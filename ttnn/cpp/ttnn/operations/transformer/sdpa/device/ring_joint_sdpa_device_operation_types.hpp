@@ -11,7 +11,6 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
@@ -29,7 +28,6 @@ struct RingJointSDPAParams {
     std::size_t ring_size = 0;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
-    DeviceComputeKernelConfig compute_kernel_config;
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
@@ -50,6 +48,9 @@ struct RingJointSDPAParams {
     // The per-chip padded length N_local is a runtime quantity: the hash ignores it and the kernels take it
     // from one common runtime word. Supported feature set: validate_dynamic_local_n.
     bool dynamic_local_n = false;
+    // The precision recipe (device/recipe/sdpa_precision_policy.hpp) that owns the numerics; STANDARD unless the
+    // caller names one.
+    ttnn::operations::transformer::SDPAPrecision precision = ttnn::operations::transformer::SDPAPrecision::STANDARD;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -63,7 +64,6 @@ struct RingJointSDPAParams {
         std::size_t ring_size,
         tt::tt_metal::MemoryConfig output_memory_config,
         std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-        DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
@@ -75,7 +75,8 @@ struct RingJointSDPAParams {
         std::optional<uint32_t> sliding_window_size = std::nullopt,
         bool circular_kv_cache = false,
         uint32_t kv_stripe_split = 1,
-        bool dynamic_local_n = false) :
+        bool dynamic_local_n = false,
+        ttnn::operations::transformer::SDPAPrecision precision = ttnn::operations::transformer::SDPAPrecision::STANDARD) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -86,7 +87,6 @@ struct RingJointSDPAParams {
         ring_size(ring_size),
         output_memory_config(std::move(output_memory_config)),
         program_config(std::move(program_config)),
-        compute_kernel_config(compute_kernel_config),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
@@ -98,7 +98,8 @@ struct RingJointSDPAParams {
         sliding_window_size(sliding_window_size),
         circular_kv_cache(circular_kv_cache),
         kv_stripe_split(kv_stripe_split),
-        dynamic_local_n(dynamic_local_n) {}
+        dynamic_local_n(dynamic_local_n),
+        precision(precision) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -128,7 +129,7 @@ struct RingJointSDPAParams {
         "logical_n",
         "logical_l",
         "ring_size",
-        "compute_kernel_config",
+        "precision",
         "program_config",
         "ccl_core_grid_offset",
         "has_kv_cache_batch_idx",
@@ -151,7 +152,7 @@ struct RingJointSDPAParams {
             std::cref(logical_n),
             std::cref(logical_l),
             std::cref(ring_size),
-            std::cref(compute_kernel_config),
+            std::cref(precision),
             std::cref(program_config),
             std::cref(ccl_core_grid_offset),
             kv_cache_batch_idx.has_value(),
@@ -263,11 +264,13 @@ inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJ
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
 constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
+// The recipe state checkpoints of cores with several Q chunks (internal; recipe_state_layout.hpp).
+constexpr size_t RING_JOINT_SDPA_STATE_OUTPUT_IDX = 3;
 
-// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
+// RingJointSDPAResult is a vector of 4 tensors: [output, joint_output, stats_output, state]
 using RingJointSDPAResult = Tensors;
 
-// RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+// RingJointSDPAResultSpec is a vector of 4 TensorSpecs: [output, joint_output, stats_output, state]
 using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

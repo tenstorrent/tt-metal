@@ -59,7 +59,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     bool is_balanced = false,
     bool is_cross = false,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
     std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
     std::optional<uint32_t> kv_actual_isl = std::nullopt,
@@ -75,6 +74,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
-    bool dynamic_local_n = false);
+    bool dynamic_local_n = false,
+    // The precision recipe; STANDARD when unset (ttnn.SDPAPrecision; ACCURATE for FP32 accumulation).
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim

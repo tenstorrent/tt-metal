@@ -146,7 +146,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     // The per-chip padded length is a runtime quantity: one cached program serves every length up to the
     // gathered buffers' capacity. Supported feature set: validate_dynamic_local_n.
-    bool dynamic_local_n = false);
+    bool dynamic_local_n = false,
+    // The numerics (STANDARD by default; ACCURATE for FP32 accumulation). compute_kernel_config is ignored.
+    std::optional<operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,
@@ -175,7 +177,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
     std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
     std::optional<uint32_t> kv_cache_layer_idx = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
+    // The numerics (STANDARD by default; ACCURATE for FP32 accumulation). compute_kernel_config is ignored.
+    std::optional<operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 struct ExecuteExpRingJointAttention {
     static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(

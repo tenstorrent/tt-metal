@@ -189,10 +189,8 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_commit();
         tile_regs_wait();
         if constexpr (recipe::ring) {
-            if constexpr (recipe::ring_causal) {
-                recipe_causal_row0 = row0;
-            }
             if (recipe_ring_chunk_masked()) {
+                recipe_mask_row0 = row0;
                 mask_recipe_tail(col0, sbw, h);
                 qk_setup_h = 0;
             }

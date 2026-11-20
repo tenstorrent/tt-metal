@@ -918,7 +918,11 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     // chunks on the reduce path.
     if constexpr (recipe::fused_active && !recipe::wormhole) {
         if (!is_first_iter && !recipe_chunk_masked()) {
-            if constexpr (recipe::unpack_thread && (recipe::ring || recipe::krange)) {
+            // MLA-width rings (a narrower V than Q/K, D >= 512) also size-optimize the PACK copy: their pack image
+            // put the program 704 B over the kernel config buffer (ring_mla mla_100k, Q160/K320, BH).
+            constexpr bool mla_width_ring = recipe::ring && vDHt < DHt && DHt >= 16;
+            if constexpr ((recipe::unpack_thread && (recipe::ring || recipe::krange)) ||
+                          (recipe::pack_thread && mla_width_ring)) {
                 fused_os::sdpa_fused_chunk<
                     Sq_chunk_t,
                     Sk_chunk_t,

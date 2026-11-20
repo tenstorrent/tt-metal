@@ -2,6 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// Size-optimized: the dataflow kernels leave the kernel config buffer to the recipe compute (the ring's masked recipe
+// builds sit within a few hundred bytes of it on Blackhole).
+#pragma GCC optimize("Os")
+
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
@@ -290,9 +294,6 @@ void kernel_main() {
     constexpr bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     constexpr bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     constexpr bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
-    // In-place latent-V (single-tile Q): the compute kernel reads V straight from K^T, so the
-    // reader never materializes V. Shared with the program factory and compute kernel.
-    constexpr bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
     constexpr uint32_t q_heads_per_v = NH / NHV;
     // Slots 33-35: sharded-joint scalars appended by the factory after upstream's attention-sink /
     // sliding-window / metadata fields (slots 28-32 above).
@@ -355,11 +356,7 @@ void kernel_main() {
     constexpr uint32_t kv_meta_args_offset =
         kv_pad_from_metadata ? meta_args.next_compile_time_args_offset() : meta_args_offset;
     constexpr auto kv_meta_args = TensorAccessorArgs<kv_meta_args_offset>();
-#ifdef KV_VALID_END
-    constexpr bool has_kv_valid_end = kv_pad_from_metadata;
-#else
-    constexpr bool has_kv_valid_end = false;
-#endif
+    constexpr bool has_kv_valid_end = get_named_compile_time_arg_val("kv_valid_end") == 1 && kv_pad_from_metadata;
     constexpr uint32_t kv_valid_end_args_offset =
         has_kv_valid_end ? kv_meta_args.next_compile_time_args_offset() : kv_meta_args_offset;
     constexpr auto kv_valid_end_args = TensorAccessorArgs<kv_valid_end_args_offset>();
@@ -554,6 +551,10 @@ void kernel_main() {
     constexpr bool rotated_q_split_enabled = rotated_max_slots > 0;
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool dense_causal_skip = get_named_compile_time_arg_val("dense_causal_skip") == 1;
+    // Sliding work plans: the most source ranges a Q chunk's plan holds, and whether the local slab goes first (a
+    // multi-hop halo, long enough to hide behind it).
+    constexpr uint32_t sliding_max_source_ranges = get_named_compile_time_arg_val("sliding_max_source_ranges");
+    constexpr bool sliding_local_first = get_named_compile_time_arg_val("sliding_local_first") == 1;
     constexpr bool ksplit_enabled = ksplit_count > 1;
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
@@ -603,7 +604,11 @@ void kernel_main() {
                 meta_noc, kv_meta_args, get_common_arg_val<uint32_t>(metadata_common_arg_base + 4), meta_l1);
             if constexpr (has_sliding_window) {
                 kv_actual_isl = trace_metadata::bounded_sliding_kv_actual_isl(
-                    kv_actual_isl, q_local_padded_Nt, ring_size, kv_local_padded_Nt, SLIDING_HALO_SLOT_COUNT);
+                    kv_actual_isl,
+                    q_local_padded_Nt,
+                    ring_size,
+                    kv_local_padded_Nt,
+                    get_named_compile_time_arg_val("sliding_halo_slot_count"));
             } else {
                 kv_actual_isl =
                     trace_metadata::bounded_kv_actual_isl(kv_actual_isl, chunk_size_t, kv_local_padded_Nt * ring_size);
@@ -706,7 +711,8 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * vDHt;
-    constexpr uint32_t v_cb_entry_tiles = v_shares_k_buffer ? k_chunk_tiles : v_chunk_tiles;
+    // V's own CB holds one chunk per entry; latent V is materialized into it from the K chunk in L1.
+    constexpr uint32_t v_cb_entry_tiles = v_chunk_tiles;
 
     Noc noc;
 
@@ -796,7 +802,11 @@ void kernel_main() {
         }
     }();
 
-    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+    // Q is pushed in groups of q_push_rows tile rows so compute can start QK incrementally. An odd Q tile count with a
+    // 2-row QK subblock (the paired recipes end such a chunk with a single row) is pushed one row at a time; compute
+    // waits on cumulative tile counts, so any row grouping that covers the chunk is valid.
+    constexpr uint32_t q_push_rows = Sq_chunk_t % qk_subblock_h != 0 ? 1 : qk_subblock_h;
+    constexpr uint32_t q_num_subblocks = Sq_chunk_t / q_push_rows;
     constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
     constexpr uint32_t q_heads_per_k = NH / NHK;
     static_assert(!has_sliding_window || !gqa_mcast_enabled, "Sliding windows use direct per-core K/V reads");
@@ -886,11 +896,25 @@ void kernel_main() {
                                              qmap.q_post_wrap_start_tile,
                                              qmap.q_valid_tile_count)
                                        : logical_nt;
+    // Balanced causal: the last active step on K from this or an earlier device, after which the early half's Q
+    // chunks see nothing more and compute normalizes them (ring_joint_sdpa.cpp walks the same order).
+    uint32_t early_last_iter = 0;
+    if constexpr (is_causal && is_balanced && !has_sliding_window) {
+        RingIdSequencer order = fused_op_receiver.seq;
+        for (uint32_t it = 0; it < ring_size; ++it) {
+            const uint32_t id = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                order.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
+            if (((active_ring_iter_mask >> it) & 1u) != 0 && id <= ring_index) {
+                early_last_iter = it;
+            }
+        }
+    }
     auto arrival_preview = fused_op_receiver.seq;
     // Chosen at compile time, and the guard below folds packed_sources to false in the classic ring's
     // binary so it carries none of the packed-source path.
-    constexpr bool packed_kv_enabled = GROUPED_KV_SOURCE_COUNT > 1;
-    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<GROUPED_KV_SOURCE_COUNT>(
+    constexpr uint32_t grouped_kv_source_count = get_named_compile_time_arg_val("grouped_kv_source_count");
+    constexpr bool packed_kv_enabled = grouped_kv_source_count > 1;
+    const ring_joint::PackedKVSchedule packed_schedule = ring_joint::make_packed_kv_schedule<grouped_kv_source_count>(
         ring_size,
         kv_local_padded_Nt,
         logical_nt,
@@ -907,7 +931,7 @@ void kernel_main() {
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
     for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
         const ring_joint::PackedKVGroupPlan packed_kv = packed_schedule.pass_plan(ring_iter);
-        uint32_t packed_source_ids[GROUPED_KV_SOURCE_COUNT];
+        uint32_t packed_source_ids[grouped_kv_source_count];
         ring_joint::PackedKVSourceReadiness packed_readiness;
         if (packed_sources) {
             // Planning identities must not wait for every member. Compute and
@@ -1078,12 +1102,14 @@ void kernel_main() {
             const bool balanced_skip_q =
                 !has_sliding_window && q_chunk < half_sequence && is_balanced && ring_index < ring_id;
 
-            // A sink is one virtual key in the global softmax. It is consumed exactly once,
-            // during final-iteration normalization. Decode its head from this iteration's
-            // scheduled chunk, including migrated chunks; no sink state crosses ring iterations.
-            // Padded chain/mcast iterations have no consumer and must not produce a sink tile.
+            // A sink is one virtual key in the global softmax. It is consumed exactly once, when compute normalizes
+            // the Q chunk: on the last active ring iteration, or (balanced causal, early half) the last step on K from
+            // this or an earlier device. Padded chain/mcast iterations have no consumer and must not produce a sink.
             if constexpr (use_attention_sink) {
-                if (is_last_ring_iter && !is_padded_iter) {
+                const bool q_normalizes =
+                    is_last_ring_iter || (is_causal && is_balanced && !has_sliding_window && q_chunk < half_sequence &&
+                                          ring_iter == early_last_iter);
+                if (q_normalizes && !balanced_skip_q && !is_padded_iter) {
                     constexpr uint32_t sink_tiles = 1;
                     cb_attn_sink.reserve_back(sink_tiles);
                     const uint32_t sink_write_ptr = cb_attn_sink.get_write_ptr();
@@ -1129,9 +1155,9 @@ void kernel_main() {
             // the fixed slot count and would wait on a Q chunk the reader never re-pushed.
             const bool need_q_read = rotated_q_split_enabled || (q_per_core > 1) || !q_pushed;
 
-            ring_joint::SlidingQWorkPlan<SLIDING_MAX_SOURCE_RANGES> sliding_q_plan;
+            ring_joint::SlidingQWorkPlan<sliding_max_source_ranges> sliding_q_plan;
             if constexpr (has_sliding_window) {
-                sliding_q_plan = ring_joint::build_sliding_q_work_plan<SLIDING_MAX_SOURCE_RANGES>(
+                sliding_q_plan = ring_joint::build_sliding_q_work_plan<sliding_max_source_ranges>(
                     q_chunk * Sq_chunk_t,
                     Sq_chunk_t,
                     ring_index,
@@ -1144,7 +1170,7 @@ void kernel_main() {
                     logical_nt,
                     circular_kv_slab_count,
                     kv_pad_rotation_enabled ? &qmap : nullptr,
-                    /*local_first=*/SLIDING_LOCAL_FIRST && ksplit_count == 1);
+                    /*local_first=*/sliding_local_first && ksplit_count == 1);
                 ASSERT(sliding_q_plan.is_valid);
                 ASSERT(sliding_q_plan.total_k_chunk_count > 0);
             }
@@ -1393,7 +1419,7 @@ void kernel_main() {
                             v_chain.receive(noc);
                         }
                         cb_v.push_back(v_cb_entry_tiles);
-                    } else if constexpr (!kt_inplace_v) {
+                    } else {
                         CircularBuffer cb_v(cb_v_in);
                         cb_v.reserve_back(v_cb_entry_tiles);
                         cb_v.push_back(v_cb_entry_tiles);
@@ -1413,8 +1439,8 @@ void kernel_main() {
                     const auto read_q = [&](const auto& q_gen) {
                         if constexpr (use_q_subblock_push) {
                             for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
-                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
-                                const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                                const uint32_t sb_row_start = q_slice.d2_start + q_sub * q_push_rows;
+                                const uint32_t sb_row_end = sb_row_start + q_push_rows;
                                 Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
                                 read_block(
                                     q_gen,
@@ -1442,41 +1468,12 @@ void kernel_main() {
                 }
                 first_k_for_q = false;
 
-                // In-place latent-V (kt_inplace_v) materializes nothing: compute reads V straight
-                // from the K^T already pushed above, so neither branch below runs for that case.
-                if constexpr (v_shares_k_buffer && !kt_inplace_v) {
-                    bool skip_v_materialization = false;
-                    uint32_t v_rows_to_materialize = Sk_chunk_t;
-                    if constexpr (is_causal && !chunked_enabled && !has_sliding_window) {
-                        if (ring_iter == 0) {
-                            // Local causal chunks beyond this limit are fully masked. Compute still
-                            // advances the K/V FIFO phase, but does not consume V values for them.
-                            const uint32_t causal_k_limit =
-                                (q_row_start_tile + Sq_chunk_t + Sk_chunk_t - 1) / Sk_chunk_t;
-                            skip_v_materialization = k_chunk >= causal_k_limit;
-                            if (!skip_v_materialization && k_chunk == causal_k_limit - 1) {
-                                const uint32_t active_rows = q_row_start_tile + Sq_chunk_t - k_chunk * Sk_chunk_t;
-                                if (active_rows < Sk_chunk_t) {
-                                    // Compute narrows active_Sk to this same row count, so the unfilled tail
-                                    // of the fixed-size V entry is kept for FIFO phase only and is never read.
-                                    v_rows_to_materialize = active_rows;
-                                }
-                            }
-                        }
-                    }
-
-                    // Same physical CB as K. K^T is already pushed; reserve a second fixed-size
-                    // FIFO entry whose prefix is compact V[Sk, vDHt] via local L1-to-L1 NoC reads.
-                    if (skip_v_materialization) {
-                        // Preserve the logical V FIFO entry for phase alignment. No fill is needed
-                        // because compute skips the fully masked K chunk.
-                        CircularBuffer cb_v_skip(cb_v_in);
-                        cb_v_skip.reserve_back(v_cb_entry_tiles);
-                        cb_v_skip.push_back(v_cb_entry_tiles);
-                    } else {
-                        materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
-                            noc, cb_k_start_address, v_rows_to_materialize);
-                    }
+                // Latent V: materialize V [Sk, vDHt] into its own CB from the K^T chunk already in L1 (local L1-to-L1
+                // NoC reads). Every row: compute processes whole chunks and masks keys by position, so no V row it
+                // reads may hold stale data.
+                if constexpr (v_shares_k_buffer) {
+                    materialize_v_prefix_from_k<cb_v_in, v_cb_entry_tiles, Sk_chunk_t, vDHt, k_tile_bytes>(
+                        noc, cb_k_start_address, Sk_chunk_t);
                 } else if constexpr (!v_shares_k_buffer) {
                     // V: either read locally (injector or not participant) or receive from chain.
                     const uint32_t nv = nq / q_heads_per_v;
@@ -1537,16 +1534,14 @@ void kernel_main() {
         if constexpr (!has_sliding_window) {
             for (uint32_t dummy_chunk = 0;
                  dummy_chunk <
-                 dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v>(KV_chunks_processed_in_iter);
+                 dummy_kv_chunks_for_phase_alignment<false, false>(KV_chunks_processed_in_iter);
                  ++dummy_chunk) {
                 CircularBuffer cb_k_dummy(cb_k_in);
                 cb_k_dummy.reserve_back(k_chunk_tiles);
                 cb_k_dummy.push_back(k_chunk_tiles);
-                if constexpr (!kt_inplace_v) {
-                    CircularBuffer cb_v_dummy(cb_v_in);
-                    cb_v_dummy.reserve_back(v_cb_entry_tiles);
-                    cb_v_dummy.push_back(v_cb_entry_tiles);
-                }
+                CircularBuffer cb_v_dummy(cb_v_in);
+                cb_v_dummy.reserve_back(v_cb_entry_tiles);
+                cb_v_dummy.push_back(v_cb_entry_tiles);
             }
         }
     }

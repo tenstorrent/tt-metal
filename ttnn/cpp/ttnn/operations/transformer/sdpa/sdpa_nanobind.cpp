@@ -65,7 +65,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    bool dynamic_local_n) {
+    bool dynamic_local_n,
+    std::optional<SDPAPrecision> precision) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -108,7 +109,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         kv_cache_num_layers,
         kv_cache_layer_idx,
         kv_valid_end_tensor,
-        dynamic_local_n);
+        dynamic_local_n,
+        precision);
     return outputs;
 }
 
@@ -137,7 +139,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    std::optional<SDPAPrecision> precision) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
     return ttnn::transformer::ring_mla(
@@ -165,7 +168,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx,
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        precision);
 }
 
 ttnn::Tensor sparse_ring_sdpa_wrapper(
@@ -747,7 +751,9 @@ void bind_sdpa(nb::module_& mod) {
                 so never pass a tensor with a replicated joint. Requires joint tensors present and ring_size > 1.
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Ignored (deprecated); see precision.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default), BALANCED, ACCURATE
+                (FP32 accumulation) or FAST.
             dim (int): Dimension along which to perform the ring all-gather operation.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for multi-device synchronization.
             num_links (int): Number of communication links to use for ring all-gather.
@@ -885,7 +891,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
         nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
-        nb::arg("dynamic_local_n") = false);
+        nb::arg("dynamic_local_n") = false,
+        nb::arg("precision") = nb::none());
 
     ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,
@@ -986,7 +993,9 @@ void bind_sdpa(nb::module_& mod) {
             logical_n (int): Logical global sequence length before sharding.
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Ignored (deprecated); see precision.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default), BALANCED, ACCURATE
+                (FP32 accumulation) or FAST.
             dim (int): Dimension for ring all-gather.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for CCL synchronization.
             num_links (int): Number of CCL links.
@@ -1068,7 +1077,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("kv_valid_end_tensor").noconvert() = nb::none());
+        nb::arg("kv_valid_end_tensor").noconvert() = nb::none(),
+        nb::arg("precision") = nb::none());
 
     const auto* exp_ring_joint_doc = R"doc(
         ExpRingJointAttention operation that efficiently performs non-causal attention over two

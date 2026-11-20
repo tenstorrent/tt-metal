@@ -386,7 +386,6 @@ RingJointSDPAParams make_ring_joint_params(CoreAllocationStrategy strategy = Cor
         /*ring_size=*/kRingSize,
         /*output_memory_config=*/ttnn::DRAM_MEMORY_CONFIG,
         /*program_config=*/std::nullopt,
-        /*compute_kernel_config=*/DeviceComputeKernelConfig{},
         ::ttnn::experimental::prim::RingAttentionAllGatherAsyncParams(
             /*dim=*/2,
             /*num_links=*/1,

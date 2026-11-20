@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/common/hash_without_rows.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_state_layout.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -627,9 +629,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             q_shape[1]);
         TT_FATAL(sink_shape[2] == 1, "Attention sink sequence dimension must be 1, got {}", sink_shape[2]);
         TT_FATAL(sink_shape[3] == 1, "Attention sink hidden dimension must be 1, got {}", sink_shape[3]);
-        TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "RingJointSDPA attention_sink requires streaming compute; set fp32_dest_acc_en=false");
     }
 
     std::vector<Tensor> sdpa_input_tensors = {input_tensor_q, gathered_input_tensor_k};
@@ -708,6 +707,29 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             tensor.memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Operands to Joint SDPA need to be in DRAM");
+    }
+
+    // The precision recipe: a supported scale, tile-aligned chunks with a Q chunk of at most 1024 rows, and V no wider
+    // than Q. The joint K/V share the spatial K/V circular buffers, so they take the spatial types.
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    recipes::resolve_recipe_policy(
+        input_tensor_q, gathered_input_tensor_k, args.precision, args.scale, args.program_config);
+    recipes::validate_recipe_geometry(
+        recipes::RecipeOp::Ring, args.get_q_chunk_size(), args.get_k_chunk_size(), q_shape[3]);
+    TT_FATAL(
+        VDH % tt::constants::TILE_WIDTH == 0 && VDH <= q_shape[3],
+        "RingJointSDPA requires a tile-aligned V head dim of at most Q's ({}), got {}",
+        q_shape[3],
+        VDH);
+    if (has_joint_tensors) {
+        TT_FATAL(
+            tensor_args.joint_k->dtype() == gathered_input_tensor_k.dtype() &&
+                tensor_args.joint_v->dtype() ==
+                    (has_gathered_v ? tensor_args.gathered_v->dtype() : gathered_input_tensor_k.dtype()),
+            "RingJointSDPA joint K/V must have the spatial K/V dtypes, got joint K {} / V {} for K {}",
+            tensor_args.joint_k->dtype(),
+            tensor_args.joint_v->dtype(),
+            gathered_input_tensor_k.dtype());
     }
 
     // Validate input shapes match
@@ -876,9 +898,6 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             args.has_sliding_window(),
             args.circular_kv_cache,
             has_joint_tensors);
-        TT_FATAL(
-            !get_fp32_dest_acc_en(args.compute_kernel_config),
-            "Split KV requires streaming compute; set fp32_dest_acc_en=false");
     }
 
     TT_FATAL(
@@ -1245,13 +1264,34 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = v_head_dim;
 
+    // The recipe state checkpoints (kernels/recipe_state_layout.hpp): a header page and the raw O, maxima and denominator
+    // planes of every Q chunk, for cores with several Q chunks (a one-device ring never checkpoints: one page).
+    using State = ::sdpa::streaming::StateTransfer;
+    const uint32_t q_tiles = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
+    const bool fp32_maxima = args.precision == ttnn::operations::transformer::SDPAPrecision::BALANCED ||
+                             args.precision == ttnn::operations::transformer::SDPAPrecision::ACCURATE;
+    const uint32_t state_pages =
+        State::page_count(q_tiles, v_head_dim / tt::constants::TILE_WIDTH, fp32_maxima ? 4096 : 2048) + 1;
+    // dynamic_local_n: the gathered buffers' capacity bounds the per-chip length the program serves.
+    const uint32_t local_rows = args.dynamic_local_n
+                                    ? tensor_args.gathered_k.padded_shape()[2] / static_cast<uint32_t>(args.ring_size)
+                                    : input.padded_shape()[2];
+    const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
+                              (tt::div_up(local_rows, args.get_q_chunk_size()) +
+                               tt::div_up(joint_padded_seq, args.get_q_chunk_size()));
+    const ttnn::Shape state_shape{
+        1, 1, args.ring_size == 1 ? tt::constants::TILE_HEIGHT : q_blocks * state_pages * tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH};
+
     return {
         tt::tt_metal::TensorSpec(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
+        tt::tt_metal::TensorSpec(
+            state_shape, TensorLayout(DataType::UINT32, PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
@@ -1261,6 +1301,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
         create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
+        create_device_tensor(output_specs[RING_JOINT_SDPA_STATE_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 
@@ -1297,7 +1338,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
             args.logical_l,
             args.ring_size,
             args.kv_stripe_split,
-            args.compute_kernel_config,
+            args.precision,
             args.program_config,
             args.ccl_core_grid_offset,
             args.sliding_window_size,
@@ -1347,7 +1388,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.joint_is_sharded(),
         args.ring_size,
         args.kv_stripe_split,
-        args.compute_kernel_config,
+        args.precision,
         args.program_config,
         args.ccl_core_grid_offset,
         args.kv_cache_batch_idx.has_value(),
@@ -1409,10 +1450,9 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    // QK^T and softmax @ V dominate the modeled cycles, so use their fidelity when it is overridden.
-    const auto matmul_fidelity =
-        args.program_config.has_value() ? args.program_config->matmul_math_fidelity : std::nullopt;
-    tt::tt_metal::MathFidelity fidelity = matmul_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    // QK^T and softmax @ V dominate the modeled cycles: the recipe's matmul fidelity.
+    const tt::tt_metal::MathFidelity fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(
+        args.precision, tensor_args.gathered_k.dtype());
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -1494,7 +1534,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const bool is_balanced,
     const bool is_cross,
     const std::optional<float> scale,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
     const std::optional<uint32_t> kv_cache_batch_idx,
     const std::optional<uint32_t> kv_actual_isl,
@@ -1509,11 +1548,9 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_n_tensor,
     const std::optional<ttnn::Tensor>& logical_l_tensor,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    const bool dynamic_local_n) {
+    const bool dynamic_local_n,
+    const std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
-
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     log_debug(
         tt::LogOp,
@@ -1723,7 +1760,6 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
-        kernel_config_val,
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
@@ -1735,7 +1771,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         sliding_window_size,
         circular_kv_cache,
         resolved_kv_stripe_split,
-        dynamic_local_n);
+        dynamic_local_n,
+        precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD));
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

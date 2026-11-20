@@ -374,10 +374,8 @@ ALWI void blocked_matmul_and_pack_body(
 
     tile_regs_wait();
     if constexpr (transpose && recipe::ring) {
-        if constexpr (recipe::ring_causal) {
-            recipe_causal_row0 = row_subblock_idx * subblock_h;
-        }
         if (recipe_ring_chunk_masked()) {
+            recipe_mask_row0 = row_subblock_idx * subblock_h;
             mask_recipe_tail(out_col_offset, subblock_w, subblock_h);
         }
     } else if constexpr (transpose && recipe::k_tail) {

@@ -288,7 +288,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
-    bool dynamic_local_n) {
+    bool dynamic_local_n,
+    std::optional<operations::transformer::SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -340,7 +342,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         is_balanced,
         is_cross,
         scale,
-        compute_kernel_config,
         core_allocation_strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
@@ -357,7 +358,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         logical_n_tensor,
         logical_l_tensor,
         kv_valid_end_tensor,
-        dynamic_local_n);
+        dynamic_local_n,
+        precision);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
@@ -389,7 +391,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
     std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& kv_valid_end_tensor) {
+    const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
+    std::optional<operations::transformer::SDPAPrecision> precision) {
+    warn_ignored_prefill_arguments(compute_kernel_config, program_config);
     auto topology_1d = ttnn::ccl::convert_2d_to_1d_topology(topology);
     auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention(
         input_tensor_q,
@@ -418,7 +422,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         is_balanced,
         /*is_cross=*/false,
         scale,
-        compute_kernel_config,
         core_allocation_strategy,
         kv_cache_batch_idx,
         kv_actual_isl,
@@ -432,7 +435,9 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
         /*circular_kv_cache=*/false,
         std::nullopt,  // logical_n_tensor
         std::nullopt,  // logical_l_tensor
-        kv_valid_end_tensor);
+        kv_valid_end_tensor,
+        /*dynamic_local_n=*/false,
+        precision);
     return {output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 

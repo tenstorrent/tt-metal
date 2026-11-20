@@ -37,7 +37,7 @@ constexpr uint32_t reader_address_common_arg_count(bool has_joint_inputs, bool h
     return kReaderBaseAddressCommonArgCount + (has_joint_inputs ? kReaderJointAddressCommonArgCount : 0) +
            (has_gathered_joint_k ? kReaderGatheredJointAddressCommonArgCount : 0);
 }
-constexpr uint32_t kWriterAddressCommonArgCount = 3;  // out, joint out, stats addrs
+constexpr uint32_t kWriterAddressCommonArgCount = 4;  // out, joint out, stats, recipe state addrs
 // slot_id addr, num_layers, layer_idx, batch count, kv_actual_isl addr
 constexpr uint32_t kReaderMetadataCommonArgCount = 5;
 constexpr uint32_t kWriterMetadataCommonArgCount = 1;  // kv_actual_isl addr
