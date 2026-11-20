@@ -6,13 +6,15 @@
 
 The routed-expert list is partitioned across an "ep" mesh axis
 (``SparseMoEEP``), each chip running ``E / D_ep`` experts and all-reducing the
-partial outputs. One set of host weights is loaded into
+partial outputs. The shared experts are sharded on the same axis. One set of
+host weights is loaded into
 
-  * a replicated dense ``MoE`` reference holding all E experts, and
+  * a replicated dense ``MoE`` reference holding all E experts and the full
+    shared experts, and
   * an EP-sharded ``SparseMoEEP`` (expert ``e`` lives on shard ``e // e_local``),
 
-both are run on the same replicated input, and the (replicated) forward output
-and gate gradient must match within PCC bounds.
+both are run on the same replicated input, and the (replicated) forward output,
+gate gradient and input gradient must match within PCC bounds.
 
 Blackhole only: every bundled MGD and every measured EP configuration is
 Blackhole, so the module skips on other archs rather than exercising an untuned
@@ -51,6 +53,9 @@ SEED = 2026
 DP_AXIS_SIZE = 8
 EP_AXIS_SIZE = 4
 MESH_SHAPE = (DP_AXIS_SIZE, EP_AXIS_SIZE)
+# DeepSeek-16B has 2 shared experts per MoE layer. Their 2 * moe_inter_dim = 128
+# hidden columns split into tile-aligned 32-column shards at EP=4.
+N_SHARED_EXPERTS = 2
 
 
 class _Cfg:
@@ -113,14 +118,20 @@ def ep_mesh(fresh_device_mesh):
 
 
 def _host_weights(cfg: _Cfg, seed: int = SEED):
-    """Deterministic host weights: gate [E, dim] and per-expert w1/w3 [I,H], w2 [H,I]."""
+    """Deterministic host weights: gate [E, dim], per-expert w1/w3 [I,H] and w2 [H,I], shared [Is,H] and [H,Is]."""
     g = torch.Generator().manual_seed(seed)
     E, H, I = cfg.n_routed_experts, cfg.dim, cfg.moe_inter_dim
+    Is = cfg.n_shared_experts * I
     gate = torch.randn(E, H, generator=g) * (H**-0.5)
     w1 = [torch.randn(I, H, generator=g) * (H**-0.5) for _ in range(E)]
     w3 = [torch.randn(I, H, generator=g) * (H**-0.5) for _ in range(E)]
     w2 = [torch.randn(H, I, generator=g) * (I**-0.5) for _ in range(E)]
-    return gate, w1, w3, w2
+    shared = (
+        torch.randn(Is, H, generator=g) * (H**-0.5),
+        torch.randn(Is, H, generator=g) * (H**-0.5),
+        torch.randn(H, Is, generator=g) * (Is**-0.5),
+    )
+    return gate, w1, w3, w2, shared
 
 
 def _4d(arr: np.ndarray) -> np.ndarray:
@@ -156,7 +167,7 @@ def ep_vs_reference(ep_mesh):
     ep_size = EP_AXIS_SIZE
     # Keep E a multiple of ep_size so every shard holds e_local = E / ep_size experts.
     n_experts = 8 if 8 % ep_size == 0 else ep_size * 2
-    cfg = _Cfg(n_routed_experts=n_experts)
+    cfg = _Cfg(n_routed_experts=n_experts, n_shared_experts=N_SHARED_EXPERTS)
     E = cfg.n_routed_experts
     e_local = E // ep_size
 
@@ -170,11 +181,18 @@ def ep_vs_reference(ep_mesh):
     ep_shard = ttml.mesh().axis_mapper("ep", tdim=0)  # shard dim0 across ep
     gather = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
-    gate_w, w1, w3, w2 = _host_weights(cfg)
+    gate_w, w1, w3, w2, (s1, s3, s2) = _host_weights(cfg)
 
     # Dense MoE reference: keeps all E experts replicated on every chip (an EP
     # module would shard them, which is the thing under test).
-    ref = MoE(_Cfg(n_routed_experts=cfg.n_routed_experts, moe_type="dense", moe_axis_name=None))
+    ref = MoE(
+        _Cfg(
+            n_routed_experts=cfg.n_routed_experts,
+            n_shared_experts=cfg.n_shared_experts,
+            moe_type="dense",
+            moe_axis_name=None,
+        )
+    )
     ep = SparseMoEEP(cfg, axis_name="ep")
     assert ep.e_local == e_local, f"e_local {ep.e_local} != {e_local}"
 
@@ -196,6 +214,14 @@ def ep_vs_reference(ep_mesh):
         _set(ep.w_gate[i], gate_i, ep_shard, device)
         _set(ep.w_up[i], up_i, ep_shard, device)
         _set(ep.w_down[i], down_i, ep_shard, device)
+
+    # Shared experts: full weights in the reference. In the EP module they are one
+    # DeepSeekMLP sharded on "ep" (w1/w3 by rows, w2 by columns), so each chip
+    # computes a partial output that DeepSeekMLP itself must all-reduce.
+    for name, host in (("w1", s1), ("w3", s3), ("w2", s2)):
+        _set(getattr(ref.shared_experts, name).weight, _4d(host.numpy()), replicate, device)
+        ep_mapper = ttml.mesh().axis_mapper("ep", tdim=3 if name == "w2" else 2)
+        _set(getattr(ep.shared_experts, name).weight, _4d(host.numpy()), ep_mapper, device)
 
     # Same input, replicated across the mesh.
     B, S = 2, 32
@@ -223,7 +249,7 @@ def ep_vs_reference(ep_mesh):
     fwd_ref = ttnn.to_torch(out_ref.get_value(), mesh_composer=gather).float()[:B]
     fwd_ep = ttnn.to_torch(out_ep.get_value(), mesh_composer=gather).float()[:B]
 
-    # Backward: same random upstream into both; compare the replicated gate grad.
+    # Backward: same random upstream into both; compare the replicated gate and input grads.
     gg = torch.Generator().manual_seed(SEED + 11)
     up_np = torch.randn(B, 1, S, cfg.dim, generator=gg).numpy().astype(np.float32)
 
@@ -246,6 +272,10 @@ def ep_vs_reference(ep_mesh):
     # replicas along dim0, so slice replica 0 out of both.
     grad_ref = ttnn.to_torch(ref.gate.weight.tensor.get_grad(), mesh_composer=gather).float()[:1]
     grad_ep = ttnn.to_torch(ep.gate.weight.tensor.get_grad(), mesh_composer=gather).float()[:1]
+    # The input grad sums the gate, routed and shared-expert paths. Each EP-sharded
+    # path leaves a partial dX per chip that its broadcast all-reduces in backward.
+    dx_ref = ttnn.to_torch(x_ref.get_grad(), mesh_composer=gather).float()[:B]
+    dx_ep = ttnn.to_torch(x_ep.get_grad(), mesh_composer=gather).float()[:B]
 
     return {
         "ep_size": ep_size,
@@ -255,6 +285,8 @@ def ep_vs_reference(ep_mesh):
         "fwd_ep": fwd_ep,
         "grad_ref": grad_ref,
         "grad_ep": grad_ep,
+        "dx_ref": dx_ref,
+        "dx_ep": dx_ep,
     }
 
 
@@ -296,6 +328,11 @@ def test_gate_grad_parity_ep_vs_replicated_sparse(ep_vs_reference):
     # Gradients are noisier than activations: routing puts a different subset of
     # tokens through each expert, so per-element spread is wider than forward.
     _assert_close("gate.weight grad", r["grad_ref"], r["grad_ep"], pcc=0.95, atol=0.1, rtol=0.1)
+
+
+def test_input_grad_parity_ep_vs_replicated_sparse(ep_vs_reference):
+    r = ep_vs_reference
+    _assert_close("input grad", r["dx_ref"], r["dx_ep"], pcc=0.99, atol=0.05, rtol=0.05)
 
 
 if __name__ == "__main__":
