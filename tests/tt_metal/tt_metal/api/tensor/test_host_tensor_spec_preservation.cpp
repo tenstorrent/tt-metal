@@ -181,10 +181,10 @@ TEST(HostTensorSpecPreservation, ToTileLayoutBfpTileMismatchThrows) {
     EXPECT_ANY_THROW(std::ignore = to_tile_layout(source, Tile({16, 16})));
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
+TEST(HostTensorSpecPreservation, PadUnpadResetsMemoryConfigToDefault) {
     const Shape logical{2, 3};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(logical.volume());
-    // Pre-#50285 host pad/unpad always emit MemoryConfig{} (interleaved DRAM).
+    // tensor_host_pad_apis.hpp post-condition: host pad/unpad emit MemoryConfig{} (interleaved DRAM).
     auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
     auto source_spec =
         TensorSpec(logical, TensorLayout(DataType::FLOAT32, PageConfig(Layout::ROW_MAJOR), memory_config));
@@ -219,7 +219,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadUnpadDropsMemoryConfigToDefault) {
     }
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadShardedLegacyDropsSharding) {
+TEST(HostTensorSpecPreservation, PadShardedLegacyResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -236,7 +236,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadShardedLegacyDropsSharding) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedLegacyDropsSharding) {
+TEST(HostTensorSpecPreservation, UnpadShardedLegacyResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     auto memory_config = MemoryConfig{
@@ -253,7 +253,7 @@ TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedLegacyDropsSharding) {
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(unpadded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_PadShardedConvertibleNdDropsSharding) {
+TEST(HostTensorSpecPreservation, PadShardedConvertibleNdResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     // Convertible ND: 2D height-sharded via NdShardSpec (auto-fills legacy shard_spec).
@@ -271,7 +271,7 @@ TEST(HostTensorSpecPreservation, DISABLED_PadShardedConvertibleNdDropsSharding) 
     CMAKE_UNIQUE_NAMESPACE::expect_packed_sizes(padded);
 }
 
-TEST(HostTensorSpecPreservation, DISABLED_UnpadShardedConvertibleNdDropsSharding) {
+TEST(HostTensorSpecPreservation, UnpadShardedConvertibleNdResetsToInterleaved) {
     const Shape shape{32, 32};
     auto data = CMAKE_UNIQUE_NAMESPACE::make_ramp<float>(shape.volume());
     NdShardSpec nd_shard_spec{Shape{32, 32}, CoreRangeSet({CoreRange({0, 0}, {0, 0})}), ShardOrientation::ROW_MAJOR};

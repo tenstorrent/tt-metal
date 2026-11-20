@@ -220,8 +220,24 @@ HostTensor pad_impl(
     float pad_value) {
     auto pad_value_ = static_cast<T>(pad_value);
     auto input_padded_shape = tensor.padded_shape();
-    if (input_padded_shape.rank() < 2) {
-        input_padded_shape = input_padded_shape.to_rank(2);
+    // Rank 0/1 inputs may be padded into a rank-2 tile shape (from_torch with a pad value).
+    if (input_padded_shape.rank() < 2 && input_padded_shape.rank() < output_padded_shape.rank()) {
+        input_padded_shape = input_padded_shape.to_rank(output_padded_shape.rank());
+    }
+    TT_FATAL(
+        output_padded_shape.rank() >= 1 && input_padded_shape.rank() == output_padded_shape.rank() &&
+            input_tensor_start.rank() == output_padded_shape.rank(),
+        "pad: input padded shape {}, input tensor start {} and output padded shape {} must have the same non-zero rank",
+        input_padded_shape,
+        input_tensor_start,
+        output_padded_shape);
+    for (int i = 0; i < static_cast<int>(output_padded_shape.rank()); ++i) {
+        TT_FATAL(
+            static_cast<uint64_t>(input_tensor_start[i]) + input_padded_shape[i] <= output_padded_shape[i],
+            "pad: input padded shape {} placed at input tensor start {} does not fit in output padded shape {}",
+            input_padded_shape,
+            input_tensor_start,
+            output_padded_shape);
     }
     const auto input_strides = tensor.strides();
 
@@ -353,14 +369,20 @@ HostTensor unpad_impl(
     const auto input_strides = compute_strides(input_shape);
 
     // Validate inputs and compute output shape
+    TT_FATAL(
+        output_tensor_start.rank() == input_shape.rank() && output_tensor_end.rank() == input_shape.rank(),
+        "unpad: output tensor start {} and end {} must have the rank of input padded shape {}",
+        output_tensor_start,
+        output_tensor_end,
+        input_shape);
     ttsl::SmallVector<uint32_t> output_shape;
     for (auto i = 0; i < input_shape.rank(); i++) {
-        // Check if tensor start and end indices are within input tensor shape
-        TT_ASSERT(output_tensor_start[i] <= input_shape[i]);
-        TT_ASSERT(output_tensor_end[i] <= input_shape[i]);
-        // Check if start shape is < end shape
-        TT_ASSERT(output_tensor_start[i] <= output_tensor_end[i]);
-        // Figure out output tensor shape
+        TT_FATAL(
+            output_tensor_start[i] <= output_tensor_end[i] && output_tensor_end[i] <= input_shape[i],
+            "unpad: range [{}, {}) must satisfy start <= end <= input padded shape {} in every dimension",
+            output_tensor_start,
+            output_tensor_end,
+            input_shape);
         output_shape.push_back(output_tensor_end[i] - output_tensor_start[i]);
     }
 

@@ -112,6 +112,7 @@ set(UNIT_TESTS_API_TENSOR_SOURCES
     tensor/test_host_tensor_to_dtype.cpp
     tensor/test_bfp_host_preparation.cpp
     tensor/test_host_tensor_spec_preservation.cpp
+    tensor/test_host_tensor_pad.cpp
     tensor/test_host_tensor_to_tensor_spec.cpp
     tensor/test_mesh_tensor.cpp
     tensor/test_tensor_types.cpp

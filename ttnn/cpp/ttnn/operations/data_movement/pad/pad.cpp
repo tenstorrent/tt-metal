@@ -205,7 +205,9 @@ ttnn::Tensor pad_impl(
         if (eq_spans(input_logical_shape, output_padded_shape)) {
             return input_tensor;
         }
-        return input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
+        // Tensor::pad keeps the input logical shape; ttnn.pad returns the padded shape as logical, like on device.
+        auto output = input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
+        return ttnn::experimental::view(output, output.padded_shape());
     }
 
     // on device
