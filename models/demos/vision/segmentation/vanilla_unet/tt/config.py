@@ -16,18 +16,17 @@ from models.tt_cnn.tt.builder import (
     ShardingStrategy,
 )
 
-# The L1 plan (L1 input shards, L1 activations, unsliced convs) is sized for an 8x8 grid; a grid with
-# fewer cores runs from DRAM instead.
-FULL_PLAN_MIN_CORES = 64
+# The L1 plan (L1 input shards, L1 activations, unsliced convs) runs on an 8x8 core range at the
+# grid's origin; a grid that does not hold it runs from DRAM instead.
+L1_PLAN_GRID_SIZE = 8
 
 
 def reduced_grid(device) -> bool:
-    """Whether ``device``'s grid has fewer cores than the L1 plan is sized for. A device of None is
-    taken to have a full grid."""
+    """Whether ``device``'s grid does not hold the L1 plan's 8x8 core range."""
     if device is None:
-        return False
+        raise ValueError("A device is required to choose the UNet memory plan")
     grid = device.compute_with_storage_grid_size()
-    return grid.x * grid.y < FULL_PLAN_MIN_CORES
+    return grid.x < L1_PLAN_GRID_SIZE or grid.y < L1_PLAN_GRID_SIZE
 
 
 @dataclass
@@ -109,7 +108,7 @@ class TtUNetConfigBuilder:
 
         l1_input_core_grid = ttnn.CoreRangeSet(
             {
-                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7)),
+                ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(L1_PLAN_GRID_SIZE - 1, L1_PLAN_GRID_SIZE - 1)),
             }
         )
         l1_input_shard_shape = (in_channels, input_height * input_width // l1_input_core_grid.num_cores())
