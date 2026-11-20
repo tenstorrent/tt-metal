@@ -1,23 +1,16 @@
 ---
-# Stopgap: builds asan-build (and its ci-build-image) on main every 2 hours so
-# main's caches stay fresh for merge-queue entries. Delete this file once
-# TorrentCI's merge-queue lineage work (tenstorrent/torrentci merge-queue trust
-# partition) lands and queue entries reuse lineage caches.
-#
-# "Only if main moved" needs no extra field: a schedule firing is ordinary
-# demand, so at an unchanged tip it reuses the existing execution (succeeded or
-# failed) instead of running again.
+# Stopgap: rebuild asan-build on main every 2 hours so queue entries find warm
+# caches. An unchanged tip reuses its last run. Remove once queue entries reuse
+# lineage caches (TorrentCI merge-queue trust partition).
 triggers:
   - id: main-cache-refresh
     kind: automatic
-    # Every 2 hours, UTC, on the default branch (main) tip. No pattern: a
-    # pattern without events would also fire on every push to main.
+    # No pattern: with one, this would also fire on every push to main.
     cron: '0 */2 * * *'
-    # A newer tip supersedes an older refresh, running or queued.
     concurrency:
       group: ref
       supersede: all
-    # Below the merge-queue trigger (160); a higher number is lower priority.
+    # Lower priority than the merge-queue trigger (160).
     priority: 200
     targets:
       jobs: [asan-build]

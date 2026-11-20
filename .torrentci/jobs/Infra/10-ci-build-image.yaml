@@ -1,7 +1,6 @@
 ---
-# Builds bake target ci-build from tt-metal's own Dockerfiles. Each layer is
-# reused by its own inputs, so an unchanged image costs about nothing. Needs
-# direct egress until the mirror covers its hosts (#1754).
+# Bake target ci-build from tt-metal's own Dockerfiles. Direct egress until the
+# mirror covers its hosts (#1754).
 jobs:
   - id: ci-build-image
     name: CI build image

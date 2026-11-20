@@ -1,6 +1,5 @@
 ---
-# Mirrors the PR Gate's ASan build (build-artifact.yaml) as a shadow; never a
-# required check. Runs on every merge-queue entry as a Shadow PR Gate member.
+# Shadow of the PR Gate's ASan build (build-artifact.yaml); never required.
 jobs:
   - id: asan-build
     name: ASan build
@@ -23,12 +22,9 @@ jobs:
       # Keeps cache keys path-independent; remove once TorrentCI sets it by default.
       - {name: CCACHE_BASEDIR, value: /workspace}
       - {name: CPM_SOURCE_CACHE, value: /workspace/.cpmcache}
-      # Stops git in a cached source without .git from walking up into the
-      # tt-metal checkout (benchmark took its version from tt-metal's tags).
+      # Keep git in cached sources (no .git) from finding tt-metal's repo.
       - {name: GIT_CEILING_DIRECTORIES, value: /workspace/.cpmcache}
-    # CPM source cache: saves ~2.3 min of configure (162 s without it, 25 s
-    # warm; a cold run that also normalises the tree takes 177 s).
-    # cpm-cache drops a restored tree whose dependency files changed.
+    # CPM source cache: configure takes 25 s warm, 162 s cold.
     cache:
       key: 'cpm-v1-${ref_name}-${commit_sha}'
       restore-keys: ['cpm-v1-${ref_name}-', cpm-v1-]
@@ -70,12 +66,9 @@ jobs:
               --build-all --enable-ccache --configure-only
               --use-system-sfpi --disable-profiler; }
             - configure
-            # The cache archive refuses symlinks, sparse files and .git paths,
-            # so a restored tree differs from a fresh download. After a fresh
-            # download, make the tree match what a restore gives (drop .git,
-            # replace each symlink with a copy of its target, densify files)
-            # and configure again (about 15 s), so the first build produces the
-            # same ccache keys as later ones.
+            # After a fresh download, normalise the tree the way the cache
+            # stores it (no .git, symlinks or sparse files) and reconfigure, so
+            # ccache keys match later restored runs.
             - if [ -f /tmp/cpm-unchanged ]; then exit 0; fi
             - find .cpmcache -name .git -prune -exec rm -rf {} +
             - >-
@@ -113,8 +106,7 @@ jobs:
         kind: shell
         shell:
           run:
-            # Lean TT_FROM_PRECOMPILED_DIR tree (build/lib + runtime), as the
-            # PR Gate stages it.
+            # TT_FROM_PRECOMPILED_DIR layout, as the PR Gate stages it.
             - rm -rf ttnn-import
             - mkdir -p ttnn-import/build/lib
             - cp -a build/lib/*.so* ttnn-import/build/lib/
@@ -127,6 +119,5 @@ jobs:
         kind: shell
         shell:
           run:
-            # configure already made a fresh tree archivable. An unchanged
-            # restored tree is already stored; skip re-uploading it.
+            # An unchanged restored tree is already stored; don't re-upload it.
             - if [ -f /tmp/cpm-unchanged ]; then rm -rf .cpmcache; fi
