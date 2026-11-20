@@ -971,14 +971,17 @@ static uint32_t process_relay_inline_cmd(uintptr_t cmd_ptr, uint32_t& local_down
 
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
-        // wrap cmddat
-        write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
-            data_ptr,
-            local_downstream_data_ptr,
-            remaining,
-            RelayInlineState::downstream_cb_end_addr,
-            RelayInlineState::downstream_noc_encoding);
-        length -= remaining;
+        // wrap cmddat. When the header ends exactly at cmddat_q_end the whole payload is in the wrapped part, and
+        // the first part is empty: skip it rather than issue a zero-length NOC write.
+        if (remaining > 0) {
+            write_downstream<RelayInlineState::downstream_cb_base_addr, RelayInlineState::downstream_write_cmd_buf>(
+                data_ptr,
+                local_downstream_data_ptr,
+                remaining,
+                RelayInlineState::downstream_cb_end_addr,
+                RelayInlineState::downstream_noc_encoding);
+            length -= remaining;
+        }
         data_ptr = cmddat_q_base;
     }
 
@@ -1015,11 +1018,13 @@ static uint32_t process_relay_inline_noflush_cmd(uintptr_t cmd_ptr, uint32_t& di
     // last transfer covers all packets before it.
     uint32_t remaining = cmddat_q_end - data_ptr;
     if (cmddat_wrap_enable && length > remaining) {
-        // wrap cmddat
-        noc_async_write(
-            static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
-        dispatch_data_ptr += remaining;
-        length -= remaining;
+        // wrap cmddat; an empty first part (header ending at cmddat_q_end) issues no write
+        if (remaining > 0) {
+            noc_async_write(
+                static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), remaining);
+            dispatch_data_ptr += remaining;
+            length -= remaining;
+        }
         data_ptr = cmddat_q_base;
     }
     noc_async_write(static_cast<uint32_t>(data_ptr), get_noc_addr_helper(downstream_noc_xy, dispatch_data_ptr), length);
