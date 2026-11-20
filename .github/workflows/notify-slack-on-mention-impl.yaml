@@ -1,0 +1,518 @@
+name: Notify Slack on Comment or Mention (impl)
+
+# Relays @mentions written by someone outside the org, or by a bot, to Slack.
+# Three ways in:
+#   - an issue opened or edited, or an issue/PR conversation comment
+#   - a PR description or PR review comment, handed over by the
+#     notify-slack-on-mention.yaml launchpad through workflow_run
+#
+# Tokens:
+#   - github.token for the gate's reads and the public user lookups.
+#   - OSPO Vault token (github/token/org-bot-token) for the private org
+#     membership check. Revoked before the job ends.
+#   - CODEOWNERS_PING_BOT secret and NOTIFY_SLACK_ON_MENTION_CHANNEL variable
+#     for Slack.
+
+on:
+  issue_comment:
+    types: [created]
+  issues:
+    types: [opened, edited]
+  workflow_run:
+    workflows: ["Notify Slack on Comment or Mention"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  # Works out who wrote what and which mentions are new, without touching Vault.
+  # The launchpad runs the PR's own copy of its workflow file, so nothing it
+  # hands over is trusted: the PR is looked up from the run's head repo and
+  # branch, the sender is the run's actor, and the text is re-read from the API.
+  gate:
+    if: >-
+      (github.event_name != 'workflow_run' &&
+       contains(github.event.comment.body || github.event.issue.body, '@')) ||
+      (github.event_name == 'workflow_run' &&
+       contains(fromJSON('["pull_request","pull_request_review_comment"]'), github.event.workflow_run.event) &&
+       github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-slim
+    permissions:
+      actions: read
+      contents: read
+      issues: read
+      pull-requests: read
+    outputs:
+      has-mention: ${{ steps.mentions.outputs.has-mention }}
+      mentioned: ${{ steps.mentions.outputs.mentioned }}
+      sender: ${{ steps.mentions.outputs.sender }}
+      sender-is-bot: ${{ steps.mentions.outputs.sender-is-bot }}
+      link: ${{ steps.mentions.outputs.link }}
+      number: ${{ steps.mentions.outputs.number }}
+      title: ${{ steps.mentions.outputs.title }}
+    steps:
+      - name: Download request
+        if: github.event_name == 'workflow_run'
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: notify-slack-request
+          path: ${{ runner.temp }}/request
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Check for @ mentions
+        id: mentions
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_PATH: ${{ github.event.workflow_run.path }}
+          HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          RUN_ACTOR: ${{ github.event.workflow_run.actor.login }}
+          RUN_ACTOR_TYPE: ${{ github.event.workflow_run.actor.type }}
+        run: |
+          MENTION_RE='(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'
+          # GitHub does not notify mentions inside code, so fenced blocks and inline code are dropped first.
+          # A fence that is never closed runs to the end of the body, as Markdown renders it.
+          # Otherwise a pasted `@pytest.mark.parametrize` would ping a GitHub user called pytest.
+          extract_mentions() {
+            perl -0pe 's/^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[^\n]*$//gms; s/^[ \t]*(`{3,}|~{3,}).*\z//ms; s/(`+).+?\1//gs' |
+              { grep -oP "$MENTION_RE" || true; } | sed 's/^@//' | sort -u
+          }
+          api_get() {
+            curl -sS --fail --max-time 30 \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "$@"
+          }
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_run" ]; then
+            REQUEST_FILE="$RUNNER_TEMP/request/request.json"
+            if [ "$RUN_PATH" != ".github/workflows/notify-slack-on-mention.yaml" ]; then
+              echo "::notice::Ignoring a run of $RUN_PATH"
+              exit 0
+            fi
+            if [ ! -f "$REQUEST_FILE" ]; then
+              echo "No mentions handed over"
+              exit 0
+            fi
+
+            KIND=$(jq -r '.kind // ""' "$REQUEST_FILE")
+            PR_NUMBER=$(jq -r '.pr_number // "" | tostring' "$REQUEST_FILE")
+            COMMENT_ID=$(jq -r '.comment_id // "" | tostring' "$REQUEST_FILE")
+            if ! [[ "$PR_NUMBER" =~ ^[0-9]+$ ]]; then
+              echo "::notice::Bad PR number in the request"
+              exit 0
+            fi
+
+            # The PR must be an open PR whose head is the launchpad run's head.
+            # Fork PRs carry no workflow_run.pull_requests, so look it up by head.
+            PRS=$(api_get --get \
+                    --data-urlencode "head=$HEAD_OWNER:$HEAD_BRANCH" \
+                    --data-urlencode "state=open" \
+                    --data-urlencode "per_page=100" \
+                    "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls")
+            PR=$(echo "$PRS" | jq -c --arg repo "$HEAD_REPO" --argjson n "$PR_NUMBER" \
+                   '[.[] | select(.head.repo.full_name == $repo and .number == $n)][0] // empty')
+            if [ -z "$PR" ]; then
+              echo "::notice::PR #$PR_NUMBER is not an open PR from $HEAD_REPO:$HEAD_BRANCH"
+              exit 0
+            fi
+
+            SENDER="$RUN_ACTOR"
+            SENDER_TYPE="$RUN_ACTOR_TYPE"
+            NUMBER="$PR_NUMBER"
+            TITLE=$(echo "$PR" | jq -r '.title // ""')
+            case "$KIND" in
+              pull_request)
+                AUTHOR=$(echo "$PR" | jq -r '.user.login // ""')
+                ASSOCIATION=$(echo "$PR" | jq -r '.author_association // ""')
+                BODY=$(echo "$PR" | jq -r '.body // ""')
+                LINK=$(echo "$PR" | jq -r '.html_url // ""')
+                ;;
+              review_comment)
+                if ! [[ "$COMMENT_ID" =~ ^[0-9]+$ ]]; then
+                  echo "::notice::Bad comment id in the request"
+                  exit 0
+                fi
+                COMMENT=$(api_get "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/comments/$COMMENT_ID")
+                AUTHOR=$(echo "$COMMENT" | jq -r '.user.login // ""')
+                if [ "$(echo "$COMMENT" | jq -r '.pull_request_url // ""')" != "https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER" ] || \
+                   [ "$AUTHOR" != "$SENDER" ]; then
+                  echo "::notice::Review comment $COMMENT_ID is not $SENDER's comment on PR #$PR_NUMBER"
+                  exit 0
+                fi
+                ASSOCIATION=$(echo "$COMMENT" | jq -r '.author_association // ""')
+                BODY=$(echo "$COMMENT" | jq -r '.body // ""')
+                LINK=$(echo "$COMMENT" | jq -r '.html_url // ""')
+                ;;
+              *)
+                echo "::notice::Unknown request kind '$KIND'"
+                exit 0
+                ;;
+            esac
+
+            # Only the handed-over mentions that are really in the text now. For an
+            # edit, the launchpad already dropped the ones that were there before.
+            MENTIONED=$(comm -12 <(echo "$BODY" | extract_mentions) \
+                                 <(jq -r '.mentions // [] | .[] | strings' "$REQUEST_FILE" | sort -u))
+          else
+            SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
+            SENDER_TYPE=$(jq -r '.sender.type // ""' "$GITHUB_EVENT_PATH")
+            AUTHOR=$(jq -r '(.comment.user.login // .issue.user.login // "")' "$GITHUB_EVENT_PATH")
+            ASSOCIATION=$(jq -r '(.comment.author_association // .issue.author_association // "")' "$GITHUB_EVENT_PATH")
+            if [ "$GITHUB_EVENT_NAME" = "issue_comment" ]; then
+              LINK=$(jq -r '.comment.html_url // ""' "$GITHUB_EVENT_PATH")
+            else
+              LINK=$(jq -r '.issue.html_url // ""' "$GITHUB_EVENT_PATH")
+            fi
+            NUMBER=$(jq -r '.issue.number // ""' "$GITHUB_EVENT_PATH")
+            TITLE=$(jq -r '.issue.title // ""' "$GITHUB_EVENT_PATH")
+
+            BODY=$(jq -r '(.comment.body // .issue.body // "")' "$GITHUB_EVENT_PATH")
+            MENTIONED=$(echo "$BODY" | extract_mentions)
+
+            # An edited issue only pings the mentions the edit added to its description. An edit that
+            # leaves the description alone (title, labels) carries no changes.body and pings nobody.
+            ACTION=$(jq -r '.action // ""' "$GITHUB_EVENT_PATH")
+            if [ "$ACTION" = "edited" ]; then
+              if jq -e '.changes.body' "$GITHUB_EVENT_PATH" > /dev/null; then
+                PREVIOUS=$(jq -r '.changes.body.from // ""' "$GITHUB_EVENT_PATH" | extract_mentions)
+                MENTIONED=$(comm -23 <(echo "$MENTIONED") <(echo "$PREVIOUS"))
+              else
+                MENTIONED=""
+              fi
+            fi
+          fi
+
+          # Org members can reach each other on Slack directly, so only mentions written by someone outside
+          # the org, or by a bot, are relayed. The person classified is the sender, who wrote the comment or
+          # made the edit. This workflow's own comments trigger nothing, but other github.token comments
+          # would show up as github-actions[bot] and are not relayed.
+          if [ "$SENDER" = "github-actions[bot]" ]; then
+            echo "Skipping: comment by github-actions[bot]"
+            exit 0
+          fi
+          SENDER_IS_BOT=false
+          if [ "$SENDER_TYPE" = "Bot" ]; then
+            SENDER_IS_BOT=true
+          elif [ "$SENDER" = "$AUTHOR" ] && { [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; }; then
+            # author_association settles a public member without an API call, but only when the sender
+            # is that author. Private members read as CONTRIBUTOR and are checked by the next job.
+            echo "Skipping: $SENDER is an org $ASSOCIATION"
+            exit 0
+          fi
+
+          MENTIONED=$(echo "$MENTIONED" | sed '/^$/d' | paste -sd ',')
+          if [ -z "$MENTIONED" ]; then
+            echo "No new mentions"
+            exit 0
+          fi
+
+          if [ ${#TITLE} -gt 60 ]; then
+            TITLE="${TITLE:0:57}..."
+          fi
+          DELIM="EOF_$(openssl rand -hex 8)"
+          {
+            echo "has-mention=true"
+            echo "mentioned=$MENTIONED"
+            echo "sender=$SENDER"
+            echo "sender-is-bot=$SENDER_IS_BOT"
+            echo "link=$LINK"
+            echo "number=$NUMBER"
+            echo "title<<$DELIM"
+            echo "$TITLE"
+            echo "$DELIM"
+          } >> "$GITHUB_OUTPUT"
+          echo "Mentions to relay from $SENDER: $MENTIONED"
+
+  notify-slack:
+    needs: [gate]
+    if: needs.gate.outputs.has-mention == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      id-token: write # OSPO Vault login
+    steps:
+      - name: Get org token
+        id: vault
+        uses: tenstorrent/.github/actions/vault-secrets@fe8df371bc63659c93009dfbde88e570ab501465 # main
+        with:
+          role: tenstorrent--tt-metal--codeowners
+          github-token: github/token/org-bot-token
+
+      - name: Check org membership
+        id: member
+        if: needs.gate.outputs.sender-is-bot != 'true'
+        env:
+          ORG_TOKEN: ${{ steps.vault.outputs.token }}
+          SENDER: ${{ needs.gate.outputs.sender }}
+        run: |
+          # A private member reads as CONTRIBUTOR, and an editor who is not the author has no
+          # association at all, so ask the org. Only 204 means member and 404 means outsider;
+          # anything else (302 when the token cannot see members, rate limit, 5xx) is not a verdict.
+          MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+            -H "Authorization: Bearer ${ORG_TOKEN}" \
+            "https://api.github.com/orgs/${GITHUB_REPOSITORY_OWNER}/members/$SENDER" || echo "000")
+          case "$MEMBER_STATUS" in
+            204)
+              echo "Skipping: $SENDER is an org member"
+              echo "is-member=true" >> "$GITHUB_OUTPUT"
+              ;;
+            404)
+              echo "is-member=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::Membership check for $SENDER failed (HTTP $MEMBER_STATUS)"
+              exit 1
+              ;;
+          esac
+
+      - name: Fetch Slack users
+        if: steps.member.outputs.is-member != 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+        run: |
+          echo "Fetching all Slack users..."
+          TEMP_USERS_FILE=$(mktemp)
+          echo "[]" > "$TEMP_USERS_FILE"
+          CURSOR=""
+          PAGE_COUNT=0
+
+          while true; do
+            if [ -n "$CURSOR" ]; then
+              API_URL="https://slack.com/api/users.list?limit=1000&cursor=$CURSOR"
+            else
+              API_URL="https://slack.com/api/users.list?limit=1000"
+            fi
+
+            USER_SEARCH_RESPONSE=$(curl -s -X GET \
+              -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+              -H "Content-Type: application/json" \
+              "$API_URL")
+
+            RESPONSE_FILE=$(mktemp)
+            echo "$USER_SEARCH_RESPONSE" > "$RESPONSE_FILE"
+
+            if [ "$(jq -r '.ok' "$RESPONSE_FILE")" = "true" ]; then
+              MERGE_FILE=$(mktemp)
+              jq -s '.[0] + .[1]' "$TEMP_USERS_FILE" <(jq '.members' "$RESPONSE_FILE") > "$MERGE_FILE"
+              mv "$MERGE_FILE" "$TEMP_USERS_FILE"
+              PAGE_COUNT=$((PAGE_COUNT + 1))
+
+              CURSOR=$(jq -r '.response_metadata.next_cursor // ""' "$RESPONSE_FILE")
+              rm -f "$RESPONSE_FILE"
+              if [ -z "$CURSOR" ] || [ "$CURSOR" = "null" ]; then
+                break
+              fi
+            else
+              ERROR_MSG=$(jq -r '.error // "Unknown error"' "$RESPONSE_FILE")
+              echo "Error: Failed to fetch Slack users: $ERROR_MSG"
+              rm -f "$RESPONSE_FILE"
+              break
+            fi
+          done
+
+          USER_COUNT=$(jq '. | length' "$TEMP_USERS_FILE")
+          echo "Fetched $USER_COUNT Slack users across $PAGE_COUNT pages"
+          mv "$TEMP_USERS_FILE" "${RUNNER_TEMP}/slack_users.json"
+
+      - name: Send notification to Slack
+        if: steps.member.outputs.is-member != 'true'
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.CODEOWNERS_PING_BOT }}
+          SLACK_CHANNEL_ID: ${{ vars.NOTIFY_SLACK_ON_MENTION_CHANNEL }}
+          GH_TOKEN: ${{ github.token }}
+          SENDER: ${{ needs.gate.outputs.sender }}
+          MENTIONED_CSV: ${{ needs.gate.outputs.mentioned }}
+          LINK: ${{ needs.gate.outputs.link }}
+          NUMBER: ${{ needs.gate.outputs.number }}
+          TITLE: ${{ needs.gate.outputs.title }}
+        run: |
+          if [ -z "$SLACK_CHANNEL_ID" ]; then
+            echo "::warning::The NOTIFY_SLACK_ON_MENTION_CHANNEL variable is not set; skipping the Slack ping"
+            exit 0
+          fi
+          SLACK_USERS_FILE="${RUNNER_TEMP}/slack_users.json"
+
+          find_slack_user_id() {
+            local full_name="$1"
+            local github_username="$2"
+            local USERS_FILE="$3"
+
+            case "$github_username" in
+              "mradosavljevicTT") echo "U0837MYG788"; return 0 ;;
+              "nsextonTT") echo "U08TVGQGGAE"; return 0 ;;
+              "ncvetkovicTT") echo "U07AUABTEP6"; return 0 ;;
+              "jvegaTT") echo "U07M7QZ0BQA"; return 0 ;;
+            esac
+
+            USER_ID=$(jq -r --arg name "$full_name" \
+              '.[] | select(.real_name == $name or .profile.real_name == $name) | .id' "$USERS_FILE" | head -n1)
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              USER_ID=$(jq -r --arg name "$full_name" \
+                '.[] | select(.profile.display_name == $name) | .id' "$USERS_FILE" | head -n1)
+            fi
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              USER_ID=$(jq -r --arg username "$github_username" \
+                '.[] | select(.name == $username or .profile.display_name == $username) | .id' "$USERS_FILE" | head -n1)
+            fi
+
+            if [ -z "$USER_ID" ] || [ "$USER_ID" = "null" ]; then
+              IFS=' ' read -ra NAME_WORDS <<< "$full_name"
+              for word in "${NAME_WORDS[@]}"; do
+                if [ ${#word} -ge 3 ]; then
+                  WORD_MATCHES=$(jq -r --arg word "$word" \
+                    '.[] | select(
+                      (.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                      (.profile.real_name // "" | ascii_downcase | contains($word | ascii_downcase)) or
+                      (.profile.display_name // "" | ascii_downcase | contains($word | ascii_downcase))
+                    ) | .id + "|" + (.real_name // .profile.real_name // .name)' "$USERS_FILE")
+
+                  if [ -n "$WORD_MATCHES" ]; then
+                    MATCH_COUNT=$(echo "$WORD_MATCHES" | wc -l)
+                    if [ "$MATCH_COUNT" -eq 1 ]; then
+                      USER_ID=$(echo "$WORD_MATCHES" | cut -d'|' -f1)
+                      break
+                    fi
+                  fi
+                fi
+              done
+            fi
+
+            if [ -n "$USER_ID" ] && [ "$USER_ID" != "null" ]; then
+              echo "$USER_ID"
+            else
+              echo ""
+            fi
+          }
+
+
+          # Resolve every tagged login to a Slack ID, or keep the GitHub login when there is no match.
+          MENTION_TOKENS=()
+          SLACK_IDS=()
+          IFS=',' read -ra MENTIONED_ARRAY <<< "$MENTIONED_CSV"
+          for gh_user in "${MENTIONED_ARRAY[@]}"; do
+            gh_user=$(echo "$gh_user" | xargs)
+            [ -z "$gh_user" ] && continue
+
+            USER_DATA=$(curl -s -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/users/$gh_user" 2>/dev/null || echo "{}")
+            USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+            [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$gh_user"
+
+            SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user" "$SLACK_USERS_FILE")
+
+            # Only people with a Slack account are pinged. A login with no match (a bot such as @copilot,
+            # an outside user, a stray word after @) would only post a line that notifies nobody.
+            if [ -n "$SLACK_ID" ]; then
+              MENTION_TOKENS+=("<@$SLACK_ID>")
+              SLACK_IDS+=("$SLACK_ID")
+              echo "Resolved @$gh_user -> Slack <@$SLACK_ID>"
+            else
+              echo "Skipping @$gh_user: no matching Slack user"
+            fi
+          done
+
+          # A Slack mention of someone outside the channel does not notify them, so add the tagged people
+          # who are not in it yet. Failures only warn: the ping still reaches everyone already there.
+          if [ ${#SLACK_IDS[@]} -gt 0 ]; then
+            CHANNEL_MEMBERS=$(mktemp)
+            CURSOR=""
+            LISTED=true
+            while true; do
+              MEMBERS_URL="https://slack.com/api/conversations.members?channel=${SLACK_CHANNEL_ID}&limit=1000"
+              [ -n "$CURSOR" ] && MEMBERS_URL="${MEMBERS_URL}&cursor=${CURSOR}"
+              MEMBERS_RESPONSE=$(curl -s --max-time 30 -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" "$MEMBERS_URL" \
+                || echo '{"ok":false,"error":"request failed"}')
+              if [ "$(echo "$MEMBERS_RESPONSE" | jq -r '.ok')" != "true" ]; then
+                echo "::warning::Slack conversations.members failed: $(echo "$MEMBERS_RESPONSE" | jq -r '.error // "unknown error"')"
+                LISTED=false
+                break
+              fi
+              echo "$MEMBERS_RESPONSE" | jq -r '.members[]' >> "$CHANNEL_MEMBERS"
+              CURSOR=$(echo "$MEMBERS_RESPONSE" | jq -r '.response_metadata.next_cursor // ""')
+              [ -z "$CURSOR" ] && break
+            done
+
+            if [ "$LISTED" = "true" ]; then
+              MISSING=$(printf '%s\n' "${SLACK_IDS[@]}" | sort -u | grep -vxF -f "$CHANNEL_MEMBERS" | paste -sd ',' || true)
+              if [ -n "$MISSING" ]; then
+                # force invites the valid IDs even when one of them cannot be (a guest, a deactivated account).
+                INVITE_RESPONSE=$(curl -s --max-time 30 -X POST \
+                  -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                  -H "Content-type: application/json" \
+                  -d "$(jq -n --arg channel "$SLACK_CHANNEL_ID" --arg users "$MISSING" '{channel: $channel, users: $users, force: true}')" \
+                  "https://slack.com/api/conversations.invite" || echo '{"ok":false,"error":"request failed"}')
+                if [ "$(echo "$INVITE_RESPONSE" | jq -r '.ok')" = "true" ]; then
+                  echo "Invited $MISSING to the channel"
+                else
+                  echo "::warning::Slack conversations.invite failed for $MISSING: $(echo "$INVITE_RESPONSE" | jq -r '.error // "unknown error"')"
+                fi
+              fi
+            fi
+            rm -f "$CHANNEL_MEMBERS"
+          fi
+
+          # Escape Slack control characters in the user-supplied title.
+          TITLE=$(echo "$TITLE" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+
+          # One short line per tagged person, so each person can find their own pings by name.
+          FAILED=0
+          for MENTION in "${MENTION_TOKENS[@]}"; do
+            TEXT=":speech_balloon: ${MENTION} — mentioned by ${SENDER} on <${LINK}|#${NUMBER} ${TITLE}>"
+
+            # Write payload to a temp file to avoid ARG_MAX issues with curl -d
+            PAYLOAD_FILE=$(mktemp)
+            jq -n \
+              --arg channel "$SLACK_CHANNEL_ID" \
+              --arg text "$TEXT" \
+              '{
+                channel: $channel,
+                text: $text,
+                unfurl_links: false,
+                unfurl_media: false
+              }' > "$PAYLOAD_FILE"
+
+            # Slack allows about one message per second per channel. Pace the posts and retry a rate-limited
+            # one after its Retry-After, up to 3 attempts, before moving to the next person.
+            for ATTEMPT in 1 2 3; do
+              HEADERS_FILE=$(mktemp)
+              SLACK_RESPONSE=$(curl -s --max-time 30 -X POST -D "$HEADERS_FILE" \
+                -H "Authorization: Bearer ${SLACK_BOT_TOKEN}" \
+                -H "Content-type: application/json" \
+                -d @"$PAYLOAD_FILE" \
+                "https://slack.com/api/chat.postMessage" || echo '{"ok":false,"error":"request failed"}')
+              RETRY_AFTER=$(grep -i '^retry-after:' "$HEADERS_FILE" | tr -dc '0-9' || true)
+              rm -f "$HEADERS_FILE"
+              [ "$(echo "$SLACK_RESPONSE" | jq -r '.error // ""')" != "ratelimited" ] && break
+              echo "Rate limited, retrying ${MENTION} in ${RETRY_AFTER:-1}s"
+              sleep "${RETRY_AFTER:-1}"
+            done
+            rm -f "$PAYLOAD_FILE"
+
+            if [ "$(echo "$SLACK_RESPONSE" | jq -r '.ok')" = "true" ]; then
+              echo "Slack notification sent for ${MENTION}"
+            else
+              ERROR=$(echo "$SLACK_RESPONSE" | jq -r '.error // "unknown error"')
+              echo "::error::Failed to send Slack notification for ${MENTION}: $ERROR"
+              FAILED=1
+            fi
+            sleep 1
+          done
+          exit $FAILED
+
+      - name: Revoke org token
+        if: always() && steps.vault.outputs.token != ''
+        env:
+          VAULT_GH_TOKEN: ${{ steps.vault.outputs.token }}
+        run: |
+          if ! curl -sS --fail --connect-timeout 10 --max-time 20 -X DELETE \
+            https://api.github.com/installation/token \
+            -H "Authorization: Bearer ${VAULT_GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json"; then
+            echo "::warning::Could not revoke the Vault token; it expires on its own"
+          fi
