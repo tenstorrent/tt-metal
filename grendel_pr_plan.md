@@ -22,7 +22,7 @@ Line counts below are added plus removed lines from `git diff --numstat` against
 ## Not for merge
 
 - Planning and worklog documents in the tt-metal root: `keraunos_plan.md`, `keraunos_project.md`, `keraunos_worklog.md`, `grendel_keraunos.md`, `grendel_mimir_addressing.md`, `keraunos_mimir_gddr_read.md`, `mimir_setup.md` (1,175 lines). If a user-facing setup guide is wanted, condense `mimir_setup.md` into a tech report in the last tt-metal PR.
-- `tt-umd/.claude/settings.json` (committed by accident in the UMD branch).
+- `tt-umd/.claude/settings.json` (a local tool permission that came in with a JTAG commit, 015fa06f; keep it out of U7 unless the JTAG author wants it).
 - `PR_DRAFT_keraunos_cce1.md` in tt-umd (untracked).
 - The atomics probes (`test_keraunos_atomics.cpp`, `keraunos_cce_idma_accum_cfg.cpp`, `keraunos_cce_noc_atomic_inc.cpp`, the `DISABLED_` accumulate tests in `test_keraunos_overlay.cpp`, about 320 lines) until remote atomics work. They are investigation code, not regression tests.
 
