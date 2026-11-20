@@ -74,6 +74,7 @@ def test_gather_general(input_shape, index_shape, dim, device):
         ([64, 128, 256], [64, 128, 128], -1),
         ([1, 2048, 1, 64], [1, 2048, 1, 32], -1),
         ([1, 1, 1, 1], [1, 1, 1, 1], -1),
+        ([64], [32], 0),
     ],
 )
 def test_gather_preallocated_output(input_shape, index_shape, dim, device):
@@ -95,6 +96,33 @@ def test_gather_preallocated_output(input_shape, index_shape, dim, device):
     assert ttnn_output.shape == index.shape
 
     assert_allclose(torch_gather, ttnn.to_torch(ttnn_output))
+
+
+@pytest.mark.parametrize(
+    "input_shape, index_shape, dim",
+    [
+        ([64], [32], 0),
+        ([64], [32], -1),
+        ([128], [64], 0),
+        ([1000], [500], 0),
+    ],
+)
+def test_gather_rank1(input_shape, index_shape, dim, device):
+    torch.manual_seed(0)
+
+    torch_dtype = torch.bfloat16
+    input = torch.randn(input_shape, dtype=torch_dtype)
+    index = torch.randint(0, input_shape[dim], index_shape, dtype=torch.int64)
+
+    torch_gather = torch.gather(input, dim, index)
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint16, layout=ttnn.Layout.TILE, device=device)
+
+    ttnn_gather = ttnn.gather(ttnn_input, dim, index=ttnn_index)
+
+    assert ttnn_gather.shape == index.shape
+    assert_allclose(torch_gather, ttnn.to_torch(ttnn_gather))
 
 
 @pytest.mark.parametrize(
@@ -658,6 +686,27 @@ def test_gather_rank_mismatch(input_shape, index_shape, device, expect_error):
     )
     with expect_error(RuntimeError, "same number of dimensions"):
         ttnn.gather(ttnn_input, -1, index=ttnn_index)
+
+
+@pytest.mark.parametrize("operand", ["input", "index", "output"])
+@pytest.mark.parametrize("tile", [[16, 32], [32, 16]], ids=["16x32", "32x16"])
+@pytest.mark.parametrize("dim", [-1, -2])
+def test_gather_rejects_non_32x32_tile(device, operand, tile, dim, expect_error):
+    input = torch.randn([2, 1, 64, 128], dtype=torch.bfloat16)
+    index = torch.randint(0, input.shape[dim], [2, 1, 64, 128], dtype=torch.int32)
+
+    def tile_for(name):
+        return ttnn.Tile(tile) if operand == name else ttnn.Tile([32, 32])
+
+    ttnn_input = ttnn.from_torch(input, ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=tile_for("input"), device=device)
+    ttnn_index = ttnn.from_torch(index, ttnn.uint32, layout=ttnn.TILE_LAYOUT, tile=tile_for("index"), device=device)
+    ttnn_output = None
+    if operand == "output":
+        ttnn_output = ttnn.from_torch(
+            torch.zeros_like(input), ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile(tile), device=device
+        )
+    with expect_error(RuntimeError, f"has a {tile[0]}x{tile[1]} tile"):
+        ttnn.gather(ttnn_input, dim, index=ttnn_index, out=ttnn_output)
 
 
 def test_gather_rejects_row_major_out_for_tile_input(device, expect_error):

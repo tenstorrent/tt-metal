@@ -23,6 +23,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/allocator/allocator.hpp"
+#include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"
 #include "tt_metal/impl/allocator/allocation_request.hpp"
 
 namespace tt::tt_metal {
@@ -379,8 +380,7 @@ void AllocatorImpl::end_hybrid_allocation() {
 std::vector<std::pair<DeviceAddr, DeviceAddr>> AllocatorImpl::get_l1_allocated_ranges(
     BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     std::lock_guard<std::mutex> lock(mutex_);
-    auto state = l1_manager_->extract_state(allocator_id);
-    return state.allocated_regions;
+    return allocator::coalesce(l1_manager_->get_allocated_ranges(allocator_id));
 }
 
 void AllocatorImpl::mirror_lockstep_allocation(DeviceAddr address, DeviceAddr size) {
@@ -719,9 +719,7 @@ AllocatorState AllocatorImpl::extract_state() const {
         }
     }
 
-    // Copy allocated buffer pointers
-    std::vector<Buffer*> all_allocated_buffers(allocated_buffers_.begin(), allocated_buffers_.end());
-    return AllocatorState(std::move(states_per_buffer_type), std::move(all_allocated_buffers));
+    return AllocatorState(std::move(states_per_buffer_type));
 }
 
 void AllocatorImpl::override_state(const AllocatorState& state) {

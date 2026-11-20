@@ -47,6 +47,10 @@ inline constexpr std::array logical_right_shift{DT::UINT32, DT::INT32};
 inline constexpr std::array arithmetic_fpu{
     DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT16, DT::INT32};
 
+// FPU arithmetic that also takes UINT8/INT8 (SUB).
+inline constexpr std::array arithmetic_fpu_and_int8{
+    DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT16, DT::INT32, DT::UINT8, DT::INT8};
+
 inline constexpr std::array relational{
     DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B, DT::UINT32, DT::UINT8, DT::UINT16, DT::INT32};
 
@@ -61,6 +65,10 @@ inline constexpr std::array where{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::
 // happens to match float_only today, but the two answer different questions (per-operand
 // support vs. mix eligibility) and are kept distinct.
 inline constexpr std::array mixed_float{DT::BFLOAT16, DT::FLOAT32, DT::BFLOAT8_B, DT::BFLOAT4_B};
+
+// A fused binary activation runs its own SFPU kernel on BF16 data in DEST: BFLOAT16 operands, and
+// BFLOAT8_B ones, which unpack to BF16. Every other dtype keeps the path it had.
+inline constexpr std::array fused_activation_bf16{DT::BFLOAT16, DT::BFLOAT8_B};
 
 // Enum values that are not dispatched to binary_ng (e.g. ADDALPHA -> ADD).
 inline constexpr std::array<DT, 0> unsupported{};
