@@ -168,3 +168,27 @@ def test_tile_entry_unaligned_shape(device, entry, in_dtype, out_dtype):
 def test_row_major_input_memory_entries(device, entry, in_dtype, out_dtype):
     # ROW_MAJOR inputs take the typecast row-major path before (or after) the move.
     run_tile_entry(device, entry, in_dtype, out_dtype, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+@pytest.mark.parametrize("in_dtype, out_dtype", [(ttnn.int32, ttnn.bfloat16), (ttnn.float32, ttnn.int32)])
+def test_tilize_with_val_padding_extra_tile_padding(device, in_dtype, out_dtype):
+    # The output is padded past its tile-rounded shape ([1, 1, 32, 32] -> [1, 1, 64, 64]); the dtype conversion must
+    # keep that padding and fill it with pad_value.
+    values = make_values(in_dtype, out_dtype, [1, 1, 32, 32])
+    torch_in, tt_in = upload(device, values, in_dtype, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.tilize_with_val_padding(tt_in, [1, 1, 64, 64], 0, dtype=out_dtype)
+    assert out.dtype == out_dtype
+    assert list(out.padded_shape) == [1, 1, 64, 64]
+    padded = out.cpu().to_torch_with_padded_shape().to(torch.float32)
+    assert torch.equal(padded[..., :32, :32], torch_in.to(torch.float32))
+    assert torch.count_nonzero(padded[..., 32:, :]) == 0
+    assert torch.count_nonzero(padded[..., :, 32:]) == 0
+
+
+def test_clone_int_float_rejects_non_default_tiles(device, expect_error):
+    torch_in = torch.arange(32 * 32, dtype=torch.int32).reshape(1, 1, 32, 32)
+    tt_in = ttnn.from_torch(
+        torch_in, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device, tile=ttnn.Tile((16, 32))
+    )
+    with expect_error(RuntimeError, "Clone supports only 32x32 tiles"):
+        ttnn.clone(tt_in, dtype=ttnn.bfloat16)

@@ -89,7 +89,7 @@ ttnn::Tensor tilize_with_val_padding(
     if (output_dtype.has_value() && is_int_float_conversion(input_tensor.dtype(), output_dtype.value())) {
         auto tiled = tilize_with_val_padding(
             input_tensor, output_padded_shape, pad_value, memory_config, std::nullopt, use_multicore, sub_core_grids);
-        return ttnn::typecast(tiled, output_dtype.value());
+        return ttnn::typecast(tiled, output_dtype.value(), std::nullopt, std::nullopt, sub_core_grids);
     }
 
     // Handle empty tensors - no tiling needed for tensors with no data
