@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -659,6 +660,25 @@ ttnn::Tensor pad_with_route(
             return p.before_elements == 0 && p.after_elements == 0;
         })) {
         return input_tensor;
+    }
+
+    // An empty input has no pages to read, so the output is all padding. The pad programs read input pages that do
+    // not exist in that case.
+    if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.logical_volume() == 0) {
+        const auto output_shape = compute_padded_logical_shape(input_tensor.logical_shape(), working_padding);
+        const auto& requested_config = memory_config_arg.value_or(input_tensor.memory_config());
+        ttnn::Tensor output_tensor = ttnn::full(
+            output_shape,
+            value,
+            input_tensor.dtype(),
+            input_tensor.layout(),
+            *input_tensor.device(),
+            MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()});
+        if (requested_config.is_sharded()) {
+            // Without a memory_config, the output keeps the input's shard spec.
+            return ttnn::to_memory_config(output_tensor, requested_config, std::nullopt);
+        }
+        return output_tensor;
     }
 
     ttnn::Tensor working_tensor = input_tensor;

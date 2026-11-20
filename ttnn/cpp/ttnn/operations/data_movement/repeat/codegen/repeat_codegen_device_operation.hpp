@@ -34,6 +34,10 @@ struct RepeatCodegenDeviceOperation {
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+    // A zero-volume output has nothing to write, and the program factory divides by its empty dims.
+    static bool skip_launch(const operation_attributes_t&, const tensor_args_t&, const tensor_return_value_t& output) {
+        return output.logical_shape().volume() == 0;
+    }
 
     static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
         const operation_attributes_t& operation_attributes,
