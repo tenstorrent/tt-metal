@@ -89,7 +89,7 @@ struct WorkerToFabricEdmSenderBase {
     static constexpr bool IS_WORKER = !I_USE_STREAM_REG_FOR_CREDIT_RECEIVE;
     static_assert(
         IS_WORKER || connection_interface::kernel_stream_registers_available,
-        "a stream-register credit receiver needs stream registers; routers use RouterStaticSizedChannelWriterAdapter");
+        "a stream-register credit receiver needs stream registers");
     static constexpr bool IS_POW2_NUM_BUFFERS = USER_DEFINED_NUM_BUFFER_SLOTS && is_power_of_2(EDM_NUM_BUFFER_SLOTS);
     static constexpr size_t BUFFER_SLOT_PTR_WRAP = EDM_NUM_BUFFER_SLOTS * 2;
     // HACK: Need a way to properly set this up
