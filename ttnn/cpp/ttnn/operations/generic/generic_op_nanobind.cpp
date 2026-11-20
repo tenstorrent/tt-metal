@@ -38,10 +38,16 @@ void bind_generic_operation(nb::module_& mod) {
                 MeshProgramDescriptor for explicit per-device control.
 
         Returns:
-            ttnn.Tensor: Handle to the output tensor. Its mesh topology is inferred from the tensors in io_tensors,
-                as for other ops. If the program writes something else, such as the same data on every device from
-                a sharded input, relabel it with output.update_tensor_topology(topology), for example with the
-                topology of a tensor laid out that way on the same devices.
+            ttnn.Tensor: Handle to the output tensor, the last entry of io_tensors. When the tensors are not all on
+                the same devices, only its parts on the devices of the tensor in io_tensors that is on the fewest
+                devices. Its tensor topology (the mesh placements and distribution shape that say whether it is
+                sharded or replicated across the mesh) is merged from the topologies of all the tensors in
+                io_tensors, the output's own included, as for most ops: a tensor sharded along a mesh axis makes the
+                output sharded along it. Other output tensors keep their topologies. The label changes before the
+                call is checked, so it changes even if the call raises. If the program writes another layout, such as
+                the same data on every device from a sharded input, relabel the output with
+                output.update_tensor_topology(topology), for example with output.tensor_topology() saved before the
+                call.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
@@ -178,10 +184,13 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the
                 same devices, only its parts on the devices of the tensor in io_tensors that is on the fewest
-                devices. Its mesh topology is inferred from the tensors in io_tensors, as for other ops. If the
-                program writes something else, such as the same data on every device from a sharded input,
-                relabel it with output.update_tensor_topology(topology), for example with the topology of a
-                tensor laid out that way on the same devices.
+                devices. Its tensor topology (the mesh placements and distribution shape that say whether it is
+                sharded or replicated across the mesh) is merged from the topologies of all the tensors in
+                io_tensors, the output's own included, as for most ops: a tensor sharded along a mesh axis makes the
+                output sharded along it. generic_op and prepare_generic_op change the label before checking the call,
+                so it changes even if the call raises. If the program writes another layout, such as the same data on
+                every device from a sharded input, relabel the output with output.update_tensor_topology(topology),
+                for example with output.tensor_topology() saved before the call.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
