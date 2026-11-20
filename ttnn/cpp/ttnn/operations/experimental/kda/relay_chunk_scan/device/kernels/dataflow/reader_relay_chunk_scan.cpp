@@ -64,19 +64,22 @@ constexpr uint32_t cores_per_head = get_compile_time_arg_val(correction_ct + 7);
 constexpr uint32_t grid_x = get_compile_time_arg_val(correction_ct + 8);
 constexpr uint32_t first_core = get_compile_time_arg_val(correction_ct + 9);
 constexpr auto terms_args = TensorAccessorArgs<correction_ct + 10>();
-// The gated output norm: the mean's scaler, each chunk's gate rows (g of the head's chunks, formed by the matmul on
-// the core, or on a head core by its helper) and the weight.
+// The gated output norm: the mean's scaler, the weight, and on a head core what its helper forms of its chunks: their
+// factors sigmoid(gate) * weight in place, their gate rows streamed.
 constexpr uint32_t norm_ct = terms_args.next_compile_time_args_offset();
 constexpr uint32_t cb_scaler = get_compile_time_arg_val(norm_ct);
 constexpr uint32_t cb_gate = get_compile_time_arg_val(norm_ct + 1);
 constexpr uint32_t cb_weight = get_compile_time_arg_val(norm_ct + 2);
 constexpr uint32_t heads = get_compile_time_arg_val(norm_ct + 3);
-constexpr auto weight_args = TensorAccessorArgs<norm_ct + 4>();
+constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(norm_ct + 4);
+constexpr auto weight_args = TensorAccessorArgs<norm_ct + 5>();
 // The output gate's operands (gate_matmul_dataflow.hpp), and where the common args hold a bit per head: whether its W
 // moves north, on the writer's NoC 1 from its last core to a helper above (this kernel then moves x), or south, on this
 // kernel's NoC 0 from its second core to a helper below (the writer then moves x).
 constexpr uint32_t north_args = get_compile_time_arg_val(weight_args.next_compile_time_args_offset());
-using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset() + 1>;
+// Where the common args hold each head's helper's NoC x | y << 16.
+constexpr uint32_t helper_args = get_compile_time_arg_val(weight_args.next_compile_time_args_offset() + 1);
+using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset() + 2>;
 constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 
 // Every core of a head corrects its chunks of the head from the head's seeds; the head's first core is also the
@@ -149,10 +152,6 @@ void kernel_main() {
     const bool zero_entry = slab && (actual_start == 0 || index >= slab_index_limit);
     const uint32_t state_tile = get_tile_size(cb_seed);
     const uint32_t column_bytes = kt * state_tile;
-    // The relay starts from the first rank's entry state, and every rank waits for it. Its head cores' DRAM reads set
-    // the pace, so the head's other cores read tile column j (j % cores_per_head their place in the head) and post it
-    // into the head core's landing buffer as a predecessor would, counting it in the arrival counter, which the first
-    // rank has no predecessor to count in. They stage it in their seed buffer, unused until the relay is done.
     const uint32_t place = core % cores_per_head;
     const uint32_t entry_base = slab ? (index * slab_scale + slab_offset) * entry_tiles : 0;
     const auto read_entry_column = [&](uint32_t j, uint32_t destination) {
@@ -161,26 +160,6 @@ void kernel_main() {
             noc_async_read_page(entry_base + head * state_tiles + r * kt + j, init, destination + r * state_tile);
         }
     };
-    if (holder && !zero_entry && place != 0) {
-        const uint32_t stage = get_write_ptr(cb_seed);
-        uint32_t posted = 0;
-        for (uint32_t j = place; j < kt; j += cores_per_head) {
-            read_entry_column(j, stage + j * column_bytes);
-        }
-        noc_async_read_barrier();
-        const uint32_t head_xy = get_common_arg_val<uint32_t>(head_core_args);
-        for (uint32_t j = place; j < kt; j += cores_per_head) {
-            noc_async_write(
-                stage + j * column_bytes,
-                get_noc_addr(head_xy & 0xFFFF, head_xy >> 16, landing + j * column_bytes),
-                column_bytes);
-            ++posted;
-        }
-        noc_async_write_barrier();
-        if (posted != 0) {
-            noc_semaphore_inc(get_noc_addr(head_xy & 0xFFFF, head_xy >> 16, arrival_semaphore), posted);
-        }
-    }
     // This core's valid chunks; those before the reset start from the entry state, the rest from the tail's seed.
     const uint32_t valid = interval.valid_chunks(0, 1);
     const uint32_t reset = interval.reset_chunk(0, 1);
@@ -255,16 +234,23 @@ void kernel_main() {
         }
     };
 
-    // The norm's scaler and weight.
+    // The norm's scaler and, where compute forms the factors, its weight; in place, the terms.
     const auto read_norm_inputs = [&]() {
         if (chunks == 0) {
             return;
+        }
+        if constexpr (!streamed) {
+            cb_reserve_back(cb_terms, 2 * core_chunks * kt);
+            cb_push_back(cb_terms, 2 * core_chunks * kt);
         }
         dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
             cb_scaler,
             ckernel::PoolType::AVG,
             ckernel::ReduceDim::REDUCE_ROW,
             kt * tt::constants::TILE_WIDTH>();
+        if (relay_head && !streamed) {
+            return;
+        }
         const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(9));
         const uint32_t tile = get_tile_size(cb_weight);
         cb_reserve_back(cb_weight, kt);
@@ -275,6 +261,20 @@ void kernel_main() {
         cb_push_back(cb_weight, kt);
     };
 
+    // A head core's helper writes its factors into cb_gate_factor's storage, which on the first rank holds the final
+    // transition's E (cb_fe) until the final carry is formed: the head core counts, on its helper, when it may.
+    const uint32_t helper_xy = get_common_arg_val<uint32_t>(helper_args + head);
+    const auto free_factors = [&]() {
+        noc_semaphore_inc(get_noc_addr(helper_xy & 0xFFFF, helper_xy >> 16, gate_landed), 1);
+    };
+    if (!streamed && relay_head && !(holder && interval.split)) {
+        free_factors();
+    }
+    // Outside the first rank's relay start, the norm's inputs (and the terms) come first: a head core forms the
+    // differences while the entry state is on its way.
+    if (!(relay_head && holder)) {
+        read_norm_inputs();
+    }
     if (relay_head) {
         cb_push_back(cb_e, state_tiles);
         cb_push_back(cb_b, state_tiles);
@@ -283,8 +283,8 @@ void kernel_main() {
         cb_reserve_back(cb_ein, state_tiles);
         cb_reserve_back(cb_ein_exact, state_tiles);
         if (holder) {
-            // The columns the head's other cores post (see above).
-            uint32_t posted = 0;
+            // The relay starts from the first rank's entry state, and every rank waits for it: all of it in one round
+            // trip, which the output gate's DRAM reads would otherwise queue up behind.
             if (zero_entry) {
                 const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
                 for (uint32_t offset = 0; offset < state_tiles * state_tile; offset += MEM_ZEROS_SIZE) {
@@ -292,22 +292,12 @@ void kernel_main() {
                 }
             } else {
                 for (uint32_t j = 0; j < kt; ++j) {
-                    if (j % cores_per_head == 0) {
-                        read_entry_column(j, landing + j * column_bytes);
-                    } else {
-                        ++posted;
-                    }
+                    read_entry_column(j, landing + j * column_bytes);
                 }
             }
             noc_async_read_barrier();
-            // Column 0 is this core's own: compute starts on it while the others land.
-            cb_push_back(cb_ein, kt);
-            cb_push_back(cb_ein_exact, kt);
-            if (posted != 0) {
-                kda_counter::wait_and_consume(arrival_semaphore, posted);
-            }
-            cb_push_back(cb_ein, state_tiles - kt);
-            cb_push_back(cb_ein_exact, state_tiles - kt);
+            cb_push_back(cb_ein, state_tiles);
+            cb_push_back(cb_ein_exact, state_tiles);
             // The first rank applies its final transition to P when the interval ends in a separated tail. P lands only
             // after the whole lap, so E and B are read after the entry state: the relay starts from the first rank, and
             // every rank waits for it.
@@ -338,7 +328,9 @@ void kernel_main() {
         }
     }
 
-    read_norm_inputs();
+    if (relay_head && holder) {
+        read_norm_inputs();
+    }
 
     // The chunks that start from the entry state. Their terms are in place, or streamed a chunk row at a time: head h's
     // F(0) rows are tile rows h * 2 * num_chunks + chunk of the terms, its F(I) rows num_chunks further.
@@ -356,10 +348,6 @@ void kernel_main() {
             cb_push_back(cb_terms, 2 * kt);
         }
     };
-    if (!streamed && chunks != 0) {
-        cb_reserve_back(cb_terms, 2 * core_chunks * kt);
-        cb_push_back(cb_terms, 2 * core_chunks * kt);
-    }
     if (group_chunks != 0) {
         receive(cb_seed, 0);
     }
@@ -385,12 +373,17 @@ void kernel_main() {
             }
         }
     }
-    // A head core's g, which its helper writes into cb_gate's storage (after the hop and the final carry, which compute
-    // forms first).
+    // What a head core's helper forms of its chunks: in place their factors, streamed their g (cb_gate's storage).
     if (relay_head) {
-        cb_reserve_back(cb_gate, core_chunks * kt);
+        const uint32_t cb_helper = streamed ? cb_gate : cb_gate_factor;
+        if (!streamed && holder && interval.split) {
+            // E is free once compute has taken it.
+            cb_reserve_back(cb_fe, state_tiles);
+            free_factors();
+        }
+        cb_reserve_back(cb_helper, core_chunks * kt);
         kda_counter::wait_and_consume(gate_landed, 1);
-        cb_push_back(cb_gate, core_chunks * kt);
+        cb_push_back(cb_helper, core_chunks * kt);
     }
     if constexpr (streamed) {
         stream_terms(0, group_chunks);

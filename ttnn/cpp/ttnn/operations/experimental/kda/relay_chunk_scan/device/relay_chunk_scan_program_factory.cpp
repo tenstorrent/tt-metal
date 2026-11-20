@@ -456,6 +456,11 @@ tt::tt_metal::ProgramDescriptor build_program(
         return kda_factory_detail::cb_descriptor(index, tiles, tt::tile_size(format), format, correction_set);
     };
     const auto gate_set = correction_set.merge(helper_set);
+    const auto gate_tile_cb = [&](uint32_t index, uint32_t tiles, tt::tt_metal::DataType dtype) {
+        auto cb = tile_cb(index, tiles, dtype);
+        cb.core_ranges = gate_set;
+        return cb;
+    };
     auto gate_cbs = gate_buffers(gate_kb, gate_ways, gate_depth);
     for (auto& cb : gate_cbs) {
         cb.core_ranges = gate_set;
@@ -487,8 +492,9 @@ tt::tt_metal::ProgramDescriptor build_program(
         tile_cb(cb_square, kt, attrs.output_dtype),
         kda_factory_detail::cb_descriptor(cb_scaler, 1, summary_tile, tt::DataFormat::Float16_b, correction_set),
         kda_factory_detail::cb_descriptor(cb_inv_rms, 1, state_tile, tt::DataFormat::Float32, correction_set),
-        tile_cb(cb_weight, kt, in.norm_weight.dtype()),
-        tile_cb(cb_weight_rows, kt, in.norm_weight.dtype()),
+        // The weight on the helpers too: in place, a head core's helper forms its factors.
+        gate_tile_cb(cb_weight, kt, in.norm_weight.dtype()),
+        gate_tile_cb(cb_weight_rows, kt, in.norm_weight.dtype()),
         // One normalized row, single-buffered: L1 beside the in-place terms has no room for two.
         tile_cb(cb_norm, kt, attrs.output_dtype),
         // Two DRAM-aligned slots: actual_start (then the writer's chronology words), then the slab index.
@@ -593,11 +599,14 @@ tt::tt_metal::ProgramDescriptor build_program(
          grid_x,
          first_core});
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
-    reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads});
+    reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads, cb_gate_factor});
     tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
-    // The heads' W directions, then the output gate's operands, whose common args follow the cores' NoC coordinates.
-    const uint32_t reader_north = 14 + static_cast<uint32_t>(correction_cores.size());
+    // The heads' W directions, then the output gate's operands, whose common args follow the cores' and the helpers'
+    // NoC coordinates.
+    const uint32_t reader_helpers = 14 + static_cast<uint32_t>(correction_cores.size());
+    const uint32_t reader_north = reader_helpers + static_cast<uint32_t>(helper_cores.size());
     reader_ct.push_back(reader_north);
+    reader_ct.push_back(reader_helpers);
     append_gate_ct(reader_ct, reader_north + static_cast<uint32_t>(north_bits.size()));
     std::vector<uint32_t> writer_ct = {
         cb_eout,
@@ -705,9 +714,11 @@ tt::tt_metal::ProgramDescriptor build_program(
         helper_kinds[std::ranges::find(sender_cores, core) != sender_cores.end()].push_back(core);
     }
     const auto helper_kernel = [&](const CoreRangeSet& cores, bool moves_x, bool moves_w) {
-        // The operands' common args follow the landed count.
-        std::vector<uint32_t> ct = {cb_gate, num_chunks, cores_per_head, moves_x, moves_w};
-        append_gate_ct(ct, 1);
+        // The operands' common args follow the landed count and the norm weight.
+        std::vector<uint32_t> ct = {
+            cb_gate, num_chunks, cores_per_head, moves_x, moves_w, uint32_t(streamed), cb_gate_factor, cb_weight};
+        tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(ct);
+        append_gate_ct(ct, 2);
         const bool riscv_1 = moves_x;
         return tt::tt_metal::KernelDescriptor{
             .kernel_source = std::string(kernel_dir) + "dataflow/helper_relay_chunk_scan.cpp",
@@ -741,7 +752,12 @@ tt::tt_metal::ProgramDescriptor build_program(
              static_cast<uint32_t>(attrs.gate_math_fidelity),
              cb_gate_pair,
              cb_gate_partial,
-             gate_ways},
+             gate_ways,
+             uint32_t(streamed),
+             cb_weight,
+             cb_weight_rows,
+             cb_gate_factor,
+             uint32_t(attrs.output_dtype == tt::tt_metal::DataType::FLOAT32)},
         .config = std::move(helper_compute_config),
     };
     tt::tt_metal::KernelDescriptor sender{
@@ -795,6 +811,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto& core : correction_cores) {
         reader_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
+    for (const auto& core : helper_cores) {
+        reader_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
+    }
     reader_args.append(north_bits);
     append_gate_args(reader_args);
     reader.emplace_common_runtime_args(reader_args);
@@ -810,6 +829,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     writer.emplace_common_runtime_args(writer_args);
     tt::tt_metal::KernelDescriptor::RTArgList helper_args;
     helper_args.push_back(gate_landed);
+    helper_args.push_back(in.norm_weight.buffer());
     append_gate_args(helper_args);
     for (auto& helper : helpers) {
         helper.emplace_common_runtime_args(helper_args);

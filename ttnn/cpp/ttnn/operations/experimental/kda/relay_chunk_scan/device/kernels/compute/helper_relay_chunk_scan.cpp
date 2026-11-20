@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_factor.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
 
 constexpr uint32_t cb_gin0 = get_compile_time_arg_val(0);
@@ -17,9 +18,16 @@ constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_ti
 constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(8);
 constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(9);
 constexpr uint32_t ways = get_compile_time_arg_val(10);
+// In place (terms in the cores' shards), the head core's factors g = sigmoid(gate) * weight: they take its tail off
+// the relay's critical path. Streamed, the head core forms them a chunk at a time from g.
+constexpr bool streamed = get_compile_time_arg_val(11);
+constexpr uint32_t cb_weight = get_compile_time_arg_val(12);
+constexpr uint32_t cb_weight_rows = get_compile_time_arg_val(13);
+constexpr uint32_t cb_gate_factor = get_compile_time_arg_val(14);
+constexpr bool fp32_output = get_compile_time_arg_val(15);
 
 // A head's helper: g of the chunks of the head's first core (see the helper's data movement), its head's partial
-// sums with the pair's helper's added.
+// sums with the pair's helper's added; in place, then their factors.
 void kernel_main() {
     const bool own_first = ways == 1 || get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_gin0, cb_gin1, cb_gate);
@@ -27,5 +35,10 @@ void kernel_main() {
         cb_gin0, cb_gin1, cb_gate, cb_gate_pair, own_first, ways, rows, columns, gate_kb, blocks);
     if constexpr (ways == 2) {
         kda_gate::add_pair(cb_gate_partial, cb_gate, rows * columns);
+    }
+    if constexpr (!streamed) {
+        kda_gate::broadcast_weight<cb_weight, cb_weight_rows, columns>();
+        kda_gate::gate_factors<cb_gate, cb_weight_rows, cb_gate_factor, columns, fp32_output>(rows);
+        cb_pop_front(cb_weight_rows, columns);
     }
 }

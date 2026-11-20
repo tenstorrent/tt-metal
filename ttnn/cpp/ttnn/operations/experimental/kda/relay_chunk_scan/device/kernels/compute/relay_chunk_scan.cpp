@@ -21,6 +21,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/eltwise/unary/activations.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/compute/matmul_subblock.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_factor.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
 
 namespace ckl = compute_kernel_lib;
@@ -216,48 +217,10 @@ void subtract(uint32_t first, uint32_t tiles) {
         ckl::PackTile<ckl::output(cb_diff, ckl::ReservePolicy::None, ckl::PushPolicy::None)>{diff});
 }
 
-// The norm weight's row 0 broadcast down every row, for the elementwise product with each output row.
-void broadcast_weight() {
-    DataflowBuffer weight(cb_weight);
-    DataflowBuffer weight_rows(cb_weight_rows);
-    ckl::unary_bcast<
-        ckl::BroadcastDim::Row,
-        ckl::input(cb_weight, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block),
-        ckl::output(cb_weight_rows, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd)>(
-        ckl::IterationShape::tiles(kt), weight, weight_rows);
-    cb_wait_front(cb_weight_rows, kt);
-}
+void broadcast_weight() { kda_gate::broadcast_weight<cb_weight, cb_weight_rows, kt>(); }
 
-// Each of the next `chunks` gate rows into its chunk's g = sigmoid(gate) * weight.
 void gate_factors(uint32_t chunks) {
-    DataflowBuffer gate(cb_gate);
-    DataflowBuffer weight_rows(cb_weight_rows);
-    DataflowBuffer gate_factor(cb_gate_factor);
-    constexpr auto gate_row =
-        ckl::input(cb_gate, ckl::WaitPolicy::Upfront, ckl::PopPolicy::AtEnd, ckl::InputTileMapping::Block);
-    constexpr auto weight_row =
-        ckl::input(cb_weight_rows, ckl::WaitPolicy::None, ckl::PopPolicy::None, ckl::InputTileMapping::Block);
-    constexpr auto gate_factor_row = ckl::output(cb_gate_factor, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd);
-    for (uint32_t c = 0; c < chunks; ++c) {
-        if constexpr (fp32_output) {
-            // The product on the SFPU, in FP32: the FPU's DEST reuse would round sigmoid(gate) to srcA's format.
-            ckl::eltwise_chain(
-                ckl::IterationShape::tiles(kt).block_size(kt),
-                ckl::CopyTile<gate_row, ckl::Dst::D0>{gate},
-                ckl::Sigmoid<ckl::Dst::D0>{},
-                ckl::CopyTile<weight_row, ckl::Dst::D1>{weight_rows},
-                ckl::MulBinary<ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0>{},
-                ckl::PackTile<gate_factor_row, ckl::Dst::D0>{gate_factor});
-        } else {
-            // A BF16 g needs only the BF16-accurate sigmoid, and the FPU product reusing DEST.
-            ckl::eltwise_chain(
-                ckl::IterationShape::tiles(kt).block_size(kt),
-                ckl::CopyTile<gate_row>{gate},
-                ckl::Sigmoid<ckl::Dst::D0, ckl::Approx::Exact, ckl::SigmoidPrecision::Bf16>{},
-                ckl::DestReuseBinary<ckl::BinaryFpuOp::Mul, weight_row, ckl::DestReuseType::DEST_TO_SRCA>{weight_rows},
-                ckl::PackTile<gate_factor_row>{gate_factor});
-        }
-    }
+    kda_gate::gate_factors<cb_gate, cb_weight_rows, cb_gate_factor, kt, fp32_output>(chunks);
 }
 
 // The gated norm of the chunk row in cb_out, with the front g of cb_gate_factor, into cb_norm.
@@ -360,7 +323,7 @@ void correct(uint32_t begin, uint32_t end, uint32_t seed) {
 
 // Every core of a head corrects its chunks once their gate rows are formed: the head's other cores form them first,
 // the head's first core runs the relay's hop instead and, on the first rank, the final carry (from P, which lands after
-// the lap) before its chunks, whose rows its helper forms meanwhile.
+// the lap) before its chunks, whose rows its helper forms meanwhile (in place, their factors too).
 void kernel_main() {
     const bool relay_head =
         (get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core) % cores_per_head == 0;
@@ -372,10 +335,29 @@ void kernel_main() {
     const uint32_t group_chunks = read_tile_value(cb_ctl, 0, 3);
     cb_pop_front(cb_ctl, 1);
 
+    // In place, every chunk's difference: on a head core while its entry state is on its way, outside the first rank
+    // (whose relay starts at once).
+    const auto differences = [&]() {
+        if constexpr (!streamed) {
+            if (chunks != 0) {
+                cb_wait_front(cb_terms, terms_tiles);
+                cb_reserve_back(cb_diff, chunks * kt);
+                subtract(0, chunks * kt);
+                cb_push_back(cb_diff, chunks * kt);
+                cb_wait_front(cb_diff, chunks * kt);
+            }
+        }
+    };
+    // The cores that form their chunks' factors: all but the head cores, whose helpers form them in place.
+    const bool own_factors = streamed || !relay_head;
     if (relay_head) {
+        if (!holder) {
+            differences();
+        }
         relay_hop();
         if (holder) {
             carry_pass(split);
+            differences();
         }
     } else {
         const uint32_t head =
@@ -396,22 +378,15 @@ void kernel_main() {
         }
     }
     // The norm's weight rows and, in place, every chunk's g.
-    if (chunks != 0) {
-        cb_wait_front(cb_scaler, 1);
+    if (own_factors && chunks != 0) {
         broadcast_weight();
     }
-    if constexpr (!streamed) {
+    if (!streamed && !relay_head) {
         gate_factors(chunks);
+        differences();
     }
-    // In place, every chunk's difference while the seeds are on their way.
-    if constexpr (!streamed) {
-        if (chunks != 0) {
-            cb_wait_front(cb_terms, terms_tiles);
-            cb_reserve_back(cb_diff, chunks * kt);
-            subtract(0, chunks * kt);
-            cb_push_back(cb_diff, chunks * kt);
-            cb_wait_front(cb_diff, chunks * kt);
-        }
+    if (chunks != 0) {
+        cb_wait_front(cb_scaler, 1);
     }
     correct(0, group_chunks, cb_seed);
     correct(group_chunks, chunks, cb_tail);
@@ -425,8 +400,10 @@ void kernel_main() {
         cb_pop_front(cb_terms, terms_tiles);
         cb_pop_front(cb_diff, chunks * kt);
     }
-    if (chunks != 0) {
+    if (own_factors && chunks != 0) {
         cb_pop_front(cb_weight_rows, kt);
+    }
+    if (chunks != 0) {
         cb_pop_front(cb_scaler, 1);
     }
 }
