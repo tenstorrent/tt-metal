@@ -211,8 +211,10 @@ void kernel_main() {
         } else {
             Gate::move_w(head);
         }
-        const uint32_t pair = Gate::half(head) ? head - heads / 2 : head + heads / 2;
-        Gate::swap(get_common_arg_val<uint32_t>(14 + pair * cores_per_head + place));
+        if constexpr (Gate::ways == 2) {
+            const uint32_t pair = Gate::half(head) ? head - heads / 2 : head + heads / 2;
+            Gate::swap(get_common_arg_val<uint32_t>(14 + pair * cores_per_head + place));
+        }
     }
 
     // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer

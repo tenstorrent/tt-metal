@@ -82,6 +82,8 @@ constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_ti
 constexpr uint32_t cb_gate_pair = get_compile_time_arg_val(37);
 constexpr uint32_t cb_gate_partial = get_compile_time_arg_val(38);
 constexpr uint32_t gate_heads = get_compile_time_arg_val(39);
+// 2 where the heads pair up, else 1 (each core its head over all of K).
+constexpr uint32_t gate_ways = get_compile_time_arg_val(40);
 constexpr uint32_t state_tiles = kt * kt;
 constexpr uint32_t dst_tiles =
     ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
@@ -389,12 +391,15 @@ void kernel_main() {
             cb_gin1,
             cb_gate,
             cb_gate_pair,
-            head % gate_heads < gate_heads / 2,
+            gate_ways == 1 || head % gate_heads < gate_heads / 2,
+            gate_ways,
             core_chunks,
             kt,
             gate_kb,
             gate_blocks);
-        kda_gate::add_pair(cb_gate_partial, cb_gate, core_chunks * kt);
+        if constexpr (gate_ways == 2) {
+            kda_gate::add_pair(cb_gate_partial, cb_gate, core_chunks * kt);
+        }
     }
     DeviceZoneScopedN("NORM");
     // The norm's weight rows and, in place, every chunk's g.

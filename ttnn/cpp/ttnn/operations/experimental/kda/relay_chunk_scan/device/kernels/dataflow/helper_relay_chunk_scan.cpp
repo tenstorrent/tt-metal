@@ -27,7 +27,7 @@ void kernel_main() {
     // The head core is below a helper whose head's W moves north, above one whose W moves south.
     const bool north = get_arg_val<uint32_t>(2);
     const uint32_t pair_xy = get_arg_val<uint32_t>(3);
-    const uint32_t x_group = 2 * (head / Gate::heads * cores_per_head) + Gate::half(head);
+    const uint32_t x_group = Gate::ways * (head / Gate::heads * cores_per_head) + Gate::half(head);
     const uint32_t first_row = head / Gate::heads * num_chunks;
     if constexpr (moves_x && moves_w) {
         // Each operand as far as its group lets it.
@@ -55,7 +55,9 @@ void kernel_main() {
         }
     }
 
-    Gate::swap(pair_xy);
+    if constexpr (Gate::ways == 2) {
+        Gate::swap(pair_xy);
+    }
     cb_wait_front(cb_gate, Gate::rows * Gate::columns);
     const uint32_t gate = get_read_ptr(cb_gate);
     noc_async_write(gate, kda_gate::noc_address(head_xy, gate), Gate::rows * Gate::columns * get_tile_size(cb_gate));

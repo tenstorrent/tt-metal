@@ -39,11 +39,12 @@ ALWI void matmul_step(uint32_t in0, uint32_t in1, uint32_t in0_tile, uint32_t in
 #endif
 }
 
-// A pair of heads' output gate over half of K: g = x @ W of `rows` tile rows and two heads' `columns` tile columns
-// each, this core's head's into cb_own and its pair's into cb_pair (FP32; cb_pair pushed for the pair's core, cb_own
-// left reserved for add_pair). K arrives in blocks of `kb` tiles, [rows x kb] of x in cb_in0 and [kb x 2 columns] of W
-// in cb_in1 (the pair's first head's columns, then its second's), and each block's products accumulate in the FP32 DST
-// (one head's columns at a time: DST holds 4 FP32 tiles), then onto the partial sums in the packer (L1 accumulation).
+// The output gate of `ways` heads (1, or a pair over half of K): g = x @ W of `rows` tile rows and each head's
+// `columns` tile columns, this core's head's into cb_own and a pair's other head's into cb_pair (FP32; cb_pair pushed
+// for the pair's core, cb_own pushed alone, else left reserved for add_pair). K arrives in blocks of `kb` tiles,
+// [rows x kb] of x in cb_in0 and [kb x ways columns] of W in cb_in1 (a pair's first head's columns, then its
+// second's), and each block's products accumulate in the FP32 DST (one head's columns at a time: DST holds 4 FP32
+// tiles), then onto the partial sums in the packer (L1 accumulation).
 template <ckernel::MathFidelity fidelity>
 ALWI void matmul(
     uint32_t cb_in0,
@@ -51,6 +52,7 @@ ALWI void matmul(
     uint32_t cb_own,
     uint32_t cb_pair,
     bool own_first,
+    uint32_t ways,
     uint32_t rows,
     uint32_t columns,
     uint32_t kb,
@@ -63,15 +65,17 @@ ALWI void matmul(
     MATH((ckernel::throttled_mop_status = 0));
 #endif
     cb_reserve_back(cb_own, rows * columns);
-    cb_reserve_back(cb_pair, rows * columns);
+    if (ways == 2) {
+        cb_reserve_back(cb_pair, rows * columns);
+    }
     for (uint32_t b = 0; b < blocks; ++b) {
         cb_wait_front(cb_in0, rows * kb);
-        cb_wait_front(cb_in1, kb * 2 * columns);
+        cb_wait_front(cb_in1, kb * ways * columns);
         for (uint32_t m = 0; m < rows; ++m) {
-            for (uint32_t head = 0; head < 2; ++head) {
+            for (uint32_t head = 0; head < ways; ++head) {
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < kb; ++k) {
-                    matmul_step<fidelity>(cb_in0, cb_in1, m * kb + k, (2 * k + head) * columns, columns, kb);
+                    matmul_step<fidelity>(cb_in0, cb_in1, m * kb + k, (ways * k + head) * columns, columns, kb);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
@@ -86,10 +90,10 @@ ALWI void matmul(
             pack_reconfig_l1_acc(1);
         }
         cb_pop_front(cb_in0, rows * kb);
-        cb_pop_front(cb_in1, kb * 2 * columns);
+        cb_pop_front(cb_in1, kb * ways * columns);
     }
     pack_reconfig_l1_acc(0);
-    cb_push_back(cb_pair, rows * columns);
+    cb_push_back(ways == 2 ? cb_pair : cb_own, rows * columns);
 }
 
 // g of this core's head: the pair's core's partial sums (cb_partial, FP32, unpacked to DST exactly) onto this core's

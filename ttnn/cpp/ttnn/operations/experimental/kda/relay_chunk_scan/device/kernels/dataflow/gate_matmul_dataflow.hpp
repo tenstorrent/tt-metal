@@ -253,15 +253,16 @@ FORCE_INLINE void swap_partials(
     noc_async_write_barrier();
 }
 
-// The output gate's operands as a kernel moves them. The heads of a batch pair up, h with h + heads / 2, and each
-// core forms both heads' columns of its rows over its head's half of K (the first half for a pair's first head), then
-// swaps partial sums with the pair's core (swap_partials). Compile-time args from `ct`: x's, W's and the progress CBs,
+// The output gate's operands as a kernel moves them. Where the buffers fit (`ways` 2), the heads of a batch pair up,
+// h with h + heads / 2, and each core forms both heads' columns of its rows over its head's half of K (the first half
+// for a pair's first head), then swaps partial sums with the pair's core (swap_partials); else (`ways` 1) each core
+// forms its head's over all of K. Compile-time args from `ct`: x's, W's and the progress CBs,
 // the rows and a head's columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0:
 // none), W's tile columns, the heads per batch, the x groups (two per place: the pairs' first heads' cores, then their
 // second's; W's follow, one per head), where the group table and the gate's common args start, the CBs of the partial
 // sums of the pair's head and of the pair's of this core's head and their swap's semaphores, then the input's, the
 // local input's and W's accessor args. Common args: the input, the local input, W, the TP rank, and x's and W's block
-// counts.
+// counts. Last of the compile-time args before the accessors: `ways`.
 template <uint32_t ct>
 struct Operands {
     static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
@@ -281,19 +282,20 @@ struct Operands {
     static constexpr uint32_t cb_partial = get_compile_time_arg_val(ct + 14);
     static constexpr uint32_t ready_id = get_compile_time_arg_val(ct + 15);
     static constexpr uint32_t partial_id = get_compile_time_arg_val(ct + 16);
-    static constexpr auto input_args = TensorAccessorArgs<ct + 17>();
+    static constexpr uint32_t ways = get_compile_time_arg_val(ct + 17);
+    static constexpr auto input_args = TensorAccessorArgs<ct + 18>();
     static constexpr auto local_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static constexpr auto weight_args = TensorAccessorArgs<local_args.next_compile_time_args_offset()>();
-    // Each core's half of K.
-    static constexpr uint32_t blocks = k / kb / 2;
+    // Each core's share of K.
+    static constexpr uint32_t blocks = k / kb / ways;
 
-    static uint32_t half(uint32_t head) { return head % heads >= heads / 2; }
+    static uint32_t half(uint32_t head) { return ways == 2 && head % heads >= heads / 2; }
     // A pair's first head.
     static uint32_t first(uint32_t head) { return head - half(head) * (heads / 2); }
 
     // x of a correction core's chunks, or its head's W: whichever the other kernel leaves it.
     static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
-        x_share(2 * group + half(head)).all(blocks, x_read(first_row, half(head)));
+        x_share(ways * group + half(head)).all(blocks, x_read(first_row, half(head)));
     }
     static void move_w(uint32_t head) { w_share(head).all(blocks, w_read(head)); }
     // The partial sums with the pair's core, at NoC x | y << 16 `pair_xy`.
@@ -333,8 +335,8 @@ struct Operands {
             table,
             x_groups + head,
             cb_w,
-            kb * 2 * columns,
-            kb * 2 * columns * get_tile_size(cb_w),
+            kb * ways * columns,
+            kb * ways * columns * get_tile_size(cb_w),
             common + 5,
             get_write_ptr(cb_progress) + w_progress);
     }
@@ -345,12 +347,12 @@ struct Operands {
         const uint32_t k_begin = half(head) * blocks * kb;
         return [=](uint32_t b, uint32_t slot) {
             for (uint32_t i = 0; i < kb; ++i) {
-                for (uint32_t pair = 0; pair < 2; ++pair) {
+                for (uint32_t pair = 0; pair < ways; ++pair) {
                     for (uint32_t j = 0; j < columns; ++j) {
                         noc_async_read_page(
                             (k_begin + b * kb + i) * width + first_column + pair * (heads / 2) * columns + j,
                             weight,
-                            slot + ((2 * i + pair) * columns + j) * tile);
+                            slot + ((ways * i + pair) * columns + j) * tile);
                     }
                 }
             }
