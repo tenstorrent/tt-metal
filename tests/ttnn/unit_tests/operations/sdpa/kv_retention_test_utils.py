@@ -22,7 +22,9 @@ def assert_same_attention(expected, actual, what):
     corrupting a row, gives an O(1) relative error."""
     e, a = expected.double(), actual.double()
     rel = ((a - e).norm() / e.norm().clamp_min(1e-30)).item()
-    assert rel < 0.01, f"{what}: relative error {rel:.4g}"
+    # STANDARD's L2 bound against FP64 is 3.5% (sdpa_recipe_test_utils.L2_PCT_BOUND); two schedules (e.g. a Q chunk on
+    # the fused path in one, on the reduce path in the other) may each use part of it.
+    assert rel < 0.035, f"{what}: relative error {rel:.4g}"
 
 
 def skip_if_wormhole_lofi_hang(q_chunk):
