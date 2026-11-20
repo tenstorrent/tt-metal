@@ -35,7 +35,7 @@ ALWI void elu_tile(uint32_t idst, uint32_t param0) {
                 DST_SYNC_MODE,
                 is_fp32_dest_acc_en,
                 calculate_elu,
-                (APPROX, is_fp32_dest_acc_en, 32),
+                (APPROX, is_fp32_dest_acc_en, 32 /*ITERATIONS*/),
                 idst,
                 VectorMode::None,
                 param0);
