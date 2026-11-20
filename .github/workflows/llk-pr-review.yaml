@@ -86,7 +86,7 @@ jobs:
         id: vault
         # The action's pull request is not merged yet: repin to the merge commit
         # on main of tenstorrent/.github when it is.
-        uses: tenstorrent/.github/actions/vault-secrets@5287b8d03bfcb0d13b2d839907e203b0e9728e81
+        uses: tenstorrent/.github/actions/vault-secrets@a697f1bb22ad8b488b0ac63f9a261e462179fe13 # vault-secrets-v1.0.0
         with:
           role: tenstorrent--tt-metal--llk-review
           github-token: tenstorrent--tt-metal--llk-knowledge-read
