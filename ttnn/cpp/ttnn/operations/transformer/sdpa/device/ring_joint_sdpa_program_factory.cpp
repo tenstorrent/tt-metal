@@ -2515,6 +2515,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    if (args.output_concat_heads) {
+        defines["OUTPUT_CONCAT_HEADS"] = "1";  // the writer packs the heads side by side
+    }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(!fp32_dest_acc_en, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
         defines["SDPA_MATMUL_FIDELITY"] =

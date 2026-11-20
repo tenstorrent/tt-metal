@@ -69,6 +69,8 @@ class Attention(Module):
         },
     }
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
+    # Ring SDPA writes the heads side by side, so concatenate_heads is a reshape (self-attention only)
+    ring_sdpa_concat_heads: bool = False
 
     def __init__(
         self,
@@ -625,6 +627,8 @@ class Attention(Module):
                 persistent_joint_k = self.ccl_manager.get_ag_ping_pong_buffer(add_k.shape, 2, sp_axis)
                 persistent_joint_v = self.ccl_manager.get_ag_ping_pong_buffer(add_v.shape, 2, sp_axis)
 
+        ring_self = self.parallel_config.sequence_parallel.factor > 1 and int(add_q.shape[2]) == 0
+        concat_out = self.ring_sdpa_concat_heads and ring_self
         if self.parallel_config.sequence_parallel.factor > 1:
             config_length = (
                 sequence_1.shape[1] * self.parallel_config.sequence_parallel.factor
@@ -661,6 +665,7 @@ class Attention(Module):
                 ccl_core_grid_offset=(0, self.get_ring_sdpa_core_grid(config_length)[1]),
                 persistent_output_buffer_joint_k=persistent_joint_k,
                 persistent_output_buffer_joint_v=persistent_joint_v,
+                output_concat_heads=concat_out,
             )
         else:
             assert (
@@ -679,7 +684,10 @@ class Attention(Module):
                 compute_kernel_config=self.sdpa_compute_kernel_config,
             )
 
-        spatial = ttnn.transformer.concatenate_heads(spatial)
+        if concat_out:  # [B, 1, N, H * D] -> [B, N, H * D]
+            spatial = ttnn.reshape(spatial, (spatial.shape[0], spatial.shape[2], spatial.shape[3]))
+        else:
+            spatial = ttnn.transformer.concatenate_heads(spatial)
         if self.to_out is not None:
             spatial = self.to_out(
                 x=spatial,

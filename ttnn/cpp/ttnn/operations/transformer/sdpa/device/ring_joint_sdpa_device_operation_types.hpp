@@ -50,6 +50,9 @@ struct RingJointSDPAParams {
     // The per-chip padded length N_local is a runtime quantity: the hash ignores it and the kernels take it
     // from one common runtime word. Needs logical_n as a device tensor and non-causal MHA (> 1 head/chip, own V).
     bool dynamic_local_n = false;
+    // The writer packs the heads side by side, output [B, 1, N_local, NH * vDH] (what nlp_concat_heads makes of
+    // [B, NH, N_local, vDH]); self-attention only
+    bool output_concat_heads = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -75,7 +78,8 @@ struct RingJointSDPAParams {
         std::optional<uint32_t> sliding_window_size = std::nullopt,
         bool circular_kv_cache = false,
         uint32_t kv_stripe_split = 1,
-        bool dynamic_local_n = false) :
+        bool dynamic_local_n = false,
+        bool output_concat_heads = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -98,7 +102,8 @@ struct RingJointSDPAParams {
         sliding_window_size(sliding_window_size),
         circular_kv_cache(circular_kv_cache),
         kv_stripe_split(kv_stripe_split),
-        dynamic_local_n(dynamic_local_n) {}
+        dynamic_local_n(dynamic_local_n),
+        output_concat_heads(output_concat_heads) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -139,7 +144,8 @@ struct RingJointSDPAParams {
         "kv_stripe_split",
         "dynamic_local_n",
         "all_gather_operation_attributes",
-        "all_gather_tensor_args");
+        "all_gather_tensor_args",
+        "output_concat_heads");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -162,7 +168,8 @@ struct RingJointSDPAParams {
             std::cref(kv_stripe_split),
             std::cref(dynamic_local_n),
             std::cref(all_gather_operation_attributes),
-            std::cref(all_gather_tensor_args));
+            std::cref(all_gather_tensor_args),
+            std::cref(output_concat_heads));
     }
 };
 

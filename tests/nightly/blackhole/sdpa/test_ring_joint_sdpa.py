@@ -866,6 +866,7 @@ def call_sdpa(
     circular_kv_cache=False,
     kv_valid_end_tensor=None,
     ccl_core_grid_offset=None,
+    output_concat_heads=False,
 ):
     """The all-gather runs on column ccl_column, or row-major from ccl_core_grid_offset when given."""
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -904,6 +905,7 @@ def call_sdpa(
         kv_cache_layer_idx=kv_cache_layer_idx,
         circular_kv_cache=circular_kv_cache,
         kv_valid_end_tensor=kv_valid_end_tensor,
+        output_concat_heads=output_concat_heads,
     )
     return tt_out
 
@@ -5839,6 +5841,86 @@ def test_ring_joint_attention_sdpa_ccl_row_cores(expect_error):
         assert torch.equal(rectangle, with_ccl_row), "the CCL row's cores changed the output"
         with expect_error(RuntimeError, "ccl_row_sdpa_start_x"):
             run(all_gather_cores - 1)
+    finally:
+        close_ring_joint_sdpa_runtime(runtime)
+
+
+def test_ring_joint_attention_sdpa_concat_heads():
+    """output_concat_heads writes the heads side by side, [B, 1, N, NH * DH]: byte for byte what nlp_concat_heads makes
+    of the default [B, NH, N, DH] output."""
+    mesh_config = MESH_CONFIG
+    model = MODEL_CONFIGS["wan2_2_1xGLX"]
+    assert not model.is_causal and not model.is_balanced
+    nhq, nhk, nhv = scaled_model_heads_for_mesh(model, mesh_config)
+    sq = model.seq_len * mesh_config.sp_size
+    q_chunk_size, k_chunk_size = get_model_qk_configs(model)[0]
+    runtime = open_ring_joint_sdpa_runtime(mesh_config)
+    try:
+        mesh_device = runtime.mesh_device
+        torch.manual_seed(1234)
+        Q = torch.randn(BATCH_SIZE, nhq, sq, model.d_q)
+        K = torch.randn(BATCH_SIZE, nhk, sq, model.d_k)
+        V = torch.randn(BATCH_SIZE, nhv, sq, model.d_v)
+
+        def mesh_dims(seq_dim, heads_dim):  # SP shards the sequence, TP the heads (dim 1, or dim 3 side by side)
+            dims = [None, None]
+            dims[runtime.sp_axis] = seq_dim
+            if mesh_config.tp_size > 1:
+                dims[runtime.tp_axis] = heads_dim
+            return dims
+
+        def to_device(t, dtype, shard_dims):
+            return ttnn.from_torch(
+                t,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=shard_dims),
+            )
+
+        tt_q = to_device(Q, model.q_dtype, mesh_dims(2, 1))
+        tt_k = to_device(K, model.kv_dtype, mesh_dims(2, 1))
+        tt_v = to_device(V, model.kv_dtype, mesh_dims(2, 1))
+        p_buf_k = to_device(torch.zeros_like(K), model.kv_dtype, mesh_dims(None, 1))
+        p_buf_v = to_device(torch.zeros_like(V), model.kv_dtype, mesh_dims(None, 1))
+        fence_persistent_buffers(mesh_device)
+        program_config = ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=q_chunk_size,
+            k_chunk_size=k_chunk_size,
+            exp_approx_mode=False,
+        )
+
+        def run(out_heads_dim, v=tt_v, buf_v=p_buf_v, **kwargs):
+            tt_out = call_sdpa(
+                tt_q,
+                tt_k,
+                v,
+                sq,
+                is_causal=False,
+                is_balanced=False,
+                p_buf_k=p_buf_k,
+                p_buf_v=buf_v,
+                program_config=program_config,
+                compute_kernel_config=runtime.compute_kernel_config,
+                ccl_semaphore_handles=runtime.ccl_semaphore_handles,
+                num_links=runtime.num_links,
+                sp_axis=runtime.sp_axis,
+                mesh_device=mesh_device,
+                topology=runtime.topology,
+                worker_sub_device_id=runtime.worker_sub_device_id,
+                ccl_column=runtime.ccl_column,
+                **kwargs,
+            )
+            dims = mesh_dims(2, out_heads_dim)
+            composer = ttnn.create_mesh_composer(
+                mesh_device, ttnn.MeshComposerConfig(*[-1 if d is None else d for d in dims])
+            )
+            return ttnn.to_torch(tt_out, mesh_composer=composer)[:, :, :sq, :]
+
+        default = run(1)
+        side_by_side = default.permute(0, 2, 1, 3).reshape(BATCH_SIZE, 1, sq, nhq * model.d_v)
+        assert torch.equal(run(3, output_concat_heads=True), side_by_side), "output_concat_heads changed the output"
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
