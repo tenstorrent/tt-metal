@@ -146,6 +146,17 @@ tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
         padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded param tensor volume must be divisible by TILE_HW");
     TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
 
+    // The compute kernels count 32x32 tiles (total_tiles_to_process), the reader and writer the param's own
+    // (compute_tile_work_split): they agree only on 32x32 tiles.
+    const auto& param_tile = param.tensor_spec().tile();
+    TT_FATAL(
+        param_tile.get_height() == tt::constants::TILE_HEIGHT && param_tile.get_width() == tt::constants::TILE_WIDTH,
+        "Param tiles must be {}x{}, got {}x{}",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        param_tile.get_height(),
+        param_tile.get_width());
+
     uint32_t total_tiles_to_process = padded_tensor_volume / tt::constants::TILE_HW;
 
     // get number of free cores
@@ -154,8 +165,6 @@ tt::tt_metal::ProgramDescriptor SGDProgramFactory::create_descriptor(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
         tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_tiles_to_process);
     const WorkSplit split = compute_tile_work_split(param);
-    check_work_split(
-        split, num_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2);
 
     uint32_t block_size = std::min(8U, num_tiles_per_core_group_1);
     // -------------------------------------------------------------------------

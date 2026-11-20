@@ -147,6 +147,12 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSingleSeedSetCoresProgramFact
     // Tensor config info
     const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
+    // The readers land all ids in one tile-sized dataflow buffer entry.
+    TT_FATAL(
+        number_of_ids <= user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        "manual_seed supports at most {} user_ids, got {}",
+        user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        number_of_ids);
 
     // Create core kernels
     const std::string reader_kernel_path =
@@ -257,6 +263,12 @@ ttnn::device_operation::ProgramArtifacts ManualSeedSetSeedsSetCoresProgramFactor
     // Tensor config info
     const auto& user_ids_mesh = tensor_args.user_ids.value().mesh_tensor();
     const auto number_of_ids = static_cast<uint32_t>(user_ids_mesh.logical_volume());
+    // The readers land all ids in one tile-sized dataflow buffer entry.
+    TT_FATAL(
+        number_of_ids <= user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        "manual_seed supports at most {} user_ids, got {}",
+        user_ids_mesh.tensor_spec().tile().get_tile_hw(),
+        number_of_ids);
 
     const auto& seeds_mesh = tensor_args.seeds.value().mesh_tensor();
 

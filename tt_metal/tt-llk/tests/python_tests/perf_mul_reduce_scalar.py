@@ -22,7 +22,7 @@ from test_mul_reduce_scalar import test_mul_reduce_scalar as _test_mul_reduce_sc
     math_fidelity=[MathFidelity.HiFi2, MathFidelity.HiFi4],
     num_tiles=_num_tiles_for_format,
     tile_dimensions=TILE_DIMENSIONS,
-    math_op=list(GOLDEN_OPS),
+    mathop=list(GOLDEN_OPS),
     **PERF_MEASUREMENT_AXES,
 )
 def test_perf_mul_reduce_scalar(
@@ -31,7 +31,7 @@ def test_perf_mul_reduce_scalar(
     math_fidelity,
     num_tiles,
     tile_dimensions,
-    math_op,
+    mathop,
     run_types,
     loop_factor,
     is_perf,
@@ -41,7 +41,7 @@ def test_perf_mul_reduce_scalar(
         math_fidelity,
         num_tiles,
         tile_dimensions,
-        math_op,
+        mathop,
         is_perf=is_perf,
         perf_report=perf_report,
         run_types=run_types,

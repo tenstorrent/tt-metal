@@ -5,6 +5,7 @@
 """Tests for check_redefined_helpers.py."""
 
 import os
+import subprocess
 import sys
 import textwrap
 
@@ -12,6 +13,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import check_redefined_helpers as chk  # noqa: E402
+import precommit_common  # noqa: E402
 from precommit_common import REPO_ROOT as REPO  # noqa: E402
 
 
@@ -321,13 +323,35 @@ def test_l1_check_ignores_raw_limit_and_detects_first_statement_in_function():
 
 
 def test_git_rev_rejects_option_injection():
-    assert chk.safe_git_rev("abc123def") == "abc123def"
-    assert chk.safe_git_rev("origin/main") == "origin/main"
-    assert chk.safe_git_rev("HEAD^") == "HEAD^"
-    assert chk.safe_git_rev("--output=/tmp/x") is None
-    assert chk.safe_git_rev("-c") is None
-    assert chk.safe_git_rev("HEAD;rm") is None
-    assert chk.safe_git_rev("rev\n--version") is None
+    safe_git_rev = precommit_common.safe_git_rev
+    assert safe_git_rev("abc123def") == "abc123def"
+    assert safe_git_rev("origin/main") == "origin/main"
+    assert safe_git_rev("HEAD^") == "HEAD^"
+    assert safe_git_rev("--output=/tmp/x") is None
+    assert safe_git_rev("-c") is None
+    assert safe_git_rev("HEAD;rm") is None
+    assert safe_git_rev("rev\n--version") is None
+
+
+def test_precommit_revisions_reject_a_bad_environment_value(monkeypatch):
+    monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    assert precommit_common.precommit_revisions() == []
+    monkeypatch.setenv("PRE_COMMIT_FROM_REF", "origin/main")
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "HEAD")
+    assert precommit_common.precommit_revisions() == ["origin/main", "HEAD"]
+    monkeypatch.setenv("PRE_COMMIT_TO_REF", "--output=/tmp/x")
+    assert precommit_common.precommit_revisions() is None
+
+
+def test_name_status_keeps_both_sides_of_a_rename():
+    payload = "D\0api/old.hpp\0R100\0api/a.hpp\0elsewhere/a.hpp\0M\0b.hpp\0"
+    assert precommit_common.name_status_entries(payload) == [
+        ("D", ["api/old.hpp"]),
+        ("R100", ["api/a.hpp", "elsewhere/a.hpp"]),
+        ("M", ["b.hpp"]),
+    ]
+    assert precommit_common.name_status_entries("R100\0only-old.hpp") == []
 
 
 def test_paths_outside_the_repo_are_refused():
@@ -372,8 +396,46 @@ def test_diff_parser_counts_only_additions(monkeypatch):
     )
     monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
     monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
-    monkeypatch.setattr(chk, "_git_diff", lambda args: head_diff if args == ["HEAD"] else None)
+    monkeypatch.delenv("PRE_COMMIT", raising=False)
+    monkeypatch.setattr(chk, "_git_diff", lambda args, paths=None: head_diff if args == ["HEAD"] else None)
     assert chk.commit_added_lines() == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
+
+    # pre-commit run --files does not stash. An unstaged edit must still be in the diff,
+    # so PRE_COMMIT selects `git diff HEAD -- <files>`, not the index.
+    calls = []
+
+    def record(args, paths=None):
+        calls.append((args, paths))
+        return head_diff if args == ["HEAD"] else ""
+
+    monkeypatch.setenv("PRE_COMMIT", "1")
+    monkeypatch.setattr(chk, "_git_diff", record)
+    monkeypatch.setattr(chk, "_rename_sources", lambda revisions, paths: [])
+    assert chk.commit_added_lines(["ttnn/a.cpp", "ttnn/b.cpp"]) == {"ttnn/a.cpp": {1}, "ttnn/b.cpp": {3}}
+    assert calls[0] == (["HEAD"], ["ttnn/a.cpp", "ttnn/b.cpp"])
+
+
+def test_a_renamed_file_reports_only_its_changed_lines(tmp_path, monkeypatch):
+    # With only the new path in the pathspec, git cannot pair the rename and every line of
+    # the moved file reads as added. Its existing helpers must not be reported.
+    def git(*args):
+        subprocess.run(
+            ["git", "-c", "user.email=t@t", "-c", "user.name=t", *args], cwd=tmp_path, check=True, capture_output=True
+        )
+
+    git("init", "-q")
+    (tmp_path / "old.cpp").write_text("int a;\nint b;\nint c;\n")
+    git("add", "old.cpp")
+    git("commit", "-qm", "init")
+    git("mv", "old.cpp", "new.cpp")
+    (tmp_path / "new.cpp").write_text("int a;\nint b;\nint c;\nint d;\n")
+    git("add", "new.cpp")
+
+    monkeypatch.setattr(precommit_common, "REPO_ROOT", str(tmp_path))
+    monkeypatch.setattr(chk, "REPO_ROOT", str(tmp_path))
+    monkeypatch.delenv("PRE_COMMIT_FROM_REF", raising=False)
+    monkeypatch.delenv("PRE_COMMIT_TO_REF", raising=False)
+    assert chk.commit_added_lines(["new.cpp"]) == {"new.cpp": {4}}
 
 
 def test_list_mentions_both_sides(capsys):

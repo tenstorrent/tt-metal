@@ -144,7 +144,8 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                               : (*cluster_axis == 0 ? ttnn::MeshCoordinate(destination_rank, group)
                                                     : ttnn::MeshCoordinate(group, destination_rank));
                 const auto destination = mesh_device->get_fabric_node_id(destination_coord);
-                const auto direction = tt::tt_fabric::pipeline_get_forwarding_direction(source, destination);
+                const auto direction =
+                    tt::tt_fabric::pipeline_get_forwarding_direction(*mesh_device, source, destination);
                 if (!direction.has_value()) {
                     if (log_rejection) {
                         log_warning(
@@ -156,7 +157,7 @@ std::optional<uint64_t> resolve_direct_neighbor_route_hash(
                     }
                     return std::nullopt;
                 }
-                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(source, *direction);
+                const auto neighbors = tt::tt_fabric::pipeline_get_chip_neighbors(*mesh_device, source, *direction);
                 const auto mesh_it = neighbors.find(*destination.mesh_id);
                 if (mesh_it == neighbors.end() ||
                     std::find(mesh_it->second.begin(), mesh_it->second.end(), destination.chip_id) ==
@@ -219,7 +220,7 @@ std::optional<ResolvedMeshRoute> resolve_mesh_ring_plan(
     if (shape.dims() != 2) {
         return std::nullopt;
     }
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     if (!cluster_axis.has_value() && !tt::tt_fabric::is_2d_fabric_config(fabric_config)) {
         if (log_rejection) {
             log_warning(
