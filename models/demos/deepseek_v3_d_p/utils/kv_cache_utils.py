@@ -309,6 +309,7 @@ def create_kv_chunk_address_table_block_cyclic(
     layer_rows=None,
     tp_axis=None,
     chunk_size_global=PREFILL_CHUNK_TOKENS,
+    cache_num_users=None,
 ):
     """
     Create and populate a KV chunk address table for disaggregation (Kimi K2.7 model - non-balanced).
@@ -338,6 +339,8 @@ def create_kv_chunk_address_table_block_cyclic(
             is what DeepSeek / Kimi-K2 / GLM want.
         tp_axis: None for a TP-replicated cache, the TP axis for a deduped one (see is_tp_deduped_kv_cache).
         chunk_size_global: the cache's block-cyclic period, the prefill chunk size it was written with.
+        cache_num_users: slots the cache is allocated with, when more than the ``num_users`` it publishes
+            (a traced packed forward's scratch slot, which sits after them in the user-major fold).
 
     Returns:
         lookup_table: Populated KvChunkAddressTable
@@ -354,10 +357,11 @@ def create_kv_chunk_address_table_block_cyclic(
 
     rows = mesh_shape[0]
 
-    # This (building) rank's cache must hold exactly its own stage's layers, folded with num_users.
+    # This (building) rank's cache must hold exactly its own stage's layers, folded with its allocated slots.
+    cache_users = cache_num_users or num_users
     assert (
-        kvpe_cache.shape[0] == num_users * num_my_layers
-    ), f"cache batch dim {kvpe_cache.shape[0]} != num_users({num_users}) * num_my_layers({num_my_layers})"
+        kvpe_cache.shape[0] == cache_users * num_my_layers
+    ), f"cache batch dim {kvpe_cache.shape[0]} != cache slots({cache_users}) * num_my_layers({num_my_layers})"
 
     # The merged table spans ALL layers (not just this rank's), so size the table to the global total.
     config.num_layers = merged_num_layers(stage_layout)

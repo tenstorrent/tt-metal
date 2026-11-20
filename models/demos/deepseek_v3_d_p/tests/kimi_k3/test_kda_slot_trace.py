@@ -18,10 +18,10 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAConfig
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_plain_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import all_zero_bits, assert_bit_identical, make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     build_layer,
+    kda_device_params,
     mla_row_permutation,
     random_weights,
     read_slab_layer,
@@ -56,13 +56,13 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
 @pytest.mark.parametrize(
     "mesh_device,sp_axis,tp_axis,device_params",
     [
-        pytest.param((2, 4), 0, 1, fabric_1d_plain_device_params(), id="sp2tp4"),
+        pytest.param((2, 4), 0, 1, kda_device_params((2, 4)), id="sp2tp4"),
         # Galaxy runs only the production 8x4 TorusXY mesh.
         pytest.param(
             (8, 4),
             0,
             1,
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="sp8tp4-torus-xy",
         ),
