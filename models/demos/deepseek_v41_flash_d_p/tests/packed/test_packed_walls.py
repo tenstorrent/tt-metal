@@ -60,6 +60,14 @@ packed_dram_measured_gib_<case> / packed_dram_unloaded_gib_<case> the two parts)
 
     BRINGUP_CHUNK=8192 DS41_PACKED=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode \\
         scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py
+
+PB.9F (OWNER 2026-11-20 19:00, "I absolutely need an honest measurement"): WALLS_FRESH=1 runs the FRESH walls instead of
+the cases (tests/packed/fresh_common.py): case lanes4x2k, the fixed 4 x 2048 lanes (PACKED=on, PACKED_GLUED=off),
+every timed chunk four NEW requests (each its own AgentX history draw, 64-aligned, >= 2048) in four NEW serving slots
+(the contract's caches; warm-up and timed slots disjoint) in a random lane order, the real previous packed chunk (each
+segment at p - 2048) untimed first as the cases do, program-cache misses allowed and counted; WALLS_FRESH_WARM warm-up
+draws, WALLS_FRESH_RUNS timed (each run again right after: the warm-repeated number), WALLS_FRESH_PROF profiled,
+WALLS_FRESH_PROBE more under the build probe (the ops that built).
 """
 
 from __future__ import annotations
@@ -92,7 +100,18 @@ CHUNK, packed = _pc.CHUNK, _pc.packed
 
 S = spec()
 BATCH_SHARED = True
-BATCH_ITEM_VARS = ("PACKED_WALL_CASES", "PACKED_WALL_CAP", "PB3H_STAMP_DUMP")
+BATCH_ITEM_VARS = (
+    "PACKED_WALL_CASES",
+    "PACKED_WALL_CAP",
+    "PB3H_STAMP_DUMP",
+    "WALLS_FRESH",
+    "WALLS_FRESH_SLOTS",
+    "WALLS_FRESH_WARM",
+    "WALLS_FRESH_RUNS",
+    "WALLS_FRESH_PROBE",
+    "WALLS_FRESH_PROF",
+    "WALLS_FRESH_CASES",
+)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes (0-20 under decode)
 LANE_ROWS = 2048
 SHIFT = 4096  # lane k reads the text shifted by k x SHIFT
@@ -154,6 +173,10 @@ def test_packed_walls(mesh_device, monkeypatch):
     # (no load-time switch set here, OV-61 / F283: the gate's one performance load serves every packed perf test)
     full = list(S.layers())
     layers = batch.run_layers(S, full, last_chunk=False)
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common
+
+    if fresh_common.on():  # PB.9F: the fresh walls (module docstring)
+        return _fresh_walls(mesh_device, layers, monkeypatch)
     cases = _cases()
     top = max(p for c in cases for p in CASES[c] if p is not None)
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
@@ -821,3 +844,140 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int, proj=None) -> di
     finally:
         for st in states.values():
             st.free()
+
+
+# ----------------------------------------------------------------------------------------------- PB.9F fresh walls
+def _fresh_walls(mesh, layers, monkeypatch) -> None:
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
+
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))
+    cap = _cap(deploy)
+    monkeypatch.setitem(S.data["target"], "seq", max(cap, int(S.data["target"]["seq"])))
+    model = batch.device_model(S, mesh, layers, lm_head=False)
+    loaded = model.skip_mode
+    if loaded != "decode":
+        model.use_decoder_skip("decode")
+    hi = min(cap, model.max_seq) - LANE_ROWS
+    text = PositionGolden(S, 3 * SHIFT + hi, CHUNK).tokens()  # (lane k reads from k x SHIFT)
+    slots = F.Slots(model, mesh, cap)
+    try:
+        for case in F.cases(["lanes4x2k"]):
+            try:
+                row = _fresh_lanes(model, mesh, layers, case, hi, text, slots)
+            except Exception as e:  # (owner: a path that fails on fresh positions is recorded, not fixed)
+                if F.is_hang(e):
+                    raise
+                import traceback
+
+                traceback.print_exc()
+                row = F.failed(case, "fixed 4 x 2048 lanes", e)
+            F.record(case, row)
+    finally:
+        slots.free()
+        if loaded != "decode":
+            model.use_decoder_skip(loaded)
+
+
+def _fresh_lanes(model, mesh, layers, case: str, hi: int, text, slots) -> dict:
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
+
+    nwarm, nrun = F.knob("WALLS_FRESH_WARM", 4), F.knob("WALLS_FRESH_RUNS", 8)
+    nprobe, nprof = F.knob("WALLS_FRESH_PROBE", 3), F.knob("WALLS_FRESH_PROF", 3)
+    base = 400000 + CHUNK
+    seeds = {
+        "warm": [base + 900 + w for w in range(nwarm)],
+        "timed": [base + r for r in range(nrun)],
+        "probe": [base + 500 + j for j in range(nprobe)],
+    }
+    print(f"FRESH {case}: seeds {seeds}", flush=True)
+
+    def draw(seed: int, phase: str) -> dict:
+        d = F.Draw(seed)
+        pos = [d.history(lo=LANE_ROWS, hi=hi) for _ in range(4)]
+        sl = slots.pick(4, phase, d.rnd)
+        lanes = list(range(4))
+        d.rnd.shuffle(lanes)  # lanes[k]: the lane of request k
+        return {"seed": seed, "pos": pos, "slots": sl, "lanes": lanes, "new": 4 * LANE_ROWS}
+
+    def run(dr: dict, prev: bool, prof: bool = False):
+        segs, ids = [None] * 4, [None] * 4
+        for k in range(4):
+            s = dr["pos"][k] - (LANE_ROWS if prev else 0)
+            segs[dr["lanes"][k]] = Segment(dr["slots"][k], s, s + LANE_ROWS)
+            ids[dr["lanes"][k]] = text[k * SHIFT + s : k * SHIFT + s + LANE_ROWS].long()
+        desc = ChunkDescriptor.packed(CHUNK, segs)
+        sts = [slots.state(sg.slot) for sg in segs]
+        inp = make_input(mesh, desc, ids)  # (the engine's H2D: not timed)
+        model.sync()
+        if prof:
+            profiler.enable(mesh, rt=True)
+            profiler.set_layer(None)
+        t0 = time.time()
+        dev = None
+        try:
+            nat = ids_from_input(mesh, inp, desc)
+            run_chunk(model, desc, nat, sts, layers, last=False, inp=inp)
+            model.sync()
+            wall = (time.time() - t0) * 1e3
+            if prof:
+                profiler.signpost("end")
+                profiler.finish_rt()
+                dev = _device_split(profiler.result())["slowest"]
+        finally:
+            if prof:
+                profiler.disable()
+            ttnn.deallocate(inp)
+        return wall, dev
+
+    with packed("on"), _pc.switch("PACKED_GLUED", "off"):
+        for sd in seeds["warm"]:
+            dr = draw(sd, "warm")
+            run(dr, True)
+            w, _ = run(dr, False)
+            print(f"FRESH {case} warm-up {dr}: {w:.1f} ms", flush=True)
+        fresh, repeat, prof, builds, draws = [], [], [], 0, []
+        pc, preps = F.PrepCount(), [0, 0.0]  # (prepared programs built in the fresh runs: no cache entry of their own)
+        for i, sd in enumerate(seeds["timed"]):
+            dr = draw(sd, "timed")
+            e0 = cache_entries(mesh)
+            with pc:
+                p0, m0 = pc.n, pc.ms
+                run(dr, True)
+                wf, _ = run(dr, False)
+                preps[0] += pc.n - p0
+                preps[1] += pc.ms - m0
+            e1 = cache_entries(mesh)
+            built = -1 if e0 is None or e1 is None else e1 - e0
+            builds += max(built, 0)
+            run(dr, True)  # the warm-repeated run: the same chunks again
+            wr, _ = run(dr, False)
+            fresh.append((wf, dr["new"]))
+            repeat.append((wr, dr["new"]))
+            dev = None
+            if i < nprof:
+                run(dr, True)
+                _, dev = run(dr, False, prof=True)
+                prof.append((wf, wr, dev))
+            draws.append(
+                {
+                    **dr,
+                    "fresh_ms": round(wf, 1),
+                    "repeat_ms": round(wr, 1),
+                    "built": built,
+                    "prepared": pc.n - p0,
+                    "device_ms": dev,
+                }
+            )
+            print(f"FRESH {case} timed {dr}: fresh {wf:.1f} ms (+{built} programs), repeated {wr:.1f} ms, device {dev}")
+        with F.BuildProbe(mesh) as pb:
+            for sd in seeds["probe"]:
+                dr = draw(sd, "timed")
+                run(dr, True)
+                run(dr, False)
+        pb.print(case)
+    extra = {"seeds": seeds, "draws": draws, "probe_chunks": 2 * len(seeds["probe"])}
+    return F.summarize(
+        case, "fixed 4 x 2048 lanes (PACKED=on, GLUED=off)", fresh, repeat, prof, builds, pb, extra, tuple(preps)
+    )

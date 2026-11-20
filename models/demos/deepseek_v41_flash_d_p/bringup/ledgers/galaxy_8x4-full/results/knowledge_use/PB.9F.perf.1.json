@@ -1,0 +1,81 @@
+{
+ "used": [
+  {
+   "id": "DS41-185",
+   "how": "switched PACKED / PACKED_GLUED per call inside the fresh tests through packed_common.switch (the frozen settings snapshot), never by environment alone",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "no settings.refresh() in the fresh tests on the resident runner's held model",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-344",
+   "how": "relied on the LRU constant cache for the lanes side on fresh AgentX layouts (no crash on contract slots)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how many slots tt-d-gen serves at 1M context (num_users): the fresh walls use 32 contract slots, a guess",
+  "that a prepared program whose per-run values are value slots keeps one cache hash, so a new prepare is invisible to program_builds counts (counted with PrepCount now)",
+  "that the adapter builds a slot's DS41DeviceState lazily on the slot's first request (a timing harness must build them before timing)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "measurement task: tests only, no kernel or padding change"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PPB.9F (contract slots, builds include the untimed previous chunk)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "fresh mode raises max_seq to the walls' capacity (deploy in whole chunks) in all three tests, no load-time env, WALLS_FRESH* in BATCH_ITEM_VARS; gate check #2 ran the three perf units on one load"
+  },
+  {
+   "id": "OV-67",
+   "answer": "done",
+   "evidence": "measured per path, fresh layouts only: glued_new_layout_ms agentx 8.5 / 2.5 / 1.5 ms, 5x1600 14.0 ms (0 builds, 0 prepares), lanes 27-50 ms; host ms/chunk fresh vs repeated in results/PB.9F_fresh_walls.md"
+  },
+  {
+   "id": "OV-68",
+   "answer": "done",
+   "evidence": "fresh starts, fresh serving slots (DS41ContractKV, slot in the slab batch row), real partial last chunks (single8192_partial) and a replay (single8192_resumed) measured at 8192: 0-1 builds there (PACKED_GLUED_DYNAMIC=on gives the single path PB.7C's dynamic parts); the lane path builds ~20 a chunk (served.py:155 slice_rows, served.py:211 DeviceScalars._pick, history_gather _tail_part, snapshot_send prepares); the 5120 default path is PB.9F5 with the same test"
+  }
+ ],
+ "cited_only": [
+  "DS41-346"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.9F",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T21:33:40",
+  "head": "ce4e3bc674f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9F.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9F_fresh_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9F_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.9F.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/fresh_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}

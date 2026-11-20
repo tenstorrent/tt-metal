@@ -989,3 +989,16 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   oracles all 0. FIRST HONEST GLUED NUMBERS (fresh layouts every chunk, = repeated): AgentX mixes 47.2 / 51.0 / 51.7k
   new tok/s; 5 x 1.6k 57.7k; 4x2k 72.6k. Fixed lanes fresh: 25.1 / 28.6 / 30.1k (repeated 33.1 / 36.1 / 35.5k) with
   212 / 122 / 128 builds: PB.9X's job. DECIDED: accept.
+- 21:35 UTC OWNER: priority now = fix the model_bringup branch after the measurements; overseer low on context. PLAN:
+  pause after PB.9F (requested now), run PB.9F5 alone (resume --only PB.9F5), stop the batching queue there (PB.9X ->
+  PB.T stay queued, not run). Report the fresh measurements. If reliable: set up the ledger on dnijemcevic/model_bringup
+  (MB.1: bring PB.9F's fresh-traffic tests over, tests only, and measure the shipped branch honestly; MB.2: the
+  single-request fix from the audit OV-68 (start / slot x layer x start / last-chunk end / replay offsets as runtime
+  values, ids reorder on device), gate = 5120 accept units + fresh walls with 0 builds after warm-up), for the owner to
+  kick off. Switching branches needs the batching orchestrator stopped and the tree clean (one folder, one branch).
+- 21:45 UTC PB.9F done (tests only), gate units all PASS (the quick A/B side lacks fresh metrics: its "would FAIL"
+  is that). FRESH 8192 walls (results/PB.9F_fresh_walls.md, seeds logged, misses counted): single request steady 72.2k
+  warm -> 72.6k fresh, resumed 72.3 -> 72.5k (0 builds: CLEAN); fixed lanes 4x2k 67.8 -> 59.0k (-13 %, 346 builds:
+  slice @ served.py:155 x45 ...); fixed lanes AgentX 33.6 / 37.1 / 36.0 -> 23.3 / 26.5 / 28.9k (-20..-31 %); glued
+  AgentX 47.9 / 52.4 / 52.5 -> 45.1 / 51.5 / 52.0k (-1..-6 %, ~0 builds); glued 5 x 1.6k 52.5 -> 48.1k. DECIDED:
+  accept; PB.9F5 (5120) next, alone; the batching queue stops after it.

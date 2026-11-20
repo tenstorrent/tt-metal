@@ -2469,3 +2469,68 @@ Plan and expectation (written before the first load):
   walls rose ~10 %. Not moved: the kernels' per-call runtime args (computed from the descriptor each chunk, no upload,
   DECIDED above). The packed_glued module docstring still says "uploaded once a descriptor" for the non-dynamic path
   (PACKED_GLUED_DYNAMIC=off); left untouched after the gate so the recorded runs stay valid.
+
+## PPB.9F (PB.9F perf, attempt 1): HONEST fresh walls (WALLS_FRESH=1), a measurement: tests only
+
+- Overseer notes OV-3 / OV-58 / OV-61 / OV-67 / OV-68 read first; PACKED_RULES.md read. A MEASUREMENT task (owner 19:00):
+  no tt/ or fork change; a path that fails on fresh positions is recorded, not fixed.
+- Expected saving per chunk (perf_guide, written before any code change): device 0 ms, host 0 ms (nothing in the model
+  changes). What the fresh mode should SHOW: on the single-request and fixed-lane paths, program builds after warm-up > 0
+  (OV-68's slices: RoPE begin=start, compressed-row RoPE start//r, DeviceScalars.at, slab.slice_rows slot x layers +
+  row, replay offsets) and a fresh-vs-repeated wall gap of the builds' host cost (each build ~ms); glued ~0 (PB.7C).
+- Built: tests/packed/fresh_common.py (AgentX draws; `Slots`: serving's slots = a DS41ContractKV of WALLS_FRESH_SLOTS (32)
+  slots over the loaded layers, states bound to their slabs as the adapter's state(), warm-up pool 0-15 / timed 16-31;
+  `BuildProbe`: the PB.7C dynamic probe's wrap, a build charged to the innermost wrapped call, its arguments diffed
+  against the previous call at the same site = the attribute that changed; the table writer). WALLS_FRESH=1 in
+  test_skip_positions.py (single<chunk>_steady / _resumed / _partial, PACKED=off through run_chunk: the adapter's path
+  from the engine input), test_packed_walls.py (lanes4x2k), test_glued_walls.py (glued_/lanes_agentx_m1..3,
+  glued_5x1600; PB.7C's fresh flow + slots, profiled repeats, probe). Gated names: <case>_fresh_tok_s,
+  program_builds_after_warmup_<case>; glued's old list metric `<side>_fresh_mixes_*` renamed `<side>_mixes_timed_*`
+  (a list under the gate's `*_fresh*` > 0 fails float()).
+- DECIDED (OV-58): fresh slots = the contract's caches (own new_state() slabs are slot 0 / one batch: a slot-keyed program
+  never shows there); the slot index is the slab's batch row (slot x layers + row) as in serving. 32 slots at the 1M
+  capacity ~ +4.7 GiB a chip (PB.5C: ~0.148 GiB a slot over layers 0-20).
+- DECIDED: builds after warm-up = the cache entries of every fresh timed iteration (the untimed real previous chunk
+  included: in serving it is a fresh chunk too); the repeats and profiled runs are not counted.
+- Load reason: "needs the gate's perf load (layers 0-20, decode, 8192, resident engram table) because the walls are
+  whole-chunk walls through every executed layer; one smoke (1 warm / 1 timed / 1 probe draw a case, all three tests in
+  one process) then the gate units on the same held model".
+- Smoke (resident, 1 draw a case): every path ran on contract slots; the lane path built ~50 programs a fresh chunk.
+- Gate check #1 (`gate PB.9F --check`, 497 s): PASS. Glued fresh walls showed 8 of ~50 chunks at 0.4-1.4 s with 0
+  program-cache builds (glued -28..-58 % vs repeated). Two changes to the measurement (tests only): (a) `PrepCount`
+  counts ttnn.bringup.prepare_program calls in the timed runs (a prepared program whose per-run values are value
+  slots keeps one cache hash, so a new prepare adds no cache entry: it was invisible), and the probe attributes host
+  gaps before a call and slow calls by site; (b) every slot's state is built before timing (the adapter builds a
+  slot's state lazily on its first request: once a process, not a chunk; it was paid inside the first fresh chunks of
+  each slot). Cause of the spikes not proven: with (b) none came back (max 275 ms), prepared builds on the glued side 0.
+- Gate check #2 (after the last code edit, hooks clean): PASS PB.9F (637 s; determinism 0.0). Results
+  (results/PB.9F_fresh_walls.md; 8192, every accepted packing switch on, layers 0-20, decode):
+  | case | warm-repeated tok/s | fresh tok/s | builds after warm-up (cache + prepared) | host ms/chunk fresh (rep) | device ms |
+  | single8192_steady | 72.2k | 72.6k | 1 + 1 / 8 iterations | 13.2 (11.3) | 102.9 |
+  | single8192_resumed | 72.3k | 72.5k | 0 + 0 | 17.1 (15.2) | 98.0 |
+  | single8192_partial (last chunks, 372-4583 rows) | 14.1k | 14.1k | 0 + 0 | 11.5 (12.8) | 122.0 |
+  | lanes4x2k | 67.8k | 59.0k (-13 %) | 346 + 3 / 8 iterations (16 chunks) | 38.3 (14.8) | 109.2 |
+  | lanes_agentx_m1 / m2 / m3 | 33.6k / 37.1k / 36.0k | 23.3k / 26.5k / 28.9k (-31 / -29 / -20 %) | 403+22 / 251+11 / 264+5 | 90 / 53 / 45 (16 / 13 / 16) | 99 / 93 / 96 |
+  | glued_agentx_m1 / m2 / m3 | 47.9k / 52.4k / 52.5k | 45.1k / 51.5k / 52.0k (-6 / -2 / -1 %) | 1 / 0 / 0, prepared 0 | 41 / 21 / 24 (22 / 19 / 23) | 130 / 113 / 117 |
+  | glued_5x1600 | 52.5k | 48.1k (-8 %) | 0 + 0 | 36.7 (17.2) | 131.3 |
+  The single-request path builds nothing at 8192 here: PACKED_GLUED_DYNAMIC=on gives it PB.7C's dynamic parts (RoPE
+  rows, DeviceScalars picks as page copies); OV-68's slices are on the default path, PB.9F5 (5120, switches off)
+  measures that. The lane path's builds (probe, by op and changed argument): ttnn.slice at served.py:155 slice_rows
+  (slice_start / slice_end: the slab batch row slot x layers + row, the rows a history needs) from
+  history_gather._pack / _tail_part / prefetch_prepare; served.py:211 DeviceScalars._pick (k = start // 32) from
+  compressor._put_into 730-732; history_gather.py:376 _tail_part; snapshot_send run_prepared (new owner patterns,
+  prepared); packed_onecall ring_indexer_score_dsa (chunk_start_idx) on AgentX lanes. Its fresh host cost is
+  +23..+74 ms a chunk (DS41-346).
+- Known issues: DS41-185 / DS41-314 used (the switches inside the tests through packed_common.switch, never
+  settings.refresh); DS41-344 (the lanes side's LRU constants: no crash on fresh AgentX lanes); new DS41-346.
+- Re-run: gate `gate PB.9F --spec $BRINGUP_SPEC --check` (devjob); one test: the gate's env +
+  WALLS_FRESH_WARM / _RUNS / _PROBE / _PROF / _SLOTS / _CASES (e.g. WALLS_FRESH_CASES=steady,lanes4x2k,agentx_m1)
+  through `resident submit`. PB.9F5: the same test_skip_positions.py at BRINGUP_CHUNK=5120.
+- OV-67 numbers (fresh minus the same chunks repeated, every timed chunk; gate check #2): glued_new_layout_ms
+  agentx m1 / m2 / m3 8.5 / 2.5 / 1.5 ms (medians 0.2 / 0.4 / -0.3), 5x1600 14.0 (median 17.0) with 0 builds and 0
+  prepares: on serving slots at fresh positions the glued 5 x 1.6k chunk still pays ~15 ms host a new layout that no
+  probe gap > 5 ms names (many small costs; not attributed here). Lanes 49.7 / 44.1 / 27.5 ms (the builds, DS41-346).
+  One ring call a layer on every glued case.
+- Final check `orchestrator measure --task PB.9F`: not run. The orchestrator run is paused (its PAUSE file exists:
+  "paused before A/B on: one process for quick; `resume` continues the task", rc 4); the pause is the overseer's, left
+  as it is. Nothing in tt/ or a fork changed (tests only), so the quick A/B has no switch to compare.

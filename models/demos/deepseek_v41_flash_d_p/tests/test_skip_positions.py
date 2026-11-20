@@ -51,6 +51,19 @@ and skip_positions_table: the markdown table of every point (also printed).
 
     PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
+
+PB.9F (OWNER 2026-11-20 19:00, "I absolutely need an honest measurement"): WALLS_FRESH=1 runs the FRESH walls instead of
+the points (tests/packed/fresh_common.py): the single-request chunk (PACKED=off, the adapter's path: the engine's device
+input, the ids readback, note_tokens / begin_chunk with global_write_start, every layer to PREFILL_END's run end) with
+every timed chunk at a NEW position (AgentX history draws, 64-aligned, >= a chunk) in a NEW serving slot (the contract's
+caches; warm-up and timed slots disjoint), program-cache misses allowed and counted. Kinds (case single<chunk>_<kind>):
+steady (a full chunk, write_start = start), resumed (a full chunk, write_start = start + 128: the encoder replay) and
+partial (a request's last chunk: actual_end = start + the last piece of an AgentX new-token draw, >= 64 rows). Each
+timed iteration runs the real previous chunk [p - chunk, p) untimed first, as the points do. Per kind:
+WALLS_FRESH_WARM warm-up draws, WALLS_FRESH_RUNS timed draws (each run again right after: the warm-repeated number),
+WALLS_FRESH_PROF of them profiled (device ms), WALLS_FRESH_PROBE more draws under the build probe (the ops that built).
+The model is loaded with the position tables of the walls' slot capacity (the deployment context in whole chunks, as
+tests/packed/test_packed_walls.py: one load for the gate's perf tests, OV-61).
 """
 
 from __future__ import annotations
@@ -77,7 +90,16 @@ from models.demos.deepseek_v41_flash_d_p.tt.settings import settings
 
 S = spec()
 BATCH_SHARED = True  # FIX.29: takes the model of a bring-up batch process (core/batch.shareable)
-BATCH_ITEM_VARS = ("SKIP_POS",)
+BATCH_ITEM_VARS = (
+    "SKIP_POS",
+    "WALLS_FRESH",
+    "WALLS_FRESH_SLOTS",
+    "WALLS_FRESH_WARM",
+    "WALLS_FRESH_RUNS",
+    "WALLS_FRESH_PROBE",
+    "WALLS_FRESH_PROF",
+    "WALLS_FRESH_CASES",
+)
 BATCH_POS_VARS = ("SKIP_POS",)  # F288: the plan's model is loaded for the furthest point (core/batch.hints)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run (the points measured), not the model's configuration
 POINTS = (51200, 128000, 256000, 512000, 768000, 1024000)
@@ -165,6 +187,9 @@ def test_skip_positions(mesh_device, monkeypatch):
     # test_profile sizes them for BRINGUP_POS (target.seq, in memory), never past the deployment's context deploy.seq
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     want = max([p + chunk for p in points if p + chunk <= deploy] + [int(S.data["target"]["seq"])])
+    fresh = _fresh_on()
+    if fresh:  # PB.9F: the walls' one capacity (the deployment context in whole chunks; OV-61: one load, one max_seq)
+        want = max(-(-deploy // chunk) * chunk, int(S.data["target"]["seq"]))
     monkeypatch.setitem(S.data["target"], "seq", want)
     t0 = time.time()
     model = batch.device_model(S, mesh_device, layers, lm_head=False)
@@ -174,6 +199,14 @@ def test_skip_positions(mesh_device, monkeypatch):
         model.use_decoder_skip("decode")
     assert model.skip_mode == "decode" and model.decoder, (model.skip_mode, model.decoder)
     print(f"DECODER_SKIP=decode: decoder {model.decoder[0]}..{model.decoder[-1]}, kv-only {sorted(model.kv_only)}")
+
+    if fresh:
+        try:
+            _fresh_walls(model, mesh_device, layers, chunk, want)
+        finally:
+            if loaded != "decode":
+                model.use_decoder_skip(loaded)
+        return
 
     dram = _dram(mesh_device)
     if dram is not None:
@@ -342,3 +375,150 @@ def _table(rows, chunk: int) -> str:
             ] + [f"{r['phases'].get(ph, 0.0):.1f}" for ph in phases]
             lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)
+
+
+# ----------------------------------------------------------------------------------------------- PB.9F fresh walls
+FRESH_KINDS = ("steady", "resumed", "partial")
+FRESH_SEED = {"steady": 1, "resumed": 2, "partial": 3}
+
+
+def _fresh_on() -> bool:
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common
+
+    return fresh_common.on()
+
+
+def _fresh_walls(model, mesh, layers, chunk: int, cap: int) -> None:
+    """PB.9F: the single-request chunk's FRESH walls, a case a kind (module docstring)."""
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
+    from models.demos.deepseek_v41_flash_d_p.tests.packed.packed_common import packed
+
+    hi = min(cap, model.max_seq) - chunk  # (the last start whose chunk fits the slot and the position tables)
+    text = PositionGolden(S, hi, chunk).tokens()  # (hi + chunk tokens of the text: any draw's previous and own chunk)
+    slots = F.Slots(model, mesh, cap)
+    try:
+        with packed("off"):
+            for kind in F.cases(FRESH_KINDS):
+                case = f"single{chunk}_{kind}"
+                try:
+                    row = _fresh_kind(model, mesh, layers, chunk, kind, case, hi, text, slots)
+                except Exception as e:  # (owner: a path that fails on fresh positions is recorded, not fixed)
+                    if F.is_hang(e):
+                        raise
+                    import traceback
+
+                    traceback.print_exc()
+                    row = F.failed(case, "single (PACKED=off)", e)
+                F.record(case, row)
+    finally:
+        slots.free()
+
+
+def _fresh_kind(model, mesh, layers, chunk: int, kind: str, case: str, hi: int, text, slots) -> dict:
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import fresh_common as F
+    from models.demos.deepseek_v41_flash_d_p.tt.packed import ChunkDescriptor
+    from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
+
+    nwarm, nrun = F.knob("WALLS_FRESH_WARM", 4), F.knob("WALLS_FRESH_RUNS", 8)
+    nprobe, nprof = F.knob("WALLS_FRESH_PROBE", 3), F.knob("WALLS_FRESH_PROF", 3)
+    base = 100000 * FRESH_SEED[kind] + chunk
+    seeds = {
+        "warm": [base + 900 + w for w in range(nwarm)],
+        "timed": [base + r for r in range(nrun)],
+        "probe": [base + 500 + j for j in range(nprobe)],
+    }
+    print(f"FRESH {case}: seeds {seeds}", flush=True)
+
+    def draw(seed: int, phase: str) -> dict:
+        d = F.Draw(seed)
+        p = d.history(lo=chunk, hi=hi)
+        slot = slots.pick(1, phase, d.rnd)[0]
+        if kind == "steady":
+            end, ws, new = p + chunk, None, chunk
+        elif kind == "resumed":
+            end, ws, new = p + chunk, p + REPLAY, chunk - REPLAY
+        else:  # a request's last chunk: the last piece of its new tokens (>= 64 rows: PREFILL_END=cap computes rows)
+            while True:
+                m = (d.new_tokens() - 1) % chunk + 1
+                if m >= 64:
+                    break
+            end, ws, new = p + m, None, m
+        return {"seed": seed, "slot": slot, "start": p, "end": end, "write_start": ws, "new": new}
+
+    def run(dr: dict, prev: bool, prof: bool = False):
+        if prev:  # the real previous chunk of the request (untimed)
+            s, e, ws = dr["start"] - chunk, dr["start"], None
+        else:
+            s, e, ws = dr["start"], dr["end"], dr["write_start"]
+        desc = ChunkDescriptor.single(chunk, dr["slot"], s, e, ws)
+        inp = make_input(mesh, desc, [text[s:e].long()])  # (the engine's H2D: not timed)
+        st = slots.state(dr["slot"])
+        model.sync()
+        if prof:
+            profiler.enable(mesh, rt=True)
+            profiler.set_layer(None)
+        t0 = time.time()
+        dev = None
+        try:
+            nat = ids_from_input(mesh, inp, desc)
+            run_chunk(model, desc, nat, [st], layers, last=False)
+            model.sync()
+            wall = (time.time() - t0) * 1e3
+            if prof:
+                profiler.signpost("end")
+                profiler.finish_rt()
+                dev = _device_split(profiler.result())["slowest"]
+        finally:
+            if prof:
+                profiler.disable()
+            ttnn.deallocate(inp)
+        return wall, dev
+
+    for sd in seeds["warm"]:
+        dr = draw(sd, "warm")
+        run(dr, True)
+        w, _ = run(dr, False)
+        print(f"FRESH {case} warm-up {dr}: {w:.1f} ms", flush=True)
+    fresh, repeat, prof, builds, draws = [], [], [], 0, []
+    pc, preps = F.PrepCount(), [0, 0.0]  # (prepared programs built in the fresh runs: no cache entry of their own)
+    for i, sd in enumerate(seeds["timed"]):
+        dr = draw(sd, "timed")
+        e0 = cache_entries(mesh)
+        with pc:
+            p0, m0 = pc.n, pc.ms
+            run(dr, True)
+            wf, _ = run(dr, False)
+            preps[0] += pc.n - p0
+            preps[1] += pc.ms - m0
+        e1 = cache_entries(mesh)
+        built = -1 if e0 is None or e1 is None else e1 - e0
+        builds += max(built, 0)
+        run(dr, True)  # the warm-repeated run: the same chunks again (positions, slot seen)
+        wr, _ = run(dr, False)
+        fresh.append((wf, dr["new"]))
+        repeat.append((wr, dr["new"]))
+        dev = None
+        if i < nprof:
+            run(dr, True)
+            _, dev = run(dr, False, prof=True)
+            prof.append((wf, wr, dev))
+        draws.append(
+            {
+                **dr,
+                "fresh_ms": round(wf, 1),
+                "repeat_ms": round(wr, 1),
+                "built": built,
+                "prepared": pc.n - p0,
+                "device_ms": dev,
+            }
+        )
+        print(f"FRESH {case} timed {dr}: fresh {wf:.1f} ms (+{built} programs), repeated {wr:.1f} ms, device {dev}")
+    with F.BuildProbe(mesh) as pb:
+        for sd in seeds["probe"]:
+            dr = draw(sd, "timed")
+            run(dr, True)
+            run(dr, False)
+    pb.print(case)
+    extra = {"seeds": seeds, "draws": draws, "probe_chunks": 2 * len(seeds["probe"]), "chunk": chunk}
+    return F.summarize(case, "single (PACKED=off)", fresh, repeat, prof, builds, pb, extra, tuple(preps))
