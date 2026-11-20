@@ -416,6 +416,46 @@ def test_two_level_trace_crosses_cutover(device):
         ttnn.release_trace(device, trace_id)
 
 
+def test_two_level_trace_remaps_rows_on_99_cores(device):
+    """On 99 cores (no split rows) the rows of the cores with a second row move at split_first_below: one captured
+    program replayed across it both ways gives exact rows, including rows that change owner."""
+    device.enable_program_cache()
+    rows, width = 160, 524_288
+    torch_input = generate("ties64", rows, width, 24)
+    tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
+    length = _scalar(device, 393_215)
+
+    def run():
+        return ttnn.experimental.topk_large_indices(
+            tt_input,
+            k=K,
+            valid_length_tensor=length,
+            block_select=32,
+            two_level_cutover=FORCE_TWO_LEVEL,
+            sub_core_grids=_grid(device, 11),
+        )
+
+    run()
+    ttnn.synchronize_device(device)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    output = run()
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    try:
+        for n in (393_215, 393_216, 393_215, 393_216):
+            ttnn.copy_host_to_device_tensor(
+                ttnn.from_torch(
+                    torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                ),
+                length,
+            )
+            ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+            _check_rows(torch_input, _indices(output, rows), n, (0, 60, 61, 98, 99, 121, 122, 159))
+    finally:
+        ttnn.release_trace(device, trace_id)
+
+
 def test_two_level_leaves_the_next_op_intact(device):
     """A single-level op after a two-level one on the same cores still gives the exact result."""
     rows, width = 160, 131_072

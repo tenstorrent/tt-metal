@@ -117,12 +117,13 @@ constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
 
 // Row ownership: the first num_rows - split_rows rows are whole rows, row r the local row r / num_cores of the core at
 // position r % num_cores (a whole number of rounds when there are split rows; without, the last round may be
-// partial). The last split_rows rows are halved across core pairs (as the single-level assignment pairs them): split
-// row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the
-// second half that core 2u + 1 sorts. A round's first split_rows positions are the cores 2u, then come the cores
-// 2u + 1, then the cores without a split row: the whole rows' units run in row order, so the cores 2u get their whole
-// rows first, which frees them earlier for their split rows when those come last (see split_rows_first). A row's DRAM
-// bank still follows its index.
+// partial, and with a short phase 1 whole_row_owner gives the cores of the partial round the first rows). The last
+// split_rows rows are halved across core pairs (as the single-level assignment pairs them): split row whole_rows + u
+// belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the second half that core
+// 2u + 1 sorts. A round's first split_rows positions are the cores 2u, then come the cores 2u + 1, then the cores
+// without a split row: the whole rows' units run in row order, so the cores 2u get their whole rows first, which frees
+// them earlier for their split rows when those come last (see split_rows_first). A row's DRAM bank still follows its
+// index.
 constexpr uint32_t whole_row_core(uint32_t position, uint32_t split_rows) {
     if (position < split_rows) {
         return 2 * position;
