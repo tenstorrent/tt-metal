@@ -166,9 +166,9 @@ public:
     distributed::MeshDevice& device() const;
 
     /**
-     * @brief Command-queue id this list is bound to.
+     * @brief Command queue this list is bound to.
      */
-    uint8_t cq_id() const;
+    distributed::MeshCommandQueue& command_queue() const;
 
     /**
      * @brief Patches parameters for all later replays.

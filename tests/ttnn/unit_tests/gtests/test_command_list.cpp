@@ -135,7 +135,7 @@ TEST_F(CommandListTest, RecordBuildReplay) {
     EXPECT_FALSE(builder.is_recording());
 
     CommandList command_list = builder.build(QueueId{0});
-    EXPECT_EQ(*command_list.cq_id(), 0);
+    EXPECT_EQ(&command_list.command_queue(), &device_->mesh_command_queue(0));
 
     command_list.enqueue(/*blocking=*/true);
 

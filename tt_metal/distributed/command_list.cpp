@@ -431,7 +431,7 @@ public:
     void replay(bool blocking, bool check_dram_overlap) const;
     void update_args(const CmdListArgPatch& patch, bool blocking);
     MeshDevice& get_device() const;
-    uint8_t get_cq_id() const;
+    MeshCommandQueue& get_command_queue() const;
 
 private:
     void validate() const;
@@ -652,9 +652,9 @@ MeshDevice& CommandList::Impl::get_device() const {
     return *mesh_device;
 }
 
-uint8_t CommandList::Impl::get_cq_id() const {
+MeshCommandQueue& CommandList::Impl::get_command_queue() const {
     validate();
-    return bound_cq_id;
+    return mesh_device->mesh_command_queue(bound_cq_id);
 }
 
 namespace detail {
@@ -1277,14 +1277,14 @@ MeshDevice& CommandList::device() const {
     return impl_->get_device();
 }
 
-uint8_t CommandList::cq_id() const {
+MeshCommandQueue& CommandList::command_queue() const {
     TT_FATAL(impl_ != nullptr, "CommandList has been moved from");
-    return impl_->get_cq_id();
+    return impl_->get_command_queue();
 }
 
 void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap) {
     TT_FATAL(&command_list.device() == cq.device(), "CommandList belongs to a different MeshDevice");
-    TT_FATAL(command_list.cq_id() == cq.id(), "CommandList was built for a different command queue");
+    TT_FATAL(&command_list.command_queue() == &cq, "CommandList was built for a different command queue");
     command_list.replay(blocking, check_dram_overlap);
 }
 

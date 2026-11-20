@@ -650,8 +650,7 @@ CommandList::~CommandList() {
 void CommandList::enqueue(bool blocking, bool check_dram_overlap) {
     ZoneScoped;
     device_operation::detail::throw_if_recording_command_list("CommandList::enqueue");
-    metal::EnqueueCommandList(
-        device().mesh_command_queue(metal_list_.cq_id()), metal_list_, blocking, check_dram_overlap);
+    metal::EnqueueCommandList(command_queue(), metal_list_, blocking, check_dram_overlap);
 }
 
 void CommandList::update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking) {
@@ -684,6 +683,6 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }
 
-QueueId CommandList::cq_id() const { return QueueId(metal_list_.cq_id()); }
+tt::tt_metal::distributed::MeshCommandQueue& CommandList::command_queue() const { return metal_list_.command_queue(); }
 
 }  // namespace ttnn::command_list

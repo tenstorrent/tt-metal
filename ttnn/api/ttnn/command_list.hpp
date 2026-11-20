@@ -149,7 +149,7 @@ public:
     void update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking = false);
 
     tt::tt_metal::distributed::MeshDevice& device() const;
-    QueueId cq_id() const;
+    tt::tt_metal::distributed::MeshCommandQueue& command_queue() const;
 
 private:
     friend class CommandListBuilder;

@@ -367,8 +367,8 @@ TEST_F(CommandListTest, BuildsIndependentSnapshotsAndReplaysBlockingAndNonBlocki
     builder.add(cq, workload_b);
     auto list_ab = builder.build(cq);
     EXPECT_EQ(&list_a.device(), mesh_device_.get());
-    EXPECT_EQ(list_a.cq_id(), cq.id());
-    EXPECT_EQ(list_ab.cq_id(), cq.id());
+    EXPECT_EQ(&list_a.command_queue(), &cq);
+    EXPECT_EQ(&list_ab.command_queue(), &cq);
 
     // The first snapshot contains only workload A.
     write_l1(mesh_device_, kAddressA, 0);
@@ -1740,7 +1740,7 @@ TEST_F(CommandListTest, CommandListMoveInvalidatesTheSource) {
         [&] { (void)command_list.device(); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
     EXPECT_THAT(
-        [&] { (void)command_list.cq_id(); },
+        [&] { (void)command_list.command_queue(); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
     EXPECT_THAT(
         [&] { command_list.update_args({}); },
@@ -1968,8 +1968,8 @@ TEST_F(CommandListMultiCQTest, EnforcesTheCommandQueueUsedAtBuildTime) {
     builder.add(cq1, workload);
     auto list0 = builder.build(cq0);
     auto list1 = builder.build(cq1);
-    EXPECT_EQ(list0.cq_id(), cq0.id());
-    EXPECT_EQ(list1.cq_id(), cq1.id());
+    EXPECT_EQ(&list0.command_queue(), &cq0);
+    EXPECT_EQ(&list1.command_queue(), &cq1);
 
     // The enqueue helper rejects a mismatched queue and accepts the bound queue.
     EXPECT_THAT(

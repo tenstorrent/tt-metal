@@ -15,6 +15,7 @@
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/string.h>
 
+#include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 
@@ -203,7 +204,8 @@ void py_module_types(nb::module_& mod) {
             [](CommandList& self) { [[maybe_unused]] const CommandList released = std::move(self); },
             nb::call_guard<nb::gil_scoped_release>(),
             "Releases device resources and invalidates the list. Repeated calls have no effect.")
-        .def_prop_ro("cq_id", &CommandList::cq_id);
+        .def_prop_ro(
+            "cq_id", [](const CommandList& self) { return QueueId(static_cast<uint8_t>(self.command_queue().id())); });
 }
 
 // Used by ttnn/ttnn/command_list.py.
