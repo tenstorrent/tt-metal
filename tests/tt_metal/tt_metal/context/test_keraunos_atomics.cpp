@@ -317,6 +317,83 @@ TEST_F(KeraunosAccumulateForms, Cce0ToOtherTileSocForm) {
     expect_adds(*a, *a, soc_sram(0, 0) + unreserved_ + kSrcOffset, *c, soc_sram(1, 0) + unreserved_ + kDstOffset);
 }
 
+// A plain IDMA copy (no accumulate) to HSIO 1 in its NoC form (cce-dv TILE1_SRAM 0x26800000), to tell whether that
+// route works at all; the accumulate there left the destination unchanged.
+TEST_F(KeraunosAccumulateForms, CopyToOtherTileSocForm) {
+    const auto a = hsio_core(0, 0);
+    const auto c = hsio_core(1, 0);
+    ASSERT_TRUE(a.has_value() && c.has_value());
+    std::vector<uint32_t> data(kWords);
+    for (uint32_t i = 0; i < kWords; i++) {
+        data[i] = 0xC0F10000u | i;
+    }
+    write_words(*a, kSrcOffset, data);
+    write_words(*c, kDstOffset, std::vector<uint32_t>(kWords, 0));
+    write_words(*a, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+    Program program = CreateProgram();
+    add_idma_copy(
+        program,
+        *a,
+        {.src = soc_sram(0, 0) + unreserved_ + kSrcOffset,
+         .dst = soc_sram(1, 0) + unreserved_ + kDstOffset,
+         .len = kWords * 4});
+    launch(program, *a);
+    const auto status = read_words(*a, kStatusOffset, kStatusWords);
+    EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+    const auto got = read_words(*c, kDstOffset, kWords);
+    std::cout << fmt::format("copy to {:#x}: {}", soc_sram(1, 0) + unreserved_ + kDstOffset, fmt::join(got, " "))
+              << std::endl;
+    EXPECT_EQ(got, data);
+}
+
+// The CCE CPU-view form: plain local SRAM offsets, where each CCE sees CCE0's SRAM at [0, 4 MiB) and CCE1's at
+// [4, 8 MiB). cce-dv's IP-level tests use this form (SRAM_LBASE 0).
+TEST_F(KeraunosAccumulateForms, Cce0OwnCpuForm) {
+    const auto a = hsio_core(0, 0);
+    ASSERT_TRUE(a.has_value());
+    expect_adds(*a, *a, unreserved_ + kSrcOffset, *a, unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce0ToCce1CpuForm) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_adds(*a, *a, unreserved_ + kSrcOffset, *b, 0x400000ULL + unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce1ToCce0CpuForm) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_adds(*b, *b, 0x400000ULL + unreserved_ + kSrcOffset, *a, unreserved_ + kDstOffset);
+}
+
+// A plain IDMA copy from CCE1 to CCE0's SoC form: tells whether that route exists at all.
+TEST_F(KeraunosAccumulateForms, CopyCce1ToCce0SocForm) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    std::vector<uint32_t> data(kWords);
+    for (uint32_t i = 0; i < kWords; i++) {
+        data[i] = 0xC1C00000u | i;
+    }
+    write_words(*b, kSrcOffset, data);
+    write_words(*a, kDstOffset, std::vector<uint32_t>(kWords, 0));
+    write_words(*b, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+    Program program = CreateProgram();
+    add_idma_copy(
+        program,
+        *b,
+        {.src = soc_sram(0, 1) + unreserved_ + kSrcOffset,
+         .dst = soc_sram(0, 0) + unreserved_ + kDstOffset,
+         .len = kWords * 4});
+    launch(program, *b);
+    const auto got = read_words(*a, kDstOffset, kWords);
+    std::cout << fmt::format("copy CCE1 -> {:#x}: {}", soc_sram(0, 0) + unreserved_ + kDstOffset, fmt::join(got, " "))
+              << std::endl;
+    EXPECT_EQ(got, data);
+}
+
 // Source in the SoC form, destination another tile through the package address (how cce-dv reaches other tiles).
 TEST_F(KeraunosAccumulateForms, Cce0ToOtherTilePackageDestination) {
     const auto a = hsio_core(0, 0);
