@@ -157,6 +157,34 @@ TEST_F(TensorSerializationFlatbufferTest, ReplicatedTensorDifferentDataTypes) {
     }
 }
 
+// The tile's face shape decides where each value sits in the tile buffer, so a tensor loaded with the default faces
+// would read its values from the wrong positions.
+TEST_F(TensorSerializationFlatbufferTest, CustomTileFaceShapeRoundtrip) {
+    const std::vector<std::pair<Tile::TileShape, std::optional<Tile::FaceShape>>> tiles{
+        {{16, 32}, Tile::FaceShape{8, 16}},
+        {{16, 16}, Tile::FaceShape{16, 8}},
+        {{16, 32}, std::nullopt},
+    };
+    for (const auto& [tile_shape, face_shape] : tiles) {
+        const Tile tile = face_shape.has_value() ? Tile(tile_shape, *face_shape) : Tile(tile_shape);
+        SCOPED_TRACE(fmt::format("tile {} face {}", tile.get_tile_shape(), tile.get_face_shape()));
+        const ttnn::Shape shape{tile_shape[0], tile_shape[1]};
+        std::vector<uint32_t> test_data(shape.volume());
+        std::iota(test_data.begin(), test_data.end(), 0u);
+        const Tensor original_tensor = Tensor::from_vector(
+            test_data,
+            TensorSpec(shape, TensorLayout(DataType::UINT32, PageConfig(Layout::TILE, tile), MemoryConfig{})));
+
+        TemporaryFile test_file("custom_face.tensorbin");
+        dump_tensor_flatbuffer(test_file.string(), original_tensor);
+        const Tensor loaded_tensor = load_tensor_flatbuffer(test_file.string());
+
+        EXPECT_EQ(loaded_tensor.tensor_spec().tile(), tile);
+        EXPECT_EQ(loaded_tensor.tensor_spec().tile().get_face_shape(), tile.get_face_shape());
+        EXPECT_THAT(loaded_tensor.to_vector<uint32_t>(), Pointwise(testing::Eq(), test_data));
+    }
+}
+
 // Range lockstep lives on the MemoryConfig, so it has to survive serialization: any path that
 // rebuilds a spec from its stored form -- a warm tensor cache, for instance -- would otherwise
 // silently drop it and the buffer would revert to a chip-wide allocation scan.
