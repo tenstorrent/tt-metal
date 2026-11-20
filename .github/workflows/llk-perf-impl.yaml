@@ -60,7 +60,7 @@ on:
         default: ""
         type: string
       stage2-thresholds:
-        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "module_thresholds": ...}}; only these arches run stage 2'
+        description: 'With stage2-baseline-ref: {"<arch>": {"threshold": ..., "min_cycles": ..., "module_thresholds": ...}}; only these arches run stage 2'
         required: false
         default: "{}"
         type: string
