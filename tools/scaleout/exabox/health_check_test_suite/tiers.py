@@ -78,10 +78,6 @@ class Tier:
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
 
-    # Judge the new PCIe AER errors per chip between the start of the run and the
-    # end of the triage phase (diag/aer.py). Needs triage.
-    aer_diff: bool = False
-
     # The only reset the tier may run is -glx_reset. _validate() rejects a -r in
     # its resets or post-test resets.
     glx_reset_only: bool = False
@@ -132,11 +128,10 @@ TIERS: dict[str, Tier] = {
     # What a caller that runs its own load wants of the unit's health: the
     # snapshot checks (chips by BDF, tray and ASIC, thermal, telemetry), a
     # -glx_reset (callers pass --skip-reset to read the unit as found), and the
-    # host-side triage with its AER before/after diff. No tests, no ETH reads.
+    # host-side triage. No tests, no ETH reads.
     "galaxy": Tier(
         resets=("-glx_reset",),
         triage=("host_side",),
-        aer_diff=True,
         glx_reset_only=True,
     ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
