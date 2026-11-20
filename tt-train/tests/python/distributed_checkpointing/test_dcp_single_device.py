@@ -12,6 +12,7 @@ live one.
 """
 
 import os
+import threading
 
 import numpy as np
 import pytest
@@ -156,6 +157,68 @@ def test_one_byte_budget(tmp_path, monkeypatch):
     dcp.load(path, model=fresh, optimizer=fresh_opt)
     assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
     assert_same_shards(optimizer_shards(fresh_opt)[0], optimizer_shards(opt)[0])
+
+
+class _Interrupt(BaseException):
+    """Stands in for a KeyboardInterrupt, which is a BaseException and not an Exception, without being one pytest
+    would act on."""
+
+
+def _trained_pair():
+    model = _Pair(DIM)
+    opt = make_adamw(model.parameters())
+    train_step(model, opt, DIM)
+    return model, opt
+
+
+def _join_writers() -> None:
+    for thread in threading.enumerate():
+        if thread.name.startswith("dcp-writer-"):
+            thread.join()
+
+
+def test_an_interrupted_save_writes_only_into_its_own_files(tmp_path, monkeypatch, expect_error):
+    """An interrupt while save waits for its writers (a ^C in a join) leaves no writer writing through a descriptor
+    that was closed under it, and so reused by the next file opened: each writer closes its own files after its last
+    write."""
+    model, opt = _trained_pair()
+    gate = threading.Event()
+    real_pwrite_all, real_join = _save.pwrite_all, threading.Thread.join
+    interrupted, lost = [], []
+
+    def held_pwrite_all(fd, view, offset):  # each writer's first write is still going when the interrupt lands
+        inode = os.fstat(fd).st_ino
+        gate.wait()
+        try:
+            if os.fstat(fd).st_ino != inode:
+                lost.append(fd)  # closed, and reused by another file
+        except OSError:
+            lost.append(fd)  # closed
+        real_pwrite_all(fd, view, offset)
+
+    def interrupted_join(thread, timeout=None):
+        if thread.name.startswith("dcp-writer-") and not interrupted:
+            interrupted.append(thread.name)
+            threading.Timer(0.5, gate.set).start()  # the writes that were going on go on after the interrupt
+            raise _Interrupt()
+        return real_join(thread, timeout)
+
+    monkeypatch.setattr(_save, "pwrite_all", held_pwrite_all)
+    monkeypatch.setattr(threading.Thread, "join", interrupted_join)
+    open_fds = len(os.listdir("/proc/self/fd"))
+    with expect_error(_Interrupt, ""):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt)
+    monkeypatch.undo()
+    # The next file opened takes the lowest free descriptor: the save's own, had it been closed under its writer.
+    bystander = tmp_path / "bystander"
+    with open(bystander, "wb"):
+        gate.wait()
+        _join_writers()
+    assert interrupted, "the save never waited for a writer"
+    assert not lost, f"descriptors {lost} were closed while their writer was still writing through them"
+    assert os.path.getsize(bystander) == 0, "an interrupted save's writer wrote into a file it did not open"
+    assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
+    assert os.listdir(tmp_path) == ["bystander"], "no checkpoint and no staging directory left"
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):

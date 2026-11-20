@@ -103,26 +103,65 @@ def _one_process_owner(key: str, group: list[Chunk]) -> Chunk:
     return next(c for c in group if c.mesh_coord == coord)
 
 
-def _writer(jobs: queue.SimpleQueue, crcs: dict, failed: list, stop: threading.Event, budget: _ByteBudget) -> None:
+def _writer(
+    jobs: queue.SimpleQueue, fds: list[int], crcs: dict, failed: list, stop: threading.Event, budget: _ByteBudget
+) -> None:
     """A writer thread: untilizes the shards queued for its files on the host, writes them in queue order and records
     each one's CRC32 per (key, file), until it gets None. Once a write or the readback has failed it only releases the
-    budget of what is still queued."""
-    while (job := jobs.get()) is not None:
-        key, file_index, fd, offset, shard, sizes, itemsize, charged = job
-        job = None
-        try:
-            if not stop.is_set():
-                row_major = shard.to(ttnn.ROW_MAJOR_LAYOUT)
-                shard = None
-                data = row_major.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
-                view = _logical_bytes(np.from_dlpack(data), sizes, itemsize)
-                pwrite_all(fd, view, offset)
-                crcs[(key, file_index)] = zlib.crc32(view)
-        except BaseException as err:
-            failed.append(err)
-            stop.set()
-        finally:
-            budget.release(charged)
+    budget of what is still queued.
+
+    It owns its files' descriptors ``fds``: after its last write it syncs them, unless the save has failed, and closes
+    every one of them, recording the first error. So no descriptor is closed while a write can still go through it,
+    whatever interrupts the thread that queued the work."""
+    try:
+        while (job := jobs.get()) is not None:
+            key, file_index, fd, offset, shard, sizes, itemsize, charged = job
+            job = None
+            try:
+                if not stop.is_set():
+                    row_major = shard.to(ttnn.ROW_MAJOR_LAYOUT)
+                    shard = None
+                    data = row_major.host_buffer().get_shard(ttnn.MeshCoordinate(0, 0))  # its one shard
+                    view = _logical_bytes(np.from_dlpack(data), sizes, itemsize)
+                    pwrite_all(fd, view, offset)
+                    crcs[(key, file_index)] = zlib.crc32(view)
+            except BaseException as err:
+                failed.append(err)
+                stop.set()
+            finally:
+                budget.release(charged)
+        if not stop.is_set():
+            for fd in fds:
+                os.fdatasync(fd)
+    except BaseException as err:
+        failed.append(err)
+        stop.set()
+    finally:
+        for fd in fds:
+            try:
+                os.close(fd)
+            except OSError as err:
+                if not stop.is_set():  # once the save has failed, its error is the one to report
+                    failed.append(err)
+                    stop.set()
+
+
+def _end_writers(queues: list[queue.SimpleQueue], writers: list[threading.Thread], stop: threading.Event) -> None:
+    """Send every writer its end marker and wait for them all. Interrupted while it waits (a ^C in a join), it tells the
+    writers to drop what is still queued and waits once more, for their current writes only; each writer closes its
+    own files after its last write, so even if that wait is interrupted too, no descriptor is closed under a write."""
+    try:
+        for jobs in queues:
+            jobs.put(None)
+        for writer in writers:
+            writer.join()
+    except BaseException:
+        stop.set()
+        for jobs in queues:
+            jobs.put(None)  # for a queue the interrupt skipped; a writer stops at its first marker
+        for writer in writers:
+            writer.join()
+        raise
 
 
 def _write_plan(
@@ -135,9 +174,9 @@ def _write_plan(
 ) -> dict[tuple[str, int], int]:
     """Create this process's files in ``staging`` and write every planned chunk into them; returns the CRC32 per
     (key, file). Each file's chunks go through one queue to one writer thread (``threads`` caps the threads, which then
-    share the files round-robin), so nothing per chunk outlives its write. Files are synced to the filesystem before
-    they are closed, the first failed write stops the readback of the keys after it, and every descriptor opened is
-    closed whatever fails."""
+    share the files round-robin), so nothing per chunk outlives its write. Each writer syncs its files to the filesystem
+    and closes them after its last write, the first failed write stops the readback of the keys after it, and every
+    descriptor opened is closed whatever fails."""
     fds: dict[int, int] = {}
     data_start: dict[int, int] = {}
     budget = _ByteBudget(max_inflight_bytes)
@@ -146,9 +185,9 @@ def _write_plan(
     stop = threading.Event()
     queues: list[queue.SimpleQueue] = []
     writers: list[threading.Thread] = []
+    owned: set[int] = set()  # the files whose descriptors a writer has taken over
     t2 = time.perf_counter()
     readback_s = 0.0
-    synced = False
     try:
         for fplan in plan.files:
             path = os.path.join(staging, fplan.path)
@@ -158,11 +197,20 @@ def _write_plan(
         workers = len(plan.files) if threads is None else min(threads, len(plan.files))
         queues = [queue.SimpleQueue() for _ in range(workers)]
         queue_of = {fplan.index: queues[i % workers] for i, fplan in enumerate(plan.files)}
+        files_of = [[fplan.index for j, fplan in enumerate(plan.files) if j % workers == i] for i in range(workers)]
         for i, jobs in enumerate(queues):
             writer = threading.Thread(
-                target=_writer, args=(jobs, crcs, failed, stop, budget), name=f"dcp-writer-{i}", daemon=True
+                target=_writer,
+                args=(jobs, [fds[index] for index in files_of[i]], crcs, failed, stop, budget),
+                name=f"dcp-writer-{i}",
+                daemon=True,
             )
-            writer.start()
+            owned.update(files_of[i])
+            try:
+                writer.start()
+            except BaseException:
+                owned.difference_update(files_of[i])
+                raise
             writers.append(writer)
         try:
             order = sorted(plan.items, key=lambda k: (-plan.infos[k].local_nbytes * len(plan.items[k]), k))
@@ -190,22 +238,18 @@ def _write_plan(
             stop.set()  # the writers drop what is still queued
             raise
         finally:
-            for jobs in queues:
-                jobs.put(None)
-            for writer in writers:
-                writer.join()
+            _end_writers(queues, writers, stop)
         if failed:
             raise failed[0]
-        for fd in fds.values():
-            os.fdatasync(fd)
-        synced = True
     finally:
-        for fd in fds.values():
-            try:
-                os.close(fd)
-            except OSError:
-                if synced:
-                    raise
+        # Descriptors no writer took over (opened before a failure that came before the writers started) are closed
+        # here, quietly: that failure is the error to report.
+        for index, fd in fds.items():
+            if index not in owned:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
     stats["readback_s"] = readback_s
     stats["write_s"] = time.perf_counter() - t2
     return crcs
