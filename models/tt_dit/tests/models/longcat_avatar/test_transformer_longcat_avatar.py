@@ -46,6 +46,11 @@ NUM_LAYERS = int(os.environ.get("LONGCAT_AVATAR_TEST_LAYERS", "2"))
     "mode",
     ["at2v", "ai2v", "avc"],
 )
+@pytest.mark.parametrize(
+    "lora",
+    # v1.6 distilled sampling runs loraA (DMD) for the first steps and loraB (OPSD) for the rest
+    ["base", "loraA", "loraB"],
+)
 def test_longcat_avatar_transformer(
     mesh_device: ttnn.MeshDevice,
     sp_axis: int,
@@ -56,6 +61,7 @@ def test_longcat_avatar_transformer(
     H: int,
     W: int,
     mode: str,
+    lora: str,
 ) -> None:
     if not CHECKPOINT_DIR:
         pytest.skip("set LONGCAT_AVATAR_DIR to a LongCat-Video-Avatar-1.6 checkpoint")
@@ -69,7 +75,8 @@ def test_longcat_avatar_transformer(
     )
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
 
-    torch_model = ref.build_model(CHECKPOINT_DIR, num_blocks=NUM_LAYERS)
+    lora_path = None if lora == "base" else os.path.join(CHECKPOINT_DIR, lora, "lora.safetensors")
+    torch_model = ref.build_model(CHECKPOINT_DIR, num_blocks=NUM_LAYERS, lora_path=lora_path)
     config = ref.load_config(CHECKPOINT_DIR)
     tt_model = LongCatAvatarTransformer(
         config,
@@ -78,7 +85,7 @@ def test_longcat_avatar_transformer(
         parallel_config=parallel_config,
         num_layers=NUM_LAYERS,
     )
-    tt_model.load_torch_state_dict(ref.load_state_dict(CHECKPOINT_DIR, num_blocks=NUM_LAYERS))
+    tt_model.load_torch_state_dict(ref.load_state_dict(CHECKPOINT_DIR, num_blocks=NUM_LAYERS, lora_path=lora_path))
 
     num_frames = 1 + (T - 1) * config["vae_scale"]
     latents = torch.randn(1, config["in_channels"], T, H, W)
@@ -101,7 +108,7 @@ def test_longcat_avatar_transformer(
     actual = tt_model(latents, timestep, text, text_mask, audio, **kwargs)
 
     n_cond = kwargs["num_cond_latents"]
-    logger.info(f"{mode} {NUM_LAYERS} layers, latent {T}x{H}x{W}")
+    logger.info(f"{mode} {lora} {NUM_LAYERS} layers, latent {T}x{H}x{W}")
     # conditioning frames are discarded by the sampler, so check the noise frames on their own as well
     assert_quality(expected[:, :, n_cond:], actual[:, :, n_cond:], pcc=0.995)
     assert_quality(expected, actual, pcc=0.99)

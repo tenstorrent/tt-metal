@@ -600,9 +600,13 @@ def load_config(checkpoint_dir: str, subfolder: str = "base_model") -> dict:
 
 
 def load_state_dict(
-    checkpoint_dir: str, subfolder: str = "base_model", num_blocks: Optional[int] = None
+    checkpoint_dir: str,
+    subfolder: str = "base_model",
+    num_blocks: Optional[int] = None,
+    lora_path: Optional[str] = None,
 ) -> dict[str, torch.Tensor]:
-    """Loads the DiT shards, keeping only the first ``num_blocks`` blocks when given."""
+    """Loads the DiT shards, keeping only the first ``num_blocks`` blocks when given, with the LoRA at
+    ``lora_path`` merged in."""
     folder = os.path.join(checkpoint_dir, subfolder)
     with open(os.path.join(folder, "diffusion_pytorch_model.safetensors.index.json")) as f:
         weight_map = json.load(f)["weight_map"]
@@ -617,6 +621,8 @@ def load_state_dict(
         for k, v in load_file(os.path.join(folder, shard)).items():
             if keep(k):
                 state[k] = v
+    if lora_path is not None:
+        merge_lora_into_state_dict(state, lora_deltas(lora_path))
     return state
 
 
@@ -661,9 +667,7 @@ def build_model(
     if num_blocks is not None:
         config["depth"] = num_blocks
     model = LongCatVideoAvatarTransformer3DModel(**config)
-    state = load_state_dict(checkpoint_dir, num_blocks=num_blocks)
-    if lora_path is not None:
-        merge_lora_into_state_dict(state, lora_deltas(lora_path))
+    state = load_state_dict(checkpoint_dir, num_blocks=num_blocks, lora_path=lora_path)
     model.load_state_dict(state, strict=True)
     model = model.to(dtype).eval()
     for module in model.fp32_modules():
