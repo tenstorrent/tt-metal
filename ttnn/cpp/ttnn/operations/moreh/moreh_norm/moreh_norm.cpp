@@ -8,11 +8,12 @@
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/operations/moreh/moreh_abs_pow/moreh_abs_pow.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
 
 namespace ttnn {
 
 Tensor moreh_norm(
-    const Tensor& input,
+    const Tensor& input_arg,
     float p,
     const std::optional<std::variant<int64_t, ttsl::SmallVector<int64_t>>>& dim,
     bool keepdim,
@@ -23,6 +24,10 @@ Tensor moreh_norm(
     // nullopt (Python dim=None) and an empty list both expand to the full dim range, a single
     // int becomes {d}, and a list is taken as-is. Single-dim cases are then handled by the
     // dims.size() == 1 branch below, so dim is never accessed via dim.value() directly.
+    // The norm kernels (moreh_abs_pow, moreh_sum, prim::moreh_norm) compute in BFLOAT16. An INT32 input is converted
+    // by value first, so the norm runs on its values (the result is BFLOAT16, like every moreh_norm output).
+    const Tensor input =
+        input_arg.dtype() == DataType::INT32 ? ttnn::typecast(input_arg, DataType::BFLOAT16) : input_arg;
     auto dims = operations::get_dim(dim, input.logical_shape().rank());
     auto INF = std::numeric_limits<float>::infinity();
 

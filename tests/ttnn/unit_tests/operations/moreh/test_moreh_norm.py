@@ -156,3 +156,18 @@ def test_moreh_norm_backward_allocated_input_grad(device):
 
     passing, out = comp_allclose(expected_input_grad, ttnn.to_torch(tt_input_grad), rtol=0.06, atol=0.06)
     assert passing, out
+
+
+@pytest.mark.parametrize("p", [1.0, 2.0, 3.0, 0.0, float("inf")], ids=["p1", "p2", "p3", "p0", "inf"])
+@pytest.mark.parametrize("dim", [3, 2], ids=["w", "h"])
+def test_moreh_norm_int32_input(p, dim, device):
+    # An INT32 input is converted to BFLOAT16 by value before the norm, so the result matches the float norm of its
+    # values. Values up to 64 are exact in bfloat16.
+    torch.manual_seed(0)
+    torch_input = torch.randint(-64, 65, (2, 3, 64, 64), dtype=torch.int32)
+    expected = torch.norm(torch_input.float(), p=p, dim=dim, keepdim=True)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = ttnn.moreh_norm(tt_input, p=p, dim=dim, keepdim=True)
+    assert tt_output.dtype == ttnn.bfloat16
+    passing, out = comp_allclose(expected, ttnn.to_torch(tt_output).float(), rtol=0.06, atol=0.06)
+    assert passing, out
