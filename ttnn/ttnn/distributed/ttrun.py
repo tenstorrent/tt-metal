@@ -53,7 +53,7 @@ TIMEOUT_BACKSTOP_S = 30.0
 # the one grace of every graceful shutdown: the ranks' time to exit after a stop (tt-run's, a rank's, the --timeout)
 # and the time a process still exiting after the launcher returned is waited for. Past it tt-run forces, with a
 # warning; a second signal at tt-run forces at once. The ranks read it too (it is forwarded as a TT_ variable).
-STOP_GRACE_S = 60.0
+STOP_GRACE_S = 120.0
 
 # How long the launcher may ignore the force (SIGTERM to prterun) before tt-run SIGKILLs it. Only ever armed by a
 # force, so it never acts on a job nobody asked to stop.
@@ -218,8 +218,9 @@ SHM_MIN_STALE_AGE_S = 30.0
 # own before tt-run acts on it. A rank (or a UMD helper child it spawned) can still be in its exit path after the
 # launcher returns — a graceful finish, not a leftover — and on real hardware a rank in uninterruptible sleep (D)
 # releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS the grace gets SIGTERM, then
-# SIGKILL SURVIVOR_TERM_GRACE_S later.
+# SIGKILL SURVIVOR_TERM_GRACE_S later. After a job that was stopped, forced or aborted the wait is STOPPED_JOB_SETTLE_S.
 SURVIVOR_TERM_GRACE_S = 10.0
+STOPPED_JOB_SETTLE_S = 10.0  # the same wait after a job that was already stopped, forced or aborted
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -584,7 +585,10 @@ class LaunchedJob:
         TT_RUN_JOB_ID) would extend this guarantee across hosts.
         """
         if settle_s is None:
-            settle_s = _stop_grace_s()
+            # A clean finish (nothing stopped the job) gets the whole stop grace: a rank still in its exit path is not
+            # a leftover. A job that was stopped, forced or aborted already had its grace; what is left is ended soon.
+            stopping = self.forwarded or self.forced_why or self.stop_sent or self._abort_seen
+            settle_s = STOPPED_JOB_SETTLE_S if stopping else _stop_grace_s()
         survivors = self._survivors()
         if survivors:
             logger.warning(

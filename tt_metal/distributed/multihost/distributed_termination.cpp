@@ -53,7 +53,7 @@ void (*g_force_abort)(int) = nullptr;
 std::atomic<bool> g_peer_failed{false};
 constexpr double kPeerFailedFenceS = 5.0;
 
-constexpr double kDefaultStopGraceS = 60.0;  // tt-run's TT_RUN_STOP_GRACE_S default
+constexpr double kDefaultStopGraceS = 120.0;  // tt-run's TT_RUN_STOP_GRACE_S default
 constexpr double kGraceMarginS = 10.0;
 constexpr double kWatchdogMarginS = 10.0;
 
@@ -67,9 +67,9 @@ double env_seconds(const char* name, double fallback) {
     return (end != v && s >= 0.0) ? s : fallback;
 }
 
-// The bound on a stopping rank's wait for the other ranks at its exit: TT_METAL_STOP_TIMEOUT_S, else tt-run's stop grace
-// (TT_RUN_STOP_GRACE_S, forwarded to every rank, 60 s by default) plus a margin, so under tt-run its own force after
-// the grace comes first. The watchdog ends the job (MPI_Abort) kWatchdogMarginS after that. 0 turns both off.
+// The bound on a stopping rank's wait for the other ranks at its exit: TT_METAL_STOP_TIMEOUT_S, else tt-run's stop
+// grace (TT_RUN_STOP_GRACE_S, forwarded to every rank, 120 s by default) plus a margin, so under tt-run its own force
+// after the grace comes first. The watchdog ends the job (MPI_Abort) kWatchdogMarginS after that. 0 turns both off.
 double stop_timeout_s() {
     return env_seconds("TT_METAL_STOP_TIMEOUT_S", env_seconds("TT_RUN_STOP_GRACE_S", kDefaultStopGraceS) + kGraceMarginS);
 }

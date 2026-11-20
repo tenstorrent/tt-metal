@@ -1657,7 +1657,7 @@ class TestJobOwnership:
         from ttnn.distributed.ttrun import run_launcher
 
         # The SC4 case: every rank finished, but one is still in its exit path (driver teardown) when the launcher
-        # returns. A clean finish is never killed: tt-run waits for it up to the stop grace (60 s by default; 12 s is
+        # returns. A clean finish is never killed: tt-run waits for it up to the stop grace (120 s by default; 12 s is
         # longer than the 10 s tt-run used to allow) and the clean code is forwarded.
         t0 = time.time()
         text, rc = self._logged_rc(
@@ -1666,6 +1666,40 @@ class TestJobOwnership:
         assert rc == 0, text
         assert exits_after <= time.time() - t0 < exits_after + 8
         assert "job end: outcome=clean exit=0" in text and "a leak" not in text, text
+
+    def test_run_launcher_ends_a_forced_jobs_leftovers_without_another_grace(self, monkeypatch):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # The CI shape: tt-run forced the job (no tt-run-signal) and the launcher returned with a rank still alive. The
+        # stop grace was already spent, so the leftover is ended after the short settle, not after another grace.
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", "/nonexistent/tt-run-signal")
+        running = threading.Event()
+
+        def stop():
+            time.sleep(1.0)
+            if running.is_set():
+                os.kill(os.getpid(), signal.SIGTERM)
+
+        def launch():
+            running.set()
+            try:
+                return run_launcher(
+                    ["bash", "-c", "sleep 300 & disown; trap 'exit 143' TERM; while :; do sleep 0.1; done"],
+                    cwd=Path.cwd(),
+                )
+            finally:
+                running.clear()
+
+        threading.Thread(target=stop, daemon=True).start()
+        t0 = time.time()
+        text, rc = self._logged_rc(launch)
+        assert rc == 128 + signal.SIGTERM, text
+        assert time.time() - t0 < 30, f"took {time.time() - t0:.0f} s\n{text}"
+        assert "job forced down" in text and "straggler" in text, text
 
     def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
         from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop

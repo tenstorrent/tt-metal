@@ -137,6 +137,11 @@ class Result:
 
     def __str__(self) -> str:
         head = "HANG (killed at %.0f s)" % self.wall_s if self.timed_out else f"exit {self.exit} in {self.wall_s:.1f} s"
+        # how the job ended: tt-run's own verdict, so a row that should end gracefully is seen not to have been forced
+        if "job forced down" in self.log:
+            head += " FORCED"
+        elif "outcome=" in self.log:
+            head += " graceful"
         bits = [head]
         if self.signal_sent:
             bits.append(self.signal_sent)

@@ -408,6 +408,20 @@ static double distributed_init_timeout_seconds() {
     return (end != v && s > 0.0) ? s : 0.0;
 }
 
+// The pause between two polls of a pending request: none (a yield) for the first kSpinS of a wait, so a collective that
+// completes promptly costs what a blocking call costs, then a short sleep growing to kMaxPauseUs, so a long wait does
+// not burn a core. A blocking MPI call spins the same way.
+constexpr double kSpinS = 0.02;
+constexpr int kMaxPauseUs = 1000;
+static void poll_pause(std::chrono::steady_clock::time_point start, int& pause_us) {
+    if (std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() < kSpinS) {
+        std::this_thread::yield();
+        return;
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(pause_us));
+    pause_us = std::min(pause_us * 2, kMaxPauseUs);
+}
+
 // Drive a non-blocking request to completion by polling it, so a wait can always be left. A blocking MPI call never
 // returns on a signal, so every wait in this context is one of these.
 //  - SIGTERM (the job is stopping, see distributed_termination.cpp): the wait throws at once, no clock involved, and
@@ -420,6 +434,7 @@ static void wait_or_abort(
     MPI_Comm comm, MPI_Request& req, const char* what, bool point_to_point = false, MPI_Status* status = nullptr) {
     const double timeout = operation_timeout_seconds();  // 0: no deadline, the wait is still a poll for the flag below
     const auto start = std::chrono::steady_clock::now();
+    int pause_us = 50;
     for (;;) {
         int flag = 0;
         MPI_CHECK(MPI_Test(&req, &flag, status != nullptr ? status : MPI_STATUS_IGNORE));
@@ -450,7 +465,7 @@ static void wait_or_abort(
             }
             TT_THROW("MPIContext: {} timed out after {} s (a peer did not arrive)", what, timeout);
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        poll_pause(start, pause_us);
     }
 }
 
@@ -1203,6 +1218,8 @@ std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
     int size_bytes = 0;
     MPI_Status status;
     // A polled probe, for the same reason as wait_or_abort: a blocking MPI_Probe never returns on a signal.
+    const auto start = std::chrono::steady_clock::now();
+    int pause_us = 50;
     for (int found = 0; found == 0;) {
         MPI_CHECK(MPI_Iprobe(*source, *tag, comm_, &found, &status));
         if (found == 0) {
@@ -1210,7 +1227,7 @@ std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
                 throw std::runtime_error(
                     "[MPIContext] rank " + std::to_string(rank_) + ": probe abandoned, the job is stopping");
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            poll_pause(start, pause_us);
         }
     }
     MPI_CHECK(MPI_Get_count(&status, MPI_CHAR, &size_bytes));

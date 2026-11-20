@@ -30,7 +30,7 @@ waits for the other ranks (a PMIx fence, `TT_METAL_STOP_TIMEOUT_S`, default 30 s
 | clean, a process still exiting after the launcher returned | tt-run waits for it up to the grace, with a warning; only past it SIGTERM, then SIGKILL 10 s later, and the job fails as a leak | 0 if it exits in time | `test_ttrun.py::test_run_launcher_waits_for_a_rank_still_exiting_after_the_launcher` |
 | clean | normal finalize | 0 | `test_clean` |
 
-One grace covers every graceful shutdown: `TT_RUN_STOP_GRACE_S`, 60 s by default (tt-run forwards it to the ranks).
+One grace covers every graceful shutdown: `TT_RUN_STOP_GRACE_S`, 120 s by default (tt-run forwards it to the ranks).
 A stop (at tt-run, from a failing rank, from a dead rank's wrapper, at the `--timeout`) sends SIGTERM to every rank
 and logs a warning with the grace; ranks still running when it runs out are forced through the launcher (SIGTERM, then
 SIGKILL 250 ms later), with a warning to run `tt-smi -r`. The ranks bound their own exit wait at the grace + 10 s
