@@ -33,11 +33,13 @@ import json
 import pickle
 import shutil
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 import numpy as np
 import torch
 from safetensors.torch import save_file
+from ttml.models.qwen3.weights import build_weight_mapping_single, repermute_norm_weights, repermute_proj_rows
 
 
 # Standard tt-transformers assumes the top-level dir prefix in the ttml
@@ -75,35 +77,6 @@ def parse_args() -> argparse.Namespace:
         help=f"ttml top-level prefix in the checkpoint keys (default: {DEFAULT_ROOT_PREFIX}).",
     )
     return p.parse_args()
-
-
-def _repermute_proj_rows(weight: torch.Tensor, num_heads: int) -> torch.Tensor:
-    """ttml interleaved ``[r0, i0, r1, i1, ...]`` -> HF ``[real_half, imag_half]`` per head.
-
-    Inverse of ``ttml.models.qwen3.weights.unpermute_proj_rows``. Inlined here
-    so this script does not depend on the ttml package.
-    """
-    rows, cols = weight.shape
-    if rows % num_heads != 0:
-        raise ValueError(f"rows={rows} not divisible by num_heads={num_heads}")
-    D = rows // num_heads
-    w = weight.view(num_heads, D, cols)
-    reals = w[:, 0::2, :]  # even positions along head_dim -> real half
-    imags = w[:, 1::2, :]  # odd positions -> imag half
-    return torch.cat([reals, imags], dim=1).reshape(rows, cols).contiguous()
-
-
-def _repermute_norm_weights(weight: torch.Tensor) -> torch.Tensor:
-    """ttml ``[x1, y1, x2, y2, ...]`` -> HF ``[x1, x2, ..., y1, y2, ...]``.
-
-    Inverse of ``ttml.models.qwen3.weights.unpermute_norm_weights`` for a
-    per-head-dim RMSNorm gamma.
-    """
-    head_dim = weight.shape[0]
-    if head_dim % 2 == 0:
-        w = weight.view(head_dim // 2, 2)
-        return w.t().contiguous().flatten()
-    return weight
 
 
 def _squeeze2d(t: torch.Tensor, key: str) -> torch.Tensor:
@@ -183,83 +156,27 @@ def convert(src: Path, dst: Path, dtype: torch.dtype, root_prefix: str) -> None:
         raise SystemExit(
             f"[convert] fc/weight shape {tuple(fc.shape)} != " f"(vocab_size, hidden) = ({cfg['vocab_size']}, {hidden})"
         )
-    hf["model.embed_tokens.weight"] = cast(fc)
-    if not tie:
-        # Untied: expect a separate tok_emb tensor; fc is lm_head only.
-        tok = _squeeze2d(get(f"{root_prefix}/tok_emb/weight"), "tok_emb/weight")
-        hf["model.embed_tokens.weight"] = cast(tok)
-        hf["lm_head.weight"] = cast(fc)
     # Tied path: HF materializes lm_head from embed_tokens at model init, so we
     # do NOT save lm_head.weight. Saving both would cause safetensors to hold
     # two copies unnecessarily.
+    mapping, transforms = build_weight_mapping_single(SimpleNamespace(**cfg), root_prefix, tie)
+    for hf_name, ttml_name in mapping.items():
+        t = _squeeze2d(get(ttml_name), ttml_name)
+        match transforms.get(hf_name):
+            case ("unpermute_proj", num_heads):
+                t = repermute_proj_rows(t, num_heads)
+            case ("unpermute_norm",):
+                t = repermute_norm_weights(t)
+            case ("combine_kv", num_heads, v_name):
+                if t.shape[0] != 2 * kv_dim:
+                    raise SystemExit(
+                        f"[convert] {ttml_name} shape {tuple(t.shape)}: expected 2 * kv_dim = {2 * kv_dim} rows"
+                    )
+                hf[v_name] = cast(t[kv_dim:])
+                t = repermute_proj_rows(t[:kv_dim], num_heads)
+        hf[hf_name] = cast(t)
 
-    hf["model.norm.weight"] = cast(_squeeze2d(get(f"{root_prefix}/ln_fc/weight"), "ln_fc/weight"))
-
-    # Per-layer.
-    for i in range(n_layers):
-        tp = f"{root_prefix}/blocks/{i}"
-        hp = f"model.layers.{i}"
-
-        hf[f"{hp}.input_layernorm.weight"] = cast(_squeeze2d(get(f"{tp}/input_layernorm/weight"), "input_layernorm"))
-        hf[f"{hp}.post_attention_layernorm.weight"] = cast(
-            _squeeze2d(get(f"{tp}/post_attention_layernorm/weight"), "post_attention_layernorm")
-        )
-
-        # Attention projections. Q/K row layout is ttml's meta-permuted
-        # [r0, i0, r1, i1, ...] per head; HF Qwen3 expects "half-then-half"
-        # [r0..r_{d/2-1}, i0..i_{d/2-1}] so rotary math lines up. Re-permute
-        # Q/K rows (Q with n_q heads, K with n_kv heads) and Q/K-norm gammas
-        # (per-head-dim), leaving V and O untouched.
-        q = _squeeze2d(get(f"{tp}/self_attn/q_proj/weight"), "q_proj")
-        hf[f"{hp}.self_attn.q_proj.weight"] = cast(_repermute_proj_rows(q, n_q))
-        hf[f"{hp}.self_attn.o_proj.weight"] = cast(_squeeze2d(get(f"{tp}/self_attn/o_proj/weight"), "o_proj"))
-
-        qn = _squeeze2d(get(f"{tp}/self_attn/q_norm/weight"), "q_norm")
-        kn = _squeeze2d(get(f"{tp}/self_attn/k_norm/weight"), "k_norm")
-        hf[f"{hp}.self_attn.q_norm.weight"] = cast(_repermute_norm_weights(qn))
-        hf[f"{hp}.self_attn.k_norm.weight"] = cast(_repermute_norm_weights(kn))
-
-        # Fused kv_proj (ttml, K rows then V rows) -> split into HF k_proj / v_proj.
-        # K rows use the meta-permuted layout; V rows do not (V is not RoPE'd).
-        kv = _squeeze2d(get(f"{tp}/self_attn/kv_proj/weight"), "kv_proj")
-        if kv.shape != (2 * kv_dim, hidden):
-            raise SystemExit(
-                f"[convert] layer {i} kv_proj shape {tuple(kv.shape)} != "
-                f"(2 * kv_dim, hidden) = ({2 * kv_dim}, {hidden})"
-            )
-        k_rows = kv[:kv_dim, :].contiguous()
-        v_rows = kv[kv_dim:, :].contiguous()
-        hf[f"{hp}.self_attn.k_proj.weight"] = cast(_repermute_proj_rows(k_rows, n_kv))
-        hf[f"{hp}.self_attn.v_proj.weight"] = cast(v_rows)
-
-        # MLP.
-        hf[f"{hp}.mlp.gate_proj.weight"] = cast(_squeeze2d(get(f"{tp}/mlp/gate_proj/weight"), "gate_proj"))
-        hf[f"{hp}.mlp.up_proj.weight"] = cast(_squeeze2d(get(f"{tp}/mlp/up_proj/weight"), "up_proj"))
-        hf[f"{hp}.mlp.down_proj.weight"] = cast(_squeeze2d(get(f"{tp}/mlp/down_proj/weight"), "down_proj"))
-
-    # Any leftover ttml keys mean an unhandled architectural piece.
-    consumed_ttml_keys: set[str] = set()
-    consumed_ttml_keys.add(f"{root_prefix}/fc/weight")
-    consumed_ttml_keys.add(f"{root_prefix}/ln_fc/weight")
-    if not tie:
-        consumed_ttml_keys.add(f"{root_prefix}/tok_emb/weight")
-    for i in range(n_layers):
-        tp = f"{root_prefix}/blocks/{i}"
-        for suffix in (
-            "input_layernorm/weight",
-            "post_attention_layernorm/weight",
-            "self_attn/q_proj/weight",
-            "self_attn/o_proj/weight",
-            "self_attn/q_norm/weight",
-            "self_attn/k_norm/weight",
-            "self_attn/kv_proj/weight",
-            "mlp/gate_proj/weight",
-            "mlp/up_proj/weight",
-            "mlp/down_proj/weight",
-        ):
-            consumed_ttml_keys.add(f"{tp}/{suffix}")
-
-    leftover = sorted(set(ttml.keys()) - consumed_ttml_keys)
+    leftover = sorted(set(ttml) - set(mapping.values()))
     if leftover:
         raise SystemExit(
             f"[convert] {len(leftover)} ttml key(s) were not consumed by the "
