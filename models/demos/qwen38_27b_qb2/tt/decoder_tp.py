@@ -14,6 +14,7 @@ import copy
 
 from ttnn.operations.qwen_mlp import qwen_mlp_partial
 from ttnn.operations.qwen_mlp.program_descriptor import BLOCK_CONFIGS
+from ttnn.operations.qwen_mlp_prefill import qwen_mlp_prefill
 
 import ttnn
 from models.common.tt_ccl import TT_CCL
@@ -102,7 +103,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
             num_links=2,
             ring=True,
             packed_mlp=True,
-            qwen_mlp_op=True,
+            qwen_mlp_op="partial",
             packed_decode_conv=True,
             persistent_ccl=True,
             direct_allreduce=True,
@@ -275,7 +276,7 @@ class Qwen38TPDecoder(Qwen38Decoder):
                     for g, u in zip(gate, up)
                 ],
             )
-        if self.policy["qwen_mlp_op"]:
+        if self.policy["qwen_mlp_op"] != "off":
             gate, up = split(state_dict["mlp.gate_proj.weight"]), split(state_dict["mlp.up_proj.weight"])
             self.weights["mlp.interleaved_gate_up.weight"] = upload(
                 torch.cat(
@@ -445,13 +446,21 @@ class Qwen38TPDecoder(Qwen38Decoder):
 
     def _finish(self, x, attention):
         if (
-            self.policy["qwen_mlp_op"]
+            self.policy["qwen_mlp_op"] != "off"
             and not self.sharded_residual
             and len(x.shape) == 3
             and x.shape[0] == 1
             and x.shape[1] in BLOCK_CONFIGS
         ):
             h = ttnn.add(x, attention, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if self.policy["qwen_mlp_op"] == "single":
+                y = qwen_mlp_prefill(
+                    ttnn.reshape(h, [x.shape[1], 5120]),
+                    self.weights["post_attention_layernorm.weight"],
+                    self.weights["mlp.interleaved_gate_up.weight"],
+                    self.weights["mlp.down_proj.weight"],
+                )
+                return ttnn.reshape(y, [1, x.shape[1], 5120])
             partial = qwen_mlp_partial(
                 ttnn.reshape(h, [x.shape[1], 5120]),
                 self.weights["post_attention_layernorm.weight"],

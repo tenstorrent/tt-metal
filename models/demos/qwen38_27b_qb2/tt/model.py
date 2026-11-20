@@ -62,7 +62,16 @@ class ModelCache:
 
 
 class Qwen38Model:
-    def __init__(self, mesh_device, *, snapshot=None, layer_indices=None, head_strategy="dram", precision_config=None):
+    def __init__(
+        self,
+        mesh_device,
+        *,
+        snapshot=None,
+        layer_indices=None,
+        head_strategy="dram",
+        precision_config=None,
+        policy=None,
+    ):
         validate_qb2_mesh(mesh_device)
         self.precision = load_precision(precision_config)
         self.mesh = mesh_device
@@ -105,6 +114,7 @@ class Qwen38Model:
                     policy={
                         **decoder_policy(self.precision, i),
                         **prefill_policy,
+                        **(policy or {}),
                         "compact_decode_residual": self.compact_decode_residual,
                         "compact_decode_mlp": os.getenv("QWEN_COMPACT_DECODE_MLP", "0") == "1",
                         "batched_decode_rope": os.getenv("QWEN_BATCHED_DECODE_ROPE", "0") == "1",
