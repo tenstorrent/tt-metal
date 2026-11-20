@@ -144,6 +144,7 @@ class TtTransformerBlock(LightweightModule):
         chunk_start_idx_tensor=None,
         kv_cache=None,
         batch_size=1,
+        seqsplit=False,
     ) -> ttnn.Tensor:
         # x contains input in layer 0 and ffout of previous layer thereafter, x should be dealocated
         # h contains 0 in layer 0 and h_prev+x_prev+attn_out_prev thereafter, h is persistent
@@ -168,6 +169,20 @@ class TtTransformerBlock(LightweightModule):
             assert (
                 x.memory_config() == skip_mem_cfg
             ), f"decoder input memcfg mismatch: {x.memory_config()} != {skip_mem_cfg}"
+        if mode == "prefill" and seqsplit:
+            return self._forward_prefill_seqsplit(
+                x,
+                current_pos,
+                rot_mats,
+                user_id,
+                page_table=page_table,
+                chunk_page_table=chunk_page_table,
+                chunk_start_idx=chunk_start_idx,
+                chunk_start_idx_tensor=chunk_start_idx_tensor,
+                kv_cache=kv_cache,
+                batch_size=batch_size,
+                res_dtype=res_dtype,
+            )
         # Norms take fractured inputs and output replicated across devices
         # attn_in_sharded=norm(x+h), h = x+h happens implicitly
         if self.layer_num == 0 or mode == "prefill":
@@ -239,3 +254,71 @@ class TtTransformerBlock(LightweightModule):
             return out, None
         else:
             return ff_out, h
+
+    def _seqsplit_norm_gather(self, norm, x):
+        """RMSNorm seqlen/8 rows (stats still gathered over cluster_axis 1), then all-gather the rows."""
+        normed, _ = norm(x, None, "prefill")
+        gathered = self.tt_ccl.prefill_seq_all_gather(normed, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        normed.deallocate(True)
+        return gathered
+
+    def _forward_prefill_seqsplit(
+        self,
+        x,
+        current_pos,
+        rot_mats,
+        user_id,
+        page_table=None,
+        chunk_page_table=None,
+        chunk_start_idx=None,
+        chunk_start_idx_tensor=None,
+        kv_cache=None,
+        batch_size=1,
+        res_dtype=None,
+    ):
+        """LLAMA_GALAXY_PREFILL_SEQSPLIT prefill layer.
+
+        The residual stream is [1, 1, seqlen/8, dim/4] per device: device (r, c) of the 8x4 mesh holds
+        sequence rows r*seqlen/8 .. (r+1)*seqlen/8 - 1 of hidden column block c. The WO and FF2 outputs
+        arrive reduce-scattered along the sequence in the same layout, so both residual adds and both
+        RMSNorms run on seqlen/8 rows; only the norm outputs are all-gathered (cluster_axis 0, dim 2) to
+        feed the QKV and FF1/FF3 matmuls. Add order and dtypes (res_dtype: bf16 on Blackhole) match the full-length path.
+        """
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        if self.layer_num == 0:
+            # The embedding output is full length and replicated over cluster_axis 0: keep this row's slice.
+            x_full = x
+            x = ttnn.mesh_partition(x_full, dim=2, cluster_axis=0, memory_config=dram)
+            x_full.deallocate(True)
+
+        attn_in = self._seqsplit_norm_gather(self.attention_norm, x)
+        attn_out = self.attention.forward(
+            attn_in,
+            current_pos,
+            rot_mats,
+            user_id,
+            "prefill",
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            chunk_start_idx_tensor=chunk_start_idx_tensor,
+            kv_cache=kv_cache,
+            batch_size=batch_size,
+            seqsplit=True,
+        )
+        h = ttnn.add(x, attn_out, memory_config=dram, dtype=res_dtype)
+        x.deallocate(True)
+        attn_out.deallocate(True)
+
+        ff_in = self._seqsplit_norm_gather(self.ff_norm, h)
+        ff_out = self.feed_forward.forward(ff_in, "prefill", batch_size=batch_size, seqsplit=True)
+        out = ttnn.add(ff_out, h, memory_config=dram, dtype=res_dtype)
+        ff_out.deallocate(True)
+        h.deallocate(True)
+
+        if self.layer_num == self.n_layers - 1:
+            # The model's output norm / LM head expect the full sequence.
+            out_rows = out
+            out = self.tt_ccl.prefill_seq_all_gather(out_rows, cluster_axis=0, memory_config=dram)
+            out_rows.deallocate(True)
+        return out, None

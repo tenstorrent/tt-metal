@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
 import os
 import time
 from collections import defaultdict
@@ -26,7 +27,14 @@ from models.common.sampling import (
     format_sampling_params,
 )
 from models.common.warmup import WarmupForwardMixin
+from models.demos.llama3_70b_galaxy.tt.llama_attention import CPF_RING_ALIGN, cpf_ring_eligible, cpf_ring_warm_prefixes
 from models.demos.llama3_70b_galaxy.tt.model_config import SDPA_CHUNK_ALIGN
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+    cpf_pad512_on,
+    cpf_pad512_seqlens,
+    padded_prefill_len,
+    prefill_extra_seqlens,
+)
 from models.tt_transformers.tt.common import (
     InterleavedTextMedia,
     copy_host_to_device,
@@ -43,6 +51,10 @@ DECODE_PAGE_TABLE_INPUT_IDX = 3
 # A chunked-prefill continuation arrives like a prefix-cache hit: start_pos is the
 # tokens computed by earlier chunks and prompt_lens is this chunk's end.
 CHUNKED_PREFILL = os.environ.get("LLAMA_GALAXY_CHUNKED_PREFILL", "0") == "1"
+
+# Non-power-of-two prefill lengths from LLAMA_GALAXY_PREFILL_PAD (empty when unset). TT_CCL reads the
+# same variable for its persistent buffers, so the padded lengths always have buffers and traces.
+PREFILL_EXTRA_SEQLENS = prefill_extra_seqlens()
 
 
 def _as_list(value):
@@ -81,9 +93,12 @@ def _fill_inactive_params_from_active(params, active_slots, max_batch):
 
 def get_prefill_warmup_sequence_lengths(max_seq_len: int) -> list[int]:
     """
-    Returns powers of 2 from 128 up to max_seq_len (inclusive).
+    Returns powers of 2 from 128 up to max_seq_len (inclusive), plus any LLAMA_GALAXY_PREFILL_PAD lengths.
     """
-    return [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    lengths = [128] + [2**i for i in range(10, max_seq_len.bit_length()) if 2**i <= max_seq_len]
+    if PREFILL_EXTRA_SEQLENS:
+        lengths = sorted(set(lengths) | {s for s in PREFILL_EXTRA_SEQLENS if s <= max_seq_len})
+    return lengths
 
 
 def _acknowledge_trace_io_corruptible(tensors):
@@ -101,15 +116,42 @@ def _acknowledge_trace_io_corruptible(tensors):
 def get_padded_prefill_len(seq_len: int) -> int:
     """
     Get the padded prefill length for a given sequence length.
-    This is used to pad the sequence length to the nearest power of 2.
+    This is used to pad the sequence length to the nearest power of 2, or to a
+    LLAMA_GALAXY_PREFILL_PAD length when that is smaller.
     """
-    if seq_len <= 128:
-        return 128
-    if seq_len <= 1024:
-        return 1024
-    else:
-        # return next power of 2 greater than seq_len
-        return 2 ** (seq_len - 1).bit_length()
+    return padded_prefill_len(seq_len, PREFILL_EXTRA_SEQLENS)
+
+
+def _cpf_rep_max() -> int:
+    """LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX (default 5120): longest new-token length that uses the replica. Each length
+    up to it adds a write and a read ring trace per warmed prefix; 8192 needs a trace region above 560 MB."""
+    return int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MAX", "5120"))
+
+
+def _cpf_rep_on() -> bool:
+    """LLAMA_GALAXY_PREFILL_CPF_REPLICA=1 (read at call time): reuse the last broadcast prefix K|V of the CPF ring
+    path when the next ring request has the same prefix tokens (llama_attention._cpf_ring_kv, mode "read")."""
+    return os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA", "0") == "1" and _cpf_ring_on()
+
+
+def _cpf_ring_on() -> bool:
+    """LLAMA_GALAXY_PREFILL_CPF_RING=1 (read at call time): prefill over a cached prefix runs ring SDPA on all
+    4 mesh columns (llama_attention._cpf_ring_kv) when the request is eligible (Generator._cpf_ring_request)."""
+    return os.environ.get("LLAMA_GALAXY_PREFILL_CPF_RING", "0") == "1"
+
+
+def _should_skip_prefix_caching_env(seq_len: int, num_cached: int, ring: bool) -> bool:
+    """LLAMA_GALAXY_PREFIX_SKIP (read at call time) selects the skip rule:
+    unset -> _should_skip_prefix_caching (default heuristic);
+    "0"   -> never skip: every cache hit runs the cached path;
+    "ring"-> keep the cache when the request takes the CPF ring path (ring: Generator._cpf_ring_request),
+             otherwise the default heuristic."""
+    rule = os.environ.get("LLAMA_GALAXY_PREFIX_SKIP")
+    if rule == "0":
+        return False
+    if rule == "ring" and ring:
+        return False
+    return _should_skip_prefix_caching(seq_len, num_cached)
 
 
 def _should_skip_prefix_caching(
@@ -241,6 +283,13 @@ class Generator(WarmupForwardMixin):
         # no output-processing allocation happens while a trace is live. See prefill_warmup.
         self._defer_trace_recording = False
         self._pending_prefill_traces: dict = {}
+        # CPF replica (LLAMA_GALAXY_PREFILL_CPF_REPLICA): (P, sha1 of the prefix tokens) whose K|V the device replica
+        # holds (set after a "write" call is dispatched; None = nothing valid), this call's (P, digest), the forced
+        # mode during warmup, and the mode the last ring call ran with.
+        self._cpf_rep_valid = None
+        self._cpf_rep_cur = None
+        self._cpf_rep_force = None
+        self._cpf_rep_last_mode = None
         # None means programs are warm, but L1 inputs must be recreated after prefill.
         self._prepared_decode_traces: dict = {}
 
@@ -251,6 +300,31 @@ class Generator(WarmupForwardMixin):
             raise ValueError(f"Request slot {slot} is out of range")
         if self.model.sampling is not None:
             self.model.sampling.seed_manager.release_slot(slot)
+
+    def _cpf_ring_request(self, padded_new: int, num_cached: int, block_size: int) -> bool:
+        """Whether a batch-1 prefill of padded_new rows over num_cached cached rows takes the CPF ring path: the
+        attention-side rule (llama_attention.cpf_ring_eligible) with this model's prefill CCL lengths, so the
+        _cs<P> trace keys, the skip rule, the prefix rounding and the warmup all match what attention runs."""
+        support_seqlens = getattr(self.model.tt_ccl, "support_seqlens", None)
+        if support_seqlens is None:
+            support_seqlens = getattr(self.model.tt_ccl_prefill, "support_seqlens", ())
+        return cpf_ring_eligible(padded_new, num_cached, block_size, support_seqlens)
+
+    def _padded_new_len(self, new_len: int, num_cached: int, block_size: int) -> int:
+        """Padded length of new_len new rows over num_cached cached rows. LLAMA_GALAXY_PREFILL_CPF_PAD512=1: the next
+        multiple of 512 when it is a CPF_PAD512 length with prefill CCL buffers, shorter than the usual padding, and
+        the request then takes the CPF ring path; otherwise get_padded_prefill_len."""
+        padded = get_padded_prefill_len(new_len)
+        if num_cached > 0 and cpf_pad512_on():
+            p512 = -(-int(new_len) // 512) * 512
+            if (
+                p512 < padded
+                and p512 in cpf_pad512_seqlens()
+                and p512 in getattr(self.model.tt_ccl, "support_seqlens", ())
+                and self._cpf_ring_request(p512, num_cached, block_size)
+            ):
+                return p512
+        return padded
 
     def _set_prefill_column_mask(self, tt_column_mask):
         # Keep mask available on whichever TT_CCL instance attention currently uses.
@@ -280,6 +354,80 @@ class Generator(WarmupForwardMixin):
         if getattr(args, "is_blackhole", False) and getattr(args, "use_prefetcher", False):
             return os.environ.get("LLAMA_BH_BATCHED_PREFILL", "0") == "1"
         return True
+
+    def _set_cpf_rep_mode(self, mode):
+        """tt_ccl._cpf_rep_mode on every TT_CCL instance attention may use (same walk as the column mask)."""
+        seen_ids = set()
+        refs = [getattr(self.model, n, None) for n in ("tt_ccl", "tt_ccl_prefill", "tt_ccl_decode")]
+        refs += [getattr(layer.attention, "tt_ccl", None) for layer in self.model.layers]
+        for ccl_obj in refs:
+            if ccl_obj is not None and id(ccl_obj) not in seen_ids:
+                seen_ids.add(id(ccl_obj))
+                ccl_obj._cpf_rep_mode = mode
+        self._cpf_rep_last_mode = mode
+
+    def _cpf_rep_tensors(self, P):
+        """Per-layer replica tensors ([1, 1, 2P, head_dim], prefix K rows 0..P-1, V rows P..2P-1) for prefix length P,
+        in layer order, or None when any layer has none (llama_attention._cpf_ring_kv allocates them)."""
+        reps = []
+        for layer in self.model.layers:
+            attn = layer.attention
+            st = getattr(getattr(attn, "tt_ccl", None), "_cpf_ring_state", None)
+            rep = (st or {}).get("rep", {}).get((attn.layer_num, P))
+            if rep is None:
+                return None
+            reps.append(rep)
+        return reps
+
+    def _cpf_rep_miss_prefix(self, tokens_row, prompt_len, block_size):
+        """LLAMA_GALAXY_PREFILL_CPF_REPLICA_MISS=1 (opt-in, read at call time): for a request with no cached prefix,
+        the prefix length P the device replica can serve, else 0. It can when the replica is valid for (P, sha1 of
+        P tokens) and this prompt's first P tokens hash the same, the prompt is longer than P, and the new rows take
+        the replica-read ring path (ring eligible, padded length <= REPLICA_MAX). A lane's first request for a prefix
+        another lane holds is such a miss: its prefix K|V are then read from the replica (same rows as a hit) and
+        copied into this lane's paged cache (_cpf_rep_fill_prefix) instead of being recomputed."""
+        if os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_MISS", "0") != "1" or not _cpf_rep_on():
+            return 0
+        if self._cpf_rep_valid is None:
+            return 0
+        P = int(self._cpf_rep_valid[0])
+        if prompt_len <= P:
+            return 0
+        padded = self._padded_new_len(prompt_len - P, P, block_size)
+        if padded > _cpf_rep_max() or not self._cpf_ring_request(padded, P, block_size):
+            return 0
+        pre = tokens_row[:P].to(torch.int64).contiguous().numpy().tobytes()
+        if (P, hashlib.sha1(pre).hexdigest()) != self._cpf_rep_valid:
+            return 0
+        if self._cpf_rep_tensors(P) is None:
+            return 0
+        return P
+
+    def _cpf_rep_fill_prefix(self, kv_cache, page_table_row, P, user_id, block_size):
+        """Copy the replica's prefix K|V (P rows per layer) into user_id's paged cache: page_table_row [1, >= P /
+        block_size] holds the request's blocks; the owning mesh column (user_id // 8) gets them, the other columns
+        -1 (paged_fill_cache skips). Eager ops on the one command queue, so they are ordered before the forward."""
+        nb = P // block_size
+        cols = 4
+        pt = torch.full((cols, ((nb + 7) // 8) * 8), -1, dtype=torch.int32)
+        pt[user_id // 8, :nb] = page_table_row[0, :nb].to(torch.int32)
+        tt_pt = ttnn.from_torch(
+            pt,
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(None, 0), mesh_shape=self.model_args.cluster_shape
+            ),
+        )
+        reps = self._cpf_rep_tensors(P)
+        for i, rep in enumerate(reps):
+            head_dim = int(rep.shape[3])
+            for j, lo in enumerate((0, P)):
+                part = ttnn.slice(rep, [0, 0, lo, 0], [1, 1, lo + P, head_dim])
+                ttnn.experimental.paged_fill_cache(kv_cache[i][j], part, tt_pt, batch_idx=0)
+                ttnn.deallocate(part)
+        ttnn.deallocate(tt_pt)
 
     def prefill_warmup(
         self,
@@ -319,6 +467,9 @@ class Generator(WarmupForwardMixin):
             self._defer_trace_recording = False
             self._pending_prefill_traces.clear()
             self.warming_up_prefill = False
+            # warmup wrote dummy prefixes into the CPF replica
+            self._cpf_rep_valid = None
+            self._cpf_rep_force = None
         logger.info("Prefill warmup completed")
 
     def _prefill_warmup_sweep(
@@ -463,6 +614,41 @@ class Generator(WarmupForwardMixin):
                 start_pos=[num_cached],
             )
 
+        # Phase 3 (LLAMA_GALAXY_PREFILL_CPF_RING=1): the ring path's traces for the warmed prefix lengths.
+        if _cpf_ring_on():
+            # LLAMA_GALAXY_PREFILL_CPF_PAD512: the ring-only lengths are warmed here and nowhere else
+            ring_lengths = sorted(
+                set(warmup_sequence_lengths)
+                | {s for s in cpf_pad512_seqlens() if s in getattr(self.model.tt_ccl, "support_seqlens", ())}
+            )
+            for prefix_len in cpf_ring_warm_prefixes():
+                for supported_length in ring_lengths:
+                    # a prefix plus new rows beyond max_seq_len never reaches the model (vLLM caps the prompt)
+                    if prefix_len + supported_length > self.model_args.max_seq_len:
+                        continue
+                    if not self._cpf_ring_request(supported_length, prefix_len, block_size):
+                        continue
+                    total_seq_len = prefix_len + supported_length
+                    logger.info(
+                        f"Running warmup prefill for CPF ring: prefill_seq_len={supported_length}, "
+                        f"num_cached={prefix_len}, total_seq_len={total_seq_len}"
+                    )
+                    rep_max = _cpf_rep_max()
+                    for force in ("write", "read") if _cpf_rep_on() and supported_length <= rep_max else (None,):
+                        self._cpf_rep_force = force
+                        self.prefill_forward_text(
+                            torch.zeros(1, total_seq_len, dtype=torch.long),
+                            torch.zeros(1, num_blocks_in_seq(total_seq_len, block_size), dtype=torch.int32),
+                            kv_cache,
+                            torch.tensor([total_seq_len], dtype=torch.long),
+                            enable_trace,
+                            sampling_params,
+                            [0],
+                            tt_out_logits_all_users,
+                            start_pos=[prefix_len],
+                        )
+                    self._cpf_rep_force = None
+
     def prefill_forward_text(
         self,
         tokens: torch.Tensor,  # All tokens, including the cached ones
@@ -526,6 +712,31 @@ class Generator(WarmupForwardMixin):
                         f"-> {aligned} (aligned to {SDPA_CHUNK_ALIGN})"
                     )
                     num_cached_tokens_list[idx] = aligned
+                # CPF ring: round a prefix >= CPF_RING_ALIGN down to a multiple of it (recomputes the rest) when the
+                # rounded request takes the ring path.
+                ring_cached = (num_cached_tokens_list[idx] // CPF_RING_ALIGN) * CPF_RING_ALIGN
+                if ring_cached != num_cached_tokens_list[idx] and self._cpf_ring_request(
+                    self._padded_new_len(int(prompt_lens[idx]) - ring_cached, ring_cached, get_block_size(kv_cache)),
+                    ring_cached,
+                    get_block_size(kv_cache),
+                ):
+                    num_cached_tokens_list[idx] = ring_cached
+
+        # CPF replica miss (opt-in): a single-request miss whose prefix the replica holds runs as a replica-read hit
+        # over that prefix; rep_fill_prefix[idx] = P marks the prefix rows to copy into the request's paged cache.
+        rep_fill_prefix = [0] * batch
+        if (
+            batch == 1
+            and num_cached_tokens_list[0] == 0
+            and kv_cache is not None
+            and page_table is not None
+            and not self.warming_up_prefill
+            and not CHUNKED_PREFILL
+        ):
+            P = self._cpf_rep_miss_prefix(tokens[0], int(prompt_lens[0]), get_block_size(kv_cache))
+            if P:
+                num_cached_tokens_list[0] = P
+                rep_fill_prefix[0] = P
 
         # Heuristic: revert to non-cached path when prefix-caching overhead
         # exceeds the compute savings (chunked-SDPA penalty, column masking,
@@ -536,16 +747,30 @@ class Generator(WarmupForwardMixin):
         # hit, and resetting a resume to 0 would recompute every earlier chunk.
         if not self.warming_up_prefill and not CHUNKED_PREFILL:
             for idx, seq_len in enumerate(prompt_lens):
-                if _should_skip_prefix_caching(int(seq_len), num_cached_tokens_list[idx]):
+                num_cached = num_cached_tokens_list[idx]
+                ring = self._cpf_ring_request(
+                    self._padded_new_len(int(seq_len) - num_cached, num_cached, get_block_size(kv_cache)),
+                    num_cached,
+                    get_block_size(kv_cache),
+                )
+                if _should_skip_prefix_caching_env(int(seq_len), num_cached, ring):
                     logger.info(
                         f"Prefix-caching heuristic: skipping cache for user {idx} "
                         f"(seq_len={int(seq_len)}, cached={num_cached_tokens_list[idx]})"
                     )
                     num_cached_tokens_list[idx] = 0
+                    rep_fill_prefix[idx] = 0
 
         # Calculate and pad prefill_seq_lens excluding cached tokens
         prefill_seq_lens = [
-            get_padded_prefill_len(seq_len - num_cached_tokens_list[idx]) for idx, seq_len in enumerate(prompt_lens)
+            (
+                self._padded_new_len(
+                    int(seq_len) - num_cached_tokens_list[idx], num_cached_tokens_list[idx], get_block_size(kv_cache)
+                )
+                if num_cached_tokens_list[idx] > 0 and kv_cache is not None
+                else get_padded_prefill_len(seq_len - num_cached_tokens_list[idx])
+            )
+            for idx, seq_len in enumerate(prompt_lens)
         ]
         if page_table is not None:
             assert isinstance(
@@ -726,6 +951,31 @@ class Generator(WarmupForwardMixin):
                     dim=-1,
                 )
 
+            # CPF replica: identity of this call's prefix; "read" when the device replica holds this prefix (the
+            # traced path then uses the _rep trace variant), else "write" (refresh it).
+            self._cpf_rep_cur = None
+            rep_mode = None
+            if (
+                _cpf_rep_on()
+                and not work_use_batched_prefill
+                and num_cached_tokens > 0
+                and prefill_seq_len <= _cpf_rep_max()
+                and self._cpf_ring_request(prefill_seq_len, num_cached_tokens, get_block_size(kv_cache))
+            ):
+                pre = tokens[request_idx, :num_cached_tokens].to(torch.int64).contiguous().numpy().tobytes()
+                self._cpf_rep_cur = (int(num_cached_tokens), hashlib.sha1(pre).hexdigest())
+                # LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE=read: test-only planted bug (read whatever the replica holds)
+                force = self._cpf_rep_force or os.environ.get("LLAMA_GALAXY_PREFILL_CPF_REPLICA_FORCE") or None
+                if force is not None:
+                    rep_mode = force
+                else:
+                    rep_mode = "read" if self._cpf_rep_cur == self._cpf_rep_valid else "write"
+                if rep_mode == "write":
+                    # the write overwrites the replica layer by layer: nothing is valid until it has been dispatched
+                    # in full (an exception mid-forward must not leave the old prefix's marker on a mixed replica)
+                    self._cpf_rep_valid = None
+            self._set_cpf_rep_mode(rep_mode)
+
             if page_table is not None:
                 # For prefix caching, page_table includes both cached and new blocks
                 page_table_user = self._get_prefill_user_page_table(
@@ -766,10 +1016,32 @@ class Generator(WarmupForwardMixin):
             num_cached = num_cached_tokens_list[request_idx]
             last_token_idx_output = last_token_idx - num_cached if num_cached > 0 else last_token_idx
 
+            if not work_use_batched_prefill and rep_fill_prefix[request_idx]:
+                if rep_mode != "read":
+                    raise RuntimeError(
+                        f"CPF replica miss: prefix {rep_fill_prefix[request_idx]} chosen for user {user_id} but the "
+                        f"replica mode is {rep_mode!r} (cur {self._cpf_rep_cur}, valid {self._cpf_rep_valid})"
+                    )
+                logger.info(
+                    f"CPF replica miss: user {user_id} prefix {rep_fill_prefix[request_idx]} from the replica, "
+                    f"{seq_len - rep_fill_prefix[request_idx]} new tokens"
+                )
+                self._cpf_rep_fill_prefix(
+                    kv_cache,
+                    page_table[request_idx : request_idx + 1, :],
+                    rep_fill_prefix[request_idx],
+                    user_id,
+                    get_block_size(kv_cache),
+                )
             if user_enable_trace:
                 tt_tok = self._easy_trace_prefill(**prefill_kwargs, prefill_seq_len=prefill_seq_len)
             else:
                 tt_tok = self.prefill_forward_single_user_text(**prefill_kwargs)
+            if _cpf_rep_on() and self._cpf_rep_last_mode == "write":
+                # the replica now holds this call's prefix (device work is ordered on the one command queue);
+                # a deferred warmup compile wrote nothing valid (the warmup end resets this anyway)
+                self._cpf_rep_valid = self._cpf_rep_cur
+            self._set_cpf_rep_mode(None)
 
             if not do_device_sampling:
                 tt_tok = self.model.process_output_prefill(
@@ -1172,6 +1444,16 @@ class Generator(WarmupForwardMixin):
         # Required because the attention path differs (regular/ring SDPA vs chunked SDPA + fill table).
         use_start_pos = "sp1" if (chunk_start_idx is not None and chunk_start_idx > 0) else "sp0"
         trace_key = f"{prefill_seq_len}_{batch_size}_{use_start_pos}"
+        # The CPF ring path bakes the prefix length into its ops: one trace per (new length, prefix length).
+        if (
+            use_start_pos == "sp1"
+            and batch_size == 1
+            and self._cpf_ring_request(prefill_seq_len, chunk_start_idx, block_size)
+        ):
+            trace_key += f"_cs{chunk_start_idx}"
+            # CPF replica: the mode prefill_forward_text chose for this call selects the trace variant
+            if _cpf_rep_on() and self._cpf_rep_last_mode == "read":
+                trace_key += "_rep"
 
         # For prefix caching, the model output has only prefill_seq_len positions (the chunk).
         # Relative index within the chunk (0..prefill_seq_len-1) for get_last_token and output processing.
@@ -1199,6 +1481,8 @@ class Generator(WarmupForwardMixin):
                         batch_size=batch_size,
                         start_pos=chunk_start_idx,
                     )
+                    # CPF replica: record this variant later with the mode it was compiled with
+                    self._pending_prefill_traces[trace_key]["cpf_rep_mode"] = self._cpf_rep_last_mode
                 # Hand back the compile run's own output so the caller's output processing still
                 # runs (and compiles) exactly as it would have. There is no trace to replay yet.
                 return self._pending_prefill_traces[trace_key]["compile_out"]
@@ -1243,6 +1527,7 @@ class Generator(WarmupForwardMixin):
 
         logger.info(f"Recording {len(self._pending_prefill_traces)} deferred prefill trace(s)")
         for trace_key, prepared in self._pending_prefill_traces.items():
+            self._set_cpf_rep_mode(prepared.get("cpf_rep_mode"))
             trace_id, tt_out_trace = self._record_trace_prefill(prepared)
             self.trace_id_prefill[trace_key] = trace_id
             self.trace_inputs_prefill[trace_key] = prepared["device_inputs"]

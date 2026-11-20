@@ -7,9 +7,50 @@ import torch
 import os
 from loguru import logger
 
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import cpf_pad512_seqlens, prefill_extra_seqlens
+
 # Only for prefill, check tt-metal/models/demos/llama3_70b_galaxy/README.md
 LINE_RS = os.environ.get("LINE_RS", "0") == "1"
 LINE_AG = os.environ.get("LINE_AG", "0") == "1"
+
+# Prefill WO all-reduce: up to this seqlen it is an all-gather on dim 0 plus a local sum (buffer key
+# "WO_AG"); above it, a reduce-scatter plus all-gather (buffer key "WO"). Default 4096 is the original split.
+WO_AG_MAX = int(os.environ.get("LLAMA_GALAXY_WO_AG_MAX", "4096"))
+
+# LLAMA_GALAXY_PREFILL_SEQSPLIT=1 (opt-in, ring prefill): the residual stream between the
+# cluster_axis=0 reductions lives as seqlen/8 rows per device. The WO and FF2 all-reduces become a
+# reduce-scatter along the sequence (dim 2); the residual add and the RMSNorm then run on seqlen/8 rows,
+# and only the norm output is all-gathered (dim 2) for the next matmul. Unset = the original full-length
+# add + norm on every device. Applies to batch-1 prefill of PREFILL_SEQSPLIT_MIN..MAX rows (cold and
+# prefix-cached chunks alike: the add and norm do not depend on the position).
+PREFILL_SEQSPLIT = os.environ.get("LLAMA_GALAXY_PREFILL_SEQSPLIT", "0") == "1"
+PREFILL_SEQSPLIT_MIN = 2048
+PREFILL_SEQSPLIT_MAX = 8192
+
+# LLAMA_GALAXY_PREFILL_CCL_BUFS=<n> (opt-in, read at call time): num_buffers_per_channel for the Wormhole
+# prefill ring CCLs (reduce_scatter_minimal_async / all_gather_async; the ops default to 1). Applies to
+# ring_reduce_scatter (FF1/FF3 RS; QKV/WO RS without seqsplit), ring_all_gather (FF2 input AG < 4096, SDPA
+# output AG, QKV/WO AG without seqsplit) and the seqsplit RS/AG (WO, FF2, norm output, QKV heads).
+# LLAMA_GALAXY_PREFILL_CCL_BUFS_OPS = comma (or +) list of rs, ag, seqrs, seqag (default: rs only).
+# Default rs: traced A/B (9 vs 1 layer, 16 buffers) per layer: rs (FF1/FF3 ring RS) -0.05 ms at 4096 and 6144,
+# +0.003 at 2048 (noise); seqrs neutral; ag and seqag slower at every length (+0.007..+0.020 ms).
+PREFILL_CCL_BUFS_ENV = "LLAMA_GALAXY_PREFILL_CCL_BUFS"
+PREFILL_CCL_BUFS_KINDS = ("rs", "ag", "seqrs", "seqag")
+PREFILL_CCL_BUFS_DEFAULT_KINDS = ("rs",)
+
+
+def prefill_ccl_bufs(kind):
+    """num_buffers_per_channel for this prefill CCL kind, or None (op default) when the lever is off."""
+    value = os.environ.get(PREFILL_CCL_BUFS_ENV, "").strip()
+    if value in ("", "0"):
+        return None
+    ops = os.environ.get(PREFILL_CCL_BUFS_ENV + "_OPS", "").strip()
+    kinds = tuple(k.strip() for k in ops.replace("+", ",").split(",")) if ops else PREFILL_CCL_BUFS_DEFAULT_KINDS
+    for k in kinds:
+        if k not in PREFILL_CCL_BUFS_KINDS:
+            raise ValueError(f"{PREFILL_CCL_BUFS_ENV}_OPS={ops!r}: unknown kind {k!r}; use {PREFILL_CCL_BUFS_KINDS}")
+    return int(value) if kind in kinds else None
+
 
 # If set, use line for those AG ops in prefill, otherwise use ring if available
 USE_LINE_AG = {
@@ -196,6 +237,14 @@ class TT_CCL:
         if mode == "prefill":
             # For some prefill seqlens we always allocate CCL buffers. Otherwise they will require barrier syncing
             self.support_seqlens = [4096, 2048, 1024, 128]
+            # LLAMA_GALAXY_PREFILL_PAD lengths (3072/5120/6144) pad, trace and buffer like the ones above.
+            max_seq_len = getattr(model_args, "max_seq_len", 0)
+            extra_seqlens = [s for s in prefill_extra_seqlens() if s <= max_seq_len]
+            # LLAMA_GALAXY_PREFILL_CPF_PAD512: ring-only lengths (buffers here; traces only on the CPF ring path)
+            extra_seqlens += [s for s in cpf_pad512_seqlens() if s <= max_seq_len and s not in extra_seqlens]
+            self.pad_extra_seqlens = set(extra_seqlens)
+            if extra_seqlens:
+                self.support_seqlens = sorted(set(self.support_seqlens) | set(extra_seqlens), reverse=True)
             if allocate_prefill_buffers:
                 self.persistent_buffers = (
                     self.get_ring_prefill_reduce_scatter_buffers()
@@ -779,6 +828,9 @@ class TT_CCL:
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2", "FF2_batched"):
                     continue
+                # Batched prefill only runs 32 x 128 = 4096 rows, never a LLAMA_GALAXY_PREFILL_PAD length.
+                if key.endswith("_batched") and seqlen in self.pad_extra_seqlens:
+                    continue
                 tt_intermediate_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
                     device=self.mesh_device,
@@ -840,6 +892,11 @@ class TT_CCL:
             )
             for key, shape in buffers_dict.items():
                 if self.use_qwen_prefill_ff2_gather_reduce and key in ("FF2",):
+                    continue
+                # Attention uses WO_AG only up to WO_AG_MAX, and for batched prefill at 4096
+                # (llama_attention.forward_prefill); above that the WO all-reduce takes buffer key "WO",
+                # so this (8, 1, seqlen, 2048) buffer would go unused.
+                if key == "WO_AG" and seqlen > max(WO_AG_MAX, 4096):
                     continue
                 tt_buffer = ttnn.as_tensor(
                     torch.zeros(shape[0]),
@@ -1370,6 +1427,75 @@ class TT_CCL:
             return self.model_config.get("GALAXY_PREFILL_NUM_LINKS", self.model_config["GALAXY_NUM_LINKS"])
         return self.model_config["GALAXY_NUM_LINKS"]
 
+    def prefill_seqsplit_enabled(self, seq_len, batch_size=1):
+        """True when LLAMA_GALAXY_PREFILL_SEQSPLIT applies to this prefill (see PREFILL_SEQSPLIT)."""
+        rows_per_device = seq_len // self.cluster_shape[0]
+        return (
+            PREFILL_SEQSPLIT
+            and self.mode == "prefill"
+            and batch_size == 1
+            # Blackhole builds its prefill TT_CCL with use_prefetcher False (prefill runs without the prefetcher
+            # sub-device); the seq-split layout does not depend on the prefetcher.
+            and (self.use_prefetcher or self.is_blackhole)
+            and not self.is_qwen
+            and self.use_ring_rs_prefill
+            and self.use_ring_ag_prefill
+            and PREFILL_SEQSPLIT_MIN <= seq_len <= PREFILL_SEQSPLIT_MAX
+            and seq_len % self.cluster_shape[0] == 0
+            and rows_per_device % 32 == 0
+        )
+
+    def _prefill_seqsplit_num_links(self):
+        # Same link count as ring_reduce_scatter (Blackhole: the prefill link cap, see _galaxy_links).
+        return 4 if (self.use_prefetcher and not self.is_blackhole) else min(4, self._galaxy_links())
+
+    def prefill_seq_reduce_scatter(self, input_tensor_mesh, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Sum the partials over cluster_axis and keep this device's seqlen/N rows (scatter on dim 2).
+
+        Input [1, B, S/B, H] (B > 1 when the matmul ran in row slabs) -> output [1, 1, S/N, H], where the
+        device at position r along cluster_axis holds rows r*S/N .. (r+1)*S/N - 1. No persistent buffers:
+        the op allocates its own and synchronises through the barrier semaphore, as the "WO" key does.
+        """
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+        seqlen = input_tensor_mesh.shape[-2]
+        ttnn_tensor_out = ttnn.experimental.reduce_scatter_minimal_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.reduce_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            num_links=self._prefill_seqsplit_num_links(),
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            num_workers_per_link=4 if seqlen > 128 else 1,
+            num_buffers_per_channel=prefill_ccl_bufs("seqrs"),
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return ttnn_tensor_out
+
+    def prefill_seq_all_gather(self, input_tensor_mesh, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+        """Inverse of prefill_seq_reduce_scatter's layout: [1, 1, S/N, H] per device -> [1, 1, S, H] everywhere."""
+        ttnn_tensor_out = ttnn.experimental.all_gather_async(
+            input_tensor=input_tensor_mesh,
+            persistent_output_buffer=None,
+            dim=2,
+            multi_device_global_semaphore=self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]],
+            num_links=self._prefill_seqsplit_num_links(),
+            barrier_semaphore=self.get_and_cycle_barrier_semaphore_handle(cluster_axis),
+            memory_config=memory_config,
+            topology=ttnn.Topology.Ring,
+            subdevice_id=self.worker_sub_device_id,
+            cluster_axis=cluster_axis,
+            num_buffers_per_channel=prefill_ccl_bufs("seqag"),
+        )
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return ttnn_tensor_out
+
     def ring_reduce_scatter(
         self,
         input_tensor_mesh,
@@ -1417,6 +1543,7 @@ class TT_CCL:
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
             num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=prefill_ccl_bufs("rs") if (self.use_prefetcher and not self.is_blackhole) else None,
         )
 
         # reshape input back
@@ -1595,6 +1722,7 @@ class TT_CCL:
             topology=ttnn.Topology.Ring,
             subdevice_id=self.worker_sub_device_id,
             cluster_axis=cluster_axis,
+            num_buffers_per_channel=prefill_ccl_bufs("ag") if (self.use_prefetcher and not self.is_blackhole) else None,
         )
 
         if self.mode == "prefill" and buffer_key is not None and dim != 2:

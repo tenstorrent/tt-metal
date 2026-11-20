@@ -6,6 +6,7 @@ import os
 
 import torch
 import ttnn
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import prefill_minmm, prefill_slab_rows
 from models.common.lightweightmodule import LightweightModule
 import torch.nn.functional as F
 
@@ -92,6 +93,17 @@ class TtLlamaMLP(LightweightModule):
         )
 
         self.four_bit_mlp = args.optimizations.bfp4_mlp
+        # Opt-in LLAMA_GALAXY_FF2_BFP4=1 (LlamaOptimizations.bfp4_ff2): w2 in bfp4, FF2 matmuls at LoFi.
+        # Qwen's sharded w2 is bf16 (as_sharded_tensor), so this stays Llama-only. The weight cache file
+        # differs by dtype (ttnn.as_tensor appends _dtype_BFLOAT4_B), so the bfp8 file is never reused.
+        self.ff2_bfp4 = bool(getattr(args.optimizations, "bfp4_ff2", False)) and not args.is_qwen
+        w2_dtype = ttnn.bfloat4_b if self.ff2_bfp4 else ttnn.bfloat8_b
+        if self.ff2_bfp4:
+            self.ff2_decode_compute_kernel_config = args.compute_kernel_config_lofi_fp32acc
+            self.ff2_prefill_compute_kernel_config = args.compute_kernel_config_lofi
+        else:
+            self.ff2_decode_compute_kernel_config = args.compute_kernel_config_hifi2
+            self.ff2_prefill_compute_kernel_config = args.compute_kernel_config_hifi2_fp16
 
         # Sharded weights
         w1_dim = (-1, -2)
@@ -101,13 +113,13 @@ class TtLlamaMLP(LightweightModule):
         self.w1 = as_sharded_tensor(
             "w1_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )  # bfp4 normally ok here but sub .99 pcc for llama 3.1 weights
-        self.w2 = as_sharded_tensor("w2_sharded", ttnn.bfloat8_b, dim=w2_dim)
+        self.w2 = as_sharded_tensor("w2_sharded", w2_dtype, dim=w2_dim)
         self.w3 = as_sharded_tensor("w3_sharded", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim)
 
         self.w1_interleaved = as_interleaved_tensor(
             "w1_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
-        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", ttnn.bfloat8_b, dim=w2_dim)
+        self.w2_interleaved = as_interleaved_tensor("w2_interleaved", w2_dtype, dim=w2_dim)
         self.w3_interleaved = as_interleaved_tensor(
             "w3_interleaved", ttnn.bfloat4_b if self.four_bit_mlp else ttnn.bfloat8_b, dim=w1_dim
         )
@@ -123,9 +135,9 @@ class TtLlamaMLP(LightweightModule):
             self.prefetcher_setup.insert_tensor(self.w2)
         self.tt_ccl = tt_ccl
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False):
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, return_intermediates=False, seqsplit=False):
         if mode == "prefill":
-            return self.forward_prefill(x, batch_size=batch_size)
+            return self.forward_prefill(x, batch_size=batch_size, seqsplit=seqsplit)
 
         intermediates = {} if return_intermediates else None
 
@@ -306,7 +318,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_for_matmul,
                 self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.ff2_decode_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
                 program_config=None,
                 memory_config=None,
@@ -318,7 +330,7 @@ class TtLlamaMLP(LightweightModule):
             w2_out = ttnn.linear(
                 w2_in_for_matmul,
                 self.w2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2,
+                compute_kernel_config=self.ff2_decode_compute_kernel_config,
                 dtype=ttnn.bfloat8_b,
                 program_config=pc_2_for_matmul,
                 memory_config=self.model_config["FF2_OUT_RING_MEMCFG"],
@@ -348,7 +360,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1, seqsplit=False) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -369,6 +381,8 @@ class TtLlamaMLP(LightweightModule):
             None
             if bh_interleaved_override
             else self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
+            if seq_len < 4096 or batch_size > 1
+            else None
         )
         short_lens_pc_2 = self.model_config["PREFILL_MLP_W2_PRG_CONFIG"](seq_len)
 
@@ -433,10 +447,26 @@ class TtLlamaMLP(LightweightModule):
         )
 
         if 1024 <= seq_len < 4096 and not bh_min_2k:
-            x = ttnn.reshape(x, (1, seq_len // 1024, 1024, -1))
+            slab = prefill_slab_rows(seq_len)
+            x = ttnn.reshape(x, (1, seq_len // slab, slab, -1))
 
+        # LLAMA_GALAXY_PREFILL_MINMM=mlp2048 / mlp3072: minimal matmuls (FF2 fused with its all-gather) at 2048 /
+        # 3072 too (the 1024-row slab input [1, S/1024, 1024, 2048] goes to minimal_matmul as is, as at 2048).
+        mlp_minmm = (
+            (
+                (seq_len == 2048 and prefill_minmm("mlp2048"))
+                or (seq_len == 3072 and prefill_minmm("mlp3072"))
+                or (seq_len in (2560, 3584) and prefill_minmm("mlp512"))
+            )
+            and batch_size == 1
+            and self.args.use_prefetcher
+            and not self.args.is_blackhole
+            and not self.args.is_qwen
+        )
+        if mlp_minmm:
+            use_w1_w3_interleaved = True
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if use_linear_13:
+        if use_linear_13 and not mlp_minmm:
             w1_out = ttnn.linear(
                 x,
                 self.w1_interleaved if use_w1_w3_interleaved else self.w1,
@@ -472,7 +502,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w1_out)
 
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
-        if use_linear_13:
+        if use_linear_13 and not mlp_minmm:
             w3_out = ttnn.linear(
                 x,
                 self.w3_interleaved if use_w1_w3_interleaved else self.w3,
@@ -537,7 +567,7 @@ class TtLlamaMLP(LightweightModule):
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
-        elif seq_len < 4096 or batch_size > 1 or self.args.is_blackhole:
+        elif (seq_len < 4096 or batch_size > 1 or self.args.is_blackhole) and not mlp_minmm:
             w2_in_gathered = self.tt_ccl.line_all_gather(
                 w2_in,
                 cluster_axis=1,
@@ -567,7 +597,7 @@ class TtLlamaMLP(LightweightModule):
                 w2_out = ttnn.linear(
                     w2_in_gathered,
                     self.w2_interleaved,
-                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    compute_kernel_config=self.ff2_prefill_compute_kernel_config,
                     dtype=self.prefill_output_dtype,
                     program_config=short_lens_pc_2,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -583,10 +613,19 @@ class TtLlamaMLP(LightweightModule):
                 cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 matmul_config=minimal_pc_2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                compute_kernel_config=self.ff2_prefill_compute_kernel_config,
                 dtype=self.prefill_output_dtype,
             )
             ttnn.deallocate(w2_in)
+
+        if seqsplit:
+            # LLAMA_GALAXY_PREFILL_SEQSPLIT: reduce-scatter along the sequence only ([1, 1, seqlen/8, 2048]
+            # per device; the 1024-row slabs are flattened first). The decoder does the residual add.
+            w2_out_reduced = self.tt_ccl.prefill_seq_reduce_scatter(
+                w2_out, cluster_axis=0, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+            ttnn.deallocate(w2_out)
+            return w2_out_reduced
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,

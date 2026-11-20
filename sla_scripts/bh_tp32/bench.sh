@@ -19,7 +19,7 @@ b() {
   vllm bench serve --backend openai --base-url http://localhost:8000 --model llama70b --tokenizer "$HF_MODEL" \
     --dataset-name random --ignore-eos --top-k 32 --top-p 0.9 --temperature 0.6 \
     --percentile-metrics ttft,tpot,itl,e2el --metric-percentiles 50,90,99 \
-    --save-result --result-dir "$OUT" --result-filename "$tag.json" "$@" > "$OUT/$tag.log" 2>&1
+    --save-result --save-detailed --result-dir "$OUT" --result-filename "$tag.json" "$@" > "$OUT/$tag.log" 2>&1
   echo "$(date +%T) END $tag exit=$?" >> "$OUT/progress.txt"
 }
 b warmup --random-input-len 1024 --random-output-len 32 --num-prompts 8 --max-concurrency 8   # not scored

@@ -2,9 +2,13 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+import time
+
 import ttnn
 from ttnn.tools import trace_allocation_tracker
 import torch
+from loguru import logger
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -18,6 +22,20 @@ from models.demos.llama3_70b_galaxy.tt.prefetcher_common import TtLlamaPrefetche
 from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
 from models.common.sampling.generator import SamplingGenerator
+
+
+def prefill_rot_slice_parts(table_len, seq_len):
+    """
+    num_devices for the device-tensor ttnn.slice of the prefill rot mats.
+
+    That slice returns table_len // num_devices rows starting at chunk_start_idx (its `ends`
+    tensor does not set the size). Return the largest part count whose tile-aligned part still
+    holds seq_len rows, so RoPE gets a cos/sin row for every position of the chunk.
+    """
+    for parts in range(max(table_len // seq_len, 1), 1, -1):
+        if table_len % parts == 0 and (table_len // parts) % 32 == 0:
+            return parts
+    return 1
 
 
 class TtTransformer(LightweightModule):
@@ -946,6 +964,28 @@ class TtTransformer(LightweightModule):
         return tt_logits
 
     def switch_mode(self, mode):
+        # LLAMA_SWITCH_TIMING=1: time each real prefill<->decode switch on its own (device synced before and after,
+        # so it excludes the work queued before it). Logs mean / max per direction every 100 switches.
+        if os.environ.get("LLAMA_SWITCH_TIMING", "0") != "1":
+            return self._switch_mode(mode)
+        real = (mode == "decode" and not self.is_decode_setup) or (mode != "decode" and not self.is_prefill_setup)
+        if not real:
+            return self._switch_mode(mode)
+        ttnn.synchronize_device(self.mesh_device)
+        t0 = time.perf_counter()
+        self._switch_mode(mode)
+        ttnn.synchronize_device(self.mesh_device)
+        dt = (time.perf_counter() - t0) * 1e3
+        st = self.__dict__.setdefault("_switch_ms", {})
+        st.setdefault(mode, []).append(dt)
+        n = sum(len(v) for v in st.values())
+        if n % 100 == 0:
+            logger.info(
+                "SWITCH_TIMING "
+                + " ".join(f"to_{k}: n={len(v)} mean={sum(v) / len(v):.1f}ms max={max(v):.1f}ms" for k, v in st.items())
+            )
+
+    def _switch_mode(self, mode):
         if mode == "decode":
             if self.is_prefill_setup:
                 self.tt_ccl.close()
@@ -1036,7 +1076,9 @@ class TtTransformer(LightweightModule):
         # ops that can hang on some builds; trace capture for prefix-cached runs uses start_pos > 0.
         if mode == "prefill" and start_pos > 0:
             full_rot_cos, full_rot_sin = rot_mats[0], rot_mats[1]
-            num_devices = self.args.cluster_shape[0] * self.args.cluster_shape[1]
+            # Not the mesh size: with 32 parts the slice held max_seq_len // 32 rows (1152 at
+            # max_seq_len 36864), so a 2048+ token chunk read RoPE rows past the slice.
+            num_devices = prefill_rot_slice_parts(int(full_rot_cos.shape[-2]), int(x.shape[-2]))
             z = self._tt_slice_start_zeros_4
             tt_slice_starts = ttnn.concat(
                 [z[0:2], chunk_start_idx, z[3:4]],
@@ -1059,6 +1101,8 @@ class TtTransformer(LightweightModule):
             rot_mats = (rot_cos_slice, rot_sin_slice)
 
         h = None
+        # LLAMA_GALAXY_PREFILL_SEQSPLIT: one decision per forward, so every layer agrees on the residual layout.
+        seqsplit = mode == "prefill" and self.tt_ccl.prefill_seqsplit_enabled(x.shape[-2], batch_size)
         # x needs to be in bfloat16_b as it gets reused as the residual tensor
         # Shared per-step RoPE cos/sin tiles (llama_attention decode): drop the previous step's so the first
         # layer always rebuilds them inside this forward (and inside any trace being captured).
@@ -1077,6 +1121,7 @@ class TtTransformer(LightweightModule):
                 chunk_start_idx_tensor=chunk_start_idx if mode == "prefill" else None,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
                 batch_size=batch_size,
+                seqsplit=seqsplit,
             )
         # ttnn.deallocate(h)
         if mode == "decode" and self.use_prefetcher:

@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.llama3_70b_galaxy.tt.llama_ccl import tt_distributed_rmsnorm, tt_sharded_distributed_rmsnorm
@@ -87,6 +89,15 @@ class DistributedNorm(LightweightModule):
         # the residual, so force it to bf8 to keep activation/CB footprint small (avoids L1 clashes
         # at long prefill sequence lengths). Other paths keep their input-derived dtype (None).
         norm_output_dtype = ttnn.bfloat8_b if self.args.blackhole_no_prefetcher else None
+        # LLAMA_BH_PREFILL_NORM_BF8=1 (read at call time): the same bf8 norm output for prefill on the BH prefetcher
+        # path. Halves the bytes of the seq-split norm-output all-gathers (LLAMA_GALAXY_PREFILL_SEQSPLIT) and of the
+        # QKV / FF1 / FF3 matmul inputs; the residual stays bf16.
+        if (
+            mode == "prefill"
+            and getattr(self.args, "is_blackhole", False)
+            and os.environ.get("LLAMA_BH_PREFILL_NORM_BF8", "0") == "1"
+        ):
+            norm_output_dtype = ttnn.bfloat8_b
         # BH prefetcher path: use_sharded_decode is True but the fused RMSAllGather hangs on the 2D-torus
         # fabric, so fall through to the unfused distributed rmsnorm (stable all_gather) and reshard to
         # the sharded output the downstream matmul expects. Only triggers on BH + sharded-decode.

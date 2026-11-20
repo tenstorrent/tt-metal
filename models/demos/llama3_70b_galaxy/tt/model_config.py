@@ -26,13 +26,19 @@ from typing import Tuple
 from models.common.utility_functions import nearest_32
 from pathlib import Path
 from enum import Enum, auto
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from models.demos.llama3_70b_galaxy.tt.load_checkpoints import (
     check_checkpoint_index,
     load_hf_state_dict,
     convert_hf_to_meta,
     convert_meta_to_hf,
     standardize_hf_keys,
+)
+from models.demos.llama3_70b_galaxy.tt.prefill_padding import (
+    prefill_sdpa_q64_2048_enabled,
+    prefill_slab1024_q_chunk,
+    ring_sdpa_q_chunk_override,
+    prefill_slab_rows,
 )
 
 # HuggingFace reference-model wrappers are shared with models/tt_transformers instead of being
@@ -48,6 +54,37 @@ from models.tt_transformers.tt.model_config import (
 # a multiple of this; generator aligns num_cached_tokens DOWN to this boundary.
 # (That means some tokens, even full pages, can be recomputed.)
 SDPA_CHUNK_ALIGN = 128
+
+# LLAMA_GALAXY_PREFILL_SLAB1024: ring SDPA q_chunk_size for 4096/6144/8192 (None when unset).
+PREFILL_SLAB1024_Q_CHUNK = prefill_slab1024_q_chunk()
+
+
+def ring_sdpa_q_chunk_size(seqlen):
+    """q_chunk_size for ring_distributed_sdpa at seqlen >= 2048 (ring_size 4: each device takes two
+    seqlen/8 slices). The op places a slice at slice_index * (seqlen/8) // q_chunk_size, so q_chunk_size
+    must divide seqlen/8: 256 for every power of two >= 2048, 128 for 3072 and 5120.
+    LLAMA_GALAXY_PREFILL_SLAB1024 can lower it at 4096/6144/8192 (prefill_padding.py)."""
+    default = 256 if (seqlen // 8) % 256 == 0 else 128 if (seqlen // 8) % 128 == 0 else 64  # 64: CPF_PAD512 lengths
+    if default == 64:
+        # LLAMA_GALAXY_PREFILL_CPF_PAD512_Q (read at call time): q_chunk for the CPF_PAD512 lengths (64 or 32)
+        default = int(os.environ.get("LLAMA_GALAXY_PREFILL_CPF_PAD512_Q", "64"))
+    if seqlen == 2048 and prefill_sdpa_q64_2048_enabled():
+        return 64
+    return ring_sdpa_q_chunk_override(seqlen, default, PREFILL_SLAB1024_Q_CHUNK)
+
+
+def is_1024_slab_prefill_len(seq_len):
+    """True for padded prefill lengths above 2048 that are not multiples of 2048 (3072, 5120 from
+    LLAMA_GALAXY_PREFILL_PAD; 2560/3584/4608 from LLAMA_GALAXY_PREFILL_CPF_PAD512). Their 2D prefill matmuls run on
+    slabs of prefill_slab_rows rows (1024, or 512 when the length is not a multiple of 1024), unfused, with
+    per_core_M = slab_per_core_m(seq_len) (slab tile rows over 8 grid rows)."""
+    return seq_len > 2048 and seq_len % 2048 != 0
+
+
+def slab_per_core_m(seq_len):
+    """per_core_M of the 7x10-grid 2D prefill matmuls on one slab: 4 for 1024-row slabs, 2 for 512-row slabs."""
+    return prefill_slab_rows(seq_len) // 32 // 8
+
 
 PREFETCHER_NOC1_GRID = [
     (6, 6),
@@ -483,10 +520,32 @@ def get_core_ranges(num_reader_cores, num_global_cb_receivers, is_functional_tes
 @dataclass
 class LlamaOptimizations:
     bfp4_mlp: bool
+    # Opt-in (LLAMA_GALAXY_FF2_BFP4=1): MLP FF2 (w2, down-projection) weights in bfp4 at LoFi instead of
+    # bfp8 at HiFi2, decode and prefill. Read when the optimizations object is built. Llama only
+    # (llama_mlp.py ignores it for Qwen).
+    bfp4_ff2: bool = field(
+        default_factory=lambda: os.environ.get("LLAMA_GALAXY_FF2_BFP4", "0") == "1",
+        repr=False,
+    )
+    # Opt-in (LLAMA_GALAXY_ATTN_W_BFP4=1): attention wqkv and wo weights in bfp4 at LoFi instead of bfp8 at
+    # HiFi2, decode (prefetcher ring) and prefill. Read when the optimizations object is built. Llama only
+    # (llama_attention.py ignores it for Qwen).
+    bfp4_attn_w: bool = field(
+        default_factory=lambda: os.environ.get("LLAMA_GALAXY_ATTN_W_BFP4", "0") == "1",
+        repr=False,
+    )
     # Future fields will go here:
     # bfp8_activations: bool
     # bfp8_layernorm: bool
     # bfp8_ccl: bool
+
+    def __repr__(self):
+        # Unset: same text as the generated dataclass repr. Set: the repr changes, so callers that key a
+        # weight-cache marker on repr(optimizations) (demo/text_demo.py build_variant) see a different
+        # variant and cold-load instead of handing a placeholder weight to a bfp4 cache miss.
+        extra = ", bfp4_ff2=True" if self.bfp4_ff2 else ""
+        extra += ", bfp4_attn_w=True" if self.bfp4_attn_w else ""
+        return f"{self.__class__.__qualname__}(bfp4_mlp={self.bfp4_mlp!r}{extra})"
 
     @classmethod
     def accuracy(cls, model_name):
@@ -783,6 +842,16 @@ class TtModelArgs:
                 fp32_dest_acc_en=False,
                 packer_l1_acc=True,
             )
+            # Decode FF2 with bfp4 weights (LlamaOptimizations.bfp4_ff2): compute_kernel_config_hifi2 with
+            # LoFi (tech_reports/LLMs/llms.md: "Use LoFi for BFP4 weights"; bfp4 has 3 mantissa bits, so the
+            # second HiFi2 pass adds little). fp32 dest accumulation is kept as on the bfp8 FF2 path (K=3584).
+            self.compute_kernel_config_lofi_fp32acc = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.LoFi,
+                math_approx_mode=True,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=True,
+                dst_full_sync_en=True,
+            )
             self.compute_kernel_config_hifi4 = ttnn.WormholeComputeKernelConfig(
                 math_fidelity=ttnn.MathFidelity.HiFi4,
                 math_approx_mode=False,
@@ -873,7 +942,11 @@ class TtModelArgs:
             # only 32 work units for 70 cores, so the op ran at ~1 ms/layer at 4K. LLAMA_BH_SDPA_Q_CHUNK=64 spreads
             # it over the grid (4K: 0.99 -> 0.28 ms; 2K: 0.28 -> 0.16 ms). Read at call time so tests can toggle it.
             def _sdpa_progcfg(seqlen, chunk_start_idx=0, _gx=sdpa_grid_x, _gy=sdpa_grid_y):
-                q_long = int(os.environ.get("LLAMA_BH_SDPA_Q_CHUNK", "256"))
+                # ring_sdpa_q_chunk_size: q_chunk must divide seqlen/8 (128 at 3072/5120 from LLAMA_GALAXY_PREFILL_PAD).
+                q_long = ring_sdpa_q_chunk_size(seqlen)
+                q_env = os.environ.get("LLAMA_BH_SDPA_Q_CHUNK")
+                if q_env and (seqlen // 8) % int(q_env) == 0:
+                    q_long = int(q_env)
                 if chunk_start_idx == 0:
                     q_chunk, k_chunk = (q_long, 512) if seqlen >= 2048 else (64, 64)
                 else:
@@ -964,8 +1037,10 @@ class TtModelArgs:
                         in0_block_w=8,
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=4,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(
-                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        per_core_M=(
+                            slab_per_core_m(seq_len)
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                         per_core_N=math.ceil(28672 / 8 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
@@ -1092,7 +1167,11 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_M=(
+                            slab_per_core_m(seq_len)
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)
+                        ),  # 8~10 rows
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
@@ -1194,7 +1273,9 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(1, 4 if seq_len >= 1024 else seq_len // self.tile_size // 8),  # 8~10 rows
+                        per_core_M=max(
+                            1, slab_per_core_m(seq_len) if seq_len >= 1024 else seq_len // self.tile_size // 8
+                        ),  # 8~10 rows
                         per_core_N=math.ceil(2048 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,
                         fused_activation=None,
@@ -1262,8 +1343,10 @@ class TtModelArgs:
                         in0_block_w=8,  # FIXME: optimize this config for prefill, careful use DI_DT_WORKAROUND if necessary
                         out_subblock_h=1,  # Must be divisible by per_core_M
                         out_subblock_w=2,  # Must be divisible by per_core_N, out_subblock_w * out_subblock_h <= 4
-                        per_core_M=max(
-                            1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8  # 8 rows
+                        per_core_M=(
+                            slab_per_core_m(seq_len)
+                            if is_1024_slab_prefill_len(seq_len)
+                            else max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8)  # 8 rows
                         ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                         per_core_N=math.ceil(1280 / 32 / 7),  # N / TILE_WIDTH / grid width
                         transpose_mcast=False,

@@ -1,0 +1,61 @@
+diff --git a/src/vllm_tt_plugin/config.py b/src/vllm_tt_plugin/config.py
+index ce2a79c..7374710 100644
+--- a/src/vllm_tt_plugin/config.py
++++ b/src/vllm_tt_plugin/config.py
+@@ -655,6 +655,24 @@ def _read_tt_positive_int(tt_config: dict[str, Any], key: str, default: int) ->
+     return value
+ 
+ 
++_MAX_NEW_PREFILLS_PER_STEP_KEY = "max_new_prefills_per_step"
++
++
++def get_tt_max_new_prefills_per_step(vllm_config: "VllmConfig") -> int:
++    """Most new requests one prefill step admits per scheduler (lane); 0 = no cap.
++
++    The TT runner returns a step's first tokens only when the whole step ends, so a large token budget that admits
++    several whole prompts per step delays every first token in it. Capping admissions keeps a large budget (one long
++    prompt in one pass instead of chunks) without growing the step.
++    """
++    value = get_tt_config(vllm_config).get(_MAX_NEW_PREFILLS_PER_STEP_KEY, 0)
++    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
++        raise ValueError(
++            f"additional_config['tt']['{_MAX_NEW_PREFILLS_PER_STEP_KEY}'] must be an integer >= 0, got {value!r}"
++        )
++    return value
++
++
+ _LANE_PREFIX_CACHE_ROUTING_KEY = "lane_prefix_cache_routing"
+ _LANE_PREFIX_CACHE_ROUTING_DEFAULT = True
+ 
+diff --git a/src/vllm_tt_plugin/scheduler.py b/src/vllm_tt_plugin/scheduler.py
+index 2d163ed..e432b64 100644
+--- a/src/vllm_tt_plugin/scheduler.py
++++ b/src/vllm_tt_plugin/scheduler.py
+@@ -19,6 +19,7 @@ from vllm_tt_plugin.config import (
+     get_tt_adaptive_block_max_prompt_tokens,
+     get_tt_block_kv_extent_tokens,
+     get_tt_decode_interleave_config,
++    get_tt_max_new_prefills_per_step,
+     get_tt_output_tokens_per_step,
+     get_tt_prefill_chunk_alignment,
+     get_tt_spec_plan,
+@@ -393,6 +394,7 @@ class TTScheduler(AsyncScheduler):
+         # before every one of its lanes' schedule() calls and owns the one
+         # policy instance for the whole step, so this one stays dormant there.
+         self._decode_interleave = TTDecodeInterleavePolicy(self.vllm_config)
++        self._max_new_prefills = get_tt_max_new_prefills_per_step(self.vllm_config)
+         self._pending_forced_reset_discard_counts: dict[str, int] = {}
+         # Block-step decisions for the step currently being committed, read off
+         # its SchedulerOutput in update_from_output so _update_request_with_output
+@@ -972,6 +974,11 @@ class TTScheduler(AsyncScheduler):
+         self.running = cast(list[Request], partial_prefills)
+         self.max_num_running_reqs = max(0, saved_max - len(pure_decodes))
+         self.max_num_active_reqs = max(0, saved_active - len(pure_decodes))
++        if self._max_new_prefills > 0:
++            # The waiting loop admits while len(running) < the cap and running holds only the partial prefills here.
++            cap = len(partial_prefills) + self._max_new_prefills
++            self.max_num_running_reqs = min(self.max_num_running_reqs, cap)
++            self.max_num_active_reqs = min(self.max_num_active_reqs, cap)
+         try:
+             result = super().schedule()
+         finally:
