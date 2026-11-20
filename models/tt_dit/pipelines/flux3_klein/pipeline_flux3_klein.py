@@ -324,6 +324,8 @@ class Flux3KleinPipeline:
         t0 = time.time()
         image_cond = None
         if canvas is not None:
+            if size == max(SIZES):
+                self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
             h, w = latent_shape(canvas.height, canvas.width)
             image_cond = (self._vae.encode(canvas), reference_ids(h, w, 0))
         timings["encode_reference"] = time.time() - t0
@@ -351,6 +353,13 @@ class Flux3KleinPipeline:
         timings["to_host"] = time.time() - t0
         logger.info(f"FLUX 3 Klein {request.model} {size}x{size} refs {len(request.images)}: {timings}")
         return Flux3KleinResult(image=image, prompt=prompt, seed=seed, timings=timings, cached_steps=cached_steps)
+
+    def _free_other_plans(self, image_rows: int, cond_rows: int) -> None:
+        """Frees the cached plans of every other layout: at the largest size, the reference encoder needs their DRAM."""
+        for key in list(self._plan_cache):
+            lengths = dict(key[3])
+            if (lengths["image"], lengths["image_cond"]) != (image_rows, cond_rows):
+                self._plan_cache.pop(key).deallocate()
 
     def _upload_rows(self, rows: torch.Tensor | ttnn.Tensor, sp_factor: int) -> ttnn.Tensor:
         if isinstance(rows, ttnn.Tensor):
@@ -395,7 +404,7 @@ class Flux3KleinPipeline:
             tokens = self._upload_rows(text_rows, sp)
             embedded = transformer.embed_text(tokens)
             ttnn.deallocate(tokens)
-            key = (model, index, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(sample_ids))
+            key = _plan_key(model, index, sp, lengths, text_valid, sample_ids)
             plan = self._plan_cache.get(key)
             if plan is None:
                 plan = self._plan_cache[key] = transformer.prepare_plan(layout, sample_ids, sample=index)
@@ -498,6 +507,11 @@ class Flux3KleinPipeline:
             ttnn.deallocate(mask)
         self._plan_cache.clear()
         self._mask_cache.clear()
+
+
+def _plan_key(model: str, index: int, sp: int, lengths: dict[str, int], text_valid: int, ids: dict) -> tuple:
+    """The plan cache key; `Flux3KleinPipeline._free_other_plans` reads the lengths at index 3."""
+    return (model, index, sp, tuple(sorted(lengths.items())), text_valid, _ids_digest(ids))
 
 
 def _ids_digest(ids: dict[str, torch.Tensor]) -> tuple:

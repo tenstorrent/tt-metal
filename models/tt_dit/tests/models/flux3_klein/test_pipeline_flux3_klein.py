@@ -3,19 +3,40 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import time
+import types
+from collections import OrderedDict
 
 import numpy as np
 import pytest
+import torch
 from loguru import logger
 from PIL import Image
 
 import ttnn
 
 from ....pipelines.flux3_klein.dbcache_flux3_klein import flux3_klein_dbcache_config
-from ....pipelines.flux3_klein.pipeline_flux3_klein import SIZES, Flux3KleinPipeline, Flux3KleinRequest
+from ....pipelines.flux3_klein.pipeline_flux3_klein import SIZES, Flux3KleinPipeline, Flux3KleinRequest, _plan_key
 from ....utils.test import ring_params_8k
 
 PROMPT = "A man in a red jacket walks a golden retriever along a snowy forest path at sunrise, photorealistic"
+
+
+def test_free_other_plans_keeps_the_request_layout():
+    freed = []
+    ids = {"image": torch.zeros(1, 4)}
+
+    def key(image_rows, cond_rows):
+        return _plan_key("distilled", 0, 4, {"image": image_rows, "image_cond": cond_rows, "text": 512}, 7, ids)
+
+    def plan(name):
+        return types.SimpleNamespace(deallocate=lambda: freed.append(name))
+
+    pipeline = object.__new__(Flux3KleinPipeline)
+    pipeline._plan_cache = OrderedDict(
+        [(key(65536, 1024), plan("same")), (key(4096, 1024), plan("image")), (key(65536, 256), plan("cond"))]
+    )
+    pipeline._free_other_plans(65536, 1024)
+    assert list(pipeline._plan_cache) == [key(65536, 1024)] and sorted(freed) == ["cond", "image"]
 
 
 @pytest.mark.timeout(3600)
