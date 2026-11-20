@@ -421,9 +421,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 devices of the tensor in io_tensors that is on the fewest devices (every other tensor must be on them
                 too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
-                call, or of each range's program. A tensor argument that is a partial view of an io_tensors tensor,
-                such as one device's view from ttnn.get_device_tensors, must hold every device its program runs on:
-                bind a one-device view only in a program that runs on that device.
+                call, or of each range's program. A tensor argument that is another view of a tensor io_tensors lists
+                (they share one MeshTensor), such as one device's view from ttnn.get_device_tensors, must hold every
+                device its program runs on: bind a one-device view only in a program that runs on that device alone.
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same
@@ -443,7 +443,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
                 DFB at fault; if a tensor is on another MeshDevice or misses a device the program runs on; if the
                 MeshProgramSpec has no programs, its ranges overlap or reach outside the mesh, or the run args' ranges
-                differ from the spec's; if a tensor argument is a per-device view that misses a device its program
+                differ from the spec's; if a tensor argument is a partial view that misses a device its program
                 runs on; if io_tensors is empty or holds a tensor that is not allocated on a device, or
                 one allocated per core; if Metal rejects the run args, such as a DFB size it cannot take; or, on a
                 first call, if Metal rejects the spec, a kernel does not compile or the program does not fit the
