@@ -4,6 +4,7 @@
 # direct egress until the mirror covers its hosts (#1754).
 jobs:
   - id: ci-build-image
+    name: CI build image
     description: Build the tt-metal CI build image (bake target ci-build, Ubuntu 24.04) as a chain image
     runs-on: {os: linux, arch: amd64}
     temporary-direct-egress: "#1754"

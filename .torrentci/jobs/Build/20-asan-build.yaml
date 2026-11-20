@@ -3,6 +3,7 @@
 # required check. Runs on every merge-queue entry as a Shadow PR Gate member.
 jobs:
   - id: asan-build
+    name: ASan build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
     timeout: 1h
     compiler-cache: ccache

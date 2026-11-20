@@ -6,6 +6,7 @@
 # never block a merge. Members grow as more PR Gate jobs are ported.
 dashboards:
   - id: shadow-pr-gate
+    name: Shadow PR Gate
     description: "Shadow PR Gate: a non-blocking shadow of the PR Gate, run on each merge-queue entry; its checks are not required"
     report: {check: true}
     members:
