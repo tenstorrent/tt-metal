@@ -62,6 +62,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
 from models.demos.deepseek_v3_d_p.utils.sub_device_trace import CapturedCall
+from tt_py_test_utils_common.perf.cpu_clock import hold_full_cpu_clock
 
 
 def _apply_manifest_env():
@@ -1228,6 +1229,12 @@ def _assert_ranks_agree_on_config(rank: int, num_ranks: int) -> None:
 def main() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
+    # Eager prefill blocks between ops, so a utilization-driven governor (schedutil) can leave the dispatching threads
+    # at a low clock. Request full clock (uclamp_min) for the process from here, before the device opens, so the
+    # threads it starts inherit it; unlike the helper's tests, it is never restored (it ends with the process).
+    # PREFILL_HOLD_CPU_CLOCK=0 turns it off.
+    if os.environ.get("PREFILL_HOLD_CPU_CLOCK", "1") == "1":
+        print(f"[prefill] CPU clock: {hold_full_cpu_clock().status}", flush=True)
     # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
     install_crash_diagnostics()
 
