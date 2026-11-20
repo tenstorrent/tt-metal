@@ -48,6 +48,15 @@ def card_busy(device_path):
     return False
 
 
+def visible_devices_value(device_path):
+    """TT_VISIBLE_DEVICES value that leaves only this device node: its index among the sorted /dev/tenstorrent nodes."""
+    number = int(os.path.basename(os.path.realpath(device_path)))
+    nodes = sorted(int(n) for n in os.listdir("/dev/tenstorrent") if n.isdigit())
+    if number not in nodes:
+        raise SystemExit(f"{device_path} is not a /dev/tenstorrent device node")
+    return str(nodes.index(number))
+
+
 def executable(path):
     """Absolute path of an existing executable file, or exit."""
     resolved = Path(path).resolve()
@@ -101,11 +110,13 @@ class UmdReader(Reader):
 class ExalensReader(Reader):
     """ttexalens context. reinit=True builds a new context for every read batch (see begin_batch)."""
 
-    def __init__(self, reinit=False, safe_mode=True):
+    def __init__(self, device_path, reinit=False, safe_mode=True):
         self.name = "exalens-reinit" if reinit else "exalens"
         self._reinit = reinit
         self._safe = safe_mode
         self._ctx = None
+        # exalens opens every card UMD can see and the probe reads the first, so only the requested one is left.
+        os.environ["TT_VISIBLE_DEVICES"] = visible_devices_value(device_path)
         self._open()
 
     def _open(self):
@@ -141,14 +152,15 @@ class ExalensReader(Reader):
 
 
 def make_reader(mode, device_path=None):
+    device_path = device_path or default_device_path()
     if mode == "umd":
-        return UmdReader(int(os.path.basename(device_path or default_device_path())))
+        return UmdReader(int(os.path.basename(device_path)))
     if mode == "exalens":
-        return ExalensReader()
+        return ExalensReader(device_path)
     if mode == "exalens-reinit":
-        return ExalensReader(reinit=True)
+        return ExalensReader(device_path, reinit=True)
     if mode == "exalens-unsafe":
-        return ExalensReader(safe_mode=False)
+        return ExalensReader(device_path, safe_mode=False)
     raise SystemExit(f"unknown mode {mode}")
 
 

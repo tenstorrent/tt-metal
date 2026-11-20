@@ -58,6 +58,7 @@
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
+#include "impl/profiler/dram_counters.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt-umd/types/xy_pair.hpp>
@@ -429,6 +430,7 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
 
     metal_ctx.get_cluster().dram_barrier(device_id);
     metal_ctx.get_cluster().l1_barrier(device_id);
+    dram_counters::begin_program(metal_ctx, *device, program);
     const auto& hal = metal_ctx.hal();
     for (uint32_t programmable_core_type_index = 0; programmable_core_type_index < logical_cores_used_in_program.size();
          programmable_core_type_index++) {

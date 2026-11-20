@@ -34,8 +34,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "python"))
 from tt_llk_perf import dram_counters  # noqa: E402
 
 
-def run_example(example, env_extra, profiler_dir):
+def run_example(example, device, env_extra, profiler_dir):
     env = dict(os.environ)
+    # The example opens device 0, so the requested card is the only one it can see.
+    env["TT_VISIBLE_DEVICES"] = c.visible_devices_value(device)
     env["TT_METAL_SLOW_DISPATCH_MODE"] = "1"
     env["TT_METAL_PROFILER_DIR"] = str(profiler_dir)
     env.pop("TT_METAL_PROFILE_DRAM_COUNTERS", None)
@@ -68,7 +70,7 @@ def main():
 
     work = Path(tempfile.mkdtemp(prefix="dram_validate_"))
     off_dir, on_dir = work / "off", work / "on"
-    off, off_s = run_example(args.example, {}, off_dir)
+    off, off_s = run_example(args.example, args.device, {}, off_dir)
     ok = True
 
     def check(cond, text):
@@ -86,7 +88,7 @@ def main():
     )
 
     env_on = {"TT_METAL_PROFILE_DRAM_COUNTERS": "1"}
-    on, on_s = run_example(args.example, env_on, on_dir)
+    on, on_s = run_example(args.example, args.device, env_on, on_dir)
     check(
         on.returncode == 0 and "Test Passed" in on.stdout + on.stderr,
         f"option on: example passes ({on_s:.1f} s)",
