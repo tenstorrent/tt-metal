@@ -275,6 +275,10 @@ class FusedTail:
         key = (n, mix.buffer_address(), pre.buffer_address(), post.buffer_address(), X.buffer_address())
         if key in self._programs:
             return self._programs[key]
+        if (
+            len(self._programs) >= 64
+        ):  # eager calls (decoder chunk) bring new buffer addresses; generic_op's program cache
+            self._programs.clear()  # hashes runtime-arg sizes, not values, so a fresh descriptor still hits it
         g = self.device.compute_with_storage_grid_size()
         coords = [ttnn.CoreCoord(i % g.x, i // g.x) for i in range(n)]
         cores = ttnn.CoreRangeSet([ttnn.CoreRange(cc, cc) for cc in coords])
