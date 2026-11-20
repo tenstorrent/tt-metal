@@ -18,7 +18,7 @@
 /**
  * @brief Register-word counters (RWCs) of the issuing math thread.
  *
- * Each of SrcA, SrcB, and Dest has a live counter X and a carry (CR) shadow X_Cr. Every update
+ * Each of SrcA, SrcB, and Dest has a live counter X and a carriage-return (CR) shadow X_Cr. Every update
  * is one of the operations below, applied independently per counter; the HAL selects SETRWC
  * and/or INCRWC to encode them.
  */
@@ -316,57 +316,69 @@ inline __attribute__((always_inline)) constexpr Instr owner(const Op op, const I
  * @param update: Counter update.
  * @param instr: Instruction being encoded.
  * @param issued: Instructions from plan().
- * @param write_bit: Counter's bit in the SETRWC write mask.
  * @param cr_bit: Counter's bit in the CR mask.
- * @param select: Accumulates the SETRWC write mask.
- * @param carry: Accumulates the CR mask.
+ * @param cr_mask: Accumulates the CR mask.
  * @return The counter's immediate, or zero if another instruction encodes it.
  */
 inline __attribute__((always_inline)) constexpr std::uint32_t encode_counter(
-    const SrcUpdate& update, const Instr instr, const Instr issued, const WriteBit write_bit, const CrBit cr_bit, std::uint32_t& select, std::uint32_t& carry)
+    const SrcUpdate& update, const Instr instr, const Instr issued, const CrBit cr_bit, std::uint32_t& cr_mask)
 {
     if (owner(update.op, issued) != instr)
     {
         return 0;
     }
     hal::detail::require(update.value <= RwcValueMax, "math-counter value must fit in four bits");
-    select |= hal::to_underlying(write_bit);
+    // A DestUpdate can be sliced into a Src field; its DestCToCr bit would then rewrite Dest.
+    hal::detail::require(update.op != Op::IncrementAndSave || cr_bit == CrBit::Dest, "IncrementAndSave applies only to the Dest counter");
     if (update.op == Op::AdvanceAndReset)
     {
-        carry |= hal::to_underlying(cr_bit);
+        cr_mask |= hal::to_underlying(cr_bit);
     }
     else if (update.op == Op::IncrementAndSave)
     {
-        carry |= hal::to_underlying(CrBit::DestCToCr);
+        cr_mask |= hal::to_underlying(CrBit::DestCToCr);
     }
     return update.value;
+}
+
+/**
+ * @brief Select a counter's bit in the SETRWC write mask.
+ *
+ * @param update: Counter update.
+ * @param issued: Instructions from plan().
+ * @param write_bit: Counter's bit in the SETRWC write mask.
+ * @return write_bit when SETRWC encodes the update, otherwise zero.
+ */
+inline __attribute__((always_inline)) constexpr std::uint32_t write_mask(const SrcUpdate& update, const Instr issued, const WriteBit write_bit)
+{
+    return owner(update.op, issued) == Instr::Setrwc ? hal::to_underlying(write_bit) : 0;
 }
 
 /** @brief Encode the SETRWC share of an update. */
 inline __attribute__((always_inline)) constexpr std::uint32_t setrwc(const MathCounter& descriptor, const Instr issued)
 {
-    std::uint32_t select = 0;
-    std::uint32_t carry  = 0;
-    const auto dest      = encode_counter(descriptor.dest, Instr::Setrwc, issued, WriteBit::Dest, CrBit::Dest, select, carry);
-    const auto src_b     = encode_counter(descriptor.src_b, Instr::Setrwc, issued, WriteBit::SrcB, CrBit::SrcB, select, carry);
-    const auto src_a     = encode_counter(descriptor.src_a, Instr::Setrwc, issued, WriteBit::SrcA, CrBit::SrcA, select, carry);
+    std::uint32_t cr_mask = 0;
+    const auto dest       = encode_counter(descriptor.dest, Instr::Setrwc, issued, CrBit::Dest, cr_mask);
+    const auto src_b      = encode_counter(descriptor.src_b, Instr::Setrwc, issued, CrBit::SrcB, cr_mask);
+    const auto src_a      = encode_counter(descriptor.src_a, Instr::Setrwc, issued, CrBit::SrcA, cr_mask);
+    auto select           = write_mask(descriptor.dest, issued, WriteBit::Dest) | write_mask(descriptor.src_b, issued, WriteBit::SrcB) |
+                  write_mask(descriptor.src_a, issued, WriteBit::SrcA);
     if (descriptor.clear_fidelity)
     {
         select |= hal::to_underlying(WriteBit::Fidelity);
     }
-    return TT_OP_SETRWC(hal::to_underlying(descriptor.flip), carry, dest, src_b, src_a, select);
+    return TT_OP_SETRWC(hal::to_underlying(descriptor.flip), cr_mask, dest, src_b, src_a, select);
 }
 
 /** @brief Encode the INCRWC share of an update. */
 inline __attribute__((always_inline)) constexpr std::uint32_t incrwc(const MathCounter& descriptor, const Instr issued)
 {
     // INCRWC has no write mask: omitted counters encode a zero increment without CR.
-    std::uint32_t select = 0;
-    std::uint32_t carry  = 0;
-    const auto dest      = encode_counter(descriptor.dest, Instr::Incrwc, issued, WriteBit::Dest, CrBit::Dest, select, carry);
-    const auto src_b     = encode_counter(descriptor.src_b, Instr::Incrwc, issued, WriteBit::SrcB, CrBit::SrcB, select, carry);
-    const auto src_a     = encode_counter(descriptor.src_a, Instr::Incrwc, issued, WriteBit::SrcA, CrBit::SrcA, select, carry);
-    return TT_OP_INCRWC(carry, dest, src_b, src_a);
+    std::uint32_t cr_mask = 0;
+    const auto dest       = encode_counter(descriptor.dest, Instr::Incrwc, issued, CrBit::Dest, cr_mask);
+    const auto src_b      = encode_counter(descriptor.src_b, Instr::Incrwc, issued, CrBit::SrcB, cr_mask);
+    const auto src_a      = encode_counter(descriptor.src_a, Instr::Incrwc, issued, CrBit::SrcA, cr_mask);
+    return TT_OP_INCRWC(cr_mask, dest, src_b, src_a);
 }
 
 } // namespace detail
