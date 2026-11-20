@@ -225,6 +225,44 @@ def lane_slices(table: ttnn.Tensor, starts: "LaneStarts", lane_rows: int, width:
     return out
 
 
+class GluedStarts(tuple):
+    """PB.7B (PACKED_GLUED_ONECALL=on, tt/packed_glued.py): the model rows of a glued chunk as pieces ((start, rows),
+    ...) in row order (each segment's computed rows at its own positions, then the tail pad at positions 0..), passed
+    where a chunk start is expected by the rope tables: ``RopeTable.rows`` / ``CompressRope.rows`` then give each chip
+    the rows of the positions its own rows hold, whatever segments they belong to. Hashable (a memo key)."""
+
+    def scaled(self, r: int) -> "GluedStarts":
+        """The pieces' compressed rows at ratio ``r`` (start // r, rows // r each; rows are multiples of 2 r)."""
+        assert all(int(n) % r == 0 for _, n in self), (tuple(self), r)
+        return GluedStarts((int(s) // r, int(n) // r) for s, n in self)
+
+    @property
+    def rows(self) -> int:
+        return sum(int(n) for _, n in self)
+
+
+def glued_slices(table: ttnn.Tensor, starts: "GluedStarts", width: int) -> ttnn.Tensor:
+    """Rows [s, s + n) of ``table`` for each piece (s, n) of ``starts``, concatenated in order ([1, 1, sum n, width],
+    the table's layout): the natural-order rows of a glued chunk. Exact copies of the table's rows."""
+    parts = [
+        ttnn.slice(
+            table,
+            [0, 0, int(s), 0],
+            [1, 1, int(s) + int(n), width],
+            memory_config=DRAM,
+            sub_core_grids=sub_cores(table),
+        )
+        for s, n in starts
+        if int(n) > 0
+    ]
+    if len(parts) == 1:
+        return parts[0]
+    out = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+    for t in parts:
+        dealloc(t)
+    return out
+
+
 class RowsMemo:
     """INDEXER_GLUE=on (P.16): device tensors that depend only on (a load-time table, a chunk start), computed once
     and handed to every caller of the chunk (the rope rows of all 8 layers' kv / attention / indexer steps). Holds
@@ -374,8 +412,12 @@ class RopeTable:
 
     def _rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
+        glued = isinstance(start, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(start, LaneStarts)  # PB.3A: each lane its own start (tt/packed_onecall.py)
-        if packed:
+        if glued:
+            assert start.rows == length and length % (32 * sp) == 0, (start, length)
+            assert all(s % 32 == 0 and n % 32 == 0 and s + n <= self.max_seq for s, n in start), start
+        elif packed:
             lr = length // len(start)
             assert lr * len(start) == length and all(s % 32 == 0 and s + lr <= self.max_seq for s in start), (start, lr)
         else:
@@ -389,7 +431,9 @@ class RopeTable:
 
                 out.append(lane_rows(t, start, length))
                 continue
-            if packed:
+            if glued:
+                sl = glued_slices(t, start, self.width)
+            elif packed:
                 sl = lane_slices(t, start, lr, self.width)
             else:
                 sl = ttnn.slice(

@@ -20,6 +20,20 @@
 constexpr uint32_t one_bf16_packed = 0x3F803F80u;  // bf16(1.0) double-packed; generate_bcast_col_scalar uses >>16
 constexpr uint16_t neg_inf_bf16 = 0xFF80u;
 
+#ifdef SPARSE_SDPA_KV_ROWS
+// Bring-up fork option kv_lane_rows (deepseek_v41_flash_d_p PB.7B): per-core runtime args 2.. are [n, (token end,
+// kv address) x 8]: token tok reads the kv of the first range whose end is past it (the device's kv past the last).
+static inline uint32_t kv_row_address(uint32_t tok, uint32_t fallback) {
+    const uint32_t n = get_arg_val<uint32_t>(2);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (tok < get_arg_val<uint32_t>(3 + 2 * i)) {
+            return get_arg_val<uint32_t>(4 + 2 * i);
+        }
+    }
+    return fallback;
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::H);
     constexpr uint32_t S = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::S);
@@ -76,7 +90,9 @@ void kernel_main() {
     constexpr uint32_t k_row_bytes = k_dim * kv_elem_bytes;
     constexpr uint32_t latent_row_bytes = vDHt * tt::constants::TILE_WIDTH;
     constexpr uint32_t scale_blocks = sparse_sdpa::scale_block_count(latent_row_bytes);
+#ifndef SPARSE_SDPA_KV_ROWS
     const auto kv = TensorAccessor(kv_args, kv_addr);
+#endif
     experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
 #ifdef SPARSE_SDPA_ROW_BFP4
@@ -163,6 +179,9 @@ void kernel_main() {
     }
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+#ifdef SPARSE_SDPA_KV_ROWS
+        const auto kv = TensorAccessor(kv_args, kv_row_address(tok, kv_addr));
+#endif
         // K-gather phase: process this token's active chunks (reader signals per chunk; is_last ends the token).
         // Gather rows [0,split) on the writer's NoC into the reader-reserved destination, then ack.
         bool last = false;

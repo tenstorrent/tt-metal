@@ -1431,6 +1431,18 @@ TABLE = {
         "steps, PB.3's v1 loop with row moves). off = the accepted 4-lane path (ChunkDescriptor). Default off (the "
         "task's: on = the change; the gate sets it)",
     ),
+    "PACKED_GLUED_ONECALL": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7B (OWNER 2026-11-20, overseer 11:40), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on, PACKED_GLUED=on and PACKED_ATTN_ONECALL=on: on = a glued chunk that is "
+        "not a lane chunk runs its attention ONCE a layer with per-ROW segment arguments (tt/packed_glued.py: glued "
+        "rope rows, a glued window region with each segment's carry block and per-row index lists, the compressor's "
+        "served writes per segment row range, the indexer ring and top-k in per-chip passes with rolled rows, "
+        "sparse_sdpa kv_lanes per pass), no row moves; off = PB.7's path (b) (each segment's rows moved to rows [0, n), "
+        "today's steps per segment). Bit-identical to path (b) (tests/packed/test_glued_oracle.py). Default off (the "
+        "task's: off = PB.7's path (b); the gate sets it)",
+    ),
     "MOE_HEAD_ORDER": Setting(
         "free",
         ("free", "source"),

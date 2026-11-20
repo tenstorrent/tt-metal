@@ -346,7 +346,7 @@ void bind_indexer_score(nb::module_& mod) {
                 chunk; needs natural_query_blocks): lane l = chunk tokens [l lane_rows, (l + 1) lane_rows); a device
                 of lane l scores at chunk start lane_starts[l] with kv_len lane_kv_lens[l] against the keys of buffer
                 lane_buffer[l] (0: k / k_local, i: k_extra[i - 1] / k_local_extra[i - 1]); the ring gathers every
-                buffer's k_local (up to 4); kv_len must be the largest lane's. The lane values are runtime values.
+                buffer's k_local (up to 8); kv_len must be the largest lane's. The lane values are runtime values.
             lane_own_extent: optional bool (default False = every lane buffer gathered to kv_len, the largest
                 lane's; bring-up fork, deepseek_v41_flash_d_p PB.3M): each lane buffer gathered only to the largest
                 kv_len of the lanes that read it (a mixed packed chunk's short lanes do not carry the longest lane's

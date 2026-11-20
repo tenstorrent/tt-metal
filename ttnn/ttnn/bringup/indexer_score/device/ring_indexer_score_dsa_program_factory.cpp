@@ -194,7 +194,7 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     const uint32_t sll_t = Tt / ring_size;  // physical tiles per SP shard in gathered K
     // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
     // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
-    // (PB.3A lanes: the gather has up to 4 inputs; the AG's partial readiness needs one)
+    // (PB.3A lanes: the gather has up to 8 inputs; the AG's partial readiness needs one)
     const bool partial_readiness_enabled = fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
                                            lanes_args == nullptr &&
                                            ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2);

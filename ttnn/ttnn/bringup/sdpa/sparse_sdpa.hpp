@@ -126,6 +126,12 @@ ttnn::Tensor sparse_sdpa(
     // device reads its own kv, kv_lanes[kv_lane_of_chip[row-major chip index]] (same shape / dtype / memory config
     // as kv); kv itself is then ignored. One program per device (only the kv address differs).
     const std::optional<std::vector<ttnn::Tensor>>& kv_lanes = std::nullopt,
-    const std::optional<std::vector<uint32_t>>& kv_lane_of_chip = std::nullopt);
+    const std::optional<std::vector<uint32_t>>& kv_lane_of_chip = std::nullopt,
+    // Bring-up fork option (deepseek_v41_flash_d_p PB.7B, glued packed prefill; default none = kv_lanes' per-device
+    // kv): each query ROW (token) reads its own lane's kv. Per device (row-major chip index c) KV_ROWS_WORDS words
+    // at c * KV_ROWS_WORDS: [n, end_0, lane_0, .., end_{n-1}, lane_{n-1}], n <= KV_ROWS_MAX ranges of the device's
+    // query rows [previous end, end_i) reading kv_lanes[lane_i] (rows past the last end: kv_lane_of_chip's lane).
+    // Runtime values (not in the program hash): any map reuses the program. Needs kv_lanes.
+    const std::optional<std::vector<uint32_t>>& kv_lane_rows = std::nullopt);
 
 }  // namespace ttnn::transformer::bringup

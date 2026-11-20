@@ -49,6 +49,23 @@ views of the staging (`TtEngramRows.fill_tp_glued`). Not row-position invariant 
 shared-expert reduce-scatter adds in an order that depends on the row's TP chip. v2 (per-row segment arguments in the
 window / sparse_sdpa / indexer / top-k ops, no moves) is what makes glued faster than lanes.
 
+PB.7B (PACKED_GLUED_ONECALL=on, `tt/packed_glued.GluedCall`): v2 for glued chunks, no row moves. Every per-chip lane
+argument of the one-call path becomes a per-row one: rope rows from `rope.GluedStarts` (each segment's rows at its own
+positions); a glued window region a layer [carry 128 | own rows R | one 128-row carry block per segment] written by ONE
+prepared program (`GluedSend`: own rows, every chip's last 128 rows to the next chip, each continuing segment's slot
+carry into its block, each segment's ring pieces into its ring) and per-row index lists (host, `GluedGeo.region_lists`:
+own rows, the previous chip's rows, or the segment's carry block; today's lists mapped); the compressor once, each
+segment's served writes through `(server rows + off) mod S`; the indexer ring and the sparse_sdpa table in per-chip
+PASSES (pass p = each chip's p-th segment; on 8x4 at most 2 for segments >= 256 rows): the indexer's lanes ring with
+lane_rows = R (each chip its own lane, <= 4 key buffers a call, one capacity), a chip whose pass segment starts inside it
+scoring its query / gate / bias rows rolled to row 0 (so its lane start is that row's position, never negative), each
+call's scores rolled per chip to the segment's alone chip row before the top-k (DS41-342: the top-k's tie order follows
+a row's chip row) and its top-k / candidate pool copied back to the segment's rows (`ChipRows`, one prepared row-piece
+copy with a per-chip table uploaded once a chunk; the ring takes up to 8 key buffers, PB.7B fork change); sparse_sdpa
+ONCE a layer with the sdpa fork's `kv_lane_rows` (each query row its own segment's history buffer; without the option:
+kv_lanes once a pass, the other rows on their window keys only, pass outputs copied onto pass 0's). Chunks it does not
+take keep path (b) (`glued_call_ok`: a replay segment, PREFILL_END=end, < 128 rows a chip).
+
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
 10 projected time, 11 owner decisions, 12 PB.2-PB.4 estimates.

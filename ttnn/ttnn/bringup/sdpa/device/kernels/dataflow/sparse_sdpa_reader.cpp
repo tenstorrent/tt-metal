@@ -29,6 +29,20 @@ FORCE_INLINE uint32_t valid_rows_in_slab(uint32_t valid, uint32_t row_base) {
     return remaining < tt::constants::TILE_HEIGHT ? remaining : tt::constants::TILE_HEIGHT;
 }
 
+#ifdef SPARSE_SDPA_KV_ROWS
+// Bring-up fork option kv_lane_rows (deepseek_v41_flash_d_p PB.7B): per-core runtime args 2.. are [n, (token end,
+// kv address) x 8]: token tok reads the kv of the first range whose end is past it (the device's kv past the last).
+static inline uint32_t kv_row_address(uint32_t tok, uint32_t fallback) {
+    const uint32_t n = get_arg_val<uint32_t>(2);
+    for (uint32_t i = 0; i < n; ++i) {
+        if (tok < get_arg_val<uint32_t>(3 + 2 * i)) {
+            return get_arg_val<uint32_t>(4 + 2 * i);
+        }
+    }
+    return fallback;
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t H = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::H);
     constexpr uint32_t S = get_compile_time_arg_val(sparse_sdpa::reader_ct_arg::S);
@@ -101,7 +115,9 @@ void kernel_main() {
     experimental::CB kreq_cb(cb_kreq), kack_cb(cb_kack);  // dual-NoC K-gather handoff to the writer
     experimental::CB scale_bcast_cb(cb_k_scale_bcast);
     const auto q = TensorAccessor(q_args, q_addr);
+#ifndef SPARSE_SDPA_KV_ROWS
     const auto kv = TensorAccessor(kv_args, kv_addr);
+#endif
     const auto idx = TensorAccessor(idx_args, idx_addr);
 #ifdef SPARSE_SDPA_ROW_BFP4
     constexpr auto kvw_args =
@@ -124,6 +140,9 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
 
     for (uint32_t tok = tok_start; tok < tok_start + tok_count; ++tok) {
+#ifdef SPARSE_SDPA_KV_ROWS
+        const auto kv = TensorAccessor(kv_args, kv_row_address(tok, kv_addr));
+#endif
         // Q: H head-rows -> cb_q_rm.  Q is [1,H,S,576] row-major: row (h,tok) = page h*S+tok.
         q_cb.reserve_back(H);
         for (uint32_t h = 0; h < H; ++h) {

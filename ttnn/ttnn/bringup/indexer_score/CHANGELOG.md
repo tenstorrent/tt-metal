@@ -272,3 +272,16 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp,
   device/indexer_score_device_operation.hpp, device/ring_indexer_score_dsa_program_factory.cpp,
   indexer_score_nanobind.cpp, README.md
+
+### PB.7B (deepseek_v41_flash_d_p, 2026-11-20): the lanes ring takes up to 8 key buffers (was 4)
+- What: `ring_indexer_score_dsa(lane_rows=...)` accepts up to 7 `k_extra` / `k_local_extra` (8 key buffers, one
+  all-gather input each); only the validation limit changed (the ring_attention all-gather and the per-device lane
+  programs already handle any input count: one descriptor block an input).
+- Why: deepseek_v41_flash_d_p PB.7B (glued packing v2, PACKED_GLUED_ONECALL): a glued chunk holds up to 6 segments and
+  its indexer runs with each chip its own lane (lane_rows = rows a chip); with 4 buffers a pass of 5-6 segments took two
+  ring calls.
+- Default: unchanged for every call with <= 4 buffers (same programs, same hash).
+- Run: the model's glued oracle on the 8x4 (tests/packed/test_glued_oracle.py, PACKED_GLUED_ONECALL=on: glued vs the
+  segment alone, bit-identical) and walls; no fork unit test on the 8x4 (PACKED_RULES: no fork suites on the 8x4).
+- Files: device/indexer_score_device_operation.cpp, device/indexer_score_device_operation_types.hpp,
+  device/ring_indexer_score_dsa_program_factory.cpp, indexer_score_nanobind.cpp, README.md

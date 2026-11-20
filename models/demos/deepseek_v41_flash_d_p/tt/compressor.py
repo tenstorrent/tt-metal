@@ -72,11 +72,13 @@ from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activation
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .norm import TtDistributedRmsNorm
 from .rope import (
+    GluedStarts,
     LaneStarts,
     PairPerm,
     RowsMemo,
     deinterleave_perm,
     glue,
+    glued_slices,
     indexer_glue,
     lane_slices,
     pair_table,
@@ -143,8 +145,11 @@ class CompressRope:
 
     def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
+        glued = isinstance(g0, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(g0, LaneStarts)  # PB.3A: each lane its own first group (tt/packed_onecall.py)
-        if packed:
+        if glued:
+            assert g0.rows == n and n % (32 * sp) == 0 and all(s + k <= self.rows_max for s, k in g0), (g0, n)
+        elif packed:
             lr = n // len(g0)
             assert lr * len(g0) == n and n % (32 * sp) == 0 and max(g0) + lr <= self.rows_max, (g0, n, self.rows_max)
         else:
@@ -156,6 +161,8 @@ class CompressRope:
                 from .lane_rows import lane_rows
 
                 sl = lane_rows(t, g0, n)
+            elif glued:
+                sl = glued_slices(t, g0, self.width)
             elif packed:
                 sl = lane_slices(t, g0, lr, self.width)
             else:
@@ -1069,7 +1076,8 @@ class TtCompressor:
     def __call__(self, x: ttnn.Tensor, start: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         r = self.ratio
         rows = x.shape[-2]
-        lanes = isinstance(start, LaneStarts)  # PB.3A (tt/packed_onecall.py): each lane its own start, rope only
+        # PB.3A (tt/packed_onecall.py) / PB.7B (tt/packed_glued.py): each lane / glued piece its own start, rope only
+        lanes = isinstance(start, (LaneStarts, GluedStarts))
         assert (lanes or start % 32 == 0) and rows % r == 0, (start, rows, r)
         if self.full_rows:  # ATTN_SP32=on (P.10): the chip's rows' whole sum, gathered over TP (a data move)
             part = self._mm(x, self.proj_w, dtype=ttnn.float32)

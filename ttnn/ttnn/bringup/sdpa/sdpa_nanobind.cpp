@@ -463,6 +463,11 @@ void bind_sdpa(nb::module_& mod) {
                 (deepseek_v41_flash_d_p PB.3A, packed prefill), default None (the source program). Each device reads
                 its own kv: kv_lanes[kv_lane_of_chip[c]], c its row-major chip index (r * mesh columns + col); every
                 lane tensor has kv's shape, dtype and memory config; kv is then ignored. One program per device.
+            kv_lane_rows (list[int], optional): bring-up fork option (deepseek_v41_flash_d_p PB.7B, glued packed
+                prefill; needs kv_lanes), default None (each device reads one kv). Each query row (token) reads its
+                own lane's kv: per device c (row-major chip index) 17 words at 17 c, [n, end_0, lane_0, ..,
+                end_{n-1}, lane_{n-1}] (n <= 8): rows [previous end, end_i) read kv_lanes[lane_i], rows past the
+                last end kv_lanes[kv_lane_of_chip[c]]. Runtime values: any map reuses the program.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -489,7 +494,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_window") = nb::none(),
         nb::arg("max_grid") = nb::none(),
         nb::arg("kv_lanes") = nb::none(),
-        nb::arg("kv_lane_of_chip") = nb::none());
+        nb::arg("kv_lane_of_chip") = nb::none(),
+        nb::arg("kv_lane_rows") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

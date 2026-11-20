@@ -244,6 +244,17 @@ class GluedMover:
         return out
 
 
+_LOGGED: set = set()
+
+
+def _log_once(msg: str) -> None:
+    if msg not in _LOGGED:
+        _LOGGED.add(msg)
+        from loguru import logger
+
+        logger.info(msg)
+
+
 _LANE_KEYS: set = set()  # (mesh id, kind, key) of the per-lane buffers acquired (held for the process: v1)
 
 
@@ -341,6 +352,15 @@ class PackedChunk:
 
             if onecall_on():
                 self.oc = OneCall(self)
+        elif not self.trivial and self.glued:  # PB.7B (PACKED_GLUED_ONECALL=on, read per chunk): no row moves
+            from .packed_glued import GluedCall, glued_call_ok
+
+            why = glued_call_ok(model, desc, segs)
+            if why is None:
+                self.oc = GluedCall(self)
+                self.mover = None
+            elif why != "switch off":
+                _log_once(f"PACKED_GLUED_ONECALL: path (b) for this chunk: {why}")
         # PB.4 (PACKED_MOE=on, read per chunk): the pad rows out of the MoE dispatch (MoEPadSpan; None: every row real
         # or the switch off)
         self.moe_span = None
@@ -539,6 +559,9 @@ class PackedChunk:
         """DECODER_SKIP (kv_only, layer 20): the compressor of every segment (the KV head's served writes)."""
         if self.trivial:
             self._seg_steps(block, self.segs[0], x, names=("compressor",))
+            return
+        if self.oc is not None:  # PB.3A / PB.7B (one call: lanes or glued rows)
+            self.oc.compress_only(block, x)
             return
         if self.glued:  # PB.7: each segment's rows moved to rows [0, n)
             mv = self.mover

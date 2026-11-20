@@ -1403,7 +1403,7 @@ def batch_call_settings(env=None) -> tuple:
     # PACKED (PB.1, owner 2026-11-19: packed prefill, tt/packed.py) likewise, per chunk; PACKED_ATTN_ONECALL (PB.3A,
     # tt/packed_onecall.py) likewise; PACKED_MOE (PB.4, tt/packed_device.MoEPadSpan) likewise; PACKED_GATHER_HIDE
     # (PB.3H, tt/gather_hide.py) likewise; PACKED_HOST_FAST (PB.3K) likewise; PACKED_LANE_BALANCE (PB.3M) likewise;
-    # PACKED_LONG_HIDE (PB.6L) likewise; PACKED_GLUED (PB.7) likewise
+    # PACKED_LONG_HIDE (PB.6L) likewise; PACKED_GLUED (PB.7) likewise; PACKED_GLUED_ONECALL (PB.7B) likewise
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1416,6 +1416,7 @@ def batch_call_settings(env=None) -> tuple:
         "PACKED_LANE_BALANCE",
         "PACKED_LONG_HIDE",
         "PACKED_GLUED",
+        "PACKED_GLUED_ONECALL",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 

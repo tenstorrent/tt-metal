@@ -758,8 +758,9 @@ def _has_lane_kv() -> bool:
 LANE_KV = [_has_lane_kv()]  # (a list: tests may switch it off for the copy path)
 
 
-def sdpa_lanes(att, q_rm, bufs: list, lane_of_chip: list, index, window) -> ttnn.Tensor:
-    """TtSparseAttention._sdpa's ROW_BFP4 + kv_window call (HISTORY_FORMAT=bfp4) with the fork's kv_lanes."""
+def sdpa_lanes(att, q_rm, bufs: list, lane_of_chip: list, index, window, lane_rows=None) -> ttnn.Tensor:
+    """TtSparseAttention._sdpa's ROW_BFP4 + kv_window call (HISTORY_FORMAT=bfp4) with the fork's kv_lanes (PB.7B
+    ``lane_rows``: the fork's kv_lane_rows, each query row its own lane)."""
     from .attention import SDPA_K_CHUNK
     from .cores import max_grid
 
@@ -778,6 +779,7 @@ def sdpa_lanes(att, q_rm, bufs: list, lane_of_chip: list, index, window) -> ttnn
         max_grid=max_grid(),
         kv_lanes=list(bufs),
         kv_lane_of_chip=[int(v) for v in lane_of_chip],
+        **({} if lane_rows is None else {"kv_lane_rows": [int(v) for v in lane_rows]}),
     )
 
 

@@ -568,3 +568,21 @@ Build fixes after fork_op.py (no behaviour change):
   unit test on the 8x4 (brief).
 - Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
   sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, sources.cmake, README.md
+
+### PB.7B (deepseek_v41_flash_d_p, 2026-11-20): sparse_sdpa kv_lane_rows, each query row its own lane's kv
+- What: opt-in `ttnn.bringup.sparse_sdpa(..., kv_lanes=, kv_lane_of_chip=, kv_lane_rows=None)`: per device up to 8 row
+  ranges [n, end_0, lane_0, ..] (17 words a device, row-major chip order); the reader and writer (define
+  SPARSE_SDPA_KV_ROWS) take each token's kv address from per-core runtime args after (tok_start, tok_count):
+  [n, (token end, kv address) x 8], appended by the lanes factory at creation and rewritten by its cache-hit override
+  every call (the map and the lane addresses are runtime values; the program hash adds only "on"). Tokens past the
+  last end read the device's kv (kv_lane_of_chip's). The per-token arithmetic is the source's: a row's output is the
+  same bytes as with its lane's kv as the device's kv.
+- Why: deepseek_v41_flash_d_p PB.7B (glued packing v2, PACKED_GLUED_ONECALL=on): a chip holding rows of two segments
+  ran sparse_sdpa twice (the second with the other rows on their window keys only) plus a row copy: 12.6 ms of a
+  5 x 1600 glued chunk's 125.8 ms device at 139k.
+- Default: off (None): the kv_lanes programs, their hash and kernels unchanged.
+- Run: the model's glued oracle on the 8x4 (tests/packed/test_glued_oracle.py, PACKED_GLUED_ONECALL=on: glued vs the
+  segment alone, bit-identical) and walls; no fork unit test on the 8x4 (PACKED_RULES: no fork suites on the 8x4).
+- Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
+  device/kernels/dataflow/sparse_sdpa_reader.cpp, device/kernels/dataflow/sparse_sdpa_writer.cpp, sparse_sdpa.hpp,
+  sparse_sdpa.cpp, sdpa_nanobind.cpp, README.md

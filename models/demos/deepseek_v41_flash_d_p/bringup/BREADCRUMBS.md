@@ -2153,3 +2153,92 @@ Plan and expectation (written before the first load):
 - Re-run: op test `resident submit --cmd "scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/test_moe_head_scatter_columns.py"` (mesh only); probe: the gate's glued env
   + DS41_PACKED_LAYERS=0,..,20 GLUED_PROBE_LAYER=20 tests/packed/test_glued_probe_layer.py; gate `gate PB.7 --check`.
+
+## PPB.7B (PB.7B perf, attempt 1): glued packing v2, per-row segment arguments (PACKED_GLUED_ONECALL off | on)
+
+- Expected (written before any device run, perf_guide s2): path (b) costs ~77-95 ms device a moved segment a chunk
+  (PB.7: 5 x 1600 at 139k 496 ms vs the 4 x 2k lane chunk 112 ms). v2 removes every move: the attention runs once a
+  layer with per-row arguments; what is left over the lane chunk is the passes where a chip holds two segments (the
+  indexer ring + top-k once more per extra pass, ~2-2.5 ms an index layer at 139k, 3 index layers in 0-20; the
+  sparse_sdpa extra pass on the window keys of the other rows, ~0.1-0.2 ms a sparse layer; a few ChipRows copies) and
+  the per-descriptor table uploads (~5 a chunk). Device 5 x 1600 @ 139k: ~496 -> ~110-125 ms; host: ~-70 ms of path
+  (b)'s per-segment launches, + ~5-10 ms of pass launches. So glued 5 x 1600 ~120-130 ms (8000 tokens, ~62-66k new
+  tok/s) vs lanes 2 chunks 200 ms (40k); AgentX mixes glued ~85-96 % real rows at ~120-135 ms a chunk vs lanes 41-51
+  %: glued should win by ~1.5-2x.
+- DECIDED (OV-58): v2 without a C++ fork change first: per-chip "passes" (pass p = each chip's p-th segment) over the
+  existing per-chip lane options (sdpa kv_lanes, the indexer's lanes ring with lane_rows = R: each chip its own lane),
+  a chip whose pass segment starts inside it scores its query / gate / bias rows rolled (its lane start is then that
+  segment row's position, never negative: a fresh segment can start mid-chip). A per-token kv selection in the sdpa
+  fork and more than 4 key buffers a ring call are the follow-ups if the passes measure costly.
+- Load reasons: (1) tests/packed/test_glued_ops.py: "needs only the mesh: the two new prepared programs (ChipRows,
+  GluedSend) bit-exact vs the host, smallest shapes"; (2) oracle rung DS41_PACKED_LAYERS=0,1,2,3 then the
+  characteristic layers: "needs the gate's 40-layer accuracy load (OV-61) but computes only the listed layers".
+- Load reason (3): the walls (tests/packed/test_glued_walls.py, GLUED_WALL_CASES=5x1600_p139264,agentx_m1 first): "needs
+  the performance-class load (layers 0-20, DECODER_SKIP=decode, resident engram table) because the walls time the
+  serving-equivalent chunk".
+- Built: `tt/packed_glued.py` (GluedGeo: chip pieces / passes / glued rope pieces / per-row window index lists;
+  ChipRows: one prepared per-chip row-piece copy (a per-chip table page uploaded once a chunk, page prefixes for the
+  logits); GluedSend: the glued window region a layer in one prepared program; GluedCall(OneCall): compressor,
+  indexer calls, window / sparse attention), `tt/rope.GluedStarts` + `glued_slices` (RopeTable / CompressRope /
+  TtCompressor take them), Setting PACKED_GLUED_ONECALL (call-time, hooks batch_call_settings), PackedChunk wires
+  GluedCall for a glued chunk that `glued_call_ok` takes (else path (b)). Tests: tests/packed/test_glued_ops.py
+  (ChipRows / GluedSend bit-exact vs the host on the 8x4; region lists on all four boxes, host), diagnostics
+  test_glued_v2_probe.py (one segment's top-k / sdpa / logits at a layer, glued vs alone), test_glued_v2_phases.py.
+- Op test (mesh only): ChipRows rows / tiles (bf16, bfp4) / GluedSend (2 runs, a shared tail tensor): 0 chips differ.
+  Gotcha: the mesh-only op test and the 40-layer oracle in ONE runner process: the oracle's first single-request
+  chunk failed (mhc_post: "Input Tensor is not allocated", layer 1); the same oracle in a fresh process ran (DS41-316's
+  family: run mesh-only tests in their own process, or after the model's tests).
+- Oracle rung layers 0-3, first run: layers 0-1 (window) 0 everywhere; from layer 2 the segments starting inside a chip
+  differed (0.057). Probe (test_glued_v2_probe.py): logits bit-identical, same top-k SETS, 180 of 768 rows in another
+  ORDER = DS41-342: topk_large_indices splits a chip's last 256 mod cores rows over core pairs and ties follow the
+  split, so a row's top-k depends on its chip row. Fix: each call's scores rolled per chip to the segment's alone
+  chip row ((g - off) mod R) before the top-k (first max kv_len columns only), the top-k rows mapped back.
+- Oracle after the fix: layers 0-3 and the characteristic layers [0, 1, 2, 3, 14, 20, 21, 24] (the candidate source
+  20 and re-index 24 included): alone vs today 0, segment equivalence 0, split 0, slot digests 0, determinism 0.
+- Walls, first v2 (GLUED_WALL_RUNS=3, gate walls env, one 21-layer load):
+  | case | glued v2 | lanes | path (b) (PB.7) |
+  | 5x1600_p139264 | 146.1 ms, 54.7k new tok/s (device 131.0) | 2 chunks 203.2 ms, 39.4k | 496 ms, 16.1k |
+  | agentx_m1 | 3 chunks 432.8 ms, 54.4k (96 % real rows) | 7 chunks 731.2 ms, 32.2k (41 %) | 20.7k |
+- Fork: ring_indexer_score_dsa's lanes ring takes up to 8 key buffers (was 4; only the validation limit; CHANGELOG
+  PB.7B): a pass of 5-6 segments is one ring call. Oracle layers 0-3 after the rebuild: all 0.
+- Phase split (tests/packed/test_glued_v2_phases.py: the walls with each profiled chunk's device phases), 5 x 1600 @
+  139k, glued 125.8 ms device vs the 4-lane chunk 98.1: the extra sparse_sdpa pass + its row copy (attn_pass) 12.6 ms,
+  the second indexer call (indexer_pass) 5.6 ms, the top-k phase copies (indexer_phase) 0.9 ms, attn_residual +5.9 ms
+  (the collective after the attention waiting for the chips holding two segments); AgentX m1 chunk 0 132.1 vs 102.7.
+- DECIDED (OV-58): the sdpa pass goes into the fork: sparse_sdpa kv_lane_rows (each query row its own lane's kv, the
+  kv address per token from per-core runtime args set every call: no program per map). The indexer's second pass
+  stays (a per-row-lane ring needs the score kernel to take two lanes a device: the next step if it measures worth).
+- Fork: sparse_sdpa `kv_lane_rows` (CHANGELOG PB.7B): oracle layers 0-3 and the characteristic layers: all 0.
+- Walls with kv_lane_rows (test_glued_v2_phases.py = the walls + phases, GLUED_WALL_RUNS=3, one 21-layer load):
+  | case | glued v2 | lanes | glued / lanes |
+  | 5x1600_p139264 | 132.2 ms, 60.5k new tok/s (device 115.3) | 2 chunks 206.6 ms, 38.7k | +56 % |
+  | agentx_m1 | 3 chunks 419.2 ms, 56.2k | 7 chunks 730.0 ms, 32.2k | +74 % |
+  | agentx_m2 | 4 chunks 540.8 ms, 52.2k | 8 chunks 941.9 ms, 30.0k | +74 % |
+  5 x 1600 device phases: attention 37.9 (lane chunk 30.6 with 6400 real rows), indexer 8.3 + indexer_pass 5.6 +
+  indexer_phase 0.9, attn_residual 6.9 (was 11.4 with the sdpa passes). AgentX m1 chunk 0 (histories 35k-444k):
+  indexer_pass 15.8 ms (a second ring over long histories for the chips holding two segments), attn_region 8.3.
+- What is left (measured, not built): the indexer's second pass (a ring over every chip for the few chips holding a
+  second segment: 5.6 ms at 139k, 15.8 ms on a 35k-444k mix) needs the score kernel to take two lanes a device; the
+  top-k phase copies (0.9-2.1 ms); host: new descriptors build new programs for the lane maps (sdpa kv_lane_of_chip,
+  the ring's lane_buffer are hashed) and upload ~5 per-chunk tables (the walls warm them up; serving would pay them on
+  each new descriptor).
+- Op test after the last C++ change (mesh only, its own process): ChipRows rows / row prefixes / tiles (bf16, bfp4),
+  GluedSend (2 runs): 0 chips differ; region lists on 8x4 / 4x4 / 2x4 / 2x2: 0 rows wrong.
+- Re-run: op test `resident submit --cmd "BRINGUP_CHUNK=8192 scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_ops.py"` (its own process: DS41-316); oracle rungs: the
+  gate's glued env + DS41_PACKED_LAYERS=0,1,2,3 (then 0,1,2,3,14,20,21,24) test_glued_oracle.py; probe: +
+  GLUED_PROBE_LAYER / _COMP / _SEG test_glued_v2_probe.py; phases: the walls env + GLUED_WALL_CASES / GLUED_WALL_RUNS
+  test_glued_v2_phases.py; gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.7B --spec $BRINGUP_SPEC
+  --check` (2 h tool timeout, background).
+- Gate (`gate PB.7B --check`, after the last code edit, hooks clean): PASS PB.7B (1569 s). Glued oracle, 40 layers:
+  segment equivalence 0, alone vs today 0, split vs alone 0, slot digests 0, determinism 0; packed (lane) oracle 40
+  layers: lane equivalence 0, alone vs today 0; glued reference: every gseg within its limits (final rel 0.13, top-5
+  1.0); determinism 0.0. Walls (table results/PB.7B_glued_walls.md, 5 runs a chunk):
+  | case | glued v2 | lanes / path (b) (PB.7) |
+  | 4x2k_p139264 | 113.4 ms, 72.2k (the lane chunk; bar 67k) | PB.7 71.8k |
+  | 5x1600_p139264 | 134.4 ms, 59.5k | lanes 202.3 ms, 39.5k; path (b) 497 ms |
+  | n2 / n3 / n5 / n6 | 105.8 / 122.4 / 138.2 / 151.5 ms | path (b) 241 / 326 / 497 / 583 ms |
+  | 6x_p1m | 228.1 ms, DRAM headroom 6.69 GB | path (b) 774 ms |
+  | agentx_m1 / m2 / m3 | 57.4k / 52.7k / 47.0k new tok/s | lanes 32.0k / 29.9k / 36.6k (+80 / +77 / +28 %) |
+- Final check `orchestrator measure --task PB.7B` (quick, switch on, the single-request path): rc 0, chunk_wall_ms
+  216.8, min layer PCC 0.732 (L39, as PB.7), host_transfers_per_layer 0.

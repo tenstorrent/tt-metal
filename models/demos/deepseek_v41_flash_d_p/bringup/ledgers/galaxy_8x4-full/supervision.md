@@ -890,3 +890,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   75.0k before: the order-free reduces cost ~1.5 ms; still >= 67k), 5 x 1.6k glued 16.1k vs lanes 39.6k, AgentX mixes
   glued 20.6 / 25.4 / 16.1k vs lanes 32.4 / 29.8 / 36.7k (the row-move loop: PB.7B's job), 6 x 1M glued 10.4k; DRAM
   headroom with 6 x 1M histories 6.9 GB. DECIDED: accept (correctness is the goal of PB.7; speed is PB.7B).
+- 13:52 UTC PB.7 gate PASS -> 437e310b596 (units reused). PB.7B (glued v2, one call with per-row segment args) attempt 1 started.
+- 15:30 UTC OWNER: do not support / test segments of 1 token (or other shapes) unless necessary; stick to what tt-d-gen actually sends (request size / alignment). Research agent started on the tt-d-gen source (/scratch/dnijemcevic/tt-d-gen jazpur/dsv4-replay-window + origin/main). Its constraints will go into PB.T's brief (boundary set) and PACKED_RULES.md when PB.7B stops (no tasks.yaml edit while an agent runs).
+- 15:47 UTC PB.7B done (attempt 1), WAITING; checked the gate units (all PASS on the current code) and metrics. Glued v2
+  (attention in passes = each chip's p-th segment over the per-chip lane options; sparse_sdpa kv_lane_rows; indexer
+  lanes ring up to 8 key buffers): serving tok/s AgentX mixes 57.4 / 52.7 / 47.0k vs fixed lanes 32.0 / 29.9 / 36.6k
+  (1.3-1.8x), 5 x 1.6k 59.5k vs 39.5k, 6 x 1M 35.4k (v1 10.4k), n1..n6 83.1 / 77.5 / 65.9 / 72.8 / 57.9 / 53.2k; 4x2k
+  72.2k (below the brief's 74.6k: the loss is PB.7's DS41-339/341 order-free reduces; the gate's threshold 67k holds).
+  Oracle all 0 (glued, splits, digests, lanes), reference within limits, DRAM headroom 6 x 1M 6.7 GB. DECIDED: accept.

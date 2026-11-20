@@ -173,7 +173,7 @@ struct operation_attributes_t {
     // takes its lane l (from its natural chunk offset) and scores its queries as one natural_query_lane call of that
     // lane would: chunk start lane_starts[l], kv_len lane_kv_lens[l], keys gathered from buffer lane_buffer[l] (0: k /
     // k_local, i >= 1: tensor_args.k_extra[i - 1] / k_local_extra[i - 1]). The ring gathers EVERY buffer's k_local
-    // (one all-gather of up to 4 inputs, no partial readiness); kv_len (the attribute) is the largest lane's, the
+    // (one all-gather of up to 8 inputs, no partial readiness); kv_len (the attribute) is the largest lane's, the
     // gather's extent. lane_starts / lane_kv_lens are runtime values; lane_buffer is HASHED (a device's program binds
     // its lane's buffers by position: one program a lane -> buffer map).
     uint32_t lane_rows{0};

@@ -1303,9 +1303,9 @@ ttnn::Tensor launch_indexer_score(
             "indexer_score lanes: the fused ring with natural_query_blocks, no natural_query_lane, no cache slot");
         TT_FATAL(
             lanes >= 1 && lane_kv_lens.size() == lanes && lane_buffer.size() == lanes &&
-                k_extra.size() == k_local_extra.size() && k_extra.size() + 1 <= 4 &&
+                k_extra.size() == k_local_extra.size() && k_extra.size() + 1 <= 8 &&
                 lane_rows % tt::constants::TILE_HEIGHT == 0,
-            "indexer_score lanes: {} lanes, {} kv_lens, {} buffers, {} / {} extra tensors (at most 3), lane_rows {}",
+            "indexer_score lanes: {} lanes, {} kv_lens, {} buffers, {} / {} extra tensors (at most 7), lane_rows {}",
             lanes,
             lane_kv_lens.size(),
             lane_buffer.size(),
