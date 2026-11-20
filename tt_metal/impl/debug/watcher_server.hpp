@@ -4,9 +4,7 @@
 
 #pragma once
 #include <mutex>
-#include <core_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
-#include <cstdint>
 #include <string>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 

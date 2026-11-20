@@ -9,8 +9,10 @@
 #include "api/scratchpad.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
+#include "api/debug/assert.h"
 #include "experimental/kernel_args.h"
 #include "internal/local_mem/address_access.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/chip_position/kernels/chip_position.hpp"
 
 // Forked from reader_rotary_embedding_llama_interleaved_start_id.cpp for KV-pad-aware indexed RoPE,
 // on the Metal 2.0 named-arg API.
@@ -24,8 +26,8 @@
 // (older tokens finishing the current slab block, then newer tokens spilling into the next block)
 // is absorbed by the shard layout, so the read stays contiguous.
 //
-// my_sp_coord / sp_factor are baked per-device compile-time args (each device's program is built for
-// its own mesh coordinate). The per-call kv_actual_global reaches the reader one of two ways, selected
+// This chip's SP index (my_sp_coord) and query-subshard index come from its chip_table entry (chip_position.hpp).
+// The per-call kv_actual_global reaches the reader one of two ways, selected
 // by the HAS_METADATA compile-time flag (set by the op from whether a metadata tensor was supplied; both
 // keep the value out of the program hash so one cached program is reused across chunks):
 //   - scalar path: a common runtime arg (patched on cache hits by override_runtime_arguments).
@@ -51,11 +53,14 @@ void kernel_main() {
     constexpr auto sin_Ht = get_arg(args::sin_Ht);
     constexpr auto rotary_Ht = get_arg(args::rotary_Ht);
     constexpr auto tile_height = get_arg(args::tile_height);
-    // Per-device structural constants, baked when this device's program is built for its coordinate.
-    constexpr auto my_sp_coord = get_arg(args::my_sp_coord);
     constexpr auto sp_factor = get_arg(args::sp_factor);
     constexpr auto chunk_local_t = get_arg(args::chunk_local_t);
-    constexpr auto query_offset_t = get_arg(args::query_offset_t);
+    constexpr auto chip_table = get_arg(args::chip_table);
+    const uint32_t chip_index = deepseek_prefill::chip_table_index<get_arg(args::chip_lookup) != 0>();
+    ASSERT(chip_index < chip_table.size());
+    const uint32_t chip_entry = chip_table[chip_index];  // SP index | query-subshard index << 16
+    const uint32_t my_sp_coord = chip_entry & 0xFFFF;
+    const uint32_t query_offset_t = Ht * (chip_entry >> 16);
 
 #ifdef HAS_METADATA
     // Metadata path: read kv_actual_global from element [0] of the 1-element uint32 tensor (4 bytes).
@@ -116,6 +121,14 @@ void kernel_main() {
     const auto s3 = TensorAccessor(tensor::trans_mat);
 
     DataflowBuffer dfb_input(dfb::input);
+#if ROW_MAJOR_OUTPUT
+    // Row-major output: compute untilizes each tile row's prefix tiles with its rotated ones, so the reader fetches
+    // them.
+    constexpr auto prefix_Wt = get_arg(args::prefix_Wt);
+    const auto s_prefix = TensorAccessor(tensor::concat_prefix);
+    DataflowBuffer dfb_prefix(dfb::prefix);
+    const uint32_t prefix_tile_bytes = dfb_prefix.get_entry_size();
+#endif
     DataflowBuffer dfb_cos(dfb::cos);
     DataflowBuffer dfb_sin(dfb::sin);
     DataflowBuffer dfb_trans_mat(dfb::trans_mat);
@@ -206,6 +219,22 @@ void kernel_main() {
 
                 noc.async_read_barrier();
                 dfb_input.push_back(Wt);
+#if ROW_MAJOR_OUTPUT
+                dfb_prefix.reserve_back(prefix_Wt);
+                uint32_t prefix_l1_write_addr = dfb_prefix.get_write_ptr();
+                const uint32_t prefix_first_page = ((batch_id * n_heads + head_num) * Ht + seq_tile) * prefix_Wt;
+                for (uint32_t col = 0; col < prefix_Wt; ++col) {
+                    noc.async_read(
+                        s_prefix,
+                        CoreLocalMem<uint32_t>(prefix_l1_write_addr),
+                        prefix_tile_bytes,
+                        {.page_id = prefix_first_page + col},
+                        {});
+                    prefix_l1_write_addr += prefix_tile_bytes;
+                }
+                noc.async_read_barrier();
+                dfb_prefix.push_back(prefix_Wt);
+#endif
 #if RELOAD_IMPL == 1
                 dfb_sin.push_back(Wt);
                 dfb_cos.push_back(Wt);

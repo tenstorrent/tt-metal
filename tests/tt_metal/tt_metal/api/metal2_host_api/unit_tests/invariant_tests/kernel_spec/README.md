@@ -107,8 +107,15 @@ struct KernelSpec {
     // Table key represents the accessor name of the CTA.
     // Invariant:
     // - The key must be a valid C++ identifier.
-    // - Must not have repeated name with runtime_arg_schema.
+    // - Must not have repeated name with compile_time_array_args or runtime_arg_schema.
     CompileTimeArgs compile_time_args;
+
+    using CompileTimeArrayArgs = Table<std::string, ArrayArgValue>;
+    // Invariant:
+    // - The key must be a valid C++ identifier.
+    // - The value must be non-empty.
+    // - Must not have repeated name with compile_time_args or runtime_arg_schema.
+    CompileTimeArrayArgs compile_time_array_args;
 
     struct RuntimeArgSchema {
         // Invariant:
@@ -120,10 +127,24 @@ struct KernelSpec {
         // - Must not have repeated names.
         // - All argument names must be valid C++ identifiers.
         Group<std::string> common_runtime_arg_names;
+
+        struct ArrayArgDecl {
+            // Invariant: A valid C++ identifier.
+            std::string name;
+            // Invariant: Must be > 0.
+            uint32_t size;
+        };
+        // Invariant: Must not have repeated names.
+        Group<ArrayArgDecl> runtime_array_args;
+
+        // Invariant: Must not have repeated names.
+        Group<ArrayArgDecl> common_runtime_array_args;
     };
     // Invariant:
-    // - No repeated names across runtime_arg_names and common_runtime_arg_names.
-    // - Must not have repeated names with compile_time_args.
+    // - No repeated names across runtime_arg_names, common_runtime_arg_names, runtime_array_args and
+    //   common_runtime_array_args.
+    // - Must not have repeated names with compile_time_args or compile_time_array_args.
+    // - The scalar names plus the array sizes total at most 4096 words.
     RuntimeArgSchema runtime_arg_schema{};
 
     // Invariant for ComputeHardwareConfig:
@@ -133,6 +154,9 @@ struct KernelSpec {
     //     (Float32, Int32, UInt32 or RawUInt32). On Gen1 it requires enable_32_bit_dest for every format.
     //   - If the DFB's data_format_metadata is Float32 and enable_32_bit_dest is set, unpack_modes must
     //     have an entry for it (either mode; no default is assumed).
+    //   - On Quasar, if the DFB's data_format_metadata is Int16 and enable_32_bit_dest is set,
+    //     unpack_modes must be UnpackToDest. UnpackToSrc is the FPU datacopy, which cannot take
+    //     Int16 in a 32-bit Dest. UnpackToDest is the SFPU typecast path.
     //
     // Invariant for DataMovementHardwareConfig:
     // - Every config_2xx->disable_dfb_implicit_sync_for entry names a DFB in this kernel's dfb_bindings.

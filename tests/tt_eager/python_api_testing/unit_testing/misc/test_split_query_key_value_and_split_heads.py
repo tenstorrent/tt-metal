@@ -62,3 +62,38 @@ def test_split_query_key_value_and_split_heads_interleaved(device, batch, num_he
         p, o = comp_pcc(got, ref)
         logger.info(f"{name} {o}")
         assert p, f"{name} mismatch with num_heads={num_heads}"
+
+
+@pytest.mark.parametrize("head_dim", [72, 80, 96, 100])
+def test_split_query_key_value_and_split_heads_rejects_unsupported_head_dim(device, head_dim, expect_error):
+    """Head dims other than 64 must be rejected instead of returning silently corrupt values.
+
+    The program factory hardcodes out_w = 64, so a wider head leaves every value past column
+    64 of each head wrong (head_dim 96 corrupts 5,733,621 of 9,437,184 values).
+    """
+    compute_grid_size = device.compute_with_storage_grid_size()
+    if compute_grid_size.x < 8:
+        pytest.skip(f"Grid size {compute_grid_size.x} is not supported")
+
+    torch.manual_seed(1234)
+    batch = 8
+    seq_len = 32 * min(12, compute_grid_size.x)
+    num_heads = 12
+    hidden = 3 * num_heads * head_dim
+
+    torch_input = torch.randn(batch, 1, seq_len, hidden)
+    xt = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    with expect_error(RuntimeError, "requires a per-head width of 64"):
+        ttnn.experimental.split_query_key_value_and_split_heads(
+            xt,
+            ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            num_heads=num_heads,
+        )

@@ -12,7 +12,7 @@ from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import copy_to_buffer, nearest_32
 from models.ttt_compat.tt.ccl import tt_all_gather, tt_all_reduce
 from models.ttt_compat.tt.common import Mode
-from models.ttt_compat.tt.model_config import OpGroup, TensorGroup, num_to_corerange
+from models.ttt_compat.tt.model_config import OpGroup, TensorGroup, qk_fused_core_ranges
 
 
 class Attention(LightweightModule):
@@ -753,11 +753,9 @@ class Attention(LightweightModule):
         k_batch = k_tensor.shape[1]
         assert q_batch == k_batch
 
-        row_size = 8  # We assume a row size of 8 cores
-        k_start_core = ttnn.CoreCoord(q_batch % row_size, q_batch // row_size)
-
-        q_core_grid = ttnn.CoreRangeSet({num_to_corerange(q_batch)})
-        k_core_grid = ttnn.CoreRangeSet({num_to_corerange(k_batch, start_core=k_start_core)})
+        q_range, k_range = qk_fused_core_ranges(q_batch)
+        q_core_grid = ttnn.CoreRangeSet({q_range})
+        k_core_grid = ttnn.CoreRangeSet({k_range})
 
         q_mem_config = ttnn.create_sharded_memory_config(
             shape=(nearest_32(n_q_heads), self.head_dim),
@@ -1104,19 +1102,22 @@ class Attention(LightweightModule):
             return dense_out_sharded
 
         else:
-            attn_output = tt_all_gather(
-                attn_output_cat,
-                self.mesh_device,
-                self.tt_ccl,
-                dim=2,
-                cluster_axis=1,
-                memory_config=self.args.get_attn_gather_users_mem_config(
-                    Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
-                ),
-                sharded=True,
-                subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
-                # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
-            )
+            # Users are partitioned across columns only on a 2D mesh.
+            attn_output = attn_output_cat
+            if 1 not in self.mesh_device.shape:
+                attn_output = tt_all_gather(
+                    attn_output_cat,
+                    self.mesh_device,
+                    self.tt_ccl,
+                    dim=2,
+                    cluster_axis=1,
+                    memory_config=self.args.get_attn_gather_users_mem_config(
+                        Mode.DECODE, list(self.mesh_device.shape)[1], self.prefetcher
+                    ),
+                    sharded=True,
+                    subdevice_id=self.prefetcher.worker_sub_device_id if self.prefetcher is not None else None,
+                    # dtype=self.ccl_dtype,  # Running bf16 until we have SDPA output bfp8 df; otherwise we have two sharded to interleaved/interleaved to sharded conversions
+                )
             if self.TG:
                 attn_output = ttnn.to_memory_config(attn_output, ttnn.L1_MEMORY_CONFIG)
                 # user_selection_matrix = [1, 1, 32, 128]
