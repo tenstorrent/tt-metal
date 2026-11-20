@@ -31,7 +31,7 @@ void kernel_main() {
     CircularBuffer up_cb(cb_up);
     CircularBuffer out_cb(cb_out);
 
-    // Both input CBs must share a data format: init_sfpu configures the unpacker from cb_gate,
+    // Both input CBs must share a data format: compute_kernel_hw_startup configures the unpacker from cb_gate,
     // and copy_tile only updates the L1 address per call, not the THCON format registers.
     compute_kernel_hw_startup(cb_gate, cb_out);
     copy_init(cb_gate);

@@ -104,7 +104,7 @@ static void validate_direct_tensors_every_invocation(
     const ReduceScatterMinimalDirectDeviceOperation::tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must be allocated in a buffer on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Input tensor must be allocated in a buffer on device!");
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "Input tensor must be on a mesh device!");
 
@@ -115,7 +115,7 @@ static void validate_direct_tensors_every_invocation(
         }
         const auto& tensor = maybe.value();
         TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Persistent {} tensor must be on device!", what);
-        TT_FATAL(tensor.buffer() != nullptr, "Persistent {} tensor must be allocated in a buffer on device!", what);
+        TT_FATAL(tensor.is_allocated(), "Persistent {} tensor must be allocated in a buffer on device!", what);
         TT_FATAL(
             tensor.device() == mesh_device,
             "Persistent {} tensor must live on the same mesh device as the input",
@@ -258,7 +258,7 @@ static std::tuple<ReduceScatterMinimalDirectParams, ReduceScatterMinimalDirectIn
         "reduce_scatter_minimal_direct requires an explicit cluster_axis on a {} mesh: with both extents "
         "greater than one there is no single implied ring axis",
         mesh_shape);
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*mesh_device);
     std::array<tt::tt_fabric::Topology, 2> axis_topology{
         tt::tt_fabric::Topology::Linear, tt::tt_fabric::Topology::Linear};
     std::array<uint32_t, 2> axis_num_devices{1u, 1u};

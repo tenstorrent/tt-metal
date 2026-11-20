@@ -8,7 +8,7 @@
 //   pipe::in               — KernelAdvancedOptions::PrefetcherPipeBinding accessor (program slot id baked in)
 // Args (named CTAs):
 //   args::num_entries      - total dense entries in this epoch (must be divisible by
-//                            get_num_threads() when multi-DM lane credits are armed)
+//                            get_num_threads() when the pipe has more than one credit lane)
 //
 // Multi-DM: the receiver KernelSpec's num_threads is the pipe's credit lane count P. Each hart
 // owns lane tid and wait_front/pop_front one owned stride per loop iteration

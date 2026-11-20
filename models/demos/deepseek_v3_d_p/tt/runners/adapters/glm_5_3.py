@@ -37,6 +37,15 @@ class GLM53Adapter(MLAPrefillAdapter):
     hf_model_default = "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"
+    passes_indexer_indices = True
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > PREFILL_CHUNK_SIZE): TtPrefillRuntime.prefill_forward, traced
+    # or eager, with D2H layer acks, on any pipeline rank, carrying every chunk's indexer indices across a boundary.
+    supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
+    supports_packed_forward_indexer_indices = True
+    # MTP over a packed forward, eager or traced: one lookahead block and one provided-levels count per chunk.
+    supports_packed_forward_mtp = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
@@ -50,6 +59,12 @@ class GLM53Adapter(MLAPrefillAdapter):
     routing_use_l1_small_for_semaphores = True
 
     supports_mtp = True
+    # The deployed mode: on SC4 it cuts TTFT by about 3% against VC1 with one fabric route per chip.
+    d2d_relay_default = True
+    # Sparse (DSA) MLA always TP-dedups its KVPE and index caches (allocate_kv_cache), so
+    # PREFILL_TP_SHARD_KV=1, which the 4x4 bindings pin, states what it does anyway. 0 cannot roll it back.
+    supports_tp_shard_kv = True
+    tp_shard_kv_default = True
 
     def load_hf_config(self):
         """GLM's ``glm_moe_dsa`` isn't AutoConfig-loadable, so return the hand-built HF-attribute config
@@ -96,7 +111,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             tp_axis=kv_tp_axis,
             bank_aligned=True,
         )
@@ -111,7 +126,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=num_index_layers,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
             bank_aligned=True,

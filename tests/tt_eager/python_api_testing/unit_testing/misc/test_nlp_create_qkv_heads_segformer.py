@@ -105,3 +105,9 @@ def test_nlp_create_qkv_heads_segformer_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+def test_nlp_create_qkv_heads_segformer_rejects_dim1_greater_than_one(device, expect_error):
+    in0_t = ttnn.from_torch(torch.randn([1, 2, 64, 64]), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "Input shape\\[1\\] must be 1"):
+        ttnn.experimental.nlp_create_qkv_heads_segformer(in0_t, memory_config=ttnn.DRAM_MEMORY_CONFIG)

@@ -34,7 +34,7 @@ constexpr std::array<std::tuple<uint32_t, uint32_t, 20SUBBLOCK_HW_CHOICES = {{
 
 ## Intermediate Circular Buffer Configuration
 
-In addition to our double-buffer config, we introduce a third circular buffer denoted as `interm0_cb_index`. Out of the 32 possible circular buffers provided by the API (which you can view in the [tt_metal/hostdevcommon/kernel_structs.h](../../../tt_metal/hostdevcommon/kernel_structs.h), this one belongs to a subset of intermediate CBs.
+In addition to our double-buffer config, we introduce a third circular buffer denoted as `interm0_cb_index`. Out of the 32 possible circular buffers provided by the API (which you can view in the [tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h](../../../tt_metal/hostdevcommon/api/hostdevcommon/kernel_structs.h), this one belongs to a subset of intermediate CBs.
 This buffer acts as a temporary storage for the intermediate results of matrix multiplication before they are combined into the final output.
 
 ``` cpp
