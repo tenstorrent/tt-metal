@@ -312,6 +312,7 @@ def gated_attention_forward_ttnn(
                 scale=scaling,
                 program_config=_get_flexible_sdpa_program_config(device),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
             attn_output = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -323,6 +324,7 @@ def gated_attention_forward_ttnn(
                 scale=scaling,
                 program_config=_get_sdpa_program_config(device, T, chunk_start_idx=chunk_start_idx),
                 compute_kernel_config=_get_sdpa_compute_kernel_config(),
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
 
         new_key = paged_kv_cache_key
@@ -544,6 +546,7 @@ def gated_attention_forward_ttnn(
             scale=scaling,
             program_config=_get_sdpa_program_config(device, S_total, q_seq_len=T),
             compute_kernel_config=_get_sdpa_compute_kernel_config(),
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
     ttnn.deallocate(query_states)
 
