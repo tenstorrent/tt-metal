@@ -187,16 +187,16 @@ transfers smaller than a tile, such as row-major sticks, also passes ``disable_d
 ``create_reader_datamovement_config`` or ``create_writer_datamovement_config``: such transfers stall Quasar's implicit
 counting of buffer entries, and the flag leaves the counting to the kernel's own calls.
 
-.. The links pin one tt-metal commit, so they keep showing the code this page describes as main moves on. Move the
-   pin when the page changes with the code.
+.. The kernel links pin one tt-metal commit, since the page describes their code line by line; move the pin when the
+   page changes with them. The header links follow main, since the headers document the fields as they are now.
 
 .. _eltwise_sfpu.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
 .. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
 .. _reader_unary_interleaved_start_id.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
 .. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
-.. _generic_op.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/generic/generic_op.hpp
-.. _the workload headers: https://github.com/tenstorrent/tt-metal/tree/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/workload
-.. _advanced_options.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+.. _generic_op.hpp: https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/generic/generic_op.hpp
+.. _the workload headers: https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/api/tt-metalium/workload
+.. _advanced_options.hpp: https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
 circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available

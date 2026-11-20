@@ -467,7 +467,7 @@ def guide_example(device):
         work_units=[E.WorkUnitSpec(name="exp", kernels=["reader", "writer", "compute"], target_nodes=cores)],
     )
 
-    # The values of this call, by argument name and then by core. Tensors are bound by name.
+    # The values of this call, by argument name and then by node. Tensors are bound by name.
     num_pages, start_id, start = {}, {}, 0
     for group, n in ((group_1, tiles_1), (group_2, tiles_2)):
         for core in ttnn.corerange_to_cores(group):
