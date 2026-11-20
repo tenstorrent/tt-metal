@@ -338,7 +338,14 @@ def test_survivor_closes_ulfm():
     with the mesh open, rank 0 records the error and goes on to close: its close must complete."""
     r = run_case(
         "survivor_close_ulfm",
-        {"PROBE_SCENARIO": "sigkill", "PROBE_PHASE": "after_open", "PROBE_ON_ERROR": "continue"},
+        # Under ULFM recovery the launcher does not end the job when ranks exit, so the dead rank's wrapper stands in
+        # for the whole stop grace + 10 s before it leaves; a short grace keeps the row inside its deadline.
+        {
+            "PROBE_SCENARIO": "sigkill",
+            "PROBE_PHASE": "after_open",
+            "PROBE_ON_ERROR": "continue",
+            "TT_RUN_STOP_GRACE_S": "10",
+        },
         DEADLINE_HANG,
         cmd=legacy_cmd("--with-ft ulfm"),
     )
