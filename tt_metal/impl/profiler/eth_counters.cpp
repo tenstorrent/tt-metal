@@ -7,9 +7,10 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
+#include <utility>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -59,12 +60,15 @@ struct DeviceState {
     std::vector<int> channels;
     std::vector<double> idle_per_second;
     std::optional<Reading> run_start;
+    std::optional<Reading> last;          // latest snapshot of the run
+    std::vector<uint64_t> run_registers;  // register deltas summed over the run
     std::optional<Pending> pending;
     uint64_t launch_seq = 0;
 };
 
 std::mutex g_mutex;
-std::unordered_map<ChipId, DeviceState> g_devices;
+// Contexts can share chip ids, so the state is per context and chip.
+std::map<std::pair<int, ChipId>, DeviceState> g_devices;
 bool g_traffic_started = false;
 bool g_run_started = false;
 bool g_idle_started = false;
@@ -214,6 +218,15 @@ void disable_after_failure(DeviceState& st, const std::exception& e) {
     st.disabled = true;
     st.pending.reset();
     st.run_start.reset();
+    st.last.reset();
+}
+
+// Every snapshot of a run also advances its register totals.
+void advance(DeviceState& st, const Reading& now) {
+    if (st.last) {
+        add_register_deltas(st.plan, *st.last, now, st.run_registers);
+    }
+    st.last = now;
 }
 
 uint64_t elapsed_ns(const Reading& a, const Reading& b) {
@@ -239,7 +252,21 @@ void write_launch(DeviceState& st, ChipId chip, const Pending& pending, const Re
 
 void write_run(DeviceState& st, ChipId chip, const Reading& before, const Reading& after) {
     uint32_t flags = 0;
-    const std::vector<Delta> deltas = diff(st.plan, before, after, &flags);
+    std::vector<Delta> deltas;
+    for (const Delta& d : diff(st.plan, before, after, &flags)) {
+        if (!is_register(st.plan.items[d.item])) {
+            deltas.push_back(d);
+        }
+    }
+    const size_t per_core = st.plan.items.size();
+    for (size_t v = 0; v < st.run_registers.size(); v++) {
+        if (st.run_registers[v] != 0) {
+            deltas.push_back({static_cast<uint32_t>(v / per_core), v % per_core, st.run_registers[v]});
+        }
+    }
+    std::sort(deltas.begin(), deltas.end(), [](const Delta& a, const Delta& b) {
+        return std::pair(a.core, a.item) < std::pair(b.core, b.item);
+    });
     const uint64_t ns = elapsed_ns(before, after);
     std::ofstream out = open_log(RUN_LOG, RUN_HEADER, g_run_started);
     const uint64_t run = g_run_id++;
@@ -315,20 +342,20 @@ std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& 
     std::vector<Delta> out;
     const size_t n = std::min(before.values.size(), after.values.size());
     const size_t per_core = plan.items.size();
-    bool stale = false;
+    std::vector<bool> stale(per_core == 0 ? 0 : (n + per_core - 1) / per_core, false);
     for (size_t i = 0; i < per_core; i++) {
         if (plan.items[i].counter == ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT) {
             for (size_t v = i; v < n; v += per_core) {
-                stale = stale || uint32_t(after.values[v] - before.values[v]) == 0;
+                if (uint32_t(after.values[v] - before.values[v]) == 0) {
+                    stale[v / per_core] = true;
+                    *flags |= FLAG_STALE;
+                }
             }
         }
     }
-    if (stale) {
-        *flags |= FLAG_STALE;
-    }
     for (size_t v = 0; v < n; v++) {
         const Item& item = plan.items[v % per_core];
-        if (stale && item.kind == Kind::L1) {
+        if (stale[v / per_core] && item.kind == Kind::L1) {
             continue;
         }
         uint64_t count = 0;
@@ -345,6 +372,15 @@ std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& 
         }
     }
     return out;
+}
+
+void add_register_deltas(const Plan& plan, const Reading& before, const Reading& after, std::vector<uint64_t>& totals) {
+    const size_t n = std::min({before.values.size(), after.values.size(), totals.size()});
+    for (size_t v = 0; v < n; v++) {
+        if (is_register(plan.items[v % plan.items.size()])) {
+            totals[v] += uint32_t(after.values[v] - before.values[v]);
+        }
+    }
 }
 
 std::string counter_name(ec::EthCounter counter) {
@@ -392,10 +428,12 @@ void begin_run(MetalContext& ctx, IDevice& device) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
-    DeviceState& st = g_devices[device.id()];
+    DeviceState& st = g_devices[{ctx.get_context_id().get(), device.id()}];
     try {
         if (prepare(ctx, device, st)) {
             st.run_start = read_all(ctx, device.id(), st);
+            st.last = st.run_start;
+            st.run_registers.assign(st.plan.reading_size(), 0);
         }
     } catch (const std::exception& e) {
         disable_after_failure(st, e);
@@ -408,14 +446,16 @@ void end_run(MetalContext& ctx, IDevice& device) {
     }
     const ChipId chip = device.id();
     std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_devices.find(chip);
+    auto it = g_devices.find({ctx.get_context_id().get(), chip});
     if (it == g_devices.end()) {
         return;
     }
     DeviceState& st = it->second;
     try {
         if (!st.disabled && st.run_start) {
-            write_run(st, chip, *st.run_start, read_all(ctx, chip, st));
+            const Reading now = read_all(ctx, chip, st);
+            advance(st, now);
+            write_run(st, chip, *st.run_start, now);
         }
     } catch (const std::exception& e) {
         disable_after_failure(st, e);
@@ -429,7 +469,7 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
     }
     const ChipId chip = device.id();
     std::lock_guard<std::mutex> lock(g_mutex);
-    DeviceState& st = g_devices[chip];
+    DeviceState& st = g_devices[{ctx.get_context_id().get(), chip}];
     try {
         if (!prepare(ctx, device, st)) {
             return;
@@ -440,6 +480,7 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
         }
         st.calibrated = true;
         Reading now = read_all(ctx, chip, st);
+        advance(st, now);
         const bool overlapped = st.pending.has_value();
         if (overlapped) {
             // The earlier program is still in flight: close it at this instant, its number includes the new program.
@@ -456,7 +497,7 @@ void end_pending(MetalContext& ctx, ChipId chip) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_devices.find(chip);
+    auto it = g_devices.find({ctx.get_context_id().get(), chip});
     if (it == g_devices.end() || !it->second.pending) {
         return;
     }
@@ -464,7 +505,9 @@ void end_pending(MetalContext& ctx, ChipId chip) {
     const Pending pending = *st.pending;
     st.pending.reset();
     try {
-        write_launch(st, chip, pending, read_all(ctx, chip, st), 0u);
+        const Reading now = read_all(ctx, chip, st);
+        advance(st, now);
+        write_launch(st, chip, pending, now, 0u);
     } catch (const std::exception& e) {
         disable_after_failure(st, e);
     }

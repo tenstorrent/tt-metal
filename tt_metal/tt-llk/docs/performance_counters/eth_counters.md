@@ -28,7 +28,7 @@ Headers in `tools/include/perf_counters/`, namespace `llk::perf::eth`, self-cont
 
 ### Queue registers
 
-Every queue register is a free-running 32-bit counter; reading it has no side effect and the host reads them without involving the ERISC. Deltas use wrapping subtraction. Queue `q` of a kind is at `base + q * 0x1000`:
+Every queue register is a free-running 32-bit counter; reading it has no side effect and the host reads them without involving the ERISC. Deltas use wrapping subtraction, so one window holds less than one counter period; the run totals in `eth_run.csv` add the queue deltas of every snapshot of the run (each program start and end), which keeps the periods a single open to close difference would lose. Queue `q` of a kind is at `base + q * 0x1000`:
 
 | | Blackhole | Wormhole |
 |---|---|---|
@@ -52,7 +52,7 @@ The word size is the width of the MAC data path: 96 B on Blackhole, where a keep
 
 ### Values the base firmware keeps in L1
 
-On Blackhole the base firmware refreshes a live status block, `boot_results_t::eth_live_status` at `0x7CE00`, about once a second from the MAC/PCS block, and the capture reads it as one block per core. Its 64-bit counters are cumulative and stored low word first. The queue counts in it are 64-bit copies of the queue registers, useful to check the registers and to see counts that wrapped. `FW_LINK_POLL_ALIVE_COUNT` moves each time the firmware polls; a delta of 0 over a window means the block was not refreshed in it, and then every other `FW_` value of the window is stale: the runtime drops those rows and sets flag bit 2 instead of reporting zeros. `FW_` values are exact over windows of several seconds, not per program. On a Blackhole QuietBox with a 19.x firmware bundle the block did not refresh at all in 20 s, so there every window is flagged stale and only the queue registers are reported.
+On Blackhole the base firmware refreshes a live status block, `boot_results_t::eth_live_status` at `0x7CE00`, about once a second from the MAC/PCS block, and the capture reads it as one block per core. Its 64-bit counters are cumulative and stored low word first. The queue counts in it are 64-bit copies of the queue registers, useful to check the registers and to see counts that wrapped. `FW_LINK_POLL_ALIVE_COUNT` moves each time the firmware polls; a delta of 0 over a window means the block of that core was not refreshed in it, and then every other `FW_` value of that core in the window is stale: the runtime drops those rows and sets flag bit 2 instead of reporting zeros. Other cores keep their rows. `FW_` values are exact over windows of several seconds, not per program. On a Blackhole QuietBox with a 19.x firmware bundle the block did not refresh at all in 20 s, so there every window is flagged stale and only the queue registers are reported.
 
 On Wormhole the base firmware keeps four values: `FW_RETRAIN_COUNT` (`0x1EDC`), `FW_CRC_ERR` (`0x1F7C`), `FW_CORR_CW` (`0x1F90`) and `FW_UNCORR_CW` (`0x1F98`), the 64-bit ones as high word, then low word.
 

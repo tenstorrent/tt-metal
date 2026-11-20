@@ -196,6 +196,43 @@ TEST(EthCountersDiff, LinkCountersAreDroppedWhenTheFirmwarePollCounterDidNotMove
     EXPECT_EQ(flags, 0u);
 }
 
+TEST(EthCountersDiff, OnlyTheStaleCoreLosesItsLinkCounters) {
+    const auto plan = make_plan(ec::Arch::BLACKHOLE, 2, true);
+    ASSERT_TRUE(plan.has_value());
+    const size_t per_core = plan->items.size();
+    const size_t poll = index_of(*plan, ec::EthCounter::FW_LINK_POLL_ALIVE_COUNT, Kind::L1, NO_QUEUE);
+    const size_t frames = index_of(*plan, ec::EthCounter::FW_FRAMES_TXD, Kind::L1, NO_QUEUE);
+    Reading before = flat(*plan, 5), after = flat(*plan, 5);
+    after.values[frames] += 9;           // core 0 is stale
+    after.values[per_core + poll] += 1;  // core 1 refreshed
+    after.values[per_core + frames] += 3;
+    uint32_t flags = 0;
+    const auto deltas = diff(*plan, before, after, &flags);
+    ASSERT_EQ(deltas.size(), 2u);
+    EXPECT_EQ(deltas[0].core, 1u);
+    EXPECT_EQ(deltas[0].item, poll);
+    EXPECT_EQ(deltas[1].core, 1u);
+    EXPECT_EQ(deltas[1].item, frames);
+    EXPECT_EQ(deltas[1].count, 3u);
+    EXPECT_EQ(flags, FLAG_STALE);
+}
+
+TEST(EthCountersRun, RegisterTotalsKeepEveryCounterPeriod) {
+    const auto plan = make_plan(ec::Arch::BLACKHOLE, 1, true);
+    ASSERT_TRUE(plan.has_value());
+    const size_t words = index_of(*plan, ec::EthCounter::TXQ_WORD_CNT, Kind::TX_QUEUE, 0);
+    const size_t frames = index_of(*plan, ec::EthCounter::FW_FRAMES_TXD, Kind::L1, NO_QUEUE);
+    std::vector<uint64_t> totals(plan->reading_size(), 0);
+    Reading a = flat(*plan, 0), b = flat(*plan, 0), c = flat(*plan, 0);
+    b.values[words] = 0xC0000000u;  // 3 Gi words, then 2 Gi more that wrap the register
+    c.values[words] = 0x40000000u;
+    c.values[frames] = 7;
+    add_register_deltas(*plan, a, b, totals);
+    add_register_deltas(*plan, b, c, totals);
+    EXPECT_EQ(totals[words], 0x140000000ull);
+    EXPECT_EQ(totals[frames], 0u);  // L1 values are 64-bit and come from the open and close readings
+}
+
 TEST(EthCountersNames, EveryCounterOfTheTablesHasAName) {
     for (const ec::Arch arch : {ec::Arch::BLACKHOLE, ec::Arch::WORMHOLE}) {
         const auto plan = make_plan(arch, 1, true);
