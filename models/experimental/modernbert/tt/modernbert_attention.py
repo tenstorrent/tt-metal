@@ -61,7 +61,10 @@ class TtnnModernBertAttention:
             self._qkv_kwargs["program_config"] = qkv_program_config
         if self._mem is not None:
             self._qkv_kwargs["memory_config"] = self._mem
-        self._sdpa_kwargs = {"compute_kernel_config": self.compute_kernel_config}
+        self._sdpa_kwargs = {
+            "compute_kernel_config": self.compute_kernel_config,
+            "precision": ttnn.SDPAPrecision.ACCURATE,
+        }
         if sdpa_program_config is not None:
             self._sdpa_kwargs["program_config"] = sdpa_program_config
         if self._mem is not None:
