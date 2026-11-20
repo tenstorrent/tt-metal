@@ -27,6 +27,8 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/tensor/tensor_apis.hpp>
 
 #include "reshape.hpp"
 #include "reshape_common.hpp"
@@ -565,6 +567,63 @@ ttnn::Tensor reshape_tiled(
 namespace ttnn::operations::data_movement::detail {
 namespace {
 
+// A host TILE buffer is stored in tile order, so giving it a new shape is a reshape only when the tiles keep
+// their order: the this_is_view conditions minus the memory-config clauses, since a host tensor has no
+// placement. Otherwise the data goes through row-major on the host and is tiled again with the input's dtype
+// and tile shape. Block and MX formats have no row-major form, so that copy is FLOAT32.
+bool host_tile_view_keeps_order(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    const auto& tensor_shape = tensor.logical_shape();
+    const uint32_t tile_height = tensor.tensor_spec().tile().get_height();
+    const uint32_t shape_last_dim = logical_shape.rank() >= 1 ? logical_shape[-1] : 1;
+    const uint32_t tensor_shape_last_dim = tensor_shape.rank() >= 1 ? tensor_shape[-1] : 1;
+    const uint32_t shape_second_last_dim = logical_shape.rank() >= 2 ? logical_shape[-2] : 1;
+    const uint32_t tensor_shape_second_last_dim = tensor_shape.rank() >= 2 ? tensor_shape[-2] : 1;
+    return tensor_shape_last_dim == shape_last_dim &&
+           (tensor_shape_second_last_dim == shape_second_last_dim ||
+            (shape_second_last_dim % tile_height == 0 && tensor_shape_second_last_dim % tile_height == 0));
+}
+
+bool is_packed_block_format(tt::tt_metal::DataType dtype) {
+    return tt::tt_metal::is_block_float(dtype) || tt::tt_metal::is_mx(dtype);
+}
+
+// to_tensor_spec decodes the host data as T: FLOAT32 when a block format is on either side, else the source dtype.
+ttnn::Tensor host_tensor_to_spec(const ttnn::Tensor& tensor, const tt::tt_metal::TensorSpec& spec) {
+    using tt::tt_metal::DataType;
+    const DataType decode_dtype = is_packed_block_format(tensor.dtype()) || is_packed_block_format(spec.data_type())
+                                      ? DataType::FLOAT32
+                                      : tensor.dtype();
+    const auto& host = tensor.host_tensor();
+    switch (decode_dtype) {
+        case DataType::FLOAT32: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<float>(host, spec));
+        case DataType::BFLOAT16: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<bfloat16>(host, spec));
+        case DataType::INT32: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<int32_t>(host, spec));
+        case DataType::UINT32: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<uint32_t>(host, spec));
+        case DataType::UINT16: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<uint16_t>(host, spec));
+        case DataType::UINT8: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<uint8_t>(host, spec));
+        case DataType::INT8: return ttnn::Tensor(tt::tt_metal::to_tensor_spec<int8_t>(host, spec));
+        default: TT_THROW("reshape: cannot re-tile a host tensor of dtype {}", tensor.dtype());
+    }
+}
+
+ttnn::Tensor retile_host_tensor(const ttnn::Tensor& tensor, const ttnn::Shape& logical_shape) {
+    using tt::tt_metal::DataType;
+    using tt::tt_metal::PageConfig;
+    using tt::tt_metal::TensorLayout;
+    using tt::tt_metal::TensorSpec;
+    const DataType dtype = tensor.dtype();
+    const DataType row_major_dtype = is_packed_block_format(dtype) ? DataType::FLOAT32 : dtype;
+    const TensorSpec row_major_spec(
+        tensor.logical_shape(),
+        TensorLayout(row_major_dtype, PageConfig(ttnn::ROW_MAJOR_LAYOUT), tensor.memory_config()));
+    const ttnn::Tensor reshaped =
+        ttnn::experimental::view(host_tensor_to_spec(tensor, row_major_spec), logical_shape, logical_shape);
+    const TensorSpec tile_spec(
+        logical_shape,
+        TensorLayout(dtype, PageConfig(ttnn::TILE_LAYOUT, tensor.tensor_spec().tile()), tensor.memory_config()));
+    return host_tensor_to_spec(reshaped, tile_spec);
+}
+
 enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
 
 // The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
@@ -668,6 +727,12 @@ ttnn::Tensor reshape_dispatch(
     TT_FATAL(logical_shape.volume() != 0, "Tensor volume is not 0, but shape volume is 0");
 
     if (!is_device_tensor(tensor)) {
+        // Re-tile only a plain reshape: a caller that passes its own padded shape relabels the logical shape
+        // inside the existing padding (conv weight preparation does), which only a view does.
+        if (tensor.layout() == ttnn::TILE_LAYOUT && padded_shape == logical_shape &&
+            logical_shape.volume() == tensor.logical_volume() && !host_tile_view_keeps_order(tensor, logical_shape)) {
+            return retile_host_tensor(tensor, logical_shape);
+        }
         // This case has been allowed in the past though it means introducing padding values to the data.
         // Host tensors can't be device-sharded, so this is a pure view and a requested ND/sharded
         // output config is not applied here.

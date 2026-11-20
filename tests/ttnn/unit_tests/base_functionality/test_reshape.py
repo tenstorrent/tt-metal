@@ -1264,3 +1264,74 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+_HOST_RESHAPE_OPS = {"ttnn": ttnn.reshape, "quasar": ttnn.experimental.quasar.reshape}
+
+
+def _host_tile_input(shape, dtype):
+    """A host TILE tensor. Block floats get values with one exponent, so values that move to another block come back
+    exactly."""
+    torch.manual_seed(0)
+    if dtype in (ttnn.bfloat8_b, ttnn.bfloat4_b):
+        magnitude = 1 + torch.rand(shape)
+        torch_input = torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+    elif dtype == ttnn.uint32:
+        torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+    elif dtype == ttnn.int32:
+        torch_input = torch.randint(-(2**31), 2**31 - 1, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(shape, dtype=torch.float32)
+    return ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT)
+
+
+@pytest.mark.parametrize("op_name", list(_HOST_RESHAPE_OPS))
+@pytest.mark.parametrize(
+    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b, ttnn.bfloat4_b, ttnn.uint32, ttnn.int32], ids=str
+)
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [
+        ((1, 1, 32, 64), (1, 1, 64, 32)),  # last dim changes
+        ((1, 1, 30, 64), (1, 1, 60, 32)),  # last dim changes, padded height
+        ((2, 3, 32, 32), (1, 12, 16, 32)),  # same last dim, second-last dim changes off the tile height
+        ((1, 1, 32, 64), (64, 32)),  # rank changes too
+        ((2, 1, 32, 64), (1, 2, 32, 64)),  # same last two dims: still a view
+        ((1, 1, 64, 64), (1, 2, 32, 64)),  # second-last dims on the tile height: still a view
+    ],
+)
+def test_reshape_host_tile(op_name, dtype, input_shape, output_shape):
+    """A host TILE tensor holds its data in tile order, so a reshape that moves values between tiles must re-tile it,
+    as the device path does, instead of relabelling the buffer."""
+    input_tensor = _host_tile_input(input_shape, dtype)
+    output = _HOST_RESHAPE_OPS[op_name](input_tensor, output_shape)
+
+    assert output.storage_type() == ttnn.StorageType.HOST
+    assert output.layout == ttnn.TILE_LAYOUT
+    assert output.dtype == dtype
+    assert list(output.shape) == list(output_shape)
+    assert_exact(ttnn.to_torch(input_tensor).reshape(output_shape), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("op_name", list(_HOST_RESHAPE_OPS))
+def test_reshape_host_tile_keeps_tile_shape(op_name):
+    """The re-tiled host tensor keeps the input's tile shape."""
+    torch_input = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, tile=ttnn.Tile([16, 32]))
+    output = _HOST_RESHAPE_OPS[op_name](input_tensor, (1, 1, 64, 32))
+
+    assert output.tile.tile_shape == [16, 32]
+    assert_exact(torch_input.reshape(1, 1, 64, 32), ttnn.to_torch(output))
+
+
+@pytest.mark.parametrize("op_name", list(_HOST_RESHAPE_OPS))
+def test_reshape_host_tile_explicit_padded_shape_is_a_view(op_name):
+    """A reshape that passes its own padded shape relabels the logical shape inside the existing padding, as conv
+    weight preparation does, so the host tile buffer is kept as is."""
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    output = _HOST_RESHAPE_OPS[op_name](input_tensor, ttnn.Shape([1, 1, 60, 50]), ttnn.Shape([1, 1, 64, 64]))
+
+    assert list(output.shape) == [1, 1, 60, 50]
+    assert list(output.padded_shape) == [1, 1, 64, 64]
+    assert_exact(torch_input[:, :, :60, :50], ttnn.to_torch(output))
