@@ -60,8 +60,8 @@ void kernel_main() {
     };
     for (uint32_t t = 0; t < T; t++) {
         const bool last = (t == T - 1);
-        // decode_token pops the token's inputs and S_cur (pop_inputs = true); S_next is intentionally left in its
-        // CB: the next iteration reads it as S_cur. The ring (S, then s2 / s3 alternating) is the CB header's.
+        // decode_token pops the token's inputs and S_cur (pop_inputs = true); S_next is left in its CB
+        // for the next iteration to read as S_cur, and drained after the final token below.
         gdn_decode::decode_token<Kt, Vt, /*FuseReadVector=*/true>(
             tcb, cb::state_cur(t), cb::state_next(t), per_token || last);
         if (last) {
