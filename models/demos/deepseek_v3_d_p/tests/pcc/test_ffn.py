@@ -45,13 +45,15 @@ from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
         # width and the activation are new here — 33792 is 1.8x DSv3's 18432, and it is far past
         # ttnn.situ_glu's 3072 L1 cutoff, so every intermediate is a full-size DRAM tensor.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
+        # The same over a packed forward's rows (4 chunks): more rows per chip than the fused gather was tuned at.
+        (4 * PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, KimiK3Config.INTERMEDIATE_SIZE, ACTIVATION_SITU),
         # TtFfn's clamped branch at the DeepSeek default width. No shipped config selects it --
         # V4, the only clamped model, is MoE on every layer -- so this is its only coverage.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
         # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
     ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_20k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
@@ -112,6 +114,7 @@ from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
     ],
     indirect=["mesh_device", "device_params"],
 )
+@pytest.mark.parametrize("fuse_tp_collectives", [False, True], ids=["unfused", "fused"])
 def test_ffn_pcc(
     mesh_device,
     device_params,
@@ -121,6 +124,7 @@ def test_ffn_pcc(
     activation: str,
     num_links: int,
     tp_axis: int,
+    fuse_tp_collectives: bool,
 ):
     """
     Test TtFfn PCC against TorchExpert reference.
@@ -136,6 +140,8 @@ def test_ffn_pcc(
     """
     if activation == ACTIVATION_SITU and not is_blackhole():
         pytest.skip("SiTU-GLU needs ttnn.softcap, which is Blackhole-only")
+    if fuse_tp_collectives and activation != ACTIVATION_SITU:
+        pytest.skip("the fused TP collectives run in production on Kimi-K3's dense layer only")
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
@@ -193,21 +199,31 @@ def test_ffn_pcc(
         activation=activation,
         clamped_silu_glu_limit=clamp_limit,
         tp_axis=tp_axis,
+        fuse_tp_collectives=fuse_tp_collectives,
         **situ_betas,
     )
+    if fuse_tp_collectives:
+        assert tt_model.fuses_tp_collectives, "the fused path was not taken on this mesh"
 
     # Create input tensor (replicated across all devices)
     torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
     logger.debug(f"Created torch input: {torch_input.shape}")
 
+    # The fused path takes the TP-sharded input (it gathers inside its first matmul); the plain one the gathered.
     tt_input = ttnn.from_torch(
         torch_input,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        mesh_mapper=(
+            ttnn.ShardTensor2dMesh(
+                mesh_device, mesh_shape=mesh_device.shape, dims=(None, -1) if tp_axis == 1 else (-1, None)
+            )
+            if fuse_tp_collectives
+            else ttnn.ReplicateTensorToMesh(mesh_device)
+        ),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
         dtype=activations_dtype,
     )
-    logger.debug(f"Created ttnn input (replicated): {tt_input.shape}")
+    logger.debug(f"Created ttnn input: {tt_input.shape}")
 
     # Run forward passes
     logger.debug("Running torch forward pass")
@@ -217,6 +233,13 @@ def test_ffn_pcc(
     logger.debug("Running ttnn forward pass")
     tt_output = tt_model(tt_input)
     logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
+    if fuse_tp_collectives:
+        # A second call, from an input at another address, reuses the gather's persistent buffer, counters and
+        # barrier: it must give the same result.
+        again = tt_model(ttnn.clone(tt_input))
+        for a, b in zip(ttnn.get_device_tensors(tt_output), ttnn.get_device_tensors(again)):
+            assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), "a second fused call gave a different output"
+        ttnn.deallocate(again)
 
     # Convert and compare
     logger.debug("Converting TTNN output to torch for comparison")
