@@ -1104,9 +1104,10 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # Every tensor in the run args is checked, whatever else is wrong with the call: a view of a tensor that io_tensors
-    # does not list, a view under a name the spec does not declare, and a view in run args for a range the spec has no
-    # program on. A tensor that holds the program's devices leaves such a call to generic_op's own message.
+    # Every tensor bound to a declared parameter is checked, whatever else is wrong with the call: a view of a tensor
+    # that io_tensors does not list, and a view in run args for a range the spec has no program on. A tensor under a
+    # name that no program declares is never read, so it leaves the call to generic_op's own message, as does a tensor
+    # that holds its program's devices.
     unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
     spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
     with expect_error(RuntimeError, message):
@@ -1116,9 +1117,6 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         E.generic_op([input_tensor, output_tensor], spec, run_args)
     spec, run_args = exp_program(first_input, first_output)
     run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
-    with expect_error(RuntimeError, r"tensor_args\['extra'\] holds devices"):
-        E.generic_op([first_input, first_output], spec, run_args)
-    run_args.tensor_args = {"input": first_input, "output": first_output, "extra": first_input}
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
         E.generic_op([first_input, first_output], spec, run_args)
     spec, run_args = exp_program(second_input, first_output)

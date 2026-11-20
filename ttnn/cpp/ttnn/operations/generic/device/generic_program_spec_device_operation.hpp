@@ -76,6 +76,11 @@ ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& sp
 
 namespace ttnn::prim {
 
+// The mesh ranges a ProgramSpec-form generic_op call runs its program on for these io_tensors: the whole mesh when
+// every tensor is on every device, else the devices of the tensor on the fewest devices. Raises as generic_op does for
+// io_tensors it cannot take.
+ttnn::MeshCoordinateRangeSet program_spec_ranges(const std::vector<Tensor>& io_tensors);
+
 // The ProgramSpec form. The program runs on the ranges that ttnn's framework gives the tensors, as it would in a
 // MeshProgramSpec with those ranges, so the two forms share cache entries.
 Tensor generic_op(
