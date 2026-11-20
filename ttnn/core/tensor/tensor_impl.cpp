@@ -39,6 +39,8 @@
 
 #include <tracy/Tracy.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
+#include <internal/mesh_device.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::tensor_impl {
 
@@ -341,7 +343,8 @@ std::string to_string_impl(const ttnn::Tensor& tensor) {
             ss << std::endl;
         }
         first = false;
-        ss << "device_id: " << mesh_device.get_device(coord)->id() << ", " << coord << std::endl;
+        ss << "device_id: " << tt::tt_metal::internal::get_device(mesh_device, coord)->id() << ", " << coord
+           << std::endl;
         detail::to_string(ss, shard->view_as<T>(), shape, strides, tensor.dtype(), tensor.layout());
     }
     return ss.str();
@@ -437,6 +440,10 @@ tt::tt_metal::HostTensor view(
         if (is_row_major && input_memory_config.is_sharded() && changing_last_dim) {
             auto shard_spec = input_memory_config.shard_spec().value();
             auto shard_volume = shard_spec.numel();
+            TT_FATAL(
+                new_padded_shape[-1] > 0,
+                "Cannot reshape a sharded tensor to a zero last dimension, new shape: {}",
+                new_padded_shape);
             shard_spec.shape[1] = new_padded_shape[-1];
             shard_spec.shape[0] = shard_volume / shard_spec.shape[1];
             output_memory_config =
@@ -446,7 +453,7 @@ tt::tt_metal::HostTensor view(
 
     auto new_spec = tt::tt_metal::TensorSpec(
         new_logical_shape,
-        tt::tt_metal::TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor.dtype(),
             tensor.tensor_spec().page_config(),
             output_memory_config,

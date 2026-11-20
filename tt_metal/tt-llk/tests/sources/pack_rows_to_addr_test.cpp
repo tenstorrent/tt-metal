@@ -39,7 +39,10 @@
 #include <cstdint>
 
 #include "ckernel.h"
+#include "counters.h"
 #include "llk_defs.h"
+#include "perf.h"
+#include "profiler.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
@@ -48,6 +51,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
+#include "llk_lib_unpack_wrappers.h"
 #include "llk_unpack_A.h"
 #include "llk_unpack_common.h"
 #include "params.h"
@@ -57,17 +61,50 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
-        formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces*/, 4 /*num_faces*/);
-    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
+    const std::uint32_t num_blocks         = params.NUM_BLOCKS;
+    const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const Operand& buffer_A                = params.buffer_A;
+#else
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+#endif
+    const std::uint32_t num_total_tiles     = num_blocks * num_tiles_in_block;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /*tilize_en*/, num_total_tiles, TILE_NUM_FACES);
 
-    const int num_total_tiles = params.NUM_TILES_IN_BLOCK * params.NUM_BLOCKS;
-
-    for (int tile = 0; tile < num_total_tiles; ++tile)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-            L1_ADDRESS(params.buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+        START_PERF_MEASURE("INIT")
+        _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
+            formats.unpack_A_src, formats.unpack_B_src, formats.unpack_A_dst, formats.unpack_B_dst, FACE_R_DIM, FACE_R_DIM, 4 /*num_faces*/, 4 /*num_faces*/);
+        _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, ckernel::DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
+        {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+            if constexpr (!unpack_to_dest)
+            {
+                _perf_unpack_stream_set_valid<true /*src A*/, is_fp32_dest_acc_en /*src B*/, PERF_RUN_TYPE>(src_handshake_iters);
+            }
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t tile = 0; tile < num_total_tiles; ++tile)
+                {
+                    _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+                        L1_ADDRESS(buffer_A[tile]), formats.unpack_A_src, formats.unpack_A_dst);
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -76,6 +113,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_MATH
 
 #include "llk_lib_math_wrappers.h"
+#include "llk_lib_unpack_wrappers.h"
 #include "params.h"
 
 using namespace ckernel;
@@ -85,28 +123,63 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const bool is_int_fpu_en = false;
-
-    _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-    _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
-        4 /*num_faces*/, formats.math);
-    _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
-
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+#else
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+#endif
+    const bool is_int_fpu_en                = false;
+    const std::uint32_t src_handshake_iters = LOOP_FACTOR * _perf_src_handshake_iters_(false /*tilize_en*/, num_blocks * num_tiles_in_block, TILE_NUM_FACES);
 
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
-        for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+        START_PERF_MEASURE("INIT")
+        _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
+        _llk_math_eltwise_unary_datacopy_init_wrapper_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, is_int_fpu_en, PackMode::Default>(
+            ckernel::DEFAULT_TENSOR_SHAPE, formats.math);
+        _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        PROFILER_SYNC();
+    }
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
-            LLK_ASSERT(
-                (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                tile, formats.math, formats.math);
         }
-        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && !unpack_to_dest)
+        {
+            _perf_math_stream_clear_valid<true /*src A*/, true /*src B*/, PERF_RUN_TYPE>(src_handshake_iters);
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE && unpack_to_dest)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_wait_for_dest_available_<DstSync::SyncHalf>();
+                    }
+                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+                    {
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DstSync::SyncHalf, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+                            tile, formats.math, formats.math);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
     }
 }
 
@@ -133,35 +206,60 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    const bool UNTILIZE = false;
-
-    _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
-    _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
-    // pack_rows_to_addr_init(num_rows) -> llk_pack_rows_init(num_rows) -> _llk_pack_rows_init_(num_rows)
-    _llk_pack_rows_init_(params.NUM_ROWS_TO_PACK);
-
+#ifndef SPEED_OF_LIGHT
+    const std::uint32_t LOOP_FACTOR        = params.LOOP_FACTOR;
     const std::uint32_t num_blocks         = params.NUM_BLOCKS;
     const std::uint32_t num_tiles_in_block = params.NUM_TILES_IN_BLOCK;
+    const std::uint32_t num_rows_to_pack   = params.NUM_ROWS_TO_PACK;
+    const Operand& buffer_Res              = params.buffer_Res;
+#else
+    constexpr std::uint32_t num_blocks         = NUM_BLOCKS;
+    constexpr std::uint32_t num_tiles_in_block = NUM_TILES_IN_BLOCK;
+    constexpr std::uint32_t num_rows_to_pack   = NUM_ROWS_TO_PACK;
+#endif
+    const bool UNTILIZE = false;
 
-    for (std::uint32_t block = 0; block < num_blocks; ++block)
     {
-        _llk_packer_wait_for_math_done_();
-        for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
-        {
-            std::uint32_t res_tile_idx = (block * num_tiles_in_block) + tile;
-            LLK_ASSERT(
-                (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                "Block tile index exceeds maximum destination tiles");
-            // Caller supplies the target the way a pack_rows_to_addr caller does:
-            // target = L1_ADDRESS(buffer_Res[t]) + 1. The wrapper's `l1_addr - 1`
-            // then lands data exactly at L1_ADDRESS(buffer_Res[t]).
-            const std::uint32_t target_l1_addr = L1_ADDRESS(params.buffer_Res[res_tile_idx]) + 1;
-            pack_rows_to_addr_llk(tile, target_l1_addr);
-        }
-        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+        START_PERF_MEASURE("INIT")
+        _llk_pack_hw_configure_<is_fp32_dest_acc_en, ckernel::PackMode::Default>(formats.pack_src, formats.pack_dst, FACE_R_DIM * FACE_C_DIM * TILE_NUM_FACES);
+        _llk_pack_dest_init_wrapper_<DstSync::SyncHalf, is_fp32_dest_acc_en, llk_test_pack_mode_v<UNTILIZE, false>>();
+        _llk_pack_rows_init_(num_rows_to_pack);
+        PROFILER_SYNC();
     }
-    // pack_rows_to_addr_uninit() -> llk_pack_rows_uninit() (+ Default addrmod restore
-    // in the compute API; the raw _llk_pack_rows_uninit_ is the harness equivalent).
+    {
+        START_PERF_MEASURE("TILE_LOOP")
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
+        {
+        }
+        else
+        {
+            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            {
+                for (std::uint32_t block = 0; block < num_blocks; ++block)
+                {
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_packer_wait_for_math_done_();
+                    }
+                    for (std::uint32_t tile = 0; tile < num_tiles_in_block; ++tile)
+                    {
+                        const std::uint32_t res_tile_idx = block * num_tiles_in_block + tile;
+                        LLK_ASSERT(
+                            (tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                            "Block tile index exceeds maximum destination tiles");
+                        // The API's -1 offset restores this caller-provided +1 target.
+                        const std::uint32_t target_l1_addr = L1_ADDRESS(buffer_Res[res_tile_idx]) + 1;
+                        pack_rows_to_addr_llk(tile, target_l1_addr);
+                    }
+                    if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
+                    }
+                }
+            }
+        }
+        PROFILER_SYNC();
+    }
     _llk_pack_rows_uninit_();
 }
 

@@ -390,9 +390,11 @@ class RunChecks:
             else cast("list[BlockType]", block_filter)
         )
 
-        def per_device_blocks_check(device: Device) -> list[PerBlockCheckResult] | None:
+        # Outside the per-device check, so a device that times out keeps its rows from before the timeout.
+        result: list[PerBlockCheckResult] = []
+
+        def per_device_blocks_check(device: Device) -> None:
             """Check all block locations for a single device."""
-            result: list[PerBlockCheckResult] = []
             with create_progress() as progress:
                 progress_count = 0
                 for block_type in block_types_to_check:
@@ -418,13 +420,11 @@ class RunChecks:
                                 device_description=DeviceDescription(device, self._use_unique_id),
                                 location=location,
                             )
-                    return result if len(result) > 0 else None
                 finally:
                     progress.remove_task(device_task)
 
-        # Reuse the device iteration from run_per_device_check. The nested check wraps results as
-        # PerBlockCheckResult, so the collected list contains PerBlockCheckResult items.
-        return cast("list[PerBlockCheckResult] | None", self.run_per_device_check(per_device_blocks_check))
+        self.run_per_device_check(per_device_blocks_check)
+        return result if len(result) > 0 else None
 
     def run_per_core_check(
         self,
