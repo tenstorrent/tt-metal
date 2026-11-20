@@ -766,13 +766,20 @@ void repoint_rta_data_into_command_stream(
         rta_locations[slot_keys[j]] = data_in_sequence;
         // rt_args_data points to args; data.second.get().data() points to count when watcher enabled.
         auto& rta = data.first.get();
-        if (rta.data() == (data.second.get().data() + count_word_offset)) {
+        // A core with no runtime args has an empty backing vector and a null view. Don't offset a null pointer
+        // (UB, and with the watcher's count word it would also never compare equal to the null view).
+        const auto& stored = data.second.get();
+        const uint32_t* const stored_args = stored.empty() ? nullptr : stored.data() + count_word_offset;
+        if (rta.data() == stored_args) {
             rta = RuntimeArgsData{data_in_sequence, rta.size()};
         } else {
             TT_ASSERT(
                 rta.data() ==
                 (reinterpret_cast<const uint32_t*>(std::get<0>(kernel_data_and_sizes[j])) + count_word_offset));
-            rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
+            // Nothing to copy for an empty view; skipping also keeps a null src out of the later memcpy.
+            if (rta.size() > 0) {
+                rta_updates.emplace_back(rta.data(), data_in_sequence, rta.size() * sizeof(uint32_t));
+            }
         }
         offset += std::get<2>(kernel_data_and_sizes[j]);
     }
@@ -1207,9 +1214,12 @@ BatchedTransfers assemble_runtime_args_commands(
                                         unique_rta_slot_key(device_local_kernel_handle, x, y));
                                     TT_ASSERT(runtime_args_data.size() * sizeof(uint32_t) <= kg->rta_sizes[idx]);
                                     // Back up pointer to include count word for dispatch
-                                    // Device expects [count | args...] layout for watcher bounds checking
+                                    // Device expects [count | args...] layout for watcher bounds checking.
+                                    // A core with no runtime args has a null view: pass null (writers skip the
+                                    // copy and just advance by the stride) rather than offsetting a null pointer.
+                                    const uint32_t* const rta_view_data = kernel->runtime_args_data(core_coord).data();
                                     unique_rt_data_and_sizes.back().emplace_back(
-                                        kernel->runtime_args_data(core_coord).data() - count_word_offset,
+                                        rta_view_data != nullptr ? rta_view_data - count_word_offset : nullptr,
                                         runtime_args_data.size() * sizeof(uint32_t),
                                         kg->rta_sizes[idx]);
                                 }
