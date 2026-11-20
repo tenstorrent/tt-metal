@@ -30,7 +30,7 @@ class SeqParallel:
         self.tt_ccl = tt_ccl
         self.rows = mesh.shape[0]
         self.Nv, self.Dk, self.Dv = args.gdn_nv_tp, args.gdn_dk, args.gdn_dv
-        assert self.Dk == self.Dv, "the packed [A | B] transform and U @ S_c assume Dk == Dv"
+        assert self.Dk == self.Dv, "the packed [E | B] transform and U @ S_c assume Dk == Dv"
         rep = ttnn.ReplicateTensorToMesh(mesh)
 
         def up(t, dtype, layout=ttnn.TILE_LAYOUT, mapper=rep):
@@ -54,6 +54,11 @@ class SeqParallel:
         init2[1] = torch.eye(self.Dk, dtype=torch.float32).expand(self.Nv, self.Dk, self.Dv)
         self.gdn_init2 = up(init2, ttnn.float32)
         self.gdn_zero_state = up(torch.zeros(self.Nv, self.Dk, self.Dv, dtype=torch.float32), ttnn.float32)
+        # The identity transform [I | 0] per head, [1, Nv, Dk, Dk + Dv]: the fold call's initial state S'_0, and what
+        # _chain_entry subtracts from a transform [A | B] to form the chain op's [E | B].
+        identity_ab = torch.zeros(1, self.Nv, self.Dk, self.Dk + self.Dv, dtype=torch.float32)
+        identity_ab[:, :, :, : self.Dk] = torch.eye(self.Dk, dtype=torch.float32)
+        self.gdn_identity_ab = up(identity_ab, ttnn.float32)
         # Same constant as gdn/tp.py _kda_actual_start: the chunk's first token is at absolute position 0.
         self.actual_start = up(torch.tensor([0], dtype=torch.int64), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
         # chain_affine_transforms requires HiFi2 + fp32 dest accumulation; the U @ S_c combine runs HiFi4 by default.
@@ -79,10 +84,6 @@ class SeqParallel:
         self.fold_max_len = int(os.environ.get("QWEN36_SP_GDN_FOLD_MAX", "256"))
         if self.fold_max_len > 0:
             Nv, Dk, Dv = self.Nv, self.Dk, self.Dv
-            # S'_0 = [I | 0] per head: [1, Nv, Dk, Dk + Dv] (the op's initial state is [B, HV, K, V'] with V' = Dk + Dv).
-            init_fold = torch.zeros(1, Nv, Dk, Dk + Dv, dtype=torch.float32)
-            init_fold[:, :, :, :Dk] = torch.eye(Dk, dtype=torch.float32)
-            self.gdn_init_fold = up(init_fold, ttnn.float32)
             # [Nv, Dv, Dv] identity per head: the lower half of W = [[S_c], [I]].
             self.fold_eye = up(torch.eye(Dv, dtype=torch.float32).expand(Nv, Dv, Dv).contiguous(), ttnn.float32)
             # Placement matrix P [Nv*Dv, Nv*(Dk+Dv)], P[h*Dv + j, h*(Dk+Dv) + Dk + j] = 1: v @ P puts head h's v in the right
@@ -195,21 +196,31 @@ class SeqParallel:
         return q2, k2, v2, beta2, g2
 
     def gdn_entry_state(self, fin2, local_rows):
-        """This row's entry state S_c [Nv, Dk, Dv] fp32 from the batch-2 final state fin2 [2, Nv, Dk, Dv]
-        (batch 0 = B, batch 1 = A: S_out = A @ S_in + B). Chains the rows' transforms S_{r+1} = A_r @ S_r + B_r from
-        a zero state on device. local_rows: tokens per row. Consumes fin2."""
+        """This row's entry state S_c [Nv, Dk, Dv] fp32 from the batch-2 final state fin2 [2, Nv, Dk, Dv] fp32
+        (batch 0 = B, batch 1 = A: S_out = A @ S_in + B), via _chain_entry. local_rows: tokens per row.
+        Consumes fin2."""
         Nv, Dk, Dv = self.Nv, self.Dk, self.Dv
         dram = ttnn.DRAM_MEMORY_CONFIG
         b = ttnn.slice(fin2, (0, 0, 0, 0), (1, Nv, Dk, Dv), memory_config=dram)
         a = ttnn.slice(fin2, (1, 0, 0, 0), (2, Nv, Dk, Dv), memory_config=dram)
         ttnn.deallocate(fin2)
-        # Pack [A | B] (Dk == Dv, so no reshape) and transport as bf16, the chain op's input contract.
-        packed = ttnn.concat([a, b], dim=3, memory_config=dram)
+        # [A | B] (Dk == Dv, so no reshape).
+        ab = ttnn.concat([a, b], dim=3, memory_config=dram)
         ttnn.deallocate(a)
         ttnn.deallocate(b)
-        packed_bf16 = ttnn.typecast(packed, ttnn.bfloat16, memory_config=dram)
-        ttnn.deallocate(packed)
-        gathered = self.gather_rows(packed_bf16, dim=0)  # [R, Nv, Dk, Dk + Dv]
+        return self._chain_entry(ab, local_rows)
+
+    def _chain_entry(self, ab, local_rows):
+        """This row's entry state S_c [Nv, Dk, Dv] fp32 from its transform ab = [A | B] [1, Nv, Dk, Dk + Dv] fp32
+        (S_out = A @ S_in + B). Forms the chain op's [E | B] = [A | B] - [I | 0], E = A - I, in fp32, transports it as
+        bf16 and chains the rows' transforms S_{r+1} = A_r @ S_r + B_r from a zero state on device. local_rows: tokens
+        per row. Consumes ab."""
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        eb = ttnn.subtract(ab, self.gdn_identity_ab, dtype=ttnn.float32, memory_config=dram)
+        ttnn.deallocate(ab)
+        eb_bf16 = ttnn.typecast(eb, ttnn.bfloat16, memory_config=dram)
+        ttnn.deallocate(eb)
+        gathered = self.gather_rows(eb_bf16, dim=0)  # [R, Nv, Dk, Dk + Dv]
         entry, final = ttnn.experimental.kda.chain_affine_transforms(
             gathered,
             self.gdn_zero_state,
@@ -250,8 +261,9 @@ class SeqParallel:
 
     # ---- fold variant: one batch-1 call on v' = [0 | v] from S'_0 = [I | 0] (see __init__) ----------------------------------
     # The recurrence is linear in (S, v). With the augmented value v' = [0 | v] (Dk zero columns, then v; Dv' = Dk + Dv) and
-    # S'_0 = [I | 0], one call yields the final state S'_T = [A | B] (the packed transform layout) and the outputs
-    # o'_t = [U_t | O0_t]. With this row's entry state S_c the true outputs are O = O0 + U @ S_c = o' @ [[S_c], [I]].
+    # S'_0 = [I | 0], one call yields the final state S'_T = [A | B] (S'_T - S'_0 = [E | B] is the packed transform) and
+    # the outputs o'_t = [U_t | O0_t]. With this row's entry state S_c the true outputs are
+    # O = O0 + U @ S_c = o' @ [[S_c], [I]].
 
     def gdn_fold_v(self, v):
         """Augmented value v' = v @ P: [1, T, Nv*Dv] bf16 -> [1, T, Nv*(Dk + Dv)] bf16, per head [0 | v]. Consumes v."""
@@ -267,28 +279,11 @@ class SeqParallel:
 
     def gdn_entry_state_fold(self, fin, local_rows):
         """This row's entry state S_c [Nv, Dk, Dv] fp32 from the fold call's final state fin [1, Nv, Dk, Dk + Dv] fp32
-        (already the packed [A | B]: S_out = A @ S_in + B). Chains the rows' transforms from a zero state on device, as
-        gdn_entry_state does. local_rows: tokens per row. Consumes fin."""
+        (already [A | B]: S_out = A @ S_in + B), via _chain_entry. local_rows: tokens per row. Consumes fin."""
         Nv, Dk, Dv = self.Nv, self.Dk, self.Dv
-        dram = ttnn.DRAM_MEMORY_CONFIG
         if tuple(fin.shape) != (1, Nv, Dk, Dk + Dv):
             fin = ttnn.reshape(fin, (1, Nv, Dk, Dk + Dv))
-        # Transport as bf16, the chain op's input contract.
-        fin_bf16 = ttnn.typecast(fin, ttnn.bfloat16, memory_config=dram)
-        ttnn.deallocate(fin)
-        gathered = self.gather_rows(fin_bf16, dim=0)  # [R, Nv, Dk, Dk + Dv]
-        entry, final = ttnn.experimental.kda.chain_affine_transforms(
-            gathered,
-            self.gdn_zero_state,
-            actual_start=self.actual_start,
-            local_rows=local_rows,
-            memory_config=dram,
-            compute_kernel_config=self._chain_cfg,
-            sequence_parallel_axis=self.axis,
-        )
-        ttnn.deallocate(final)
-        ttnn.deallocate(gathered)
-        return entry
+        return self._chain_entry(fin, local_rows)
 
     def gdn_combine_fold(self, o, entry):
         """True outputs O = o' @ W per head, W = [[S_c], [I]] ([Dk + Dv, Dv]), from the fold call's head-major outputs o

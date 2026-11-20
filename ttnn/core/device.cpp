@@ -6,6 +6,7 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/cluster.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn {
@@ -89,7 +90,14 @@ void close_device(MeshDevice& device) { device.close(); }
 
 bool is_wormhole_or_blackhole(tt::ARCH arch) { return arch == tt::ARCH::WORMHOLE_B0 or arch == tt::ARCH::BLACKHOLE; }
 
-void deallocate_buffers(MeshDevice* device) { device->allocator()->deallocate_buffers(); }
+void deallocate_buffers(MeshDevice* device) {
+    // Queued work may still read the buffers and cached kernel binaries freed below.
+    tt::tt_metal::distributed::Synchronize(*device, std::nullopt);
+    // Cached programs own their kernel-binary buffers; drop them while the allocator still tracks those
+    // addresses, or a later program could be loaded over a binary the cache still dispatches.
+    device->clear_program_cache();
+    device->allocator()->deallocate_buffers();
+}
 
 // Device management for auto-formatting
 // Note: This functionality is planned for deprecation in the future.

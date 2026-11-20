@@ -11,5 +11,6 @@ Tensor clone(
     const Tensor& input,
     const std::optional<DataType>& dtype,
     const std::optional<MemoryConfig>& memory_config,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config);
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 }  // namespace ttnn
