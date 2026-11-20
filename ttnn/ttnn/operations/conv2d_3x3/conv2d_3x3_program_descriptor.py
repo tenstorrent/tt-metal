@@ -390,6 +390,19 @@ SPARE_MGROUPS = True
 # reader rows are worth -2.4 / -7.3 points of that on res5.1 / res5.2 (readers on the sender rows: -4.8% / +0.2%).
 NSLICE_ROUND0_MODEL = True
 NSLICE_ROUND0_MODEL_MIN_BYTES = 16384
+# N-slice spread column stream (writer NSLICE_SPREAD): where every weight round of a core's stream fits its own
+# cb_weights slot (depth = the core's rounds, from the L1 left after the solve) and one flag semaphore per round fits,
+# no round needs a handshake: every slot is fresh at kernel start, as round 0's already is. Round r's reader member
+# reads it from DRAM into slot r and multicasts it down its column, then sets flag semaphore r there (same path, after
+# the data); the column sender relays every round to its slice's spare members as it lands on it. Readers: round 0 the
+# NSLICE_ROUND0 reader, round 1 the column sender (the handshake stream's start-up reads), round r >= 2 the column's
+# other rows in turn. A reader issues round r >= NSLICE_SPREAD_LOOKAHEAD once round r - NSLICE_SPREAD_LOOKAHEAD landed
+# on it, and round 1 goes down the column only once round 0 landed on its sender (nothing shares the column's links
+# with round 0, which gates every walk). The handshake stream's round was a serial chain: a receiver acks round r + 1
+# only once round r landed, the sender multicasts once every ack is in (res4.x: ~0.85 us a round against ~0.75 us of
+# step compute; the spare members, one forward later, ended the op). Measured: changelog Perf 14 (nslice_stream_spread).
+NSLICE_SPREAD = True
+NSLICE_SPREAD_LOOKAHEAD = 2
 # Blackhole NoC1 DRAM endpoint row per bank (soc descriptor dram_views worker_endpoint[1]; the relocated set once
 # CMFW moved its MRISC port), keyed by whether the endpoints are relocated. Banks 0-3 sit on DRAM column x 0, 4-7 on
 # x 9; worker rows are physical y 2..11.
@@ -1568,6 +1581,43 @@ def _round0_args(input_tensor, weight_tensor, g, b, work, m_blocks_per_index, sp
     return args
 
 
+def _spread_args(input_tensor, work, m_blocks_per_index, spare_groups, column_channel, spare, round0_args, rounds):
+    """NSLICE_SPREAD writer args per core (x, y), in the NSLICE_ROUND0 args' place: [rounds this core reads (bit mask),
+    the column's multicast rectangle (NoC1-ordered), column dests, its slice's spare members' rectangle, spare dests,
+    rounds this core relays to them (bit mask)] (zeros where absent). Round 0's reader is the NSLICE_ROUND0 reader,
+    round 1's the column sender, round r >= 2's the column's other rows in turn; the column sender relays every
+    round."""
+    device = input_tensor.device()
+    _, rows_n, _ = column_channel
+    most = max(m_blocks_per_index[i] for _, i, _ in work)
+    grid_rows = sorted({i for _, i, _ in work if i not in spare_groups and m_blocks_per_index[i] == most})
+    spare_rows = {i for _, i, _ in work if i in spare_groups and m_blocks_per_index[i] == most}
+    k_cols = max(c for _, _, c in work) + 1
+
+    def rect(cores):
+        lo = device.worker_core_from_logical_core(ttnn.CoreCoord(min(c.x for c in cores), min(c.y for c in cores)))
+        hi = device.worker_core_from_logical_core(ttnn.CoreCoord(max(c.x for c in cores), max(c.y for c in cores)))
+        return [hi.x, hi.y, lo.x, lo.y]  # the writer's NoC1 order
+
+    args = {}
+    for c in range(k_cols):
+        column = [next(core for core, i, cc in work if i == row and cc == c) for row in grid_rows]
+        r0 = next(p for p, core in enumerate(column) if round0_args.get((core.x, core.y), [0])[0] == 1)
+        # The staggered column sender of column c is participant c % rows (_column_weight_mcast).
+        sender = c % rows_n
+        others = [p for p in ((r0 + k) % rows_n for k in range(1, rows_n)) if p != sender] or [sender]
+        readers = [r0, sender] + [others[(r - 2) % len(others)] for r in range(2, rounds)]
+        for p, core in enumerate(column):
+            mask = sum(1 << r for r in range(rounds) if readers[r] == p)
+            if mask:
+                args.setdefault((core.x, core.y), [0] * 12)[0:6] = [mask] + rect(column) + [len(column) - 1]
+        members = [core for core, i, cc in work if i in spare_rows and cc == c]
+        if spare is not None and members:
+            relay = column[sender]
+            args.setdefault((relay.x, relay.y), [0] * 12)[6:12] = rect(members) + [len(members), (1 << rounds) - 1]
+    return args
+
+
 def _block_device_extents(shard_spec, device_grid):
     """(rows, columns) of the device from the shard grid's first core, along its M axis and its channel-slice axis."""
     start = shard_spec.grid.bounding_box().start
@@ -2719,6 +2769,54 @@ def create_program_descriptor(
         assert len(sem_ids) + 3 <= MAX_SEMAPHORES, sem_ids
     sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 3)) if sd_r0_noc0 else ()
     sem_ids += sd_r0_sems
+    # N-slice spread column stream (see NSLICE_SPREAD): every round of a core's stream in its own slot, one flag
+    # semaphore per round, no channel. Not where cores run different M-block counts (the cores outside the column
+    # channel stream their own rounds), a stream of one round (nothing to spread), or the rounds or their flags do not
+    # fit (aspp.convs.1 / .2: 8 x 59 KB rounds).
+    spread_rounds = 0
+    spread_flag_sem0 = 0
+    spread_banks = 0
+    if NSLICE_SPREAD and round0_args:
+        most = max(m_blocks_per_index[i] for _, i, _ in work)
+        rounds = _div_up(g.tensor_n_tiles, ns) * most
+        slice_bytes = g.tensor_k_tiles * ns * g.weight_tile_bytes
+        extra = max(rounds - b.weight_depth, 0) * slice_bytes
+        if (
+            all(m_blocks_per_index[i] == most for _, i, _ in work)
+            and 2 <= rounds <= 32
+            and len(sem_ids) + rounds <= MAX_SEMAPHORES
+            and sum(cb.total_size for cb in cbs) + extra <= l1_cb_budget_bytes(resident)
+        ):
+            spread_rounds = rounds
+            spread_flag_sem0 = len(sem_ids)
+            sem_ids += tuple(range(len(sem_ids), len(sem_ids) + rounds))
+            round0_args = _spread_args(
+                input_tensor, work, m_blocks_per_index, spare_groups, column_channel, spare_channel, round0_args, rounds
+            )
+            if rounds > b.weight_depth:
+                b = replace(b, weight_depth=rounds)
+                for i, cb in enumerate(cbs):
+                    if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                        cbs[i] = _cb(
+                            CB_WEIGHTS,
+                            weight_tensor.dtype,
+                            g.weight_tile_bytes,
+                            rounds * slice_bytes // g.weight_tile_bytes,
+                            cores,
+                        )
+            # A round is ND shard (channel slice, N-slice) of conv2d_3x3._block_weight_memory_config, round-robin over
+            # the DRAM banks: the writer computes its bank and offset itself (the TensorAccessor's page-to-shard
+            # arithmetic costs ~0.15 us of RISC time per read). Any other placement keeps the accessor.
+            wspec = weight_tensor.memory_config().nd_shard_spec
+            if (
+                wspec is not None
+                and list(wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, ns * TILE]
+                and g.tensor_n_tiles % ns == 0
+                and wspec.shard_distribution_strategy == ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D
+                and wspec.grid.num_cores() == input_tensor.device().dram_grid_size().x
+                and weight_tensor.buffer_aligned_page_size() == g.weight_tile_bytes
+            ):
+                spread_banks = wspec.grid.num_cores()
     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
@@ -3177,7 +3275,7 @@ def create_program_descriptor(
             + server_rt_args(core)
             + (_kwf_xchg_writer_args(g, work, m_index, m_ranges, device) if kwf_xchg else [])
             + kwf_writer_fill
-            + (round0_args.get((core.x, core.y), [0] * 11) if round0_args else [])
+            + (round0_args.get((core.x, core.y), [0] * (12 if spread_rounds else 11)) if round0_args else [])
             + (host_fill_words[(core.x, core.y)][1] if host_fill else [])
         )
 
@@ -3365,7 +3463,18 @@ def create_program_descriptor(
             + _round0_defines
             + slot_ack_defines
             + _host_fill_defines
-            + ([("NSLICE_ROUND0", "1")] if round0_args else []),
+            + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+            + (
+                [
+                    ("NSLICE_SPREAD", "1"),
+                    ("NSLICE_SPREAD_ROUNDS", str(spread_rounds)),
+                    ("NSLICE_SPREAD_FLAG_SEM0", str(spread_flag_sem0)),
+                    ("NSLICE_SPREAD_LOOKAHEAD", str(NSLICE_SPREAD_LOOKAHEAD)),
+                    ("NSLICE_SPREAD_BANKS", str(spread_banks)),
+                ]
+                if spread_rounds
+                else []
+            ),
             config=ttnn.WriterConfigDescriptor(),
         )
         for slice_channels, (writer_cores, writer_rt) in writer_groups.items()
@@ -3560,6 +3669,9 @@ def create_program_descriptor(
                 mcast_receivers.num_cores(),
                 ttnn.McastExplicitFixedSenderConfig([core_list[0]]),
             )
+    if spread_rounds:
+        # The spread stream's rounds go out raw, flagged on their own semaphores: no channel.
+        weight_mcast = spare_mcast = None
     if weight_mcast is None:
         for writer in writers:
             ttnn.attach_absent_mcast(writer, WEIGHT_MCAST_PREFIX)

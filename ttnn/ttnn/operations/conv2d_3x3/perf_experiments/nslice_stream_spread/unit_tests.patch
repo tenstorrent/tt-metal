@@ -1,0 +1,94 @@
+diff --git a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+@@ -18,6 +18,8 @@
+   weight rounds forwarded from the column streams.
+ - host-planned fill: each core's slab reads planned on the host (split cores' writer part issued at kernel start, the
+   spare members' upper half on NoC1, a short last slice's padding tiles zeroed), bit-identical to the device plan.
++- spread column stream: every weight round in its own slot, read and multicast by its own column member without a
++  handshake, bit-identical to the handshake stream.
+ """
+ 
+ import importlib
+@@ -712,3 +714,81 @@
+     assert torch.equal(out_model, out_senders)
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, True)
+     assert_with_pcc(expected, out_model, PCC[ttnn.bfloat8_b])
++
++
++SPREAD_CASES = [
++    # res4.x: 8 rounds of 9 tiles, 13 M-groups (3 spare columns: every round relayed by the column sender).
++    pytest.param(((32, 64, 256), 256, 1, 1, 1), (256, 32), id="res4_8x8"),
++    # res5.0: 8 rounds of 36 tiles, round 0 from the NoC1-model reader, round 1 from the column sender.
++    pytest.param(((32, 64, 512), 512, 2, 1, 2), (224, 64), id="res5_0_8x10"),
++    # 7 columns (odd ring), 7 rounds.
++    pytest.param(((32, 64, 224), 224, 1, 1, 1), (256, 32), id="k7"),
++    # aspp.convs.3: 11 columns, 8 owners spread over them, a short last channel slice, no bias.
++    pytest.param(((32, 64, 1024), 256, 18, 1, 18), (256, 96), id="aspp3_k11"),
++]
++
++
++@pytest.mark.parametrize("case_hw,shard", SPREAD_CASES)
++def test_conv2d_3x3_block_sharded_spread_stream(case_hw, shard, device, monkeypatch):
++    """N-slice spread column stream (NSLICE_SPREAD): every round in its own slot, read and multicast by its own column
++    member without a handshake, relayed to the spare members by the column sender. Bit-identical to the handshake
++    stream (NSLICE_SPREAD off), on the program-cache hit too."""
++    torch.manual_seed(7)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10):
++        pytest.skip("pinned to the 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard)
++    with_bias = c_in != 1024
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16) if with_bias else None
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    kwargs = dict(
++        stride=s,
++        padding=p,
++        dilation=d,
++        input_dtype=dtype,
++        input_layout=layout,
++        weight_dtype=ttnn.bfloat8_b,
++        input_memory_config=config,
++        device=device,
++    )
++    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs) if with_bias else None
++
++    def run():
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu" if with_bias else None,
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        return ttnn.to_torch(tt_output).float()
++
++    real_spread_args = _pd._spread_args
++    taken = []
++
++    def recording(*args):
++        taken.append(args[-1])
++        return real_spread_args(*args)
++
++    monkeypatch.setattr(_pd, "_spread_args", recording)
++    out_spread = run()
++    assert taken, "the spread stream was not taken"
++    out_spread_hit = run()
++    monkeypatch.setattr(_pd, "NSLICE_SPREAD", False)
++    out_handshake = run()
++    assert torch.equal(out_spread, out_handshake)
++    assert torch.equal(out_spread_hit, out_handshake)
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, with_bias)
++    assert_with_pcc(expected, out_spread, PCC[ttnn.bfloat8_b])

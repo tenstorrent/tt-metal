@@ -103,6 +103,18 @@
 // members at 4.4 / 5.1, now 3.2 / 3.5; the 39 KB round-0 read took 0.9-2.2 us from the column senders' rows (NoC1
 // climbs shared by up to four reads), 0.8-0.9 us from the picked rows.
 //
+// N-slice spread column stream (NSLICE_SPREAD, the descriptor's NSLICE_SPREAD): where every round of the core's
+// stream fits its own cb_weights slot (depth = the core's rounds), no round needs a handshake (every slot is fresh at
+// kernel start). Round r's reader member (runtime mask, in the round-0 args' place) reads it from DRAM into slot r and
+// multicasts it down its column, then sets flag semaphore NSLICE_SPREAD_FLAG_SEM0 + r there (same path, after the
+// data); the column sender relays each round, in order, as it lands on it to its slice's spare members. Every core
+// pushes round r once its flag is VALID. A reader issues round r >= NSLICE_SPREAD_LOOKAHEAD once round r - lookahead
+// landed on it; round 1 goes down the column only once round 0 landed on its sender. One multicast per poll (its issue
+// holds this RISC for the injection, ~0.45 us for a 39 KB round), so a core pushes its own round as soon as it is
+// flagged; the stream is polled from every wait of the walk (poll_credit). The handshake stream's round was a serial
+// chain (a receiver acks round r + 1 once round r landed; the sender multicasts once every ack is in): ~0.85 us a
+// round on res4.x, now its rounds land as their reads do (res4.x 10.53 -> 10.15 us, changelog Perf 14).
+//
 // Every push of cb_combine_slots is its whole capacity, so its write pointer never leaves the CB base and
 // the same base address is right on every core. The counters only grow, so round j waits for
 // (j + 1) x the per-round count.
@@ -811,7 +823,9 @@ void kernel_main() {
     // [batches], then per batch [pieces] and (owner x << 16 | y, offset, slab row << 16 | rows) per piece. One M-block
     // per core and the whole slab in the ring (empty at kernel start), so every batch is issued from kernel start (up
     // to the window in flight) without the reader's hand-over, and counted in slab_fwd_done in order as it lands.
-#ifdef NSLICE_ROUND0
+#if defined(NSLICE_SPREAD)
+    uint32_t hf_arg = round0_arg + 12;  // after the spread stream's args
+#elif defined(NSLICE_ROUND0)
     uint32_t hf_arg = round0_arg + 11;  // after the N-slice round-0 args
 #else
     uint32_t hf_arg = server_arg + 3;
@@ -1584,7 +1598,7 @@ void kernel_main() {
 #endif
         dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
     };
-#ifdef NSLICE_ROUND0
+#if defined(NSLICE_ROUND0) && !defined(NSLICE_SPREAD)
     // The round-0 reader's read (M-block 0's first owner slice), before anything else of the walk; issue_weight_slice
     // finds it in flight.
     if constexpr (nslice_outer) {
@@ -1604,6 +1618,141 @@ void kernel_main() {
             }
         }
     }
+#endif
+#ifdef NSLICE_SPREAD
+    // ---- Spread column stream (see the file comment). Args (round0_arg ..): [rounds read (mask), column rectangle,
+    // column dests, spare rectangle, spare dests, rounds relayed (mask)].
+    constexpr uint32_t sp_rounds = NSLICE_SPREAD_ROUNDS;
+    static_assert(nslice_outer && nslice_weight_depth >= sp_rounds && sp_rounds <= 32);
+    constexpr uint32_t SP_TRID0 = 2;  // 2..5: the handshake stream's ids, unused here
+    constexpr uint32_t SP_NTRID = 4;
+    const bool sp_live = num_m_blocks_this_core > 0;
+    const uint32_t sp_mask = sp_live ? get_arg_val<uint32_t>(round0_arg) : 0;
+    const uint32_t sp_col_dests = get_arg_val<uint32_t>(round0_arg + 5);
+    const uint32_t sp_spare_dests = get_arg_val<uint32_t>(round0_arg + 10);
+    const uint32_t sp_relay_mask = (sp_live && sp_spare_dests != 0) ? get_arg_val<uint32_t>(round0_arg + 11) : 0;
+    uint32_t sp_mine[sp_rounds];    // rounds this core reads, in order
+    uint32_t sp_relays[sp_rounds];  // rounds this core relays, in order
+    uint32_t sp_nmine = 0;
+    uint32_t sp_nrelay = 0;
+    for (uint32_t r = 0; r < sp_rounds; ++r) {
+        if ((sp_mask >> r) & 1u) {
+            sp_mine[sp_nmine++] = r;
+        }
+        if ((sp_relay_mask >> r) & 1u) {
+            sp_relays[sp_nrelay++] = r;
+        }
+    }
+    // Round r is the M-block's (r mod slices)-th owner slice of the walk order.
+    uint32_t sp_order[k_cols];
+    uint32_t sp_nslices = 0;
+    for (uint32_t j = 0; j < k_cols; ++j) {
+        const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+        if (conv2d_3x3::ring_is_owner<num_owning_cols>(owner)) {
+            sp_order[sp_nslices++] = conv2d_3x3::ring_slice_of(owner);
+        }
+    }
+    uint32_t sp_k_issued = 0;  // this core's reads issued,
+    uint32_t sp_k_landed = 0;  // landed (flagged here),
+    uint32_t sp_k_sent = 0;    // and multicast down the column
+    uint32_t sp_relay_k = 0;
+    auto sp_flag = [&](uint32_t r) -> uint32_t { return get_semaphore(NSLICE_SPREAD_FLAG_SEM0 + r); };
+    auto sp_landed = [&](uint32_t r) -> bool {
+        return *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sp_flag(r)) == VALID;
+    };
+    auto sp_slot = [&](uint32_t r) -> uint32_t { return weights_base + r * slice_weight_tiles * weight_tile_bytes; };
+    // Round r's slot to the rectangle at arg a (NoC1-ordered), then its flag (same path, after the data).
+    auto sp_mcast = [&](uint32_t r, uint32_t a, uint32_t dests) {
+        const uint32_t sx = get_arg_val<uint32_t>(a);
+        const uint32_t sy = get_arg_val<uint32_t>(a + 1);
+        const uint32_t ex = get_arg_val<uint32_t>(a + 2);
+        const uint32_t ey = get_arg_val<uint32_t>(a + 3);
+        noc_async_write_multicast(
+            sp_slot(r),
+            get_noc_multicast_addr(sx, sy, ex, ey, sp_slot(r)),
+            slice_weight_tiles * weight_tile_bytes,
+            dests,
+            true);
+        noc_semaphore_set_multicast(sp_flag(r), get_noc_multicast_addr(sx, sy, ex, ey, sp_flag(r)), dests);
+    };
+    auto sp_read = [&](uint32_t r, uint32_t trid) {
+        weight_reads.begin(trid);
+        const uint32_t y = sp_order[r % sp_nslices];
+#if NSLICE_SPREAD_BANKS
+        // ND shard (channel slice c, N-slice y) = shard c * num_owning_cols + y, round-robin over the banks, shards one
+        // after another in a bank (the descriptor checked the placement): one read, no accessor arithmetic.
+        const uint32_t shard = (weight_k_tile_start / nslice_k_tiles) * num_owning_cols + y;
+        weight_reads.read(
+            get_noc_addr_from_bank_id<true>(
+                shard % NSLICE_SPREAD_BANKS,
+                weight_addr + (shard / NSLICE_SPREAD_BANKS) * slice_weight_tiles * weight_tile_bytes,
+                weight_reads.noc.get_noc_id()),
+            sp_slot(r),
+            slice_weight_tiles * weight_tile_bytes);
+#else
+        // Any other placement: start_weight_reads' reads (a run per k under NSLICE_WEIGHT_PAGE_RUNS, else per tile).
+        uint32_t l1 = sp_slot(r);
+        const uint32_t n0 = y * out_n_tiles;
+        const uint32_t valid = tensor_n_tiles - n0 < out_n_tiles ? tensor_n_tiles - n0 : out_n_tiles;
+        for (uint32_t k = 0; k < nslice_k_tiles; ++k, l1 += out_n_tiles * weight_tile_bytes) {
+#ifdef NSLICE_WEIGHT_PAGE_RUNS
+            weight_reads.read(
+                weights.get_noc_addr((weight_k_tile_start + k) * tensor_n_tiles + n0), l1, valid * weight_tile_bytes);
+#else
+            const uint32_t row_page = (weight_k_tile_start + k) * tensor_n_tiles + n0;
+            for (uint32_t n = 0; n < valid; ++n) {
+                weight_reads.read(weights.get_noc_addr(row_page + n), l1 + n * weight_tile_bytes, weight_tile_bytes);
+            }
+#endif
+        }
+#endif
+        dataflow_kernel_lib::set_read_trid(weight_reads.noc, 0);
+    };
+    auto sp_issue = [&]() {
+        while (sp_k_issued < sp_nmine && sp_k_issued - sp_k_landed < SP_NTRID) {
+            const uint32_t r = sp_mine[sp_k_issued];
+            if (r >= NSLICE_SPREAD_LOOKAHEAD && !sp_landed(r - NSLICE_SPREAD_LOOKAHEAD)) {
+                break;
+            }
+            sp_read(r, SP_TRID0 + sp_k_issued % SP_NTRID);
+            ++sp_k_issued;
+        }
+    };
+    // Flags every landed read, issues what the lookahead allows, then at most one multicast: a relay of round r before
+    // this core's own round r + 1.
+    auto sp_poll = [&]() {
+        invalidate_l1_cache();
+        while (sp_k_landed < sp_k_issued && ncrisc_noc_read_with_transaction_id_flushed(
+                                                weight_reads.noc.get_noc_id(), SP_TRID0 + sp_k_landed % SP_NTRID)) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sp_flag(sp_mine[sp_k_landed])) = VALID;
+            ++sp_k_landed;
+        }
+        sp_issue();
+        const uint32_t own = sp_k_sent < sp_k_landed ? sp_mine[sp_k_sent] : sp_rounds;
+        const uint32_t rel = sp_relay_k < sp_nrelay ? sp_relays[sp_relay_k] : sp_rounds;
+        const bool own_ok = own < sp_rounds && (own != 1 || sp_landed(0));
+        const bool relay_ok = rel < sp_rounds && sp_landed(rel);
+        if (relay_ok && (!own_ok || rel < own)) {
+            MaybeDeviceZoneScope("writer_spread_relay");
+            sp_mcast(rel, round0_arg + 6, sp_spare_dests);
+            ++sp_relay_k;
+        } else if (own_ok) {
+            MaybeDeviceZoneScope("writer_spread_mcast");
+            sp_mcast(own, round0_arg + 1, sp_col_dests);
+            ++sp_k_sent;
+        }
+    };
+    // This core's duties for the rounds below `end` (its reads multicast, its relays) are done.
+    auto sp_idle = [&](uint32_t end) -> bool {
+        return (sp_k_sent == sp_nmine || sp_mine[sp_k_sent] >= end) &&
+               (sp_relay_k == sp_nrelay || sp_relays[sp_relay_k] >= end);
+    };
+    if (sp_nmine > 0) {
+        MaybeDeviceZoneScope("writer_spread_issue");
+        sp_poll();
+    }
+#else
+    auto sp_poll = [&]() {};
 #endif
     // The ring credit of M-block credit_m (see nslice_round), given from inside the weight waits as soon as it is
     // ready: the slab is dead (shared-L1 walk) and compute popped the previous M-block's slots (it pushes and pops the
@@ -1661,6 +1810,7 @@ void kernel_main() {
     };
     // One credit per M-block to column my_col - 1, the only core that writes this core's slots.
     auto poll_credit = [&]() {
+        sp_poll();
         try_finish_bias(false);
         serve_fill();
         if (credit_pending && credit_ready()) {
@@ -1756,6 +1906,22 @@ void kernel_main() {
         const uint32_t round = k_blocks_issued;
         bool column_received = false;
         MaybeDeviceZoneScope("writer_weight_fetch");
+#ifdef NSLICE_SPREAD
+        {
+            // The round lands in its own slot (see the spread stream): push it once flagged.
+            poll_credit();
+            while (!sp_landed(round)) {
+                poll_credit();
+            }
+            cb_reserve_back(cb_weights, slice_weight_tiles);
+            cb_push_back(cb_weights, slice_weight_tiles);
+            if (round == 0) {
+                issue_async_bias();
+            }
+            ++k_blocks_issued;
+            return;
+        }
+#endif
         // Every round, not only inside the waits: once a round lands before its receiver waits for it, a forwarder that
         // never waits gave the credit only at the blocking wait after round depth, ~2.5 us late, and its grid row's
         // ring stalled ~2 us behind it (res4.x).
@@ -2003,10 +2169,17 @@ void kernel_main() {
             while (!credit_ready()) {
                 serve_fill();
                 try_finish_bias(false);
+                sp_poll();
             }
             poll_credit();
         }
         issue_weights_through(num_slices);
+#ifdef NSLICE_SPREAD
+        // This M-block's rounds: every multicast and relay of them out (a later M-block's wait for the next).
+        while (!sp_idle((m_block_idx + 1) * num_slices)) {
+            poll_credit();
+        }
+#endif
         try_finish_bias(true);
         noc_async_writes_flushed();
     };

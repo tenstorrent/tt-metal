@@ -1,0 +1,136 @@
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] rounds 4 depth 4->4 sems 4+4 cb 62080+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] rounds 4 depth 4->4 sems 4+4 cb 60992+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 162624+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] rounds 2 depth 4->4 sems 4+2 cb 160448+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 152064+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] rounds 2 depth 4->4 sems 4+2 cb 149888+0
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] off
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] declined
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 162624+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] rounds 2 depth 4->4 sems 4+2 cb 160448+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] rounds 2 depth 4->4 sems 6+2 cb 135872+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] rounds 2 depth 4->4 sems 6+2 cb 133696+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] rounds 2 depth 4->4 sems 6+2 cb 125312+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] rounds 2 depth 4->4 sems 6+2 cb 123136+0
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] rounds 8 depth 4->8 sems 4+8 cb 135616+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] rounds 8 depth 4->8 sems 4+8 cb 135616+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 127104+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] rounds 8 depth 4->8 sems 4+8 cb 126016+39168
+test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-bias] rounds 2 depth 4->4 sems 4+2 cb 147648+0
+test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-no_bias] rounds 2 depth 4->4 sems 4+2 cb 145600+0
+test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-bias] rounds 2 depth 4->4 sems 4+2 cb 147648+0
+test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-no_bias] rounds 2 depth 4->4 sems 4+2 cb 145600+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[rm_bf16] rounds 2 depth 4->4 sems 4+2 cb 92800+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf16] rounds 2 depth 4->4 sems 4+2 cb 109968+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf8b] rounds 2 depth 4->4 sems 4+2 cb 144016+0
+test_conv2d_3x3_block_sharded_multi_m_block[tile_bf8b_bias_relu] rounds 8 depth 4->8 sems 4+8 cb 158912+78336
+test_conv2d_3x3_block_sharded_multi_m_block[rm_bf16_relu] rounds 12 depth 4->12 sems 4+12 cb 70400+52224
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[rm_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf8b] declined
+test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[tile_bf8b_bias_relu] rounds 4 depth 4->4 sems 4+4 cb 146240+0
+test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[rm_bf16_relu] rounds 6 depth 4->6 sems 4+6 cb 64256+13056
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[rm_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf8b] declined
+test_conv2d_3x3_block_sharded_grid_column_mismatch -
+test_conv2d_3x3_block_sharded_writer_only_scatter[rm_bf16] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded_writer_only_scatter[tile_bf8b] rounds 8 depth 4->8 sems 4+8 cb 127104+39168
+test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf16] rounds 8 depth 4->8 sems 6+8 cb 318864+39168
+test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf8b] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
+test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf16] rounds 8 depth 4->8 sems 6+8 cb 711888+156672
+test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf8b] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf16] rounds 2 depth 4->4 sems 6+2 cb 248528+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf8b] rounds 2 depth 4->4 sems 6+2 cb 210384+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf16] rounds 2 depth 4->4 sems 6+2 cb 167312+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf8b] rounds 2 depth 4->4 sems 6+2 cb 165776+0
+test_conv2d_3x3_block_sharded_weight_page_runs[res4_8x8] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
+test_conv2d_3x3_block_sharded_weight_page_runs[res5_0_8x10] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_weight_page_runs[k2_d8_co96] rounds 2 depth 4->4 sems 6+2 cb 210384+0
+test_conv2d_3x3_block_sharded_host_fill[res4_0_s2] rounds 8 depth 4->8 sems 4+8 cb 299264+39168
+test_conv2d_3x3_block_sharded_host_fill[res5_1] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_host_fill[k2_d8_co96] rounds 2 depth 4->4 sems 4+2 cb 210384+0
+test_conv2d_3x3_block_sharded_host_fill[k2_col_major] rounds 2 depth 4->4 sems 4+2 cb 165776+0
+test_conv2d_3x3_block_sharded_host_fill[aspp3_short_slice] rounds 8 depth 4->8 sems 6+8 cb 808848+117504
+test_conv2d_3x3_block_sharded_round0_reader[res5_0_8x10] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_round0_reader[res4_8x8] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-bias_relu] rounds 4 depth 4->4 sems 4+4 cb 62080+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-rm_bf16-plain] rounds 4 depth 4->4 sems 4+4 cb 60992+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 162624+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf16-plain] rounds 2 depth 4->4 sems 4+2 cb 160448+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 152064+0
+test_conv2d_3x3_block_sharded[H16_W16_Ci64_Co128_p1_s1_d1-tile_bf8b-plain] rounds 2 depth 4->4 sems 4+2 cb 149888+0
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-rm_bf16-plain] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf16-plain] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-bias_relu] off
+test_conv2d_3x3_block_sharded[H32_W32_Ci8_Co32_p1_s2_d1-tile_bf8b-plain] off
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-rm_bf16-plain] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf16-plain] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-bias_relu] declined
+test_conv2d_3x3_block_sharded[H32_W64_Ci64_Co32_p8_s1_d8-tile_bf8b-plain] declined
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-bias_relu] rounds 2 depth 4->4 sems 4+2 cb 162624+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-rm_bf16-plain] rounds 2 depth 4->4 sems 4+2 cb 160448+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-bias_relu] rounds 2 depth 4->4 sems 6+2 cb 135872+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf16-plain] rounds 2 depth 4->4 sems 6+2 cb 133696+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-bias_relu] rounds 2 depth 4->4 sems 6+2 cb 125312+0
+test_conv2d_3x3_block_sharded[H16_W34_Ci48_Co96_p0_s1_d1-tile_bf8b-plain] rounds 2 depth 4->4 sems 6+2 cb 123136+0
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-rm_bf16-plain] rounds 8 depth 4->8 sems 4+8 cb 135616+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf16-plain] rounds 8 depth 4->8 sems 4+8 cb 135616+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-bias_relu] rounds 8 depth 4->8 sems 4+8 cb 127104+39168
+test_conv2d_3x3_block_sharded[H8_W16_Ci256_Co256_p1_s1_d1-tile_bf8b-plain] rounds 8 depth 4->8 sems 4+8 cb 126016+39168
+test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-bias] rounds 2 depth 4->4 sems 4+2 cb 147648+0
+test_conv2d_3x3_block_sharded_relu_after_combine[rm_bf16-no_bias] rounds 2 depth 4->4 sems 4+2 cb 145600+0
+test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-bias] rounds 2 depth 4->4 sems 4+2 cb 147648+0
+test_conv2d_3x3_block_sharded_relu_after_combine[tile_bf16-no_bias] rounds 2 depth 4->4 sems 4+2 cb 145600+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[rm_bf16] rounds 2 depth 4->4 sems 4+2 cb 92800+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf16] rounds 2 depth 4->4 sems 4+2 cb 109968+0
+test_conv2d_3x3_block_sharded_col_major_offset_grid[tile_bf8b] rounds 2 depth 4->4 sems 4+2 cb 144016+0
+test_conv2d_3x3_block_sharded_multi_m_block[tile_bf8b_bias_relu] rounds 8 depth 4->8 sems 4+8 cb 158912+78336
+test_conv2d_3x3_block_sharded_multi_m_block[rm_bf16_relu] rounds 12 depth 4->12 sems 4+12 cb 70400+52224
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[rm_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_row[tile_bf8b] declined
+test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[tile_bf8b_bias_relu] rounds 4 depth 4->4 sems 4+4 cb 146240+0
+test_conv2d_3x3_block_sharded_multi_m_block_extended_rows[rm_bf16_relu] rounds 6 depth 4->6 sems 4+6 cb 64256+13056
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[rm_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf16] declined
+test_conv2d_3x3_block_sharded_column_weight_mcast_ragged_extended_row[tile_bf8b] declined
+test_conv2d_3x3_block_sharded_grid_column_mismatch -
+test_conv2d_3x3_block_sharded_writer_only_scatter[rm_bf16] rounds 8 depth 4->8 sems 4+8 cb 136704+39168
+test_conv2d_3x3_block_sharded_writer_only_scatter[tile_bf8b] rounds 8 depth 4->8 sems 4+8 cb 127104+39168
+test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf16] rounds 8 depth 4->8 sems 6+8 cb 318864+39168
+test_conv2d_3x3_block_sharded_spare_groups[res4_8x8-tile_bf8b] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
+test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf16] rounds 8 depth 4->8 sems 6+8 cb 711888+156672
+test_conv2d_3x3_block_sharded_spare_groups[res5_0_8x10-tile_bf8b] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf16] rounds 2 depth 4->4 sems 6+2 cb 248528+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_d8_co96-tile_bf8b] rounds 2 depth 4->4 sems 6+2 cb 210384+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf16] rounds 2 depth 4->4 sems 6+2 cb 167312+0
+test_conv2d_3x3_block_sharded_spare_groups[k2_col_major-tile_bf8b] rounds 2 depth 4->4 sems 6+2 cb 165776+0
+test_conv2d_3x3_block_sharded_weight_page_runs[res4_8x8] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
+test_conv2d_3x3_block_sharded_weight_page_runs[res5_0_8x10] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_weight_page_runs[k2_d8_co96] rounds 2 depth 4->4 sems 6+2 cb 210384+0
+test_conv2d_3x3_block_sharded_host_fill[res4_0_s2] rounds 8 depth 4->8 sems 4+8 cb 299264+39168
+test_conv2d_3x3_block_sharded_host_fill[res5_1] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_host_fill[k2_d8_co96] rounds 2 depth 4->4 sems 4+2 cb 210384+0
+test_conv2d_3x3_block_sharded_host_fill[k2_col_major] rounds 2 depth 4->4 sems 4+2 cb 165776+0
+test_conv2d_3x3_block_sharded_host_fill[aspp3_short_slice] rounds 8 depth 4->8 sems 6+8 cb 808848+117504
+test_conv2d_3x3_block_sharded_round0_reader[res5_0_8x10] rounds 8 depth 4->8 sems 6+8 cb 636368+156672
+test_conv2d_3x3_block_sharded_round0_reader[res4_8x8] rounds 8 depth 4->8 sems 6+8 cb 315920+39168
