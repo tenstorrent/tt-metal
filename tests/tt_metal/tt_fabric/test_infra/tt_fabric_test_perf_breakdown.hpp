@@ -4,9 +4,8 @@
 
 #pragma once
 
-// Opt-in cost breakdown for the test infra itself (not the fabric under test). Enabled with
-// TT_FABRIC_TEST_PERF_BREAKDOWN=1. When on:
-//  - every per-test host phase is timed and the blocking per-core host writes are counted,
+// Opt-in cost breakdown for the test infra itself (not the fabric under test), with TT_FABRIC_TEST_PERF_BREAKDOWN=1:
+//  - every per-test host phase is timed and the per-core host writes are counted,
 //  - sender/receiver kernels are built with FABRIC_TEST_PERF_BREAKDOWN, which makes them
 //    accumulate cycle counters into words [PERF_BREAKDOWN_BASE_WORD_INDEX, +16) of the result
 //    buffer (layout must match tt_fabric_test_kernels_utils.hpp),
@@ -27,6 +26,79 @@
 #include <tt-logger/tt-logger.hpp>
 
 namespace tt::tt_fabric::fabric_tests::perf_breakdown {
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Knobs: every environment variable the test infra reads, each TT_FABRIC_TEST_<name>, read once per process. The
+// traffic and its checks are the same with any of them on, except CORRUPT_PAYLOAD.
+//
+// Profiling
+//   PERF_BREAKDOWN=1      Per-test host phase times and sender/receiver device cycle counters: one "PERF_BD" line per
+//                         test and a run summary (read by handoff/scripts/device_time_by_*.py and log_phases.py).
+// Profiling detail, each only with PERF_BREAKDOWN=1
+//   PERF_HOST_DETAIL=1    Host sub-phases of create_kernels / enqueue_workload, per-device build times and workload
+//                         sizes. Prepares each workload before its enqueue to time the two apart, so host times with it
+//                         on are not comparable to host times with it off.
+//   PERF_PER_CORE=1       One PERF_CORE line per sender core: its loop, waits and the destinations of its configs.
+//   PERF_SEND_DETAIL=1    Sender per-packet step timing, in place of setup / close / mux termination.
+//   PERF_HOT_DETAIL=<p>   Hot-path sender step timing on one send in every p (a power of two; 0 = off).
+//   PERF_SCHED=1          Hot-path sender scheduling counters and per-config finish times.
+// Other
+//   ROUTER_TELEMETRY=1    Turns on the fabric routers' bandwidth counters and logs GB/s per ethernet link after every
+//                         test, with validation still on (about 5% more device time).
+//   CORRUPT_PAYLOAD=<m>   Verifier canary: senders corrupt one word of one packet per config (1 mid-payload, 2 the
+//                         second-to-last word, 3 the third-to-last; corrupt_payload_canary in the kernels), so the run
+//                         must fail with a data mismatch.
+// ---------------------------------------------------------------------------------------------------------------------
+
+inline bool read_flag_knob(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr && v[0] != '\0' && v[0] != '0';
+}
+
+inline uint32_t read_uint_knob(const char* name) {
+    const char* v = std::getenv(name);
+    return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
+}
+
+inline bool enabled() {
+    static const bool on = read_flag_knob("TT_FABRIC_TEST_PERF_BREAKDOWN");
+    return on;
+}
+
+inline bool host_detail() {
+    static const bool on = enabled() && read_flag_knob("TT_FABRIC_TEST_PERF_HOST_DETAIL");
+    return on;
+}
+
+inline bool perf_per_core() {
+    static const bool on = enabled() && read_flag_knob("TT_FABRIC_TEST_PERF_PER_CORE");
+    return on;
+}
+
+inline bool send_detail() {
+    static const bool on = enabled() && read_flag_knob("TT_FABRIC_TEST_PERF_SEND_DETAIL");
+    return on;
+}
+
+inline uint32_t hot_detail_period() {
+    static const uint32_t period = enabled() ? read_uint_knob("TT_FABRIC_TEST_PERF_HOT_DETAIL") : 0u;
+    return period;
+}
+
+inline bool perf_sched() {
+    static const bool on = enabled() && read_flag_knob("TT_FABRIC_TEST_PERF_SCHED");
+    return on;
+}
+
+inline bool router_telemetry() {
+    static const bool on = read_flag_knob("TT_FABRIC_TEST_ROUTER_TELEMETRY");
+    return on;
+}
+
+inline uint32_t corrupt_payload() {
+    static const uint32_t mode = std::min<uint32_t>(read_uint_knob("TT_FABRIC_TEST_CORRUPT_PAYLOAD"), 3);
+    return mode;
+}
 
 inline constexpr uint32_t PERF_BREAKDOWN_BASE_WORD_INDEX = 16;
 inline constexpr uint32_t NUM_SLOTS = 8;
@@ -56,18 +128,15 @@ enum SenderDetailSlot : uint32_t {
 // result buffer: PERF_SCHED_NUM_COUNTERS u64 counters, then PERF_SCHED_MAX_CONFIGS words of per-config finish cycles
 // (from loop start) and as many of per-config credit misses. Layout must match tt_fabric_test_kernels_utils.hpp.
 inline constexpr uint32_t PERF_SCHED_BASE_WORD_INDEX = 512;
-inline constexpr uint32_t PERF_SCHED_NUM_COUNTERS = 8;
+inline constexpr uint32_t PERF_SCHED_NUM_COUNTERS = 5;
 inline constexpr uint32_t PERF_SCHED_MAX_CONFIGS = 160;
 
 enum SenderSchedCounter : uint32_t {
     SC_PACKETS = 0,        // packets sent
-    SC_IDLE_CYCLES = 1,    // loop passes that sent nothing, plus waits on one connection in the rotation loop
-    SC_RELOADS = 2,        // free-slot re-reads of a connection
-    SC_RELOADS_FULL = 3,   // re-reads that found the connection full
-    SC_CREDIT_MISSES = 4,  // send attempts without receiver credits
-    SC_PASSES = 5,         // passes over all configs / connections
-    SC_IDLE_PASSES = 6,    // passes that sent nothing
-    SC_BUDGET_SUM = 7,     // free slots found by the re-reads
+    SC_IDLE_CYCLES = 1,    // loop passes that sent nothing
+    SC_CREDIT_MISSES = 2,  // send attempts without receiver credits
+    SC_PASSES = 3,         // passes over all configs
+    SC_IDLE_PASSES = 4,    // passes that sent nothing
 };
 
 // Sampled hot-sender step record (TT_FABRIC_TEST_PERF_HOT_DETAIL=<period>), from word
@@ -110,305 +179,6 @@ enum ReceiverSlot : uint32_t {
     R_MUX_TERM = 7,     // mux termination handshake
 };
 
-inline bool enabled() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_BREAKDOWN");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: issue the per-core zero / local-args writes non-blocking and finish once per test
-// (TT_FABRIC_TEST_BATCHED_HOST_WRITES=1) instead of one blocking round trip per write.
-inline bool batched_host_writes() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_BATCHED_HOST_WRITES");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: build sender/receiver kernels with unrolled payload fill/validate
-// (TT_FABRIC_TEST_FAST_PATTERN=1 -> FABRIC_TEST_FAST_PATTERN).
-inline bool fast_pattern() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_FAST_PATTERN");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: generate sender payloads on the sender core's compute engine (TT_FABRIC_TEST_SFPU_PAYLOAD=1).
-inline bool sfpu_payload() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SFPU_PAYLOAD");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: verify receiver payloads on the receiver core's compute engine (TT_FABRIC_TEST_SFPU_VERIFY=1).
-inline bool sfpu_verify() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SFPU_VERIFY");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Each receiver config's ring fills the receiver core's L1 up to the compute verifier's control pages
-// (TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1=1), instead of 1 MB split over max_configs_per_core. Deeper rings = more
-// credits per flow.
-inline bool receiver_rings_fill_l1() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_RECEIVER_RINGS_FILL_L1");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Receivers return credits in batches of ring slots / TT_FABRIC_TEST_CREDIT_BATCH_DIVISOR (default 4, at least 1 credit
-// per batch). A larger divisor returns credits sooner, in more credit packets.
-inline uint32_t credit_batch_divisor() {
-    static const uint32_t divisor = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_CREDIT_BATCH_DIVISOR");
-        const uint32_t d = v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 4;
-        return std::max<uint32_t>(d, 1);
-    }();
-    return divisor;
-}
-
-// Reads the fabric routers' bandwidth counters after every test and logs them per ethernet link
-// (TT_FABRIC_TEST_ROUTER_TELEMETRY=1), with validation still on. Turns on the routers' counters itself.
-inline bool router_telemetry() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_ROUTER_TELEMETRY");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// How many of a receiver core's configs (the first ones) its compute engine verifies
-// (TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS, default 8; capped at SFPU_VERIFY_MAX_CONFIGS by the caller).
-inline uint32_t sfpu_verify_max_configs() {
-    static const uint32_t max_configs = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SFPU_VERIFY_MAX_CONFIGS");
-        return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 8u;
-    }();
-    return max_configs;
-}
-
-// Packets a receiver may have outstanding with its compute verifier (TT_FABRIC_TEST_SFPU_VERIFY_DEPTH, default 4;
-// 1 waits for each verdict before polling the next packet).
-inline uint32_t sfpu_verify_depth() {
-    static const uint32_t depth = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SFPU_VERIFY_DEPTH");
-        const uint32_t d = v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 4;
-        return std::clamp<uint32_t>(d, 1, 16);
-    }();
-    return depth;
-}
-
-// Times a link mux services its full-size channels per sweep of its header-only channels
-// (TT_FABRIC_TEST_MUX_FULL_SIZE_ITERS, default 1 = the mux default).
-inline uint32_t mux_full_size_iters() {
-    static const uint32_t iters = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_MUX_FULL_SIZE_ITERS");
-        return v != nullptr ? std::max<uint32_t>(1, static_cast<uint32_t>(std::strtoul(v, nullptr, 10))) : 1u;
-    }();
-    return iters;
-}
-
-// Prototype: senders keep connections and per-config send state in local memory (TT_FABRIC_TEST_SENDER_HOT=1).
-inline bool sender_hot_state() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_HOT");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: hot-state senders cache each connection's free slots and re-read them only once used up
-// (TT_FABRIC_TEST_SENDER_SLOT_CACHE=1, with TT_FABRIC_TEST_SENDER_HOT=1; implied by TT_FABRIC_TEST_SENDER_SKIP).
-inline bool sender_slot_cache() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_SLOT_CACHE");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: hot-state senders flush their NOC writes only before a header or payload page is reused, return SFPU
-// pages to the generator in batches and count ready pages instead of polling the CB per packet
-// (TT_FABRIC_TEST_SENDER_BATCH=1, with TT_FABRIC_TEST_SENDER_HOT=1).
-inline bool sender_batch() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_BATCH");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: hot-state senders write payload, header and slot credit on three command buffers kept programmed for the
-// current connection (TT_FABRIC_TEST_SENDER_CMDBUFS=1, with TT_FABRIC_TEST_SENDER_HOT=1).
-inline bool sender_cmdbufs() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_CMDBUFS");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: hot-state senders with TT_FABRIC_TEST_SENDER_CMDBUFS return the slot credits of consecutive sends on one
-// connection in one write (TT_FABRIC_TEST_SENDER_CREDIT_BATCH=1, needs TT_FABRIC_TEST_SENDER_SLOT_CACHE=1).
-inline bool sender_credit_batch() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_CREDIT_BATCH");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: the order of each sender's configs (TT_FABRIC_TEST_SENDER_CONN_ORDER): 1 = round-robin over its
-// connections, so consecutive sends go to different connections; 2 = grouped by connection, so they mostly share one.
-inline uint32_t sender_conn_order() {
-    static const uint32_t order = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_CONN_ORDER");
-        return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
-    }();
-    return order;
-}
-
-// Prototype: hot-state senders pass over the configs of a connection found full this round instead of waiting on
-// it (TT_FABRIC_TEST_SENDER_SKIP=1, with TT_FABRIC_TEST_SENDER_HOT=1; not for SFPU-generated payloads).
-inline bool sender_skip() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_SKIP");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Sender per-packet step timing in place of setup/close/mux termination (TT_FABRIC_TEST_PERF_SEND_DETAIL=1).
-inline bool send_detail() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_SEND_DETAIL");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Hot-state sender step timing on one send in every <period> (TT_FABRIC_TEST_PERF_HOT_DETAIL=<period>, a power of
-// two; 0 = off).
-inline uint32_t hot_detail_period() {
-    static const uint32_t period = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_HOT_DETAIL");
-        return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
-    }();
-    return period;
-}
-
-// Prototype: one kernel per device for all cores whose kernels are identical (source, processor, NOC, compile args,
-// defines), with per-core runtime args, instead of one kernel per core (TT_FABRIC_TEST_SHARED_KERNELS=1).
-inline bool shared_kernels() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SHARED_KERNELS");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Prototype: build the per-device programs on parallel threads; host writes they issue are deferred and flushed in
-// device order afterwards (TT_FABRIC_TEST_PARALLEL_BUILD=1).
-inline bool parallel_build() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PARALLEL_BUILD");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Host-side detail: sub-phases of create_kernels / enqueue_workload, per-device build times and workload sizes
-// (TT_FABRIC_TEST_PERF_HOST_DETAIL=1, with TT_FABRIC_TEST_PERF_BREAKDOWN=1). Splits enqueue by preparing the workload
-// (compile + finalize) before the enqueue.
-inline bool host_detail() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_HOST_DETAIL");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Hot-state sender scheduling counters and per-config finish times (TT_FABRIC_TEST_PERF_SCHED=1).
-inline bool perf_sched() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_SCHED");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// One PERF_CORE line per sender core: its loop, waits and the destinations of its configs
-// (TT_FABRIC_TEST_PERF_PER_CORE=1, with TT_FABRIC_TEST_PERF_BREAKDOWN=1). Shows which cores set the device time.
-inline bool perf_per_core() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_PERF_PER_CORE");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Diagnostic: the rotating sender waits on a full connection instead of passing it over
-// (TT_FABRIC_TEST_SENDER_ROT_WAIT=1, with TT_FABRIC_TEST_SENDER_SKIP=1).
-inline bool sender_rot_wait() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_ROT_WAIT");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Diagnostic: packets the rotating sender sends per connection per turn (TT_FABRIC_TEST_SENDER_ROT_BURST, 0 = all
-// free slots).
-inline uint32_t sender_rot_burst() {
-    static const uint32_t burst = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_SENDER_ROT_BURST");
-        return v != nullptr ? static_cast<uint32_t>(std::strtoul(v, nullptr, 10)) : 0u;
-    }();
-    return burst;
-}
-
-// Diagnostic: atomic_inc packets ask the router not to flush its receive channel's writes before the increment
-// (TT_FABRIC_TEST_ATOMIC_INC_NO_FLUSH=1; the fabric header default is to flush).
-inline bool atomic_inc_no_flush() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_ATOMIC_INC_NO_FLUSH");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Diagnostic: receiver credit returns ask the router not to flush before the increment
-// (TT_FABRIC_TEST_CREDIT_RETURN_NO_FLUSH=1).
-inline bool credit_return_no_flush() {
-    static const bool on = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_CREDIT_RETURN_NO_FLUSH");
-        return v != nullptr && v[0] != '\0' && v[0] != '0';
-    }();
-    return on;
-}
-
-// Verifier canary: senders corrupt one word of one packet per config (TT_FABRIC_TEST_CORRUPT_PAYLOAD=1 for a word
-// mid-payload, 2 for the second-to-last word, 3 for the third-to-last; corrupt_payload_canary in the kernels); 0 when
-// off.
-inline uint32_t corrupt_payload() {
-    static const uint32_t mode = [] {
-        const char* v = std::getenv("TT_FABRIC_TEST_CORRUPT_PAYLOAD");
-        return v != nullptr ? std::min<uint32_t>(static_cast<uint32_t>(std::strtoul(v, nullptr, 10)), 3) : 0u;
-    }();
-    return mode;
-}
-
 using Clock = std::chrono::steady_clock;
 
 inline double ms_since(Clock::time_point t0) {
@@ -435,7 +205,7 @@ public:
     }
 
     // ---- host-side ----
-    // The add_* methods may be called from the parallel program build (TT_FABRIC_TEST_PARALLEL_BUILD).
+    // The add_* methods may be called from the per-device build threads (TestContext::compile_programs).
     void add_phase(const std::string& phase, double ms) {
         std::lock_guard<std::mutex> lock(mutex_);
         test_phases_[phase] += ms;
@@ -724,11 +494,10 @@ private:
     void log_sched(const std::string& test_name) const {
         const double cyc_per_us = aiclk_mhz_ > 0 ? aiclk_mhz_ : 1.0;
         const auto& c = sched_.counters;
-        const double reloads_with_slots = c[SC_RELOADS].sum - c[SC_RELOADS_FULL].sum;
         log_info(
             tt::LogTest,
             "PERF_SCHED test={} snd cores={} packets={:.0f} busy_ns/pkt={:.0f}/{:.0f} wait_us={:.0f}/{:.0f} "
-            "passes={:.0f} idle_passes={:.0f} reloads={:.0f} full={:.0f} slots/reload={:.1f} credit_miss={:.0f}/{:.0f} "
+            "passes={:.0f} idle_passes={:.0f} credit_miss={:.0f}/{:.0f} "
             "finish_spread_us={:.0f}/{:.0f}",
             test_name,
             sched_.cores,
@@ -739,9 +508,6 @@ private:
             sched_.wait_cycles.max / cyc_per_us,
             c[SC_PASSES].avg(),
             c[SC_IDLE_PASSES].avg(),
-            c[SC_RELOADS].avg(),
-            c[SC_RELOADS_FULL].avg(),
-            reloads_with_slots > 0 ? c[SC_BUDGET_SUM].sum / reloads_with_slots : 0.0,
             c[SC_CREDIT_MISSES].avg(),
             c[SC_CREDIT_MISSES].max,
             sched_.finish_spread.avg() / cyc_per_us,
@@ -882,7 +648,7 @@ private:
 // Times a scope as a nested "sub_*" phase, only with TT_FABRIC_TEST_PERF_HOST_DETAIL.
 class ScopedDetail {
 public:
-    explicit ScopedDetail(const char* name) : name_(enabled() && host_detail() ? name : nullptr) {
+    explicit ScopedDetail(const char* name) : name_(host_detail() ? name : nullptr) {
         if (name_ != nullptr) {
             t0_ = Clock::now();
         }

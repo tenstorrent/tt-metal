@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <memory>
+#include <optional>
 #include <tuple>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/program.hpp>
@@ -204,9 +205,14 @@ private:
     std::set<tt::tt_metal::CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
     tt::tt_metal::CoreCoord global_termination_master_;       // First mux client (in deterministic order)
 
-    static constexpr uint32_t MAX_FULL_SIZE_CHANNELS = 8;
-    static constexpr uint32_t MAX_HEADER_ONLY_CHANNELS = 64;
+    // Must match the clients' FabricConnectionArray::NUM_BUFFERS (kernels/tt_fabric_test_kernels_utils.hpp), which sets
+    // the buffer count of their mux connections.
     static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
+
+    // Times a mux services its full-size (sender data) channels per pass over its header-only (receiver credit)
+    // channels; the mux default is 1. A mux in these tests mostly serves receivers returning credits, so at 1 a sender
+    // gets one packet through per pass over every credit channel.
+    static constexpr uint32_t MUX_FULL_SIZE_CHANNEL_ITERS = 8;
 
     // Helper method to assign and validate mux channels for a connection
     void assign_and_validate_channels(Connection& conn, const ConnectionKey& key);
@@ -314,25 +320,28 @@ public:
         tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* config, ConnectionKey connection_key, FabricNodeId next_hop_dst);
     void create_kernels();
 
-    // Latency test kernel creation (called directly by TestContext)
-    // Uses static memory map addresses for semaphores (same as bandwidth tests)
-    void create_latency_sender_kernel(
-        tt::tt_metal::CoreCoord core,
-        FabricNodeId dest_node,
-        uint32_t payload_size,
-        uint32_t num_samples,
-        NocSendType noc_send_type,
-        tt::tt_metal::CoreCoord responder_virtual_core);
-
-    void create_latency_responder_kernel(
-        tt::tt_metal::CoreCoord core,
-        FabricNodeId sender_node,
-        uint32_t payload_size,
-        uint32_t num_samples,
-        NocSendType noc_send_type,
-        uint32_t sender_send_buffer_address,
-        uint32_t sender_receive_buffer_address,
-        tt::tt_metal::CoreCoord sender_virtual_core);
+    // Latency tests: what this chip's latency kernel needs, all known before the build (from the test config, the
+    // fixture's core coordinates and the static sender memory map).
+    struct LatencySenderSetup {
+        tt::tt_metal::CoreCoord core;
+        FabricNodeId responder_node;
+        uint32_t payload_size = 0;
+        uint32_t num_samples = 0;
+        NocSendType noc_send_type{};
+        tt::tt_metal::CoreCoord responder_virtual_core;
+    };
+    struct LatencyResponderSetup {
+        tt::tt_metal::CoreCoord core;
+        FabricNodeId sender_node;
+        uint32_t payload_size = 0;
+        uint32_t num_samples = 0;
+        NocSendType noc_send_type{};
+        uint32_t sender_send_buffer_address = 0;
+        uint32_t sender_receive_buffer_address = 0;
+        tt::tt_metal::CoreCoord sender_virtual_core;
+    };
+    void set_latency_sender(const LatencySenderSetup& setup) { latency_sender_ = setup; }
+    void set_latency_responder(const LatencyResponderSetup& setup) { latency_responder_ = setup; }
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
@@ -409,8 +418,8 @@ public:
 
     std::shared_ptr<IDeviceInfoProvider> get_device_info_provider() const { return device_info_provider_; }
 
-    // Shared kernels (TT_FABRIC_TEST_SHARED_KERNELS): while create_kernels() runs, kernels are collected per key and
-    // created at its end, one kernel per key over all of the key's cores, with each core's own runtime args.
+    // Shared kernels: kernels are collected per key and created by create_shared_kernels(), one kernel per key over all
+    // of the key's cores, with each core's own runtime args.
     struct SharedKernelKey {
         std::string src;
         bool compute = false;
@@ -422,10 +431,9 @@ public:
                    std::tie(other.src, other.compute, other.noc, other.ct_args, other.defines);
         }
     };
-    bool collecting_shared_kernels() const { return collecting_shared_kernels_; }
 
-    // Host writes from kernel setup (local args, zeroing): issued right away, or recorded while the programs are built
-    // in parallel (TT_FABRIC_TEST_PARALLEL_BUILD) and issued in order by flush_deferred_host_writes().
+    // Host writes from kernel setup (local args, zeroing): recorded while the programs are built on parallel threads and
+    // issued in device order by flush_deferred_host_writes(), or issued right away when the build is serial.
     void set_defer_host_writes(bool defer) { defer_host_writes_ = defer; }
     void write_local_args(
         const MeshCoordinate& device_coord,
@@ -438,7 +446,7 @@ public:
     void add_shared_kernel_core(SharedKernelKey key, tt::tt_metal::CoreCoord core, std::vector<uint32_t> rt_args);
 
     // The traffic configs of the kernels last created on this device, and how many of them take the core's compute
-    // engine (TT_FABRIC_TEST_SFPU_PAYLOAD / TT_FABRIC_TEST_SFPU_VERIFY) rather than the sender or receiver.
+    // engine (payload generation and verification) rather than the sender or receiver.
     struct SfpuCoverage {
         uint32_t sender_configs = 0;
         uint32_t generated = 0;
@@ -447,11 +455,31 @@ public:
     };
     const SfpuCoverage& get_sfpu_coverage() const { return sfpu_coverage_; }
 
-    // Latency buffer address getters (public so TestContext can query them)
-    size_t get_latency_send_buffer_address() const;
-    size_t get_latency_receive_buffer_address(uint32_t payload_size) const;
+    // A latency sender's send and receive buffers, after its result buffer.
+    static size_t get_latency_send_buffer_address(const SenderMemoryMap& sender_memory_map);
+    static size_t get_latency_receive_buffer_address(const SenderMemoryMap& sender_memory_map, uint32_t payload_size);
 
 private:
+    // Latency test kernels, created by create_kernels() from latency_sender_ / latency_responder_.
+    // Uses static memory map addresses for semaphores (same as bandwidth tests)
+    void create_latency_sender_kernel(
+        tt::tt_metal::CoreCoord core,
+        FabricNodeId dest_node,
+        uint32_t payload_size,
+        uint32_t num_samples,
+        NocSendType noc_send_type,
+        tt::tt_metal::CoreCoord responder_virtual_core);
+
+    void create_latency_responder_kernel(
+        tt::tt_metal::CoreCoord core,
+        FabricNodeId sender_node,
+        uint32_t payload_size,
+        uint32_t num_samples,
+        NocSendType noc_send_type,
+        uint32_t sender_send_buffer_address,
+        uint32_t sender_receive_buffer_address,
+        tt::tt_metal::CoreCoord sender_virtual_core);
+
     void add_worker(TestWorkerType worker_type, tt::tt_metal::CoreCoord logical_core);
     void create_sender_kernels();
     // Sets up the sender core's compute engine to generate the payloads of the configs flagged in sfpu_configs (see
@@ -504,7 +532,8 @@ private:
     tt::tt_metal::CoreCoord sync_core_coord_;
     bool progress_monitoring_enabled_ = false;
 
-    bool collecting_shared_kernels_ = false;
+    std::optional<LatencySenderSetup> latency_sender_;
+    std::optional<LatencyResponderSetup> latency_responder_;
 
     struct DeferredHostWrite {
         MeshCoordinate device_coord;

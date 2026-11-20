@@ -23,85 +23,6 @@ LatencyResultsManager::LatencyResultsManager(TestFixture& fixture, SenderMemoryM
     performance_t = PerformanceMetric::Latency;
 }
 
-void LatencyResultsManager::create_latency_kernels_for_device(
-    TestDevice& test_device, std::unordered_map<MeshCoordinate, TestDevice>& test_devices) {
-    const auto& senders = test_device.get_senders();
-    const auto& receivers = test_device.get_receivers();
-
-    bool has_sender = !senders.empty();
-    bool has_receiver = !receivers.empty();
-
-    if (has_sender) {
-        TT_FATAL(senders.size() == 1, "Latency test should have exactly one sender per device");
-        const auto& [sender_core, sender_worker] = *senders.begin();
-        const auto& sender_configs = sender_worker.get_configs();
-        TT_FATAL(!sender_configs.empty(), "Latency sender should have at least one config");
-
-        const auto& sender_config = sender_configs[0].first;
-        FabricNodeId responder_device_id = sender_config.dst_node_ids[0];
-
-        TestDevice* responder_device = nullptr;
-        for (auto& [responder_coord, responder_test_device] : test_devices) {
-            if (responder_test_device.get_node_id() == responder_device_id) {
-                responder_device = &responder_test_device;
-                (void)responder_coord;
-                break;
-            }
-        }
-        TT_FATAL(
-            responder_device != nullptr,
-            "Could not find responder device with node_id {}",
-            responder_device_id.chip_id);
-
-        CoreCoord responder_virtual_core =
-            responder_device->get_device_info_provider()->get_virtual_core_from_logical_core(
-                sender_config.dst_logical_core);
-
-        test_device.create_latency_sender_kernel(
-            sender_core,
-            responder_device_id,
-            sender_config.parameters.payload_size_bytes,
-            sender_config.parameters.num_packets,
-            sender_config.parameters.noc_send_type.type,
-            responder_virtual_core);
-    } else if (has_receiver) {
-        TT_FATAL(receivers.size() == 1, "Latency test should have exactly one receiver per device");
-        const auto& [receiver_core, receiver_worker] = *receivers.begin();
-
-        auto sender_location = get_latency_sender_location(test_devices);
-        TestDevice* sender_device = sender_location.device;
-        CoreCoord sender_core = sender_location.core;
-
-        const auto& sender_senders = sender_device->get_senders();
-        const auto& sender_worker = sender_senders.at(sender_core);
-        const auto& sender_configs = sender_worker.get_configs();
-        const auto& sender_config = sender_configs[0].first;
-
-        uint32_t payload_size = sender_config.parameters.payload_size_bytes;
-        uint32_t num_samples = sender_config.parameters.num_packets;
-        NocSendType noc_send_type = sender_config.parameters.noc_send_type.type;
-        FabricNodeId sender_device_id = sender_config.src_node_id;
-
-        uint32_t sender_send_buffer_address = sender_device->get_latency_send_buffer_address();
-        uint32_t sender_receive_buffer_address = sender_device->get_latency_receive_buffer_address(payload_size);
-
-        CoreCoord sender_virtual_core =
-            sender_device->get_device_info_provider()->get_virtual_core_from_logical_core(sender_core);
-
-        test_device.create_latency_responder_kernel(
-            receiver_core,
-            sender_device_id,
-            payload_size,
-            num_samples,
-            noc_send_type,
-            sender_send_buffer_address,
-            sender_receive_buffer_address,
-            sender_virtual_core);
-    } else {
-        test_device.create_kernels();
-    }
-}
-
 void LatencyResultsManager::setup_latency_test_mode(const TestConfig& config) {
     TT_FATAL(
         config.performance_test_mode == PerformanceTestMode::LATENCY,
@@ -193,6 +114,13 @@ void LatencyResultsManager::setup_latency_test_workers(
         // Set latency sender kernel
         sender_test_device.set_sender_kernel_src(
             sender_core, "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_sender.cpp");
+        sender_test_device.set_latency_sender(TestDevice::LatencySenderSetup{
+            .core = sender_core,
+            .responder_node = receiver_device_id,
+            .payload_size = pattern.size.value(),
+            .num_samples = pattern.num_packets.value(),
+            .noc_send_type = pattern.ntype.value().type,
+            .responder_virtual_core = fixture_.get_virtual_core_from_logical_core(receiver_core)});
 
         log_debug(
             tt::LogTest, "Created latency sender worker on device {} core {}", sender_device_id.chip_id, sender_core);
@@ -217,6 +145,20 @@ void LatencyResultsManager::setup_latency_test_workers(
         // Set latency responder kernel
         receiver_test_device.set_receiver_kernel_src(
             receiver_core, "tests/tt_metal/tt_fabric/test_infra/kernels/tt_fabric_latency_responder.cpp");
+        // The sender's buffer addresses come from the sender memory map, which is the same on every chip, so the
+        // sender's chip need not be local to this host.
+        const uint32_t payload_size = pattern.size.value();
+        receiver_test_device.set_latency_responder(TestDevice::LatencyResponderSetup{
+            .core = receiver_core,
+            .sender_node = sender_device_id,
+            .payload_size = payload_size,
+            .num_samples = pattern.num_packets.value(),
+            .noc_send_type = pattern.ntype.value().type,
+            .sender_send_buffer_address =
+                static_cast<uint32_t>(TestDevice::get_latency_send_buffer_address(sender_memory_map_)),
+            .sender_receive_buffer_address =
+                static_cast<uint32_t>(TestDevice::get_latency_receive_buffer_address(sender_memory_map_, payload_size)),
+            .sender_virtual_core = fixture_.get_virtual_core_from_logical_core(sender_core)});
 
         log_debug(
             tt::LogTest,

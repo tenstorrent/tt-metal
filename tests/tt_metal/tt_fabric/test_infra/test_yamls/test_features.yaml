@@ -8,7 +8,7 @@
 # are allocated across all tests in this file.
 # ======================================================================================
 allocation_policies:
-  # This sets the payload chunk size for all workers, sender and receiver.
+  # Bytes of each receive config's ring. Without it, the rings split the receiver core's L1 evenly.
   default_payload_chunk_size: 4096
   sender:
     # Policy can be 'RoundRobin' or 'ExhaustFirst'.

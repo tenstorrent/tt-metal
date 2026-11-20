@@ -187,6 +187,8 @@ struct SenderConfig {
     std::vector<TrafficPatternConfig> patterns;
     uint32_t link_id = 0;          // Link ID for multi-link tests
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    // Number of sender cores this sender's flows were split across, 1 if not split (split_senders_to_fit_core_limits).
+    uint32_t split_into = 1;
     bool use_vc2() const { return vc_id.value_or(0) == 2; }
 };
 
@@ -335,8 +337,6 @@ constexpr uint32_t DEFAULT_MAX_SENDER_CONFIGS_PER_CORE = 1;
 constexpr uint32_t DEFAULT_MAX_RECEIVER_CONFIGS_PER_CORE = 2;
 constexpr uint32_t DEFAULT_SENDER_INITIAL_POOL_SIZE = 1;
 constexpr uint32_t DEFAULT_SENDER_POOL_REFILL_SIZE = 1;
-constexpr uint32_t DEFAULT_PAYLOAD_CHUNK_SIZE_BYTES = 0x80000;  // 512KB
-constexpr uint32_t DEFAULT_RECEIVER_L1_SIZE = 0x100000;
 }  // namespace detail
 
 enum class CoreType {
@@ -385,7 +385,11 @@ struct CoreAllocationConfig {
 struct AllocatorPolicies {
     CoreAllocationConfig sender_config;
     CoreAllocationConfig receiver_config;
-    uint32_t default_payload_chunk_size;
+    // Bytes of each receive config's ring. Unless the yaml sets it, the test context sizes the rings to fill the
+    // receiver core's L1 (TestContext::size_receiver_rings_to_fill_l1).
+    uint32_t default_payload_chunk_size = 0;
+    // The yaml set default_payload_chunk_size, so receive rings keep that size instead of filling the receiver's L1.
+    bool payload_chunk_size_from_yaml = false;
 
     AllocatorPolicies(
         std::optional<CoreAllocationConfig> sender_config = std::nullopt,
@@ -405,11 +409,7 @@ struct AllocatorPolicies {
 
         if (default_payload_chunk_size.has_value()) {
             this->default_payload_chunk_size = default_payload_chunk_size.value();
-        } else {
-            // derive a reasonable default based on the number of configs served per receiver core
-            auto payload_chunk_size = detail::DEFAULT_RECEIVER_L1_SIZE / this->receiver_config.max_configs_per_core;
-            // since L1 alignment is not available here, align to 64 bytes as a safe minimum
-            this->default_payload_chunk_size = tt::align(payload_chunk_size, 64);
+            this->payload_chunk_size_from_yaml = true;
         }
     }
 };

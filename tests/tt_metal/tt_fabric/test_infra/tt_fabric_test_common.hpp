@@ -35,6 +35,7 @@
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
 #include "tt_fabric_test_perf_breakdown.hpp"
+#include "kernels/tt_fabric_test_pattern.hpp"
 #include "tt_metal/distributed/fd_mesh_command_queue.hpp"
 #include "tt_metal/distributed/mesh_device_impl.hpp"
 
@@ -63,6 +64,42 @@ using BufferShardingArgs = tt::tt_metal::BufferShardingArgs;
 using Topology = tt::tt_fabric::Topology;
 
 namespace tt::tt_fabric::fabric_tests {
+
+// The end of Tensix L1: the end of the HAL's DEFAULT_UNRESERVED region, which TestFixture's unreserved base and size
+// describe.
+inline uint32_t tensix_l1_end() {
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    return hal.get_dev_addr(
+               tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED) +
+           hal.get_dev_size(
+               tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+}
+
+// Base of a compute verifier's request and flag pages: the top of real Tensix L1, above every receive ring. Each holds
+// as many pages as the receiver may have outstanding, so the verifier can always post a verdict for every request.
+inline uint32_t sfpu_verify_control_base() {
+    return (tensix_l1_end() - SFPU_VERIFY_DEPTH * (SFPU_TILE_BYTES + SFPU_VERIFY_REQ_PAGE_BYTES)) & ~uint32_t{63};
+}
+
+// How many clients (full-size and header-only channels together) one fabric mux can serve. The mux kernel keeps each
+// channel's state in arrays on its BRISC stack: its kernel_main frame is 208 B plus 96 B per channel, of either type.
+// - Wormhole (4 KB local memory) leaves ~2048 B for kernel_main and its callees, so 18 channels keeps a margin.
+// - Blackhole (8 KB local memory, ~3.2 KB of it firmware data) leaves ~4.6 KB, so 42 keeps a margin.
+// Either way this stays below the 64 stream registers (each channel's credits stream ID is its channel index).
+// An overflow builds fine and corrupts memory at runtime, so re-measure when the mux's per-channel state changes:
+// build the mux at a few channel counts and read kernel_main's frame from the `addi sp,sp,-N` lines of
+// `objdump -d brisc.elf` (a frame over 2 KB takes two).
+inline uint32_t get_max_mux_channels() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0 ? 18 : 42;
+}
+
+// Most traffic configs a sender core runs from its hot path on this arch (HOT_STATE_MAX_CONFIGS_* in
+// kernels/tt_fabric_test_pattern.hpp).
+inline uint32_t get_max_hot_state_configs() {
+    return tt::tt_metal::MetalContext::instance().hal().get_arch() == tt::ARCH::WORMHOLE_B0
+               ? HOT_STATE_MAX_CONFIGS_WORMHOLE
+               : HOT_STATE_MAX_CONFIGS_BLACKHOLE;
+}
 
 struct pair_hash {
     template <class T1, class T2>
@@ -377,7 +414,7 @@ public:
             return;
         }
 
-        if (perf_breakdown::enabled() && perf_breakdown::host_detail()) {
+        if (perf_breakdown::host_detail()) {
             // Split the enqueue: compile + finalize (kernel hashes, JIT on a cache miss, ELF reads, CB layout), then
             // binary upload + dispatch command generation + issue.
             {
@@ -490,7 +527,10 @@ public:
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
     }
 
-    uint32_t get_l1_unreserved_size() const override { return tt::tt_metal::hal::get_max_worker_l1_unreserved_size(); }
+    uint32_t get_l1_unreserved_size() const override {
+        return tt::tt_metal::MetalContext::instance().hal().get_dev_size(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+    }
 
     uint32_t get_l1_alignment() const override { return tt::tt_metal::hal::get_l1_alignment(); }
 
@@ -793,6 +833,8 @@ public:
         mesh_device_->mesh_command_queue().finish();
     }
 
+    // Zero out the l1 range [`address`, `address` + `size_bytes`] on every core in `cores`.
+    // NOTE: These writes are non-blocking, caller expected to post the barrier.
     void zero_out_buffer_on_cores(
         const MeshCoordinate& device_coord,
         const std::vector<tt::tt_metal::CoreCoord>& cores,
@@ -800,16 +842,9 @@ public:
         uint32_t size_bytes) const override {
         const auto t0 = perf_breakdown::Clock::now();
         const auto total_size = size_bytes * cores.size();
-        if (perf_breakdown::batched_host_writes()) {
-            const std::vector<uint32_t> zero_buffer(size_bytes / sizeof(uint32_t), 0);
-            for (const auto& core : cores) {
-                write_to_worker_core_non_blocking(device_coord, core, address, zero_buffer.data(), size_bytes);
-            }
-        } else {
-            auto mesh_buffer = create_mesh_buffer_helper(cores, address, size_bytes);
-            std::vector<uint32_t> zero_buffer(total_size / sizeof(uint32_t), 0);
-            tt::tt_metal::distributed::WriteShard(
-                mesh_device_->mesh_command_queue(), mesh_buffer, zero_buffer, device_coord, true);
+        const std::vector<uint32_t> zero_buffer(size_bytes / sizeof(uint32_t), 0);
+        for (const auto& core : cores) {
+            write_to_worker_core_non_blocking(device_coord, core, address, zero_buffer.data(), size_bytes);
         }
         if (perf_breakdown::enabled()) {
             perf_breakdown::Collector::get().add_host_write(true, perf_breakdown::ms_since(t0), total_size);
@@ -817,6 +852,7 @@ public:
     }
 
     // Local runtime args function - writes args to local args buffer instead of using SetRuntimeArgs
+    // NOTE: These writes are non-blocking, caller expected to post the barrier.
     void write_data_to_core(
         const MeshCoordinate& device_coord,
         const tt::tt_metal::CoreCoord& core,
@@ -824,18 +860,7 @@ public:
         const std::vector<uint32_t>& args) const override {
         const auto t0 = perf_breakdown::Clock::now();
         const auto total_size = args.size() * sizeof(uint32_t);
-        if (perf_breakdown::batched_host_writes()) {
-            write_to_worker_core_non_blocking(device_coord, core, local_args_address, args.data(), total_size);
-        } else {
-            auto mesh_buffer = create_mesh_buffer_helper({core}, local_args_address, total_size);
-
-            std::vector<uint32_t> all_args_buffer;
-            all_args_buffer.reserve(total_size / sizeof(uint32_t));
-            all_args_buffer.insert(all_args_buffer.end(), args.begin(), args.end());
-
-            tt::tt_metal::distributed::WriteShard(
-                mesh_device_->mesh_command_queue(), mesh_buffer, all_args_buffer, device_coord, true);
-        }
+        write_to_worker_core_non_blocking(device_coord, core, local_args_address, args.data(), total_size);
         if (perf_breakdown::enabled()) {
             perf_breakdown::Collector::get().add_host_write(false, perf_breakdown::ms_since(t0), total_size);
         }

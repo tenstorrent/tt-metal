@@ -3263,8 +3263,11 @@ void YamlTestConfigSerializer::to_yaml(YAML::Emitter& out, const AllocatorPolici
     out << YAML::Key << "receiver";
     out << YAML::Value;
     to_yaml(out, policies.receiver_config);
-    out << YAML::Key << "default_payload_chunk_size";
-    out << YAML::Value << policies.default_payload_chunk_size;
+    // Only a yaml-set chunk size round-trips: a computed one would pin the rings on re-read instead of filling L1.
+    if (policies.payload_chunk_size_from_yaml) {
+        out << YAML::Key << "default_payload_chunk_size";
+        out << YAML::Value << policies.default_payload_chunk_size;
+    }
     out << YAML::EndMap;
 }
 

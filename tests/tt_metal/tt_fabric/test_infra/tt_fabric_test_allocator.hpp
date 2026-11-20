@@ -19,7 +19,6 @@
 #include "tt_fabric_test_config.hpp"
 #include "tt_fabric_test_memory_map.hpp"
 #include <tt-metalium/math.hpp>
-#include "tt_fabric_test_perf_breakdown.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
@@ -599,14 +598,15 @@ inline void TestDeviceResources::reserve_core_internal(
 // ======================================================================================
 
 /**
- * Calculate credit configuration (100% initial, 20% batch)
- * Simple policy: Give sender full buffer capacity, receiver returns in 20% batches
+ * Calculate credit configuration: the sender starts with the receive ring's full capacity, and the receiver returns
+ * credits every half ring. Each return is a header-only packet through the fabric, and the routers are limited by
+ * packet count rather than bytes, so larger batches leave more of the fabric for data.
  */
 inline static std::pair<uint32_t, uint32_t> calculate_credit_config(
     uint32_t buffer_capacity_bytes, uint32_t packet_size_bytes, uint32_t num_packets) {
     uint32_t buffer_capacity_packets = buffer_capacity_bytes / packet_size_bytes;
     uint32_t initial_credits = std::min(buffer_capacity_packets, num_packets);
-    uint32_t batch_size = std::max(1u, initial_credits / perf_breakdown::credit_batch_divisor());
+    uint32_t batch_size = std::max(1u, initial_credits / 2);
     return {initial_credits, batch_size};
 }
 
@@ -726,22 +726,216 @@ public:
         return std::nullopt;  // Signal to reuse existing policy
     }
 
-    const AllocatorPolicies& get_cached_policy() const { return cached_policy_; }
-
     void reset() {
         last_topology_key_.clear();
         cached_policy_ = AllocatorPolicies{};
     }
 
+    /**
+     * Split senders with more configs than one core runs on its fast paths across several sender cores.
+     *
+     * A sender core runs at most get_max_hot_state_configs() configs from its hot path and generates payloads on its
+     * compute engine for at most SFPU_PAYLOAD_MAX_CONFIGS; past either it falls back to slower paths. Each piece costs
+     * a sender core and a full-size channel on every mux its flows go through, and a mux serves at most
+     * get_max_mux_channels() channels, so for each (device, link) this picks the smallest piece size that still fits:
+     * 1. The hot-path cap, if the mux still fits receiver cores with at most SFPU_VERIFY_MAX_CONFIGS configs each, so
+     *    receivers keep deep rings and can verify on their compute engine.
+     * 2. Otherwise SFPU_PAYLOAD_MAX_CONFIGS, if the mux fits receiver cores at the most configs per core.
+     * 3. Otherwise the largest pieces that fit, or no split at all.
+     * Splitting applies only to validated traffic: kernel benchmark mode and latency tests run neither fast path.
+     *
+     * Flows are dealt out round-robin (with K pieces, piece p takes flows p, p + K, p + 2K, ...), so the pieces are
+     * near-equal in size and each holds a mix of near and far destinations. Senders with a pinned core are not split.
+     *
+     * fixed_receiver_configs_per_core: the receivers' configs per core when the allocation policy is given rather than
+     * computed per test.
+     */
+    static void split_senders_to_fit_core_limits(
+        TestConfig& config,
+        const IRouteManager& route_manager,
+        std::optional<uint32_t> fixed_receiver_configs_per_core = std::nullopt) {
+        // Latency / bandwidth test mode and non-packet-validation mode don't use hot state, so don't benefit here
+        if (config.performance_test_mode != PerformanceTestMode::NONE || config.skip_packet_validation) {
+            return;
+        }
+        const uint32_t hot_state_max_configs = get_max_hot_state_configs();
+        const uint32_t max_mux_channels = get_max_mux_channels();
+        const auto receive_configs = count_receive_configs_per_device_and_link(config, route_manager);
+
+        // Create ({device id, routing plane (aka link id)}, sender config indices) map
+        std::map<std::pair<FabricNodeId, uint32_t>, std::vector<size_t>> senders_per_device_and_link;
+        for (size_t i = 0; i < config.senders.size(); i++) {
+            senders_per_device_and_link[{config.senders[i].device, config.senders[i].link_id}].push_back(i);
+        }
+
+        // Most configs per piece for each sender; 0 leaves the sender whole.
+        std::vector<size_t> max_configs_per_piece(config.senders.size(), 0);
+        for (const auto& [device_and_link, sender_indices] : senders_per_device_and_link) {
+            std::vector<size_t> splittable;
+            size_t largest = 0;
+            for (const size_t i : sender_indices) {
+                const auto& sender = config.senders[i];
+
+                // We split senders that don't have a pinned core + have more configs than the hot state cap
+                if (!sender.core.has_value() && sender.patterns.size() > hot_state_max_configs) {
+                    splittable.push_back(i);
+                    largest = std::max(largest, sender.patterns.size());
+                }
+            }
+
+            // No senders to split so continue
+            if (splittable.empty()) {
+                continue;
+            }
+
+            // Counted as if every sender, receiver and sync core on this link used one mux (they may spread over
+            // several directions), as the allocator's receiver policy does. Receivers take channels only to return
+            // credits.
+            const auto receive_it = receive_configs.find(device_and_link);
+            // Receivers only use the mux when returning credits
+            const uint32_t num_receive_configs =
+                (!config.enable_flow_control || receive_it == receive_configs.end()) ? 0 : receive_it->second;
+            // Includes sync + senders that don't need to be split
+            const size_t channels_for_others = 1 /* sync */ + (sender_indices.size() - splittable.size());
+
+            // Check if the given configs per piece + receiver configs per core fit the mux channel cap
+            const auto fits = [&](size_t configs_per_piece, uint32_t receiver_configs_per_core) {
+                size_t pieces = 0;
+                for (const size_t i : splittable) {
+                    pieces += tt::div_up(config.senders[i].patterns.size(), configs_per_piece);
+                }
+                const uint32_t configs_per_core = fixed_receiver_configs_per_core.value_or(receiver_configs_per_core);
+                const size_t receiver_cores = tt::div_up(num_receive_configs, std::max(configs_per_core, 1u));
+                return channels_for_others + pieces + receiver_cores <= max_mux_channels;
+            };
+
+            // Two cases:
+            // 1. The hot state max configs fit the mux channel cap, so receivers hold a few configs each and can verify
+            // on sfpu.
+            // 2. Else, fallback to packing receiver configs on receivers on densely as possible. This uses the fewest
+            // receiver cores (more cores freed up for senders), but not all receiver configs will be verified by sfpu.
+            size_t chosen = 0;
+            if (fits(hot_state_max_configs, SFPU_VERIFY_MAX_CONFIGS)) {
+                chosen = hot_state_max_configs;
+            } else {
+                // Find the smallest piece size that fits the mux channel cap
+                for (size_t configs_per_piece = std::max<size_t>(SFPU_PAYLOAD_MAX_CONFIGS, hot_state_max_configs + 1);
+                     configs_per_piece < largest;
+                     configs_per_piece++) {
+                    if (fits(configs_per_piece, MAX_CONFIGS_PER_CORE_CEILING)) {
+                        chosen = configs_per_piece;
+                        break;
+                    }
+                }
+            }
+
+            // Set the chosen configs per piece for each sender that needs to be split
+            for (const size_t i : splittable) {
+                max_configs_per_piece[i] = chosen;
+            }
+        }
+
+        const size_t num_senders_before = config.senders.size();
+        size_t largest_before = 0;
+        size_t largest_after = 0;
+        std::vector<SenderConfig> senders;
+        senders.reserve(config.senders.size());
+        for (size_t s = 0; s < config.senders.size(); s++) {
+            auto& sender = config.senders[s];
+            const size_t num_patterns = sender.patterns.size();
+            largest_before = std::max(largest_before, num_patterns);
+
+            // No need to split if # patterns for this sender < chosen configs per piece
+            if (max_configs_per_piece[s] == 0 || num_patterns <= max_configs_per_piece[s]) {
+                largest_after = std::max(largest_after, num_patterns);
+                senders.push_back(std::move(sender));
+                continue;
+            }
+
+            // Split the sender into pieces, each with at most max_configs_per_piece[s] patterns. 
+            // We use a round-robin approach to distribute the patterns (by distance) evenly across the pieces.
+            const size_t num_pieces = tt::div_up(num_patterns, max_configs_per_piece[s]);
+            auto patterns = std::move(sender.patterns);
+            sender.patterns.clear();
+            sender.split_into = static_cast<uint32_t>(num_pieces);
+            std::vector<SenderConfig> pieces(num_pieces, sender);
+            for (size_t i = 0; i < num_patterns; i++) {
+                pieces[i % num_pieces].patterns.push_back(std::move(patterns[i]));
+            }
+            for (auto& piece : pieces) {
+                largest_after = std::max(largest_after, piece.patterns.size());
+                senders.push_back(std::move(piece));
+            }
+        }
+        config.senders = std::move(senders);
+        if (config.senders.size() != num_senders_before) {
+            log_info(
+                tt::LogTest,
+                "Split {} senders (largest {} configs) into {} senders (largest {} configs) to fit the per-core limits "
+                "(hot path {}, SFPU payload generation {}, mux channels {})",
+                num_senders_before,
+                largest_before,
+                config.senders.size(),
+                largest_after,
+                hot_state_max_configs,
+                SFPU_PAYLOAD_MAX_CONFIGS,
+                max_mux_channels);
+        }
+    }
+
 private:
+    // Receive configs landing on each device, keyed by (device, link of the sending core). A multicast counts once on
+    // every device it reaches.
+    static std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> count_receive_configs_per_device_and_link(
+        const TestConfig& config, const IRouteManager& route_manager) {
+        std::map<std::pair<FabricNodeId, uint32_t>, uint32_t> receive_configs;
+        for (const auto& sender : config.senders) {
+            for (const auto& pattern : sender.patterns) {
+                const auto& dest = pattern.destination.value();
+                if (dest.hops.has_value()) {
+                    auto dst_node_ids = route_manager.get_dst_node_ids_from_hops(
+                        sender.device,
+                        const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),
+                        pattern.ftype.value());
+                    for (const auto& dst_id : dst_node_ids) {
+                        receive_configs[{dst_id, sender.link_id}]++;
+                    }
+                } else if (dest.device.has_value()) {
+                    receive_configs[{dest.device.value(), sender.link_id}]++;
+                }
+            }
+        }
+        return receive_configs;
+    }
+
+    // Mux channels on one (device, link) kept for its sender and sync cores: one per piece of a split sender, one for
+    // the unsplit senders together (they usually send in different directions, so on different muxes), and one for
+    // sync. FabricConnectionManager checks each mux's actual total when it builds it.
+    static uint32_t count_mux_channels_for_senders_and_sync(
+        const TestConfig& config, const FabricNodeId& device, uint32_t link) {
+        uint32_t split_pieces = 0;
+        bool has_unsplit_sender = false;
+        for (const auto& sender : config.senders) {
+            if (sender.device != device || sender.link_id != link) {
+                continue;
+            }
+            if (sender.split_into > 1) {
+                split_pieces++;
+            } else {
+                has_unsplit_sender = true;
+            }
+        }
+        return std::max(split_pieces + (has_unsplit_sender ? 1u : 0u), 1u) + 1 /* sync */;
+    }
+
     /**
      * Compute dynamic allocation policies based on test configuration.
      *
      * Analyzes the test topology (senders, receivers, devices, flow control) and computes
      * optimal allocation policies:
      * - max_configs_per_core: How many receiver configs can share a single core
-     * - default_payload_chunk_size: Buffer size for each receiver config
      *
+     * The receive ring size is left to the test context, which fills the receiver core's L1.
      */
     AllocatorPolicies compute_policy(const TestConfig& config) {
         // 1. Query system parameters
@@ -764,23 +958,9 @@ private:
 
         // 3. Build per-device receiver load histogram
         std::unordered_map<FabricNodeId, uint32_t> receiver_load_per_device;
-
-        for (const auto& sender : config.senders) {
-            for (const auto& pattern : sender.patterns) {
-                const auto& dest = pattern.destination.value();
-
-                if (dest.hops.has_value()) {
-                    auto dst_node_ids = route_manager_.get_dst_node_ids_from_hops(
-                        sender.device,
-                        const_cast<std::unordered_map<RoutingDirection, uint32_t>&>(dest.hops.value()),
-                        pattern.ftype.value());
-                    for (const auto& dst_id : dst_node_ids) {
-                        receiver_load_per_device[dst_id]++;
-                    }
-                } else if (dest.device.has_value()) {
-                    receiver_load_per_device[dest.device.value()]++;
-                }
-            }
+        for (const auto& [device_and_link, num_configs] :
+             count_receive_configs_per_device_and_link(config, route_manager_)) {
+            receiver_load_per_device[device_and_link.first] += num_configs;
         }
 
         // 4. Per-device analysis - find worst case
@@ -862,11 +1042,25 @@ private:
             // we divide total receivers by num_links to get receivers per link
             if (config.enable_flow_control && num_links > 0) {
                 uint32_t receivers_per_link = num_receivers / num_links;
+                uint32_t channels_for_senders_and_sync = 0;
+                for (uint32_t link = 0; link < num_links; link++) {
+                    channels_for_senders_and_sync = std::max(
+                        channels_for_senders_and_sync, count_mux_channels_for_senders_and_sync(config, device_id, link));
+                }
+                TT_FATAL(
+                    channels_for_senders_and_sync < get_max_mux_channels(),
+                    "Device [mesh={}, chip={}] needs {} mux channels for its sender and sync cores on one link, leaving "
+                    "none of the {} for receivers. Use fewer senders per link.",
+                    device_id.mesh_id,
+                    device_id.chip_id,
+                    channels_for_senders_and_sync,
+                    get_max_mux_channels());
+                const uint32_t max_recv_cores_per_link = get_max_mux_channels() - channels_for_senders_and_sync;
 
-                if (receivers_per_link > MAX_RECV_CORES_PER_LINK_WITH_MUX) {
+                if (receivers_per_link > max_recv_cores_per_link) {
                     // Calculate minimum sharing factor needed to satisfy mux client cap
                     uint32_t sharing_factor_per_link =
-                        (receivers_per_link + MAX_RECV_CORES_PER_LINK_WITH_MUX - 1) / MAX_RECV_CORES_PER_LINK_WITH_MUX;
+                        (receivers_per_link + max_recv_cores_per_link - 1) / max_recv_cores_per_link;
 
                     // Apply the stricter constraint (mux cap vs available cores)
                     required = std::max(required, sharing_factor_per_link);
@@ -881,15 +1075,10 @@ private:
 
         // 5. Apply bounds
         uint32_t max_configs_per_core = std::min(max_configs_per_core_needed, MAX_CONFIGS_PER_CORE_CEILING);
-        uint32_t payload_chunk_size = USABLE_L1_SIZE_BYTES / max_configs_per_core;
 
-        // since L1 alignment is not available here, align to 64 bytes as a safe minimum
-        payload_chunk_size = tt::align(payload_chunk_size, 64);
-
-        // 6. Build and return policies
+        // 6. Build and return policies. The test context sizes the receive rings to fill L1.
         AllocatorPolicies computed_policies;
         computed_policies.receiver_config.max_configs_per_core = max_configs_per_core;
-        computed_policies.default_payload_chunk_size = payload_chunk_size;
 
         return computed_policies;
     }
@@ -903,15 +1092,12 @@ private:
     AllocatorPolicies cached_policy_;
 
     // Constants for dynamic policy computation
-    static constexpr uint32_t MIN_BUFFER_SIZE_BYTES = 16 * 1024;                                            // 16KB
-    static constexpr uint32_t USABLE_L1_SIZE_BYTES = 1024 * 1024;                                           // 1MB
-    static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = USABLE_L1_SIZE_BYTES / MIN_BUFFER_SIZE_BYTES;  // 64
+    // Most receive configs on one core: 64 rings still get at least 16 KB each of a receiver core's L1 on Wormhole and
+    // Blackhole.
+    static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = 64;
     static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
     static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
 
-    // Mux kernel stack constraint: Maximum receiver cores per device per link when flow control enabled
-    // Beyond this limit, receiver cores must be shared to prevent mux kernel stack overflow
-    static constexpr uint32_t MAX_RECV_CORES_PER_LINK_WITH_MUX = 20;
 };
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
