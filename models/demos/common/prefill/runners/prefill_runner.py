@@ -33,8 +33,10 @@ from models.demos.common.prefill.prefill_chunk import (
 from models.demos.common.prefill.runners.hang_detector import arm_hang_detector
 from models.demos.common.prefill.runners.layer_completion_layout import layer_completion_layout
 from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name
-from models.demos.common.prefill.runners.layer_completion_ring_writer import LayerCompletionRingWriter, NullLayerCompletionSink
-from models.demos.common.prefill.runners.stage_layout import StageLayout, single_peer
+from models.demos.common.prefill.runners.layer_completion_ring_writer import (
+    LayerCompletionRingWriter,
+    NullLayerCompletionSink,
+)
 from models.demos.common.prefill.runners.migration import (
     migration_file_export_enabled,
     migration_publish_enabled,
@@ -59,6 +61,7 @@ from models.demos.common.prefill.runners.runner_utils import (
     open_mesh_device,
     stage_mesh_shape,
 )
+from models.demos.common.prefill.runners.stage_layout import StageLayout, single_peer
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
 from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat

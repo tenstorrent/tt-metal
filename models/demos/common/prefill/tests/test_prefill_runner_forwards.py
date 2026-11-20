@@ -152,7 +152,9 @@ def test_indexer_top_k_rides_the_activation_service_with_the_d2d_metadata(monkey
     monkeypatch.setattr(runner, "activation_global_spec", lambda *a: None)
     monkeypatch.setattr(runner, "D2D_METADATA_SIZE_BYTES", 16)
     tail = (("idx", runner.INDEX_MAPPER_CONFIG),)
-    runner.build_d2d_pipeline_endpoints(None, StageLayout.single_host(3), 1, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=())
+    runner.build_d2d_pipeline_endpoints(
+        None, StageLayout.single_host(3), 1, 32, 64, extra_specs=("ids",), inbound_tail=tail, outbound_tail=()
+    )
     assert made == [(16, ["ids", "idx"]), (16, ["ids"])]
 
 

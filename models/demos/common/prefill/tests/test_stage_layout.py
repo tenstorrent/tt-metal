@@ -6,7 +6,13 @@ ttnn-free."""
 
 import pytest
 
-from models.demos.common.prefill.runners.stage_layout import BoundaryPair, StageLayout, chip_host_tag, collapse_to_stages, single_peer
+from models.demos.common.prefill.runners.stage_layout import (
+    BoundaryPair,
+    StageLayout,
+    chip_host_tag,
+    collapse_to_stages,
+    single_peer,
+)
 
 SC4 = StageLayout((1, 2, 1, 2, 1, 2, 1, 2))
 TSR = StageLayout((1, 2, 1))
@@ -36,19 +42,19 @@ def test_sc4_carve_is_eight_stages_over_twelve_ranks():
     assert [SC4.stage_of(r) for r in range(12)] == [0, 1, 1, 2, 3, 3, 4, 5, 5, 6, 7, 7]
 
 
-def test_env_rank_count_must_match_the_run():
-    with pytest.raises(ValueError, match="4 ranks but the run has 3"):
+def test_env_rank_count_must_match_the_run(expect_error):
+    with expect_error(ValueError, "4 ranks but the run has 3"):
         StageLayout.from_env(3, {"PREFILL_STAGE_HOSTS": "1,2,1"})
 
 
 @pytest.mark.parametrize("hosts", [(), (1, 0), (0,)])
-def test_every_stage_needs_a_host(hosts):
-    with pytest.raises(ValueError, match="at least one host"):
+def test_every_stage_needs_a_host(hosts, expect_error):
+    with expect_error(ValueError, "at least one host"):
         StageLayout(hosts)
 
 
-def test_rank_out_of_range_is_rejected():
-    with pytest.raises(ValueError, match="outside"):
+def test_rank_out_of_range_is_rejected(expect_error):
+    with expect_error(ValueError, "outside"):
         TSR.stage_of(4)
 
 
@@ -56,8 +62,8 @@ def test_host_rows_split_axis_zero_into_blocks():
     assert [TSR.host_rows(r, 4) for r in range(4)] == [(0, 4), (0, 2), (2, 4), (0, 4)]
 
 
-def test_rows_must_divide_over_hosts():
-    with pytest.raises(ValueError, match="do not split"):
+def test_rows_must_divide_over_hosts(expect_error):
+    with expect_error(ValueError, "do not split"):
         TSR.host_rows(1, 3)
 
 
@@ -89,15 +95,20 @@ def test_per_rank_views_of_a_boundary():
     assert TSR.outbound_pairs(2, 4) == [BoundaryPair(2, 3, (2, 4))]
 
 
-def test_the_last_stage_has_no_outbound_boundary():
-    with pytest.raises(ValueError, match="last stage"):
+def test_the_last_stage_has_no_outbound_boundary(expect_error):
+    with expect_error(ValueError, "last stage"):
         TSR.boundary_pairs(2, 4)
 
 
 def _gathered(ranks, cols=4, rows=4):
     return [
         [
-            {"rank": r, "first_layer": 0, "host_tag": 100 + r, "fnids": [[(r, row, c) for c in range(cols)] for row in range(rows)]}
+            {
+                "rank": r,
+                "first_layer": 0,
+                "host_tag": 100 + r,
+                "fnids": [[(r, row, c) for c in range(cols)] for row in range(rows)],
+            }
             for r in ranks
         ]
     ]
@@ -110,7 +121,12 @@ def test_gathered_entries_collapse_to_one_per_stage():
 
 def test_a_seam_stage_records_the_host_of_every_chip():
     seam = collapse_to_stages(_gathered(range(4)), TSR, 4)[0][1]
-    assert [[chip_host_tag(seam, r, c) for c in range(4)] for r in range(4)] == [[101] * 4, [101] * 4, [102] * 4, [102] * 4]
+    assert [[chip_host_tag(seam, r, c) for c in range(4)] for r in range(4)] == [
+        [101] * 4,
+        [101] * 4,
+        [102] * 4,
+        [102] * 4,
+    ]
 
 
 def test_a_single_host_stage_has_one_host_for_every_chip():
@@ -135,12 +151,12 @@ def test_equal_host_stages_have_one_peer_per_side():
 
 
 @pytest.mark.parametrize("rank, direction", [(0, "outbound"), (3, "inbound")])
-def test_a_boundary_split_over_two_peers_is_refused_until_ttnn_can_serve_it(rank, direction):
+def test_a_boundary_split_over_two_peers_is_refused_until_ttnn_can_serve_it(rank, direction, expect_error):
     pairs = TSR.outbound_pairs(rank, 4) if direction == "outbound" else TSR.inbound_pairs(rank, 4)
-    with pytest.raises(NotImplementedError, match="one service per host row block"):
+    with expect_error(NotImplementedError, "one service per host row block"):
         single_peer(pairs, 4, direction, rank)
 
 
-def test_a_seam_host_owning_half_the_rows_is_refused_too():
-    with pytest.raises(NotImplementedError):
+def test_a_seam_host_owning_half_the_rows_is_refused_too(expect_error):
+    with expect_error(NotImplementedError, "one service per host row block"):
         single_peer(TSR.outbound_pairs(1, 4), 4, "outbound", 1)
