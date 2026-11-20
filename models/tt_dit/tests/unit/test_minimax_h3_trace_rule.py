@@ -47,7 +47,10 @@ def _resolved(monkeypatch: pytest.MonkeyPatch, preset: dict, **kwargs: object) -
 
 @pytest.mark.parametrize(
     ("preset", "kwargs"),
-    [(_PRESETS_WH[(4, 8)], {"dynamic_length": False}), (_PRESETS_BH[(4, 32)], {"coresident": False})],
+    [
+        (_PRESETS_WH[(4, 8)], {"task": "ref2va", "dynamic_length": False}),
+        (_PRESETS_BH[(4, 32)], {"coresident": False}),
+    ],
 )
 def test_an_explicit_audio_trace_is_kept_by_an_evicting_pipeline(
     monkeypatch: pytest.MonkeyPatch, preset: dict, kwargs: dict
@@ -58,7 +61,7 @@ def test_an_explicit_audio_trace_is_kept_by_an_evicting_pipeline(
 
 
 @pytest.mark.parametrize(
-    ("preset", "kwargs"), [(_PRESETS_WH[(4, 8)], {}), (_PRESETS_BH[(4, 32)], {"coresident": False})]
+    ("preset", "kwargs"), [(_PRESETS_WH[(4, 8)], {"task": "ref2va"}), (_PRESETS_BH[(4, 32)], {"coresident": False})]
 )
 def test_explicit_denoise_trace_is_dropped_loudly_by_an_evicting_pipeline(
     monkeypatch: pytest.MonkeyPatch, preset: dict, kwargs: dict
@@ -86,7 +89,8 @@ def test_a_resident_pipeline_keeps_an_explicit_denoise_trace(monkeypatch: pytest
 
 def test_presets_resolve_without_a_conflict(monkeypatch: pytest.MonkeyPatch) -> None:
     # (offload_weights, trace)
-    assert _resolved(monkeypatch, _PRESETS_WH[(4, 8)]) == (True, False)
+    assert _resolved(monkeypatch, _PRESETS_WH[(4, 8)]) == (False, False)
+    assert _resolved(monkeypatch, _PRESETS_WH[(4, 8)], task="ref2va") == (True, False)
     assert _resolved(monkeypatch, _PRESETS_BH[(4, 32)]) == (False, True)
     assert _resolved(monkeypatch, _PRESETS_BH[(4, 8)]) == (False, False)
 

@@ -388,6 +388,7 @@ def test_the_next_traced_call_after_an_eviction_captures_again(events: list[str]
 def test_a_recaptured_trace_watches_its_weights_again(events: list[str], expect_error: Callable) -> None:
     weight = object.__new__(Parameter)
     weight.total_shape, weight._data, weight._tracers = (2, 3), object(), weakref.WeakSet()
+    weight.mesh_axes = weight.durable_mesh_axes = (None, None)
     pipeline = _Pipeline(trace=True)
     loading, _ = _excluding(pipeline, events)
     tracer = Tracer(lambda: weight.data and None, device=_Device(), prep_run=False)

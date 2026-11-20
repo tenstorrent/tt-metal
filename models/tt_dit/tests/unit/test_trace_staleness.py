@@ -9,6 +9,7 @@ from __future__ import annotations
 import gc
 import weakref
 from collections.abc import Callable
+from types import SimpleNamespace
 
 import pytest
 
@@ -44,7 +45,28 @@ def _parameter() -> Parameter:
     parameter.total_shape = (2, 3)
     parameter._data = object()
     parameter._tracers = weakref.WeakSet()
+    parameter.mesh_axes = parameter.durable_mesh_axes = (None, None)
     return parameter
+
+
+def _shardable(monkeypatch: pytest.MonkeyPatch) -> Parameter:
+    """A parameter that `shard(1)` splits along dim 0, on stand-ins for the device ops."""
+    monkeypatch.setattr(ttnn, "mesh_partition", lambda tensor, dim, **kwargs: object())
+    monkeypatch.setattr(ttnn, "reshape", lambda tensor, shape: object())
+    parameter = _parameter()
+    parameter.device = SimpleNamespace(shape=(1, 2))
+    parameter.layout = ttnn.Layout.ROW_MAJOR
+    parameter.on_host = False
+    parameter.memory_config = object()
+    return parameter
+
+
+class _CCLManager:
+    def __init__(self, parameter: Parameter) -> None:
+        self._memory_config = parameter.memory_config
+
+    def all_gather(self, tensor: object, **kwargs: object) -> SimpleNamespace:
+        return SimpleNamespace(memory_config=lambda: self._memory_config)
 
 
 def _tracer(*parameters: Parameter, prep_run: bool = False) -> Tracer:
@@ -202,6 +224,37 @@ def test_a_quant_typecast_after_capture_makes_the_trace_stale(
     _quantize_weight(weight, "bfloat16")  # same dtype: nothing moves
     tracer()
     _quantize_weight(weight, "bfloat8_b")
+    with expect_error(RuntimeError, _STALE + "replaced"):
+        tracer()
+    assert len(executed) == 2
+
+
+def test_a_shard_after_capture_makes_the_trace_stale(
+    executed: list[object], monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+) -> None:
+    weight = _shardable(monkeypatch)
+    tracer = _tracer(weight)
+    tracer()
+    weight.shard(1, defer_free=[])
+    assert weight.is_transiently_sharded()
+    with expect_error(RuntimeError, _STALE + "replaced"):
+        tracer()
+    assert len(executed) == 1
+
+
+def test_a_gather_after_capture_makes_the_trace_stale(
+    executed: list[object], monkeypatch: pytest.MonkeyPatch, expect_error: Callable
+) -> None:
+    weight = _shardable(monkeypatch)
+    weight.shard(1, defer_free=[])
+    # A capture cannot read a sharded parameter, so the trace watches it by hand. This shows that a gather
+    # goes through the data setter; no pipeline can reach this sequence.
+    tracer = _tracer()
+    tracer()
+    tracer.watch(weight)
+    tracer()
+    weight.gather(_CCLManager(weight), defer_free=[])
+    assert not weight.is_transiently_sharded()
     with expect_error(RuntimeError, _STALE + "replaced"):
         tracer()
     assert len(executed) == 2

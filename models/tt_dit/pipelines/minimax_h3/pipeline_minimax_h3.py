@@ -38,7 +38,7 @@ registered as ``Module`` coresident exclusions: loading one stage evicts the oth
 encoder is the cheap one --- FSDP over the non-TP axis puts it at ~1.6 GB/device --- but its 50 GB
 disk read is not, which is why it is kept co-resident by default: every request pays the encode
 itself (~2.8 s), never the reload. `coresident=False` evicts each stage, which is the pipeline's
-`offload_weights`; `trace_denoise` is ignored with it, and `trace_audio` cannot be combined with it.
+`offload_weights`; `trace_denoise` is ignored with it, and only an explicit `trace_audio=True` is kept with it.
 """
 
 from __future__ import annotations
