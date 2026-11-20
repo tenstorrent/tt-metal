@@ -75,6 +75,24 @@ void MoeExpertTokenRemapDeviceOperation::validate_on_program_cache_miss(
         "every reduction_size metadata pages and does not flush a partial trailing group",
         batch_seq,
         reduction_size);
+
+    const auto& opt_mapping = tensor_args.optional_output_mapping_tensor;
+    const auto& opt_reduced = tensor_args.optional_output_reduced_tensor;
+    if (opt_mapping.has_value() || opt_reduced.has_value()) {
+        const auto expected_specs = compute_output_specs(operation_attributes, tensor_args);
+        if (opt_mapping.has_value()) {
+            TT_FATAL(
+                opt_mapping.value().tensor_spec() == expected_specs[0],
+                "Invalid optional_output_mapping_tensor spec, expected {}",
+                expected_specs[0]);
+        }
+        if (opt_reduced.has_value()) {
+            TT_FATAL(
+                opt_reduced.value().tensor_spec() == expected_specs[1],
+                "Invalid optional_output_reduced_tensor spec, expected {}",
+                expected_specs[1]);
+        }
+    }
 }
 
 MoeExpertTokenRemapDeviceOperation::spec_return_value_t MoeExpertTokenRemapDeviceOperation::compute_output_specs(
