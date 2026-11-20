@@ -40,7 +40,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fol
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
@@ -104,7 +104,9 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        fabric2d_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -116,7 +118,9 @@ PLACEMENTS = [
     # system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        torus_x_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -451,13 +455,13 @@ def k31_layer_pcc(layer: int) -> float:
 # ~300-380 keys within 1% of the spread (twice 10K's) and recall falls smoothly with position, at every layer. Layers
 # 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941 at LoFi.
 # Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
-# the spread, unchanged from 10K), so the crowding costs them more. The first layers' larger score error and the
-# trend toward 1M are not fully explained; the largest device step in that error, the score matmul's LoFi, is now
-# HiFi2 (``index_score_math_fidelity``): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
-# LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
-# under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
-# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
-K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
+# the spread, unchanged from 10K), so the crowding costs them more: 0.844 / 0.844 at 128K, 0.932 / 0.938 at 10K. The
+# score matmul runs at the op's LoFi default. HiFi2 raises layers 3 / 7 to 0.871 / 0.882 at 128K, yet moves no
+# layer's residual stream or KV cache by more than 0.0014 PCC (layers 0-23, 10K / 128K / 1M goldens), and costs
+# 8% of 1M-token throughput on 8x4 (11% on 4x4 stages): the misses swap near-tied keys. So recall here is a
+# diagnostic the hidden-state and KV bars back up. The 128K floor is 0.82, ~2.4 points under the LoFi minimum, as 0.9
+# sits ~1.3 under the 10K minimum (layer 51).
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.82}
 
 
 def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -> torch.Tensor:

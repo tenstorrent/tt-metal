@@ -11,6 +11,7 @@ from models.common.utility_functions import divup
 from models.demos.vision.classification.vit.blackhole.tt import (
     ttnn_optimized_sharded_vit_hiRes_bh as ttnn_optimized_sharded_vit,
 )
+from models.demos.vision.classification.vit.common.tests.vit_test_infra import dram_shard_count
 
 
 class VitHiResTestInfra:
@@ -46,7 +47,7 @@ class VitHiResTestInfra:
             config.num_attention_heads = 12
         config.num_hidden_layers = num_hidden_layers
 
-        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size)
+        self.config = ttnn_optimized_sharded_vit.update_model_config(config, batch_size, sequence_size, device)
 
         self.torch_layers = []
         self.tt_parameters_list = []
@@ -92,13 +93,13 @@ class VitHiResTestInfra:
             layout=ttnn.TILE_LAYOUT,
         )
 
-        dram_grid_size = device.dram_grid_size()
+        dram_shards = dram_shard_count(device)
         dram_shard_spec = ttnn.ShardSpec(
-            ttnn.CoreRangeSet(
-                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_grid_size.x - 1, dram_grid_size.y - 1))}
-            ),
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(dram_shards - 1, 0))}),
             [
-                divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_grid_size.x),
+                ttnn.core.roundup(
+                    divup(tt_inputs_host.volume() // tt_inputs_host.shape[-1], dram_shards), ttnn.TILE_SIZE
+                ),
                 tt_inputs_host.shape[-1],
             ],
             ttnn.ShardOrientation.ROW_MAJOR,

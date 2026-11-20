@@ -9,7 +9,7 @@
 #include <tt_stl/assert.hpp>
 #include "command_queue_common.hpp"
 #include "dispatch_settings.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "llrt/hal.hpp"
 #include "llrt/rtoptions.hpp"
 #include <hostdevcommon/dispatch_telemetry_types.hpp>

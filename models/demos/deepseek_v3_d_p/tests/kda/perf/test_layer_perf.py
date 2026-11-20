@@ -15,7 +15,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import tp_axis_is_wrapped
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     deallocate_state,
@@ -42,10 +42,10 @@ pytestmark = [
 _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
-# their targets.
+# their targets with the fused relay.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.47,
-    ("SP8xTP4", "traced"): 1.244,
+    ("SP8xTP4", "untraced"): 1.233,
+    ("SP8xTP4", "traced"): 1.14,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
 _REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
@@ -54,8 +54,8 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP
 # Galaxy target: a full chunk whose start falls mid-device. A resumed request starts at an arbitrary aligned
-# prefix, and every full chunk of it then wraps onto its first rank, which adds the final-carry barrier and
-# broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too.
+# prefix, and every full chunk of it then wraps onto its first rank, whose separated tail the relay applies before it
+# sends the final carry, a step a rank-aligned start skips. Production always passes actual_end, so the gate does too.
 _GALAXY_ACTUAL_START = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # QuietBox SP2xTP2 runs Galaxy's per-chip workload: 640 rows and 24 heads per chip, so the chunk shrinks to 1280
 # tokens and the synthetic config halves the global head count. Every per-chip shape, L1 placement and program
@@ -75,7 +75,7 @@ _LOUDBOX_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
 _LOUDBOX_NUM_HEADS = 2 * _GALAXY_HEADS_PER_CHIP
 _LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # LoudBox SP8xTP1 runs Galaxy's SP chain and chunk with Galaxy's 24 heads per chip. Its 8 chips close into a ring, as
-# Galaxy's SP axis does, and so do QuietBox SP4xTP1's 4; FABRIC_1D_RING rings only mesh axis 0, so SP takes that axis.
+# Galaxy's SP axis does, and so do QuietBox SP4xTP1's 4; FABRIC_2D_TORUS_Y rings only mesh axis 0, so SP takes that axis.
 # As on QuietBox SP4xTP1, it skips the TP reduce-scatter.
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
@@ -194,7 +194,7 @@ def _trace_wall_samples_ms(
         pytest.param(
             (8, 1),
             1,
-            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((8, 1), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
             id="SP8xTP1-ring",
         ),
@@ -208,7 +208,7 @@ def _trace_wall_samples_ms(
         pytest.param(
             (4, 1),
             1,
-            fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, l1_small_size=_L1_SMALL_SIZE),
+            kda_device_params((4, 1), l1_small_size=_L1_SMALL_SIZE),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
             id="SP4xTP1-ring",
         ),
@@ -281,7 +281,7 @@ def test_synthetic_kimi_k3_perf(
             {
                 "layout": layout,
                 "mode": mode,
-                "fabric_config": ttnn.get_fabric_config().name,
+                "fabric_config": ttnn.get_fabric_config(mesh_device).name,
                 "sequence": sequence,
                 "actual_start": actual_start,
                 "samples_ms": samples,

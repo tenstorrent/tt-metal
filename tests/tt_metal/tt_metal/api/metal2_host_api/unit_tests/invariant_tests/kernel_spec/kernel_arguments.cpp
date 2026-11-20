@@ -12,7 +12,7 @@
 #include <stdexcept>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -29,7 +29,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NamedRuntimeArgsSucceeds) {
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"tile_count"};
     spec.kernels[0].compile_time_args = {{"block_size", 64}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedRtaIdentifierFails) {
@@ -37,7 +37,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedRtaIdentifierFails) {
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"int"};  // C++ keyword
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("named RTA name 'int' is not a valid C++ identifier")));
 }
@@ -47,7 +47,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidNamedCrtaIdentifierFails) {
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"has-dash"};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("named CRTA name 'has-dash' is not a valid C++ identifier")));
 }
@@ -59,7 +59,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NamedRtaCrtaCollisionFails) {
     spec.kernels[0].runtime_arg_schema.common_runtime_arg_names = {"count"};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("naming collision: 'count' is declared as both a named RTA and a named CRTA")));
 }
@@ -70,7 +70,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_NamedRtaCtaCollisionFails) {
     spec.kernels[0].compile_time_args = {{"block_size", 64}};  // same name as CTA
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("naming collision: 'block_size' is declared as both a named RTA and a named CTA")));
 }
@@ -81,7 +81,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DifferentKernelsMayReuseArgNames) {
     spec.kernels[0].runtime_arg_schema.runtime_arg_names = {"shared_name"};
     spec.kernels[1].runtime_arg_schema.runtime_arg_names = {"shared_name"};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_CompileTimeArgBindingsSucceeds) {
@@ -90,7 +90,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_CompileTimeArgBindingsSucceeds) {
     // Add compile-time arg bindings
     spec.kernels[0].compile_time_args = {{"arg1", 100}, {"arg2", 200}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_RuntimeArgsSchemaSucceeds) {
@@ -99,7 +99,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_RuntimeArgsSchemaSucceeds) {
     // Add runtime args schema
     spec.kernels[0].advanced_options = KernelAdvancedOptions{.num_runtime_varargs = 3, .num_common_runtime_varargs = 2};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 // ============================================================================
@@ -113,7 +113,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgsOfEveryKindSucceed) {
     spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 2}};
     spec.kernels[0].compile_time_array_args = {{"page_sizes", {64, 128, 256}}};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_InvalidArrayArgIdentifierFails) {
@@ -121,7 +121,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_InvalidArrayArgIdentifierFails) {
     spec.kernels[0].runtime_arg_schema.runtime_array_args = {{.name = "has-dash", .size = 2}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("RTA array name 'has-dash' is not a valid C++ identifier")));
 }
@@ -133,7 +133,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgScalarCollisionFails) {
     spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "x", .size = 2}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("naming collision: 'x' is declared as both a named RTA and a CRTA array")));
 }
@@ -144,7 +144,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgCtaArrayCollisionFails) {
     spec.kernels[0].compile_time_array_args = {{"sizes", {1, 2}}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("naming collision: 'sizes' is declared as both a RTA array and a CTA array")));
 }
@@ -154,7 +154,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ZeroSizeArrayArgFails) {
     spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "dims", .size = 0}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CRTA array 'dims' has size 0")));
 }
 
@@ -163,7 +163,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_EmptyCtaArrayFails) {
     spec.kernels[0].compile_time_array_args = {{"page_sizes", ArrayArgValue{}}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("CTA array 'page_sizes' is empty")));
 }
 
@@ -176,7 +176,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_ArrayArgsOverRuntimeArgsCapacityFail) {
     spec.kernels[0].runtime_arg_schema.common_runtime_array_args = {{.name = "y", .size = 95}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("declares 4097 words of named runtime args")));
 }
