@@ -82,6 +82,8 @@ def _write_mxfp4_checkpoint(path, num_shards):
 @pytest.mark.parametrize("num_shards", [1, 3])
 def test_lazy_state_dict_matches_from_pretrained(tmp_path, monkeypatch, num_shards):
     config = _write_mxfp4_checkpoint(tmp_path, num_shards)
+    # The release settings' GPTQ dense file (gpt-oss-20b's real weights) would replace this random checkpoint's values.
+    monkeypatch.delenv("GPT_OSS_DENSE_ROUNDED_DECODE", raising=False)
 
     monkeypatch.setenv("GPT_OSS_EAGER_HF_LOAD", "1")
     eager = ModelArgs.load_state_dict(str(tmp_path), convert_to_meta_format=True)
