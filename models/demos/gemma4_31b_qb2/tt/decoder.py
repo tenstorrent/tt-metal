@@ -850,6 +850,7 @@ class Decoder:
                         scale=1.0,
                         program_config=sdpa_config,
                         compute_kernel_config=self.pref_compute,
+                        precision=ttnn.SDPAPrecision.ACCURATE,
                     )
                     del both_k, both_v
                 elif self.sliding:
@@ -862,6 +863,7 @@ class Decoder:
                         sliding_window_size=self.window,
                         program_config=sdpa_config,
                         compute_kernel_config=self.pref_compute,
+                        precision=ttnn.SDPAPrecision.ACCURATE,
                     )
                 else:
                     attn = ttnn.transformer.chunked_scaled_dot_product_attention(
@@ -873,6 +875,7 @@ class Decoder:
                         scale=1.0,
                         program_config=sdpa_config,
                         compute_kernel_config=self.pref_compute,
+                        precision=ttnn.SDPAPrecision.ACCURATE,
                     )
                 if self.sliding:
                     if return_history and end == seq:
