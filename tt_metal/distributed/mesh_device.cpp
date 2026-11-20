@@ -21,6 +21,7 @@
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <algorithm>
+#include <chrono>
 #include <array>
 #include <atomic>
 #include <cstddef>
@@ -1781,7 +1782,9 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         *trace_id,
         this->mesh_id_,
         active_sub_device_manager->id());
+    const auto record_start = std::chrono::steady_clock::now();
     this->mesh_command_queues_[cq_id]->record_end();
+    const auto record_done = std::chrono::steady_clock::now();
 
     // End DRAM high water mark tracking if trace_region_size is 0 (dynamic allocation mode)
     auto trace_region_size = this->allocator_impl()->get_config().trace_region_size;
@@ -1800,6 +1803,15 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
         dram_allocation_high_water_mark,
         dram_deletion_high_water_mark,
         max_live_trace_high_water_mark);
+    const auto write_done = std::chrono::steady_clock::now();
+    // One line per capture: how end_trace_capture splits between recording the trace and writing it to DRAM.
+    log_info(
+        tt::LogMetal,
+        "end_mesh_trace: trace {} record_end {:.1f} ms, write {:.1f} ms, {:.1f} MB per device",
+        *trace_id,
+        std::chrono::duration<double, std::milli>(record_done - record_start).count(),
+        std::chrono::duration<double, std::milli>(write_done - record_done).count(),
+        trace_buffer->mesh_buffer ? trace_buffer->mesh_buffer->size() / 1e6 : 0.0);
 }
 
 void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking) {
