@@ -39,9 +39,14 @@ overload_t(Func, Args...) -> overload_t<Func, Args...>;
 // An overload whose function is called with the GIL held, for a function that reads Python objects before its work: it
 // releases the GIL itself (nb::gil_scoped_release) before anything that can block or take long, as the other
 // overloads have it released for them.
+// A type of its own, not an overload_t, so that code written for overload_t, which releases the GIL around the call,
+// cannot take it by mistake.
 template <typename Func, typename... Args>
-struct gil_held_overload_t : overload_t<Func, Args...> {
-    using overload_t<Func, Args...>::overload_t;
+struct gil_held_overload_t {
+    Func func;
+    std::tuple<Args...> args;
+
+    constexpr gil_held_overload_t(Func f, const Args&... a) : func(f), args(std::make_tuple(a...)) {}
 };
 
 template <typename Func, typename... Args>
