@@ -1894,6 +1894,12 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 llrt::get_core_type(descriptor_->env_impl(), device_id, virtual_core),
                 HalL1MemAddrType::CORE_INFO));
         if (has_quasar_ethernet) {
+            // ACTIVE_ETH has one image, linked into CCE0's SRAM.
+            TT_FATAL(
+                cluster_.get_keraunos_eth_cce(device_id, virtual_core) == 0,
+                "Chip {} Ethernet core {} is CCE1 of its HSIO tile; a linked Ethernet core must be CCE0",
+                device_id,
+                eth_core.str());
             const auto slot = quasar_eth_link_slot(cluster_, device_id, eth_core);
             TT_FATAL(
                 hal_.get_dev_size(HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::ETH_LINK) == sizeof(slot),
