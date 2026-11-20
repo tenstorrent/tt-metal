@@ -65,4 +65,8 @@ void kernel_main() {
         {.offset_bytes = 0},
         {.page_id = 0, .offset_bytes = 0});
     noc.async_write_barrier();
+    routing_weights_dfb.pop_front(1);
+    local_weights_idxs_dfb.pop_front(1);
+    local_weights_dfb.wait_front(1);
+    local_weights_dfb.pop_front(1);
 }
