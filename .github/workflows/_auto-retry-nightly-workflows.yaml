@@ -28,6 +28,10 @@ jobs:
   auto-retry:
     if: ${{ github.event.workflow_run.conclusion == 'failure' && (github.event.workflow_run.head_branch == 'main' || github.event.workflow_run.head_branch == 'stable' || startsWith(github.event.workflow_run.head_branch, 'v')) }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: write # read the failed run and re-run its failed jobs
+      checks: read # ci-no-retry annotations of the failed jobs
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -97,11 +101,33 @@ jobs:
           fi
 
           echo "should-continue=$should_continue" >> "$GITHUB_OUTPUT"
-      - name: Re-run failed jobs
+      # Jobs opt in by emitting a ci-no-retry annotation (.github/actions/classify-failure) when they
+      # failed in a way a re-run of the same commit repeats, e.g. a perf gate. If every unsuccessful job
+      # is marked, nothing can turn green, so skip the re-run. Mixed failures are still re-run;
+      # .github/actions/skip-non-retryable makes the marked jobs exit at once on that re-run.
+      # Fails open: any API problem re-runs as before.
+      - name: Skip if every failed job is non-retryable
+        id: check-retryable
         if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
+        continue-on-error: true # a broken check must not block the re-run
+        shell: bash
         env:
-          GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          GH_TOKEN: ${{ github.token }}
         run: |
+          python3 .github/actions/skip-non-retryable/ci_no_retry.py run-decision \
+            --repo "${{ github.repository }}" \
+            --run-id "${{ steps.get-run-id-and-attempt.outputs.run-id }}" \
+            --attempt "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" | tee decision.txt
+          if [ "$(tail -n 1 decision.txt)" = skip ]; then
+            echo "::notice title=no-continue-non-retryable::Every failed job failed deterministically (ci-no-retry). Not re-trying"
+          fi
+      - name: Re-run failed jobs
+        if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' && steps.check-retryable.outputs.all-non-retryable != 'true' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Re-runs started with github.token show github-actions[bot] as the triggering actor, which is what
+          # skip-non-retryable (AUTO_RETRY_ACTOR in .github/actions/skip-non-retryable/ci_no_retry.py) keys on.
           echo "Re-running jobs here"
           # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
           gh api --method POST \

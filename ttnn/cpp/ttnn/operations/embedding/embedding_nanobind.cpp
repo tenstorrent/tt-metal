@@ -32,6 +32,7 @@ void py_module(nb::module_& mod) {
             layout (ttnn.Layout): the layout of the output tensor. Defaults to `ttnn.ROW_MAJOR_LAYOUT`.
             embeddings_type (ttnn.EmbeddingsType): the type of embeddings. Defaults to `ttnn._ttnn.operations.embedding.EmbeddingsType.GENERIC`.
             dtype (ttnn.DataType, optional): the data type for the output tensor. Defaults to `None`.
+            runtime_rows (bool, optional): with a TILE_LAYOUT output and an interleaved output and weight table, derive the per-core rows on device so one program serves every index length and table row count (an interleaved TILE_LAYOUT table is then converted by the native untilize the same way). Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor of layout == layout or layout of the weights tensor.
@@ -49,7 +50,8 @@ void py_module(nb::module_& mod) {
         nb::arg("embeddings_type").noconvert() = nb::cast(ttnn::prim::EmbeddingsType::GENERIC),
         nb::arg("dtype").noconvert() = nb::none(),
         nb::arg("memory_config") = nb::none(),
-        nb::arg("output_tensor").noconvert() = nb::none());
+        nb::arg("output_tensor").noconvert() = nb::none(),
+        nb::arg("runtime_rows") = false);
 }
 
 }  // namespace ttnn::operations::embedding

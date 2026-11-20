@@ -207,11 +207,20 @@ test_suite_bh_ttnn_stress_tests() {
     fi
 }
 
+# Torus cabling differs between BH Galaxy revisions, so pick the descriptor matching this system's revision.
+bh_galaxy_cabling_descriptor_() {
+    local rev
+    rev=$(./build/tools/scaleout/detect_bh_galaxy_revision | tail -n 1) || return 1
+    echo "tools/tests/scaleout/cabling_descriptors/${rev,,}_$1.textproto"
+}
+
 test_suite_bh_6u_metal_unit_tests() {
     echo "[upstream-tests] running BH GLX upstream metal unit tests"
 
     # BH Galaxy XY (2D) Torus System Validation (no fabric, simply validate that expected links are discovered and healthy)
-    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic
+    local cabling_descriptor
+    cabling_descriptor=$(bh_galaxy_cabling_descriptor_ xy_torus)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path "$cabling_descriptor" --hard-fail --send-traffic
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric2D*.*:-*ChannelTrimming*"
     RELIABILITY_MODE=relaxed ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="*Fabric1D*.*:-*ChannelTrimming*":-NightlyFabric1DFixture.TestEDMConnectionStressTestQuick
     RELIABILITY_MODE=relaxed build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_sanity_common.yaml
@@ -240,7 +249,9 @@ UnitMeshCQSingleCardFixture.TensixTestReadWriteMultipleCoresL1"
 
 test_suite_bh_6u_metal_torus_xy_health_check_tests() {
     echo "[upstream-tests] Checking for XY Torus topology on BH 6U Galaxy"
-    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus.textproto --hard-fail --send-traffic --num-iterations 1
+    local cabling_descriptor
+    cabling_descriptor=$(bh_galaxy_cabling_descriptor_ xy_torus)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path "$cabling_descriptor" --hard-fail --send-traffic --num-iterations 1
     ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config tests/tt_metal/tt_fabric/test_infra/test_yamls/test_fabric_2d_torus_stability.yaml --filter 'name.*_short'
 }
 
@@ -264,7 +275,9 @@ test_suite_bh_6u_torus_xyz_health_check_tests() {
     # This test is to be run on systems that have the XY Torus links setup, along with Z connections between adjacent trays.
     # The purpose of this test is to verify that the Z Ports are healthy, and is to be run by operators/technicians installing BH Galaxies.
     # This test is not to be run on officical topologies (Mesh, X Torus, Y Torus or XY Torus).
-    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tools/tests/scaleout/cabling_descriptors/bh_galaxy_xy_torus_z_ports.textproto --hard-fail --send-traffic
+    local cabling_descriptor
+    cabling_descriptor=$(bh_galaxy_cabling_descriptor_ xy_torus_z_ports)
+    ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path "$cabling_descriptor" --hard-fail --send-traffic
 }
 
 test_suite_bh_6u_deployment_tests() {

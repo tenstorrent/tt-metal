@@ -442,6 +442,30 @@ public:
             result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
             return result;
         }
+
+        // The same 4 bytes as one word, for a reader that loads them early and takes the fields later (unpack): one
+        // register to hold instead of three.
+        static uint32_t load_word(const volatile Derived* hdr) {
+            return *reinterpret_cast<const volatile uint32_t*>(
+                reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBase, payload_size_bytes));
+        }
+
+        // The fields of a word from load_word, the source channel included.
+        struct Unpacked {
+            uint16_t payload_size_bytes;
+            NocSendType noc_send_type;
+            uint8_t src_ch_id;
+        };
+        static Unpacked unpack(uint32_t raw) {
+            constexpr size_t word_offset = offsetof(PacketHeaderBase, payload_size_bytes);
+            static_assert(offsetof(PacketHeaderBase, noc_send_type) == word_offset + 2);
+            static_assert(offsetof(PacketHeaderBase, src_ch_id) == word_offset + 3);
+            Unpacked result;
+            result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
+            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            result.src_ch_id = static_cast<uint8_t>(raw >> 24);
+            return result;
+        }
     };
 
     // Returns size of payload in bytes - TODO: convert to words (4B)

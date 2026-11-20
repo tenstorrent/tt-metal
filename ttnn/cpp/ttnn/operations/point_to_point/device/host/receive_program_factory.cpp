@@ -142,7 +142,7 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
             page_idx_start,
             page_idx_end,
             num_pages_per_packet,
-            intermediate_tensor.buffer()->address(),  // placeholder, replaced via Buffer* below
+            intermediate_tensor.mesh_buffer().address(),  // placeholder, replaced via Buffer* below
             packet_size_bytes,
             output_page_size_bytes,
             num_page_segments,
@@ -152,12 +152,12 @@ tt::tt_metal::ProgramDescriptor receive_program_factory(
 
         if (sender_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
+                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
         }
         reader_runtime_args.emplace_back(!sender_is_forward);
         if (!sender_is_forward) {
             tt::tt_fabric::append_fabric_connection_rt_args(
-                this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
+                *mesh_device, this_fabric_id, next_fabric_id, link_idx, desc, c, reader_runtime_args);
         }
 
         tt::tt_metal::KernelDescriptor::RTArgList reader_rt_args_builder;

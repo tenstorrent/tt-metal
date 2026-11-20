@@ -74,7 +74,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             // idle here deadlocks math.
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en>(src_handshake_iters);
+                _perf_unpack_stream_set_valid</* src A */ true, /* src B */ tilize_en || is_fp32_dest_acc_en, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else
@@ -168,7 +168,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
             if constexpr (unpack_to_dest)
             {
@@ -190,7 +190,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
             }
             else
             {
-                _perf_math_loop_clear_valid</* src A */ true, /* src B */ true>(src_handshake_iters);
+                _perf_math_stream_clear_valid</* src A */ true, /* src B */ true, PERF_RUN_TYPE>(src_handshake_iters);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
@@ -280,7 +280,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
         }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
@@ -293,6 +293,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             "tile_num exceeds max dest tiles");
                         _llk_pack_<DstSync::SyncHalf, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
                             DST_INDEX + tile_num, L1_ADDRESS(buffer_Res[block_num * NUM_TILES_IN_BLOCK + tile_num]));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -11,7 +11,7 @@
 #include "cunpack_common.h"
 #include "llk_assert.h"
 #include "api/debug/waypoint.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_defs.h"
 #include "llk_io.h"
 #include "llk_operands.h"
@@ -25,43 +25,32 @@
  *************************************************************************/
 
 /**
- * @brief Allocate a BFD id from the unpack partition, program its table entry from the operand's
- * DFB info (shape, L1 base, formats), and record the id in the engine's current slot. The DFB id is
+ * @brief Program the engine's fixed BFD table entry from the operand's
+ * DFB info (shape, L1 base, formats). The DFB id is
  * used only to fetch buffer info — it never doubles as the BFD id.
  *
- * @tparam E: physical UNPACR engine that will consume the descriptor (Unp0 or Unp1)
+ * @tparam E: fixed BFD id of the UNPACR engine that will consume the descriptor (BFD_ID_UNP0 or BFD_ID_UNP1)
  * @tparam MODE: L1 access mode for the descriptor; Strided collapses y/z dims to 1 for the
  * UNPACR_STRIDE tilize sequences.
  * @param operand_id: Input DFB used to look up the descriptor parameters
- * @return Allocated BFD id for the unpack init
  */
-template <ckernel::trisc::BfdResource E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
-inline std::uint8_t llk_unpack_program_bfd(const std::uint32_t operand_id) {
+template <std::uint8_t E, ckernel::trisc::L1AccessMode MODE = ckernel::trisc::L1AccessMode::Continuous>
+inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
     LLK_REINIT_GUARD_NOTE_PROGRAMMED(E, operand_id);
     // TODO: multi-TC not handled — only tc_slots[0]'s L1 base is programmed. When a DFB is mapped
     // across multiple TCs this must program one descriptor per active tc_slot (same gap in
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
-    return ckernel::trisc::bfd_alloc_and_program<E, MODE>(
+    ckernel::trisc::program_bfd<E, MODE>(
         get_operand_tensor_shape(operand_id),
         get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
 }
 
-namespace ckernel::trisc {
-// The scaler DFB whose unpacker (UNP_B) llk_unpack_AB_reduce_init moved to MxFp4_2x_B for a 2x column reduce, as
-// operand id + 1 so that 0 (REDUCE_2X_SCALER_NONE) means none and the definition stays in .tbss. thread_local because
-// each Neo has its own UNP_B and runs its own init/uninit (tt-llk#1678). Firmware TLS outlives a kernel, so
-// llk_unpack_hw_configure clears it at kernel start. Defined in tt_metal/hw/firmware/src/tt-2xx/trisc.cc.
-extern thread_local std::uint32_t reduce_2x_scaler_operand_plus_one;
-}  // namespace ckernel::trisc
-
-constexpr std::uint32_t REDUCE_2X_SCALER_NONE = 0;
-
 /**
  * @brief Programs source register format for both UNP_A and UNP_B
  *
  * Buffer descriptors are no longer programmed here: BFD ids are an LLK-internal resource
- * allocated from the per-TRISC partition (see llk_bfd_alloc.h) and each op's llk_unpack_*_init
+ * fixed per engine (see ckernel_buf_desc.h) and each op's llk_unpack_*_init
  * programs its own table entry. DFB ids never double as BFD ids.
  *
  * Also the unpack thread's once-per-program unpack-to-dest init: its DEST bank reset and the seeds of the semaphores
@@ -79,8 +68,6 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
     _llk_unpack_configure_binary_<p_unpacr::UNP_A, p_unpacr::UNP_B>(
         static_cast<DataFormat>(unpack_dst_format[unpA_operand_id]),
         static_cast<DataFormat>(unpack_dst_format[unpB_operand_id]));
-    // UNP_B is back on its table format, and a previous kernel's 2x reduce scaler record must not leak.
-    ckernel::trisc::reduce_2x_scaler_operand_plus_one = REDUCE_2X_SCALER_NONE;
 
     // Unpack-to-dest: the unpack thread carries its DEST bank in the UNP_DEST tile index (the SEC registers do not move
     // UNPACR_DEST), and this is the once-per-program reset of that bank. Every compute-API site that calls

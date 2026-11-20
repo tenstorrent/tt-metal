@@ -8,7 +8,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import torch2tt_tensor, tt2torch_tensor
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
 
 
 class PytorchFalconCreateQKVHeads(torch.nn.Module):
