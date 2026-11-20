@@ -935,3 +935,15 @@ The triage tools are a sibling directory,
 compiled scaleout tools rather than under the health check, because the binary
 is a CMake target and the tools are useful on their own when triaging a unit by
 hand.
+
+## Galaxy device programs
+
+`galaxy/` holds the single-galaxy device programs an outside harness drives: the load stages
+(`chunk_load.py`, `agloop.py`, `ub0_repro.py`), the numeric checks (G3 `numeric_check.py`, G3b
+`dram_dbi.py`, `numeric_pinpoint.py`, `l1_march.py`, `rf_walk.py`, `noc_a2a.py`), the link tests
+(`link_pattern.py`, `fabric_open.py`), the quiet-clock check (`quiet_clock.py`) and the firmware
+code readback (`code_readback.py` via `exalens_probe.py`). Run each as a script from `galaxy/`,
+or import it by its flat name with `galaxy/` on `sys.path`; every import stays inside `galaxy/`,
+the standard library and the device stack (`ttnn`, `torch`, `tt_umd`, `ttexalens`). A script prints
+its result lines on stdout. `tests/test_galaxy_programs.py` checks
+the imports without a device.
