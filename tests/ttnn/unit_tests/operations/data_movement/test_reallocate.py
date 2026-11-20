@@ -46,10 +46,12 @@ def test_reallocate_interleaved(device, mem_config, num_allocs):
     tensors[-1] = ttnn.reallocate(tensors[-1])
     new_address = tensors[-1].buffer_address()
 
+    # With earlier tensors freed there is a hole to move into, so the address must change (DRAM allocates bottom-up,
+    # L1 top-down); a single allocation has no hole and may stay where it is.
     if mem_config == ttnn.DRAM_MEMORY_CONFIG:
-        assert new_address <= initial_address
+        assert new_address < initial_address if num_allocs > 1 else new_address <= initial_address
     else:
-        assert new_address >= initial_address
+        assert new_address > initial_address if num_allocs > 1 else new_address >= initial_address
 
     assert_equal(torch_tensors[-1], ttnn.to_torch(tensors[-1]))
 
