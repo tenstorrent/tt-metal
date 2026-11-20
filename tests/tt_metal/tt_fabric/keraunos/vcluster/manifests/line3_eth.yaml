@@ -6,9 +6,10 @@ devices:
     fabric_chip: 0
     slots:
       - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 0, cce: 0, hart: 1, role: worker}
+      - {tile: 0, cce: 1, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 0, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 0, cce: 1, base: 0x0, size: 0x400000}
   - name: M
     fabric_chip: 1
     slots:
@@ -21,9 +22,10 @@ devices:
     fabric_chip: 2
     slots:
       - {tile: 3, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 3, cce: 0, hart: 1, role: worker}
+      - {tile: 3, cce: 1, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 3, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 3, cce: 1, base: 0x0, size: 0x400000}
 links:
   - {a: {device: A, port: 0}, b: {device: M, port: 0}, backend: ethernet}
   - {a: {device: M, port: 1}, b: {device: B, port: 0}, backend: ethernet}
