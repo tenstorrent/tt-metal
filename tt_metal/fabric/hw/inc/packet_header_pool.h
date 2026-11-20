@@ -12,7 +12,15 @@
 #include "noc_nonblocking_api.h"
 #include "core_config.h"
 
-static_assert(proc_type < MaxDMProcessorsPerCoreType, "PacketHeaderPool: proc_type must be a valid DM processor index");
+#if defined(KERAUNOS_CCE)
+// An idle-ethernet kernel's processor index counts the harts of both CCEs of its tile; the pool is its own CCE's.
+constexpr uint32_t packet_header_pool_proc = proc_type % MEM_IERISC_LOCAL_HARTS;
+#else
+constexpr uint32_t packet_header_pool_proc = proc_type;
+#endif
+static_assert(
+    packet_header_pool_proc < MaxDMProcessorsPerCoreType,
+    "PacketHeaderPool: proc_type must be a valid DM processor index");
 
 // Simple packet header pool manager for fabric networking
 // This class manages allocation of packet headers from a fixed pool
@@ -32,7 +40,7 @@ private:
     static constexpr uint32_t POOL_SIZE = MEM_PACKET_HEADER_POOL_SIZE;
     static constexpr uint32_t HEADER_SIZE = PACKET_HEADER_MAX_SIZE;
     static constexpr uint32_t POOL_SIZE_PER_RISC = POOL_SIZE / MaxDMProcessorsPerCoreType;
-    static const uint32_t risc_pool_start = proc_type * POOL_SIZE_PER_RISC;
+    static const uint32_t risc_pool_start = packet_header_pool_proc * POOL_SIZE_PER_RISC;
     static const uint32_t risc_pool_end = risc_pool_start + POOL_SIZE_PER_RISC;
     static uint8_t route_id_;
     static const uint32_t HEADER_GROUP_SIZE_PER_RISC = NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType;
