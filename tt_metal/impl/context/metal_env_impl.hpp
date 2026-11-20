@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -36,6 +37,9 @@ class DistributedContext;
 }
 
 namespace tt::tt_metal {
+
+class IDevice;
+class Program;
 
 class MetalEnvImpl {
 public:
@@ -104,6 +108,22 @@ public:
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
     void set_default_fabric_topology();
 
+    // Called once per device while its fabric program is built, after the router kernels are created and before the
+    // program is compiled: the one moment a test can reach between device init and the routers' launch. It is for a
+    // host write the routers must find when they start, such as the kind of a Keraunos link record
+    // (hostdev/eth_link.h); the callee may read `fabric_program` and adds nothing to it. A write to any device must be
+    // finished before any call returns: the launch loop configures and launches a device once its own compile is done,
+    // while other devices still compile. One write under std::call_once that every call passes through does that.
+    // Devices compile in parallel, so it is called from several threads, one per device. An empty function (the
+    // default) leaves fabric as it is.
+    using FabricProgramExtension = std::function<void(IDevice* device, Program& fabric_program)>;
+    // Test-only. Set before this env's devices open and cleared after they close. Not thread-safe against a
+    // concurrent open.
+    void set_fabric_program_extension(FabricProgramExtension extension) {
+        fabric_program_extension_ = std::move(extension);
+    }
+    const FabricProgramExtension& get_fabric_program_extension() const { return fabric_program_extension_; }
+
     // --- Distributed context ---
     const distributed::multihost::DistributedContext& full_world_distributed_context() const;
     const distributed::multihost::DistributedContext& global_distributed_context();
@@ -171,6 +191,7 @@ private:
     tt_fabric::MeshHostRankId fabric_host_rank_ = tt_fabric::MeshHostRankId{0};
     std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
     std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
+    FabricProgramExtension fabric_program_extension_;
 
     bool force_reinit_ = false;
 
