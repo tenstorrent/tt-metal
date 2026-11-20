@@ -42,6 +42,8 @@ class KimiK3Config:
     EMB_SIZE = 7168  # embedding dimension
     # The dense FFN (layer 0) fuses its TP gather and reduce-scatter into its matmuls (TtFfn fuse_tp_collectives).
     FUSE_DENSE_FFN_TP_COLLECTIVES = True
+    # Callers can override this default with use_fused_rmsnorm at model initialization.
+    USE_FUSED_PREFILL_RMSNORM = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
     # The one definition of K3's l1_small pool, read by the adapter (and so by the runner) and by
     # the pytest gates, whose mesh fixture is built before any adapter is resolved. It is cut from
