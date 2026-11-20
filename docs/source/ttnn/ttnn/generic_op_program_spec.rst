@@ -81,8 +81,8 @@ What a kernel needs, where you set it, and how the kernel reaches it:
 
 An array has the same length on every node, and ``get_arg(args::<name>).size()`` gives it. For a list whose length
 differs from node to node, such as a list of node coordinates, declare the longest length and pass each node's count
-in another argument. Python has no varargs, the positional arguments that Metal 2.0 keeps only to ease migration:
-array arguments replace them.
+in another argument. The Python classes do not bind varargs, the positional kernel arguments that Metal 2.0 keeps in
+its advanced options for a few niche uses: array arguments replace them.
 
 The lists and dicts these classes return are copies, and so are their other fields that hold an object, such as
 ``KernelSpec.hw_config``, ``TensorParameter.spec`` and ``WorkUnitSpec.target_nodes``. A change to a copy is lost: assign
@@ -179,16 +179,18 @@ reader_unary_interleaved_start_id_metal2.cpp_).
   arguments, a list of values per node, become ``KernelRunArgs.runtime_arg_values``: a dict from each argument name to a
   dict from node (a ``ttnn.CoreCoord``) to value.
 
-On Wormhole and Blackhole the loops that move and compute data can stay as they are (eltwise_sfpu_metal2.cpp_ also
-splits its loop with ``dram_read::for_each_chunk``, which is not part of the move). On Quasar the circular-buffer calls
-do not work, so the data-movement loops use the ``DataflowBuffer`` calls instead (``reserve_back``, ``push_back``,
-``wait_front``, ``pop_front``), as both unary readers above already do. A Quasar data-movement kernel that makes many
-transfers smaller than a tile, such as row-major sticks, also passes ``disable_dfb_implicit_sync_for_all=True`` to
-``create_reader_datamovement_config`` or ``create_writer_datamovement_config``: such transfers stall Quasar's implicit
-counting of buffer entries, and the flag leaves the counting to the kernel's own calls.
+On Wormhole and Blackhole the loops that move and compute data can stay as they are. The Metal 2.0 kernels above also
+have changes that are not part of the move: eltwise_sfpu_metal2.cpp_ splits its loop with ``dram_read::for_each_chunk``
+and can set a packer ReLU, and reader_unary_interleaved_start_id_metal2.cpp_ can take its page size from defines. On
+Quasar the circular-buffer calls do not work, so the data-movement loops use the ``DataflowBuffer`` calls instead
+(``reserve_back``, ``push_back``, ``wait_front``, ``pop_front``), as both unary readers above already do. A Quasar
+data-movement kernel that makes many transfers smaller than a tile, such as row-major sticks, also passes
+``disable_dfb_implicit_sync_for_all=True`` to ``create_reader_datamovement_config`` or
+``create_writer_datamovement_config``: such transfers stall Quasar's implicit counting of buffer entries, and the flag
+leaves the counting to the kernel's own calls.
 
 .. The kernel links pin one tt-metal commit, since the page describes their code line by line; move the pin when the
-   page changes with them. The header links follow main, since the headers document the fields as they are now.
+   page changes with them. The header and test links follow main, since they document the code as it is now.
 
 .. _eltwise_sfpu.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
 .. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
@@ -197,6 +199,7 @@ counting of buffer entries, and the flag leaves the counting to the kernel's own
 .. _generic_op.hpp: https://github.com/tenstorrent/tt-metal/blob/main/ttnn/cpp/ttnn/operations/generic/generic_op.hpp
 .. _the workload headers: https://github.com/tenstorrent/tt-metal/tree/main/tt_metal/api/tt-metalium/workload
 .. _advanced_options.hpp: https://github.com/tenstorrent/tt-metal/blob/main/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+.. _test_generic_op_program_spec.py: https://github.com/tenstorrent/tt-metal/blob/main/tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
 circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available
@@ -205,6 +208,6 @@ yet either, and a semaphore always starts at 0. Programs that need any of these 
 More examples
 *************
 
-``tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py`` builds programs with two inputs, array
-arguments, aliased buffers, buffers on a sharded tensor's memory, semaphores, the mesh form and, on Quasar, a compute
-kernel with two threads. The API reference lists the arguments of :func:`ttnn.experimental.generic_op`.
+test_generic_op_program_spec.py_ builds programs with two inputs, array arguments, aliased buffers, buffers on a sharded
+tensor's memory, semaphores, the mesh form and, on Quasar, a compute kernel with two threads. The API reference lists
+the arguments of :func:`ttnn.experimental.generic_op`.
