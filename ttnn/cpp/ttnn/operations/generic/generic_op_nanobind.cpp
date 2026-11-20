@@ -44,18 +44,18 @@ void bind_generic_operation(nb::module_& mod) {
             fewest devices.
 
         Note:
-            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
-            and distribution shape. As for most ops, each generic_op call merges this label from the labels of all
-            the tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes
-            the output sharded along it. Other output tensors keep their labels. The label changes before the program
+            The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements and
+            distribution shape. As for most ops, each generic_op call merges this label from the labels of all the
+            tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the
+            output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
             is compiled and before some of generic_op's checks, so a call that raises can still change it.
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``,
-            which moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the
-            program has not run, so give back the label the output had before the call. When every tensor in
-            io_tensors is on every device of the mesh, build the label that ttnn gives its own tensors with that
-            layout, from the output's devices::
+            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``, which
+            moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the program has
+            not run, so give back the output's label from before the call: save it first with
+            ``output.tensor_topology()``, which returns a copy. When every tensor in io_tensors is on every device of
+            the mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
@@ -222,11 +222,11 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             run args against the spec, so a call that raises can still change it.
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``,
-            which moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the
-            program has not run, so give back the label the output had before the call. When every tensor in
-            io_tensors is on every device of the mesh, build the label that ttnn gives its own tensors with that
-            layout, from the output's devices::
+            input, fix the label after each call that runs it, with ``output.update_tensor_topology(topology)``, which
+            moves no data. After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the program has
+            not run, so give back the output's label from before the call: save it first with
+            ``output.tensor_topology()``, which returns a copy. When every tensor in io_tensors is on every device of
+            the mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
                 shape = output.device().shape
