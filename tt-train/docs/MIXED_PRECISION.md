@@ -94,8 +94,9 @@ optimizer state follows. It is applied once per run, where the optimizer is buil
   in the process.
 - **C++.** The `nano_gpt` runner applies it.
 - **Checking.** `ttml.core.validate_precision_config()` (C++ `core::validate_precision_config()`) checks the block
-  without applying it. Python's `ttml.common.config.TrainingConfig`, which also exposes the block as `.precision`, and
-  the C++ `nano_gpt` `parse_config()` call it, so a typo stops the run before the model is built.
+  without applying it. Python's `ttml.common.config.TrainingConfig`, which also exposes the block as `.precision`,
+  `GRPOTrainer`'s constructor (through `ttml.common.utils.validate_precision()`) and the C++ `nano_gpt`
+  `parse_config()` call it, so a typo stops the run before the model is built.
 
 The load order is: build the model, convert, load weights, create the optimizer, then load a training checkpoint,
 which restores the optimizer state too. Every loader writes the dtype a tensor is stored in, so values loaded after

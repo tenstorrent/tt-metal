@@ -223,6 +223,12 @@ def _precision_block_as_yaml(precision):
     return converted
 
 
+def validate_precision(precision: dict | None) -> None:
+    """Check the YAML's ``training_config.precision`` block, given as a dict, without applying it: the errors
+    ``apply_precision`` would raise, with no model and no device needed. ``None`` means no block."""
+    ttml.core.validate_precision_config({"precision": _precision_block_as_yaml(precision)})
+
+
 def apply_precision(model, precision: dict | None) -> None:
     """Apply the YAML's ``training_config.precision`` block, given as a dict, to *model*'s parameters with
     ``ttml.core.apply_precision_config``, as ``create_optimizer`` does with the whole config. ``None`` means no block:
