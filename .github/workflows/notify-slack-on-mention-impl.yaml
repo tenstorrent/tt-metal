@@ -1,4 +1,4 @@
-name: Notify Slack on Comment or Mention (impl)
+name: "[internal] Notify Slack on Comment or Mention impl"
 
 # Relays @mentions written by someone outside the org, or by a bot, to Slack.
 # Three ways in:

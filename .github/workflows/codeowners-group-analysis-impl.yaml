@@ -1,4 +1,4 @@
-name: CodeOwners Group Analysis (impl)
+name: "[internal] CodeOwners Group Analysis impl"
 
 # Does the work for codeowners-group-analysis.yaml. Three ways in:
 #   - a PR comment (`/codeowners ...`, `/ping ...`)
