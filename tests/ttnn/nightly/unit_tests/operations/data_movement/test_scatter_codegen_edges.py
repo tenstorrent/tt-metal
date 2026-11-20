@@ -84,14 +84,17 @@ def _run_auto_against_native(device, xt, it, st, dim, **kwargs):
     "shape,index_shape,layout",
     [
         ([1, 1, 32, 64], [1, 1, 16, 64], ttnn.TILE_LAYOUT),
+        ([1, 1, 96, 128], [1, 1, 33, 128], ttnn.ROW_MAJOR_LAYOUT),
         ([1, 1, 96, 128], [1, 1, 48, 128], ttnn.ROW_MAJOR_LAYOUT),
     ],
     ids=lambda v: str(v) if isinstance(v, list) else None,
 )
 def test_scatter_codegen_row_axis_small_shapes_route_to_codegen(device, shape, index_shape, layout):
     # Small bf16 row-axis scatters route to codegen and must match native: TILE at any size, and
-    # ROW_MAJOR once the input passes the 16 KiB dispatch bound (96 rows of 128 bf16 is 24 KiB, and
-    # the 96-element transposed stick is 192 B, aligned on both architectures).
+    # ROW_MAJOR once input, index and source together pass the 48 KiB dispatch bound. 96 rows of 128
+    # bf16 are 24576 B of input; a 33-row index adds 16896 B of int32 index and 8448 B of source,
+    # 49920 B in all, one row past the bound; the 48-row index is 61440 B. The 96-element transposed
+    # stick is 192 B, aligned on both architectures.
     xt, it, st = _make_case(shape, index_shape, -2, layout, device)
     _, added = _run_auto_against_native(device, xt, it, st, -2)
     assert added > 0, "auto fell back to native; expected codegen to serve this call"
@@ -110,13 +113,16 @@ def test_scatter_codegen_tile_dram_input_l1_output_runs_tile_factory(device):
     assert added == 1, "expected the codegen TILE factory's one program beyond native's"
 
 
-@pytest.mark.parametrize("shape,index_shape", [([1, 1, 32, 64], [1, 1, 16, 64]), ([1, 1, 64, 128], [1, 1, 32, 128])])
+@pytest.mark.parametrize(
+    "shape,index_shape",
+    [([1, 1, 32, 64], [1, 1, 16, 64]), ([1, 1, 64, 128], [1, 1, 32, 128]), ([1, 1, 96, 128], [1, 1, 32, 128])],
+)
 @pytest.mark.parametrize("dim", [-2, 2])
 def test_scatter_codegen_small_row_major_off_axis_scatter_stays_native(device, shape, index_shape, dim):
-    # A ROW_MAJOR scatter off the last axis with at most 16 KiB of input is dispatch-bound: a tie on
-    # device that loses host wall clock, so is_demoted() keeps it native. The rule reads the
-    # normalized axis, so both spellings of the dim route the same way; 64 rows of 128 bf16 sit
-    # exactly on the bound.
+    # A ROW_MAJOR scatter off the last axis whose input, index and source together are at most
+    # 48 KiB is dispatch-bound: a tie on device that loses host wall clock, so is_demoted() keeps it
+    # native. The rule reads the normalized axis, so both spellings of the dim route the same way.
+    # The three cases carry 10240 B, 40960 B and exactly 49152 B of operands.
     xt, it, st = _make_case(shape, index_shape, dim, ttnn.ROW_MAJOR_LAYOUT, device)
     _, added = _run_auto_against_native(device, xt, it, st, dim)
     assert added == 0, "auto routed a dispatch-bound row-major scatter to codegen; expected native"
@@ -437,12 +443,10 @@ def test_scatter_codegen_uint16_index_stays_native(device):
     assert added == 0, "auto routed a uint16 index to codegen; expected native"
 
 
-@pytest.mark.parametrize(
-    "input_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16_codegen_leg", "float32_native_leg"]
-)
+@pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32], ids=["bfloat16_row", "float32_row"])
 def test_scatter_codegen_unknown_reduce_string_raises(device, input_dtype, expect_error):
-    # scatter_reduction_mode() parses the reduce string ahead of routing, on both legs; a string
-    # the codegen kernels do not implement must raise instead of landing as a plain overwrite.
+    # A reduce string outside ALLOWED_REDUCTIONS routes native on every leg, so native's own
+    # validate raises the one error for it; the bfloat16 row would otherwise be a codegen call.
     xt, it, st = _make_case([1, 1, 32, 64], [1, 1, 32, 32], -1, ttnn.ROW_MAJOR_LAYOUT, device, input_dtype=input_dtype)
     with expect_error(RuntimeError, "reduce must be either 'add' or 'multiply'"):
         ttnn.scatter(xt, -1, it, st, reduce="amax")
@@ -541,29 +545,17 @@ def test_scatter_codegen_program_cache_key_follows_the_l1_frontier(device):
 
 def test_scatter_codegen_wide_rows_with_a_wide_index_keep_the_row_split(device):
     # Forty tile rows underfill the grid, but each row carries eight index tiles: a column split would
-    # read and scan those eight pairs once per output tile, 80x the row split's work on the busiest
-    # core, and measured 18x slower than native on Blackhole. The row split is one program beyond
-    # native's and stays within a small factor of native on wall clock even with host noise.
-    import statistics
-    import time
-
+    # read and scan those eight pairs once per output tile and ran 18x slower than native. The row
+    # split is one program beyond native's; the gtest pins the selection itself.
     xt, it, st = _make_case([1, 1, 1280, 3200], [1, 1, 1280, 256], -1, ttnn.TILE_LAYOUT, device)
     _, added = _run_auto_against_native(device, xt, it, st, -1)
     assert added == 1, "expected the codegen TILE factory's one program beyond native's"
 
-    def median_ms(fn, n=10):
-        fn()
-        ttnn.synchronize_device(device)
-        samples = []
-        for _ in range(n):
-            t0 = time.perf_counter()
-            fn()
-            ttnn.synchronize_device(device)
-            samples.append((time.perf_counter() - t0) * 1e3)
-        return statistics.median(samples)
 
-    native_ms = median_ms(lambda: _force_native(xt, -1, it, st))
-    codegen_ms = median_ms(lambda: ttnn.scatter(xt, -1, it, st))
-    assert (
-        codegen_ms < 3 * native_ms
-    ), f"codegen {codegen_ms:.3f} ms against native {native_ms:.3f} ms: the column split is back"
+def test_scatter_codegen_wide_rows_past_the_detour_stay_native(device):
+    # 400 output tile columns do not fit the row split in L1 and 64 tile rows are past the detour, so
+    # the column split is all codegen has left; it rescans the eight index tiles per output tile and
+    # ran 38x slower than native. is_demoted() keeps the call native.
+    xt, it, st = _make_case([1, 1, 2048, 12800], [1, 1, 2048, 256], -1, ttnn.TILE_LAYOUT, device)
+    _, added = _run_auto_against_native(device, xt, it, st, -1)
+    assert added == 0, "auto routed a wide-row scatter past the detour to codegen; expected native"

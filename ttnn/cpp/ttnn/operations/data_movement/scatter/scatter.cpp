@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include <iostream>
 #include <enchantum/enchantum.hpp>
 
@@ -26,9 +27,16 @@ namespace ttnn::operations::data_movement {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Widen together with scatter_reduction_mode() below: routing runs that parser ahead of
-// validate_inputs(), so a string admitted here but unknown there never reaches native.
+// The reduce strings the codegen factories serve. codegen_can_serve() routes any other string
+// native, where validate_inputs() raises the one error for it; widen together with
+// scatter_reduction_mode() below.
 constexpr std::string_view ALLOWED_REDUCTIONS[] = {"add", "multiply"};
+
+bool codegen_serves_reduction(const std::optional<std::string>& opt_reduction_string) {
+    return !opt_reduction_string.has_value() ||
+           std::find(std::begin(ALLOWED_REDUCTIONS), std::end(ALLOWED_REDUCTIONS), *opt_reduction_string) !=
+               std::end(ALLOWED_REDUCTIONS);
+}
 
 // validate dimension constraints before sending down to device operation working on the last dimension
 // inputs are validated according to
@@ -253,10 +261,9 @@ scatter::ScatterReductionType get_scatter_reduction_type_from_string(
 // The codegen prim's reduction_mode (scatter_codegen_supported.hpp's kReduction* constants, the
 // kernels' own numbering). Derived from the one string parser this file has rather than re-parsing
 // the string, so a reduce the parser knows but the codegen factories do not (amax/amin) can never be
-// read as a plain overwrite. ttnn::scatter() consults this through codegen_can_serve() BEFORE
-// validate_inputs() runs, on the native leg too, so an unsupported string fails here on its own and
-// with validate_inputs()'s wording. ScatterReductionType's ordinals do not match the kernel
-// numbering, so the two are never interconverted by casting.
+// read as a plain overwrite. Every caller has passed codegen_serves_reduction() first, so the
+// default below is the bridge's contract, not a path a public entry reaches. ScatterReductionType
+// is not cast to the kernel numbering, which is defined on its own.
 uint32_t scatter_reduction_mode(const std::optional<std::string>& opt_reduction_string) {
     if (!opt_reduction_string.has_value()) {
         return scatter::kReductionNone;
@@ -294,8 +301,9 @@ bool codegen_can_serve(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::string>& opt_reduction_string) {
     const auto output_mem_config = memory_config.has_value() ? memory_config.value() : input_tensor.memory_config();
-    // An unknown reduce string routes native, which raises the one error for it on every architecture.
-    if (opt_reduction_string.has_value() && *opt_reduction_string != "add" && *opt_reduction_string != "multiply") {
+    // A reduce string outside ALLOWED_REDUCTIONS routes native, which raises the one error for it on
+    // every architecture.
+    if (!codegen_serves_reduction(opt_reduction_string)) {
         return false;
     }
     const uint32_t reduction_mode = scatter_reduction_mode(opt_reduction_string);
@@ -556,7 +564,7 @@ Tensor scatter(
     //                                                                      -> native
     //   - TILE with at most kRowMajorRerouteMaxHt post-transpose tile rows, input and index sticks of
     //     at most kRowMajorRerouteMaxStickElems elements whose raw byte widths are multiples of
-    //     kRowMajorRerouteNocAlign, that fit live L1, and an output in the input's placement
+    //     kRowMajorRerouteWidthMultiple, that fit live L1, and an output in the input's placement
     //                                      -> untilize, ROW_MAJOR factory, tilize (the detour)
     //   - otherwise -> codegen: the TILE interleaved/streaming factory, or the ROW_MAJOR plain or
     //     bf16-reduce factory, chosen by the prim's select_program_factory()

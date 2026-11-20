@@ -319,6 +319,9 @@ def test_scatter_partial(
         ([2, 3, 4, 5, 6, 7], 2, [2, 2, 4, 5, 6, 7], [2, 2, 4, 5, 6, 7]),  # rank 6, transposed
         ([2, 3, 4, 5, 6, 7], 0, [2, 3, 2, 5, 6, 7], [2, 3, 2, 5, 6, 7]),  # rank 6, transposed
         ([2, 3, 2, 3, 2, 3, 2, 3], 3, [2, 2, 2, 2, 2, 2, 2, 3], [2, 2, 2, 2, 2, 2, 2, 3]),  # rank 8, transposed
+        # Past the 48 KiB operand bound under which is_demoted() keeps small off-axis ROW_MAJOR calls
+        # native, so this row reaches the codegen kernels on Wormhole and Blackhole (46 KiB input, 75 KiB index).
+        ([4, 6, 8, 10, 12], 2, [4, 5, 8, 10, 12], [4, 5, 8, 10, 12]),
         # Interior leading dim of 1 on the index side: broadcast-looking but not broadcast.
         ([2, 3, 4, 5, 6], -1, [2, 1, 4, 5, 6], [2, 1, 4, 5, 6]),
     ],
@@ -327,7 +330,8 @@ def test_scatter_partial(
     "input_dtype, index_dtype, layout",
     [
         # bfloat16 with an int32 or uint32 index routes to the codegen kernels, whose readers fold the
-        # same page coordinates; every other row stays on the native kernels.
+        # same page coordinates, except the small off-axis ROW_MAJOR rows is_demoted() keeps native;
+        # every other row stays on the native kernels. Compared against torch, so both routes count.
         (ttnn.bfloat16, ttnn.int32, ttnn.Layout.ROW_MAJOR),
         (ttnn.bfloat16, ttnn.int32, ttnn.Layout.TILE),
         (ttnn.float32, ttnn.uint16, ttnn.Layout.ROW_MAJOR),
@@ -418,6 +422,8 @@ def test_scatter_singleton_operand(input_shape, dim, index_shape, source_shape, 
         ([2, 3, 4, 5, 6, 7], -1, [2, 3, 2, 5, 6, 7]),
         # mismatch at axis 1, not axis 2 - see the note in the non-reduction test above
         ([2, 3, 4, 5, 6, 7], 2, [2, 2, 4, 5, 6, 7]),
+        # Past the 48 KiB operand bound, so the off-axis call reaches the codegen bf16-reduce factory.
+        ([4, 6, 8, 10, 12], 2, [4, 5, 8, 10, 12]),
     ],
 )
 @pytest.mark.parametrize("reduction", ["add", "multiply"])

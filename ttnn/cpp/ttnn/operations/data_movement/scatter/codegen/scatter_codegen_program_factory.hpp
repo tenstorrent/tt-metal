@@ -158,7 +158,7 @@ uint32_t scatter_rm_chunk_elems(
     uint32_t src_elem_size,
     uint32_t cb_align);
 
-// TILE, full input/src row resident in L1. "Interleaved" is the name the gather port gave this
+// TILE, the input and output rows resident in L1. "Interleaved" is the name the gather port gave this
 // row-resident plan; every factory here reads interleaved (non-sharded) buffers.
 struct ScatterCodegenProgramFactoryInterleaved {
     static tt::tt_metal::ProgramDescriptor create_descriptor(
