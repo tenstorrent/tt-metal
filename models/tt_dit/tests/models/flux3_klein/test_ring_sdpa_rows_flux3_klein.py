@@ -8,7 +8,7 @@
 SP4 x TP2 (DP4 groups) has no key in the shared ring SDPA table, whose default there is a 256 k chunk. Every DP4 length
 must pick a 512 k chunk ((224, 512) at the 4096 image / single-stage rows), and SP8 x TP4 must pick exactly SP8_ROWS:
 Klein's table where it has the rows (k 640 at the 4096 + 1 reference rows, 8960), else the shared table with q capped at
-128.
+128. The DP2 splits (SP8 x TP2, SP4 x TP4) have no shared key either and pick a 512 k chunk at every length.
 """
 
 from __future__ import annotations
@@ -85,6 +85,17 @@ def test_dp4_picks_a_512_k_chunk(size):
         assert _chunks(4, 2, n)[1] == 512, n
         if size == 4096 and n // 4 in SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS:
             assert _chunks(4, 2, n) == (224, 512), n
+
+
+@pytest.mark.parametrize("size", SIZES)
+@pytest.mark.parametrize(("sp", "tp"), [(8, 2), (4, 4)])
+def test_dp2_picks_a_512_k_chunk(size, sp, tp):
+    assert (True, sp, tp) not in attention_opt.Attention.ring_sdpa_chunk_size_map
+    rows = SP8_ROWS if sp == 8 else SP4_TP2_RING_SDPA_CHUNKS_BY_LOCAL_ROWS
+    for n in _lengths(sp, size):
+        q, k = _chunks(sp, tp, n)
+        assert k == 512, n
+        assert (q, k) == rows.get(n // sp, (128, 512)) or (sp == 4 and n // sp in SP8_ROWS), n
 
 
 def test_dp4_4096_image_and_single_stage_rows_are_listed():
