@@ -22,14 +22,28 @@ TRAINER_STATE = "trainer_state.json"
 PathLike = Union[str, os.PathLike]
 
 
+def _remove(path: Path) -> None:
+    if path.is_dir():
+        shutil.rmtree(path)
+    else:
+        path.unlink()
+
+
 @contextmanager
 def staged_directory(path: PathLike) -> Iterator[Path]:
     """A directory to write a checkpoint into, which replaces ``path`` only once it is complete.
 
     A failed or interrupted save leaves what was at ``path`` before, never a partial checkpoint.
+    The directory already at ``path`` is renamed aside and deleted only after the new one is in its place.
     """
     final = Path(path)
     staging = final.with_name(final.name + ".tmp")
+    previous = final.with_name(final.name + ".old")
+    # A crash after the previous checkpoint was renamed aside, and before the new one took its name,
+    # leaves the last complete checkpoint at ``previous``.
+    if not final.exists() and previous.exists():
+        os.replace(previous, final)
+
     shutil.rmtree(staging, ignore_errors=True)
     staging.mkdir(parents=True)
     try:
@@ -37,11 +51,21 @@ def staged_directory(path: PathLike) -> Iterator[Path]:
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise
-    if final.is_dir():
-        shutil.rmtree(final)
-    elif final.exists():
-        final.unlink()
-    os.replace(staging, final)
+    # Rename the previous checkpoint aside before publishing. Deleting it first would leave only the
+    # staging directory if the process died before the new one was moved into place.
+    if previous.exists():
+        _remove(previous)
+    if final.exists():
+        os.replace(final, previous)
+    try:
+        os.replace(staging, final)
+    except BaseException:
+        if not final.exists() and previous.exists():
+            os.replace(previous, final)
+        shutil.rmtree(staging, ignore_errors=True)
+        raise
+    if previous.exists():
+        _remove(previous)
 
 
 def write_trainer_state(directory: PathLike, state: dict[str, Any]) -> None:
