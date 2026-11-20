@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Interleaved tile reader with one reserve, one read barrier and one push per batch of consecutive tiles,
-// instead of per tile. The batch is the consumer's wait unit (a tile-row block), so the DFB is never
-// pushed in a shape the compute cannot consume.
+// instead of per tile. The batch divides the consumer's wait unit (a tile-row block), so a block is always a
+// whole number of pushes and the compute never sees a partial block.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

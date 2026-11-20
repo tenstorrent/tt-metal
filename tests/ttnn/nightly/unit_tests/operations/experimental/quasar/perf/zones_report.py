@@ -6,6 +6,12 @@ import sys
 
 from sim_profile import read_new_rows, reduce_all_zones, summarize_zones
 
-rows, _ = read_new_rows(sys.argv[1], 0)
-for s in summarize_zones(reduce_all_zones(rows)):
-    print(json.dumps(s))
+
+def main():
+    rows, _ = read_new_rows(sys.argv[1], 0)
+    for s in summarize_zones(reduce_all_zones(rows)):
+        print(json.dumps(s))
+
+
+if __name__ == "__main__":
+    main()

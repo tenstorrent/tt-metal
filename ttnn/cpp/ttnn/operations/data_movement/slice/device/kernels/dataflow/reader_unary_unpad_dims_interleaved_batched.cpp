@@ -2,8 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Tile reader with one read barrier per batch of tiles. The source tile ids still step through the
-// padded dims one tile at a time (the odometer), so a batch may span a padded-dim boundary.
+// KEEP IN SYNC WITH reader_unary_unpad_dims_interleaved_start_id.cpp, the one-tile form this file forks so that
+// WH/BH keep their binary. Tile reader with one read barrier per batch of tiles. The source tile ids still step
+// through the padded dims one tile at a time (the odometer), so a batch may span a padded-dim boundary.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
@@ -17,6 +18,8 @@ void kernel_main() {
     constexpr uint32_t num_dims = get_arg(args::num_dims);
     constexpr uint32_t tiles_per_batch = get_arg(args::tiles_per_batch);
 
+    // Two num_dims-long common vararg blocks, in the order the host appends them: the per-dimension
+    // unpadded and padded tile counts.
     constexpr uint32_t num_unpadded_tiles_base = 0;
     constexpr uint32_t num_padded_tiles_base = num_dims;
 
@@ -30,7 +33,13 @@ void kernel_main() {
 
     const uint32_t tile_size = dfb_in0.get_entry_size();
 
+    // The per-dimension index odometer this kernel advances as it walks the source. It is seeded from the
+    // host's starting position for this core (the per-core vararg block) and then mutated in place, so it
+    // needs writable storage of its own; vararg values are read-only.
     Scratchpad<uint32_t> id_per_dim(scratch::id_per_dim);
+    // Keep every CPU access to the odometer inside a scoped_lock. On Quasar DM the scratchpad is reached
+    // through the DM caches: the lock drops any old lines on entry and writes the counters back on exit, so
+    // no dirty line outlives this program.
     const auto id_per_dim_lock = id_per_dim.scoped_lock(0, num_dims);
     for (uint32_t j = 0; j < num_dims; ++j) {
         id_per_dim[j] = get_vararg(j);

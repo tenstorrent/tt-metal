@@ -346,9 +346,11 @@ ttnn::device_operation::ProgramArtifacts ReshapeViewTiledProgramFactory::create_
     const uint32_t max_map_entries = mapping_page_size / detail::SegmentMapData::size;
 
     // Resource names.
-    // One reader/writer hart pair saturates on this map-driven copy, and the input tiles a page needs are not a
-    // fixed stride, so Quasar runs independent pairs per cluster over disjoint page ranges rather than one
-    // multi-threaded pair. WH/BH keep the single pair.
+    // One reader/writer hart pair runs at its instruction issue rate on this map-driven copy, and the input
+    // tiles a page needs are not a fixed stride, so Quasar runs independent pairs per cluster over disjoint page
+    // ranges rather than one multi-threaded pair. Three pairs fill the six DM harts a program can use (eight per
+    // cluster, two kept by the firmware). Each pair owns its rings and syncs them explicitly, which needs
+    // implicit sync off. WH/BH keep the single pair. A pair whose page range is empty exits at once.
     const bool split_pairs = device->arch() == tt::ARCH::QUASAR;
     const uint32_t num_pairs = split_pairs ? 3 : 1;
     const TensorParamName INPUT_T{"input"};

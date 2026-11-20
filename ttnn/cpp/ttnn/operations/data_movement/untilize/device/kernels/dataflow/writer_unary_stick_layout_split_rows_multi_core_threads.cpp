@@ -2,9 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Multi-threaded variant of writer_unary_stick_layout_split_rows_multi_core.cpp: every thread waits for and
-// pops every block (ALL consumer pattern), and thread t writes the rows j with j % num_threads == t. The
-// per-row NoC commands are what bound an untilize writer, so they are spread over the DM harts.
+// KEEP IN SYNC WITH writer_unary_stick_layout_split_rows_multi_core.cpp, the single-hart form this file forks so
+// that WH/BH keep their binary; the only difference is the row stride. Every thread waits for and pops every
+// block (ALL consumer pattern), and thread t writes the rows j with j % num_threads == t. The per-row NoC
+// commands are what bound an untilize writer, so they are spread over the DM harts.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

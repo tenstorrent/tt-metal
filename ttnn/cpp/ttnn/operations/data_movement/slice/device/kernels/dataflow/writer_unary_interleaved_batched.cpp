@@ -2,7 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Page writer with one write barrier per batch of pages; each batch is popped as a unit.
+// Page writer with one write barrier per batch of pages; each batch is popped as a unit. The batch size is
+// named tiles_per_batch because the host sizes it in tiles, the pages this op moves.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

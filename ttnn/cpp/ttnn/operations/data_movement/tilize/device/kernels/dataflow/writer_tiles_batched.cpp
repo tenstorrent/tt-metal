@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Writes `num_blocks` blocks of `tiles_per_batch` consecutive tile pages with one write barrier per block.
-// Each block is popped as a unit, so the producer's block granularity bounds how far the writer can run ahead.
+// A block is laid out by stepping one address from the ring's read pointer, so the output ring must be a whole
+// number of blocks; the host keeps it at exactly one, and each block is popped as a unit, so the compute cannot
+// start the next block until this one is flushed.
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"

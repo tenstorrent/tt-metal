@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Slice the device-profiler CSV that a simulator run appends to, and reduce one op's rows to per-RISC cycle metrics.
 
-On Quasar the profiler is CSV-only, the log is opened in append mode, CHIP_FREQ is 0 on the simulator and the
-run-host id stays 0 under slow dispatch, so the only reliable per-op key is "rows appended since the previous
-read". Only cycle columns are used; the ns columns are derived from a hard-coded clock.
+On Quasar the profiler is CSV-only, the log is opened in append mode and flushed late, and CHIP_FREQ is 0 on the
+simulator, so the primary per-op key is "rows appended since the previous read" (byte offsets) and the run-host id
+the fallback key. Only cycle columns are used; the ns columns are derived from a hard-coded clock.
 """
 
 import csv
@@ -16,8 +16,10 @@ from dataclasses import dataclass, field
 
 KERNEL_ZONE_RE = re.compile(r"-KERNEL$")
 FW_ZONE_RE = re.compile(r"-FW$")
-# Capacity of the L1-only profiler buffer per RISC on Quasar; a RISC at the cap has dropped markers.
+# Capacity of the L1-only profiler buffer per RISC on Quasar: 250 optional markers (profiler_common.h), two per
+# zone. A RISC at the cap has dropped markers; the slack covers the firmware's own markers.
 ZONE_CAP_PER_RISC = 125
+ZONE_CAP_SLACK = 5
 
 
 @dataclass
@@ -25,7 +27,7 @@ class RiscStats:
     risc: str
     core: tuple
     zones: int = 0
-    busy: int = 0
+    lifetime: int = 0
     first_start: int | None = None
     last_end: int | None = None
 
@@ -44,7 +46,7 @@ class OpProfile:
         a value near 1 means the hart stayed alive to the end of the program, not that it was busy."""
         agg = defaultdict(lambda: [0, 0])
         for (core, risc), st in self.riscs.items():
-            agg[risc][0] += st.busy
+            agg[risc][0] += st.lifetime
             agg[risc][1] += 1
         if not self.span:
             return {}
@@ -72,7 +74,8 @@ def read_new_rows(path, offset):
 
 
 def reduce_rows(rows):
-    """Pair ZONE_START/ZONE_END markers per (core, RISC, zone) and reduce to span and per-RISC busy cycles."""
+    """Pair ZONE_START/ZONE_END markers per (core, RISC, zone) and reduce to the span and each RISC's kernel
+    lifetime (entry to exit, waits included)."""
     prof = OpProfile()
     open_zones = {}
     kernel_bounds = []
@@ -99,7 +102,7 @@ def reduce_rows(rows):
                 continue
             st = prof.riscs.setdefault((core, risc), RiscStats(risc, core))
             st.zones += 1
-            st.busy += ts - start
+            st.lifetime += ts - start
             st.first_start = start if st.first_start is None else min(st.first_start, start)
             st.last_end = ts if st.last_end is None else max(st.last_end, ts)
             kernel_bounds.append((start, ts))
@@ -108,7 +111,7 @@ def reduce_rows(rows):
     if fw_bounds:
         prof.fw_span = max(e for _, e in fw_bounds) - min(s for s, _ in fw_bounds)
     prof.n_cores = len({core for (core, _) in prof.riscs})
-    prof.overflow = [f"{c}:{r}" for (c, r), st in prof.riscs.items() if st.zones >= ZONE_CAP_PER_RISC - 5]
+    prof.overflow = [f"{c}:{r}" for (c, r), st in prof.riscs.items() if st.zones >= ZONE_CAP_PER_RISC - ZONE_CAP_SLACK]
     return prof
 
 

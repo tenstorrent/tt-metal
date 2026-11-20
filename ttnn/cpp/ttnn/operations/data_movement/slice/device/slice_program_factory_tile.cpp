@@ -51,12 +51,16 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
     // --- Dataflow buffer ---
     // Quasar's single NoC charges the full read latency at every barrier and its DM harts are issue-bound on
     // 2 KB transfers, so there one barrier covers a batch of tiles and the ring holds two batches. The batch
-    // bookkeeping costs a few dozen DM instructions, so cores with only a handful of tiles keep the one-tile
-    // path. WH/BH always keep it, which leaves their kernels and buffers unchanged.
+    // bookkeeping costs a few dozen DM instructions, so the program takes the batched path only when its busiest
+    // core holds 8 or more tiles; a core below that then runs one short batch. The batch is at most 32 tiles, so
+    // the reads in flight behind one barrier stay a fixed count rather than growing with the tensor. The batched
+    // kernels sync the ring explicitly, which needs implicit sync off. WH/BH always keep the one-tile path, which
+    // leaves their kernels and build inputs unchanged.
     constexpr uint32_t min_tiles_per_core_to_batch = 8;
+    constexpr uint32_t max_tiles_per_batch = 32;
     const uint32_t max_tiles_per_core = std::max(num_tiles_per_core_group_1, num_tiles_per_core_group_2);
     const bool batch_tiles = device->arch() == tt::ARCH::QUASAR && max_tiles_per_core >= min_tiles_per_core_to_batch;
-    const uint32_t tiles_per_batch = batch_tiles ? std::clamp<uint32_t>(max_tiles_per_core, 1, 32) : 1;
+    const uint32_t tiles_per_batch = batch_tiles ? std::min(max_tiles_per_core, max_tiles_per_batch) : 1;
     uint32_t num_input_tiles = 2 * tiles_per_batch;
 
     DataflowBufferSpec dfb_in{
@@ -135,7 +139,9 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "src",
                 },
             },
-        .compile_time_args = {{"num_dims", num_dims}, {"tiles_per_batch", tiles_per_batch}},
+        .compile_time_args =
+            batch_tiles ? KernelSpec::CompileTimeArgs{{"num_dims", num_dims}, {"tiles_per_batch", tiles_per_batch}}
+                        : KernelSpec::CompileTimeArgs{{"num_dims", num_dims}},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"start_id", "num_tiles"},
@@ -171,7 +177,8 @@ ttnn::device_operation::ProgramArtifacts SliceTileProgramFactory::create_program
                     .accessor_name = "dst",
                 },
             },
-        .compile_time_args = {{"tiles_per_batch", tiles_per_batch}},
+        .compile_time_args = batch_tiles ? KernelSpec::CompileTimeArgs{{"tiles_per_batch", tiles_per_batch}}
+                                         : KernelSpec::CompileTimeArgs{},
         .runtime_arg_schema =
             {
                 .runtime_arg_names = {"num_pages", "start_id"},

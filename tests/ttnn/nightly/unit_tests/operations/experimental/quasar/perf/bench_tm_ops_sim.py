@@ -1,12 +1,16 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Measure tilize/untilize/reshape/slice on the Quasar simulator: one process per variant, profiler cycles per op.
+"""Measure tilize/untilize/reshape/slice on the Quasar simulator: one process per manifest case, profiler cycles
+per op, and a bit-exact check of every output against PyTorch.
 
 Usage (parent): python bench_tm_ops_sim.py --sim-dir <dir with libttsim.so + soc_descriptor.yaml> \
-    --manifest cases.json --out results.tsv [--grid 3,2] [--perf-trace] [--timeout 1800]
-Each manifest case is {"op": "untilize", "shape": [1,1,32,2048], "dtype": "bfloat16", "layout": "TILE",
-"memcfg": "DRAM", "variant": "mainline", "kwargs": {...}}. Shapes in one case share a process; cases do not,
-because a program-cache hit would replay the first variant's program.
+    --manifest manifest_tm_ops.json --out results.tsv [--grid 3,2] [--perf-trace] [--timeout 1800]
+Each manifest case is {"op": "untilize", "shapes": [[1,1,32,2048], ...], "dtype": "bfloat16", "layout": "TILE",
+"memcfg": "DRAM" | "L1", "variant": "mainline", "kwargs": {...}}. Shapes in one case share a process; cases do
+not, because a program-cache hit would replay the first variant's program. The parent exits 2 when any output
+was not exact, so a run doubles as a regression check. A simulator here is craq-sim (the internal full-chip
+simulator) or ttsim; the TSV's lifetime_by_risc column is each RISC's kernel lifetime as a fraction of the span,
+waits included, not a busy figure.
 """
 
 import argparse
@@ -19,12 +23,12 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 PINNED_ENV = {
-    "TT_METAL_SLOW_DISPATCH_MODE": "1",
-    "TT_METAL_DISABLE_SFPLOADMACRO": "1",
+    "TT_METAL_SLOW_DISPATCH_MODE": "1",  # the simulators run slow dispatch; fast dispatch is not qualified there
+    "TT_METAL_DISABLE_SFPLOADMACRO": "1",  # the simulators abort on SFPLOADMACRO
     "ARCH_NAME": "quasar",
     "CHIP_ARCH": "quasar",
     "TT_METAL_DEVICE_PROFILER": "1",
-    "TT_METAL_PROFILER_MID_RUN_DUMP": "1",
+    "TT_METAL_PROFILER_MID_RUN_DUMP": "1",  # read the L1 profiler buffer after every op, it holds ~125 zones
 }
 
 
@@ -124,7 +128,7 @@ def run_child(case, out_path):
                         if prof.span and ntiles
                         else None,
                         "active_riscs": prof.active_set(),
-                        "util_by_risc": prof.by_risc_type(),
+                        "lifetime_by_risc": prof.by_risc_type(),
                         "overflow": prof.overflow,
                         "rows": len(rows),
                         "exact": exact,
@@ -160,7 +164,7 @@ def run_child(case, out_path):
                             if prof.span and ntiles
                             else None,
                             "active_riscs": prof.active_set(),
-                            "util_by_risc": prof.by_risc_type(),
+                            "lifetime_by_risc": prof.by_risc_type(),
                             "overflow": prof.overflow,
                             "rows": len(rows),
                             "row_source": "run_id_groups",
@@ -188,10 +192,12 @@ def main():
     args = ap.parse_args()
 
     if args.child:
-        run_child(json.load(open(args.child)), args.child_out)
+        with open(args.child) as f:
+            run_child(json.load(f), args.child_out)
         return
 
-    cases = json.load(open(args.manifest))
+    with open(args.manifest) as f:
+        cases = json.load(f)
     out_dir = os.path.dirname(os.path.abspath(args.out)) or "."
     os.makedirs(out_dir, exist_ok=True)
     tt_metal_home = os.environ["TT_METAL_HOME"]
@@ -209,7 +215,7 @@ def main():
         env["TT_METAL_PROFILER_DIR"] = os.path.join(case_dir, "profiler")
         env["PYTHONPATH"] = f"{tt_metal_home}:{HERE}:" + env.get("PYTHONPATH", "")
         env["LD_LIBRARY_PATH"] = f"{tt_metal_home}/build/lib:" + env.get("LD_LIBRARY_PATH", "")
-        env.pop("TT_METAL_QUASAR_NOC_API_VERSION", None)
+        env.pop("TT_METAL_QUASAR_NOC_API_VERSION", None)  # the factories are measured on the default NoC API v2
         if args.grid:
             env["TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE"] = args.grid
         if args.perf_trace:
@@ -256,8 +262,9 @@ def main():
         status = "ok" if rc == 0 else f"fail({rc})"
         print(f"[{tag}] {status} {time.time() - t0:.0f}s", flush=True)
         if os.path.exists(child_out):
-            for line in open(child_out):
-                all_results.append(json.loads(line))
+            with open(child_out) as f:
+                for line in f:
+                    all_results.append(json.loads(line))
     cols = [
         "op",
         "variant",
@@ -272,7 +279,7 @@ def main():
         "tiles",
         "cyc_per_tile_per_cluster",
         "active_riscs",
-        "util_by_risc",
+        "lifetime_by_risc",
         "overflow",
         "exact",
         "maxdiff",
@@ -283,6 +290,10 @@ def main():
         for r in all_results:
             f.write("\t".join(json.dumps(r.get(c)) if not isinstance(r.get(c), str) else r[c] for c in cols) + "\n")
     print(f"wrote {args.out} ({len(all_results)} rows)")
+    inexact = [r for r in all_results if r.get("exact") is False]
+    if inexact:
+        print(f"{len(inexact)} rows were not bit-exact", file=sys.stderr)
+        sys.exit(2)
 
 
 if __name__ == "__main__":

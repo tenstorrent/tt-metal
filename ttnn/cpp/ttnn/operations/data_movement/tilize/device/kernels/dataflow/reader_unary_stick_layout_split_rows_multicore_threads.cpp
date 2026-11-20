@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Multi-threaded variant of reader_unary_stick_layout_split_rows_multicore.cpp: thread t reads the tile-row
-// blocks t, t + num_threads, ... of this core's share into a BLOCKED-pattern DFB, so the 32 stick reads a
-// block costs are spread over the DM harts while the compute still consumes the blocks in row order.
+// KEEP IN SYNC WITH reader_unary_stick_layout_split_rows_multicore.cpp, the single-hart form this file forks so
+// that WH/BH keep their binary. Thread t reads the tile-row blocks t, t + num_threads, ... of this core's share
+// into a BLOCKED-pattern DFB, so the tile_height * num_pages_in_row stick reads each block costs are spread over
+// the DM harts while the compute still consumes the blocks in row order. A row holds one block here: the
+// factory always sends num_full_blocks_in_row = 1, and this variant reads the argument only to hold that line.
 
 #include <stdint.h>
 #include "api/tile_constants.h"
@@ -24,7 +26,9 @@ void kernel_main() {
     const uint32_t num_rows = get_arg(args::num_rows);
     const uint32_t num_tiles_per_block = get_arg(args::num_tiles_per_block);
     const uint32_t block_width_size = get_arg(args::block_width_size);
+    const uint32_t num_full_blocks_in_row = get_arg(args::num_full_blocks_in_row);
     const uint32_t start_page_id = get_arg(args::start_page_id);
+    ASSERT(num_full_blocks_in_row == 1);
 
     const uint32_t my_thread = get_my_thread_id();
     const uint32_t num_threads = get_num_threads();

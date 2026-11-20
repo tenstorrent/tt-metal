@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -228,16 +229,23 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
             {"tiles_per_row", num_tiles_per_input_block}, {"num_cores", num_compute_cores}};
         reader_spec.runtime_arg_schema = split_runtime_arg_schema;
     } else {
-        // On Quasar the reader syncs the input DFB once per tile-row block rather than once per tile: the
-        // block is the compute's wait unit and the input ring is sized in whole blocks, so a block never
-        // straddles the ring wrap. Explicit sync needs implicit sync off. WH/BH keep the per-tile reader.
+        // On Quasar the reader syncs the input DFB once per batch of tiles rather than once per tile. A batch is
+        // at most 32 tiles, the same bound slice uses, so the reads in flight behind one barrier stay a fixed
+        // count rather than growing with the tensor width; it divides the tile-row block, and the input ring is
+        // sized in whole blocks, so a batch never straddles the ring wrap. Explicit sync needs implicit sync off.
+        // WH/BH keep the per-tile reader.
         const bool batched_reader = device->arch() == tt::ARCH::QUASAR;
         reader_spec.source =
             std::filesystem::path{batched_reader ? READER_INTERLEAVED_BATCHED_SRC : READER_INTERLEAVED_SRC};
         reader_spec.tensor_bindings = {TensorBinding{.tensor_parameter_name = INPUT, .accessor_name = "src"}};
         reader_spec.runtime_arg_schema = {.runtime_arg_names = {"num_tiles", "start_id"}};
         if (batched_reader) {
-            reader_spec.compile_time_args = {{"tiles_per_batch", num_tiles_per_input_block}};
+            constexpr uint32_t max_tiles_per_batch = 32;
+            uint32_t tiles_per_batch = std::min(num_tiles_per_input_block, max_tiles_per_batch);
+            while (num_tiles_per_input_block % tiles_per_batch != 0) {
+                --tiles_per_batch;
+            }
+            reader_spec.compile_time_args = {{"tiles_per_batch", tiles_per_batch}};
             reader_spec.hw_config = ttnn::create_reader_datamovement_config(/*disable_dfb_implicit_sync_for_all=*/true);
         }
     }
@@ -260,15 +268,18 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
     uint32_t num_cols_per_output_block = output_page_width;
 
     // The writer issues one NoC command per output row of every block, which bounds this op on Quasar; there
-    // the rows of a block are dealt over four DM harts that all consume every block (ALL pattern). Together with
-    // the reader that is five of the six user harts. WH/BH keep the single-hart writer, and so does runtime
-    // rows, whose writer derives its row range on device and has no threaded form.
+    // the rows of a block are dealt over four DM harts that all consume every block (ALL pattern). A cluster has
+    // eight DM harts (QUASAR_DM_CORES_PER_NODE) of which the firmware keeps two, so with the reader this is five
+    // of the six a program can use; the sixth stays free so a kernel can be added without re-planning the DM
+    // budget. WH/BH keep the single-hart writer, and so does runtime rows, whose writer derives its row range on
+    // device and has no threaded form.
     const bool threaded_writer = device->arch() == tt::ARCH::QUASAR && !runtime_rows;
     const uint32_t writer_threads = threaded_writer ? 4 : 1;
     KernelSpec writer_spec{
         .unique_id = WRITER,
-        .source = std::filesystem::path{
-            runtime_rows ? WRITER_INTERLEAVED_SRC : (threaded_writer ? WRITER_THREADS_SRC : WRITER_SRC)},
+        .source =
+            std::filesystem::path{
+                runtime_rows ? WRITER_INTERLEAVED_SRC : (threaded_writer ? WRITER_THREADS_SRC : WRITER_SRC)},
         .num_threads = writer_threads,
         .dfb_bindings =
             {threaded_writer
