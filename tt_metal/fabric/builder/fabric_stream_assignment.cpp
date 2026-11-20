@@ -195,11 +195,13 @@ void StreamAssignment::emit_flat_table(
         const bool is_vc2_slot = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ && flat == sender_flat_base_[2];
         const bool is_vc2_forwarding = role == StreamRole::SENDER_FREE_SLOTS && vc2_present_ &&
                                        flat > sender_flat_base_[2] && has(role, 2, flat - sender_flat_base_[2] - 1);
-        out.emplace_back(
-            fmt::format(fmt::runtime(pattern), flat),
-            is_vc2_slot         ? StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id
-            : is_vc2_forwarding ? id(role, 2, flat - sender_flat_base_[2] - 1)
-                                : k_unused_stream_id);
+        uint32_t stream_id = k_unused_stream_id;
+        if (is_vc2_slot) {
+            stream_id = StreamRegAssignments::IncrementOnWrite::vc2_sender_free_slots_stream_id;
+        } else if (is_vc2_forwarding) {
+            stream_id = id(role, 2, flat - sender_flat_base_[2] - 1);
+        }
+        out.emplace_back(fmt::format(fmt::runtime(pattern), flat), stream_id);
     }
 }
 

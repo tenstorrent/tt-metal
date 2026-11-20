@@ -38,6 +38,7 @@
 #include <tt-metalium/experimental/fabric/inter_domain.hpp>
 
 #include "impl/context/metal_context.hpp"
+#include "llrt/tt_cluster.hpp"
 #include "tt_metal/fabric/builder/router_wiring_rules.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 
