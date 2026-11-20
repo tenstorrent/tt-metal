@@ -58,7 +58,7 @@ def test_reallocate(ttnn_mesh_device, reset_seeds, shape, layout, dt, mem):
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, mem, dtype=U.DTYPES[dt], layout=layout)
-    out = ttnn.reallocate(x)
+    out = U.op("reallocate")(x)
     U.assert_lossless(x_torch, out, mesh_device=mesh)
 
 
@@ -72,6 +72,6 @@ def test_reallocate_sharded(ttnn_mesh_device, reset_seeds, shape, dt):
     x_torch = U.torch_rand(shape)
     x = U.to_tt_mem(x_torch, mesh, ("hs", (shard_h, shape[-1])), dtype=U.DTYPES[dt])
     ref = U.seen(x, x_torch, mesh)
-    out = ttnn.reallocate(x)
+    out = U.op("reallocate")(x)
     assert out.is_sharded()
     U.assert_lossless(ref, out, mesh_device=mesh)

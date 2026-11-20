@@ -6,7 +6,7 @@
 
 #include <cstdint>
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_common_api.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/llk_unpack_AB_sub_bcast_col_custom.h"
@@ -18,10 +18,9 @@
 /**
  * @brief Init the unpacker for the SDPA blocked bcast-col SUB path.
  *
- * Allocates and programs a buffer descriptor for each unpacker from the per-TRISC BFD partition
- * (operandA -> UNPACKER0 -> SrcA, operandB -> UNPACKER1 -> SrcB); the DFB ids are used only to fetch
- * buffer info, never as BFD ids. One init burns two unpack-partition ids, so the standard wrap
- * contract applies: re-init before every re-execute.
+ * Programs the buffer descriptor of each unpacker (operandA -> UNPACKER0 -> SrcA,
+ * operandB -> UNPACKER1 -> SrcB); the DFB ids are used only to fetch buffer info, never as BFD ids.
+ * Re-init before every re-execute.
  *
  * @param operandA: DFB id of srcA; its tile shape is validated (32x32 or 16x32 tiles).
  * @param operandB: DFB id of srcB (the reused bcast-col operand).
@@ -32,8 +31,8 @@ inline void llk_unpack_AB_sub_bcast_col_init_custom(const std::uint32_t operandA
     const std::uint32_t operandB_id = get_operand_id(operandB);
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operandA_id);
 
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operandA_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandB_id);
 
     _llk_unpack_AB_sub_bcast_col_init_custom_(tensor_shape);
 }
@@ -59,12 +58,12 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
     const std::uint32_t tile_index_b,
     const std::uint32_t ct_dim = 1) {
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp0,
+        ckernel::trisc::BFD_ID_UNP0,
         operandA,
         "unpack_AB_sub_bcast_col_custom operandA DFB differs from the one llk_unpack_AB_sub_bcast_col_init_custom "
         "programmed");
     LLK_REINIT_GUARD_ASSERT_MATCHES(
-        ckernel::trisc::BfdResource::Unp1,
+        ckernel::trisc::BFD_ID_UNP1,
         operandB,
         "unpack_AB_sub_bcast_col_custom operandB DFB differs from the one llk_unpack_AB_sub_bcast_col_init_custom "
         "programmed");
@@ -81,10 +80,5 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
         local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
 
     _llk_unpack_AB_sub_bcast_col_custom_(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(),
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp1>(),
-        l1_tile_idx_a,
-        l1_tile_idx_b,
-        ct_dim,
-        tensor_shape);
+        ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::BFD_ID_UNP1, l1_tile_idx_a, l1_tile_idx_b, ct_dim, tensor_shape);
 }
