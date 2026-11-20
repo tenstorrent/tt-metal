@@ -126,7 +126,10 @@ running it.
 The cache key is a hash of the whole ``ProgramSpec``, combined with the devices it runs on, apart from
 ``ProgramSpec.name``, ``WorkUnitSpec.name`` and the tensor fields that a parameter's ``TensorSpecRelaxations`` allow
 to differ. So renaming or reordering kernels or buffers gives a new cache entry. ``generic_op`` computes that hash on
-every call while the program cache is on. Unlike the
+every call while the program cache is on. The key holds a kernel's source path, not the file's contents, and so
+does Metal's kernel build cache, so after you edit a kernel file, run it in a new process, or first call
+``device.clear_program_cache()`` and ``ttnn.device.ClearKernelCache()``. A kernel given as ``KernelSpec.SourceCode`` is
+keyed on its code. Unlike the
 ``ProgramDescriptor`` form, the ``ProgramSpec`` form takes no ``custom_program_hash``, because a key the caller picks
 could give two different programs the same cache entry.
 
@@ -173,9 +176,10 @@ reader_unary_interleaved_start_id_metal2.cpp_).
   ``get_arg(args::<name>)`` with the name in ``KernelSpec.compile_time_args``. A read by position that is left in may
   still compile and read whatever value is at that position, so change every one.
 - Circular buffers by index become dataflow buffers by name: ``tt::CBIndex::c_0`` becomes ``dfb::in``, with ``in`` the
-  accessor name of the kernel's binding to a ``DataflowBufferSpec``. Compute calls take it directly, as in
-  ``copy_tile(dfb::in, 0, 0)``; a data-movement kernel wraps it as ``DataflowBuffer(dfb::in)``, and reads its page size
-  with ``get_entry_size()``.
+  accessor name of the kernel's binding to a ``DataflowBufferSpec``. Compute calls such as
+  ``copy_tile(dfb::in, 0, 0)`` take it directly. To wait for, reserve, push or pop entries, a kernel wraps it as
+  ``DataflowBuffer(dfb::in)``, as both kernels above do, and a data-movement kernel reads its page size with
+  ``get_entry_size()``.
 - Tensor addresses passed as arguments become bound tensors: ``TensorAccessor`` built from an address and
   ``TensorAccessorArgs`` becomes ``TensorAccessor(tensor::src)``.
 - On the host, each ``CBDescriptor`` becomes a ``DataflowBufferSpec`` with its bindings, and a kernel's runtime
