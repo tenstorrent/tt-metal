@@ -2868,3 +2868,10 @@ PB.5C attempt 1 and PB.6L attempt 1 failed only on the path check for results/<t
 walls test writes next to results/<task>.json. core.gate.outputs_in (F55: results/<task>.json and <task>_*.json are the
 gate's outputs: allowed for the agent, deleted before the gate, committed with it) now also lists results/<task>_*.md.
 Selftest: test_fork_capture_programs.py::test_a_tests_markdown_table_is_a_gate_output.
+
+## F293 (DeepSeek-V4.1 PB.7, 2026-11-20): "the gate would PASS" with a gate unit FAILED
+PB.7 stopped WAITING with "the gate with the change on would PASS" while its agent's own gate run had test_glued_oracle
+FAIL (glued_segment_equiv_max_abs_diff 1024, 684 slot digest mismatches): Orchestrator.gate_on judged only the quick A/B
+side (a task without an `ab` switch measures the change on only). gate_on now also fails on any unit whose last verdict
+in the task's gate is FAIL (core.gate.unit_states), naming it. Selftest:
+test_resident_gate.py::test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed.

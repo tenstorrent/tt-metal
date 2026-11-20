@@ -858,3 +858,27 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 11:10 UTC PB.6L attempt 3 exited (nothing to redo), WAITING. DECIDED: accept (gathers hidden at ~1M: 4x2k@1M 52.3k
   serving tok/s, was 40.2k; targets kept). Applied the queued patches: PB.7 (glued packing, owner 09:00), PB.8 (mhc_post,
   5120 accept gate + A/B on MHC_POST_V2) and PB.8P (its packed 8192 half). Orchestrator --until PB.8P --attempts 20.
+- 11:13 UTC PB.6L gate PASS -> ecd3a562c49 (units reused). PB.7 (glued packing) attempt 1 started.
+- 11:20 UTC OWNER (binding): queue order PB.7 -> PB.8 / PB.8P -> PB.9C (combined perf report, everything accepted on,
+  one table vs PB.5C, before the tests) -> PB.T (adversarial batching tests: fast tier <= ~5 min hard cap in every accept
+  gate from now on; deep sweep ~20-30 min, path-triggered and before any push / merge; every failure -> a FIX task at
+  once, regression test first, never loosen; keep going until both tiers pass). Read the audit
+  (handoff_20261119/batching_test_audit.md). Written: scratchpad add_pb9t.py (dry-run valid): PB.9C scripted (packed +
+  glued walls in one performance load; today's 5120 row from PB.8's 5120 gate: one geometry a gate), PB.T an agent
+  task (harness, fast tier, deep sweep, the framework hooks; on a real bug it records it and exits, I queue the FIX).
+  Applied at PB.7's stop; then --until PB.T. DECIDED: PB.T runs right after I publish PB.9C's table (owner asleep:
+  "see these numbers before PB.T" read as "in the report, before PB.T's results", not a hold).
+- 11:42 UTC DECIDED: PB.7B (glued v2: per-row segment args in the one-call attention) queued right after PB.7, before PB.8: PB.7's agent builds unaligned glued chunks as a per-segment attention loop (path b), by its own estimate ~+90 ms device on 5 x 1.6k, a net LOSS vs lanes; the owner's glued goal is real AgentX turns winning in tok/s, and PB.9C should measure the fast version. Patch scratchpad add_pb7b.py (dry-run valid with add_pb9t.py), applied at PB.7's stop.
+- 12:05 UTC PB.7 (running) found DS41-339: glued segments placed off row 0 differ from alone (1 bf16 ulp at layer 0, growing; 60 digest mismatches): the fused MoE head's shared-expert reduce-scatter add order depends on the destination TP chip (lanes are unaffected: whole chip groups). Glued v1 walls: 5 x 1.6k 496 ms (16.1k tok/s, the row moves dominate) vs lanes 39.5k; 4x2k glued = lane chunk 72.9k. DECIDED: the fix belongs in PB.7 (its oracle cannot pass without it; queuing a separate FIX task would leave PB.7's uncommitted tree between tasks): note OV-65 for PB.7's next attempt (order-free shared-expert reduce in the moe_head fork, regression test first); speed stays PB.7B's.
+- 12:14 UTC PB.7 attempt 1 stopped WAITING, "the gate would PASS" - FALSE: its gate units have test_glued_oracle FAIL
+  (glued_segment_equiv 1024, split 1184, 684 slot digest mismatches: DS41-339). FRAMEWORK bug F293 (gate_on judged only
+  the quick A/B side): fixed with a selftest. NOT accepted: `rerun --from PB.7 --no-run` (state only, the agent's tree
+  stays) so the next attempt fixes DS41-339 per note OV-65. Glued v1 walls (gate run): 4x2k glued = lane chunk 72.97k;
+  5 x 1.6k 16.1k; AgentX mixes 16.2-25.3k; 6 x 1M 10.4k; n1..n6 83.0 / 34.0 / 24.8 / 73.6 / 16.1 / 13.8k (the row moves).
+  Applied the queued patches: PB.7B (glued v2), PB.9C (combined report), PB.T (adversarial tests); orchestrator
+  --until PB.T --attempts 20.
+- 12:25 UTC the 12:14 commit had failed (black; tasks.yaml 515 KB > the repo's 500 KB hook) and the relaunch went
+  straight back to WAITING on PB.7 (its A/B record survives a state reset). Fixes: the shared owner-rules block moved
+  out of every PB brief into bringup/PACKED_RULES.md (briefs point to it; tasks.yaml 463 KB); PB.7's brief now opens
+  with the DS41-339 fix requirement (a new brief = a new A/B key, so the resume starts agent attempt 2 instead of
+  re-asking); PB.7B's packed-oracle unit carries PACKED_GLUED_ONECALL too (one model configuration a gate).
