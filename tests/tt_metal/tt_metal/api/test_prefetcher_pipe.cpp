@@ -638,10 +638,13 @@ RelayConsumerSpecs make_relay_consumer(
         {"relay_pages_per_entry", p.relay_pages_per_entry},
         {"repage_entry_size", p.repage_entry_size},
         {"probe_addr", p.probe_addr}};
-    c.compute.dfb_bindings.push_back(
-        p.cap == m2::DFBAccessPattern::ALL       ? m2::AllConsumerOf(relay_name, "relay")
-        : p.cap == m2::DFBAccessPattern::BLOCKED ? m2::BlockedConsumerOf(relay_name, "relay", p.block_size)
-                                                 : m2::StridedConsumerOf(relay_name, "relay"));
+    if (p.cap == m2::DFBAccessPattern::ALL) {
+        c.compute.dfb_bindings.push_back(m2::AllConsumerOf(relay_name, "relay"));
+    } else if (p.cap == m2::DFBAccessPattern::BLOCKED) {
+        c.compute.dfb_bindings.push_back(m2::BlockedConsumerOf(relay_name, "relay", p.block_size));
+    } else {
+        c.compute.dfb_bindings.push_back(m2::StridedConsumerOf(relay_name, "relay"));
+    }
     c.compute.compile_time_args = {
         {"entries_this_thread", p.entries_per_consumer},
         {"batch_size", p.trisc_batch_size},
