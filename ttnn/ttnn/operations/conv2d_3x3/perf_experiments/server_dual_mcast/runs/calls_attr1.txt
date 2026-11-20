@@ -1,0 +1,3 @@
+res3x base 0
+res3x noread 0
+res3x nomcast 0

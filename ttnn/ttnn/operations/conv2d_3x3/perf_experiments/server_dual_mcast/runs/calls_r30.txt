@@ -1,0 +1,12 @@
+res30 base 0
+res30 dual_a3all 0
+res30 dual_a3 0
+res30 dual 0
+res30 dual 1
+res30 dual_a3 1
+res30 dual_a3all 1
+res30 base 1
+res30 base 2
+res30 dual_a3all 2
+res30 dual_a3 2
+res30 dual 2

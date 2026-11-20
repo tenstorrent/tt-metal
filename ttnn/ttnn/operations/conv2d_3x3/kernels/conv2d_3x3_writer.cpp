@@ -31,7 +31,9 @@
 // into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
 // start and pushes it once the flag is set, polled inside the round waits. Under kw-fold (KWF_ROUND0_STREAM) the server
 // also sets an early flag per landed chunk of round 0 (the semaphores after the bias flag), and the receiver pushes
-// round 0 chunk by chunk, so compute starts on its first kernel rows.
+// round 0 chunk by chunk, so compute starts on its first kernel rows. Under kw-fold a rectangle may have two servers
+// (one multicasting on NoC1, its partner on NoC0, each part of every chunk): every slot / early flag word then reads
+// 0x0101 when complete, one byte per server, and the receiver compares against its arg's flag value.
 //
 // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
 // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
@@ -239,9 +241,11 @@ void kernel_main() {
     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
-    // Weight servers: 1 on a receiver, then its server's (x, y).
+    // Weight servers: on a receiver the value of a complete slot / early flag (VALID with one server; 0x0101 with two,
+    // one byte lane each: conv2d_3x3_weight_server_writer.cpp), then its (first) server's (x, y).
     constexpr uint32_t server_arg = split_flag_arg + 1;
-    [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
+    [[maybe_unused]] const uint32_t server_flag_valid = weight_servers ? get_arg_val<uint32_t>(server_arg) : 0;
+    [[maybe_unused]] const bool server_receiver = weight_servers && server_flag_valid != 0;
 #ifdef NSLICE_ROUND0
     // N-slice round 0 (see the file comment), after the weight-server args (the N-slice walk has no kw-fold args):
     // [this core is its column's round-0 reader, the column's multicast rectangle (NoC-ordered sx, sy, ex, ey), the
@@ -511,14 +515,14 @@ void kernel_main() {
                         bias_pushed = true;
                     }
                 }
-                if (*r0_flag == VALID) {
+                if (*r0_flag == server_flag_valid) {
                     break;
                 }
                 if constexpr (r0_chunks > 1) {
                     // Semaphore server_flag_sem_id + depth + j (after the bias flag), j >= 1: chunks 0 .. j - 1 landed.
                     for (uint32_t j = r0_chunks - 1; j > r0_pushed; --j) {
                         if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
+                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == server_flag_valid) {
                             cb_push_back(cb_weights, (j - r0_pushed) * r0_chunk_tiles);
                             r0_pushed = j;
                             break;
@@ -1390,14 +1394,14 @@ void kernel_main() {
                 get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
             while (true) {
                 invalidate_l1_cache();
-                if (*flag == VALID) {
+                if (*flag == server_flag_valid) {
                     break;
                 }
                 if (round0_chunks > 1 && k_blocks_issued == 0) {
                     // Round 0 streams: push the chunks the server's early flags report landed.
                     for (uint32_t j = round0_chunks - 1; j > round0_pushed; --j) {
                         if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
+                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == server_flag_valid) {
                             cb_push_back(cb_weights, (j - round0_pushed) * (weight_k_block_tiles / round0_chunks));
                             round0_pushed = j;
                             break;

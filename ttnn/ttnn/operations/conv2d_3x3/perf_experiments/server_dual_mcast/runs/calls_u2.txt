@@ -1,0 +1,15 @@
+res3x dual 0
+res3x dual_a2 0
+res3x dual_a3 0
+res3x dual_a3all 0
+res3x single_a3 0
+res3x single_a3 1
+res3x dual_a3all 1
+res3x dual_a3 1
+res3x dual_a2 1
+res3x dual 1
+res3x dual 2
+res3x dual_a2 2
+res3x dual_a3 2
+res3x dual_a3all 2
+res3x single_a3 2

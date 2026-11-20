@@ -1,0 +1,6 @@
+res3x base 0
+res3x dual_a3 0
+res3x dual_a3 1
+res3x base 1
+res3x base 2
+res3x dual_a3 2

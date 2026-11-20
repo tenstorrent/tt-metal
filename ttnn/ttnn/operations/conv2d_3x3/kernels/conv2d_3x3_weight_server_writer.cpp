@@ -15,7 +15,23 @@
 // chain is closed by a 4 B write to the receivers' flag of this slot when the round is complete (the flag is set) or
 // when the next chunk has not landed yet (a write of zero: the flag stays INVALID until this round's end, the receiver
 // cleared it before its ack let this round start), so no path stays reserved across a wait. One multicast into the
-// rectangle at a time: concurrent multicasts from several senders into one rectangle measured 1.6x to 3.7x slower.
+// rectangle at a time on one NoC: concurrent multicasts from several senders into one rectangle measured 1.6x to 3.7x
+// slower.
+//
+// Dual-source rectangles (kw-fold, descriptor _weight_servers): a second spare core, the partner, multicasts part of
+// every chunk on NoC0 while this server multicasts the rest on NoC1 (args part_lo / part_hi: slot tiles of each
+// chunk; the partner runs these two kernels with their NoCs swapped: reads on NoC1, multicast on NoC0, no bias). The
+// two NoCs are separate links into the same receivers. Measured on res3.x (zoned, 77-core rectangle): one server's
+// 52 KB round 0 multicast ran at ~34 GB/s beside the fill (~35 GB/s with the reads stubbed), the receivers saw round 0
+// at ~3.2 us and compute waited ~1.4 us for its three kernel rows; stubbing the multicast saved ~1 us, the reads ~0.25.
+// With a partner each NoC carries half: round 0 at ~2.3 us, compute waits ~0.7 us. Every flag word carries one byte
+// lane per server (arg lane: 1 here, byte 0; 2 on the partner, byte 1), and each server writes its byte alone (a 1-byte
+// multicast from its local flag word holding that lane's byte), so a receiver sees 0x0101 once both parts of a round
+// (or of round 0's first kernel rows) landed, then clears the whole word as before. No extra semaphore: the 4-byte
+// word the dispatcher zeroes at launch holds both lanes. Lane 0 (one server) keeps the 4-byte VALID writes. Slot reuse:
+// the receivers ack this server only; it forwards each round's clearance to the partner (arg fwd: its NoC (x | y << 8)
+// + 1), whose ack semaphore counts the forwarded rounds (SERVER_FWD_ACKS). res3.x (unzoned, medians of 3) 9.82 ->
+// 8.94 us.
 //
 // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
 // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
@@ -61,6 +77,23 @@ void kernel_main() {
     const uint32_t sy = get_arg_val<uint32_t>(3);
     const uint32_t ex = get_arg_val<uint32_t>(4);
     const uint32_t ey = get_arg_val<uint32_t>(5);
+    // Dual-source rectangles (see the file comment): this server's slot tiles [part_lo, part_hi) of every chunk, its
+    // flag byte lane (0: one server, whole VALID words), the partner to forward slot-reuse clearances to (0: none).
+    const uint32_t part_lo = get_arg_val<uint32_t>(7);
+    const uint32_t part_hi = get_arg_val<uint32_t>(8);
+    const uint32_t lane = get_arg_val<uint32_t>(9);
+    const uint32_t fwd = get_arg_val<uint32_t>(10);
+    const uint32_t lane_off = lane == 2 ? 1 : 0;
+    const uint64_t fwd_ack_noc =
+        fwd != 0 ? get_noc_addr((fwd - 1) & 0xFF, ((fwd - 1) >> 8) & 0xFF, get_semaphore(ack_sem_id)) : 0;
+    // A slot / early flag write: the whole VALID (or zero) word with one server, this server's byte lane with two.
+    auto set_flag = [&](uint32_t src, uint64_t dst, uint32_t num_dests, bool linked) {
+        if (lane == 0) {
+            noc_semaphore_set_multicast(src, dst, num_dests, linked);
+        } else {
+            noc_async_write_multicast(src + lane_off, dst + lane_off, 1, num_dests, linked);
+        }
+    };
     const uint32_t tile_bytes = get_tile_size(cb_weights);
     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
     // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
@@ -81,13 +114,16 @@ void kernel_main() {
     }
     // The multicast source of every slot's flag.
     for (uint32_t slot = 0; slot < weight_depth; ++slot) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID;
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID << (8 * lane_off);
     }
 
     for (uint32_t r = 0; r < num_rounds; ++r) {
         {
             MaybeDeviceZoneScope("server_wait_ack");
-#ifdef SERVER_SLOT_ACKS
+#if defined(SERVER_FWD_ACKS)
+            // The partner: the first server's forwarded clearances, one per round that reuses a slot.
+            noc_semaphore_wait_min(ack, r + 1 > weight_depth ? r + 1 - weight_depth : 0);
+#elif defined(SERVER_SLOT_ACKS)
             // One counter per slot (the receivers' SERVER_SLOT_ACKS; slot 0's is the ack semaphore), so a receiver's
             // acks for later slots never stand in for another receiver's ack of this one.
             const uint32_t slot = r % weight_depth;
@@ -100,6 +136,9 @@ void kernel_main() {
             const uint32_t acks = r + 1 > weight_depth ? r + 1 - weight_depth : 0;
             noc_semaphore_wait_min(ack, acks * num_receivers);
 #endif
+            if (fwd_ack_noc != 0 && r >= weight_depth) {
+                noc_semaphore_inc(fwd_ack_noc, 1);
+            }
         }
         if constexpr (has_bias) {
             if (r == bias_round) {
@@ -129,20 +168,36 @@ void kernel_main() {
             while (c + n < num_chunks && landed(c + n)) {
                 ++n;
             }
-            const uint32_t src = base + c * chunk_tiles * tile_bytes;
-            noc_async_write_multicast(
-                src, get_noc_multicast_addr(sx, sy, ex, ey, src), n * chunk_tiles * tile_bytes, num_receivers, true);
+            if (lane == 0) {
+                const uint32_t src = base + c * chunk_tiles * tile_bytes;
+                noc_async_write_multicast(
+                    src,
+                    get_noc_multicast_addr(sx, sy, ex, ey, src),
+                    n * chunk_tiles * tile_bytes,
+                    num_receivers,
+                    true);
+            } else {
+                // This server's part of each landed chunk, one multicast per chunk in the same linked chain.
+                for (uint32_t i = c; i < c + n; ++i) {
+                    const uint32_t src = base + (i * chunk_tiles + part_lo) * tile_bytes;
+                    noc_async_write_multicast(
+                        src,
+                        get_noc_multicast_addr(sx, sy, ex, ey, src),
+                        (part_hi - part_lo) * tile_bytes,
+                        num_receivers,
+                        true);
+                }
+            }
             c += n;
             if (stream_round0 && r == 0 && c < num_chunks) {
                 // Chunks 0 .. c - 1 landed: their early flag (the VALID word of this slot's flag as the source).
                 const uint32_t early = get_semaphore(early_flag_sem_id + c - 1);
-                noc_semaphore_set_multicast(
-                    flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
+                set_flag(flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
                 continue;
             }
             // Keep the chain open only into a chunk that already landed.
             if (c == num_chunks || !landed(c)) {
-                noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
+                set_flag(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
             }
         }
         {

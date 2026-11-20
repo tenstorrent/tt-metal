@@ -1,0 +1,137 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 02:26:34] SAFE_PYTEST: waiting for device (20s) — holder pid=1725255 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_row/test_conv2d_3x3_grad.py ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_r" parent pid=1725249 cmd="timeout 590 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_row/test_conv2d_3x3_grad.py ttnn/ttnn/o"
+[2026-11-20 02:26:54] SAFE_PYTEST: waiting for device (40s) — holder pid=1725255 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_row/test_conv2d_3x3_grad.py ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_r" parent pid=1725249 cmd="timeout 590 scripts/run_safe_pytest.sh --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_short_row/test_conv2d_3x3_grad.py ttnn/ttnn/o"
+[2026-11-20 02:27:14] SAFE_PYTEST: waiting for device (60s) — holder pid=1740660 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all --dev /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_stream_spread/test_block_sharded_copy.py --import-mod" parent pid=1740650 cmd="bash ./ut.sh ut_dev /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/nslice_stream_spread/test_block_sharded_cop"
+[2026-11-20 02:27:35] SAFE_PYTEST: waiting for device (80s) — holder pid=1728041 cmd="/bin/bash scripts/run_safe_pytest.sh --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_fill_balance/test_bfb.py --import-mode=prepend -q " parent pid=1728031 cmd="bash ./run.sh exact_focus "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: off (disabled) — kernels compile on demand
+SAFE_PYTEST: python -m tracy -r -m pytest --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py
+========================================
+2026-11-20 02:27:53.235 | INFO     | __main__:main:381 - Using port 8086
+2026-11-20 02:27:53.235 | INFO     | tracy:run_report_setup:91 - Verifying tracy profiling tools
+2026-11-20 02:27:53.294 | INFO     | __main__:run_workload:416 - Test process started
+2026-11-20 02:27:55.699 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... collected 12 items
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-0] 2026-11-20 02:28:00.711 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 02:28:00.711 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 02:28:00.713 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 02:28:00.713 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 02:28:00.737 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 02:28:00.738 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 02:28:01.002 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 02:28:01.002 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 02:28:01.002 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 02:28:01.002 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 02:28:01.009 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 02:28:01.442 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 02:28:01.598 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 02:28:01.598 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 02:28:01.781 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 02:28:01.800 | info     |           Metal | Profiler started on device 0 (profiler_initializer.cpp:49)
+2026-11-20 02:28:02.514 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-0] 2026-11-20 02:28:02.707 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-0] 2026-11-20 02:28:02.866 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-0] 2026-11-20 02:28:03.028 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-1] 2026-11-20 02:28:03.220 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-1] 2026-11-20 02:28:03.320 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-1] 2026-11-20 02:28:03.429 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-1] 2026-11-20 02:28:03.555 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-2] 2026-11-20 02:28:03.700 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-2] 2026-11-20 02:28:03.806 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-2] 2026-11-20 02:28:03.918 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-2] 2026-11-20 02:28:04.041 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+PASSED2026-11-20 02:28:04.221 | info     |           Metal | Device kernel duration perf summary (device=0): count=12, min=8971ns, avg=9463.2ns, max=9856ns (profiler_analysis.cpp:729)
+2026-11-20 02:28:04.221 | info     |           Metal | Device kernel duration perf histogram (device=0): (buckets=10, bucket_size=100ns, range=[8900..9900), underflow(<8900ns)=0, overflow(>=9900ns)=0) (profiler_analysis.cpp:772)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        8900 ..         9000) |####################                    |        2 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9000 ..         9100) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9100 ..         9200) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9200 ..         9300) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9300 ..         9400) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9400 ..         9500) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9500 ..         9600) |##########                              |        1 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9600 ..         9700) |                                        |        0 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9700 ..         9800) |########################################|        4 (profiler_analysis.cpp:777)
+2026-11-20 02:28:04.221 | info     |           Metal |   [        9800 ..         9900) |##########                              |        1 (profiler_analysis.cpp:777)
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+1.81s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-0]
+0.18s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-0]
+0.17s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-0]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-0]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-0]
+0.13s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-1]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-2]
+0.12s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-1]
+0.11s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-2]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-2]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-1]
+0.10s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-2]
+0.09s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-1]
+0.08s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-2]
+0.01s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-2]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-1]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-2]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-2]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-2]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-base-1]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res3x-grad-0]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-base-1]
+0.01s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/server_dual_mcast/test_sdm_ab.py::test_sdm_ab[res2-grad-0]
+============================== 12 passed in 4.49s ==============================
+2026-11-20 02:28:05.876 | info     |    BuildKernels | JIT cache stats: 51/51 hits (100.0%) [51 cached, 118 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 02:28:05.876 | info     |    BuildKernels | JIT telemetry: 38 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 02:28:05.926 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 02:28:05.926 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 02:28:06.355 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 02:28:06.355 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 02:28:06.355 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+2026-11-20 02:28:06.622 | INFO     | __main__:main:490 - Copying /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_sdm_ab_2026_11_20_02_28_06.tracy
+2026-11-20 02:28:06.625 | INFO     | __main__:main:493 - Copied /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_profile_log_host.tracy to /localdev/pmilojevic/workspaces/opgen/build/profiler/build_wasm/traces/test_sdm_ab_2026_11_20_02_28_06.tracy
+2026-11-20 02:28:06.625 | INFO     | __main__:main:502 - embed.tracy -> traces/test_sdm_ab_2026_11_20_02_28_06.tracy
+2026-11-20 02:28:06.625 | INFO     | tracy.serve_wasm:launch_server_subprocess:310 - Launching tracy web app GUI server subprocess...
+2026-11-20 02:28:06.625 | INFO     | tracy.serve_wasm:launch_server_subprocess:313 - Tracy WASM web UI (open in browser): http://localhost:8080/ (WebSocket for live reload: ws://localhost:8081/)
+2026-11-20 02:28:06.626 | INFO     | tracy.serve_wasm:launch_server_subprocess:320 - Tracy WASM server already serving port 8080; reusing it (live-reload refreshes the browser).
+2026-11-20 02:28:07.853 | INFO     | tracy:generate_report:162 - Host side ops time report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_times.csv
+2026-11-20 02:28:07.912 | INFO     | tracy:generate_report:173 - Host side ops data report generated at /localdev/pmilojevic/workspaces/opgen/generated/profiler/.logs/tracy_ops_data.csv
+2026-11-20 02:28:07.912 | INFO     | tracy.process_ops_logs:import_tracy_op_logs:430 - Importing ops logs
+/localdev/pmilojevic/workspaces/opgen/tools/tracy/process_ops_logs.py:535: DtypeWarning: Columns (3,4,8) have mixed types. Specify dtype option on import or set low_memory=False.
+  df = pd.read_csv(tracyOpTimesLog)
+2026-11-20 02:28:10.141 | INFO     | tracy.perf_counter_analysis:get_device_op_data:420 - Getting device ops
+2026-11-20 02:28:10.141 | INFO     | tracy.process_ops_logs:append_device_data:995 - Appending device data
+2026-11-20 02:28:10.204 | INFO     | tracy.process_ops_logs:generate_reports:1323 - OPs' perf analysis is finished! Generating reports ...
+2026-11-20 02:28:10.205 | INFO     | tracy.process_ops_logs:generate_reports:1343 - Copying runtime artifacts
+2026-11-20 02:28:10.226 | INFO     | tracy.process_ops_logs:generate_reports:1352 - Generating OPs CSV
+2026-11-20 02:28:10.239 | INFO     | tracy.process_ops_logs:generate_reports:1814 - OPs csv generated at: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_02_28_10/ops_perf_results_2026_11_20_02_28_10.csv
+========================================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_02_28_10/ops_perf_results_2026_11_20_02_28_10.csv
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m19s (19s total, device-lock-acquired -> exit)

@@ -19,6 +19,13 @@
 // rounds and center_head.1's Q_0 / Q_2 rounds waited for them. Larger rounds keep the pipelined issue: on sem dec res3
 // fc0's 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us (round 0 all at once there and
 // on res3.x's 52 KB round: sem dec res3 fc0 / inst dec res3 fc0 first matmul ~1.1 us later, zoned).
+//
+// Dual-source rectangles (kw-fold; conv2d_3x3_weight_server_writer.cpp): two servers share every chunk, this one
+// reading slot tiles [part_lo, part_hi) of each (whole slot rows, so the page runs stay whole), the partner the rest;
+// a single server reads [0, chunk). With half a chunk per server, one chunk ahead left ~4 page-run reads in flight and
+// the reads latency-bound (res3.x: chunk halves landed ~0.3 us apart, as whole chunks had): a dual server issues every
+// chunk of every round first (arg ahead = num_chunks), each still under its own transaction id and handed over in
+// order. res3.x (unzoned, medians of 3): dual with one chunk ahead 9.23 us, round 0 all ahead 8.98, every round 8.94.
 
 #include <cstdint>
 
@@ -55,6 +62,10 @@ void kernel_main() {
 
     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
+    // This server's part of every chunk and the chunks issued ahead of the first hand-over (see the file comment).
+    const uint32_t part_lo = get_arg_val<uint32_t>(2);
+    const uint32_t part_hi = get_arg_val<uint32_t>(3);
+    const uint32_t chunks_ahead = get_arg_val<uint32_t>(4);
     const uint32_t tile_bytes = get_tile_size(cb_weights);
     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
     conv2d_3x3::TaggedReads<false> reads;
@@ -140,12 +151,12 @@ void kernel_main() {
                 t += len;
             }
         };
-        // Issue chunk c, then hand over chunk c - 1; a one-burst round issues every chunk first.
-        const uint32_t ahead = small_round ? num_chunks : 1;
+        // Issue chunk c, then hand over chunk c - ahead; a one-burst round issues every chunk first.
+        const uint32_t ahead = small_round ? num_chunks : chunks_ahead;
         for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
             if (c < num_chunks) {
                 reads.begin(1 + c);
-                read_tiles(c * chunk_tiles, (c + 1) * chunk_tiles);
+                read_tiles(c * chunk_tiles + part_lo, c * chunk_tiles + part_hi);
                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
             }
             if (c >= ahead) {

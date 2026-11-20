@@ -1,0 +1,4 @@
+res3x base 0
+res3x dual 0
+res3x base 0
+res3x dual 0

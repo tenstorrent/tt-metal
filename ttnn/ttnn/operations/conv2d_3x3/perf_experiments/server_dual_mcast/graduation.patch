@@ -1,0 +1,499 @@
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 02:29:24.063620460 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 02:29:24.069620546 +0000
+@@ -344,6 +344,22 @@
+ # on res3.x 6 measured 12.6-12.9 (a chunk per path set-up where the reads pace the stream), 4 12.9, 2 12.3, 3 12.1.
+ WEIGHT_SERVERS = True
+ WEIGHT_SERVER_CHUNKS = 3
++# Dual-source weight servers (kw-fold): where the spare cores allow, every rectangle gets a second server, its partner,
++# which reads and multicasts half of every chunk (whole slot rows) on NoC0 while the first server sends the other half
++# on NoC1: one multicast source per rectangle capped the round at ~34 GB/s beside the fill, and round 0 gated compute's
++# first kernel rows (conv2d_3x3_weight_server_writer.cpp). Both servers issue every chunk of a round ahead
++# (conv2d_3x3_weight_server_reader.cpp). Placement (_weight_servers): partners first, each the spare core with the
++# fewest NoC0 hops (+x then +y, torus) to its rectangle's low corner whose path crosses no receiver rectangle, then the
++# first servers the same way on NoC1 to the high corner: on res3.x the 9-core row rectangle's partner reached its low
++# corner the long way round through the 77-core rectangle at first (greedy placement, dual on both: 11.9 us), and with
++# the row rectangle on one server its 9 cores became the critical ones. Measured (Blackhole p150b, LoFi bf8_b,
++# unzoned, bit-identical): res3.x 9.82 -> 8.94 us (medians of 3), res2 -5.1%, inst dec res3 fc0 -2.0%, sem dec res3 fc0
++# -1.7%, sem dec res3 fc1 -1.1%, the other kw-fold layers flat. Not off kw-fold: there the first matmul waits for the
++# tilize, round 0 is hidden, and the partner's NoC0 multicast only slows the reader's NoC0 fill (res3.0, stride 2:
++# fill 3.62 -> 3.93 us, +2.0% to +2.7% over 3 options x 3 runs).
++WEIGHT_SERVER_PARTNERS = True
++# Blackhole NoC grid (x, y), the torus of the partner placement's hop metric.
++_NOC_GRID = (17, 12)
+ # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+ MAX_MCAST_RECTANGLES = 3
+ # Spare-column M-groups (K split on the N-slice walk, one M-block per core): the device columns past the shard grid
+@@ -1679,25 +1695,70 @@
+     return (shape[-2] // TILE, shape[-1] // TILE)
+ 
+ 
+-def _weight_servers(input_tensor, core_list, receivers):
++def _weight_servers(input_tensor, core_list, receivers, partners):
+     """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
+-    corner), as [(rectangle, server core)], or None when the device grid has too few spare cores. A spare core holds
+-    neither work nor an input shard: the fill reads every input shard, and a server's traffic on a shard's core slowed
+-    those reads (stem.conv1, input on 110 cores and work on 108: 22.7 -> 24.1 us with servers on the two shard cores).
+-    """
+-    grid = input_tensor.device().compute_with_storage_grid_size()
++    corner), as [(rectangle, server core, partner core or None)], or None when the device grid has too few spare cores.
++    A spare core holds neither work nor an input shard: the fill reads every input shard, and a server's traffic on a
++    shard's core slowed those reads (stem.conv1, input on 110 cores and work on 108: 22.7 -> 24.1 us with servers on the
++    two shard cores). With partners (WEIGHT_SERVER_PARTNERS) every rectangle also gets a partner server (multicasting
++    on NoC0) while spare cores remain, largest rectangle first; both roles are then placed by NoC hops (see
++    WEIGHT_SERVER_PARTNERS)."""
++    device = input_tensor.device()
++    grid = device.compute_with_storage_grid_size()
+     used = {(c.x, c.y) for c in core_list} | {(c.x, c.y) for c in shard_cores(input_tensor)}
+     spare = [(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in used]
+     rects = list(receivers.ranges())
+     if len(spare) < len(rects):
+         return None
+-    out = []
+-    for rect in rects:
+-        hx, hy = rect.end.x, rect.end.y
+-        best = min(spare, key=lambda c: (abs(c[0] - hx) + abs(c[1] - hy), c[1], c[0]))
++    if not partners or len(spare) <= len(rects):
++        out = []
++        for rect in rects:
++            hx, hy = rect.end.x, rect.end.y
++            best = min(spare, key=lambda c: (abs(c[0] - hx) + abs(c[1] - hy), c[1], c[0]))
++            spare.remove(best)
++            out.append((rect, ttnn.CoreCoord(*best), None))
++        return out
++
++    def virtual(c):
++        v = device.worker_core_from_logical_core(ttnn.CoreCoord(*c))
++        return v.x, v.y
++
++    W, H = _NOC_GRID
++    receiving = {
++        virtual((x, y))
++        for rect in rects
++        for x in range(rect.start.x, rect.end.x + 1)
++        for y in range(rect.start.y, rect.end.y + 1)
++    }
++
++    def path_cost(src, dst, noc):
++        """NoC hops from src to dst (NoC0: +x then +y; NoC1: -y then -x; torus), +100 per receiver core passed."""
++        (sx, sy), (tx, ty) = src, dst
++        if noc == 0:
++            dx, dy = (tx - sx) % W, (ty - sy) % H
++            nodes = [((sx + i) % W, sy) for i in range(1, dx + 1)] + [(tx, (sy + j) % H) for j in range(1, dy + 1)]
++        else:
++            dx, dy = (sx - tx) % W, (sy - ty) % H
++            nodes = [(sx, (sy - j) % H) for j in range(1, dy + 1)] + [((sx - i) % W, ty) for i in range(1, dx + 1)]
++        return dx + dy + 100 * sum(1 for n in nodes[:-1] if n in receiving)
++
++    size = lambda r: r.grid_size().x * r.grid_size().y
++    order = sorted(range(len(rects)), key=lambda i: -size(rects[i]))
++    partner_of = {}
++    for i in order:
++        if len(spare) <= len(rects):
++            break
++        low = virtual((rects[i].start.x, rects[i].start.y))
++        best = min(spare, key=lambda c: (path_cost(virtual(c), low, 0), c[1], c[0]))
+         spare.remove(best)
+-        out.append((rect, ttnn.CoreCoord(*best)))
+-    return out
++        partner_of[i] = ttnn.CoreCoord(*best)
++    server_of = {}
++    for i in order:
++        high = virtual((rects[i].end.x, rects[i].end.y))
++        best = min(spare, key=lambda c: (path_cost(virtual(c), high, 1), c[1], c[0]))
++        spare.remove(best)
++        server_of[i] = ttnn.CoreCoord(*best)
++    return [(rects[i], server_of[i], partner_of.get(i)) for i in range(len(rects))]
+ 
+ 
+ def _column_weight_mcast(input_tensor, work, m_blocks_per_index):
+@@ -2530,7 +2591,11 @@
+     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
+     weight_servers = None
+     if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
+-        weight_servers = _weight_servers(input_tensor, core_list, mcast_receivers)
++        # Partners under kw-fold, where a chunk splits into two parts (see WEIGHT_SERVER_PARTNERS).
++        server_chunk_tiles = bk * bn // max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
++        weight_servers = _weight_servers(
++            input_tensor, core_list, mcast_receivers, WEIGHT_SERVER_PARTNERS and bool(kwf) and server_chunk_tiles >= 2
++        )
+     split_cores = set()
+     if tile_fill_split and mcast_receivers is not None:
+         # With weight servers every participant is a pure receiver.
+@@ -2981,11 +3046,12 @@
+             assert max(len(w) for w in host_fill_words[(core.x, core.y)]) <= HOST_FILL_MAX_WORDS
+ 
+     def server_rt_args(core):
+-        """Weight servers: [1, server x, server y] on a receiver, else zeros."""
+-        for rect, server in weight_servers or []:
++        """Weight servers: [complete-flag value (1, or 0x0101 with a partner), server x, server y] on a receiver, else
++        zeros."""
++        for rect, server, partner in weight_servers or []:
+             if rect.contains(core):
+                 virtual = device.worker_core_from_logical_core(server)
+-                return [1, virtual.x, virtual.y]
++                return [0x0101 if partner is not None else 1, virtual.x, virtual.y]
+         return [0, 0, 0]
+ 
+     ring_owners = None if kwf else ring_owner_cols(g, b)
+@@ -3327,8 +3393,9 @@
+     if weight_servers is not None:
+         # The servers hold cb_weights (same index and size, so the same L1 address as the receivers' slots) and the
+         # program's semaphores; their kernels stream every participant's rounds.
+-        servers = [server for _, server in weight_servers]
+-        sem_cores = _core_range_set(core_list + servers)
++        servers = [server for _, server, _ in weight_servers]
++        partners = [partner for _, _, partner in weight_servers if partner is not None]
++        sem_cores = _core_range_set(core_list + servers + partners)
+         for i, cb in enumerate(cbs):
+             if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+                 pages = cb.total_size // g.weight_tile_bytes
+@@ -3342,36 +3409,71 @@
+         num_chunks = max(d for d in range(1, WEIGHT_SERVER_CHUNKS + 1) if (bk * bn) % d == 0)
+         server_reader_rt = ttnn.RuntimeArgs()
+         server_writer_rt = ttnn.RuntimeArgs()
+-        for rect, server in weight_servers:
++        partner_reader_rt = ttnn.RuntimeArgs()
++        partner_writer_rt = ttnn.RuntimeArgs()
++        chunk_tiles = bk * bn // num_chunks
++        # A partner takes the second half of every chunk in whole slot rows (kw-fold: rw tiles) where a chunk holds two
++        # or more, so its page runs stay whole.
++        slot_row = max(1, bn // 3) if kwf else bn
++        chunk_rows = chunk_tiles // slot_row if chunk_tiles % slot_row == 0 else 0
++        split = (chunk_rows // 2) * slot_row if chunk_rows >= 2 else chunk_tiles // 2
++        for rect, server, partner in weight_servers:
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+-            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds]
++            n_receivers = rect.grid_size().x * rect.grid_size().y
++            end = split if partner is not None else chunk_tiles
++            ahead = num_chunks if partner is not None else 1
++            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, 0, end, ahead]
+             # NoC1 multicast: from the rectangle's high corner to its low corner.
++            fwd = 0
++            if partner is not None:
++                pv = device.worker_core_from_logical_core(partner)
++                fwd = (pv.x | (pv.y << 8)) + 1
+             server_writer_rt[server.x][server.y] = [
+                 num_rounds,
+-                rect.grid_size().x * rect.grid_size().y,
++                n_receivers,
+                 hi.x,
+                 hi.y,
+                 lo.x,
+                 lo.y,
+                 bias_addr if server_bias else 0,
++                0,
++                end,
++                1 if partner is not None else 0,
++                fwd,
+             ]
++            if partner is not None:
++                partner_reader_rt[partner.x][partner.y] = [weight_addr, num_rounds, split, chunk_tiles, ahead]
++                # NoC0 multicast: from the low corner to the high corner.
++                partner_writer_rt[partner.x][partner.y] = [
++                    num_rounds,
++                    n_receivers,
++                    lo.x,
++                    lo.y,
++                    hi.x,
++                    hi.y,
++                    0,
++                    split,
++                    chunk_tiles,
++                    2,
++                    0,
++                ]
+         server_cores = _core_range_set(servers)
++        server_reader_ct = [
++            CB_WEIGHTS,
++            bk,
++            bn,
++            b.num_k_blocks,
++            num_chunks,
++            (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
++            g.tensor_n_tiles,
++            *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
++        ] + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
+         server_kernels = [
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
+                 core_ranges=server_cores,
+-                compile_time_args=[
+-                    CB_WEIGHTS,
+-                    bk,
+-                    bn,
+-                    b.num_k_blocks,
+-                    num_chunks,
+-                    (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
+-                    g.tensor_n_tiles,
+-                    *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
+-                ]
+-                + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args()),
++                compile_time_args=server_reader_ct,
+                 runtime_args=server_reader_rt,
+                 config=ttnn.ReaderConfigDescriptor(),
+             ),
+@@ -3398,6 +3500,32 @@
+                 config=ttnn.WriterConfigDescriptor(),
+             ),
+         ]
++        if partners:
++            # The partners run the same two kernels with their NoCs swapped (reads on NoC1, multicast on NoC0) and no
++            # bias; their ack semaphore counts the first server's forwarded clearances.
++            partner_cores = _core_range_set(partners)
++            server_kernels += [
++                ttnn.KernelDescriptor(
++                    kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
++                    core_ranges=partner_cores,
++                    compile_time_args=server_reader_ct,
++                    runtime_args=partner_reader_rt,
++                    config=ttnn.DataMovementConfigDescriptor(
++                        processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
++                    ),
++                ),
++                ttnn.KernelDescriptor(
++                    kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
++                    core_ranges=partner_cores,
++                    compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks, 0, CB_BIAS, 0]
++                    + list(ttnn.TensorAccessorArgs().get_compile_time_args()),
++                    runtime_args=partner_writer_rt,
++                    defines=_round0_defines + [("SERVER_FWD_ACKS", "1")],
++                    config=ttnn.DataMovementConfigDescriptor(
++                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
++                    ),
++                ),
++            ]
+     semaphores = [ttnn.SemaphoreDescriptor(id=sem_id, core_ranges=sem_cores, initial_value=0) for sem_id in sem_ids]
+     descriptor = ttnn.ProgramDescriptor(kernels=[], semaphores=semaphores, cbs=cbs)
+     # The writer's NoC (WriterConfigDescriptor).
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-20 02:29:24.063620460 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp	2026-11-20 02:29:24.071620574 +0000
+@@ -19,6 +19,13 @@
+ // rounds and center_head.1's Q_0 / Q_2 rounds waited for them. Larger rounds keep the pipelined issue: on sem dec res3
+ // fc0's 120-tile rounds the extra issue in front of chunk 0 delayed round 0 by ~0.35 us (round 0 all at once there and
+ // on res3.x's 52 KB round: sem dec res3 fc0 / inst dec res3 fc0 first matmul ~1.1 us later, zoned).
++//
++// Dual-source rectangles (kw-fold; conv2d_3x3_weight_server_writer.cpp): two servers share every chunk, this one
++// reading slot tiles [part_lo, part_hi) of each (whole slot rows, so the page runs stay whole), the partner the rest;
++// a single server reads [0, chunk). With half a chunk per server, one chunk ahead left ~4 page-run reads in flight and
++// the reads latency-bound (res3.x: chunk halves landed ~0.3 us apart, as whole chunks had): a dual server issues every
++// chunk of every round first (arg ahead = num_chunks), each still under its own transaction id and handed over in
++// order. res3.x (unzoned, medians of 3): dual with one chunk ahead 9.23 us, round 0 all ahead 8.98, every round 8.94.
+ 
+ #include <cstdint>
+ 
+@@ -55,6 +62,10 @@
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
++    // This server's part of every chunk and the chunks issued ahead of the first hand-over (see the file comment).
++    const uint32_t part_lo = get_arg_val<uint32_t>(2);
++    const uint32_t part_hi = get_arg_val<uint32_t>(3);
++    const uint32_t chunks_ahead = get_arg_val<uint32_t>(4);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+     conv2d_3x3::TaggedReads<false> reads;
+@@ -140,12 +151,12 @@
+                 t += len;
+             }
+         };
+-        // Issue chunk c, then hand over chunk c - 1; a one-burst round issues every chunk first.
+-        const uint32_t ahead = small_round ? num_chunks : 1;
++        // Issue chunk c, then hand over chunk c - ahead; a one-burst round issues every chunk first.
++        const uint32_t ahead = small_round ? num_chunks : chunks_ahead;
+         for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
+             if (c < num_chunks) {
+                 reads.begin(1 + c);
+-                read_tiles(c * chunk_tiles, (c + 1) * chunk_tiles);
++                read_tiles(c * chunk_tiles + part_lo, c * chunk_tiles + part_hi);
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+             }
+             if (c >= ahead) {
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-20 02:29:24.063620460 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp	2026-11-20 02:29:24.069620546 +0000
+@@ -15,7 +15,23 @@
+ // chain is closed by a 4 B write to the receivers' flag of this slot when the round is complete (the flag is set) or
+ // when the next chunk has not landed yet (a write of zero: the flag stays INVALID until this round's end, the receiver
+ // cleared it before its ack let this round start), so no path stays reserved across a wait. One multicast into the
+-// rectangle at a time: concurrent multicasts from several senders into one rectangle measured 1.6x to 3.7x slower.
++// rectangle at a time on one NoC: concurrent multicasts from several senders into one rectangle measured 1.6x to 3.7x
++// slower.
++//
++// Dual-source rectangles (kw-fold, descriptor _weight_servers): a second spare core, the partner, multicasts part of
++// every chunk on NoC0 while this server multicasts the rest on NoC1 (args part_lo / part_hi: slot tiles of each
++// chunk; the partner runs these two kernels with their NoCs swapped: reads on NoC1, multicast on NoC0, no bias). The
++// two NoCs are separate links into the same receivers. Measured on res3.x (zoned, 77-core rectangle): one server's
++// 52 KB round 0 multicast ran at ~34 GB/s beside the fill (~35 GB/s with the reads stubbed), the receivers saw round 0
++// at ~3.2 us and compute waited ~1.4 us for its three kernel rows; stubbing the multicast saved ~1 us, the reads ~0.25.
++// With a partner each NoC carries half: round 0 at ~2.3 us, compute waits ~0.7 us. Every flag word carries one byte
++// lane per server (arg lane: 1 here, byte 0; 2 on the partner, byte 1), and each server writes its byte alone (a 1-byte
++// multicast from its local flag word holding that lane's byte), so a receiver sees 0x0101 once both parts of a round
++// (or of round 0's first kernel rows) landed, then clears the whole word as before. No extra semaphore: the 4-byte
++// word the dispatcher zeroes at launch holds both lanes. Lane 0 (one server) keeps the 4-byte VALID writes. Slot reuse:
++// the receivers ack this server only; it forwards each round's clearance to the partner (arg fwd: its NoC (x | y << 8)
++// + 1), whose ack semaphore counts the forwarded rounds (SERVER_FWD_ACKS). res3.x (unzoned, medians of 3) 9.82 ->
++// 8.94 us.
+ //
+ // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
+ // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
+@@ -61,6 +77,23 @@
+     const uint32_t sy = get_arg_val<uint32_t>(3);
+     const uint32_t ex = get_arg_val<uint32_t>(4);
+     const uint32_t ey = get_arg_val<uint32_t>(5);
++    // Dual-source rectangles (see the file comment): this server's slot tiles [part_lo, part_hi) of every chunk, its
++    // flag byte lane (0: one server, whole VALID words), the partner to forward slot-reuse clearances to (0: none).
++    const uint32_t part_lo = get_arg_val<uint32_t>(7);
++    const uint32_t part_hi = get_arg_val<uint32_t>(8);
++    const uint32_t lane = get_arg_val<uint32_t>(9);
++    const uint32_t fwd = get_arg_val<uint32_t>(10);
++    const uint32_t lane_off = lane == 2 ? 1 : 0;
++    const uint64_t fwd_ack_noc =
++        fwd != 0 ? get_noc_addr((fwd - 1) & 0xFF, ((fwd - 1) >> 8) & 0xFF, get_semaphore(ack_sem_id)) : 0;
++    // A slot / early flag write: the whole VALID (or zero) word with one server, this server's byte lane with two.
++    auto set_flag = [&](uint32_t src, uint64_t dst, uint32_t num_dests, bool linked) {
++        if (lane == 0) {
++            noc_semaphore_set_multicast(src, dst, num_dests, linked);
++        } else {
++            noc_async_write_multicast(src + lane_off, dst + lane_off, 1, num_dests, linked);
++        }
++    };
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
+     // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
+@@ -81,13 +114,16 @@
+     }
+     // The multicast source of every slot's flag.
+     for (uint32_t slot = 0; slot < weight_depth; ++slot) {
+-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID;
++        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(flag_sem_id + slot)) = VALID << (8 * lane_off);
+     }
+ 
+     for (uint32_t r = 0; r < num_rounds; ++r) {
+         {
+             MaybeDeviceZoneScope("server_wait_ack");
+-#ifdef SERVER_SLOT_ACKS
++#if defined(SERVER_FWD_ACKS)
++            // The partner: the first server's forwarded clearances, one per round that reuses a slot.
++            noc_semaphore_wait_min(ack, r + 1 > weight_depth ? r + 1 - weight_depth : 0);
++#elif defined(SERVER_SLOT_ACKS)
+             // One counter per slot (the receivers' SERVER_SLOT_ACKS; slot 0's is the ack semaphore), so a receiver's
+             // acks for later slots never stand in for another receiver's ack of this one.
+             const uint32_t slot = r % weight_depth;
+@@ -100,6 +136,9 @@
+             const uint32_t acks = r + 1 > weight_depth ? r + 1 - weight_depth : 0;
+             noc_semaphore_wait_min(ack, acks * num_receivers);
+ #endif
++            if (fwd_ack_noc != 0 && r >= weight_depth) {
++                noc_semaphore_inc(fwd_ack_noc, 1);
++            }
+         }
+         if constexpr (has_bias) {
+             if (r == bias_round) {
+@@ -129,20 +168,36 @@
+             while (c + n < num_chunks && landed(c + n)) {
+                 ++n;
+             }
+-            const uint32_t src = base + c * chunk_tiles * tile_bytes;
+-            noc_async_write_multicast(
+-                src, get_noc_multicast_addr(sx, sy, ex, ey, src), n * chunk_tiles * tile_bytes, num_receivers, true);
++            if (lane == 0) {
++                const uint32_t src = base + c * chunk_tiles * tile_bytes;
++                noc_async_write_multicast(
++                    src,
++                    get_noc_multicast_addr(sx, sy, ex, ey, src),
++                    n * chunk_tiles * tile_bytes,
++                    num_receivers,
++                    true);
++            } else {
++                // This server's part of each landed chunk, one multicast per chunk in the same linked chain.
++                for (uint32_t i = c; i < c + n; ++i) {
++                    const uint32_t src = base + (i * chunk_tiles + part_lo) * tile_bytes;
++                    noc_async_write_multicast(
++                        src,
++                        get_noc_multicast_addr(sx, sy, ex, ey, src),
++                        (part_hi - part_lo) * tile_bytes,
++                        num_receivers,
++                        true);
++                }
++            }
+             c += n;
+             if (stream_round0 && r == 0 && c < num_chunks) {
+                 // Chunks 0 .. c - 1 landed: their early flag (the VALID word of this slot's flag as the source).
+                 const uint32_t early = get_semaphore(early_flag_sem_id + c - 1);
+-                noc_semaphore_set_multicast(
+-                    flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
++                set_flag(flag, get_noc_multicast_addr(sx, sy, ex, ey, early), num_receivers, landed(c));
+                 continue;
+             }
+             // Keep the chain open only into a chunk that already landed.
+             if (c == num_chunks || !landed(c)) {
+-                noc_semaphore_set_multicast(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
++                set_flag(c == num_chunks ? flag : MEM_ZEROS_BASE, flag_mcast, num_receivers, false);
+             }
+         }
+         {
+diff -ruN a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 02:29:24.063620460 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 02:29:24.071620574 +0000
+@@ -31,7 +31,9 @@
+ // into cb_bias and sets the bias flag (the semaphore after the slot flags): the receiver reserves cb_bias at kernel
+ // start and pushes it once the flag is set, polled inside the round waits. Under kw-fold (KWF_ROUND0_STREAM) the server
+ // also sets an early flag per landed chunk of round 0 (the semaphores after the bias flag), and the receiver pushes
+-// round 0 chunk by chunk, so compute starts on its first kernel rows.
++// round 0 chunk by chunk, so compute starts on its first kernel rows. Under kw-fold a rectangle may have two servers
++// (one multicasting on NoC1, its partner on NoC0, each part of every chunk): every slot / early flag word then reads
++// 0x0101 when complete, one byte per server, and the receiver compares against its arg's flag value.
+ //
+ // K split (BLOCK_SHARDED, k_cols > 1; regime R4): every core of a grid row computes fp32 partials
+ // [bm, all C_out] over its own channel slice, and grid column y owns output N-slice y. Per M-block the
+@@ -239,9 +241,11 @@
+     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (k_split ? 2 * k_cols : 0);
+     [[maybe_unused]] const bool split_here = tile_fill_split && get_arg_val<uint32_t>(split_flag_arg) != 0;
+-    // Weight servers: 1 on a receiver, then its server's (x, y).
++    // Weight servers: on a receiver the value of a complete slot / early flag (VALID with one server; 0x0101 with two,
++    // one byte lane each: conv2d_3x3_weight_server_writer.cpp), then its (first) server's (x, y).
+     constexpr uint32_t server_arg = split_flag_arg + 1;
+-    [[maybe_unused]] const bool server_receiver = weight_servers && get_arg_val<uint32_t>(server_arg) != 0;
++    [[maybe_unused]] const uint32_t server_flag_valid = weight_servers ? get_arg_val<uint32_t>(server_arg) : 0;
++    [[maybe_unused]] const bool server_receiver = weight_servers && server_flag_valid != 0;
+ #ifdef NSLICE_ROUND0
+     // N-slice round 0 (see the file comment), after the weight-server args (the N-slice walk has no kw-fold args):
+     // [this core is its column's round-0 reader, the column's multicast rectangle (NoC-ordered sx, sy, ex, ey), the
+@@ -511,14 +515,14 @@
+                         bias_pushed = true;
+                     }
+                 }
+-                if (*r0_flag == VALID) {
++                if (*r0_flag == server_flag_valid) {
+                     break;
+                 }
+                 if constexpr (r0_chunks > 1) {
+                     // Semaphore server_flag_sem_id + depth + j (after the bias flag), j >= 1: chunks 0 .. j - 1 landed.
+                     for (uint32_t j = r0_chunks - 1; j > r0_pushed; --j) {
+                         if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+-                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
++                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == server_flag_valid) {
+                             cb_push_back(cb_weights, (j - r0_pushed) * r0_chunk_tiles);
+                             r0_pushed = j;
+                             break;
+@@ -1390,14 +1394,14 @@
+                 get_semaphore(server_flag_sem_id + k_blocks_issued % nslice_weight_depth));
+             while (true) {
+                 invalidate_l1_cache();
+-                if (*flag == VALID) {
++                if (*flag == server_flag_valid) {
+                     break;
+                 }
+                 if (round0_chunks > 1 && k_blocks_issued == 0) {
+                     // Round 0 streams: push the chunks the server's early flags report landed.
+                     for (uint32_t j = round0_chunks - 1; j > round0_pushed; --j) {
+                         if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+-                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == VALID) {
++                                get_semaphore(server_flag_sem_id + nslice_weight_depth + j)) == server_flag_valid) {
+                             cb_push_back(cb_weights, (j - round0_pushed) * (weight_k_block_tiles / round0_chunks));
+                             round0_pushed = j;
+                             break;

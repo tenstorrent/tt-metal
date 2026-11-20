@@ -1,0 +1,2 @@
+res30 base 0
+res30 dual_a3all 0
