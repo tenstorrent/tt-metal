@@ -750,3 +750,14 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   layers all 0; segments within limits, top-5 1.0. Bulk-MoE tuning: nothing >= 1 ms (busiest chip's FPU bound, the
   flat plan has no rows-per-expert knob, packets already <= 6208 B; P.80 fp8 dispatch was owner-rejected, not redone).
   DECIDED: accept. Applied the queued patch: PB.3H deps PB.4 (runs with PACKED_MOE=on), PB.5 deps PB.3H.
+- 02:55 UTC PB.4 gate PASS -> af4368d296e (units reused). PB.3H (host / per-segment costs / hidden gathers, mixed with one slot capacity) attempt 1 started.
+- 05:09 UTC PB.3H done (attempt 1), WAITING. Gathers on a sub-device (core column 11), per-source regions beside the
+  attention phases, a source's tails as one combined gather: exposed frac 0.109 at 4x2k@139264 (2.245 ms serial ->
+  0.245 exposed, every prefetch hidden) and 0.162 mixed (3.664 -> 0.593; per segment 61k 0.000 / 139k 0.106 / 308k
+  0.120 / 547k 0.170). Oracle 40 layers bit-identical. Walls (slots at one capacity 1,048,576): 4x2k 123.3 ms = 66.4k,
+  mixed 137.7 = 59.5k (device 109.6, indexer 20.2), 1x2k 94.7. Still host-bound (enqueue ~108-111 ms vs device ~95).
+  DECIDED (agent, accepted): gather sub-device on column 11 (the 11x10 compute grids cannot move). DECIDED: accept.
+- 05:14 UTC DECIDED: PB.3K added (host enqueue off the critical path: batched per-segment launches, prepared programs,
+  pipelined host prep; a trace only with every per-chunk value in device buffers), PB.5 now after it. Both targets are
+  missed only by the host: device 95 (4x2k) / 110 (mixed) vs walls 123 / 138; the owner's 21:00 principle covers it.
+  Without it PB.5 fails on the targets.
