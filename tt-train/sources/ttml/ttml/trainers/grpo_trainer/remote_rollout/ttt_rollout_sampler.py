@@ -215,12 +215,13 @@ class TTTRolloutSampler(RolloutSampler):
         prompts_x = repeat_interleave(prompts, g)
         completions: List[List[int]] = []
         token_logprobs: List[List[float]] = []
+        loss_masks: List[List[float]] = []
         for start in range(0, len(prompts_x), self._slots_per_call):
             chunk = prompts_x[start : start + self._slots_per_call]
             if self._multi_turn is None:
                 c, lp = self.generate_and_get_log_probs(chunk, [W] * len(chunk))
             else:
-                c, lp = generate_tool_turns(
+                c, lp, m = generate_tool_turns(
                     self,
                     chunk,
                     tools=self._tools,
@@ -229,11 +230,15 @@ class TTTRolloutSampler(RolloutSampler):
                     max_tool_response_chars=self._multi_turn.max_tool_response_chars,
                     max_completion_length=W,
                 )
+                loss_masks.extend(m)
             completions.extend(c)
             token_logprobs.extend(lp)
 
         logprobs = pad_logprobs(completions, token_logprobs, W)
-        batch = RolloutBatch(weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs)
+        loss_mask = None if self._multi_turn is None else pad_logprobs(completions, loss_masks, W)
+        batch = RolloutBatch(
+            weight_version=version, prompts=prompts_x, completions=completions, logprobs=logprobs, loss_mask=loss_mask
+        )
         validate_rollout_batch(batch, num_prompts=len(prompts), num_generations=g, max_completion_length=W)
         return batch
 
