@@ -1,6 +1,6 @@
 # Find Operation Tests and Pipelines
 
-Find which unit tests in `tests/ttnn/unit_tests/operations` test a given operation, and identify which CI/CD pipelines run those tests.
+Find which unit tests in `tests/ttnn/unit_tests/operations` and `tests/ttnn/nightly/unit_tests/operations` test a given operation, and identify which CI/CD pipelines run those tests.
 
 ## Usage
 
@@ -38,7 +38,7 @@ This command helps you:
 ### Step 1: Search for Test Files
 
 The command searches for test files that reference the operation:
-- Searches in `tests/ttnn/unit_tests/operations/` directory
+- Searches in `tests/ttnn/unit_tests/operations/` and `tests/ttnn/nightly/unit_tests/operations/`
 - Looks for files containing the operation name (case-insensitive)
 - Checks both direct matches and common variations (e.g., `slice_write` matches `test_slice_write.py`)
 
