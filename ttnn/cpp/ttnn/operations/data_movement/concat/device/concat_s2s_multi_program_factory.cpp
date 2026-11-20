@@ -369,11 +369,9 @@ ttnn::device_operation::ProgramArtifacts ConcatS2SMultiProgramFactory::create_pr
             },
     };
 
-    // Match the legacy CachedProgram path: SetRuntimeArgs(..., all_cores, args).
-    // These values must live in per-core runtime args, not common_runtime_args.
-    // BRISC (writer) and NCRISC (reader) each have their own RTA region; using
-    // common_runtime_args for both kernels made both RISCs observe the same
-    // offsets (precision failures in sharded concat).
+    // Per-node runtime arrays, even though every node gets identical values (the reader's and the
+    // writer's differ). Switching to common runtime arrays is a candidate, but an earlier move to
+    // common args caused unexplained precision failures in sharded concat, so it is left per-node.
     KernelRunArgs reader_run_args{.kernel = READER};
     KernelRunArgs writer_run_args{.kernel = WRITER};
     for (const auto& range : all_cores.ranges()) {
