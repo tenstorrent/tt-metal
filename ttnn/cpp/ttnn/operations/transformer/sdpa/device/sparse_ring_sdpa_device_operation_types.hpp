@@ -39,6 +39,9 @@ struct SparseRingSDPAParams {
     // construction; keyed in compute_program_hash.
     bool output_token_major = false;
     std::optional<DataType> output_dtype = std::nullopt;
+    // dense_q_blocks_tensor: the most dense Q blocks on one shard the program is sized for (the list path takes it
+    // from the list). Set after construction; keyed in compute_program_hash.
+    uint32_t dense_q_blocks_max_per_shard = 8;
 
     SparseRingSDPAParams(
         std::optional<float> scale,
@@ -100,6 +103,10 @@ struct SparseRingSDPAParams {
     }
 };
 
+// dense_q_blocks_tensor: the padding id and the per-shard limit.
+constexpr uint32_t kDenseQBlockInvalid = 0xFFFFFFFFu;
+constexpr uint32_t kDenseQBlocksMaxPerShard = 8;
+
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
@@ -115,8 +122,15 @@ struct SparseRingSDPAInputs {
     // too). With it, logical_n (the host value) is a placeholder kept out of the program hash, so one program serves
     // every length of the padded shape.
     std::optional<Tensor> logical_n_tensor;
+    // Dense Q block table: [1, 1, 1, K] uint32 row-major in DRAM, replicated: K global Q-block indices
+    // (shard * Q blocks per shard + local block) or kDenseQBlockInvalid. The reader reads it at every dispatch, so the
+    // host may rewrite it in place; the program is sized for dense_q_blocks_max_per_shard dense blocks per shard
+    // instead of a dense_q_blocks list in the hash.
+    std::optional<Tensor> dense_q_blocks_tensor;
 
     bool pooled_route() const { return pooled_k.has_value(); }
+
+    bool has_dense_q_blocks_tensor() const { return dense_q_blocks_tensor.has_value(); }
 
     bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 

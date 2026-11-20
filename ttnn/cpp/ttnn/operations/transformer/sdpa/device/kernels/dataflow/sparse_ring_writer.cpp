@@ -18,9 +18,6 @@
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
-#if defined(SPARSE_LOGICAL_N_TENSOR)
-#include "sparse_ring_length.hpp"
-#endif
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -43,6 +40,19 @@ public:
     uint32_t stride2() const { return nh * dht; }
 };
 
+// Q table "stride:S" (q_perm mode 3): position p holds block r + S * k, the k-th block of residue r, residues in order.
+template <uint32_t n, uint32_t S>
+inline uint32_t q_perm_stride_at(uint32_t p) {
+    uint32_t r = 0;
+    for (;; ++r) {
+        const uint32_t count = (n - r + S - 1) / S;
+        if (p < count) {
+            return r + S * p;
+        }
+        p -= count;
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -58,6 +68,8 @@ void kernel_main() {
     constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
     constexpr bool q_perm_table = get_compile_time_arg_val(24) == 2;
+    constexpr bool q_perm_stride = get_compile_time_arg_val(24) == 3;
+    [[maybe_unused]] constexpr uint32_t kQPermStride = get_named_compile_time_arg_val("q_perm_stride");
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(25);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(27);
     constexpr uint32_t kv_stripe_split = get_named_compile_time_arg_val("kv_stripe_split");
@@ -73,13 +85,7 @@ void kernel_main() {
 
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
-#if defined(SPARSE_LOGICAL_N_TENSOR)
-    // Runtime logical length (logical_n_tensor): its accessor follows the output's only when the tensor is given.
-    constexpr auto logical_n_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr uint32_t cb_arg_offset = logical_n_args.next_compile_time_args_offset();
-#else
     constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
-#endif
 
     static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
     static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
@@ -103,27 +109,15 @@ void kernel_main() {
 
 #if defined(SPARSE_LOGICAL_N_TENSOR)
     {
-        // The writer reads the length itself (the reader's copy sits in a page compute pops) for the ring mask: the
-        // runtime args hold the padded length's values. cb_col_identity is unused until generated below.
-        constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
-        const auto len = sparse_ring_length::read<
-            full_mesh_rank_mapping,
-            ring_size,
-            kv_local_padded_Nt,
-            Sk_chunk_t,
-            num_local_k_chunks,
-            chunk_size_t,
-            kv_region_Nt>(
-            noc,
-            logical_n_args,
-            get_common_arg_val<uint32_t>(SPARSE_LOGICAL_N_WRITER_ARG),
-            CircularBuffer(cb_col_identity).get_write_ptr(),
-            fused_op_receiver.seq,
-            mesh_rows,
-            mesh_cols,
-            snake_orientation);
-        logical_nt = len.logical_nt;
-        active_ring_iter_mask = len.active_ring_iter_mask;
+        // Runtime logical length: the reader derives logical_nt and the ring mask and hands them over in cb_length
+        // (the runtime args hold the padded length's values).
+        CircularBuffer cb_len(get_named_compile_time_arg_val("cb_length"));
+        cb_len.wait_front(1);
+        invalidate_l1_cache();
+        CoreLocalMem<volatile uint32_t> words(cb_len.get_read_ptr());
+        logical_nt = words[0];
+        active_ring_iter_mask = words[1];
+        cb_len.pop_front(1);
     }
 #endif
 
@@ -210,6 +204,8 @@ void kernel_main() {
                 if constexpr (q_perm_table) {
                     const uint32_t w = get_common_arg_val<uint32_t>(q_chunk >> 1);
                     q_chunk = (q_chunk & 1u) ? (w >> 16) : (w & 0xFFFFu);
+                } else if constexpr (q_perm_stride) {
+                    q_chunk = q_perm_stride_at<num_q_chunks, kQPermStride>(q_chunk);
                 }
                 write_block_row_grouped_trid<output_has_no_padding>(
                     noc,

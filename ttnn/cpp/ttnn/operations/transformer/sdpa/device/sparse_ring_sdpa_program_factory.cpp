@@ -187,6 +187,28 @@ RingWorkMasks build_ring_work_masks(
     return masks;
 }
 
+// logical_n_tensor: the first tile of the shard each ring iteration visits (ring id * kv_local_padded_Nt), in iteration
+// order. Iteration i is active when logical_nt exceeds it (build_ring_work_masks: a shard's first K piece starts at its
+// first tile), which the kernels evaluate for the live length (sparse_ring_length.hpp).
+std::vector<uint32_t> build_ring_iter_starts(
+    const ttnn::prim::SparseRingSDPAParams& args,
+    const ttnn::prim::SparseRingSDPAInputs& tensor_args,
+    const RingWritePlan& ring_write_plan) {
+    const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
+    const uint32_t kv_local_padded_Nt = tensor_args.local_kv_seq_len() / tt::constants::TILE_HEIGHT;
+    RingIdSequencer seq(
+        ring_write_plan.transport_rank,
+        ring_size,
+        ring_write_plan.backward_writes_expected,
+        ring_write_plan.forward_writes_expected);
+    auto noop_sync = [](uint32_t, uint32_t) {};
+    std::vector<uint32_t> starts;
+    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+        starts.push_back(seq.get_next_ring_id(noop_sync) * kv_local_padded_Nt);
+    }
+    return starts;
+}
+
 RingWritePlan build_ring_write_plan(
     const ttnn::prim::SparseRingSDPAParams& args,
     const ttnn::prim::SparseRingSDPAInputs& tensor_args,
@@ -329,9 +351,16 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // and the ring mask, the reader also the dense-row cost; compute takes them from the counts page). Every host value
     // that would carry the length is then the padded length, so the program does not depend on the host logical_n.
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
+    // dense_q_blocks_tensor: the reader reads the dense Q block table on device; the program is sized for
+    // dense_q_blocks_max_per_shard per shard, so it does not depend on which blocks are dense.
+    const bool has_dense_tensor = tensor_args.has_dense_q_blocks_tensor();
+    const uint32_t dense_tensor_rows =
+        has_dense_tensor ? static_cast<uint32_t>(tensor_args.dense_q_blocks_tensor->logical_shape()[3]) : 0u;
     const uint32_t host_logical_n =
         has_logical_n_tensor ? kv_local_padded_N * ring_size : static_cast<uint32_t>(args.logical_n);
     const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan, host_logical_n);
+    const std::vector<uint32_t> ring_iter_starts =
+        has_logical_n_tensor ? build_ring_iter_starts(args, tensor_args, ring_write_plan) : std::vector<uint32_t>{};
     const RingJointRuntimeArgLayout runtime_arg_layout =
         get_runtime_arg_layout(use_head_chain, k_uses_batch_chain, gqa_grouped_kv);
     const uint32_t logical_nt = tt::div_up(host_logical_n, tt::constants::TILE_HEIGHT);
@@ -620,9 +649,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         tensor_args.head_weights.has_value() ? tensor_args.head_weights->buffer() : nullptr;
     TensorAccessorArgs(head_weights_buf).append_to(reader_compile_time_args);
     tt::tt_metal::Buffer* const logical_n_buf = has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr;
-    if (has_logical_n_tensor) {
-        TensorAccessorArgs(logical_n_buf).append_to(reader_compile_time_args);
-    }
+    // The dense Q block table is read as page 0 of an interleaved DRAM buffer (bank 0): its address only, no accessor.
+    tt::tt_metal::Buffer* const dense_tensor_buf =
+        has_dense_tensor ? tensor_args.dense_q_blocks_tensor->buffer() : nullptr;
 
     struct ChainSemaphores {
         uint32_t sender_id;
@@ -737,9 +766,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    if (has_logical_n_tensor) {
-        TensorAccessorArgs(logical_n_buf).append_to(writer_compile_time_args);
-    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -880,7 +906,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
-            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
+            recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity, length;
     };
     uint32_t pbias_rows = 1;
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
@@ -912,6 +938,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                                          : std::numeric_limits<uint32_t>::max();
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();
+        // logical_n_tensor: the reader hands the derived logical_nt and ring mask to the writer in one small page.
+        l.length = has_logical_n_tensor ? alloc(32, 1, tt::DataFormat::UInt32) : std::numeric_limits<uint32_t>::max();
         return l;
     };
     // The program places each CB at the allocator's DRAM alignment, so a CB whose size is not a multiple of it (the
@@ -1078,11 +1106,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             dyn_on = true;
             q_split = std::move(placeholder);
             max_q_per_core = aligned_cap;
-            if (!args.dense_q_blocks.empty()) {
+            if (!args.dense_q_blocks.empty() || has_dense_tensor) {
                 // Each unit's cores split it by cost (sparse_dyn_split.hpp weighted_range): a core holding a dense
                 // block takes fewer others, so the rest take more. Let them take up to min(dense blocks per unit,
                 // 3) more than the cap where L1 holds that in the same passes.
-                std::vector<uint32_t> per_shard(ring_size, 0);
+                std::vector<uint32_t> per_shard(ring_size, has_dense_tensor ? args.dense_q_blocks_max_per_shard : 0u);
                 for (const uint32_t g : args.dense_q_blocks) {
                     const uint32_t sh = g / num_q_chunks;
                     TT_FATAL(sh < ring_size, "SparseRingSDPA: dense Q block {} is beyond {} shards x {} blocks", g, ring_size, num_q_chunks);
@@ -1232,7 +1260,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             head);
     }
     // Dense Q blocks as positions within a unit: the reader splits positions (Q-table order), so invert the table.
-    const bool dyn_dense_on = dyn_on && !dense_local.empty();
+    const bool dyn_dense_on = dyn_on && (!dense_local.empty() || has_dense_tensor);
     std::vector<uint32_t> dyn_dense_words;
     if (dyn_dense_on) {
         dyn_dense_words = {static_cast<uint32_t>(dense_local.size()), dense_n_full};
@@ -1248,9 +1276,23 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     constexpr size_t kReaderQRemapArg = 20;
     constexpr size_t kWriterQRemapArg = 24;
     constexpr uint32_t kQRemapTable = 2;
+    constexpr uint32_t kQRemapStride = 3;
+    // logical_n_tensor with a "stride:S" Q table (the preset): the kernels compute the same permutation from S
+    // instead of reading the 16-bit table from the common args (2 x num_q_chunks bytes per kernel of kernel-config
+    // space the runtime-length path needs).
+    const std::string q_perm_resolved = sparse_ring_q_perm_resolve(sparse_ring_q_perm_request());
+    uint32_t q_perm_stride = 0;
+    if (!q_perm.empty() && has_logical_n_tensor && q_perm_resolved.rfind("stride:", 0) == 0) {
+        const uint32_t stride = static_cast<uint32_t>(std::stoul(q_perm_resolved.substr(7)));
+        if (stride >= 1 && stride <= num_q_chunks) {
+            q_perm_stride = stride;
+            q_perm_words.clear();
+        }
+    }
     if (!q_perm.empty()) {
-        reader_compile_time_args.at(kReaderQRemapArg) = kQRemapTable;
-        writer_compile_time_args.at(kWriterQRemapArg) = kQRemapTable;
+        const uint32_t mode = q_perm_stride > 0 ? kQRemapStride : kQRemapTable;
+        reader_compile_time_args.at(kReaderQRemapArg) = mode;
+        writer_compile_time_args.at(kWriterQRemapArg) = mode;
     }
 
     if (fast_pbias) {
@@ -1535,8 +1577,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.compile_time_args = reader_compile_time_args;
     reader_kernel.defines = kernel_defines;
     reader_kernel.config = ReaderConfigDescriptor{};
-    if (multipass_pairs) {
-        // -Os to fit; the per-tile K/V read path is flattened so -Os does not outline the NoC read per tile.
+    if (multipass_pairs || has_logical_n_tensor) {
+        // -Os to fit (the runtime-length reads take kernel-config space too); the per-tile K/V read path is flattened
+        // so -Os does not outline the NoC read per tile.
         reader_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::Os;
         reader_kernel.defines.emplace_back("SDPA_READER_FLATTEN_READS", "1");
     }
@@ -1584,6 +1627,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"mask_row_bytes", mask_row_bytes},
         {"sparse_logical_n", compile_time_logical_n},
         {"cb_sparse_plan", cb_sparse_plan},
+        {"cb_length", has_logical_n_tensor ? cbs.length : 0u},
+        {"q_perm_stride", q_perm_stride},
         {"cb_pooled_bias", cb_pooled_bias},
         {"has_block_counts", has_block_counts ? 1u : 0u},
         {"dyn_mode", dyn_on ? 2u : 0u},
@@ -1601,6 +1646,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"dyn_dense", dyn_dense_on ? 1u : 0u},
         {"dyn_dense_cap", dense_cap},
         {"dyn_dense_base", static_cast<uint32_t>(q_perm_words.size() + (dyn_on ? dyn_xy_words.size() : 0))},
+        // dense_q_blocks_tensor: its rows, and the Q blocks per shard (a global id's shard and local block).
+        {"dyn_dense_rows", dense_tensor_rows},
+        {"dyn_dense_nq", num_q_chunks},
         {"cb_block_counts", cb_block_counts},
         {"key_bias_tiles", key_bias_tiles},
         {"cb_key_bias", cb_key_bias},
@@ -1846,24 +1894,32 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (dyn_dense_on) {
         reader_common_args.insert(reader_common_args.end(), dyn_dense_words.begin(), dyn_dense_words.end());
     }
-    if (has_logical_n_tensor) {
-        // Then the logical_n tensor's address, a buffer binding (re-patched on a cache hit).
-        reader_kernel.defines.emplace_back("SPARSE_LOGICAL_N_ARG", std::to_string(reader_common_args.size()));
+    if (has_logical_n_tensor || has_dense_tensor) {
+        // Then the logical_n tensor's and the dense Q block table's addresses, buffer bindings (re-patched on a cache
+        // hit).
         KernelDescriptor::RTArgList common_args;
         common_args.append(reader_common_args);
-        common_args.push_back(logical_n_buf);
+        size_t next = reader_common_args.size();
+        if (has_logical_n_tensor) {
+            reader_kernel.defines.emplace_back("SPARSE_LOGICAL_N_ARG", std::to_string(next++));
+            common_args.push_back(logical_n_buf);
+        }
+        if (has_dense_tensor) {
+            reader_kernel.defines.emplace_back("SPARSE_DENSE_Q_TENSOR", "1");
+            reader_kernel.defines.emplace_back("SPARSE_DENSE_Q_ARG", std::to_string(next++));
+            common_args.push_back(dense_tensor_buf);
+        }
+        if (has_logical_n_tensor) {
+            // Then the ring iterations' first tiles (sparse_ring_length.hpp).
+            reader_kernel.defines.emplace_back("SPARSE_RING_STARTS_ARG", std::to_string(next));
+            common_args.append(ring_iter_starts);
+            next += ring_iter_starts.size();
+        }
         reader_kernel.emplace_common_runtime_args(common_args);
     } else if (!reader_common_args.empty()) {
         reader_kernel.common_runtime_args = reader_common_args;
     }
-    if (has_logical_n_tensor) {
-        // The writer reads the length too (its ring mask): the address after the Q table.
-        writer_kernel.defines.emplace_back("SPARSE_LOGICAL_N_WRITER_ARG", std::to_string(q_perm_words.size()));
-        KernelDescriptor::RTArgList common_args;
-        common_args.append(q_perm_words);
-        common_args.push_back(logical_n_buf);
-        writer_kernel.emplace_common_runtime_args(common_args);
-    } else if (!q_perm_words.empty()) {
+    if (!q_perm_words.empty()) {
         writer_kernel.common_runtime_args = q_perm_words;
     }
     desc.kernels.push_back(std::move(reader_kernel));

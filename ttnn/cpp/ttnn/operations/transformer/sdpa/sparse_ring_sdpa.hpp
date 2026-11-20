@@ -49,5 +49,12 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<DataType> output_dtype = std::nullopt,
     // Runtime logical length ([1, 1, 1, 1] uint32 DRAM, rewritten in place between calls / trace replays): one
     // program for every length of the padded shape; logical_n is then a placeholder. Defaults to None.
-    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
+    // Dense Q block table ([1, 1, 1, K] uint32 DRAM, K <= 64 global Q-block indices or 0xFFFFFFFF): the
+    // dense_q_blocks list read on device, so the host may rewrite it in place; the program is sized for
+    // dense_q_blocks_max_per_shard. Defaults to None.
+    const std::optional<ttnn::Tensor>& dense_q_blocks_tensor = std::nullopt,
+    // With dense_q_blocks_tensor: the most dense Q blocks on one shard the program is sized for (part of the program
+    // hash; the list path's value is its own most per shard). Defaults to 8, the worst case.
+    uint32_t dense_q_blocks_max_per_shard = 8);
 }

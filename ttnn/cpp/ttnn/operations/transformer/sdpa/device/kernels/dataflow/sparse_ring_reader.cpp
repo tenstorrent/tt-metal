@@ -24,6 +24,19 @@
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
+// Q table "stride:S" (q_perm mode 3): position p holds block r + S * k, the k-th block of residue r, residues in order.
+template <uint32_t n, uint32_t S>
+inline uint32_t q_perm_stride_at(uint32_t p) {
+    uint32_t r = 0;
+    for (;; ++r) {
+        const uint32_t count = (n - r + S - 1) / S;
+        if (p < count) {
+            return r + S * p;
+        }
+        p -= count;
+    }
+}
+
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -41,6 +54,8 @@ void kernel_main() {
     constexpr uint32_t ring_size = get_compile_time_arg_val(16);
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(20) == 1;
     constexpr bool q_perm_table = get_compile_time_arg_val(20) == 2;
+    constexpr bool q_perm_stride = get_compile_time_arg_val(20) == 3;
+    [[maybe_unused]] constexpr uint32_t kQPermStride = get_named_compile_time_arg_val("q_perm_stride");
     constexpr bool chunked_enabled = get_compile_time_arg_val(21) == 1;
     constexpr uint32_t num_q_readers = get_compile_time_arg_val(22);
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(23);
@@ -75,16 +90,14 @@ void kernel_main() {
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
     constexpr auto head_weights_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
 #if defined(SPARSE_LOGICAL_N_TENSOR)
-    // Runtime logical length (logical_n_tensor): its accessor follows head_weights' only when the tensor is given.
+    // Runtime logical length (logical_n_tensor): read from its buffer address (bank 0), no accessor.
     constexpr bool kLogicalNTensor = true;
     constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
-    constexpr auto logical_n_args = TensorAccessorArgs<head_weights_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chains_base_offset = logical_n_args.next_compile_time_args_offset();
 #else
     constexpr bool kLogicalNTensor = false;
     constexpr uint32_t kLengthWordsOffset = 0;
-    constexpr uint32_t chains_base_offset = head_weights_args.next_compile_time_args_offset();
 #endif
+    constexpr uint32_t chains_base_offset = head_weights_args.next_compile_time_args_offset();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -189,25 +202,18 @@ void kernel_main() {
     {
         CircularBuffer cb_plan(cb_sparse_plan);
         cb_plan.reserve_back(1);
-        const auto len = sparse_ring_length::read<
-            full_mesh_rank_mapping,
-            ring_size,
-            kv_local_padded_Nt,
-            Sk_chunk_t,
-            num_local_k_chunks,
-            chunk_size_t,
-            kv_region_Nt>(
-            noc,
-            logical_n_args,
-            get_common_arg_val<uint32_t>(SPARSE_LOGICAL_N_ARG),
-            cb_plan.get_write_ptr(),
-            fused_op_receiver.seq,
-            mesh_rows,
-            mesh_cols,
-            snake_orientation);
+        const auto len = sparse_ring_length::read<ring_size, kv_local_padded_Nt>(
+            get_common_arg_val<uint32_t>(SPARSE_LOGICAL_N_ARG), cb_plan.get_write_ptr(), SPARSE_RING_STARTS_ARG);
         logical_n_tokens = len.logical_n;
         logical_nt = len.logical_nt;
         active_ring_iter_mask = len.active_ring_iter_mask;
+        // The writer's copy (its ring mask).
+        CircularBuffer cb_len(get_named_compile_time_arg_val("cb_length"));
+        cb_len.reserve_back(1);
+        CoreLocalMem<volatile uint32_t> words(cb_len.get_write_ptr());
+        words[0] = logical_nt;
+        words[1] = active_ring_iter_mask;
+        cb_len.push_back(1);
     }
 #else
     constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
@@ -270,9 +276,58 @@ void kernel_main() {
             dn.n_full = get_common_arg_val<uint32_t>(dyn_dense_base + 1);
             dn.cap = get_named_compile_time_arg_val("dyn_dense_cap");
             dn.n_dense = dn.n_dense < sparse_dyn_split::kMaxDense ? dn.n_dense : sparse_dyn_split::kMaxDense;
+#if !defined(SPARSE_DENSE_Q_TENSOR)
             for (uint32_t i = 0; i < dn.n_dense; ++i) {
                 dn.pos[i] = get_common_arg_val<uint32_t>(dyn_dense_base + 2 + i);
             }
+#else
+            {
+                // The dense Q block table, one page of kRows words: global Q-block ids (shard * nq + local block) or an
+                // invalid id. This shard's blocks as positions within a unit (where the Q table, common args from 0,
+                // holds the block), ascending, at most kMaxDense. The head-weight staging is free.
+                constexpr uint32_t kRows = get_named_compile_time_arg_val("dyn_dense_rows");
+                constexpr uint32_t kNq = get_named_compile_time_arg_val("dyn_dense_nq");
+                static_assert(kRows * 4 <= kStageBytes, "dense Q block table: one page in the plan scratch");
+                // Page 0 of an interleaved DRAM tensor: bank 0 at the buffer address (validated on the host).
+                noc_async_read(
+                    get_noc_addr_from_bank_id<true>(0, get_common_arg_val<uint32_t>(SPARSE_DENSE_Q_ARG)),
+                    stage,
+                    kRows * 4);
+                noc_async_read_barrier();
+                invalidate_l1_cache();
+                CoreLocalMem<volatile uint32_t> dv(stage);
+                const uint32_t my_shard = fused_op_receiver.seq.ring_index;
+                dn.n_dense = 0;
+                for (uint32_t j = 0; j < kRows; ++j) {
+                    const uint32_t g = dv[j];
+                    if (g / kNq != my_shard || dn.n_dense >= sparse_dyn_split::kMaxDense) {
+                        continue;  // another shard's block, the invalid id (shard far out of range), or full
+                    }
+                    uint32_t p = g % kNq;
+                    if constexpr (q_perm_table) {
+                        const uint32_t b = p;
+                        for (p = 0; p < kNq; ++p) {
+                            const uint32_t w = get_common_arg_val<uint32_t>(p >> 1);
+                            if (((p & 1u) ? (w >> 16) : (w & 0xFFFFu)) == b) {
+                                break;
+                            }
+                        }
+                    } else if constexpr (q_perm_stride) {
+                        // The position of block b: the blocks of the residues before b's, then b's rank in its own.
+                        const uint32_t b = p;
+                        p = b / kQPermStride;
+                        for (uint32_t r = 0; r < b % kQPermStride; ++r) {
+                            p += (kNq - r + kQPermStride - 1) / kQPermStride;
+                        }
+                    }
+                    uint32_t k = dn.n_dense++;
+                    for (; k > 0 && dn.pos[k - 1] > p; --k) {
+                        dn.pos[k] = dn.pos[k - 1];
+                    }
+                    dn.pos[k] = p;
+                }
+            }
+#endif
             if constexpr (kLogicalNTensor) {
                 // A dense row's kept count (the full key blocks inside logical_n) from the live length; the host's
                 // n_full counted the padded length.
@@ -595,6 +650,8 @@ void kernel_main() {
                 if constexpr (q_perm_table) {
                     const uint32_t w = get_common_arg_val<uint32_t>(d.q_chunk >> 1);
                     res_qc[i] = (d.q_chunk & 1u) ? (w >> 16) : (w & 0xFFFFu);
+                } else if constexpr (q_perm_stride) {
+                    res_qc[i] = q_perm_stride_at<num_q_chunks, kQPermStride>(d.q_chunk);
                 }
             }
             if (!q_pushed) {

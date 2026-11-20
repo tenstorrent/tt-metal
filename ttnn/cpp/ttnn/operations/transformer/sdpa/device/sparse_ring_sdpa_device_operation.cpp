@@ -356,7 +356,35 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
             t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr &&
                 t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
             "logical_n_tensor must be allocated in DRAM");
+        TT_FATAL(
+            t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "logical_n_tensor must be interleaved (the reader reads its page 0 from bank 0)");
         TT_FATAL(t.logical_volume() == 1, "logical_n_tensor must hold one value, got volume {}", t.logical_volume());
+    }
+    if (tensor_args.has_dense_q_blocks_tensor()) {
+        // The reader reads the one page at every dispatch; ids outside the shards are skipped, at most
+        // kDenseQBlocksMaxPerShard per shard are used.
+        const auto& t = *tensor_args.dense_q_blocks_tensor;
+        TT_FATAL(args.dense_q_blocks.empty(), "pass dense_q_blocks or dense_q_blocks_tensor, not both");
+        TT_FATAL(
+            args.dense_q_blocks_max_per_shard <= kDenseQBlocksMaxPerShard,
+            "dense_q_blocks_max_per_shard must be at most {}, got {}",
+            kDenseQBlocksMaxPerShard,
+            args.dense_q_blocks_max_per_shard);
+        TT_FATAL(t.dtype() == DataType::UINT32, "dense_q_blocks_tensor must be uint32, got {}", t.dtype());
+        TT_FATAL(t.layout() == Layout::ROW_MAJOR, "dense_q_blocks_tensor must be row-major");
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr &&
+                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "dense_q_blocks_tensor must be allocated in DRAM");
+        TT_FATAL(
+            t.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
+            "dense_q_blocks_tensor must be interleaved (the reader reads its one page from bank 0)");
+        const auto& shape = t.logical_shape();
+        TT_FATAL(
+            shape.rank() == 4 && shape[0] == 1 && shape[1] == 1 && shape[2] == 1 && shape[3] >= 1 && shape[3] <= 64,
+            "dense_q_blocks_tensor must be [1, 1, 1, K] with 1 <= K <= 64, got {}",
+            shape);
     }
 }
 
@@ -413,6 +441,10 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.has_logical_n_tensor()) {
         input_tensors.push_back(*tensor_args.logical_n_tensor);
     }
+    // The dense Q block table: its shape is keyed (with the tensor inputs), its contents are not.
+    if (tensor_args.has_dense_q_blocks_tensor()) {
+        input_tensors.push_back(*tensor_args.dense_q_blocks_tensor);
+    }
     const std::size_t keyed_logical_n = tensor_args.has_logical_n_tensor() ? 0 : args.logical_n;
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
@@ -433,6 +465,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         tensor_args.pooled_v.has_value(),
         tensor_args.block_counts.has_value(),
         tensor_args.head_weights.has_value(),
+        tensor_args.has_dense_q_blocks_tensor(),
+        tensor_args.has_dense_q_blocks_tensor() ? args.dense_q_blocks_max_per_shard : 0u,
         sparse_ring_dyn_split(),
         sparse_ring_q_perm_request(),
         sparse_ring_fast_pbias(),
@@ -510,7 +544,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::vector<uint32_t>& dense_q_blocks,
     bool output_token_major,
     std::optional<DataType> output_dtype,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    const std::optional<ttnn::Tensor>& dense_q_blocks_tensor,
+    uint32_t dense_q_blocks_max_per_shard) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
@@ -575,6 +611,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
         dense_q_blocks);
     operation_attributes.output_token_major = output_token_major;
     operation_attributes.output_dtype = output_dtype;
+    operation_attributes.dense_q_blocks_max_per_shard = dense_q_blocks_max_per_shard;
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,
@@ -587,7 +624,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .pooled_v = pooled_v,
         .block_counts = block_counts,
         .head_weights = head_weights,
-        .logical_n_tensor = logical_n_tensor};
+        .logical_n_tensor = logical_n_tensor,
+        .dense_q_blocks_tensor = dense_q_blocks_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

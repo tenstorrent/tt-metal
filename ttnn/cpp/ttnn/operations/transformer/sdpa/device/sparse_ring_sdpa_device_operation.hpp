@@ -66,6 +66,10 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<DataType> output_dtype = std::nullopt,
     // Runtime logical length ([1, 1, 1, 1] uint32 DRAM): the kernels read it at every dispatch and logical_n leaves
     // the program hash (one program per padded shape). Defaults to None: logical_n compiled in.
-    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
+    // Dense Q block table ([1, 1, 1, K] uint32 DRAM, padded with 0xFFFFFFFF): dense_q_blocks read on device, the
+    // program sized for dense_q_blocks_max_per_shard dense blocks per shard (default 8, the worst case).
+    const std::optional<ttnn::Tensor>& dense_q_blocks_tensor = std::nullopt,
+    uint32_t dense_q_blocks_max_per_shard = 8);
 
 }  // namespace ttnn::prim

@@ -241,6 +241,15 @@ class Case:
             x, self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, on_device=on_device
         )
 
+    def dense_table(self, blocks, rows=64, on_device=True):
+        """The dense_q_blocks_tensor input: [1, 1, 1, rows] uint32, the global dense Q blocks, then 0xFFFFFFFF (unused),
+        replicated (on_device=False: the host twin for ttnn.copy_host_to_device_tensor)."""
+        x = torch.full((1, 1, 1, rows), 0xFFFFFFFF, dtype=torch.int64)
+        x[0, 0, 0, : len(blocks)] = torch.tensor(list(blocks), dtype=torch.int64)
+        return self._upload(
+            x, self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, on_device=on_device
+        )
+
     def head_weights(self, seed):
         """A head_weights input (per (head, shard) kept-block counts, any values: they only steer the dynamic split)."""
         g = torch.Generator().manual_seed(seed)
@@ -282,6 +291,8 @@ class Case:
         host_logical_n=None,
         head_weights=None,
         dense_q_blocks=(),
+        dense_q_blocks_tensor=None,
+        dense_q_blocks_max_per_shard=8,
     ):
         """pooled=False omits pooled K / V: kept blocks only. dense_floor=True (with
         want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
@@ -331,6 +342,8 @@ class Case:
             head_weights=head_weights,
             dense_q_blocks=list(dense_q_blocks),
             logical_n_tensor=logical_n_tensor,
+            dense_q_blocks_tensor=dense_q_blocks_tensor,
+            dense_q_blocks_max_per_shard=dense_q_blocks_max_per_shard,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -688,3 +701,79 @@ def test_runtime_len_trace_replay(runtime):
             assert same, f"replay at logical_n {n}: max |diff| {diff:.3e}"
     finally:
         ttnn.release_trace(dev, trace_id)
+
+
+# Dense Q block table (dense_q_blocks_tensor): per length a different set of dense prefix Q blocks, at most two on a
+# shard (the program is sized by dense_q_blocks_max_per_shard=2, as the list path sizes itself), the production
+# switches.
+_PROD_SWITCHES = {
+    "TT_SPARSE_RING_Q_PERM": "1",
+    "TT_SPARSE_RING_FAST_PBIAS": "2",
+    "TT_SPARSE_RING_DYN_SPLIT": "on",
+    "TT_SPARSE_RING_DYN_EXTRA_PASS": "1",
+    "TT_SPARSE_RING_KV_PAGES": "max",
+    "TT_SPARSE_RING_MEMBER_RESCALE": "1",
+    "TT_SPARSE_RING_MULTIPASS_PAIRS": "1",
+    "TT_SPARSE_RING_BANKED_READS": "1",
+}
+
+
+def _dense_sets(nb):
+    return [[1, 2, nb + 3], [1, nb + 1, nb + 2, 2 * nb + 2], [2, 3, nb + 4, 3 * nb + 5]]
+
+
+@pytest.mark.parametrize("geom", list(RUNTIME_LEN_GEOMETRIES))
+def test_runtime_len_dense_table(runtime, geom, monkeypatch):
+    """dense_q_blocks_tensor with logical_n_tensor: three (length, dense Q blocks) pairs of one padded shape run on ONE
+    cached program, each bit-identical to the per-length program with the dense_q_blocks list."""
+    for name, value in _PROD_SWITCHES.items():
+        monkeypatch.setenv(name, value)
+    base = RUNTIME_LEN_GEOMETRIES[geom]
+    case = Case(runtime, base)
+    S, dev = case.S, runtime.mesh_device
+    lengths = _runtime_lengths(base, S)
+    dense_sets = _dense_sets(base.nb())
+    hw = case.head_weights(47)
+    q, k, v = case.inputs(47)
+    masks = []
+    for n, dense in zip(lengths, dense_sets):
+        geo = replace(base, logical_n=n)
+        masks.append(_dense_rows(make_mask(geo, S, case.H, density=0.2, seed=47), geo, S, dense))
+
+    refs = []
+    for n, mask, dense in zip(lengths, masks, dense_sets):
+        case.geo = replace(base, logical_n=n)
+        refs.append(
+            case.run(q, k, v, mask, want_dense=False, want_ref=False, head_weights=hw, dense_q_blocks=dense)["sparse"]
+        )
+
+    t_len = case.length_tensor(lengths[0])
+    t_dense = case.dense_table(dense_sets[0])
+    added = []
+    for i, (n, mask, dense) in enumerate(zip(lengths, masks, dense_sets)):
+        case.geo = replace(base, logical_n=n)
+        ttnn.copy_host_to_device_tensor(case.length_tensor(n, on_device=False), t_len)
+        ttnn.copy_host_to_device_tensor(case.dense_table(dense, on_device=False), t_dense)
+        before = dev.num_program_cache_entries()
+        got = case.run(
+            q,
+            k,
+            v,
+            mask,
+            want_dense=False,
+            want_ref=False,
+            logical_n_tensor=t_len,
+            host_logical_n=lengths[0],
+            head_weights=hw,
+            dense_q_blocks_tensor=t_dense,
+            dense_q_blocks_max_per_shard=2,
+        )["sparse"]
+        added.append(dev.num_program_cache_entries() - before)
+        same = torch.equal(got, refs[i])
+        diff = (got - refs[i]).abs().max().item()
+        logger.info(
+            f"[runtime_len dense_table {geom}] logical_n {n} dense {dense}: new programs {added[-1]}, bit-identical "
+            f"{same}, max |diff| {diff:.3e}"
+        )
+        assert same, f"logical_n {n} dense {dense}: differs from the per-length list program, max |diff| {diff:.3e}"
+    assert added == [1, 0, 0], f"program cache entries added per call {added}: expected one program for every pair"

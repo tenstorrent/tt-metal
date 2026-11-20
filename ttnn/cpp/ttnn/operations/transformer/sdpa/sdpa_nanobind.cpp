@@ -209,7 +209,9 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     const std::vector<uint32_t>& dense_q_blocks,
     bool output_token_major,
     std::optional<DataType> output_dtype,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    const std::optional<ttnn::Tensor>& dense_q_blocks_tensor,
+    uint32_t dense_q_blocks_max_per_shard) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -240,7 +242,9 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         dense_q_blocks,
         output_token_major,
         output_dtype,
-        logical_n_tensor);
+        logical_n_tensor,
+        dense_q_blocks_tensor,
+        dense_q_blocks_max_per_shard);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -966,6 +970,14 @@ void bind_sdpa(nb::module_& mod) {
                 read on device at every call (and trace replay), so the host may rewrite it in place
                 (ttnn.copy_host_to_device_tensor) between calls. logical_n is then only a placeholder and leaves the
                 program cache key: one program serves every length of the padded shape. Defaults to None.
+            dense_q_blocks_tensor (ttnn.Tensor, optional): [1, 1, 1, K] uint32 row-major in DRAM, replicated, K <= 64:
+                global dense Q-block indices (as in dense_q_blocks) or 0xFFFFFFFF (unused). Read on
+                device at every call, so the host may rewrite it in place; the program is sized for
+                dense_q_blocks_max_per_shard dense blocks per shard and does not depend on the contents. Not with
+                dense_q_blocks. Defaults to None.
+            dense_q_blocks_max_per_shard (int, optional): with dense_q_blocks_tensor, the most dense Q blocks on one
+                shard the program is sized for (keyed). The same value as the list's gives the list's program and
+                bits; any contents up to 8 per shard run on any value. Defaults to 8.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q (or token-major, see above).
@@ -1000,7 +1012,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("dense_q_blocks") = std::vector<uint32_t>{},
         nb::arg("output_token_major") = false,
         nb::arg("output_dtype") = nb::none(),
-        nb::arg("logical_n_tensor").noconvert() = nb::none());
+        nb::arg("logical_n_tensor").noconvert() = nb::none(),
+        nb::arg("dense_q_blocks_tensor").noconvert() = nb::none(),
+        nb::arg("dense_q_blocks_max_per_shard") = 8);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.
