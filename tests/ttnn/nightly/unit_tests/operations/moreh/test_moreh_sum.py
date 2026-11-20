@@ -618,3 +618,34 @@ def test_moreh_sum_int32_rejects_other_output_dtype(device, output_dtype, expect
     out = ttnn.from_torch(torch.zeros(1, 1, 64, 1), dtype=output_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "must match the input dtype"):
         ttnn.moreh_sum(x, dim=3, keepdim=True, output=out)
+
+
+
+@pytest.mark.parametrize(
+    "input_shape, dim",
+    [
+        ([1, 1, 32, 0], 3),
+        ([1, 1, 0, 32], 2),
+        ([2, 0, 32, 32], 1),
+        ([0, 2, 32, 32], 0),
+        ([2, 0, 32, 32], [0, 1]),
+        ([0, 2, 32, 64], [1, 3]),
+    ],
+    ids=["w", "h", "c", "n", "nc", "keeps_empty_dim"],
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32], ids=["bf16", "int32"])
+@pytest.mark.parametrize("use_provide_output", [False, True], ids=["new_output", "provided_output"])
+def test_moreh_sum_empty_dims(device, input_shape, dim, dtype, use_provide_output):
+    # The program factories divide by the empty dims; torch returns zeros for a sum over an empty dim.
+    torch_dtype = torch.int32 if dtype == ttnn.int32 else torch.bfloat16
+    torch_input = torch.ones(input_shape, dtype=torch_dtype)
+    torch_output = torch.sum(torch_input, dim, keepdim=True).to(torch_dtype)
+    tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    tt_output = None
+    if use_provide_output:
+        tt_output = ttnn.from_torch(
+            torch.full(torch_output.shape, 7, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+        )
+    result = ttnn.operations.moreh.sum(tt_input, dim=dim, keepdim=True, output=tt_output)
+    assert list(result.shape) == list(torch_output.shape)
+    assert torch.equal(ttnn.to_torch(result).to(torch_dtype), torch_output)

@@ -9,6 +9,7 @@
 #include <cstdint>
 
 #include <tt-metalium/base_types.hpp>
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -141,8 +142,19 @@ ttnn::operations::moreh::moreh_sum::MorehSumOperation::tensor_return_value_t mor
         dim,
         keepdim,
         memory_config.value_or(input.memory_config()),
-        init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
+        init_device_compute_kernel_config(
+            input.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi4)};
     auto tensor_args = OperationType::tensor_args_t{input, output};
+    if (input.storage_type() == StorageType::DEVICE && input.logical_volume() == 0) {
+        // The program factories divide by the empty dims, and a sum over an empty dim is zero.
+        OperationType::validate_on_program_cache_miss(operation_attributes, tensor_args);
+        const auto spec = OperationType::compute_output_specs(operation_attributes, tensor_args);
+        if (spec.logical_shape().volume() == 0) {
+            return OperationType::create_output_tensors(operation_attributes, tensor_args);
+        }
+        return ttnn::full(
+            spec.logical_shape(), 0.0f, spec.data_type(), spec.layout(), *input.device(), spec.memory_config(), output);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 }  // namespace ttnn::prim

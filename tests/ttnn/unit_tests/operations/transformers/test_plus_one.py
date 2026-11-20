@@ -148,3 +148,9 @@ def test_plus_one_multi_core_sub_core_grids(device, memory_config):
         input_tensor, sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 0))])
     )
     assert torch.equal(ttnn.to_torch(input_tensor), torch_input_tensor + 1)
+
+
+def test_plus_one_empty_sub_core_grids(device, expect_error):
+    input_tensor = ttnn.from_torch(torch.randint(32000, (8,)), dtype=ttnn.int32, device=device)
+    with expect_error(RuntimeError, "sub_core_grids must contain at least one core"):
+        ttnn.plus_one(input_tensor, sub_core_grids=ttnn.CoreRangeSet([]))

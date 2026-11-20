@@ -7,7 +7,10 @@
 
 namespace ttnn::experimental::prim {
 void PlusOneDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t&, const tensor_args_t& input_tensor) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& input_tensor) {
+    TT_FATAL(
+        !operation_attributes.sub_core_grids.has_value() || operation_attributes.sub_core_grids->num_cores() > 0,
+        "sub_core_grids must contain at least one core");
     TT_FATAL(
         input_tensor.dtype() == tt::tt_metal::DataType::INT32 || input_tensor.dtype() == tt::tt_metal::DataType::UINT32,
         "Only INT32 and UINT32 is supported for inputs!");
