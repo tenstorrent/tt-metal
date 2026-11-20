@@ -703,8 +703,8 @@ tests/ttnn/unit_tests/test_comparison_funcs.py @tenstorrent/metalium-developers-
 tests/ttnn/unit_tests/test_comp_pcc_fix.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-developers-ttnn-core @razorback3 @dongjin-na @bbradelTT
 # Op bindings outside the op folders.
-ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT @tenstorrent/metalium-developers-ops-leads
+ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT @tenstorrent/metalium-developers-eltwise
 # Bindings and tests for device and host streaming.
 ttnn/cpp/ttnn-nanobind/*_stream_service.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/hd_socket.* @nsextonTT
@@ -737,7 +737,7 @@ tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT @tenstorrent/metalium-developers-kernel-lib @tenstorrent/metalium-developers-mmfusedreduce
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
 # The TTNN profiler code itself, and its multi-host smoke test with that test's configs: owned by the profiler's owners.
