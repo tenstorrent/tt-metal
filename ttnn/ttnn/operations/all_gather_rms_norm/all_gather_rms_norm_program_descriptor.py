@@ -66,6 +66,7 @@ CB_OWN_RET = 23  # owner -> writer: combined row statistics of the owned rows (r
 CB_OWN_KG = 24  # ln owner -> writer: K_g = bf16(mu) of the owned rows (bf16)
 CB_DEV = 25  # ln owner scratch: per gather tile (n_m d_m, M2_m + n_m d_m^2) in row form
 CB_WCOL = 26  # ln owner: member weights n_m, column 0 of row m % 32 of gather tile m // 32 (accumulator format)
+CB_XG = 27  # rms with gamma, XG_FIRST: x * gamma of the member block (accumulator format)
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
@@ -82,7 +83,22 @@ INC_EVERY = int(
 PORT_BATCH_CHUNKS = int(os.environ.get("AGRMS_BATCH", "2"))  # cap: packets per sender flush + pop (batch-mode reader:
 # per read barrier); cb_port_stage holds STAGE_BATCHES batches (halved under L1 pressure: port_batch_candidates).
 # Refinement 3: 2 measured best on both perf cases (4: +0.25 / +0.56 us, 1: +1.9, 3: flat, 6: +0.9)
-RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
+RELAY_LAG_WAVES = int(os.environ.get("AGRMS_RELAY_LAG", "1"))  # own entries lead relay entries by this many waves
+# (Refinement 4: 0 -> +5.0 us, 2 -> +1.2 us on the focus case)
+# last wave's row-groups: member count raised this many candidate steps (tail_split; 0 = uniform split)
+TAIL_K_STEPS = int(os.environ.get("AGRMS_TAIL_K_STEPS", "0"))
+# writer: gamma / beta pages completed BEFORE the partial exchange (off the post-landing chain; 0 = after it, base op)
+AFFINE_FIRST = int(os.environ.get("AGRMS_AFFINE_FIRST", "1"))
+# rms with gamma: x * gamma computed while the partials are exchanged, one multiply by inv_rms after the combine
+# (only when the chosen split still fits L1 with the block-sized cb_xg: the split itself never changes for it)
+XG_FIRST = int(os.environ.get("AGRMS_XG_FIRST", "0"))  # measured +0.26 us on the focus case (Refinement 4)
+# port reader: an own entry waits only for the own members it reads (one bit per member in sem_own_loaded, <= 31
+# members per port) instead of every own member of the port (0 = wait-all)
+OWN_LOADED_MASK = int(os.environ.get("AGRMS_OWN_MASK", "1"))
+OWN_MASK_BITS = 31
+OWN_MASK_FLAG = 1 << 31  # port reader RT: own entry wait word = flag | member mask
+# relay lag of the last wave (build_entries send_slot; RELAY_LAG_WAVES = the uniform schedule)
+TAIL_RELAY_LAG = int(os.environ.get("AGRMS_TAIL_RELAY_LAG", str(RELAY_LAG_WAVES)))
 STAGE_BATCHES = int(os.environ.get("AGRMS_STAGE_BATCHES", "2"))  # cb_port_stage ring depth in sender batches
 PORT_READ_STREAM = int(os.environ.get("AGRMS_READ_STREAM", "1"))  # port reader: per-slot transaction ids, every
 # landed slot pushed at once, the whole stage ring in flight (TRANSPORT, Refinement 3); 0 = batch mode below
@@ -444,6 +460,40 @@ class Split:
     group_rows: list
     group_row_start: list
     rows_max: int
+    # tail class (OVERLAP, Refinement 4): row-groups [tail_g0, num_groups) — the last wave's — use tail_k members
+    # (narrower member blocks: the moments + normalize + store chain after the LAST landing shrinks with them).
+    # tail_k == 0: uniform split.
+    tail_k: int = 0
+    tail_mm: MemberMap = None
+    tail_g0: int = 0
+
+    def is_tail(self, g: int) -> bool:
+        return self.tail_k > 0 and g >= self.tail_g0
+
+    def k_of(self, g: int) -> int:
+        return self.tail_k if self.is_tail(g) else self.k
+
+    def mm_of(self, g: int) -> MemberMap:
+        return self.tail_mm if self.is_tail(g) else self.mm
+
+    def core0(self, g: int) -> int:
+        """Index of group g's first member in the compute-core list (groups are contiguous runs of k_of(g))."""
+        if not self.is_tail(g):
+            return g * self.k
+        return self.tail_g0 * self.k + (g - self.tail_g0) * self.tail_k
+
+    def cores_used(self) -> int:
+        return self.core0(self.num_groups - 1) + self.k_of(self.num_groups - 1)
+
+    def classes(self):
+        """[(k, mm, groups)] member classes (one kernel set each)."""
+        if self.tail_k == 0:
+            return [(self.k, self.mm, list(range(self.num_groups)))]
+        out = []
+        if self.tail_g0 > 0:
+            out.append((self.k, self.mm, list(range(self.tail_g0))))
+        out.append((self.tail_k, self.tail_mm, list(range(self.tail_g0, self.num_groups))))
+        return out
 
 
 def select_split(geo: Geometry, N: int, fits_fn) -> Split:
@@ -504,6 +554,30 @@ def member_runs(spec: MemberSpec, q: int, rows: int, pitch: int):
     return []
 
 
+def tail_split(split: Split, geo: Geometry, N: int, wave_rg: int, fits_fn, dense: bool) -> Split:
+    """Last-wave narrowing (OVERLAP lamp "tail chain block size"): the row-groups of the last wave land last, and the
+    whole chain after their landing (member moments, partial exchange, combine, normalize, store) scales with the
+    member block. Give those groups the TAIL_K_STEPS-th wider member count (k_s x 2 on the focus case: 12 -> 6 tiles
+    per member) when the cores, the symmetric combine and L1 allow it; every earlier wave keeps the cost-rule k (its
+    tail is hidden behind the later waves' transport). Uniform split otherwise."""
+    if TAIL_K_STEPS <= 0 or dense or FORCE_K is not None:
+        return split
+    k = split.k
+    n_waves = _div_up(split.num_groups, wave_rg)
+    if n_waves < 2 or k < geo.G or is_owner(k):
+        return split
+    cands = [c for c in _k_candidates(geo, N) if c > k and not is_owner(c)]
+    if len(cands) < TAIL_K_STEPS:
+        return split
+    kt = cands[TAIL_K_STEPS - 1]
+    g0 = (n_waves - 1) * wave_rg
+    if g0 * k + (split.num_groups - g0) * kt > N:
+        return split
+    if not fits_fn(kt, split.rows_max):
+        return split
+    return replace(split, tail_k=kt, tail_mm=member_map(kt, geo), tail_g0=g0)
+
+
 def wave_row_groups(split: Split, geo: Geometry, L: int, chunk_pages: int) -> int:
     mp = 1
     for spec in split.mm.members:
@@ -516,8 +590,17 @@ def wave_row_groups(split: Split, geo: Geometry, L: int, chunk_pages: int) -> in
 def build_entries(chips, ring, L, split: Split, geo: Geometry, compute_cores, vxy, wave_rg, chunk_pages):
     """Per (coord, d, l): out entries [dict(q, w, wait, runs=[(xy, off, n)])] and in entries; expected landings and
     own-member signalling. Entries with no runs are dropped."""
-    k = split.k
     n_waves = _div_up(split.num_groups, wave_rg)
+    last = n_waves - 1
+    # send slots: own entries of wave w at slot w, relays RELAY_LAG_WAVES later; the LAST wave's own entries move
+    # behind every earlier relay and its relays follow them TAIL_RELAY_LAG slots later, so only the last wave's
+    # (tail_split-narrowed) groups land at the very end (ties: own before relays, schedule order)
+    own_last = last + RELAY_LAG_WAVES - min(TAIL_RELAY_LAG, RELAY_LAG_WAVES) if n_waves > 1 else 0
+
+    def send_slot(w, idx):
+        if w == last:
+            return own_last if idx == 0 else own_last + min(TAIL_RELAY_LAG, RELAY_LAG_WAVES)
+        return w if idx == 0 else w + RELAY_LAG_WAVES
 
     def runs_for(q, w, l, part):
         runs = []
@@ -528,9 +611,10 @@ def build_entries(chips, ring, L, split: Split, geo: Geometry, compute_cores, vx
                 continue
             if part == 2 and (g // L) % 2 != 1:
                 continue
-            for m, spec in enumerate(split.mm.members):
-                core = compute_cores[g * k + m]
-                for off, n in member_runs(spec, q, split.group_rows[g], split.mm.pitch):
+            gmm = split.mm_of(g)
+            for m, spec in enumerate(gmm.members):
+                core = compute_cores[split.core0(g) + m]
+                for off, n in member_runs(spec, q, split.group_rows[g], gmm.pitch):
                     runs.append((vxy(core), off, n, (core.x, core.y)))
         return runs
 
@@ -543,16 +627,13 @@ def build_entries(chips, ring, L, split: Split, geo: Geometry, compute_cores, vx
             for l in range(L):
                 if (d, l) not in ch["ports"]:
                     continue
-                entries = []
-                for s in range(n_waves + RELAY_LAG_WAVES):
+                keyed = []
+                for w in range(n_waves):
                     for idx, (q, part) in enumerate(sched[d]):
-                        w = s if idx == 0 else s - RELAY_LAG_WAVES
-                        if w < 0 or w >= n_waves:
-                            continue
                         runs = runs_for(q, w, l, part)
                         if runs:
-                            entries.append(dict(q=q, w=w, own=(idx == 0), runs=runs))
-                out[(coord, d, l)] = entries
+                            keyed.append(((send_slot(w, idx), idx), dict(q=q, w=w, own=(idx == 0), runs=runs)))
+                out[(coord, d, l)] = [e for _, e in sorted(keyed, key=lambda t: t[0])]
     # incoming lists and relay wait thresholds
     inc = {}
     for coord, ch in chips.items():
@@ -767,7 +848,6 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         split = select_split(geo, N, fits)
     ln_fpu = sz.ln_fpu
     k, mm, pitch, rows_max = split.k, split.mm, split.mm.pitch, split.rows_max
-    compute_used = compute_all[: split.num_groups * k]
     vxy_cache = {}
 
     def vxy(c):
@@ -777,15 +857,39 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         return vxy_cache[key]
 
     wave_rg = wave_row_groups(split, geo, L, chunk_pages)
-    out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
-
-    # ---- per-chip expected landings + own signalling ----
     dp = dense_plan(geo, mm) if dense else None
-    unit = fit_unit[k]
     port_batch = fit_batch[k]
     owner = is_owner(k)
     gp = gather_tiles(k) if owner else 1
-    cplan = cb_plan(sz, k, pitch, rows_max, n_affine_slots(mm, geo), dp, unit)
+
+    def merged_plan(sp: Split) -> dict:
+        """CB plan over every member class: one declaration per CB on all compute cores (cb_x's mirror address and
+        the lockstep slot addresses need identical layouts), sized to the largest class."""
+        merged = {}
+        for kk, mmk, _ in sp.classes():
+            for idx, (pg, pb) in cb_plan(
+                sz, kk, mmk.pitch, rows_max, n_affine_slots(mmk, geo), dp, fit_unit[kk]
+            ).items():
+                if idx in merged:
+                    assert merged[idx][1] == pb
+                    pg = max(pg, merged[idx][0])
+                merged[idx] = (pg, pb)
+        return merged
+
+    split = tail_split(split, geo, N, wave_rg, fits, dense)
+    cplan = merged_plan(split)
+    if split.tail_k and plan_bytes(cplan, sz) > budget:
+        split = replace(split, tail_k=0, tail_mm=None, tail_g0=0)
+        cplan = merged_plan(split)
+    xg_first = False
+    if XG_FIRST and has_gamma and not cfg.is_ln:
+        xg_pages = max(rows_max * mmk.pitch for _, mmk, _ in split.classes())
+        trial = dict(cplan)
+        trial[CB_XG] = (xg_pages, sz.T_acc)
+        if plan_bytes(trial, sz) <= budget:
+            cplan, xg_first = trial, True
+    compute_used = compute_all[: split.cores_used()]
+    out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
     n_stat = 2 if cfg.is_ln else 1
     t_acc = acc_dtype(fp32_dest)
     cb_dtype = {
@@ -815,6 +919,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         CB_OWN_KG: ttnn.bfloat16,
         CB_DEV: t_acc,
         CB_WCOL: t_acc,
+        CB_XG: t_acc,
     }
     port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
     crs_compute = _crs(compute_used)
@@ -858,6 +963,10 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         defines.append(("AGRMS_MASK", "1"))
     if owner:
         defines.append(("AGRMS_OWNER", "1"))
+    if AFFINE_FIRST:
+        defines.append(("AGRMS_AFFINE_FIRST", "1"))
+    if xg_first:
+        defines.append(("AGRMS_XG_FIRST", "1"))
 
     x_acc = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     o_acc = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -868,34 +977,43 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     g_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
     g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
 
-    reader_ct = [tile_bytes, pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
+    def class_cts(kk: int, mmk: MemberMap):
+        """(reader, compute, writer) CT args of one member class."""
+        reader_ct = [tile_bytes, mmk.pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
+        compute_ct = [kk, mmk.pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp]
+        writer_ct = writer_ct_of(kk, mmk.pitch, fit_unit[kk])
+        return reader_ct, compute_ct, writer_ct
 
-    compute_ct = [k, pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp]
-    writer_ct = [
-        sz.T_out,
-        pitch,
-        geo.out_w_tiles,
-        k,
-        unit,
-        cplan[CB_OUT][0],  # cb_out ring size: single source = cb_plan()
-        n_stat,
-        SEM_PARTIALS,
-        sz.T_acc,
-        g_elem,
-        g_is_tile,
-        g_page,
-        sz.T_g,
-        AFFINE_SLOT_BYTES,
-        SEM_FOREIGN,
-        dp.max_fin if dense else 0,
-        dp.max_fout if dense else 0,
-        0 if dense else 1,  # affine_aligned
-        gp,  # owner combine: gather tiles per owned row
-        SEM_INV,
-    ]
-    writer_ct += list(o_acc)
-    writer_ct += list(g_acc)
-    writer_ct += list(b_acc)
+    def writer_ct_of(kk, pitch, unit):
+        return (
+            [
+                sz.T_out,
+                pitch,
+                geo.out_w_tiles,
+                kk,
+                unit,
+                cplan[CB_OUT][0],  # cb_out ring size: single source = cb_plan()
+                n_stat,
+                SEM_PARTIALS,
+                sz.T_acc,
+                g_elem,
+                g_is_tile,
+                g_page,
+                sz.T_g,
+                AFFINE_SLOT_BYTES,
+                SEM_FOREIGN,
+                dp.max_fin if dense else 0,
+                dp.max_fout if dense else 0,
+                0 if dense else 1,  # affine_aligned
+                gp,  # owner combine: gather tiles per owned row
+                SEM_INV,
+            ]
+            + list(o_acc)
+            + list(g_acc)
+            + list(b_acc)
+        )
+
+    class_ct = [class_cts(kk, mmk) for kk, mmk, _ in split.classes()]
     port_reader_ct = [
         tile_bytes,
         chunk_pages,
@@ -932,10 +1050,13 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             mesh_shape,
             tuple(ports_union),
             k,
+            split.tail_k,
+            split.tail_g0,
             wave_rg,
-            unit,
+            fit_unit[k],
             port_batch,
             ln_fpu,
+            xg_first,
             ckc.math_fidelity,
             fp32_dest,
             ckc.math_approx_mode,
@@ -989,8 +1110,9 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 for e in in_e[(coord, d, l)]:
                     for core_xy in sorted({r[3] for r in e["runs"]}):
                         landings[core_xy] = landings.get(core_xy, 0) + 1
-        own_sig = {}  # member core -> [port vxy]
+        own_sig = {}  # member core -> [(port vxy, increment)]
         own_expected = {}
+        own_bit = {}  # (d, l) -> {member core: bit} when the port waits per entry (OWN_LOADED_MASK)
         for d in DIRS:
             for l in range(L):
                 if (d, l) not in ch["ports"]:
@@ -998,19 +1120,23 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 pc = ch["ports"][(d, l)]
                 own_cores = sorted({r[3] for e in out_e[(coord, d, l)] if e["own"] for r in e["runs"]})
                 own_expected[(d, l)] = len(own_cores)
-                for cxy in own_cores:
-                    own_sig.setdefault(cxy, []).append(_xy(vxy(pc)))
+                per_entry = OWN_LOADED_MASK and len(own_cores) <= OWN_MASK_BITS
+                own_bit[(d, l)] = {cxy: 1 << i for i, cxy in enumerate(own_cores)} if per_entry else {}
+                for i, cxy in enumerate(own_cores):
+                    own_sig.setdefault(cxy, []).append((_xy(vxy(pc)), (1 << i) if per_entry else 1))
 
-        reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        class_rt = [(ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()) for _ in split.classes()]
         for g in range(split.num_groups):
+            reader_rt, compute_rt, writer_rt = class_rt[1 if (split.is_tail(g) and split.tail_g0 > 0) else 0]
             rows = split.group_rows[g]
             row_start = split.group_row_start[g]
-            members = compute_used[g * k : (g + 1) * k]
+            gk, gmm = split.k_of(g), split.mm_of(g)
+            members = compute_used[split.core0(g) : split.core0(g) + gk]
             peer_xy = []
             for c in members:
                 v = vxy(c)
                 peer_xy += [v.x, v.y]
-            for m, spec in enumerate(mm.members):
+            for m, spec in enumerate(gmm.members):
                 c = members[m]
                 own = [pt for pt in spec.parts if pt[0] == p]
                 own_n, own_c0, own_off = (own[0][2], own[0][1], own[0][3]) if own else (0, 0, 0)
@@ -1018,14 +1144,15 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 sig = own_sig.get((c.x, c.y), [])
                 rd_args = (
                     [x_addr, row_start, rows, own_n, own_c0, own_off, landings.get((c.x, c.y), 0), len(sig)]
-                    + sig
+                    + [xy for xy, _ in sig]
+                    + [w for _, w in sig]
                     + [len(tails)]
                     + tails
                 )
                 segs = []
                 for _, c0, n, _ in spec.parts:
                     segs += [n, geo.v if (mask and c0 + n == geo.sw) else 0]  # slice-last tile: valid columns
-                n_m = [_f32_bits(s.valid_cols) for s in mm.members]
+                n_m = [_f32_bits(s.valid_cols) for s in gmm.members]
                 dense_c, dense_w, dense_r = [], [], []
                 store_col0, store_w = q0_out(spec, geo), spec.core_w
                 if dense:
@@ -1050,7 +1177,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                     dense_w += [len(dm["contrib_from"]), len(dm["homes_to"])] + dm["homes_to"]
                     rd_args = rd_args + [len(dense_r)] + dense_r
                 if owner and cfg.is_ln:
-                    rd_args = rd_args + [k] + n_m  # cb_wcol: member weights n_m (fp32 bits)
+                    rd_args = rd_args + [gk] + n_m  # cb_wcol: member weights n_m (fp32 bits)
                 reader_rt[c.x][c.y] = rd_args
                 compute_rt[c.x][c.y] = (
                     [rows, spec.core_w, m, inv_w_bits, eps_bits, _f32_bits(1.0 / spec.valid_cols), len(spec.parts)]
@@ -1079,11 +1206,15 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             ins = in_e[(coord, d, l)]
             rd = [arrival_addr, own_expected[(d, l)], len(outs), len(ins)]
             sd_entries = []
+            bits = own_bit[(d, l)]
             for e in outs:
                 runs = []
                 for v, off, n, _ in e["runs"]:
                     runs += [_xy(v), off | (n << 16)]
-                rd += [e["wait"], len(e["runs"])] + runs
+                wait = e["wait"]
+                if e["own"] and bits:  # own entry: wait for exactly its own members (bit mask, flag bit 31)
+                    wait = OWN_MASK_FLAG | sum({bits[r[3]] for r in e["runs"]})
+                rd += [wait, len(e["runs"])] + runs
                 sd_entries += [len(e["runs"])] + runs
             for e in ins:
                 cores = []
@@ -1110,31 +1241,38 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 sd += [0, 0, 0, 0, 0, 0]
             ps_rt[pc.x][pc.y] = sd
 
-        program.kernels = [
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
-                core_ranges=crs_compute,
-                compile_time_args=reader_ct,
-                defines=defines,
-                runtime_args=reader_rt,
-                config=ttnn.ReaderConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_writer.cpp"),
-                core_ranges=crs_compute,
-                compile_time_args=writer_ct,
-                defines=defines,
-                runtime_args=writer_rt,
-                config=ttnn.WriterConfigDescriptor(),
-            ),
-            ttnn.KernelDescriptor(
-                kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_compute.cpp"),
-                core_ranges=crs_compute,
-                compile_time_args=compute_ct,
-                defines=defines,
-                runtime_args=compute_rt,
-                config=ccfg,
-            ),
+        kernels = []
+        for (kk, mmk, groups), (reader_ct, compute_ct, writer_ct), (reader_rt, compute_rt, writer_rt) in zip(
+            split.classes(), class_ct, class_rt
+        ):
+            crs_cls = _crs(compute_used[split.core0(groups[0]) : split.core0(groups[-1]) + kk])
+            kernels += [
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_reader.cpp"),
+                    core_ranges=crs_cls,
+                    compile_time_args=reader_ct,
+                    defines=defines,
+                    runtime_args=reader_rt,
+                    config=ttnn.ReaderConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_writer.cpp"),
+                    core_ranges=crs_cls,
+                    compile_time_args=writer_ct,
+                    defines=defines,
+                    runtime_args=writer_rt,
+                    config=ttnn.WriterConfigDescriptor(),
+                ),
+                ttnn.KernelDescriptor(
+                    kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_compute.cpp"),
+                    core_ranges=crs_cls,
+                    compile_time_args=compute_ct,
+                    defines=defines,
+                    runtime_args=compute_rt,
+                    config=ccfg,
+                ),
+            ]
+        program.kernels = kernels + [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "all_gather_rms_norm_port_reader.cpp"),
                 core_ranges=crs_ports,
@@ -1160,9 +1298,16 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
     info = dict(
         k=k,
+        tail_k=split.tail_k,
+        tail_g0=split.tail_g0,
+        xg_first=xg_first,
+        group_cores=[
+            [(vxy(c).x, vxy(c).y) for c in compute_used[split.core0(g) : split.core0(g) + split.k_of(g)]]
+            for g in range(split.num_groups)
+        ],
         owner=owner,
         port_batch=port_batch,
-        out_unit=unit,
+        out_unit=fit_unit[k],
         num_groups=split.num_groups,
         rows=rows_max,
         pitch=pitch,

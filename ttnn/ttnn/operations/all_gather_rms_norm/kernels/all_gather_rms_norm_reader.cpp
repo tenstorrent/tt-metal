@@ -82,8 +82,8 @@ void kernel_main() {
     const uint32_t expected_landings = arg(6);
     const uint32_t n_sig = arg(7);
     const uint32_t sig_idx = 8;
-    const uint32_t n_tails = arg(sig_idx + n_sig);
-    const uint32_t tails_idx = sig_idx + n_sig + 1;
+    const uint32_t n_tails = arg(sig_idx + 2 * n_sig);  // sig: n_sig port (x, y) words, then n_sig increments
+    const uint32_t tails_idx = sig_idx + 2 * n_sig + 1;
 
     Noc noc;
     CircularBuffer cb(cb_x);
@@ -119,7 +119,7 @@ void kernel_main() {
         const uint32_t own_sem = get_semaphore(sem_own_loaded_id);
         for (uint32_t i = 0; i < n_sig; ++i) {
             const uint32_t xy = arg(sig_idx + i);
-            noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, own_sem), 1);
+            noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, own_sem), arg(sig_idx + n_sig + i));
         }
     }
 

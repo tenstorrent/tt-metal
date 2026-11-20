@@ -398,7 +398,11 @@ ALWI void combine_rows_block(uint32_t owned, FinalizeInvRms finalize) {
 }
 #endif
 
-ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
+#ifdef AGRMS_XG_FIRST
+// OVERLAP (Refinement 4): the statistics-independent half of the normalize. x * gamma (gamma ROW-broadcast) of the
+// whole member block -> cb_xg (accumulator format), run while the member waits for its group's partials, so only
+// the one multiply by inv_rms is left on the chain after the combine (normalize_block below).
+ALWI void xg_block(uint32_t rows, uint32_t core_w) {
     constexpr auto x_in = input(
         cb_x,
         WaitPolicy::None,
@@ -406,8 +410,32 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
         InputTileMapping::Block,
         DataFormatReconfig::Enabled,
         TileAddressing::Strided);
+    constexpr auto g_in = input(cb_gamma, BroadcastDim::Row, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
+    eltwise_chain(
+        IterationShape::grid(rows, core_w),
+        BinaryFpu<BinaryFpuOp::Mul, x_in, g_in>{StridedTileRange{0, pitch}},
+        PackTile<output(cb_xg)>{});
+}
+#endif
+
+ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto inv_in =
         input(cb_rowstat, BroadcastDim::Col, WaitPolicy::None, PopPolicy::None, InputTileMapping::Col);
+#ifdef AGRMS_XG_FIRST
+    constexpr auto xg_in = input(cb_xg, WaitPolicy::None, PopPolicy::None, InputTileMapping::Block);
+    eltwise_chain(
+        IterationShape::grid(rows, core_w),
+        BinaryFpu<BinaryFpuOp::Mul, xg_in, inv_in>{},
+        PackTile<output(norm_out_cb)>{});
+    return;
+#endif
+    constexpr auto x_in = input(
+        cb_x,
+        WaitPolicy::None,
+        PopPolicy::None,
+        InputTileMapping::Block,
+        DataFormatReconfig::Enabled,
+        TileAddressing::Strided);
     using XTimesInv = BinaryFpu<BinaryFpuOp::Mul, x_in, inv_in>;
 #ifdef AGRMS_HAS_GAMMA
     constexpr auto gamma_in = input(cb_gamma, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
@@ -445,6 +473,14 @@ void kernel_main() {
         }
 #endif
     }
+#ifdef AGRMS_XG_FIRST
+    {
+        AGZ("c_xg");
+        cb_wait_front(cb_gamma, pitch);
+        xg_block(rows, core_w);
+        cb_wait_front(cb_xg, rows * core_w);
+    }
+#endif
 #ifdef AGRMS_OWNER
     {
         AGZ("c_comb");
@@ -470,6 +506,9 @@ void kernel_main() {
         AGZ("c_norm");
         normalize_block(rows, core_w);
     }
+#ifdef AGRMS_XG_FIRST
+    cb_pop_front(cb_xg, rows * core_w);
+#endif
     cb_pop_front(cb_x, rows * pitch);
     cb_pop_front(cb_rowstat, rows);
 #ifdef AGRMS_HAS_GAMMA

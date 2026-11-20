@@ -45,6 +45,8 @@ constexpr uint32_t chunk_bytes = chunk_pages * tile_bytes;
 constexpr bool abl_no_read = (AGRMS_ABL & 1) != 0;   // perf probes: skip the compute-L1 reads
 constexpr bool abl_no_relay = (AGRMS_ABL & 2) != 0;  // perf probes: relay entries do not wait for their arrival
 
+constexpr uint32_t OWN_MASK_FLAG = 1u << 31;  // own entry wait word: flag | bit mask of its own members
+
 FORCE_INLINE uint32_t arg(uint32_t i) { return get_arg_val<uint32_t>(i); }
 
 void kernel_main() {
@@ -103,7 +105,18 @@ void kernel_main() {
         const uint32_t wait = arg(a);
         const uint32_t n_runs = arg(a + 1);
         a += 2;
-        if (wait == 0 || abl_no_relay) {
+        if ((wait & OWN_MASK_FLAG) != 0) {
+            // own entry, per-entry readiness: every own member signals its own bit (distinct bits never carry)
+            const uint32_t mask = wait & ~OWN_MASK_FLAG;
+            while (true) {
+                drain();
+                service();
+                invalidate_l1_cache();
+                if ((*own_loaded & mask) == mask) {
+                    break;
+                }
+            }
+        } else if (wait == 0 || abl_no_relay) {
             while (!own_ready) {
                 drain();
                 service();

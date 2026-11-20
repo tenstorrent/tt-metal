@@ -32,8 +32,8 @@ from eval.golden_tests.all_gather_rms_norm.topology import resolve_pinned_mesh, 
 from ttnn.operations.all_gather_rms_norm import all_gather_rms_norm  # noqa: E402
 import ttnn.operations.all_gather_rms_norm.all_gather_rms_norm_program_descriptor as pdm  # noqa: E402
 
-ITERS = 5
-PATTERNS = 4
+ITERS = int(os.environ.get("AGRMS_ZONE_ITERS", "5"))
+PATTERNS = int(os.environ.get("AGRMS_ZONE_PATTERNS", "4"))
 FREQ_MHZ = 1350.0
 
 
@@ -85,6 +85,7 @@ def test_zones(inputs, axes, extras, index, perf_mesh):
         check(out)
     info = pdm.LAST_INFO
     print("PLAN", {k: v for k, v in (info or {}).items() if not isinstance(v, (list, dict))})
+    print("GROUPS", (info or {}).get("group_cores"))
     spin = ccl_perf.spin_op(perf_mesh)
     spin()
     call()

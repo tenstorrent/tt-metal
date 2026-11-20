@@ -43,6 +43,7 @@ constexpr uint32_t cb_own_ret = 23;  // owner combine: combined statistics of th
 constexpr uint32_t cb_own_kg = 24;   // ln owner combine: K_g of the owned rows (bf16, compute -> writer)
 constexpr uint32_t cb_dev = 25;      // ln owner combine scratch (row form)
 constexpr uint32_t cb_wcol = 26;     // ln owner combine: member weights n_m (column 0, one row per member)
+constexpr uint32_t cb_xg = 27;       // rms, AGRMS_XG_FIRST: x * gamma of the member block (accumulator format)
 }  // namespace agrms_cb
 
 // Owner combine (k > 8): tile-row r of a block is owned by member r % k; member m owns rows m, m + k, ...
