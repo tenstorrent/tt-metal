@@ -6,7 +6,7 @@
 """galaxy-workload-deployment-test: gates, matmul ND runs, then per-model block -> smoke -> soak on a Blackhole Galaxy.
 
 Usage: galaxy_workload_deployment_test.py [--co] [--skip KEY[,KEY] | --only KEY[,KEY]] [--models kimi_k2_7,glm53]
-       galaxy_workload_deployment_test.py --quad --hosts H0,H1,H2,H3 [--soak-minutes N] [--co] [--skip/--only KEYS]
+       galaxy_workload_deployment_test.py --quad --hosts H0,H1,H2,H3 [--soak-minutes N | --60min] [--co] [--skip/--only KEYS]
 """
 
 import argparse
@@ -57,6 +57,9 @@ def quad_rows(state) -> list[tuple[str, Result]]:
     """Per-stage rows of a quad run: labels from the result's details, statuses from state.rows."""
     labels = [d.partition(": ")[0] for d in state.result.details]
     return [(label, r) for label, r in zip(labels, state.rows)]
+
+
+SOAK_MINUTES = 30
 
 
 def quad_env() -> dict[str, str]:
@@ -261,7 +264,14 @@ def main(argv: list[str] | None = None) -> int:
         "single-galaxy steps; needs --hosts",
     )
     ap.add_argument("--hosts", default="", help="--quad: 1 or 4 hosts, comma-separated, in physical ring order")
-    ap.add_argument("--soak-minutes", type=int, default=15, help="--quad: block-random soak length (default 15)")
+    soak = ap.add_mutually_exclusive_group()
+    soak.add_argument(
+        "--soak-minutes",
+        type=int,
+        default=SOAK_MINUTES,
+        help=f"--quad: block-random soak length (default {SOAK_MINUTES})",
+    )
+    soak.add_argument("--60min", dest="soak_minutes", action="store_const", const=60, help="--quad: a 60-minute soak")
     args = ap.parse_args(argv)
 
     repo = Path(os.environ.get("TT_METAL_HOME") or Path(__file__).resolve().parents[4])

@@ -766,3 +766,24 @@ def test_quad_header_lists_its_env(tmp_path, monkeypatch, capsys):
         f"env   GWDT_SHARED_FOLDER={tmp_path}  GWDT_SKIP_CHECKOUT_CHECK=0  PREFILL_TTNN_CACHE=/local/cache"
         in capsys.readouterr().out
     )
+
+
+@pytest.mark.parametrize("argv, minutes", [([], 30), (["--60min"], 60), (["--soak-minutes", "5"], 5)])
+def test_quad_soak_length(monkeypatch, tmp_path, argv, minutes):
+    import galaxy_workload_deployment_test as gwdt
+
+    seen = []
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "build_quad_steps", lambda hosts, soak_s: seen.append(soak_s) or [])
+    monkeypatch.setattr(gwdt, "run_all", lambda *a: None)
+    assert gwdt.main(["--quad", "--co", "--hosts", ",".join(HOSTS), *argv]) == 0
+    assert seen == [minutes * 60]
+
+
+def test_quad_soak_flags_exclusive(capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    with pytest.raises(SystemExit):
+        gwdt.main(["--quad", "--co", "--hosts", ",".join(HOSTS), "--60min", "--soak-minutes", "5"])
+    assert "not allowed with argument" in capsys.readouterr().err
