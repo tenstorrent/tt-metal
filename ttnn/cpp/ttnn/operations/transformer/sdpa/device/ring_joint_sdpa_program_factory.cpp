@@ -2280,7 +2280,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // Reader-to-compute mailbox for the device-derived lengths.
     add_cb(recipe_ring_cb::derived, 1, 64, tt::DataFormat::UInt32);
     // Fit L1: first give up Q prefetch (the reader reserves one Q chunk at a time and compute pops it when done), then
-    // the fused chunks' CBs (every K chunk then runs on the reduce path, slower than losing Q prefetch).
+    // latent V's second entry (the reader copies V out of the K chunk already in L1, so it only loses that copy's
+    // overlap; latent V is never chained), then output staging beyond one row group, then the fused
+    // chunks' CBs (every K chunk then runs on the reduce path, slower than any of these).
     const uint64_t l1_available = recipes::recipe_free_l1(*device);
     uint64_t cb_bytes = recipes::recipe_cb_bytes(desc);
     if (cb_bytes > l1_available && max_q_chunks_per_core > 1) {
@@ -2291,6 +2293,28 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         cb_bytes = recipes::recipe_cb_bytes(desc);
         log_debug(tt::LogOp, "RingJointSDPA recipe: single-slot Q to fit L1");
+    }
+    if (cb_bytes > l1_available && tensor_args.has_latent_v()) {
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::v) {
+                cb.total_size /= 2;
+            }
+        }
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "RingJointSDPA recipe: single-entry latent V to fit L1");
+    }
+    // Compute stages the output one row group (two rows; one for a one-row Q chunk) at a time.
+    for (const uint32_t rows : {2u, 1u}) {
+        if (cb_bytes <= l1_available || rows < std::min(Sq_chunk_t, 2u)) {
+            break;
+        }
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::out) {
+                cb.total_size = std::min<uint32_t>(cb.total_size, rows * vDHt * cb.format_descriptors.front().page_size);
+            }
+        }
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "RingJointSDPA recipe: output staged in {} row(s) to fit L1", rows);
     }
     if (cb_bytes > l1_available) {
         cb_bytes -= recipes::recipe_drop_fused(desc.cbs, compute_recipe_kernel.named_compile_time_args, Sq_chunk_t);
