@@ -18,9 +18,8 @@ import torch
 
 import ttnn
 from models.tt_dit.utils import split_load
-
-from ...layers.module import Module, Parameter
-from ...parallel.manager import CCLManager
+from models.tt_dit.layers.module import Module, Parameter
+from models.tt_dit.parallel.manager import CCLManager
 
 MESH = [
     pytest.param(
