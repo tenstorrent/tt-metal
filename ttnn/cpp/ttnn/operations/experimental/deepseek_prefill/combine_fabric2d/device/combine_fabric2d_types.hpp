@@ -26,7 +26,7 @@ struct CombineFabric2dParams {
     uint32_t axis = 0;
     uint32_t num_links = 2;
     // Pages one forwarding channel holds. Any depth is correct -- the channel split makes the movement
-    // graph acyclic, see combine_fabric2d_assignments.hpp -- so this trades DRAM against throughput.
+    // graph acyclic, see fabric2d_assignments.hpp -- so this trades DRAM against throughput.
     uint32_t fwd_vc_pages;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Set only when combine runs overlapped inside the routed expert.
@@ -47,6 +47,11 @@ struct CombineFabric2dInputs {
     // Set only when combine runs overlapped. Optional because the framework reflects over every member
     // and an empty Tensor is not a valid thing to reflect over.
     std::optional<ttnn::Tensor> global_expert_idx_table;
+    // The DRAM the op relays tokens through, of forwarding_buffer_spec or larger. Absent, the op allocates its own
+    // at cache miss and the cached workload keeps it: it lands wherever DRAM is free mid-forward, once per cached
+    // program. A tensor arg rather than an attribute so a cache hit rebinds its address. The overlapped fork takes
+    // its buffer through CombineL1 instead and leaves this unset.
+    std::optional<ttnn::Tensor> forwarding_buffer;
 };
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d

@@ -70,6 +70,7 @@ ttsl::hash::hash_t ReshapeViewDeviceOperation::compute_program_hash(
     // don't hash on operation_attributes_t::recreate_mapping_tensor
     return tt::tt_metal::operation::hash_operation<ReshapeViewDeviceOperation>(
         operation_attributes.logical_output_shape,
+        operation_attributes.padded_output_shape,
         num_dest_write_slots,
         operation_attributes.output_mem_config,
         operation_attributes.sub_core_grid.has_value(),

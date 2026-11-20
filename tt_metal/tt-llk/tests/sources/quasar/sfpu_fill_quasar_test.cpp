@@ -37,7 +37,7 @@ inline bool is_int_fill_format(DataFormat fmt)
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand_to_dest.h"
@@ -62,8 +62,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Source descriptor: buffer_A in L1, L1-side format = formats.unpack_A_src,
     // face geometry from the harness. reg_data_format = unpack_A_dst is the
     // DEST-side (post-conversion) format.
-    const auto bfd_unpack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+    constexpr std::uint8_t bfd_unpack = ckernel::trisc::BFD_ID_UNP0;
 
     // Configure unpacker → init unpack-to-dest path → unpack the TILE_CNT tiles from L1 into DEST, one section at a time.
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
@@ -150,7 +151,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -174,8 +175,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // Destination descriptor: buffer_Res in L1, L1-side format = formats.pack_dst,
     // face geometry from the harness. reg_data_format = pack_src is the DEST-side
     // format the packer reads.
-    const auto bfd_pack = ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
+    constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
 
     // Configure pack engine 0 → init → per section: pack tiles from DST_INDEX into buffer_Res → release section.
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());

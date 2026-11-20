@@ -97,7 +97,7 @@ def test_from_hf_config_rejects_null_qkv_hidden_size(expect_error):
         ([(1, 7, 8)], "merge kernel"),
         ([(1, 0, 8)], "merge kernel"),
         ([(1, 2, 514)], "exceeds"),
-        ([(1, 512, 130)], "exceeds"),
+        ([(1, 512, 134)], "exceeds"),
     ],
     ids=["two_images", "video", "odd", "zero_side", "too_wide", "too_many"],
 )
