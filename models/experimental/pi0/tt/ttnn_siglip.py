@@ -417,6 +417,7 @@ class SigLIPAttentionTTNN:
             scale=self.scale,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
 
         ttnn.deallocate(q_heads)
