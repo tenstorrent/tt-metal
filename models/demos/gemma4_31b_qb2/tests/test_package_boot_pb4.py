@@ -3,7 +3,8 @@
 """Host test of the update-4 `single-user` packaged class (tt/package_boot_pb4.py), no device and no ttnn: the module's
 source is parsed, not imported (importing PB4 imports ttnn). It must subclass update 2's Gemma4ResidentSpecPB3Packaged
 (so the resident weight cache is still ensured first), key its continuation pre-warm marker to the m3_2 engine package,
-run the pre-warm through contwarm.run("single-user", ...) after the PB3 prefill warmup, and the bundle must name it.
+run the pre-warm through contwarm.run("single-user", ...) after the PB3 prefill warmup. Update 5: no bundle names it
+any more; it is the packaged base that tt/package_boot_pb4_apc.py composes (update 5's `single-user` bundle).
     pytest -q models/demos/gemma4_31b_qb2/tests/test_package_boot_pb4.py"""
 
 import ast
@@ -43,7 +44,9 @@ def test_engine_package_and_prewarm_call():
     assert src.index("super().warmup_model_prefill") < src.index("contwarm.run(")
 
 
-def test_bundle_names_the_packaged_class():
-    meta = json.loads((ROOT / "vllm_models" / "resident_spec_pb4" / "vllm_metadata.json").read_text())
-    assert meta == {"arch": "Gemma4QB2ResidentSpecPB4ForCausalLM",
-                    "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_pb4:Gemma4ResidentSpecPB4Packaged"}
+def test_update5_composes_it_and_no_bundle_names_it():
+    mains = {json.loads(p.read_text())["main_class"] for p in (ROOT / "vllm_models").glob("*/vllm_metadata.json")}
+    assert "models.demos.gemma4_31b_qb2.tt.package_boot_pb4:Gemma4ResidentSpecPB4Packaged" not in mains
+    apc = next(n for n in ast.parse((ROOT / "tt" / "package_boot_pb4_apc.py").read_text()).body
+               if isinstance(n, ast.ClassDef))
+    assert "Gemma4ResidentSpecPB4Packaged" in [ast.unparse(b) for b in apc.bases]

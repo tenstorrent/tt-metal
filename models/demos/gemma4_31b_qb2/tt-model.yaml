@@ -1,12 +1,13 @@
 # tt-model.yaml — google/gemma-4-31B-it on a QuietBox 2 (P300x2: 2x P300 boards = 4 Blackhole chips, (1, 4) mesh, TP4)
-# via vLLM + the stock vllm-tt-plugin. Rendered from bench/packaging/update4/{tt-model_u4.yaml,card_v6_final_v3.md} by
-# render_manifest_u4.py.
+# via vLLM + vllm-tt-plugin (fork changh95/vllm-tt-plugin @ c9d7808: prefix_resume). Rendered from bench/packaging/update5/{tt-model_u5.yaml,card_v7_x.md} by
+# render_manifest_u5.py.
 #
 #   single-user          DEFAULT: one user on the resident persistent-kernel decode engine (resident_m3_2) with
 #                        DFlash2 speculative decoding (RedHatAI/gemma-4-31B-it-speculator.dflash2, block 8, R=8 verify),
 #                        262,144-token context. = stage-2 regression config D (M2 adapter + M2 delta), with update 2's
 #                        paged-bucket prefill (PB3: tt/generator_resident_spec_vllm_pb3.py; LEAD_DECISIONS_PKG P34, P37);
 #                        update 4: PB4 = PB3 + the continuation pre-warm (tt/package_boot_pb4.py, tt/contwarm.py).
+#                        update 5: PB4-APC = PB3-APC (prefix resume) + PB4 (tt/package_boot_pb4_apc.py).
 #   batch                update 3: up to 32 users on the resident batch engine (resident_m5_11) through the S3.2
 #                        adapter with the paged-bucket prefill (S3-PB: tt/generator_resident_multi_s3_2_pb_vllm.py),
 #                        option S (decode width R = 1 / 8 / 32 by live rows), no speculation, 262,144-token context.
@@ -14,6 +15,18 @@
 #                        update3/UPDATE3_PLAN.md section 3); LEAD_DECISIONS_PKG P48, P49. Update 4: option C's KV layout
 #                        (tt/generator_resident_multi_s3_2_pb_ring_vllm.py: full-attention blocks in vLLM's pool, the
 #                        sliding layers in a fixed per-user ring) + the continuation pre-warm (tt/package_boot_s3pb_ring.py).
+#                        Update 5: ring-APC = APC-v2 -> APC-v1 (prefix resume) + update 4's packaged ring class
+#                        (tt/package_boot_s3pb_ring_apc.py).
+#
+# Update 5 (2026-11-21; LEAD_DECISIONS_PKG P144-P160; update5/UPDATE5_PLAN_v3.md): prefix caching on both profiles (S1:
+# canonical resume). vLLM's prefix cache holds the full-attention KV; the engine saves each sliding-window layer's last
+# 1,152 rows at 8,192-token chunk ends in a fixed device pool (tt/s1_tail_pool.py; GEMMA4_S1_TAIL_SLOTS = 4 on `batch`,
+# 2 on `single-user`, read at import, so it is in each profile's env block) and a hit resumes at the largest saved
+# 8,192-multiple at least 2,080 tokens before the prompt's end (the plugin's prefix_resume capability: fork
+# changh95/vllm-tt-plugin @ c9d7808, tree f0c6e314). Both profiles: --enable-prefix-caching and
+# --enable-prompt-tokens-details; `single-user` also --prefix-cache-retention-interval 8192. The bundles are the two APC
+# compositions (resident_spec_pb4_apc, resident_multi_s3pb_ring_apc); update 4's two bundles go (P144.2). The Hub's
+# `update-4` revision keeps update 4 (no prefix caching).
 #
 # Update 4 (2026-11-19; LEAD_DECISIONS_PKG P99-P122): `batch` = option C's ring class (P103, P107; the ring class refuses
 # update 3's KV-pool variable, so no env block sets it, P110), both profiles pre-build every continuation prefill
@@ -59,7 +72,7 @@ source:
     - models/demos/gemma4_31b_qb2/resident_m3_2    # the engine stage-2 D validated (frozen SUMS 4677ca02): single-user
     - models/demos/gemma4_31b_qb2/resident_m5_11   # update 3: the batch engine (frozen SUMS b128d3df, D43 isolation)
     - models/demos/gemma4_31b_qb2/vllm_models      # this package's EXTRA_MODELS_DIR: exactly the two profiles' bundles,
-                                                   # resident_spec_pb4 and resident_multi_s3pb_ring (update 4)
+                                                   # resident_spec_pb4_apc and resident_multi_s3pb_ring_apc (update 5)
     - models/demos/gemma4/__init__.py              # spec_policy (generator_resident_spec_vllm.py imports it)
     - models/demos/gemma4/tt/__init__.py
     - models/demos/gemma4/tt/spec_policy.py
@@ -70,10 +83,11 @@ source:
 
 runtime:
   vllm: {version: "0.31.0"}
-  # Stock upstream tenstorrent/vllm-tt-plugin main @ ca7a182 (pushed, on origin/main): the plugin every validated
-  # gemma4 serving run used, unmodified (git_diff_vllm-tt-plugin.patch empty in session_B32). It already carries the
-  # model-owned drafter sentinel (spec_admission.py) and the custom_class speculative path the adapter needs.
-  plugin: {repo: https://github.com/tenstorrent/vllm-tt-plugin, ref: ca7a18246e4111629ed6cb4a7d1192002749fccf}
+  # Update 5: the fork changh95/vllm-tt-plugin, branch hchang/prefix-resume @ c9d7808 (LEAD_DECISIONS_PKG P154): upstream
+  # tenstorrent/vllm-tt-plugin ca7a182 (update 4's plugin) plus the prefix_resume model capability (src/vllm_tt_plugin
+  # tree f0c6e314), the exact code the S1 probe's B4, B0 and SU holds passed. It keeps the model-owned drafter sentinel
+  # (spec_admission.py) and the custom_class speculative path the adapter needs.
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: c9d7808411e30709a33e82e49a2c68a5dca022a8}
   extra_models_dir: models/demos/gemma4_31b_qb2/vllm_models
   # The validated serving venv (tt-metal/python_env), pinned exactly: 418 packages, then vLLM --no-deps, as the plugin's
   # own installer does. Live resolution (attempt 2 of the warm-up build) pulled vLLM's CUDA metadata: torch 2.13 against
@@ -118,9 +132,11 @@ serve_profiles:
     env:
       GEMMA4_RESIDENT_ENGINE_PACKAGE: resident_m3_2       # = stage-2 D
       GEMMA4_RESIDENT_DRAFTER: dflash2
+      GEMMA4_S1_TAIL_SLOTS: "2"                          # update 5: the prefix-resume tail pool (2 points; read at import)
       # The resident engine's converted weights (raw BF4/BF8 blocks, 22 GB), in the /tensor-cache mount
-      # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec_pb4 names
-      # tt/package_boot_pb4.py:Gemma4ResidentSpecPB4Packaged (update 4): update 2's PB3Packaged (tt/package_boot_pb3.py:
+      # (~/.cache/tt-model/gemma4-31b-it-dflash/tensors on the host). vllm_models/resident_spec_pb4_apc names
+      # tt/package_boot_pb4_apc.py:Gemma4ResidentSpecPB4APCPackaged (update 5: PB3-APC, the prefix resume, in front of
+      # update 4's tt/package_boot_pb4.py:Gemma4ResidentSpecPB4Packaged): update 2's PB3Packaged (tt/package_boot_pb3.py:
       # package_boot.ensure_resident_cache, which converts them on the first start and checks them on every start
       # (COMPLETE.json: weights revision, engine + converter hashes, precision, file manifest), in front of PB3: PB
       # prefill + drafter-seed pre-warm + seed-path guard) plus the continuation pre-warm (64 programs, start 1,280; a
@@ -131,12 +147,14 @@ serve_profiles:
       # RedHatAI/gemma-4-31B-it-speculator.dflash2 at its pinned commit b0cd01b4 from the /hf cache, offline
       # (snapshot_download local_files_only). The card's quickstart downloads it first.
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecPB4ForCausalLM"]}']   # update 4: PB4 (PB3 + pre-warm)
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentSpecPB4APCForCausalLM"]}']   # update 5: PB4-APC (vllm_models/resident_spec_pb4_apc)
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
       - --enable-chunked-prefill
-      - --no-enable-prefix-caching
+      - --enable-prefix-caching                       # update 5
+      - --enable-prompt-tokens-details                # update 5: usage.prompt_tokens_details.cached_tokens
+      - [--prefix-cache-retention-interval, "8192"]   # update 5, single-user only (as the S1 probe's SU holds ran)
       - [--max-logprobs, "-1"]
       - [--override-generation-config, '{"top_k": 20}']
       - [--default-chat-template-kwargs, '{"enable_thinking":true}']
@@ -168,21 +186,25 @@ serve_profiles:
       GEMMA4_RESIDENT_BF8_PARTIALS: "1"
       GEMMA4_RESIDENT_R_DOWN_STEPS: "32"
       GEMMA4_RESIDENT_R_IDLE_RESET: "1"
+      GEMMA4_S1_TAIL_SLOTS: "4"                      # update 5: the prefix-resume tail pool (4 points; read at import)
       # GRES_ISO / GRES_ISO_SKIPFOLD stay unset: m5_11's safe defaults (1 / 0), checked by the validator's iso pin.
       # The converted weights, in the /tensor-cache mount: package_boot keys a cache by engine package and engine tree,
       # so this profile has its own directory (sharing single-user's would reconvert on every profile switch).
-      # vllm_models/resident_multi_s3pb_ring names tt/package_boot_s3pb_ring.py:Gemma4ResidentMultiS32PBRingPackaged
-      # (update 4), which converts them on the first start and checks them on every start, then pre-builds the 640
+      # vllm_models/resident_multi_s3pb_ring_apc names tt/package_boot_s3pb_ring_apc.py:
+      # Gemma4ResidentMultiS32PBRingAPCPackaged (update 5: APC-v2 -> APC-v1, the prefix resume, in front of update 4's
+      # tt/package_boot_s3pb_ring.py:Gemma4ResidentMultiS32PBRingPackaged), which converts them on the first start and
+      # checks them on every start, then pre-builds the 640
       # continuation prefill programs on the first start after a kernel change (tt/contwarm.py).
       GRES_CACHE: /tensor-cache/gemma4_resident_raw_bf4_m5_11
       GEMMA4_RESIDENT_PRECISION: bf4                  # must match the converter's dtypes (refused otherwise)
     args:
-      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentMultiS32PBRingForCausalLM"]}']   # update 4: the ring class (vllm_models/resident_multi_s3pb_ring)
+      - [--hf-overrides, '{"architectures":["TTGemma4QB2ResidentMultiS32PBRingAPCForCausalLM"]}']   # update 5: ring-APC (vllm_models/resident_multi_s3pb_ring_apc)
       - [--revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--tokenizer-revision, 842da3794eaa0b77d5f08bae87a17459d91ff475]
       - [--max-num-batched-tokens, "8192"]
       - --enable-chunked-prefill
-      - --no-enable-prefix-caching
+      - --enable-prefix-caching                       # update 5
+      - --enable-prompt-tokens-details                # update 5: usage.prompt_tokens_details.cached_tokens
       - [--max-logprobs, "-1"]
       - [--override-generation-config, '{"top_k": 20}']
       - [--default-chat-template-kwargs, '{"enable_thinking":true}']
@@ -193,7 +215,7 @@ default_profile: single-user          # lead 2026-11-11 (qwen v2 names); multi-u
 
 card:
   description: |
-    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on a resident batch engine that keeps per-user decode fast at long context, up to 262K. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served. Update 4 also builds every continuation prefill program a long prompt can need at the first start, and gives `batch` a KV layout that admits more users at long context.
+    [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) on a QuietBox 2 (P300x2, 4 Blackhole chips) with vLLM. The default profile serves one user on a resident decode engine (one persistent program per chip per decode step) with [DFlash2](https://huggingface.co/RedHatAI/gemma-4-31B-it-speculator.dflash2) speculative decoding, up to 262K context. `batch` serves up to 32 users on a resident batch engine that keeps per-user decode fast at long context, up to 262K. Both profiles use a paged-bucket prefill: a fixed set of prefill programs built at start-up, so device memory no longer grows with the number of distinct prompt lengths served. Update 4 also builds every continuation prefill program a long prompt can need at the first start, and gives `batch` a KV layout that admits more users at long context. Update 5 turns on prefix caching on both profiles: a request that repeats an earlier prompt's beginning, such as the next turn of a chat or a shared system prompt, resumes from a saved point instead of prefilling all of it again.
   quickstart: |
     ### At a glance
     - Weights: [google/gemma-4-31B-it](https://huggingface.co/google/gemma-4-31B-it) @ `842da37`; drafter
@@ -215,11 +237,47 @@ card:
       32) and does not speculate.
     - Update 4: continuation prefill programs are built once, at the first start after installation or a kernel change;
       `batch` keeps its sliding-window layers in a fixed per-user ring, so vLLM admits more users at long context.
+    - Update 5: prefix caching is on. A request that shares at least 8,192 tokens with an earlier one, and is at least
+      10,272 tokens long, resumes at a saved point if one for that prefix is still in the pool: a multiple of 8,192 within
+      the shared prefix, at least 2,080 tokens before its end. Only prompt tokens are cached.
+
+    ### Update 5: prefix caching
+    - **What a hit does.** vLLM's prefix cache holds the full-attention KV. The engine also keeps each sliding-window
+      layer's last 1,152 rows between prefill chunks. Update 5 saves those rows at 8,192-token chunk ends, in a fixed device
+      pool:
+      - `batch` holds 4 saved points, at most 2 per request, so roughly the last two long requests; `single-user` holds 2,
+        so only the most recent long prompt. The least recently used point is replaced first; a 32K prompt alone fills two
+        of `batch`'s four slots.
+      - A hit recomputes at least 2,080 tokens. When the earlier prompt covers all but the last 2,080 tokens and the newest
+        8,192-multiple below that is still saved, as in the measurement, it recomputes at most 10,271; a shorter shared
+        prefix or an evicted point recomputes more. Time to first token follows the recomputed length.
+      - Without a saved point, the request prefills from the start, as before.
+    - **Measured before packaging**, in the S1 probe on the development tree (the same code; 2026-11-21): a 32,797-token
+      prompt (a 32,768-token history plus a 29-token new turn; 5 real conversations; decode width R = 1) resumed at 24,576
+      tokens and recomputed 8,221:
+      - `batch`: time to first token 1.80 s on a hit, against 5.72 s for the same request cold (medians 1.7981 / 5.7222 s;
+        3.18x for this shape);
+      - `single-user`: 1.80 s on a hit, against 5.74 s cold.
+
+      This release's proof re-measures them on the packaged image.
+    - **Exactness.** A hit's output equals the same request prefilled from the start, token for token, at the same decode
+      width (R), when the prompts' prefills did not share a step with another prompt's prefill. In the S1 probe:
+      - `batch`: 12 hit/cold pairs at R = 1, and hit/cold pairs at R = 8;
+      - `single-user`: hit/cold pairs bitwise, with the speculation counters (drafts, accepted drafts, verifies) equal.
+      - Under concurrent prefills on `batch`, chunked prompts can differ slightly, as before.
+    - **Memory.** The pool is allocated at start-up: 0.94 GB per chip on `batch` (measured 0.944 GB in the S1 probe; 4 x
+      235.9 MB) and 0.47 GB on `single-user`. vLLM's KV capacity is unchanged: "TT KV cache size: 699,136 tokens" on
+      `batch`, 297,560 on `single-user`. With the pool full, the lowest free DRAM per chip in the S1 probe, under a burst of
+      31 short prefills while a 200K-token prompt was prefilling and then two 131K-token prompts among 30 decoding users,
+      was 3.50 GB; this release's proof re-measures it on the packaged image against a 1 GiB (1.07 GB) floor.
+    - **Plugin.** vLLM 0.31.0 with vllm-tt-plugin from the fork `changh95/vllm-tt-plugin` at `c9d7808` (branch
+      `hchang/prefix-resume`), which adds the `prefix_resume` model capability.
+    - **Rollback.** To serve without prefix caching, pin the Hub tag `update-4`.
 
     ### Update 4: programs built at the first start; more long-context users on `batch`
     - **Continuation programs are pre-built.** Both profiles build every prefill program a long prompt's continuation
       can need on the first start after installation or a kernel change (`single-user` 64, `batch` 640). Later starts
-      skip it: a marker in the kernel cache records that it was done. Measured in this release's proof, on the packaged
+      skip it: a marker in the kernel cache records that it was done. Measured in update 4's proof, on the packaged
       image with a fresh kernel cache:
       - first start, time spent pre-building: 90.6 s (`single-user`); 495.0 s and 535.8 s (`batch`, on a host
         where `single-user` had already started, and on a fresh host);
@@ -230,7 +288,7 @@ card:
       `GEMMA4_CONT_PREWARM=off` to skip the pre-build (continuation programs are then built on first use, as in update 3).
     - **`batch` KV layout.** The full-attention layers use vLLM's block pool; the sliding-window layers use a fixed
       per-user ring. vLLM's start-up line reads "TT KV cache size: 699,136 tokens", "Maximum concurrency for 262,144
-      tokens per request: 2.67x". Users vLLM ran at once, measured in this release's proof on the packaged image:
+      tokens per request: 2.67x". Users vLLM ran at once, measured in update 4's proof on the packaged image:
       32 at 16,384 tokens, 21 at 32,768, 10 at 65,536, 5 at 131,072, 2 at 262,016 (the last table under Results). The
       lowest free DRAM per chip during those points, on a fresh host with the pre-built programs resident:
       5.36 GB.
@@ -240,7 +298,8 @@ card:
       pre-build (535.8 s). Measured with two log-cadence variables set (`GEMMA4_PB_LOG_EVERY=1`,
       `GEMMA4_RESIDENT_DRAM_LOG_EVERY=1024`); the shipped profile does not set them. Later starts of `batch`: ready after
       121–151 s.
-    - `batch`'s result tables below were measured on this release's image in its proof.
+    - `batch`'s result tables below were measured on update 4's image in its proof; this release's proof re-measures them
+      on the update 5 image, and the published card carries those.
     - The `update-3` revision on the Hub keeps update 3's `batch` (without the ring layout and the pre-build).
 
     ### Update 2: paged-bucket prefill
@@ -256,13 +315,13 @@ card:
 
     ### Update 3: the resident batch engine (`batch`)
     `--profile batch` now selects the resident batch engine. The previous `batch-b32` profile was removed; the `update-2` revision keeps it.
-    - Start-up, measured in this release's proof (update 4, in the package container): the first `batch` start on a
+    - Start-up, measured in update 4's proof (update 4, in the package container): the first `batch` start on a
       host that had already run `single-user` once took 721 s, including the one-time conversion of `batch`'s own copy
       of the engine weights (converted in 59 s; 22.8 GB more disk) and the 495.0 s pre-build. Later `batch`
       starts took 121–151 s. A fresh host that starts `batch` first is in the update 4 section. `single-user`'s weight
       copy is untouched.
     - `batch` serves logprobs, repetition / presence / frequency penalties and logit_bias on its host-sampled step, each
-      alone and alongside 31 greedy users (checked in this release's proof); see Known limitations.
+      alone and alongside 31 greedy users (checked in update 4's proof); see Known limitations.
     - One long request among short ones: 32 users with 1K-token prompts (512 output tokens) had a TPOT of 35.6 ms; with
       one of them replaced by a 259,000-token request, its prefill already done, the 31 short users' TPOT was 42.5 ms
       (2026-11-15, update 3's adapter (before the ring layout, and before the paged-bucket prefill was added); the
@@ -294,8 +353,8 @@ card:
     - [4] Chip clocks dipped during this point's decode. Share of decode time below 1,323 MHz, chips 0 / 1 / 2 / 3 (%): 0 / 0.77 / 4.63 / 3.86. Times as measured, not corrected.
     - The clock footnotes cover the decode windows (TPOT) only.
 
-    Measured 2026-11-19 04:19–04:23 (KST) in this release's proof, in the package container (`tt-model serve --profile
-    batch`, the shipped profile), on `749f95f1d482`, the image this release's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers.
+    Measured 2026-11-19 04:19–04:23 (KST) in update 4's proof, in the package container (`tt-model serve --profile
+    batch`, the shipped profile), on `749f95f1d482`, the image update 4's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers.
 
     ### Which profile
     - One user: `single-user`.
@@ -316,8 +375,8 @@ card:
       converting the resident engine's weights once (61 s, 22.8 GB), compiling kernels once and the 90.6 s
       pre-build.
     - Later starts: 151 s, including a sha256 check of the converted weights (seconds when they are in the page cache).
-    - These start times were measured in this release's proof; `batch`'s start-up is in the update 4 section.
-    - Disk, measured in this release's proof after both profiles had started, under
+    - These start times were measured in update 4's proof; `batch`'s start-up is in the update 4 section.
+    - Disk, measured in update 4's proof after both profiles had started, under
       `~/.cache/tt-model/gemma4-31b-it-dflash`: 11.1 GB of compiled kernels (75,087 files) and 22.8 GB of converted
       weights per profile copy (45.5 GB for both). A package update that changes an engine converts that
       engine's copy again.
@@ -345,7 +404,7 @@ card:
       logprobs, or top_k above the device limit of 32) moves sampling for every concurrent request to the CPU while it is
       active.
       - At 32 users a decode step takes 279.8 ms while one of them carries a repetition penalty (the other 31
-        default-sampled), against 26.9 ms when all 32 are greedy (this release's proof, with
+        default-sampled), against 26.9 ms when all 32 are greedy (update 4's proof, with
         `OMP_NUM_THREADS=8`, which this package sets).
       - Greedy requests and the default device sampling are unaffected.
       - The full fix belongs in the vLLM TT plugin.
@@ -353,12 +412,20 @@ card:
       leave, and the same greedy prompt can produce different text depending on how many other requests are running.
       At a fixed width, greedy text was bitwise stable under co-tenant churn for prompts that prefill in one step. A prompt
       that is chunked alongside others can see small differences.
-    - **`batch`: prefix caching is off** (as on every profile): repeated prefixes are recomputed.
-    - **Device memory.** Lowest free DRAM per chip measured on `batch` in this release's proof: 5.36 GB, during
+    - **Prefix-cache privacy (`cache_salt`).** A hit reuses state computed for an earlier request with the same prefix and
+      salt. Its output equals the same request without the hit (see Exactness), but its shorter time to first token shows
+      that an earlier request shared the prefix. On a shared server, give each tenant its own `cache_salt`, a request field
+      on `/v1/chat/completions` and `/v1/completions`.
+    - **Prefix-cache consistency check.** An internal check compares every restored state with its saved record. On a
+      mismatch it stops the server rather than serve wrong output. It never triggered outside the deliberate corruption
+      tests: 567 restores in the S1 probe (552 on `batch`, 15 on `single-user`).
+    - **No per-request opt-out.** To serve without prefix caching, pin the Hub tag `update-4`.
+    - **Device memory.** Lowest free DRAM per chip measured on `batch` in update 4's proof: 5.36 GB, during
       its long-context points (16K–262K tokens, up to 32 users) on a fresh host with the pre-built programs resident.
       A 6.5 h, 491K-launch soak on update 3's adapter (before the ring layout; the engine is the same) measured 2.85 GB
       at its lowest, briefly, right after a burst of 1K-prompt prefills at up to 32 users with a 200K-token request live,
-      and about 6.3 GB at steady state.
+      and about 6.3 GB at steady state. Update 5's prefix-cache pool takes 0.94 GB more per chip on `batch` (0.47 GB on `single-user`); this
+      release's proof re-measures the lowest free DRAM with the pool allocated.
     - **Thermal clock dips.** On a QuietBox 2 chip 1 can lower its clock after about 20 s of sustained fast decode, raising
       per-token time by up to about 1.3–1.45× while it lasts (measured on earlier builds). Every table on this card
       notes the clock dips during its run.
@@ -375,7 +442,9 @@ card:
       cache) time is not measured.
 
     ### Results (tt-inference-server `--workflow benchmarks`)
-    The `single-user` tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`); update 4 changes `single-user` only by the start-up pre-build, whose outputs were checked bitwise against the same code without it. Each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. `batch`'s tables were measured on 2026-11-19 in this release's proof, against the shipped `batch` profile, on `749f95f1d482`, the image this release's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers. Update 3's `batch` tables remain in the `update-3` revision on the Hub.
+    These tables were measured before update 5 (prefix caching). This release's proof re-measures `batch`'s on the update 5
+    image; the `single-user` tables stay as labelled below.
+    The `single-user` tables were measured in one session on 2026-11-17 on update 3.1's image (`7b6dd89c97bd`); update 4 changes `single-user` only by the start-up pre-build, whose outputs were checked bitwise against the same code without it. Each profile in its own `tt-model serve --profile …` container on port 8000, with the same tt-inference-server invocations, specs and points as update 1's tables of 2026-11-11, which remain in the `update-2` revision on the Hub. `batch`'s tables were measured on 2026-11-19 in update 4's proof, against the shipped `batch` profile, on `749f95f1d482`, the image update 4's proof ran; `d356ff9f3095`, the image users pull, has the same platform manifest and the same 22 layers. Update 3's `batch` tables remain in the `update-3` revision on the Hub.
 
     #### `single-user`
     | ISL | OSL | Concurrency | Num Requests | TTFT (ms) | TPOT (ms) | Tput User (t/s/u = 1000/TPOT) | Tput Output (t/s) |
@@ -470,9 +539,15 @@ verify:
   - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm_pb3 import Gemma4ResidentSpecPB3ForCausalLM as B; assert issubclass(P, B)"
   - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb4 import Gemma4ResidentSpecPB4Packaged as P; from models.demos.gemma4_31b_qb2.tt.package_boot_pb3 import Gemma4ResidentSpecPB3Packaged as B; assert issubclass(P, B) and P.ENGINE_PACKAGE == 'resident_m3_2'"
   - "from models.demos.gemma4_31b_qb2.tt import contwarm; assert contwarm.ENV == 'GEMMA4_CONT_PREWARM' and contwarm.mode() == 'auto'"
-  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert got == {'Gemma4QB2ResidentSpecPB4ForCausalLM', 'Gemma4QB2ResidentMultiS32PBRingForCausalLM'}, got"
-  # update 4: the batch class (vllm_models/resident_multi_s3pb_ring), the ring class on its S3-PB base, and the m5_11
-  # engine with its kernels
+  # update 5: the single-user composition (vllm_models/resident_spec_pb4_apc) = PB3-APC (prefix resume) on update 4's PB4,
+  # with its prefix_resume capability (2 tail slots by default, request ids off)
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_pb4_apc import Gemma4ResidentSpecPB4APCPackaged as P; from models.demos.gemma4_31b_qb2.tt.package_boot_pb4 import Gemma4ResidentSpecPB4Packaged as B; from models.demos.gemma4_31b_qb2.tt.generator_resident_spec_vllm_pb3_apc import Gemma4ResidentSpecPB3APCForCausalLM as A; c = P.model_capabilities['prefix_resume']; assert issubclass(P, A) and issubclass(P, B) and P.ENGINE_PACKAGE == 'resident_m3_2' and P.model_capabilities['supports_prefix_caching'] is True and (c['granularity'], c['min_suffix'], c['prompt_only'], c['req_ids']) == (8192, 2080, True, False), c"
+  - "import json, os, models.demos.gemma4_31b_qb2 as q; d = os.path.join(os.path.dirname(q.__file__), 'vllm_models'); got = {json.load(open(os.path.join(d, b, 'vllm_metadata.json')))['arch'] for b in os.listdir(d)}; assert got == {'Gemma4QB2ResidentSpecPB4APCForCausalLM', 'Gemma4QB2ResidentMultiS32PBRingAPCForCausalLM'}, got"
+  # update 5: the batch composition (vllm_models/resident_multi_s3pb_ring_apc) = APC-v2 on update 4's packaged ring class,
+  # with its prefix_resume capability (4 tail slots by default, request ids on); the plugin's prefix_resume module;
+  # update 4: the ring class on its S3-PB base, and the m5_11 engine with its kernels
+  - "from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring_apc import Gemma4ResidentMultiS32PBRingAPCPackaged as P; from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring import Gemma4ResidentMultiS32PBRingPackaged as B; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_ring_apc_v2_vllm import Gemma4ResidentMultiS32PBRingAPCV2ForCausalLM as A; c = P.model_capabilities['prefix_resume']; assert issubclass(P, A) and issubclass(P, B) and P.ENGINE_PACKAGE == 'resident_m5_11' and P.model_capabilities['supports_prefix_caching'] is True and (c['granularity'], c['min_suffix'], c['prompt_only'], c['req_ids']) == (8192, 2080, True, True), c"
+  - "from vllm_tt_plugin.prefix_resume import PrefixResumeConfig, resolve_prefix_resume; assert PrefixResumeConfig and resolve_prefix_resume"
   - "from models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring import Gemma4ResidentMultiS32PBRingPackaged as P; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_ring_vllm import Gemma4ResidentMultiS32PBRingForCausalLM as R; from models.demos.gemma4_31b_qb2.tt.generator_resident_multi_s3_2_pb_vllm import Gemma4ResidentMultiS32PBForCausalLM as B; assert issubclass(P, R) and issubclass(R, B) and P.ENGINE_PACKAGE == 'resident_m5_11'"
   - "from models.demos.gemma4_31b_qb2.tt import package_boot as pb; import inspect, importlib; c = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.weights').convert; assert set(pb.CONVERT_ARGS) <= set(inspect.signature(c).parameters)"
   - "import os, importlib; e = importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.engine'); [importlib.import_module('models.demos.gemma4_31b_qb2.resident_m5_11.' + m) for m in ('model', 'k2a', 'k2a_sched', 'weights')]; from models.demos.gemma4_31b_qb2.resident_m5_11 import PKG_DIR; ks = ('attn_common.hpp', 'attn_compute.cpp', 'attn_reader.cpp', 'attn_writer.cpp', 'hub_dm.cpp', 'k2a_common.hpp', 'k2a_harness_streamer.cpp', 'k2a_head_compute.cpp', 'k2a_head_reader.cpp', 'k2a_head_writer.cpp', 'k2a_unit_compute.cpp', 'k2a_unit_reader.cpp', 'k2a_unit_writer.cpp', 'm1l0_reader.cpp', 'slice_compute.cpp', 'slice_dm.cpp', 'slice_mc.cpp', 'streamer_common.hpp', 'streamer_compute.cpp', 'streamer_reader.cpp', 'streamer_writer.cpp', 'table_scatter.cpp'); missing = [k for k in ks if not os.path.isfile(os.path.join(PKG_DIR, 'kernels', k))]; assert not missing and e.ResidentEngine, missing"

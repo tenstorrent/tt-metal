@@ -4,7 +4,8 @@
 source is parsed, not imported (importing the ring class imports ttnn). It must subclass the option C ring class
 Gemma4ResidentMultiS32PBRingForCausalLM, its initialize_vllm_model must run package_boot.ensure_resident_cache() before
 the ring construction (as update 3's package_boot_s3pb did), its continuation pre-warm marker is keyed to the m5_11
-engine package and runs through contwarm.run("batch", ...) after the S3-PB prefill warmup, and the bundle must name it.
+engine package and runs through contwarm.run("batch", ...) after the S3-PB prefill warmup. Update 5: no bundle names it
+any more; it is the packaged base that tt/package_boot_s3pb_ring_apc.py composes (update 5's `batch` bundle).
 Replaces update 3's tests/test_package_boot_s3pb.py (its class and bundle are removed in update 4).
     pytest -q models/demos/gemma4_31b_qb2/tests/test_package_boot_s3pb_ring.py"""
 
@@ -65,7 +66,9 @@ def test_ring_base_takes_the_wrappers_call():
     assert {a.arg for a in fn.args.kwonlyargs} >= {"max_seq_len", "tt_data_parallel", "optimizations"}
 
 
-def test_bundle_names_the_packaged_class():
-    meta = json.loads((ROOT / "vllm_models" / "resident_multi_s3pb_ring" / "vllm_metadata.json").read_text())
-    assert meta == {"arch": "Gemma4QB2ResidentMultiS32PBRingForCausalLM",
-                    "main_class": "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring:Gemma4ResidentMultiS32PBRingPackaged"}
+def test_update5_composes_it_and_no_bundle_names_it():
+    mains = {json.loads(p.read_text())["main_class"] for p in (ROOT / "vllm_models").glob("*/vllm_metadata.json")}
+    assert "models.demos.gemma4_31b_qb2.tt.package_boot_s3pb_ring:Gemma4ResidentMultiS32PBRingPackaged" not in mains
+    apc = next(n for n in ast.parse((ROOT / "tt" / "package_boot_s3pb_ring_apc.py").read_text()).body
+               if isinstance(n, ast.ClassDef))
+    assert "Gemma4ResidentMultiS32PBRingPackaged" in [ast.unparse(b) for b in apc.bases]
