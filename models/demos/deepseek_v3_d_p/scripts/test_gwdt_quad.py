@@ -337,3 +337,156 @@ def test_tt_fatal_wins_over_the_traceback_it_raises():
         now=1,
     )
     assert w.fatal == {1: "no free link"}
+
+
+def _fake_hosts(monkeypatch, sees: dict[str, bool]):
+    """ssh to h reads the probe back only when sees[h]; the local host is h0."""
+    monkeypatch.setattr(gwdt_quad.socket, "gethostname", lambda: "h0")
+
+    def run(argv, **kw):
+        host, path = argv[-2], shlex.split(shlex.split(argv[-1])[-1])[-1]
+        out = Path(path).read_text() if sees[host] else ""
+        return gwdt_quad.subprocess.CompletedProcess(argv, 0 if sees[host] else 1, out, "")
+
+    monkeypatch.setattr(gwdt_quad.subprocess, "run", run)
+
+
+def test_shared_dir_seen_by_every_host(tmp_path, monkeypatch):
+    _fake_hosts(monkeypatch, {"h1": True, "h2": True, "h3": True})
+    assert gwdt_quad.shared_dir_error(tmp_path, HOSTS) is None
+    assert not list(tmp_path.glob(".shared_probe_*"))
+
+
+def test_shared_dir_names_blind_hosts(tmp_path, monkeypatch):
+    _fake_hosts(monkeypatch, {"h1": True, "h2": False, "h3": False})
+    assert gwdt_quad.shared_dir_error(tmp_path, HOSTS) == f"{tmp_path} is not visible from h2, h3"
+    assert not list(tmp_path.glob(".shared_probe_*"))
+
+
+def test_shared_dir_unwritable(tmp_path):
+    assert gwdt_quad.shared_dir_error(tmp_path / "missing", HOSTS).startswith("cannot write")
+
+
+def test_quad_aborts_when_run_dir_not_shared(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "shared_dir_error", lambda d, hosts: f"{d} is not visible from h3")
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt, "run_all", lambda *a, **k: pytest.fail("steps ran"))
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    out = capsys.readouterr().out
+    assert "not visible from h3" in out and "GWDT_SHARED_FOLDER" in out
+
+
+A, B = "a" * 40, "b" * 40
+CLEAN = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+
+
+def _fake_checkouts(monkeypatch, outs: dict[str, str | None]):
+    """The checkout script on h prints outs[h]; None is a host where it fails. The local host is h0."""
+    monkeypatch.setattr(gwdt_quad.socket, "gethostname", lambda: "h0")
+
+    def run(argv, **kw):
+        out = outs["h0" if argv[0] == "bash" else argv[-2]]
+        return gwdt_quad.subprocess.CompletedProcess(argv, 0 if out else 128, out or "", "")
+
+    monkeypatch.setattr(gwdt_quad.subprocess, "run", run)
+
+
+def _out(head: str, fp: str = CLEAN, *files: str) -> str:
+    return "\n".join([head, fp, *files]) + "\n"
+
+
+def test_checkout_same_everywhere(monkeypatch):
+    _fake_checkouts(monkeypatch, dict.fromkeys(HOSTS, _out(A)))
+    assert gwdt_quad.checkout_error(REPO, HOSTS) is None
+
+
+def test_checkout_same_dirty_everywhere(monkeypatch):
+    _fake_checkouts(monkeypatch, dict.fromkeys(HOSTS, _out(A, "f" * 40, "x.py")))
+    assert gwdt_quad.checkout_error(REPO, HOSTS) is None
+
+
+def test_checkout_names_hosts_that_differ(monkeypatch):
+    _fake_checkouts(
+        monkeypatch,
+        {"h0": _out(A), "h1": _out(A, "f" * 40, "b.py", "a.py", "c.py", "d.py"), "h2": _out(B), "h3": None},
+    )
+    assert gwdt_quad.checkout_error(REPO, HOSTS) == (
+        f"{REPO} here is at {A[:11]} with no uncommitted changes, but "
+        "h1 has uncommitted changes to a.py, b.py, c.py +1 more; "
+        f"h2 is at {B[:11]}; h3 has no readable git checkout at {REPO}"
+    )
+
+
+def test_checkout_clean_remote_vs_dirty_here(monkeypatch):
+    _fake_checkouts(
+        monkeypatch,
+        {
+            "h0": _out(A, "f" * 40, "r.py"),
+            "h1": _out(A),
+            "h2": _out(A, "f" * 40, "r.py"),
+            "h3": _out(A, "f" * 40, "r.py"),
+        },
+    )
+    assert gwdt_quad.checkout_error(REPO, HOSTS) == (
+        f"{REPO} here is at {A[:11]} with uncommitted changes to r.py, but h1 has no uncommitted changes"
+    )
+
+
+def test_checkout_unreadable_here(monkeypatch):
+    _fake_checkouts(monkeypatch, dict.fromkeys(HOSTS, None))
+    assert gwdt_quad.checkout_error(REPO, HOSTS).startswith("cannot read the git checkout")
+
+
+def test_parse_checkout_rejects_garbage():
+    assert gwdt_quad.parse_checkout("fatal: not a git repository\n") is None
+    assert gwdt_quad.parse_checkout(_out(A)) == gwdt_quad.Checkout(A, CLEAN, ())
+
+
+def test_checkout_script_on_a_real_repo(tmp_path):
+    """The shell side: the fingerprint follows tracked edits and untracked files, and ignores LAUNCHER_ONLY."""
+    git = lambda *a: gwdt_quad.subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
+    git("init", "-q")
+    (tmp_path / "m.py").write_text("1\n")
+    launcher = tmp_path / gwdt_quad.LAUNCHER_ONLY
+    launcher.mkdir(parents=True)
+    (launcher / "g.py").write_text("1\n")
+    git("add", ".")
+    git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "x")
+    state = lambda: gwdt_quad.parse_checkout(
+        gwdt_quad.subprocess.run(
+            ["bash", "-c", gwdt_quad.checkout_script(tmp_path)], capture_output=True, text=True
+        ).stdout
+    )
+    clean = state()
+    assert clean.fingerprint == CLEAN and clean.files == ()
+    (launcher / "g.py").write_text("2\n")
+    (launcher / "new.py").write_text("x\n")
+    assert state() == clean
+    (tmp_path / "m.py").write_text("2\n")
+    edited = state()
+    assert edited.files == ("m.py",) and edited.fingerprint != CLEAN
+    (tmp_path / "m.py").write_text("3\n")
+    assert state().fingerprint != edited.fingerprint
+    (tmp_path / "m.py").write_text("1\n")
+    (tmp_path / "u.py").write_text("u\n")
+    untracked = state()
+    assert untracked.files == ("u.py",)
+    (tmp_path / "u.py").write_text("v\n")
+    assert state().fingerprint != untracked.fingerprint
+
+
+def test_quad_aborts_when_checkouts_differ(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "shared_dir_error", lambda d, hosts: pytest.fail("shared-dir probe ran"))
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts: "h2 is at bbbbbbbbbbb")
+    monkeypatch.setattr(gwdt, "run_all", lambda *a, **k: pytest.fail("steps ran"))
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    assert "same tt-metal checkout" in capsys.readouterr().out
+    assert not list(tmp_path.rglob("LOG_*")), "a commit mismatch must not leave a run dir behind"

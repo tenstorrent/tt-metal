@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 import gwdt_quad
-from gwdt_checks import TOOL_NAME, Result, Status, dur, layer_label, log_root, run_name
+from gwdt_checks import SHARED_FOLDER_ENV, TOOL_NAME, Result, Status, dur, layer_label, log_root, run_name
 from gwdt_steps import MODEL_ENV, MODEL_LABEL, MODEL_LAYERS, Ctx, Step, build_steps, run_all
 
 try:
@@ -256,20 +256,35 @@ def main(argv: list[str] | None = None) -> int:
     ).stdout.strip()
     host = socket.gethostname().split(".")[0]
     run = run_name(datetime.now(), host, commit or "nogit")
-    steps = gwdt_quad.build_quad_steps(hosts, args.soak_minutes * 60) if args.quad else build_steps(args.models.split(","))
+    steps = (
+        gwdt_quad.build_quad_steps(hosts, args.soak_minutes * 60) if args.quad else build_steps(args.models.split(","))
+    )
     try:
         skip = skipped_keys([s.key for s in steps], args.skip, args.only)
     except ValueError as e:
         print(e)
         return 2
-    run_dir = log_root(os.environ.get("USER", ""), Path.home()) / run
+    if args.quad and not args.co and (err := gwdt_quad.checkout_error(repo, hosts)):
+        print(
+            "error: --quad needs the same tt-metal checkout on every host (commit and uncommitted changes, outside "
+            f"{gwdt_quad.LAUNCHER_ONLY}); {err}.\nSync the checkouts and rerun."
+        )
+        return 2
+    run_dir = log_root(os.environ.get("USER", ""), Path.home(), os.environ.get(SHARED_FOLDER_ENV)) / run
     run_dir.mkdir(parents=True, exist_ok=True)
+    if args.quad and not args.co and (err := gwdt_quad.shared_dir_error(run_dir, hosts)):
+        print(
+            f"error: --quad needs a run dir every host can see; {err}.\n"
+            f"Set {SHARED_FOLDER_ENV} to a directory shared by {','.join(hosts)} "
+            "(e.g. a Weka mount such as /mnt/weka/ops/$USER) and rerun."
+        )
+        return 2
     header = [f"{TOOL_NAME}  {host}  run {run}  mode={'co' if args.co else 'real'}", f"logs  {run_dir}/"]
     meta = {"host": host, "run": run, "mode": "co" if args.co else "real", "commit": commit, "run_dir": str(run_dir)}
     screen = Screen(steps, header, run_dir / "status.json", meta)
     ctx = Ctx(repo, run_dir, args.co, tick=screen.update)
     # Live redraws in place, so scrollback keeps only the command and the final table.
-    with (Live(Text("\n".join(header)), auto_refresh=False) if screen.tty else contextlib.nullcontext()) as live:
+    with Live(Text("\n".join(header)), auto_refresh=False) if screen.tty else contextlib.nullcontext() as live:
         screen.live = live
         if not screen.tty:
             print("\n".join(header), flush=True)

@@ -21,6 +21,7 @@ import subprocess
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 from gwdt_checks import Result, Status
@@ -307,6 +308,106 @@ def _host_cmd(host: str, cmd: str) -> list[str]:
     if _is_local(host):
         return ["bash", "-lc", cmd]
     return ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no", host, f"bash -lc {shlex.quote(cmd)}"]
+
+
+SHARED_PROBE_TIMEOUT_S = 30
+
+
+def shared_dir_error(d: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S) -> str | None:
+    """None when every host reads back a probe file written here, else why not. The run dir must be shared: the
+    producer on rank 0's host reads the tokens gwdt writes, and gwdt reads every rank's results."""
+    token = f"{socket.gethostname()}:{os.getpid()}:{time.time_ns()}"
+    probe = d / f".shared_probe_{os.getpid()}"
+    try:
+        probe.write_text(token)
+    except OSError as e:
+        return f"cannot write {probe}: {e}"
+    blind = []
+    try:
+        for h in hosts:
+            if _is_local(h):
+                continue
+            try:
+                p = subprocess.run(
+                    _host_cmd(h, f"cat {shlex.quote(str(probe))}"), capture_output=True, text=True, timeout=timeout_s
+                )
+                seen = p.stdout.strip() == token
+            except subprocess.TimeoutExpired:
+                seen = False
+            if not seen:
+                blind.append(_short(h))
+    finally:
+        probe.unlink(missing_ok=True)
+    if blind:
+        return f"{d} is not visible from {', '.join(blind)}"
+    return None
+
+
+# Code that runs only on the launching host; a difference there cannot reach a rank.
+LAUNCHER_ONLY = "models/demos/deepseek_v3_d_p/scripts"
+SHOWN_FILES = 3
+
+
+@dataclass(frozen=True)
+class Checkout:
+    head: str
+    fingerprint: str  # of the uncommitted changes (tracked diff + untracked files) outside LAUNCHER_ONLY
+    files: tuple[str, ...]
+
+
+def checkout_script(repo: Path) -> str:
+    ps = f"-- . {shlex.quote(':(exclude)' + LAUNCHER_ONLY)}"
+    return (
+        f"cd {shlex.quote(str(repo))} && git rev-parse HEAD && "
+        f"{{ git diff HEAD --binary {ps}; git ls-files -o --exclude-standard -z {ps} | xargs -0 -r sha1sum; }}"
+        f" | sha1sum | cut -d' ' -f1 && "
+        f"{{ git diff HEAD --name-only {ps}; git ls-files -o --exclude-standard {ps}; }}"
+    )
+
+
+def parse_checkout(out: str) -> Checkout | None:
+    lines = out.splitlines()
+    if len(lines) < 2 or not re.fullmatch(r"[0-9a-f]{40}", lines[0]):
+        return None
+    return Checkout(lines[0], lines[1], tuple(sorted(set(filter(None, lines[2:])))))
+
+
+def _checkout(repo: Path, host: str, timeout_s: int) -> Checkout | None:
+    try:
+        p = subprocess.run(_host_cmd(host, checkout_script(repo)), capture_output=True, text=True, timeout=timeout_s)
+    except subprocess.TimeoutExpired:
+        return None
+    return parse_checkout(p.stdout) if p.returncode == 0 else None
+
+
+def _changes(c: Checkout) -> str:
+    if not c.files:
+        return "no uncommitted changes"
+    more = f" +{len(c.files) - SHOWN_FILES} more" if len(c.files) > SHOWN_FILES else ""
+    return f"uncommitted changes to {', '.join(c.files[:SHOWN_FILES])}{more}"
+
+
+def checkout_error(repo: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S) -> str | None:
+    """None when every host has `repo` at this host's commit with the same uncommitted changes, else which hosts
+    differ. Every rank runs the code at the same path on its own host, so a stale or locally edited checkout fails
+    as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that code runs only here."""
+    local = _checkout(repo, socket.gethostname(), timeout_s)
+    if local is None:
+        return f"cannot read the git checkout {repo} here"
+    off = []
+    for h in hosts:
+        if _is_local(h):
+            continue
+        c = _checkout(repo, h, timeout_s)
+        if c is None:
+            off.append(f"{_short(h)} has no readable git checkout at {repo}")
+        elif c.head != local.head:
+            off.append(f"{_short(h)} is at {c.head[:11]}")
+        elif c.fingerprint != local.fingerprint:
+            off.append(f"{_short(h)} has {_changes(c)}")
+    if off:
+        return f"{repo} here is at {local.head[:11]} with {_changes(local)}, but {'; '.join(off)}"
+    return None
 
 
 def reset_hosts(repo: Path, hosts: list[str], d: Path) -> Result:

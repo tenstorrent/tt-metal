@@ -33,7 +33,14 @@ class Result:
     details: list[str] = field(default_factory=list)
 
 
-def log_root(user: str, home: Path) -> Path:
+SHARED_FOLDER_ENV = "GWDT_SHARED_FOLDER"
+
+
+def log_root(user: str, home: Path, shared: str | None = None) -> Path:
+    """Where run dirs go: $GWDT_SHARED_FOLDER when set (a --quad run needs a dir every host sees), else /data/$USER
+    (shared on exabox), else $HOME."""
+    if shared:
+        return Path(shared).expanduser() / TOOL_NAME
     data = Path("/data") / user
     if data.is_dir() and os.access(data, os.W_OK):
         return data / TOOL_NAME

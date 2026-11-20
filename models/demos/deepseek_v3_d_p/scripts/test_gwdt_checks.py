@@ -1041,3 +1041,10 @@ def test_run_all_folds_smi_gddr_into_step(tmp_path, monkeypatch):
     assert step.state.result.details == [
         "dev 1 (c7:00.0) GDDR 5 / bank 5: corrected rd/wr 0/26, uncorrected rd/wr 0/0 [tt-smi.json]"
     ]
+
+
+def test_log_root_prefers_shared_folder(tmp_path):
+    assert (
+        log_root("u", tmp_path / "home", str(tmp_path / "weka"))
+        == tmp_path / "weka" / "galaxy-workload-deployment-test"
+    )
