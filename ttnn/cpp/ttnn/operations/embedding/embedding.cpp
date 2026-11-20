@@ -27,9 +27,15 @@ ttnn::Tensor embedding(
     if (pad_token.has_value()) {
         embeddings_type = ttnn::prim::EmbeddingsType::PADDED;
     }
+    // A TILE weight is untilized before the lookup and a BFLOAT8_B one comes out as BFLOAT16, which is
+    // the dtype a ROW_MAJOR output will actually have.
+    const auto row_major_output_dtype = weight_arg.layout() == ttnn::TILE_LAYOUT &&
+                                                weight_arg.dtype() == DataType::BFLOAT8_B
+                                            ? DataType::BFLOAT16
+                                            : weight_arg.dtype();
     TT_FATAL(
         layout.value_or(weight_arg.layout()) == ttnn::TILE_LAYOUT || !dtype.has_value() ||
-            dtype.value() == weight_arg.dtype(),
+            dtype.value() == row_major_output_dtype,
         "Can only typecast output embeddings when producing TILE_LAYOUT output");
     Tensor mutable_weight = weight_arg;
 
