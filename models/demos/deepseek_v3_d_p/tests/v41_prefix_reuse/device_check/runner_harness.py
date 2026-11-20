@@ -120,6 +120,12 @@ def _digest(rt, kv, S: int) -> dict:
                         else "|REPL"
                     )
                 )
+                # per chunk (chunk / ratio rows each): which chunk's rows differ between two runs
+                step = pf.chunk // r
+                parts.append(
+                    f"{nm}{L}c:"
+                    + ",".join(f"{_crc(h0[..., i:i + step, :]):08x}" for i in range(0, int(h0.shape[2]), step))
+                )
         detail = ";".join(parts)
     try:  # the Engram n-gram history of slot 0 (tt-blaze EngramHost: one NgramHashState cache per slot)
         eng = _crc(rt.engram._hash[0].cache[0, :S].contiguous())
