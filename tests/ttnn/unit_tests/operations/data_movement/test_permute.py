@@ -18,7 +18,11 @@ from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
     docstring_interleaved_buffer_type_params,
     interleaved_memory_config,
 )
-from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import (
+    assert_exact,
+    full_range_input,
+    one_exponent_input,
+)
 
 
 def random_torch_tensor(dtype, shape):
@@ -881,14 +885,6 @@ def test_transpose_empty_to_sharded_output(device, expect_error):
 _BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
 
 
-def _one_exponent_input(shape, seed=0):
-    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
-    tile come back exactly."""
-    torch.manual_seed(seed)
-    magnitude = 1 + torch.rand(shape)
-    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
-
-
 def _docstring_pad_value_dtypes():
     """Dtypes the ``pad_value`` line of the ttnn.permute docstring says it fills."""
     line = next(line for line in ttnn.permute.__doc__.splitlines() if line.strip().startswith("pad_value ("))
@@ -933,7 +929,7 @@ def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
     # BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared by value. Values also move
     # into new blocks, so block floats get values with one exponent.
     if dtype in _BLOCK_FLOATS:
-        x = _one_exponent_input((2, 3, 32, 64))
+        x = one_exponent_input((2, 3, 32, 64))
     else:
         x = full_range_input((2, 3, 32, 64), dtype, nan=dtype != ttnn.bfloat16)
     input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)

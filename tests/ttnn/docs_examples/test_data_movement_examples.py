@@ -59,6 +59,15 @@ def test_reshape(device):
     logger.debug(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 1, 2, 2])
 
 
+def test_expand(device):
+    # Create a tensor whose last dimension has size 1
+    input_tensor = ttnn.rand((32, 1), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    # Expand the last dimension to 64 and add a leading dimension of size 2; -1 keeps the size of a dimension
+    expanded_tensor = ttnn.expand(input_tensor, [2, -1, 64])
+    logger.debug(f"Expanded Tensor Shape: {expanded_tensor.shape}")  # Shape([2, 32, 64])
+
+
 def test_scatter(device):
     # Create input, index, and source tensors
     input_torch = torch.randn([10, 20, 30, 20, 10], dtype=torch.float32)
