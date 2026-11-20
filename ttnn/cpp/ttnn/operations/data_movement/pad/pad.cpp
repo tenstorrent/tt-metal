@@ -100,8 +100,6 @@ ttnn::Tensor pad_via_interleaved_composite(
     return padded;
 }
 
-bool eq_spans(const auto a, const auto b) { return std::equal(a.begin(), a.end(), b.begin(), b.end()); }
-
 ttnn::Shape compute_padded_logical_shape(const ttnn::Shape& input_shape, const ttsl::SmallVector<PadSpecDim>& padding) {
     ttsl::SmallVector<uint32_t> output_shape(input_shape.rank());
     for (size_t i = 0; i < input_shape.rank(); i++) {
@@ -200,17 +198,7 @@ ttnn::Tensor pad_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
     auto input_logical_shape = input_tensor.logical_shape().view();
-    // on host
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        if (eq_spans(input_logical_shape, output_padded_shape)) {
-            return input_tensor;
-        }
-        // Tensor::pad keeps the input logical shape; ttnn.pad returns the padded shape as logical, like on device.
-        auto output = input_tensor.pad(ttnn::Shape(output_padded_shape), ttnn::Shape{input_tensor_start}, value);
-        return ttnn::experimental::view(output, output.padded_shape());
-    }
 
-    // on device
     auto input_tensor_shape = input_tensor.logical_shape();
     const auto rank = input_tensor_shape.rank();
 
@@ -445,6 +433,37 @@ std::tuple<ttnn::Shape, ttnn::Shape> compute_requested_shape(
     return std::make_tuple(logical_shape, compute_padded_shape(logical_shape));
 }
 
+// Host tensors are padded at full rank in one copy, so the 4D squeeze and leading-dimension reshapes of the device
+// path are not needed. The result has logical shape == padded shape, as on device.
+ttnn::Tensor pad_on_host(
+    const ttnn::Tensor& input_tensor, const ttsl::SmallVector<PadSpecDim>& padding, const float value) {
+    const auto dtype = input_tensor.dtype();
+    if (tt::tt_metal::is_block_float(dtype)) {
+        // Block-float host tensors cannot be untilized; pad through bfloat16 like the device path does.
+        const auto padded = pad_on_host(ttnn::to_dtype(input_tensor, DataType::BFLOAT16), padding, value);
+        return ttnn::to_dtype(padded, dtype);
+    }
+    if (input_tensor.layout() == Layout::TILE) {
+        const auto padded = pad_on_host(ttnn::to_layout(input_tensor, Layout::ROW_MAJOR), padding, value);
+        return ttnn::to_layout(padded, Layout::TILE, std::nullopt, std::nullopt, std::nullopt, value);
+    }
+
+    const auto& logical_shape = input_tensor.logical_shape();
+    ttnn::Tensor source = input_tensor;
+    if (input_tensor.padded_shape() != logical_shape) {
+        // Tensor::pad copies the whole padded shape, so drop the physical padding first.
+        source = input_tensor.unpad(ttnn::Shape(ttsl::SmallVector<uint32_t>(logical_shape.rank(), 0)), logical_shape);
+    }
+    ttsl::SmallVector<uint32_t> input_tensor_start;
+    input_tensor_start.reserve(padding.size());
+    for (const auto& p : padding) {
+        input_tensor_start.push_back(p.before_elements);
+    }
+    const auto output_shape = compute_padded_logical_shape(logical_shape, padding);
+    const auto output = source.pad(output_shape, ttnn::Shape(std::move(input_tensor_start)), value);
+    return ttnn::experimental::view(output, output_shape);
+}
+
 ttnn::Tensor invoke_rm(
     const ttnn::Tensor& input_tensor,
     const ttsl::SmallVector<PadSpecDim>& padding_vec,
@@ -563,12 +582,6 @@ ttnn::Tensor invoke_tile(
         compute_requested_shape(input_logical_shape, padding_vec);
     const auto requested_rank = requested_logical_shape.rank();
 
-    // Consistent with behavior expected by callers
-    if (input_tensor.storage_type() != StorageType::DEVICE) {
-        ttnn::Shape zeros(ttsl::SmallVector<uint32_t>(input_logical_shape.rank(), 0));
-        return input_tensor.pad(requested_padded_shape, zeros, value);
-    }
-
     if (route != PadRoute::Native) {
         if (auto output = pad_tile_codegen(
                 input_tensor,
@@ -663,29 +676,26 @@ ttnn::Tensor pad_with_route(
         return input_tensor;
     }
 
+    if (input_tensor.storage_type() != StorageType::DEVICE) {
+        TT_FATAL(
+            input_tensor.layout() != ttnn::TILE_LAYOUT ||
+                std::all_of(
+                    working_padding.begin(), working_padding.end(), [](auto& p) { return p.before_elements == 0; }),
+            "ttnn.pad: tile padding does not support front padding");
+        return pad_on_host(input_tensor, working_padding, value);
+    }
+
     ttnn::Tensor working_tensor = input_tensor;
     if (original_rank > 4) {
-        if (input_tensor.storage_type() != StorageType::DEVICE) {
-            const auto first_pad_idx = static_cast<int>(
-                std::find_if(
-                    working_padding.begin(),
-                    working_padding.end(),
-                    [](const PadSpecDim& p) { return p.after_elements != 0; }) -
-                working_padding.begin());
-            TT_FATAL(
-                first_pad_idx >= original_rank - 3,
-                "ttnn::pad only supports padding on the lowest 3 dimensions for host tensors with rank > 4");
-        } else {
-            working_tensor = apply_leading_dimension_padding(
-                working_tensor, working_padding, value, use_multicore, sub_core_grids, route);
-            if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
-                    return p.before_elements == 0 && p.after_elements == 0;
-                })) {
-                if (memory_config_arg.has_value()) {
-                    return ttnn::to_memory_config(working_tensor, memory_config_arg.value());
-                }
-                return working_tensor;
+        working_tensor = apply_leading_dimension_padding(
+            working_tensor, working_padding, value, use_multicore, sub_core_grids, route);
+        if (std::all_of(working_padding.begin(), working_padding.end(), [](auto& p) {
+                return p.before_elements == 0 && p.after_elements == 0;
+            })) {
+            if (memory_config_arg.has_value()) {
+                return ttnn::to_memory_config(working_tensor, memory_config_arg.value());
             }
+            return working_tensor;
         }
     }
 

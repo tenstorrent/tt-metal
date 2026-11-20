@@ -40,10 +40,20 @@ RM_PAD_CASES = [
     pytest.param((1, 1, 2, 3, 5), ((0, 0), (0, 0), (1, 1), (0, 0), (0, 0)), id="rank5_dim2_both"),
 ]
 
-# Host pad rejects padding below the last three dims of a rank > 4 tensor; device supports it.
+# Padding on the dims a rank > 4 tensor folds into one axis when squeezed to 4D on device.
 RANK5_LEADING_DIM_CASES = [
     pytest.param((2, 1, 2, 3, 4), ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0)), id="rank5_dim0_after"),
+    pytest.param((2, 1, 2, 3, 4), ((1, 0), (0, 0), (0, 0), (0, 0), (0, 0)), id="rank5_dim0_before"),
     pytest.param((2, 1, 2, 3, 4), ((0, 0), (1, 1), (0, 0), (0, 0), (0, 0)), id="rank5_dim1_both"),
+    pytest.param((2, 1, 2, 3, 4), ((1, 0), (0, 1), (0, 0), (0, 0), (1, 2)), id="rank5_leading_and_last"),
+]
+
+TILE_PAD_CASES = [
+    pytest.param((32, 32), ((0, 32), (0, 0)), id="rank2_height"),
+    pytest.param((1, 1, 32, 32), ((0, 0), (0, 0), (0, 0), (0, 32)), id="rank4_width"),
+    pytest.param((1, 1, 30, 20), ((0, 1), (0, 0), (0, 2), (0, 12)), id="rank4_partial_tiles"),
+    pytest.param((2, 3, 32, 64), ((0, 0), (0, 1), (0, 32), (0, 0)), id="rank4_upper_and_height"),
+    pytest.param((2, 1, 2, 32, 32), ((0, 1), (0, 0), (0, 1), (0, 0), (0, 3)), id="rank5_leading_dims"),
 ]
 
 # (ttnn dtype, pad value)
@@ -125,14 +135,7 @@ def test_host_pad_chained_matches_torch(input_shape, padding):
     assert_matches("host ttnn.pad, second pad", second, reference_pad(expected_first, padding, -2.0), torch_input)
 
 
-@pytest.mark.parametrize(
-    "input_shape, padding",
-    [
-        pytest.param((32, 32), ((0, 32), (0, 0)), id="rank2_height"),
-        pytest.param((1, 1, 32, 32), ((0, 0), (0, 0), (0, 0), (0, 32)), id="rank4_width"),
-        pytest.param((1, 1, 30, 20), ((0, 1), (0, 0), (0, 2), (0, 12)), id="rank4_partial_tiles"),
-    ],
-)
+@pytest.mark.parametrize("input_shape, padding", TILE_PAD_CASES)
 def test_host_pad_tile_layout_matches_torch(input_shape, padding):
     torch_input = make_input(input_shape, ttnn.bfloat16)
     host_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
@@ -140,6 +143,14 @@ def test_host_pad_tile_layout_matches_torch(input_shape, padding):
     output = ttnn.pad(host_input, padding=padding, value=-1.0)
 
     assert_matches("host ttnn.pad TILE", output, reference_pad(torch_input, padding, -1.0), torch_input)
+
+
+# Same restriction as on device.
+def test_host_pad_tile_front_padding_raises(expect_error):
+    host_input = ttnn.from_torch(make_input((32, 32), ttnn.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+
+    with expect_error(RuntimeError, "ttnn.pad: tile padding does not support front padding"):
+        ttnn.pad(host_input, padding=((32, 0), (0, 0)), value=-1.0)
 
 
 # The whole padded input, placed at input_tensor_start, must fit in the output shape.
@@ -190,15 +201,12 @@ def test_host_pad_matches_device(device, input_shape, padding, dtype, value):
 @pytest.mark.parametrize("input_shape, padding", RANK5_LEADING_DIM_CASES)
 def test_host_pad_rank5_leading_dims_matches_device(device, input_shape, padding):
     torch_input = make_input(input_shape, ttnn.bfloat16)
-    expected = reference_pad(torch_input, padding, -1.0)
 
-    device_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-    device_output = ttnn.pad(device_input, padding=padding, value=-1.0)
-    assert_matches("device ttnn.pad rank 5 leading dims", device_output, expected, torch_input)
+    host_output, device_output = run_host_and_device(
+        device, torch_input, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, lambda t: ttnn.pad(t, padding=padding, value=-1.0)
+    )
 
-    host_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
-    host_output = ttnn.pad(host_input, padding=padding, value=-1.0)
-    check_host_and_device(host_output, device_output, expected, torch_input)
+    check_host_and_device(host_output, device_output, reference_pad(torch_input, padding, -1.0), torch_input)
 
 
 @pytest.mark.parametrize(
@@ -246,15 +254,7 @@ def test_host_pad_chained_matches_device(device, input_shape, padding):
     check_host_and_device(host_output, device_output, expected, torch_input)
 
 
-@pytest.mark.parametrize(
-    "input_shape, padding",
-    [
-        pytest.param((32, 32), ((0, 32), (0, 0)), id="rank2_height"),
-        pytest.param((1, 1, 32, 32), ((0, 0), (0, 0), (0, 0), (0, 32)), id="rank4_width"),
-        pytest.param((1, 1, 30, 20), ((0, 1), (0, 0), (0, 2), (0, 12)), id="rank4_partial_tiles"),
-        pytest.param((2, 3, 32, 64), ((0, 0), (0, 1), (0, 32), (0, 0)), id="rank4_upper_and_height"),
-    ],
-)
+@pytest.mark.parametrize("input_shape, padding", TILE_PAD_CASES)
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_host_pad_tile_layout_matches_device(device, input_shape, padding, dtype):
     torch_input = make_input(input_shape, dtype)
@@ -264,6 +264,26 @@ def test_host_pad_tile_layout_matches_device(device, input_shape, padding, dtype
     )
 
     check_host_and_device(host_output, device_output, reference_pad(torch_input, padding, -1.0), torch_input)
+
+
+@pytest.mark.parametrize(
+    "input_shape, padding",
+    [
+        pytest.param((1, 1, 32, 32), ((0, 0), (0, 0), (0, 0), (0, 32)), id="rank4_width"),
+        pytest.param((1, 1, 30, 20), ((0, 1), (0, 0), (0, 2), (0, 12)), id="rank4_partial_tiles"),
+    ],
+)
+def test_host_pad_block_float_matches_device(device, input_shape, padding):
+    # Block-float values share an exponent per block, so the pad value changes how nearby values round: compare
+    # host with device rather than with torch.
+    torch_input = make_input(input_shape, ttnn.bfloat16)
+
+    host_output, device_output = run_host_and_device(
+        device, torch_input, ttnn.bfloat8_b, ttnn.TILE_LAYOUT, lambda t: ttnn.pad(t, padding=padding, value=-1.0)
+    )
+
+    assert_same_spec(host_output, device_output)
+    assert_matches("host ttnn.pad vs device, bfloat8_b", host_output, ttnn.to_torch(device_output), torch_input)
 
 
 @pytest.mark.parametrize(
