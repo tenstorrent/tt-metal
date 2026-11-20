@@ -240,3 +240,24 @@ def test_normalize_hw_bfloat8_b(device):
 
     error = (got - expected).abs().max().item()
     assert error <= BFLOAT8_B_ATOL, f"normalize_hw on bfloat8_b is {error:g} off, more than {BFLOAT8_B_ATOL:g}"
+
+
+# std_hw and var_hw on bfloat8_b take the composite as well: the scale is formed in bfloat16, the multiply that squares
+# d / scale writes over the bfloat8_b |d| in place with that bfloat16 factor broadcast per plane, and the result keeps
+# the input's dtype.
+@pytest.mark.parametrize(
+    "shape",
+    [STATISTIC_SHAPE, UNALIGNED_STATISTIC_SHAPE, PLANES_STATISTIC_SHAPE],
+    ids=lambda shape: "x".join(map(str, shape)),
+)
+def test_std_var_hw_bfloat8_b(shape, device):
+    torch.manual_seed(0)
+    tt_in = ttnn.from_torch(torch.randn(shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    x = ttnn.to_torch(tt_in).double()
+    variance = x.var(dim=(-2, -1), keepdim=True, correction=0)
+
+    for op, expected in ((ttnn.var_hw, variance), (ttnn.std_hw, variance.sqrt())):
+        out = op(tt_in)
+        assert out.dtype == ttnn.bfloat8_b, f"{op} on bfloat8_b returns {out.dtype}"
+        error = (ttnn.to_torch(out).double() - expected).abs().max().item()
+        assert error <= BFLOAT8_B_ATOL, f"{op} on bfloat8_b is {error:g} off, more than {BFLOAT8_B_ATOL:g}"
