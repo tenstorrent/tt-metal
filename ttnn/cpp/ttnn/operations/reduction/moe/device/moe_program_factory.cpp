@@ -7,8 +7,8 @@
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/tensor/types.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/mesh_device.hpp>
@@ -24,7 +24,7 @@ namespace ttnn::prim {
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The spec-name constants below carry a MOE_ prefix because this file is one source of the
 // unity-built ttnn_op_reduction target: a unity build merges every anonymous namespace in the

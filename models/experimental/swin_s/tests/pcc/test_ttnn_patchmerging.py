@@ -7,7 +7,7 @@ import pytest
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.swin_s.reference.patchmerging import PatchMerging
 from models.experimental.swin_s.tt.tt_patchmerging import TtPatchMerging
 from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE

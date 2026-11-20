@@ -11,8 +11,8 @@
 #include <unordered_set>
 #include <vector>
 
-#include "core_coord.hpp"
-#include "hal.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include "llrt/hal.hpp"
 #include "binary_metadata.hpp"
 #include "tt_memory.h"
 #include <tt-umd/types/cluster_descriptor_types.hpp>
