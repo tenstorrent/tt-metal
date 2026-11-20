@@ -45,12 +45,6 @@ jobs:
           content-type: application/zstd
           retention: dependents
     steps:
-      - id: submodules
-        kind: shell
-        shell:
-          run:
-            - git submodule sync --recursive
-            - git submodule update --init --recursive --depth 1 --jobs 4
       - id: cpm-cache
         kind: shell
         shell:
