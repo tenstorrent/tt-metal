@@ -41,6 +41,17 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
     auto* mesh_device = input_tensor.device();
     const uint32_t num_devices = operation_attributes.num_devices;
+
+    // Arch-dependent settings: the uncalibrated arch's values, then each calibrated arch's.
+    bool writer_on_noc0 = false;  // else the writer is on NOC1; the reader takes the other
+    switch (mesh_device->arch()) {
+        case tt::ARCH::WORMHOLE_B0:
+        case tt::ARCH::BLACKHOLE:
+            writer_on_noc0 = true;  // faster on BH
+            break;
+        default: break;  // uncalibrated arch: the default reader/writer NOCs
+    }
+
     uint32_t device_idx = ::ttnn::ccl::get_linearized_index_from_physical_coord(
         input_tensor, sender_device_coord, operation_attributes.cluster_axis);
 
@@ -198,7 +209,9 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     desc.cbs.push_back(slot_cb_descriptor(cb0_id, slot_bytes, worker_core_range));
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC0 (faster on BH); the reader takes the other.
+    const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
+    const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
+
     // Reader (no fabric: reads the input, writes the local output, fills the CB)
     std::vector<uint32_t> reader_compile_args;
     append_walk_ct_args(reader_compile_args, geo, packet_cap);
@@ -223,7 +236,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     reader_kernel_desc.core_ranges = worker_core_range;
     reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
     reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = tt::tt_metal::NOC::NOC_1};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_1, .noc = reader_noc};
     desc.kernels.push_back(std::move(reader_kernel_desc));
 
     // Writer
@@ -233,7 +246,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     writer_kernel_desc.core_ranges = worker_core_range;
     writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
     writer_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
-        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_0};
+        .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = writer_noc};
     desc.kernels.push_back(std::move(writer_kernel_desc));
 
     tt::tt_metal::KernelHandle reader_kernel_id = 0;

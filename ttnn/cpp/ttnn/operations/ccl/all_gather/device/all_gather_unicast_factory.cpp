@@ -120,50 +120,89 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     //   [dir 0: mux, worker 0 .. worker W-1][dir 1: mux, worker 0 .. worker W-1]
     ////////////////////////////////////////////////////////////////
 
-    // Num worker cores per direction per link.
-    uint32_t num_links = operation_attributes.axis_num_links[axis];
-    const bool is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
-    const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
-    const uint64_t busiest_link_packets =
-        tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
-    uint32_t workers_per_dir = 1;
-    if (is_wormhole) {
-        // WH, one link: the link caps the rate, so 2 workers keep up unless short chunks cut every packet below the
-        // payload (packet_cap < max_packet_bytes: row-major rows of 1 KB or less per device, bfp8 tiles in one-tile
-        // lanes); then a 3rd pays off from about 400 packets on the busiest link-direction.
-        // From two links the chip's NOC caps the rate, and a 3rd worker, with the writer off NOC0 (below), pays off
-        // from 192 KB of input per link.
-        constexpr uint64_t three_worker_packets = 400, three_worker_link_bytes = 192 * 1024;
-        workers_per_dir =
-            num_links >= 2
-                ? (input_bytes >= three_worker_link_bytes * num_links ? 3 : 2)
-                : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
-    } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // 2 workers cannot keep up with a ring's link. On a line they keep the link busy below 160 packets on the
-        // busiest link-direction; above it more workers are needed: 4 (with the mux in the middle and the writer on
-        // NOC1, below), and a 5th when packets are 4 KB or less (short rows), which cost more per byte. A 5th slows
-        // full packets.
-        constexpr uint64_t line_more_worker_packets = 160;
-        const uint32_t more_workers = packet_cap <= 4096 ? 5 : 4;
-        workers_per_dir = (is_ring || busiest_link_packets >= line_more_worker_packets) ? more_workers : 2;
-    }
-
-    // Shrink core usage to fit available core grid. Shrink workers_per_link first, and then shrink num_links.
+    // Fit to the available cores: links drop only when one worker per direction per link does not fit, and then each
+    // keeps one worker; otherwise the workers shrink (below).
     const uint32_t num_available_cores = available_cores.num_cores();
     auto cores_per_link = [](uint32_t workers) { return 2u * (workers + 1u); };
-    const uint32_t wanted_workers = workers_per_dir;
-    const uint32_t wanted_links = num_links;
-    while (workers_per_dir > 1 && num_links * cores_per_link(workers_per_dir) > num_available_cores) {
-        --workers_per_dir;
-    }
-    if (num_links * cores_per_link(workers_per_dir) > num_available_cores) {
-        // Even one worker per direction per link does not fit; drop links (workers_per_dir is 1 by now).
-        num_links = num_available_cores / cores_per_link(workers_per_dir);
+    const uint32_t wanted_links = operation_attributes.axis_num_links[axis];
+    uint32_t num_links = wanted_links;
+    if (num_links * cores_per_link(1) > num_available_cores) {
+        num_links = num_available_cores / cores_per_link(1);
         TT_FATAL(
             num_links > 0,
             "all_gather needs at least {} worker cores but only {} are available; provide a larger sub_core_grid.",
-            cores_per_link(workers_per_dir),
+            cores_per_link(1),
             num_available_cores);
+    }
+
+    // Arch-dependent settings: the uncalibrated arch's values, then each calibrated arch's. The rules inside an arch
+    // stay keyed on bytes, packets and links.
+    const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
+    const uint64_t busiest_link_packets =
+        tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
+    uint32_t workers_per_dir = 1;  // worker cores per direction per link
+    bool mux_in_middle = false;    // the mux between its direction's workers instead of first
+    // Mux buffers per channel from 2 workers; one worker keeps 4 (below).
+    uint8_t mux_buffers_per_channel = 2;
+    // Packets per CB slot: at most max_packets_per_slot, and at least min_slots slots per worker iteration.
+    uint32_t max_packets_per_slot = kMaxPacketsPerSlot;
+    uint32_t min_slots = all_gather_walk::kNumSlots;
+    bool writer_on_noc0 = false;    // else the writer is on NOC1; the reader takes the other
+    uint64_t signals_per_iter = 2;  // data_valid signals per worker iteration
+    switch (mesh_device->arch()) {
+        case tt::ARCH::WORMHOLE_B0: {
+            const bool multi_link = num_links >= 2;
+            // One link: the link caps the rate, so 2 workers keep up unless short chunks cut every packet below the
+            // payload (packet_cap < max_packet_bytes: row-major rows of 1 KB or less per device, bfp8 tiles in
+            // one-tile lanes); then a 3rd pays off from about 400 packets on the busiest link-direction.
+            // From two links the chip's NOC caps the rate, and a 3rd worker, with the writer off NOC0, pays off from
+            // 192 KB of input per link.
+            constexpr uint64_t three_worker_packets = 400, three_worker_link_bytes = 192 * 1024;
+            workers_per_dir =
+                multi_link
+                    ? (input_bytes >= three_worker_link_bytes * num_links ? 3 : 2)
+                    : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
+            mux_in_middle = false;
+            mux_buffers_per_channel = 2;
+            // One link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines; a line
+            // keeps 2. From two links: one packet per slot.
+            max_packets_per_slot = multi_link ? 1 : kMaxPacketsPerSlot;
+            min_slots = is_ring ? 4 : all_gather_walk::kNumSlots;
+            // The writer is on NOC0 on a one-link ring. From two links, a NOC0 writer shares NOC0 with the 2 * links
+            // mux forwarders and holds the ring back.
+            writer_on_noc0 = is_ring && !multi_link;
+            // A one-link line keeps 4 signals, since its slots are half an iteration.
+            signals_per_iter = (is_ring || multi_link) ? 2 : 4;
+            break;
+        }
+        case tt::ARCH::BLACKHOLE: {
+            // 2 workers cannot keep up with a ring's link. On a line they keep the link busy below 160 packets on the
+            // busiest link-direction; above it more workers are needed: 4 (with the mux in the middle and the writer
+            // on NOC1), and a 5th when packets are 4 KB or less (short rows), which cost more per byte. A 5th slows
+            // full packets.
+            constexpr uint64_t line_more_worker_packets = 160;
+            const uint32_t more_workers = packet_cap <= 4096 ? 5 : 4;
+            workers_per_dir = (is_ring || busiest_link_packets >= line_more_worker_packets) ? more_workers : 2;
+            // The mux sits between its workers, so the worker-to-mux NOC paths are shorter and split across both
+            // sides of the row.
+            mux_in_middle = true;
+            mux_buffers_per_channel = 3;
+            max_packets_per_slot = kMaxPacketsPerSlot;
+            min_slots = 4;
+            writer_on_noc0 = false;
+            signals_per_iter = 2;
+            break;
+        }
+        default: break;  // uncalibrated arch: one worker, the mux first, the default reader/writer NOCs
+    }
+
+    // Shrink the workers to fit the available cores.
+    const uint32_t wanted_workers = workers_per_dir;
+    if (num_links < wanted_links) {
+        workers_per_dir = 1;
+    }
+    while (workers_per_dir > 1 && num_links * cores_per_link(workers_per_dir) > num_available_cores) {
+        --workers_per_dir;
     }
     if (workers_per_dir != wanted_workers || num_links != wanted_links) {
         log_warning(
@@ -225,9 +264,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     };
     group_by_row();
-    // BH: the mux sits in the middle of its direction's cores instead of first, between its workers, so the
-    // worker-to-mux NOC paths are shorter and split across both sides of the row.
-    if (!is_wormhole) {
+    if (mux_in_middle) {
         for (size_t g = 0; g + cores_per_dir <= all_cores.size(); g += cores_per_dir) {
             std::swap(all_cores[g], all_cores[g + (cores_per_dir / 2)]);
         }
@@ -261,11 +298,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const CoreRangeSet worker_core_range(worker_core_set);
 
     // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy; from 2 workers,
-    // 2 suffice (3 on BH; more gain nothing). The mux map goes in program-local L1 (a circular buffer on the mux
-    // cores), so it stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its
-    // addresses are offsets until the mux publishes the map's base. It must be placed before
-    // add_fabric_mux_v2_to_program and append_client_connection_rt_args, which read its CB index and semaphore id.
-    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : (is_wormhole ? 2 : 3);
+    // mux_buffers_per_channel (above). The mux map goes in program-local L1 (a circular buffer on the mux cores), so it
+    // stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its addresses are
+    // offsets until the mux publishes the map's base. It must be placed before add_fabric_mux_v2_to_program and
+    // append_client_connection_rt_args, which read its CB index and semaphore id.
+    const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : mux_buffers_per_channel;
     tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
         static_cast<uint8_t>(workers_per_dir),
@@ -285,11 +322,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // fabric headers.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    // WH, one link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines; a line keeps
-    // 2. WH from two links: one packet per slot. BH fills at least 4 slots.
-    const bool wh_multi_link = is_wormhole && num_links >= 2;
-    const uint32_t max_packets_per_slot = wh_multi_link ? 1 : kMaxPacketsPerSlot;
-    const uint32_t min_slots = (is_ring || !is_wormhole) ? 4 : all_gather_walk::kNumSlots;
     const uint32_t packets_per_slot = compute_packets_per_slot(
         geo, packet_cap, total_slices, packet_header_size, input_tensor, min_slots, max_packets_per_slot);
     const uint32_t slot_bytes =
@@ -300,9 +332,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     desc.cbs.push_back(slot_cb_descriptor(cb0_id, slot_bytes, worker_core_range));
 
     // KERNEL CREATION
-    // NOCs: the writer is on NOC1 except on a one-link WH ring; the reader takes the other. On a WH ring from two
-    // links, a NOC0 writer shares NOC0 with the 2 * links mux forwarders and holds the ring back.
-    const bool writer_on_noc0 = is_wormhole && is_ring && !wh_multi_link;
     const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
     const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
@@ -357,7 +386,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
 
     // Mux kernels: one fabric connection per active direction per link, to that direction's neighbor. The forwarder
-    // writes every packet into an ethernet core, which is faster from NOC0 (BH).
+    // writes every packet into an ethernet core from NOC0, the mux's default NOC.
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
             if (dir_active(dir)) {
@@ -374,10 +403,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     }
 
-    // data_valid: about 2 signals per worker iteration, every 2 to 64 packets. Each signal is a packet: fewer signals
-    // save link time, more start the downstream relay sooner. A one-link WH line keeps 4, since its slots are half an
-    // iteration.
-    const uint64_t signals_per_iter = (!is_wormhole || is_ring || wh_multi_link) ? 2 : 4;
+    // data_valid: signals_per_iter signals per worker iteration (above), every 2 to 64 packets. Each signal is a
+    // packet: fewer signals save link time, more start the downstream relay sooner.
     constexpr uint64_t max_packets_per_sync = 64;
     constexpr uint64_t min_packets_per_sync = 2;
 

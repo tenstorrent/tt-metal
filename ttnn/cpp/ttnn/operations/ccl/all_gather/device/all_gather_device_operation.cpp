@@ -324,7 +324,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 use_unicast = use_unicast && !stripe_in_one_bank(output_spec, args.dim_from_end, args.num_devices);
                 break;
             }
-            default: break;  // uncalibrated arch
+            default: break;  // uncalibrated arch: multicast
         }
     }
 
