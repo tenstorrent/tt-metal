@@ -110,10 +110,6 @@ bool declares(const ProgramSpec& spec, std::string_view name) {
         spec.tensor_parameters, [&](const auto& parameter) { return *parameter.unique_id == name; });
 }
 
-bool declares(const MeshProgramSpec& spec, std::string_view name) {
-    return std::ranges::any_of(spec.programs, [&](const auto& program) { return declares(program.second, name); });
-}
-
 void check_tensor_holds(std::string_view name, const Tensor& tensor, const std::vector<MeshCoordinate>& devices) {
     const auto held = tensor.device_storage().get_coords();
     const auto missing = std::ranges::find_if(
@@ -122,8 +118,8 @@ void check_tensor_holds(std::string_view name, const Tensor& tensor, const std::
         missing == devices.end(),
         "generic_op: tensor_args['{}'] holds devices {}, but these run args are for device {}, which it does not hold. "
         "On each device it runs on, a program reads that device's part of a tensor, so to read the data of a "
-        "per-device view, run the program only on the view's devices; binding the whole tensor instead makes each "
-        "device read its own part",
+        "per-device view, run the program only on the view's devices, for example by listing only those devices' "
+        "views in io_tensors; binding the whole tensor instead makes each device read its own part, not the view's",
         printable(name),
         fmt::format("{}", fmt::join(held, ", ")),
         *missing);
@@ -154,7 +150,8 @@ void check_views(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec,
 }
 
 // The run args of each range are for the program on that range (generic_op pairs them with the spec's program for the
-// same range, in any order), so each is checked against its own range.
+// same range, in any order), so each is checked against its own range and the names that program declares. Run args
+// for a range with no program never run, and generic_op rejects them.
 void check_views(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
     if (on_one_device_mesh(io_tensors)) {
@@ -168,10 +165,14 @@ void check_views(
     } check{io_tensors, spec, run_args, std::ranges::find_if(io_tensors, on_device)->device()->shape()};
     ttnn::program_spec::for_each_python_tensor_arg(
         run_args, [&check](std::size_t program, std::string_view name, const Tensor& tensor) {
-            if (holds_every_device(tensor) || !declares(check.spec, name) || listed(check.io_tensors, tensor)) {
+            const auto& range = check.run_args.programs[program].first;
+            const auto spec = std::ranges::find_if(
+                check.spec.programs, [&](const auto& candidate) { return candidate.first == range; });
+            if (holds_every_device(tensor) || spec == check.spec.programs.end() || !declares(spec->second, name) ||
+                listed(check.io_tensors, tensor)) {
                 return;
             }
-            check_tensor_holds(name, tensor, devices_in(check.run_args.programs[program].first, check.mesh_shape));
+            check_tensor_holds(name, tensor, devices_in(range, check.mesh_shape));
         });
 }
 
