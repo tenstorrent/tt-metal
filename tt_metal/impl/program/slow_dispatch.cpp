@@ -197,9 +197,7 @@ void ConfigureDeviceWithProgram(
     // from a kernel config buffer.
     if (kernel_config_buffer != nullptr) {
         TT_FATAL(!is_emulated, "A kernel config buffer is not supported on emulated devices");
-        if (!kernel_config_buffer->lockstep_address()) {
-            program.impl().check_no_tensix_semaphores();
-        }
+        program.impl().check_no_tensix_semaphores();
     }
     program.impl().check_kernel_config_fits(&device, kernel_config_buffer);
 

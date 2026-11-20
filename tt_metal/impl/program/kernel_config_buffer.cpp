@@ -49,9 +49,8 @@ DeviceAddr KernelConfigBuffer::address(const distributed::MeshCoordinate& device
 
 void KernelConfigBuffer::deallocate() { impl_->deallocate(); }
 
-KernelConfigBufferImpl::KernelConfigBufferImpl(
-    std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device) :
-    shards_(std::move(shards)), mesh_device_(mesh_device), lockstep_address_(lockstep_address) {
+KernelConfigBufferImpl::KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice* mesh_device) :
+    shards_(std::move(shards)), mesh_device_(mesh_device) {
     TT_FATAL(!shards_.empty(), "A kernel config buffer needs at least one shard");
     for (size_t index = 0; index < shards_.size(); ++index) {
         const Shards& shards = shards_[index];
@@ -137,17 +136,11 @@ std::unordered_map<CoreCoord, uint32_t> get_required_buffer_sizes(IDevice& devic
 }
 
 // Allocates the shards for `program` on `device`: one per-core-allocated Buffer per block size, each core in the one of
-// its block. With `lockstep_address`, one Buffer at the largest block, allocated bottom up, which must land at one
-// address on every core: it does when the cores' free L1 starts at the same address.
-std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program, bool lockstep_address) {
-    const auto buffer_sizes_on_cores = get_required_buffer_sizes(device, program);
-    uint32_t largest_buffer_size = 0;
-    for (const auto& [_, buffer_size] : buffer_sizes_on_cores) {
-        largest_buffer_size = std::max(largest_buffer_size, buffer_size);
-    }
+// its block.
+std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Program& program) {
     std::map<uint32_t, std::vector<CoreRange>> cores_by_size;
-    for (const auto& [core, buffer_size] : buffer_sizes_on_cores) {
-        cores_by_size[lockstep_address ? largest_buffer_size : buffer_size].emplace_back(core);
+    for (const auto& [core, buffer_size] : get_required_buffer_sizes(device, program)) {
+        cores_by_size[buffer_size].emplace_back(core);
     }
 
     std::vector<KernelConfigBufferImpl::Shards> shards;
@@ -161,16 +154,7 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
             TensorMemoryLayout::HEIGHT_SHARDED);
         per_core_allocation::set_per_core_allocation(sharding_args, true);
         auto buffer = BufferImpl::create(
-            &device,
-            static_cast<DeviceAddr>(buffer_size) * num_cores,
-            buffer_size,
-            BufferType::L1,
-            sharding_args,
-            lockstep_address ? std::optional<bool>(true) : std::nullopt);
-        if (lockstep_address) {
-            // Throws if the shards landed at different addresses.
-            per_core_allocation::get_shard_base_address(*buffer, cores);
-        }
+            &device, static_cast<DeviceAddr>(buffer_size) * num_cores, buffer_size, BufferType::L1, sharding_args);
         sizes += fmt::format(" {} B x {} cores;", buffer_size, num_cores);
         shards.push_back({.cores = cores, .size = buffer_size, .buffer = std::move(buffer)});
     }
@@ -180,17 +164,14 @@ std::vector<KernelConfigBufferImpl::Shards> allocate_shards(IDevice& device, Pro
 
 }  // namespace
 
-KernelConfigBuffer CreateKernelConfigBuffer(
-    distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool lockstep_address) {
+KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, distributed::MeshWorkload& workload) {
     TT_FATAL(
         !MetalContext::instance(device.impl().get_context_id()).rtoptions().get_fast_dispatch(),
         "A kernel config buffer can only be allocated in slow dispatch mode: fast dispatch places kernel-config blocks "
         "in its own ring "
         "buffer");
-    if (!lockstep_address) {
-        for (auto& [_, program] : workload.get_programs()) {
-            program.impl().check_no_tensix_semaphores();
-        }
+    for (auto& [_, program] : workload.get_programs()) {
+        program.impl().check_no_tensix_semaphores();
     }
     // Laid out as launch lays it out, so launch reuses this. Nothing to do if the caller already compiled it.
     program_preparation::compile(device, workload);
@@ -202,12 +183,12 @@ KernelConfigBuffer CreateKernelConfigBuffer(
             if (!device.impl().is_local(coord)) {
                 continue;
             }
-            auto device_shards = allocate_shards(*device.impl().get_device(coord), program, lockstep_address);
+            auto device_shards = allocate_shards(*device.impl().get_device(coord), program);
             std::move(device_shards.begin(), device_shards.end(), std::back_inserter(shards));
         }
     }
     TT_FATAL(!shards.empty(), "The workload has no Tensix kernels on this host's devices, so no kernel config block");
-    return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address, &device));
+    return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), &device));
 }
 
 void EnqueueMeshWorkload(
