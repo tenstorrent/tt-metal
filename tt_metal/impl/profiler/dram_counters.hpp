@@ -33,10 +33,22 @@ inline constexpr std::string_view TRAFFIC_HEADER =
     "device_id,program_id,launch_seq,flags,elapsed_ns,dram_x,dram_y,noc,counter,delta_words,self_words";
 inline constexpr std::string_view IDLE_HEADER =
     "device_id,dram_x,dram_y,noc,counter,words_per_snapshot_pair,words_per_second";
+inline constexpr std::string_view CONTROLLER_LOG = "dram_controller.csv";
+inline constexpr std::string_view CONTROLLER_HEADER =
+    "device_id,program_id,launch_seq,flags,elapsed_ns,channel,dram_x,dram_y,counter,value";
 
 // Bit set in the flags column of a row.
 inline constexpr uint32_t FLAG_OVERLAPPED = 1u << 0;  // another program was in flight on the device
 inline constexpr uint32_t FLAG_UNSETTLED = 1u << 1;   // write counters were still moving when the settle loop gave up
+inline constexpr uint32_t FLAG_INTERVAL_WRAPPED = 1u << 2;  // the controller interval ran out inside the window, so
+                                                            // its counts cover only the window's last part
+
+// Longest controller interval, about 2.1 s at a 2 GHz memory clock.
+inline constexpr uint32_t CONTROLLER_INTERVAL = 0xFFFFFFFFu;
+
+// Index of the first tile whose controller registers answer, judged by the AXI control word read through each tile.
+std::optional<size_t> answering_port(
+    const std::vector<uint32_t>& axi_control, const llk::perf::dram::ControllerLayout& l);
 
 struct Reading {
     std::chrono::steady_clock::time_point time;
@@ -94,7 +106,9 @@ IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, 
 std::string counter_name(llk::perf::dram::DramCounter counter);
 
 // Slow dispatch hooks, no-ops unless TT_METAL_PROFILE_DRAM_COUNTERS is set. begin_program snapshots right before the
-// go signal; end_pending closes the program in flight on the chip once its cores are idle.
+// go signal; end_pending closes the program in flight on the chip once its cores are idle. With
+// TT_METAL_PROFILE_DRAM_CONTROLLER each program also gets one controller interval, and the firmware's interval and
+// clock gating are put back after it.
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program);
 void end_pending(MetalContext& ctx, ChipId chip);
 // Drops the state of every chip of the context, which closes its devices.

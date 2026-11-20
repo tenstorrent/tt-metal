@@ -57,9 +57,19 @@ struct Pending {
     bool overlapped = false;
 };
 
+struct Controller {
+    uint32_t channel = 0;
+    std::pair<uint32_t, uint32_t> tile;  // translated x, y of a tile whose controller registers answer
+    uint32_t saved_interval = 0;
+    uint32_t saved_axi_control = 0;
+    bool open = false;  // its firmware values are saved and not yet written back
+};
+
 struct DeviceState {
     bool disabled = false;
     bool initialized = false;
+    std::vector<Controller> controllers;  // empty unless the controller capture is on and found its registers
+    bool controller_open = false;
     Plan plan;
     Coupling coupling;
     std::vector<std::pair<uint32_t, uint32_t>> tiles;  // translated x, y
@@ -76,6 +86,7 @@ std::mutex g_mutex;
 std::map<std::pair<int, ChipId>, DeviceState> g_devices;
 bool g_traffic_started = false;
 bool g_idle_started = false;
+bool g_controller_started = false;
 
 uint32_t read_one(MetalContext& ctx, ChipId chip, DeviceState& st, size_t tile, uint64_t addr, uint32_t& index) {
     uint32_t value = 0;
@@ -247,6 +258,132 @@ void write_idle_log(ChipId chip, const DeviceState& st) {
     }
 }
 
+uint32_t controller_read(MetalContext& ctx, ChipId chip, const Controller& c, uint64_t addr) {
+    uint32_t value = 0;
+    ctx.get_cluster().read_reg(&value, tt_cxy_pair(chip, c.tile.first, c.tile.second), addr);
+    return value;
+}
+
+void controller_write(MetalContext& ctx, ChipId chip, const Controller& c, uint64_t addr, uint32_t value) {
+    ctx.get_cluster().write_reg(&value, tt_cxy_pair(chip, c.tile.first, c.tile.second), addr);
+}
+
+// Not every tile of a channel reaches the controller registers, so each channel uses the first tile that does.
+std::vector<Controller> find_controllers(MetalContext& ctx, ChipId chip, dc::Arch arch) {
+    const dc::ControllerLayout l = dc::controller_layout_for(arch);
+    std::vector<Controller> out;
+    if (l.register_window == 0) {
+        return out;
+    }
+    const auto& soc_desc = ctx.get_cluster().get_soc_desc(chip);
+    const auto channels = soc_desc.get_dram_cores();
+    for (uint32_t channel = 0; channel < channels.size(); channel++) {
+        std::vector<Controller> ports;
+        std::vector<uint32_t> axi_control;
+        for (const auto& core : channels[channel]) {
+            const auto translated = soc_desc.translate_coord_to(core, tt::CoordSystem::TRANSLATED);
+            Controller c{channel, {translated.x, translated.y}};
+            axi_control.push_back(controller_read(ctx, chip, c, l.register_window | l.axi_control));
+            ports.push_back(c);
+        }
+        if (const auto port = answering_port(axi_control, l)) {
+            out.push_back(ports[*port]);
+        }
+    }
+    return out;
+}
+
+void disable_controllers(DeviceState& st, const std::exception& e) {
+    log_warning(
+        tt::LogMetal,
+        "TT_METAL_PROFILE_DRAM_CONTROLLER: accessing the memory controllers failed ({}), controller capture is off",
+        e.what());
+    st.controllers.clear();
+    st.controller_open = false;
+}
+
+// Starts one interval per controller with its clock gating off. A controller is marked open once the firmware's
+// values are saved, so a failure part way never writes back values that were not read.
+void open_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
+    const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
+    st.controller_open = true;
+    for (Controller& c : st.controllers) {
+        c.saved_interval = controller_read(ctx, chip, c, l.register_window | l.interval);
+        c.saved_axi_control = controller_read(ctx, chip, c, l.register_window | l.axi_control);
+        c.open = true;
+        controller_write(
+            ctx, chip, c, l.register_window | l.axi_control, c.saved_axi_control & ~l.axi_dynamic_gate_bits);
+        controller_write(ctx, chip, c, l.register_window | l.interval, 0);
+        controller_read(ctx, chip, c, l.register_window | l.interval_done);
+        controller_write(ctx, chip, c, l.register_window | l.interval, CONTROLLER_INTERVAL);
+    }
+}
+
+void restore_controller(MetalContext& ctx, ChipId chip, const dc::ControllerLayout& l, Controller& c) {
+    c.open = false;
+    controller_write(ctx, chip, c, l.register_window | l.interval, c.saved_interval);
+    controller_write(ctx, chip, c, l.register_window | l.axi_control, c.saved_axi_control);
+}
+
+// Puts the firmware's values back on every open controller without reading the counts, after a failure.
+void abandon_controllers(MetalContext& ctx, ChipId chip, DeviceState& st) {
+    if (!st.controller_open) {
+        return;
+    }
+    st.controller_open = false;
+    const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
+    for (Controller& c : st.controllers) {
+        if (!c.open) {
+            continue;
+        }
+        try {
+            restore_controller(ctx, chip, l, c);
+        } catch (const std::exception& e) {
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_PROFILE_DRAM_CONTROLLER: restoring memory controller {} of device {} failed ({})",
+                c.channel,
+                chip,
+                e.what());
+        }
+    }
+}
+
+// Writing a zero interval latches the counts of the interval in progress.
+void close_controllers(
+    MetalContext& ctx,
+    ChipId chip,
+    DeviceState& st,
+    uint64_t program_id,
+    uint64_t seq,
+    uint32_t flags,
+    uint64_t elapsed_ns) {
+    if (!st.controller_open) {
+        return;
+    }
+    const dc::ControllerLayout l = dc::controller_layout_for(st.plan.arch);
+    const dc::ControllerTable table = dc::controller_table(st.plan.arch);
+    std::ofstream out = open_log(CONTROLLER_LOG, CONTROLLER_HEADER, g_controller_started);
+    for (Controller& c : st.controllers) {
+        if (!c.open) {
+            continue;
+        }
+        const bool wrapped = controller_read(ctx, chip, c, l.register_window | l.interval_done) != 0;
+        controller_write(ctx, chip, c, l.register_window | l.interval, 0);
+        const uint32_t row_flags = flags | (wrapped ? FLAG_INTERVAL_WRAPPED : 0u);
+        for (size_t i = 0; i < table.size; i++) {
+            const uint32_t value = controller_read(ctx, chip, c, l.register_window | table.data[i].address);
+            if (value != 0) {
+                out << chip << "," << program_id << "," << seq << "," << row_flags << "," << elapsed_ns << ","
+                    << c.channel << "," << c.tile.first << "," << c.tile.second << "," << table.data[i].name << ","
+                    << value << "\n";
+            }
+        }
+        restore_controller(ctx, chip, l, c);
+    }
+    st.controller_open = false;
+}
+
 bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
     if (st.disabled) {
         return false;
@@ -294,11 +431,26 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
         st.disabled = true;
         return false;
     }
+    if (rt.get_profiler_dram_controller_enabled()) {
+        try {
+            st.controllers = find_controllers(ctx, chip, st.plan.arch);
+        } catch (const std::exception& e) {
+            disable_controllers(st, e);
+        }
+        if (st.controllers.empty()) {
+            log_warning(
+                tt::LogMetal,
+                "TT_METAL_PROFILE_DRAM_CONTROLLER: no memory controller registers answer on device {}, only the DRAM "
+                "tile counters are captured",
+                chip);
+        }
+    }
     st.initialized = true;
     return true;
 }
 
-void write_launch(
+// Returns the launch sequence number of the rows.
+uint64_t write_launch(
     DeviceState& st, ChipId chip, const Pending& pending, const Reading& after, bool settled, uint32_t extra_flags) {
     const uint64_t elapsed_ns =
         std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
@@ -314,6 +466,26 @@ void write_launch(
     if (deltas.empty()) {
         out << chip << "," << pending.program_id << "," << seq << "," << flags << "," << elapsed_ns
             << ",-1,-1,-1,NONE,0,0\n";
+    }
+    return seq;
+}
+
+// The controller interval of a closed launch shares its sequence number, flags and elapsed time.
+void close_launch_controllers(
+    MetalContext& ctx,
+    ChipId chip,
+    DeviceState& st,
+    const Pending& pending,
+    const Reading& after,
+    uint64_t seq,
+    uint32_t flags) {
+    const uint64_t elapsed_ns =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(after.time - pending.before.time).count();
+    try {
+        close_controllers(ctx, chip, st, pending.program_id, seq, flags, elapsed_ns);
+    } catch (const std::exception& e) {
+        abandon_controllers(ctx, chip, st);
+        disable_controllers(st, e);
     }
 }
 
@@ -382,6 +554,15 @@ std::vector<Delta> diff(const Plan& plan, const Coupling& coupling, const Readin
     return out;
 }
 
+std::optional<size_t> answering_port(const std::vector<uint32_t>& axi_control, const dc::ControllerLayout& l) {
+    for (size_t i = 0; i < axi_control.size(); i++) {
+        if (l.axi_reset_bits != 0 && (axi_control[i] & l.axi_reset_bits) == l.axi_reset_bits) {
+            return i;
+        }
+    }
+    return std::nullopt;
+}
+
 IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, double spaced_seconds) {
     IdleFit fit;
     if (spaced_seconds > tight_seconds) {
@@ -415,14 +596,25 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
         if (!prepare(ctx, chip, st)) {
             return;
         }
-        Reading now = read_all(ctx, chip, st);
         const bool overlapped = st.pending.has_value();
         if (overlapped) {
             // The earlier program is still in flight: close it at this instant, its number includes the new program.
-            write_launch(st, chip, *st.pending, now, true, FLAG_OVERLAPPED);
+            const Reading now = read_all(ctx, chip, st);
+            const uint64_t seq = write_launch(st, chip, *st.pending, now, true, FLAG_OVERLAPPED);
+            close_launch_controllers(ctx, chip, st, *st.pending, now, seq, FLAG_OVERLAPPED);
         }
-        st.pending = Pending{std::move(now), program.get_runtime_id(), overlapped};
+        // The controller register writes go before the tile snapshot so the tile counters never see them.
+        if (!st.controllers.empty()) {
+            try {
+                open_controllers(ctx, chip, st);
+            } catch (const std::exception& e) {
+                abandon_controllers(ctx, chip, st);
+                disable_controllers(st, e);
+            }
+        }
+        st.pending = Pending{read_all(ctx, chip, st), program.get_runtime_id(), overlapped};
     } catch (const std::exception& e) {
+        abandon_controllers(ctx, chip, st);
         disable_after_failure(st, e);
     }
 }
@@ -449,8 +641,11 @@ void end_pending(MetalContext& ctx, ChipId chip) {
             settled = next == last;
             last = std::move(next);
         }
-        write_launch(st, chip, pending, read_all(ctx, chip, st), settled, 0u);
+        const Reading after = read_all(ctx, chip, st);
+        const uint64_t seq = write_launch(st, chip, pending, after, settled, 0u);
+        close_launch_controllers(ctx, chip, st, pending, after, seq, settled ? 0u : FLAG_UNSETTLED);
     } catch (const std::exception& e) {
+        abandon_controllers(ctx, chip, st);
         disable_after_failure(st, e);
     }
 }
@@ -458,6 +653,12 @@ void end_pending(MetalContext& ctx, ChipId chip) {
 void release(MetalContext& ctx) {
     const int context = ctx.get_context_id().get();
     std::lock_guard<std::mutex> lock(g_mutex);
+    for (auto& [key, st] : g_devices) {
+        if (key.first == context && st.controller_open && st.pending) {
+            // A program nobody waited for still holds the controllers: hand them back to the firmware.
+            close_launch_controllers(ctx, key.second, st, *st.pending, st.pending->before, st.launch_seq++, 0u);
+        }
+    }
     std::erase_if(g_devices, [context](const auto& entry) { return entry.first.first == context; });
 }
 

@@ -164,3 +164,43 @@ def test_csv_round_trip(tmp_path):
     (p,) = dram_counters.per_program(rows, "blackhole", idle)
     assert p.read_bytes == 60 * 64
     assert dram_counters.main([str(tmp_path)]) == 0
+
+
+CONTROLLER_HEADER = "device_id,program_id,launch_seq,flags,elapsed_ns,channel,dram_x,dram_y,counter,value\n"
+
+
+def test_controller_commands_add_over_channels(tmp_path):
+    (tmp_path / "dram_controller.csv").write_text(
+        CONTROLLER_HEADER + "0,9,0,0,5000,0,17,12,RD_CMD,553\n"
+        "0,9,0,0,5000,0,17,12,RD_AP_CMD,613\n"
+        "0,9,0,0,5000,0,17,12,WR_CMD,708\n"
+        "0,9,0,0,5000,0,17,12,ACT_CMD,783\n"
+        "0,9,0,4,5000,3,26,2,WR_AP_CMD,170\n"
+        "0,9,0,4,5000,3,26,2,ACT_CMD,10\n"
+        "0,9,1,0,700,0,17,12,RD_AP_CMD,8\n"
+    )
+    first, second = dram_counters.per_program_controller(
+        dram_counters.read_controller(tmp_path / "dram_controller.csv")
+    )
+    assert (first.read_commands, first.write_commands, first.activates) == (
+        1166,
+        878,
+        793,
+    )
+    assert first.channels[3] == {"WR_AP_CMD": 170, "ACT_CMD": 10}
+    assert first.wrapped and not second.wrapped
+    assert first.command_bytes == (1166 + 878) * 64
+    assert first.row_hit_rate == pytest.approx(1 - 793 / 2044)
+    assert second.read_commands == 8 and second.row_hit_rate == 1.0
+
+
+def test_controller_log_is_printed_when_present(tmp_path, capsys):
+    (tmp_path / "dram_traffic.csv").write_text(
+        "device_id,program_id,launch_seq,flags,elapsed_ns,dram_x,dram_y,noc,counter,delta_words,self_words\n"
+        "0,9,0,0,5000,-1,-1,-1,NONE,0,0\n"
+    )
+    (tmp_path / "dram_controller.csv").write_text(
+        CONTROLLER_HEADER + "0,9,0,0,5000,0,17,12,RD_CMD,5\n"
+    )
+    assert dram_counters.main([str(tmp_path), "--no-idle"]) == 0
+    assert "rd_cmds" in capsys.readouterr().out
