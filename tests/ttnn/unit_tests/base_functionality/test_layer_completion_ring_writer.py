@@ -37,6 +37,39 @@ def test_sink_pushes_one_message_per_span():
     ]
 
 
+def test_chunk_failed_pushes_one_flagged_message():
+    producer = FakeProducer()
+    make(producer).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+    assert producer.attempts == [
+        dict(slot_id=5, pos_start=5120, pos_end=10213, layer_start=0, layer_end=0, flags=writer_mod.CHUNK_FAILED)
+    ]
+
+
+def test_chunk_failed_matches_the_binding():
+    from ttnn._experimental.layer_completion import CHUNK_FAILED
+
+    assert writer_mod.CHUNK_FAILED == CHUNK_FAILED
+
+
+def test_a_flagged_record_round_trips_and_bad_flags_are_refused(expect_error):
+    import os
+
+    from ttnn._experimental.layer_completion import CHUNK_FAILED, LayerCompletionQueue
+
+    ring = LayerCompletionQueue.create(f"/tt_lcq_writer_test_{os.getpid()}", 4)
+    try:
+        writer_mod.LayerCompletionRingWriter(ring).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+        slot_id, pos_start, pos_end, layer_start, layer_end, _, flags = ring.try_pop_with_flags()
+        assert (slot_id, pos_start, pos_end, layer_start, layer_end, flags) == (5, 5120, 10213, 0, 0, CHUNK_FAILED)
+        writer_mod.LayerCompletionRingWriter(ring).chunk_failed(slot_id=5, pos_start=5120, pos_end=10213)
+        with expect_error(RuntimeError, "use try_pop_with_flags"):
+            ring.try_pop()
+        with expect_error(ValueError, "flags must be 0 or CHUNK_FAILED"):
+            ring.try_push(slot_id=5, pos_start=0, pos_end=1, layer_start=0, layer_end=0, flags=0xFFFFFFFF)
+    finally:
+        ring.shutdown()
+
+
 def test_sink_waits_on_a_full_ring_and_warns_at_a_cadence(monkeypatch):
     """A full ring is backpressure, not an error: wait, one warning on entry and one per
     LOG_EVERY_S while waiting, never a raise."""

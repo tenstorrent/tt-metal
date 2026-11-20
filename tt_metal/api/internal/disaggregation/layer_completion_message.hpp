@@ -29,7 +29,7 @@ struct LayerCompletionMessage {
     // Global layers [layer_start, layer_end); per-layer emission is [l, l+1).
     uint32_t layer_start = 0;
     uint32_t layer_end = 0;
-    // 0 for completions; kLayerCompletionSentinel for end-of-stream.
+    // 0 for completions; kLayerCompletionChunkFailed or kLayerCompletionSentinel.
     uint32_t flags = 0;
     // Host wall clock (ns since the Unix epoch) when a host first saw the completion; forwarding keeps it.
     uint64_t host_timestamp_ns = 0;
@@ -48,6 +48,10 @@ static_assert(offsetof(LayerCompletionMessage, flags) == 20);
 static_assert(offsetof(LayerCompletionMessage, host_timestamp_ns) == 24);
 
 inline constexpr uint32_t kLayerCompletionSentinel = 0xFFFFFFFFu;
+
+// The request whose chunk [pos_start, pos_end) of slot_id this is failed; the layer range is ignored and the chunk's
+// layers are still reported. The consumer needs it no later than the chunk's last layer completion.
+inline constexpr uint32_t kLayerCompletionChunkFailed = 1u;
 
 inline uint64_t layer_completion_host_timestamp_ns() noexcept {
     return static_cast<uint64_t>(
