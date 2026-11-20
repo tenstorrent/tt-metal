@@ -26,6 +26,20 @@ FORCE_INLINE uint64_t noc_address(uint32_t xy, uint32_t address) {
     return get_noc_addr(xy & 0xFFFF, xy >> 16, address);
 }
 
+// A block read, behind a plain function: the share's loop then compiles once whichever operand a kernel moves.
+class BlockRead {
+public:
+    template <typename Read>
+    explicit BlockRead(const Read& read) :
+        read_(&read),
+        call_([](const void* read, uint32_t b, uint32_t slot) { (*static_cast<const Read*>(read))(b, slot); }) {}
+    FORCE_INLINE void operator()(uint32_t b, uint32_t slot) const { call_(read_, b, slot); }
+
+private:
+    const void* read_;
+    void (*call_)(const void*, uint32_t, uint32_t);
+};
+
 // One operand's K blocks of `block_bytes` through `cb` (`block_tiles` pages each, the CB a whole number of blocks).
 // step() never blocks, so one RISC can move two operands; all() moves one.
 class Share {
@@ -140,8 +154,7 @@ public:
         }
     }
 
-    template <typename Read>
-    FORCE_INLINE void all(uint32_t blocks, const Read& read) {
+    __attribute__((noinline)) void all(uint32_t blocks, const BlockRead& read) {
         while (!step(blocks, read)) {
         }
         finish(blocks);
@@ -296,9 +309,13 @@ struct Operands {
 
     // x of a correction core's chunks (in the x group of the head batch's cores at its place), or its head's W.
     static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
-        x_share(ways * group + half(head)).all(blocks, x_read(first_row, half(head)));
+        const auto read = x_read(first_row, half(head));
+        x_share(ways * group + half(head)).all(blocks, BlockRead(read));
     }
-    static void move_w(uint32_t head) { w_share(head).all(blocks, w_read(head)); }
+    static void move_w(uint32_t head) {
+        const auto read = w_read(head);
+        w_share(head).all(blocks, BlockRead(read));
+    }
     // The partial sums with the pair's core, at NoC x | y << 16 `pair_xy`.
     static void swap(uint32_t pair_xy) {
         swap_partials(cb_pair, cb_partial, rows * columns, pair_xy, get_semaphore(ready_id), get_semaphore(partial_id));

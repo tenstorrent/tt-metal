@@ -188,8 +188,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
     const uint32_t num_chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
-    const uint32_t cores_per_head =
-        relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
+    const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
     const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
     const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
@@ -315,9 +314,12 @@ tt::tt_metal::ProgramDescriptor build_program(
     // once the matmul is done, a pair's partial sums of this core's head, then each chunk's sigmoid(gate) * weight: in
     // place all of the core's, streamed one), then K blocks of W (the final transition's B), then a pair's partial sums
     // of its other head. The heads pair up (`ways` 2, each core forming two heads over half of K) where their buffers
-    // fit, else each core forms its head over all of K; then the largest K block whose buffers fit: a block's
-    // handshakes cost the same whatever its size.
-    const auto gate_buffers = [&](uint32_t kb, uint32_t ways) {
+    // fit, else each core forms its head over all of K; x's and W's buffers hold `depth` K tiles of 2 and of 2 (paired)
+    // or 3 and 4 slots, the largest that fit. They hold them in the smallest K blocks that divide `depth` and the
+    // core's K and whose slots have read transaction ids (gate_matmul_dataflow.hpp): small blocks keep each operand's
+    // reads and multicasts close behind the matmul.
+    const auto slots = [](uint32_t ways) { return ways == 2 ? std::array{2u, 2u} : std::array{3u, 4u}; };
+    const auto gate_buffers = [&](uint32_t kb, uint32_t ways, uint32_t depth) {
         const uint32_t x_block = core_chunks * kb * tt::tile_size(x_format);
         const uint32_t w_block = kb * ways * kt * tt::tile_size(w_format);
         const uint32_t pair_bytes = ways == 2 ? gate_bytes : 0;
@@ -325,26 +327,29 @@ tt::tt_metal::ProgramDescriptor build_program(
             shared_cb(
                 {},
                 {{cb_fe, tt::DataFormat::Float32, state_tiles * state_tile, state_tile},
-                 {cb_gin0, x_format, (ways == 2 ? 2 : 3) * x_block, x_block},
+                 {cb_gin0, x_format, slots(ways)[0] * depth / kb * x_block, x_block},
                  {cb_gate_partial, tt::DataFormat::Float32, pair_bytes, state_tile},
                  {cb_gate_factor, output_format, factor_bytes, factor_bytes}}),
             shared_cb(
                 {},
                 {{cb_fb, tt::DataFormat::Float32, state_tiles * state_tile, state_tile},
-                 {cb_gin1, w_format, (ways == 2 ? 2 : 4) * w_block, w_block}}),
+                 {cb_gin1, w_format, slots(ways)[1] * depth / kb * w_block, w_block}}),
             shared_cb({}, {{cb_gate_pair, tt::DataFormat::Float32, pair_bytes, state_tile}})};
     };
     const auto& workspace_shard = in.gate_workspace.memory_config().shard_spec()->shape;
     const uint32_t workspace_bytes = workspace_shard[0] * workspace_shard[1] * in.gate_workspace.element_size();
+    const auto fits = [&](uint32_t kb, uint32_t ways, uint32_t depth) {
+        const auto buffers = gate_buffers(kb, ways, depth);
+        return buffers[0].total_size + buffers[1].total_size + buffers[2].total_size <= workspace_bytes;
+    };
     uint32_t gate_ways = 0;
-    uint32_t gate_kb = 0;
+    uint32_t gate_depth = 0;
     for (const uint32_t ways : {2u, 1u}) {
-        for (const uint32_t kb : {8u, 4u, 2u}) {
-            const auto buffers = gate_buffers(kb, ways);
-            if (gate_ways == 0 && attrs.num_heads % ways == 0 && gate_k % (ways * kb) == 0 &&
-                buffers[0].total_size + buffers[1].total_size + buffers[2].total_size <= workspace_bytes) {
+        for (const uint32_t depth : {8u, 4u, 2u}) {
+            if (gate_ways == 0 && attrs.num_heads % ways == 0 && gate_k % (ways * depth) == 0 &&
+                fits(depth, ways, depth)) {
                 gate_ways = ways;
-                gate_kb = kb;
+                gate_depth = depth;
             }
         }
     }
@@ -353,15 +358,11 @@ tt::tt_metal::ProgramDescriptor build_program(
         gate_ways != 0,
         "relay_chunk_scan: the output gate's buffers do not fit gate_workspace's {} B per core",
         workspace_bytes);
-    {
-        // Each slot reads under its own transaction id (gate_matmul_dataflow.hpp), of which there are 15.
-        const auto buffers = gate_buffers(gate_kb, gate_ways);
-        const uint32_t x_slots = buffers[0].total_size / (core_chunks * gate_kb * tt::tile_size(x_format));
-        const uint32_t w_slots = buffers[1].total_size / (gate_kb * gate_ways * kt * tt::tile_size(w_format));
-        TT_FATAL(
-            std::max(x_slots, w_slots) <= 15,
-            "relay_chunk_scan: the output gate's buffers hold {} K blocks, more than the 15 read transaction ids",
-            std::max(x_slots, w_slots));
+    // Each slot reads under its own transaction id, of which there are 15.
+    uint32_t gate_kb = gate_depth;
+    while (gate_kb > 2 && std::ranges::max(slots(gate_ways)) * gate_depth / (gate_kb / 2) <= 15 &&
+           fits(gate_kb / 2, gate_ways, gate_depth)) {
+        gate_kb /= 2;
     }
     // Paired, x is shared among the cores at a place of the pairs' first heads, and among those of their second.
     const uint32_t batches = batch_heads / attrs.num_heads;
@@ -370,14 +371,10 @@ tt::tt_metal::ProgramDescriptor build_program(
         return h % attrs.num_heads < attrs.num_heads / 2 ? h + attrs.num_heads / 2 : h - attrs.num_heads / 2;
     };
     const auto north = [&](uint32_t h) { return helper_cores[h].y < head_cores[h].y; };
-    // The cores of the heads whose W moves north, then south: each its own reader and writer.
-    std::array<std::vector<CoreCoord>, 2> directed_cores;
+    // A bit per head: whether its W moves north (the reader and writer's common args).
+    std::vector<uint32_t> north_bits((batch_heads + 31) / 32);
     for (uint32_t h = 0; h < batch_heads; ++h) {
-        auto& cores = directed_cores[north(h) ? 0 : 1];
-        cores.insert(
-            cores.end(),
-            correction_cores.begin() + h * cores_per_head,
-            correction_cores.begin() + (h + 1) * cores_per_head);
+        north_bits[h / 32] |= uint32_t{north(h)} << h % 32;
     }
     std::vector<std::vector<GateSet>> gate_groups;
     for (uint32_t b = 0; b < batches; ++b) {
@@ -459,7 +456,7 @@ tt::tt_metal::ProgramDescriptor build_program(
         return kda_factory_detail::cb_descriptor(index, tiles, tt::tile_size(format), format, correction_set);
     };
     const auto gate_set = correction_set.merge(helper_set);
-    auto gate_cbs = gate_buffers(gate_kb, gate_ways);
+    auto gate_cbs = gate_buffers(gate_kb, gate_ways, gate_depth);
     for (auto& cb : gate_cbs) {
         cb.core_ranges = gate_set;
         cb.buffer = in.gate_workspace.buffer();
@@ -598,11 +595,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
     reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads});
     tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
-    // Whether the cores' heads move W north (set per kernel below), then the output gate's operands, whose common args
-    // follow the cores' NoC coordinates.
-    const size_t reader_north = reader_ct.size();
-    reader_ct.push_back(0);
-    append_gate_ct(reader_ct, 14 + static_cast<uint32_t>(correction_cores.size()));
+    // The heads' W directions, then the output gate's operands, whose common args follow the cores' NoC coordinates.
+    const uint32_t reader_north = 14 + static_cast<uint32_t>(correction_cores.size());
+    reader_ct.push_back(reader_north);
+    append_gate_ct(reader_ct, reader_north + static_cast<uint32_t>(north_bits.size()));
     std::vector<uint32_t> writer_ct = {
         cb_eout,
         cb_chron,
@@ -619,10 +615,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     writer_ct.insert(writer_ct.end(), slab_ct.begin(), slab_ct.end());
-    // Whether the cores' heads move W north, then the output gate's operands, whose common args follow the senders'.
-    const size_t writer_north = writer_ct.size();
-    writer_ct.push_back(0);
-    append_gate_ct(writer_ct, 3 + 2 * attrs.num_links);
+    // The heads' W directions, then the output gate's operands, whose common args follow the senders'.
+    const uint32_t writer_north = 3 + 2 * attrs.num_links;
+    writer_ct.push_back(writer_north);
+    append_gate_ct(writer_ct, writer_north + static_cast<uint32_t>(north_bits.size()));
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
@@ -633,26 +629,16 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::TensorAccessorArgs(slab_index.buffer()).append_to(sender_ct);
     sender_ct.push_back(uint32_t(unicast_peers));
 
-    // The reader and writer of the cores whose heads move W north, then of those whose heads move it south.
-    std::vector<tt::tt_metal::KernelDescriptor> readers;
-    std::vector<tt::tt_metal::KernelDescriptor> writers;
-    for (uint32_t d = 0; d < 2; ++d) {
-        if (directed_cores[d].empty()) {
-            continue;
-        }
-        const auto cores = kda_factory_detail::merged_core_set(directed_cores[d]);
-        reader_ct[reader_north] = writer_ct[writer_north] = d == 0;
-        readers.push_back(
-            {.kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_chunk_scan.cpp",
-             .core_ranges = cores,
-             .compile_time_args = reader_ct,
-             .config = tt::tt_metal::ReaderConfigDescriptor{}});
-        writers.push_back(
-            {.kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_chunk_scan.cpp",
-             .core_ranges = cores,
-             .compile_time_args = writer_ct,
-             .config = tt::tt_metal::WriterConfigDescriptor{}});
-    }
+    tt::tt_metal::KernelDescriptor reader{
+        .kernel_source = std::string(kernel_dir) + "dataflow/reader_relay_chunk_scan.cpp",
+        .core_ranges = correction_set,
+        .compile_time_args = std::move(reader_ct),
+        .config = tt::tt_metal::ReaderConfigDescriptor{}};
+    tt::tt_metal::KernelDescriptor writer{
+        .kernel_source = std::string(kernel_dir) + "dataflow/writer_relay_chunk_scan.cpp",
+        .core_ranges = correction_set,
+        .compile_time_args = std::move(writer_ct),
+        .config = tt::tt_metal::WriterConfigDescriptor{}};
     auto compute_config = kda_factory_detail::compute_config_descriptor(mesh->arch(), attrs.compute_kernel_config);
     compute_config.unpack_to_dest_mode.assign(NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     for (const uint32_t exact : {cb_ein_exact, cb_p_exact, cb_fb}) {
@@ -809,10 +795,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto& core : correction_cores) {
         reader_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
+    reader_args.append(north_bits);
     append_gate_args(reader_args);
-    for (auto& reader : readers) {
-        reader.emplace_common_runtime_args(reader_args);
-    }
+    reader.emplace_common_runtime_args(reader_args);
     tt::tt_metal::KernelDescriptor::RTArgList writer_args;
     writer_args.push_back(output.buffer());
     writer_args.push_back(carry.buffer());
@@ -820,10 +805,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto& core : sender_cores) {
         writer_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
+    writer_args.append(north_bits);
     append_gate_args(writer_args);
-    for (auto& writer : writers) {
-        writer.emplace_common_runtime_args(writer_args);
-    }
+    writer.emplace_common_runtime_args(writer_args);
     tt::tt_metal::KernelDescriptor::RTArgList helper_args;
     helper_args.push_back(gate_landed);
     append_gate_args(helper_args);
@@ -847,10 +831,9 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (uint32_t h = 0; h < batch_heads; ++h) {
         helper_compute.emplace_runtime_args(helper_cores[h], {uint32_t{h % attrs.num_heads < attrs.num_heads / 2}});
     }
-    desc.kernels = {std::move(sender), std::move(compute), std::move(helper_compute)};
-    for (auto* kernels : {&readers, &writers, &helpers}) {
-        std::ranges::move(*kernels, std::back_inserter(desc.kernels));
-    }
+    desc.kernels = {
+        std::move(sender), std::move(compute), std::move(helper_compute), std::move(reader), std::move(writer)};
+    std::ranges::move(helpers, std::back_inserter(desc.kernels));
     tt::tt_metal::KernelHandle sender_kernel = 0;
 
     desc.kernels[sender_kernel].emplace_common_runtime_args(
