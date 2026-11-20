@@ -47,7 +47,7 @@ def _fake_pipeline(*, trace_denoise):
         adaln_slot_roles=None,
         trace_denoise=trace_denoise,
         _buckets={},
-        _request_state=SimpleNamespace(warm=False),
+        _request_state=SimpleNamespace(warm=False, holds=lambda shape_key: False),
         _audio_decoder=_audio_decoder(),
         _transformer=transformer,
         _log=lambda message: None,
@@ -71,6 +71,7 @@ def _denoise_until_metadata(fake, monkeypatch, expect_error):
         num_condition_audio_rows=0,
         text_indices=torch.zeros(8),
         sequence_length=1000,
+        digest=lambda: b"",
     )
     scheduler = SimpleNamespace(timesteps=torch.zeros(8))
     with expect_error(_ReachedMetadata, "reached _device_metadata"):

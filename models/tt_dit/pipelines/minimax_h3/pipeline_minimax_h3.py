@@ -408,7 +408,10 @@ class MiniMaxH3ArenaCaps:
 @dataclass
 class _BucketState:
     """Per-rung device state whose shape depends on the padded length; bound once, never rebound.
-    The dynamic-length pipeline keeps a single one, rebound at the live padded length per request."""
+    The dynamic-length pipeline keeps a single one, rebound at the live padded length per request.
+
+    Its values depend only on the request's shape (`shape_key`), so a request of the shape they were
+    last written for reuses them without rebuilding or uploading anything."""
 
     rope_cos: StateTensor = field(default_factory=StateTensor)
     rope_sin: StateTensor = field(default_factory=StateTensor)
@@ -418,6 +421,15 @@ class _BucketState:
     adaln_tile_map: StateTensor = field(default_factory=StateTensor)
     adaln_expanded: StateTensor = field(default_factory=StateTensor)
     warm: bool = False
+    shape_key: tuple | None = None
+    tile_rows: bool = False
+
+    def holds(self, shape_key: tuple) -> bool:
+        """Whether every tensor still holds what a request of this shape wrote."""
+        tensors = [self.rope_cos, self.rope_sin, self.adaln, self.tsi, self.assembly_idx]
+        if self.tile_rows:
+            tensors += [self.adaln_tile_map, self.adaln_expanded]
+        return self.shape_key == shape_key and all(tensor.keeps_value for tensor in tensors)
 
 
 # Per-mesh-shape defaults, following `pipelines/wan/pipeline_wan.py`'s `_PRESETS_BH`. An unlisted
@@ -759,6 +771,8 @@ class MiniMaxH3Pipeline:
         self._tt_timestep = StateTensor()
         self._tt_endpoint_timestep = StateTensor()
         self._tt_logical_n = StateTensor()
+        # The shape the three index tensors above were last written for; the rungs share them.
+        self._index_shape_key: tuple | None = None
         # Resident AdaLN schedule tables (`adaln_schedule_minimax_h3`): the row plan of the transformer that holds
         # them, and the per-forward step selector, one state per slot count.
         self._adaln_precompute = adaln_precompute_enabled()
@@ -1721,6 +1735,11 @@ class MiniMaxH3Pipeline:
             )
 
     def _prepare_transformer(self) -> MiniMaxH3Transformer3DModel:
+        if not self._transformer.is_loaded():
+            # Per-shape tensors are reused only for as long as the weights they were bound beside stay loaded.
+            for state in (*self._buckets.values(), self._request_state):
+                state.shape_key = None
+            self._index_shape_key = None
         cache.load_model(
             self._transformer,
             model_name=MODEL_NAME,
@@ -3280,10 +3299,16 @@ class MiniMaxH3Pipeline:
             else:
                 self._release_denoise_traces()
 
+        max_mixed_tiles = int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES))
+        shape_key = (layout.digest(), rung, tuple(condition_spec), caps, v_target, a_target, max_mixed_tiles)
+        # A repeat of the shape this rung last served finds its RoPE tables and indices already on the devices.
+        rebuild = not state.holds(shape_key)
         t_rope = time.time()
-        rope_cos, rope_sin = self._device_metadata(layout, rung)
-        state.rope_cos.update(rope_cos, traced=traced)
-        state.rope_sin.update(rope_sin, traced=traced)
+        if rebuild:
+            state.shape_key = None
+            rope_cos, rope_sin = self._device_metadata(layout, rung)
+            state.rope_cos.update(rope_cos, traced=traced)
+            state.rope_sin.update(rope_sin, traced=traced)
         t_rope = time.time() - t_rope
 
         prompt_device = ttnn.reshape(prompt_embeds, (1, 1, prompt_embeds.shape[1], prompt_embeds.shape[2]))
@@ -3335,38 +3360,46 @@ class MiniMaxH3Pipeline:
         ttnn.deallocate(prompt_device)
         dram_probe.report(f"after prepare_static_sources, rung {rung}")
 
-        row_adaln = adaln_indices(layout.token_tags, row_slot)
-        state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
-        # The norms read their modulation through a per-tile-row map built once per request; a request with more
-        # run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
-        tilerow_kwargs = {}
-        padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
-        try:
-            tile_map, expanded = tilerow_remap(
-                padded_adaln,
-                num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
-                sp_factor=self.sp_factor,
-                max_mixed_tiles=int(os.environ.get("MINIMAX_H3_ADALN_MIXED_TILES", DEFAULT_MAX_MIXED_TILES)),
+        if rebuild:
+            row_adaln = adaln_indices(layout.token_tags, row_slot)
+            state.adaln.update(self._row_indices(row_adaln, rung), traced=traced)
+            # The norms read their modulation through a per-tile-row map built once per shape; a request with
+            # more run-boundary tiles than the map has slots falls back to the per-token one-hot gather.
+            padded_adaln = torch.cat([row_adaln, torch.zeros(rung - row_adaln.shape[0], dtype=row_adaln.dtype)])
+            try:
+                tile_map, expanded = tilerow_remap(
+                    padded_adaln,
+                    num_rows=len(slot_roles) * MINIMAX_H3_MODALITY_NUM,
+                    sp_factor=self.sp_factor,
+                    max_mixed_tiles=max_mixed_tiles,
+                )
+            except ValueError as err:
+                self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
+                tile_map = None
+            state.tile_rows = tile_map is not None
+            if state.tile_rows:
+                state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
+                state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+            state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
+            state.assembly_idx.update(
+                self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
             )
-        except ValueError as err:
-            self._log(f"adaLN tile-row map not used for this request ({err}); per-token gather instead")
-            tile_map = None
-        if tile_map is not None:
-            state.adaln_tile_map.update(self._row_indices(tile_map, tile_map.shape[0]), traced=traced)
-            state.adaln_expanded.update(self._row_indices(expanded, expanded.shape[0]), traced=traced)
+            state.shape_key = shape_key
+        tilerow_kwargs = {}
+        if state.tile_rows:
             tilerow_kwargs = {
                 "adaln_tile_map": state.adaln_tile_map.value,
                 "adaln_expanded_indices": state.adaln_expanded.value,
             }
-        state.tsi.update(self._row_indices(row_slot, rung), traced=traced)
-        state.assembly_idx.update(
-            self._assembly_indices(condition_spec, caps, l_len, a_target, v_target, rung), traced=traced
-        )
-        self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
-        audio_start = l_len + num_cond + num_cond_audio
-        video_start = audio_start + a_target
-        self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
-        self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
+        index_tensors = (self._tt_logical_n, self._tt_video_out_idx, self._tt_audio_out_idx)
+        if self._index_shape_key != shape_key or not all(tensor.keeps_value for tensor in index_tensors):
+            self._index_shape_key = None
+            self._tt_logical_n.update(self._logical_length(layout.sequence_length), traced=traced)
+            audio_start = l_len + num_cond + num_cond_audio
+            video_start = audio_start + a_target
+            self._tt_video_out_idx.update(self._output_indices(video_start, v_target, caps.video_rows), traced=traced)
+            self._tt_audio_out_idx.update(self._output_indices(audio_start, a_target, caps.audio_rows), traced=traced)
+            self._index_shape_key = shape_key
 
         self._tt_video.update(
             self._pad_host_rows(video_rows[num_cond:], caps.video_rows).reshape(1, 1, caps.video_rows, -1),

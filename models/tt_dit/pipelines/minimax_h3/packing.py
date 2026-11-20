@@ -20,7 +20,8 @@ constant fill.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import hashlib
+from dataclasses import dataclass, fields
 
 import numpy as np
 import torch
@@ -98,6 +99,18 @@ class MiniMaxH3PackedSequence:
     text_indices: torch.Tensor
     num_condition_video_rows: int
     num_condition_audio_rows: int
+
+    def digest(self) -> bytes:
+        """Content hash over every field: equal digests mean equal layouts."""
+        digest = hashlib.sha256()
+        for field in fields(self):
+            value = getattr(self, field.name)
+            if torch.is_tensor(value):
+                digest.update(repr((field.name, value.dtype, tuple(value.shape))).encode())
+                digest.update(value.contiguous().numpy())
+            else:
+                digest.update(repr((field.name, value)).encode())
+        return digest.digest()
 
 
 def resolve_canvas_size(aspect_width: float, aspect_height: float) -> tuple[int, int]:
