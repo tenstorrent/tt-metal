@@ -74,9 +74,8 @@ inline void _llk_unpack_hw_configure_(
     const std::uint32_t unpA_tile_size = 0,
     const std::uint32_t unpB_tile_size = 0)
 {
-    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim (X-dim) and the total face count
-    // (Z-dim, 1/2/4). The face count covers grids beyond real tiles, which tests/python_tests/test_unpack_canonical_baseline.py
-    // sweeps on purpose (e.g. 4 faces of 4 rows); the unpack op inits validate the tile shape.
+    // No LLK_VALIDATE_TENSOR_SHAPE_UNPACK here: this only programs face_r_dim and a 1/2/4 face count;
+    // the A/AB/AB_reduce/AB_matmul inits validate the full tile shape.
     const std::uint32_t unpA_num_faces = unpA_tensor_shape.total_num_faces();
     const std::uint32_t unpB_num_faces = unpB_tensor_shape.total_num_faces();
     LLK_ASSERT(unpA_num_faces == 1 || unpA_num_faces == 2 || unpA_num_faces == 4, "unpA_num_faces must be 1, 2, or 4");
@@ -91,7 +90,7 @@ inline void _llk_unpack_hw_configure_(
 
 /**
  * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_hw_configure_, kept for the experimental/2_0
- *        callers until they move to TensorShape (tt-llk#1033).
+ *        callers until they move to TensorShape.
  *
  * Only face_r_dim and the total face count are programmed, so the 1x2 grid picked for num_faces == 2 gives the
  * same registers as the real CB shape.
@@ -252,7 +251,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
     const std::uint32_t tile_size,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // tensor_shape is used (and validated) only by _llk_unpack_reconfig_tile_shape_srca_ under FACE_ROW_MAJOR.
+    // Only the face count is checked here; the full shape is validated by _llk_unpack_reconfig_tile_shape_srca_ under FACE_ROW_MAJOR.
     const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
@@ -327,7 +326,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
     const std::uint32_t tile_size,
     const ckernel::TensorShape tensor_shape = ckernel::DEFAULT_TENSOR_SHAPE)
 {
-    // tensor_shape is used (and validated) only by _llk_unpack_reconfig_tile_shape_srcb_ under FACE_ROW_MAJOR.
+    // Only the face count is checked here; the full shape is validated by _llk_unpack_reconfig_tile_shape_srcb_ under FACE_ROW_MAJOR.
     const std::uint32_t unpack_num_faces = tensor_shape.total_num_faces();
     LLK_ASSERT(unpack_num_faces == 1 || unpack_num_faces == 2 || unpack_num_faces == 4, "unpack_num_faces must be 1, 2, or 4");
 
@@ -369,7 +368,7 @@ inline void _llk_unpack_reconfig_data_format_srcb_impl_(
 
 /**
  * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srca_impl_, kept for the
- *        experimental/2_0 callers until they move to TensorShape (tt-llk#1033).
+ *        experimental/2_0 callers until they move to TensorShape.
  *
  * Also used by the metal llk_unpack_reconfig_data_format_srca wrapper: the experimental hybrid_llk_shims.hpp
  * (deepseek_prefill) renames this impl by macro to a shim with this signature.
@@ -390,7 +389,7 @@ inline void _llk_unpack_reconfig_data_format_srca_impl_(
 
 /**
  * @brief Legacy face_r_dim/num_faces overload of @ref _llk_unpack_reconfig_data_format_srcb_impl_, kept for the
- *        experimental/2_0 callers until they move to TensorShape (tt-llk#1033).
+ *        experimental/2_0 callers until they move to TensorShape.
  *
  * Also used by the metal llk_unpack_reconfig_data_format_srcb wrapper, so the src{a,b} pair moves to TensorShape
  * together. See the srca overload above.
