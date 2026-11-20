@@ -649,6 +649,7 @@ class MultichipDecoder(OptimizedDecoder):
                 page_table,
                 chunk_start_idx=start_pos,
                 compute_kernel_config=self.attention_compute,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     q_chunk_size=min(sdpa_chunk, self.stock_prefill_q_chunk),

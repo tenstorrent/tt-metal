@@ -582,6 +582,7 @@ class OptimizedDecoder(LightweightModule):
                 page_table,
                 chunk_start_idx=start_pos,
                 compute_kernel_config=self.compute,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=ttnn.SDPAProgramConfig(
                     compute_with_storage_grid_size=(11, 10),
                     q_chunk_size=sdpa_chunk,
