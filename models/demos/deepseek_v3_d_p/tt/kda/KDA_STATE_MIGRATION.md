@@ -113,8 +113,8 @@ the `[1, SEG, 192]` tail: `indexed_entry_copy` with `source_part` (the chip's SP
 Per layer and chunk the K3 layer imports its slot's carry (`KdaStates.import_layer`: one `indexed_entry_copy` per
 state kind of this chip's shard into a fixed staging buffer, then a native
 `ttnn.all_gather` over SP into the slabs' one 24-head scratch carry, `KdaStates.scratch`), runs its forward on the
-scratch (`ttKDA.forward_slot`: the convolution, the SP relay and the final carry read the scratch and replace it in
-place, addressing it as a one-entry slab), and exports (one `indexed_entry_copy` per
+scratch (`ttKDA.forward_slot`: the convolution and the SP relay, which also forms the final carry, read the scratch
+and replace it in place, addressing it as a one-entry slab), and exports (one `indexed_entry_copy` per
 kind, which reads the chip's heads of the SP-replicated new carry in the scratch, selected on device from the chip's SP
 coordinate `KdaStates.sp_rank`, and writes them into the slab). Outputs and carries are
 bit-identical to the replicated slabs (compared byte for byte on Galaxy SP8xTP4 and on a 4x4 stage, SP on mesh

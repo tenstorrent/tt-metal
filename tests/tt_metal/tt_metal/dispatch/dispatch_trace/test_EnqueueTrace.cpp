@@ -29,7 +29,7 @@
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "dispatch_test_utils.hpp"
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "gtest/gtest.h"
 #include "hostdevcommon/kernel_structs.h"
 #include "trace/trace_buffer.hpp"

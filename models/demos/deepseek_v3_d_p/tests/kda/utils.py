@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import os
 import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
@@ -21,6 +22,7 @@ from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     fabric2d_device_params,
+    mesh_descriptor_topologies,
     torus_x_device_params,
     torus_xy_device_params,
     torus_y_device_params,
@@ -58,17 +60,30 @@ from models.tt_transformers.tt.ccl import TT_CCL
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 
+def is_4x4_subtorus() -> bool:
+    """TT_MESH_GRAPH_DESC_PATH is the 4x4 Ring/Ring subtorus."""
+    descriptor = os.environ.get("TT_MESH_GRAPH_DESC_PATH")
+    if not descriptor:
+        return False
+    try:
+        topologies = mesh_descriptor_topologies(descriptor)
+    except AssertionError:  # e.g. no dim_types (defaults to LINE): not the subtorus
+        return False
+    return set(topologies) == {("4", "4", "RING", "RING")}
+
+
 def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
     8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
     one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
+    The 4x4 subtorus takes TorusXY.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
         profile = torus_xy_device_params
     elif (rows, columns) == (4, 4):
-        profile = torus_x_device_params
+        profile = torus_xy_device_params if is_4x4_subtorus() else torus_x_device_params
     elif columns == 1 and rows > 1:
         profile = torus_y_device_params
     elif rows == 1 and columns > 1:
@@ -551,7 +566,7 @@ def make_kimi_k3_device_case(
         tp_ccl_topology=(
             ttnn.Topology.Ring
             if tuple(mesh_device.shape)[sequence_parallel_axis] == 1
-            else per_axis_topology()[tensor_parallel_axis]
+            else per_axis_topology(mesh_device=mesh_device)[tensor_parallel_axis]
         ),
     )
     if summary_group_chunks is not None:

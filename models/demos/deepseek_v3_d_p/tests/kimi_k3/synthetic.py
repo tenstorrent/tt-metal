@@ -29,7 +29,7 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_w
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.weights import layer_query_names, output_query_names
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config, kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.utils import random_weights as random_kda_weights
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import STAGE_LAYOUTS, StageLayout
 from models.demos.deepseek_v3_d_p.tt.attn_res.weights import CHECKPOINT_PREFIX
@@ -71,11 +71,10 @@ def placements(**device_params) -> list:
     return [
         pytest.param(
             (8, 4),
-            {
-                "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-                "l1_small_size": KimiK31Config.L1_SMALL_SIZE,
-                **device_params,
-            },
+            fabric2d_device_params(
+                fabric_payload_size=KimiK31Config.FABRIC_PAYLOAD_SIZE,
+                **{"l1_small_size": KimiK31Config.L1_SMALL_SIZE, **device_params},
+            ),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
         ),

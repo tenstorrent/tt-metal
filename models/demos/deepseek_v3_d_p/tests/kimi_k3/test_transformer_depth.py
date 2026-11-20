@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fol
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
@@ -106,7 +106,9 @@ KV_CACHE_PCC = 0.96
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        {"fabric_config": ttnn.FabricConfig.FABRIC_2D, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
+        fabric2d_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -118,7 +120,9 @@ PLACEMENTS = [
     # system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        torus_x_device_params(
+            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        ),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -430,15 +434,16 @@ def test_depth_ladder_matches_golden(mesh_device, device_params, sp_axis, tp_axi
 # The bar is K3's, per layer by depth: SHALLOW_LAYER_PCC through layer 11, DEEP_LAYER_PCC through layer 23 (K3's
 # depth-24 bar, set for the second seal). KV: KV_CACHE_PCC at every DSA layer. Measured at 10K:
 # worst 0.9966 (layers 0-11), 0.9869 (12-23).
-# Re-measured on 4x4-sp1, stages 0 and 1 on one tray half, at the same bars (a Blackhole Galaxy, 2026-11-18,
-# 8x4 alongside it): 10K worst 0.99661 (layer 3) / 0.98533 (layer 23, chunk 3: prompt rows 7680-8191), 8x4
-# 0.99665 / 0.98708 (layer 19); 128K worst 0.99623 (layer 4) / 0.98630 (layer 19), 8x4 0.99633 / 0.98652. Every
-# other layer is within 0.0006 of 8x4, except layer 23 (10K 0.98533 vs 0.99170; 128K 0.98772 vs 0.99089), and the
-# caches and top-k recall agree to 1e-3 or better. Layer 23's per-chunk gap is mostly the scoring window: 4x4's last
-# 10K chunk scores 512 prompt rows. On the 8x4 chunk grid (5120-row windows) 4x4 equals 8x4 within 4e-4 at 10K (layer
-# 23: 0.99135 vs 0.99170). Undivided, 4x4 equals the split to ~1e-5, so the cut adds nothing. One residual is observed,
-# not understood: at 128K layer 23 on rows 20480-25599 reads 0.98959 on 4x4 against 0.99089 on 8x4. That is the only
-# layer-23 window below 0.99. The recovery check gates the 10K rung only, as K3 applies it (K31_RECOVERY_GATED).
+# Re-measured on 4x4-sp1, stages 0 and 1 on one tray half, at the same bars (a Blackhole Galaxy, 2026-11-18, 8x4
+# alongside it, indexer scores at HiFi2, before they returned to LoFi): 10K worst 0.99661 (layer 3) / 0.98533 (layer 23,
+# chunk 3: prompt rows 7680-8191), 8x4 0.99665 / 0.98708 (layer 19); 128K worst 0.99623 (layer 4) / 0.98630 (layer 19),
+# 8x4 0.99633 / 0.98652. Every other layer is within 0.0006 of 8x4, except layer 23 (10K 0.98533 vs 0.99170; 128K
+# 0.98772 vs 0.99089), and the caches and top-k recall agree to 1e-3 or better. Layer 23's per-chunk gap is mostly the
+# scoring window: 4x4's last 10K chunk scores 512 prompt rows. On the 8x4 chunk grid (5120-row windows) 4x4 equals 8x4
+# within 4e-4 at 10K (layer 23: 0.99135 vs 0.99170). Undivided, 4x4 equals the split to ~1e-5, so the cut adds nothing.
+# One residual is observed, not understood: at 128K layer 23 on rows 20480-25599 reads 0.98959 on 4x4 against 0.99089 on
+# 8x4. That is the only layer-23 window below 0.99. The recovery check gates the 10K rung only, as K3 applies it
+# (K31_RECOVERY_GATED).
 #
 # The DSA indexer, per DSA layer, as GLM-5.3's runner gate and the package's indexer tests measure it:
 #
@@ -480,13 +485,13 @@ def k31_layer_pcc(layer: int) -> float:
 # ~300-380 keys within 1% of the spread (twice 10K's) and recall falls smoothly with position, at every layer. Layers
 # 11-23 keep the 10K signature (>= 94% of misses rank >= 1500, median margin 0.3-0.6% of the spread): mean 0.928-0.941 at LoFi.
 # Layers 3 and 7 carry ~3x the later layers' per-key score error at both lengths (miss margin p50 ~1.2%, p90 ~3.4% of
-# the spread, unchanged from 10K), so the crowding costs them more. The first layers' larger score error and the
-# trend toward 1M are not fully explained; the largest device step in that error, the score matmul's LoFi, is now
-# HiFi2 (``index_score_math_fidelity``): layers 3 / 7 0.867 / 0.875 at 128K (0.834 / 0.837 at
-# LoFi), 0.944 / 0.952 at 10K (0.929 / 0.936). The 128K floor is 0.85, ~1.7 points under them, as 0.9 sits ~1.3
-# under the 10K minimum (layer 51, LoFi-measured; HiFi2 raised every measured layer); a fallback to LoFi fails it.
-# Unlike 0.9, 0.85 comes from this measurement alone, not from an external reference (the LoFi-era floor was 0.8).
-K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.85}
+# the spread, unchanged from 10K), so the crowding costs them more: 0.844 / 0.844 at 128K, 0.932 / 0.938 at 10K. The
+# score matmul runs at the op's LoFi default. HiFi2 raises layers 3 / 7 to 0.871 / 0.882 at 128K, yet moves no
+# layer's residual stream or KV cache by more than 0.0014 PCC (layers 0-23, 10K / 128K / 1M goldens), and costs
+# 8% of 1M-token throughput on 8x4 (11% on 4x4 stages): the misses swap near-tied keys. So recall here is a
+# diagnostic the hidden-state and KV bars back up. The 128K floor is 0.82, ~2.4 points under the LoFi minimum, as 0.9
+# sits ~1.3 under the 10K minimum (layer 51).
+K31_TOPK_RECALL = {TRACE_K31: 0.9, TRACE_K31_128K: 0.82}
 
 
 def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -> torch.Tensor:
