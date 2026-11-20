@@ -1288,7 +1288,9 @@ inline void sender_batch_sync() {
 }
 
 FORCE_INLINE void sender_batch_flush() {
+    [[maybe_unused]] const uint64_t flush_t0 = PERF_BD_HOT_NOW();
     noc_async_writes_flushed();
+    PERF_BD_HOT_ADD_SINCE(4, flush_t0);  // S_FLUSH
     if (sender_batch.pages_sent > 0) {
         sender_batch.pages_acked += sender_batch.pages_sent;
         sender_batch.pages_sent = 0;
