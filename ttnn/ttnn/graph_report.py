@@ -1255,14 +1255,14 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     """
     )
 
-    # Each rank's capture metadata. report_metadata keeps one rank's, for readers of a single report.
+    # Each rank's capture metadata. report_metadata holds the lowest rank's, for readers of a single report.
     cursor.execute(
         """
         CREATE TABLE IF NOT EXISTS rank_metadata (
-            rank int NOT NULL,
             key text NOT NULL,
             value text,
-            UNIQUE(rank, key)
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(key, rank)
         )
     """
     )
@@ -2647,15 +2647,29 @@ def _load_comparison_records_sidecar(report_file: Path, include_fallback: bool) 
     return None, False
 
 
-def import_metadata(cursor: sqlite3.Cursor, metadata: dict, rank: int = 0, into_report_metadata: bool = True) -> None:
-    """Import one capture's metadata into rank_metadata under ``rank``, and into report_metadata as well when
-    ``into_report_metadata`` (the caller passes it for the lowest rank imported)."""
+def import_metadata(cursor: sqlite3.Cursor, metadata: dict, rank: int = 0) -> None:
+    """Import one capture's metadata into rank_metadata under ``rank``.
+
+    When several captures share a rank, the last one imported wins for each key it has.
+    ``_fill_report_metadata`` copies one rank's into report_metadata once every capture is in.
+    """
     if not metadata:
         return
-    batch = [(key, str(value)) for key, value in metadata.items()]
-    cursor.executemany("""INSERT OR REPLACE INTO rank_metadata VALUES (?, ?, ?)""", [(rank, *row) for row in batch])
-    if into_report_metadata:
-        cursor.executemany("""INSERT OR REPLACE INTO report_metadata VALUES (?, ?)""", batch)
+    cursor.executemany(
+        """INSERT OR REPLACE INTO rank_metadata (key, value, rank) VALUES (?, ?, ?)""",
+        [(key, str(value), rank) for key, value in metadata.items()],
+    )
+
+
+def _fill_report_metadata(cursor: sqlite3.Cursor) -> None:
+    """Copy the lowest imported rank's capture metadata (rank 0's in a full multi-rank import) into report_metadata,
+    which holds one value per key, then write the schema version, so a capture's own key of that name can't
+    replace it. Run after every capture is imported: loose captures arrive in file-name order, not rank order."""
+    cursor.execute(
+        """INSERT OR REPLACE INTO report_metadata (key, value)
+        SELECT key, value FROM rank_metadata WHERE rank = (SELECT MIN(rank) FROM rank_metadata)"""
+    )
+    save_database_schema_version(cursor)
 
 
 def extract_total_duration_from_graph(graph: list) -> float:
@@ -2822,7 +2836,6 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
         # First JSON file per rank uses operation ids 1..N; each additional file for the same rank
         # shifts ids by _OPERATION_ID_STRIDE_PER_RANK_FILE so they stay unique in the merged DB.
         import_index_by_rank: dict[int, int] = {}
-        lowest_metadata_rank = None
         # Loose captures skipped for their version, as (name, version or None when missing).
         skipped_for_version: list[tuple[str, object]] = []
         comparison_fallback_read = False
@@ -2956,10 +2969,7 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
                 total_stats["tensors"] += comparison_stats["tensors"]
 
             if "metadata" in report:
-                # report_metadata has one value per key, so it takes the lowest rank's (rank 0's in a full multi-rank
-                # import), not whichever file happened to be imported last. rank_metadata keeps every rank's.
-                lowest_metadata_rank = rank if lowest_metadata_rank is None else min(lowest_metadata_rank, rank)
-                import_metadata(cursor, report["metadata"], rank, into_report_metadata=rank == lowest_metadata_rank)
+                import_metadata(cursor, report["metadata"], rank)
 
             # Stage the cluster descriptor and mesh mapping YAMLs; published with the database.
             yaml_suffix = _rank_file_suffix(rank, report_world_size) if report_world_size > 1 else ""
@@ -3096,6 +3106,7 @@ def _import_report(report_path: Path, output_dir: Path, db_path: Path, generate_
         if total_stats["files"] == 0:
             # Publishing would replace an earlier import's database with an empty one.
             raise ValueError(_no_capture_imported_message(report_path, skipped_for_version))
+        _fill_report_metadata(cursor)
         cursor.execute(
             "INSERT OR REPLACE INTO report_metadata VALUES (?, ?)",
             (_YAML_FILES_METADATA_KEY, json.dumps(staged.yaml_names())),

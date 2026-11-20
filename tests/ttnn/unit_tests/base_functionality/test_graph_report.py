@@ -973,7 +973,7 @@ class TestImportReportFreshDatabase:
         db_path = graph_report.import_report(report_path, output_dir)
         before = db_path.read_bytes()
 
-        def failing_import_metadata(cursor, metadata, *args, **kwargs):
+        def failing_import_metadata(cursor, metadata, rank=0):
             assert cursor.execute("SELECT COUNT(*) FROM buffers").fetchone()[0] > 0
             raise RuntimeError("late failure")
 
@@ -1217,11 +1217,11 @@ class TestImportReportFreshDatabase:
         importing_modes = []
         real_import_metadata = graph_report.import_metadata
 
-        def recording_import_metadata(cursor, metadata, *args, **kwargs):
+        def recording_import_metadata(cursor, metadata, rank=0):
             importing_modes.extend(
                 stat.S_IMODE(p.stat().st_mode) for p in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*")
             )
-            real_import_metadata(cursor, metadata, *args, **kwargs)
+            real_import_metadata(cursor, metadata, rank)
 
         monkeypatch.setattr(graph_report, "import_metadata", recording_import_metadata)
         graph_report.import_report(report_dir, output_dir)
@@ -1402,11 +1402,11 @@ class TestImportReportFreshDatabase:
         self._write_run_with_yamls(report_dir, "second")
         real_import_metadata = graph_report.import_metadata
 
-        def import_metadata_after_the_db_was_removed(cursor, metadata, *args, **kwargs):
+        def import_metadata_after_the_db_was_removed(cursor, metadata, rank=0):
             for path in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*"):
                 if not path.name.endswith(graph_report._SQLITE_SIDECAR_SUFFIXES):
                     path.unlink()
-            real_import_metadata(cursor, metadata, *args, **kwargs)
+            real_import_metadata(cursor, metadata, rank)
 
         monkeypatch.setattr(graph_report, "import_metadata", import_metadata_after_the_db_was_removed)
         with expect_error(RuntimeError, "was removed or replaced during the import"):
@@ -1823,52 +1823,104 @@ class TestDeallocateTensorLookup:
 
 
 class TestImportReportRankMetadata:
-    """Every rank's capture metadata lands in rank_metadata; report_metadata holds the lowest rank's."""
+    """Every rank's capture metadata lands in rank_metadata; report_metadata holds the lowest rank's, whatever order
+    the captures are imported in."""
+
+    # Keys the import itself writes to report_metadata, rather than copying them from a capture.
+    IMPORT_KEYS = ("schema_version", graph_report._YAML_FILES_METADATA_KEY)
 
     @staticmethod
-    def _import_ranks(tmp_path, world_size=3):
-        """Rank r is captured at time 1000 * (r + 1). Ranks are imported in order, so a last-file-wins
-        report_metadata would show the highest rank's."""
+    def _import(tmp_path, captures, source=None):
+        """Import (filename, report) pairs; returns the DB path. ``source`` imports that one file instead."""
         report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, captures)
+        return graph_report.import_report(report_dir / source if source else report_dir, tmp_path / "output")
+
+    @staticmethod
+    def _loose_capture(filename, **metadata):
+        """(filename, report) for a capture not named after its rank, which import_report reads in file-name order
+        and ranks by its metadata."""
+        return filename, _make_report(_minimal_single_op_graph(), metadata=metadata)
+
+    @classmethod
+    def _report_metadata(cls, db_path):
+        """report_metadata without the keys the import writes itself."""
+        rows = _query_db(db_path, "SELECT key, value FROM report_metadata")
+        return {key: value for key, value in rows if key not in cls.IMPORT_KEYS}
+
+    @staticmethod
+    def _rank_metadata(db_path, rank):
+        return dict(_query_db(db_path, f"SELECT key, value FROM rank_metadata WHERE rank = {rank}"))
+
+    def _import_ranks(self, tmp_path, world_size=3):
+        """Rank-named captures, rank r captured at time 1000 * (r + 1)."""
         captures = []
         for rank in range(world_size):
             name, report = _rank_capture(rank, world_size)
             report["metadata"]["capture_timestamp_ns"] = 1000 * (rank + 1)
             captures.append((name, report))
-        _write_reports(report_dir, captures)
-        db_path = graph_report.import_report(report_dir, tmp_path / "output")
-        return sqlite3.connect(db_path)
+        return self._import(tmp_path, captures)
 
     def test_rank_metadata_holds_every_rank(self, tmp_path):
-        conn = self._import_ranks(tmp_path)
-        try:
-            rows = conn.execute(
-                "SELECT rank, value FROM rank_metadata WHERE key = 'capture_timestamp_ns' ORDER BY rank"
-            ).fetchall()
-            assert rows == [(0, "1000"), (1, "2000"), (2, "3000")]
-        finally:
-            conn.close()
+        db_path = self._import_ranks(tmp_path)
+        rows = _query_db(
+            db_path, "SELECT rank, value FROM rank_metadata WHERE key = 'capture_timestamp_ns' ORDER BY rank"
+        )
+        assert rows == [(0, "1000"), (1, "2000"), (2, "3000")]
 
-    def test_report_metadata_holds_the_lowest_rank(self, tmp_path):
-        conn = self._import_ranks(tmp_path)
-        try:
-            metadata = dict(conn.execute("SELECT key, value FROM report_metadata").fetchall())
-            assert (metadata["rank"], metadata["capture_timestamp_ns"]) == ("0", "1000")
-            assert metadata["schema_version"] == graph_report.DATABASE_SCHEMA_VERSION
-        finally:
-            conn.close()
+    def test_report_metadata_is_rank_0s(self, tmp_path):
+        """Ranks are imported in order, so a last-file-wins report_metadata would show rank 2's."""
+        db_path = self._import_ranks(tmp_path)
+        assert self._report_metadata(db_path) == self._rank_metadata(db_path, 0)
+        assert self._report_metadata(db_path)["capture_timestamp_ns"] == "1000"
+        assert dict(_query_db(db_path, "SELECT key, value FROM report_metadata"))["schema_version"] == (
+            graph_report.DATABASE_SCHEMA_VERSION
+        )
+
+    def test_a_lower_rank_imported_later_replaces_every_key(self, tmp_path):
+        """Rank 2's file sorts first, and has a key rank 0's lacks, which must not stay in report_metadata."""
+        db_path = self._import(
+            tmp_path,
+            [
+                self._loose_capture("a.json", rank=2, world_size=3, capture_timestamp_ns=3000, only_on_rank_2="x"),
+                self._loose_capture("b.json", rank=0, world_size=3, capture_timestamp_ns=1000),
+            ],
+        )
+        assert self._report_metadata(db_path) == self._rank_metadata(db_path, 0)
+        assert "only_on_rank_2" not in self._report_metadata(db_path)
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM rank_metadata ORDER BY rank") == [(0,), (2,)]
+
+    def test_without_rank_0_report_metadata_is_the_lowest_rank_imported(self, tmp_path):
+        db_path = self._import(
+            tmp_path,
+            [
+                self._loose_capture("a.json", rank=2, world_size=3),
+                self._loose_capture("b.json", rank=1, world_size=3),
+            ],
+        )
+        assert self._report_metadata(db_path)["rank"] == "1"
+
+    def test_several_captures_of_one_rank_keep_the_last_imported(self, tmp_path):
+        db_path = self._import(
+            tmp_path,
+            [
+                self._loose_capture("a.json", rank=0, capture_timestamp_ns=1000),
+                self._loose_capture("b.json", rank=0, capture_timestamp_ns=2000),
+            ],
+        )
+        assert _query_db(db_path, "SELECT value FROM rank_metadata WHERE key = 'capture_timestamp_ns'") == [("2000",)]
+        assert self._report_metadata(db_path)["capture_timestamp_ns"] == "2000"
+
+    def test_capture_metadata_cannot_replace_the_schema_version(self, tmp_path):
+        db_path = self._import(tmp_path, [self._loose_capture("a.json", rank=0, schema_version="0.1")])
+        metadata = dict(_query_db(db_path, "SELECT key, value FROM report_metadata"))
+        assert metadata["schema_version"] == graph_report.DATABASE_SCHEMA_VERSION
 
     def test_single_file_import_keeps_its_own_rank_metadata(self, tmp_path):
         name, report = _rank_capture(1, 2)
-        _write_reports(tmp_path / "reports_in", [(name, report)])
-        db_path = graph_report.import_report(tmp_path / "reports_in" / name, tmp_path / "output")
-        conn = sqlite3.connect(db_path)
-        try:
-            metadata = dict(conn.execute("SELECT key, value FROM report_metadata").fetchall())
-            assert metadata["rank"] == "1"
-            assert conn.execute("SELECT DISTINCT rank FROM rank_metadata").fetchall() == [(1,)]
-        finally:
-            conn.close()
+        db_path = self._import(tmp_path, [(name, report)], source=name)
+        assert self._report_metadata(db_path)["rank"] == "1"
+        assert _query_db(db_path, "SELECT DISTINCT rank FROM rank_metadata") == [(1,)]
 
 
 @pytest.fixture
