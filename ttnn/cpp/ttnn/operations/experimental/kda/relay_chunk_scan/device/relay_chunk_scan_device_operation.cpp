@@ -32,9 +32,12 @@ void RelayChunkScanOperation::validate_on_program_cache_hit(const operation_attr
         {&in.initial_state, "initial_state"},
         {&in.actual_start, "actual_start"},
         {&in.landing, "landing"},
+        {&in.gate_workspace, "gate_workspace"},
         {&in.final_e, "final_e"},
         {&in.final_b, "final_b"},
-        {&in.output_gate, "output_gate"},
+        {&in.gate_input, "gate_input"},
+        {in.gate_local ? &*in.gate_local : nullptr, "gate_local"},
+        {&in.gate_weight, "gate_weight"},
         {&in.norm_weight, "norm_weight"},
         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}};
     kda_factory_detail::check_allocated_on_device(in.packed, tensors, operation_name);
@@ -90,13 +93,13 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
-    // Each head's cores, then the relay's sender per link and the final carry's second.
+    // Each head's cores, then the relay's sender per link and the final carry's second, then a helper per head.
     const uint32_t senders = 2 * attrs.num_links;
     const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     TT_FATAL(attrs.num_links > 0, "{}: needs at least one link", operation_name);
     TT_FATAL(
-        attrs.cores.size() > senders && (attrs.cores.size() - senders) % heads == 0,
-        "{}: needs the same number of cores per head, then two senders per link",
+        attrs.cores.size() > senders + heads && (attrs.cores.size() - senders) % heads == 0,
+        "{}: needs the same number of cores per head, then two senders per link, then a helper per head",
         operation_name);
     const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), heads, attrs.num_links);
     TT_FATAL(
@@ -113,10 +116,21 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         attrs.num_links,
         (heads + attrs.num_links - 1) / attrs.num_links,
         relay_chunk_scan_max_heads_per_link);
+    // A helper may be a sender, nothing else may share a core.
+    const std::span<const CoreCoord> helper_cores(attrs.cores.data() + attrs.cores.size() - heads, heads);
     TT_FATAL(
-        std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end()).size() == attrs.cores.size(),
-        "{}: the cores must be distinct",
+        std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end() - heads).size() == attrs.cores.size() - heads,
+        "{}: the heads' and senders' cores must be distinct",
         operation_name);
+    const auto correction_end = attrs.cores.begin() + heads * cores_per_head;
+    for (const auto& helper : helper_cores) {
+        TT_FATAL(
+            std::find(attrs.cores.begin(), correction_end, helper) == correction_end &&
+                std::count(helper_cores.begin(), helper_cores.end(), helper) == 1,
+            "{}: helper {} must be distinct from the heads' cores and the other helpers",
+            operation_name,
+            helper);
+    }
     const auto grid = mesh->compute_with_storage_grid_size();
     for (const auto& core : attrs.cores) {
         TT_FATAL(
@@ -140,8 +154,9 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
     }
     TT_FATAL(
         std::ranges::all_of(attrs.semaphore_addresses, [](uint32_t address) { return address != 0; }),
-        "{}: needs three global semaphores",
-        operation_name);
+        "{}: needs {} global semaphores",
+        operation_name,
+        relay_semaphores);
     TT_FATAL(
         tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
         "{}: the relay sends whole FP32 tiles",
@@ -179,15 +194,33 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         relay_landing_slots,
         key_dim,
         key_dim);
+    // The output gate's workspace, on the heads' cores and the helpers.
+    std::vector<CoreCoord> gate_cores(attrs.cores.begin(), correction_end);
+    gate_cores.insert(gate_cores.end(), helper_cores.begin(), helper_cores.end());
+    kda_factory_detail::check_allocated_device_tensor(in.gate_workspace, operation_name, "gate_workspace");
+    kda_factory_detail::check_same_device(in.packed, in.gate_workspace, operation_name, "gate_workspace");
+    kda_factory_detail::check_layout(in.gate_workspace, tt::tt_metal::Layout::TILE, operation_name, "gate_workspace");
+    kda_factory_detail::check_dtype(
+        in.gate_workspace, tt::tt_metal::DataType::FLOAT32, operation_name, "gate_workspace");
+    const auto& workspace = in.gate_workspace.memory_config();
+    TT_FATAL(
+        workspace.buffer_type() == tt::tt_metal::BufferType::L1 &&
+            workspace.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
+            kda_factory_detail::same_cores(workspace.shard_spec()->grid, gate_cores),
+        "{}: gate_workspace must be height-sharded in L1 over the heads' cores and the helpers",
+        operation_name);
     kda_factory_detail::check_distinct_buffers(
         {{&in.packed, "packed"},
          {&in.terms, "terms"},
          {&in.initial_state, "initial_state"},
          {&in.actual_start, "actual_start"},
          {&in.landing, "landing"},
+         {&in.gate_workspace, "gate_workspace"},
          {&in.final_e, "final_e"},
          {&in.final_b, "final_b"},
-         {&in.output_gate, "output_gate"},
+         {&in.gate_input, "gate_input"},
+         {in.gate_local ? &*in.gate_local : nullptr, "gate_local"},
+         {&in.gate_weight, "gate_weight"},
          {&in.norm_weight, "norm_weight"},
          {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
         operation_name);
@@ -244,37 +277,63 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
             operation_name,
             chunks * tt::constants::TILE_HEIGHT);
     }
-    // The gated output norm.
-    for (const auto& [tensor, name] :
-         {std::pair{&in.output_gate, "output_gate"}, std::pair{&in.norm_weight, "norm_weight"}}) {
-        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
-        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
-        kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::BFLOAT16, operation_name, name);
-        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
-        kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);
-    }
+    // The gated output norm and its gate x @ W.
     TT_FATAL(
         attrs.num_heads > 0 && heads % attrs.num_heads == 0,
         "{}: {} heads are not a whole number of batches of {}",
         operation_name,
         heads,
         attrs.num_heads);
-    const auto& gate_shape = in.output_gate.logical_shape();
+    std::vector<std::pair<const Tensor*, const char*>> norm_tensors = {
+        {&in.gate_input, "gate_input"}, {&in.gate_weight, "gate_weight"}, {&in.norm_weight, "norm_weight"}};
+    if (in.gate_local) {
+        norm_tensors.emplace_back(&*in.gate_local, "gate_local");
+    }
+    for (const auto& [tensor, name] : norm_tensors) {
+        kda_factory_detail::check_allocated_device_tensor(*tensor, operation_name, name);
+        kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
+        if (tensor != &in.gate_weight) {
+            kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::BFLOAT16, operation_name, name);
+        } else {
+            TT_FATAL(
+                tensor->dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+                    tensor->dtype() == tt::tt_metal::DataType::BFLOAT8_B ||
+                    tensor->dtype() == tt::tt_metal::DataType::BFLOAT4_B,
+                "{}: gate_weight must be BFLOAT16, BFLOAT8_B or BFLOAT4_B, got {}",
+                operation_name,
+                tensor->dtype());
+        }
+        kda_factory_detail::check_interleaved(*tensor, operation_name, name);
+        kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);
+    }
+    const auto& input_shape = in.gate_input.logical_shape();
     TT_FATAL(
-        attrs.gate_column_offset % tt::constants::TILE_WIDTH == 0,
-        "{}: gate_column_offset {} must be tile aligned",
+        input_shape.rank() == 3 && input_shape[0] == heads / attrs.num_heads && input_shape[1] == attrs.local_rows &&
+            input_shape[2] % (2 * tt::constants::TILE_WIDTH) == 0,
+        "{}: gate_input {} must be [{}, {}, X] with X a multiple of 2 tiles",
         operation_name,
-        attrs.gate_column_offset);
-    TT_FATAL(
-        gate_shape.rank() == 3 && gate_shape[0] == heads / attrs.num_heads && gate_shape[1] == attrs.local_rows &&
-            gate_shape[2] >= uint64_t{attrs.gate_column_offset} + uint64_t{attrs.num_heads} * key_dim,
-        "{}: output_gate {} must be [{}, {}, W] with H*K = {} columns from gate_column_offset {}",
-        operation_name,
-        gate_shape,
+        input_shape,
         heads / attrs.num_heads,
-        attrs.local_rows,
-        attrs.num_heads * key_dim,
-        attrs.gate_column_offset);
+        attrs.local_rows);
+    TT_FATAL(
+        in.gate_weight.logical_shape() == Shape({input_shape[2], attrs.num_heads * key_dim}),
+        "{}: gate_weight {} must be [X, H*K] = [{}, {}]",
+        operation_name,
+        in.gate_weight.logical_shape(),
+        input_shape[2],
+        attrs.num_heads * key_dim);
+    if (in.gate_local) {
+        const uint32_t tp_size = mesh->shape().dims() == 2 ? mesh->shape()[1 - attrs.sequence_parallel_axis] : 1;
+        TT_FATAL(
+            tp_size > 1 && input_shape[2] % (tp_size * tt::constants::TILE_WIDTH) == 0 &&
+                in.gate_local->logical_shape() == Shape({input_shape[0], input_shape[1], input_shape[2] / tp_size}),
+            "{}: gate_local {} must be gate_input's TP slice [{}, {}, X / {}] (TP > 1)",
+            operation_name,
+            in.gate_local->logical_shape(),
+            input_shape[0],
+            input_shape[1],
+            tp_size);
+    }
     TT_FATAL(
         in.norm_weight.logical_shape().rank() == 1 && in.norm_weight.logical_shape()[0] == key_dim,
         "{}: norm_weight must be [K] with K = {}",
@@ -351,12 +410,15 @@ RelayChunkScanOperation::create_op_performance_model(
     const double heads = geometry.heads;
     const double key_dim = geometry.key_dim;
     const double rows = attrs.local_rows;
-    // Per head: one hop S_out = S_in + E S_in + B (E = A - I), then each chunk row's F0 + (FI - F0) @ seed.
+    // Per head: one hop S_out = S_in + E S_in + B (E = A - I), then each chunk row's F0 + (FI - F0) @ seed, and the
+    // head's output gate x @ W over its rows.
+    const double gate_k = in.gate_input.logical_shape()[-1];
     const KdaFpuWork work{
-        .fpu_matrix_flops = heads * 2.0 * (key_dim + rows) * key_dim * key_dim,
+        .fpu_matrix_flops = heads * 2.0 * ((key_dim + rows) * key_dim * key_dim + rows * gate_k * key_dim),
         .fpu_add_ops = heads * (key_dim + rows) * key_dim,
     };
-    const std::array<const Tensor*, 3> inputs = {&in.packed, &in.terms, &in.initial_state};
+    const std::array<const Tensor*, 5> inputs = {
+        &in.packed, &in.terms, &in.initial_state, &in.gate_input, &in.gate_weight};
     return make_profiler_model(work, inputs, outputs, attrs.compute_kernel_config.math_fidelity);
 }
 
@@ -366,18 +428,21 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
     const Tensor& initial_state,
     const Tensor& final_e,
     const Tensor& final_b,
-    const Tensor& output_gate,
+    const Tensor& gate_input,
+    const std::optional<Tensor>& gate_local,
+    const Tensor& gate_weight,
     const Tensor& norm_weight,
     const Tensor& actual_start,
     const std::optional<Tensor>& actual_end,
     const Tensor& landing,
+    const Tensor& gate_workspace,
     uint32_t num_heads,
-    uint32_t gate_column_offset,
+    tt::tt_metal::MathFidelity gate_math_fidelity,
     float norm_epsilon,
     tt::tt_metal::DataType output_dtype,
     const tt::tt_metal::MemoryConfig& memory_config,
     const DeviceComputeKernelConfig& compute_kernel_config,
-    const std::array<uint32_t, 3>& semaphore_addresses,
+    const std::array<uint32_t, relay_semaphores>& semaphore_addresses,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
     uint32_t num_links,
@@ -392,7 +457,7 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
             .num_links = num_links,
             .cores = cores,
             .num_heads = num_heads,
-            .gate_column_offset = gate_column_offset,
+            .gate_math_fidelity = gate_math_fidelity,
             .norm_epsilon = norm_epsilon,
             .output_dtype = output_dtype,
             .output_mem_config = memory_config,
@@ -406,10 +471,13 @@ std::tuple<Tensor, Tensor> relay_chunk_scan(
             .initial_state = initial_state,
             .actual_start = actual_start,
             .landing = landing,
+            .gate_workspace = gate_workspace,
             .final_e = final_e,
             .final_b = final_b,
             .actual_end = actual_end,
-            .output_gate = output_gate,
+            .gate_input = gate_input,
+            .gate_local = gate_local,
+            .gate_weight = gate_weight,
             .norm_weight = norm_weight,
             .slab_index = slab_index});
     return {outputs[0], outputs[1]};
