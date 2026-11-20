@@ -706,10 +706,12 @@ tests/ttnn/unit_tests/test_parametrize_id_stability.py @tenstorrent/metalium-dev
 ttnn/cpp/ttnn-nanobind/operations/copy.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/activation.* @nsextonTT
 # Bindings and tests for device and host streaming.
-ttnn/cpp/ttnn-nanobind/*_stream_service.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/hd_socket.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/layer_ack_service.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/layer_completion.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/d2d_stream_service.* @nsextonTT @SeanNijjar @sjameelTT
+ttnn/cpp/ttnn-nanobind/d2h_stream_service.* @nsextonTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/h2d_stream_service.* @nsextonTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/hd_socket.* @nsextonTT @tenstorrent/metalium-developers-metal-distributed
+ttnn/cpp/ttnn-nanobind/layer_ack_service.* @nsextonTT @bzhangTT @yeongyunTT
+ttnn/cpp/ttnn-nanobind/layer_completion.* @nsextonTT @bzhangTT @yeongyunTT
 tests/ttnn/unit_tests/gtests/tensor/kernels/ @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tensor/*stream_service* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/gtests/tensor/test_stream_pipeline.cpp @razorback3 @dongjin-na @bbradelTT
