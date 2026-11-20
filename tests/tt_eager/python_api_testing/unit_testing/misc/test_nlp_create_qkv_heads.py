@@ -826,3 +826,163 @@ def test_sharded_nlp_create_qkv_heads_kv_tied_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 1
+
+
+def run_nlp_create_qkv_heads_subtile_head_dim_test(
+    batch,
+    seq_len,
+    head_dim,
+    num_q_heads,
+    num_kv_heads,
+    transpose_k_heads,
+    read_from_input_tensor_kv,
+    dtype,
+    in_mem_config,
+    out_mem_config,
+    device,
+):
+    # Head dims that are not a multiple of ttnn.TILE_SIZE used to be read as if the head
+    # were a whole number of TILE_WIDTH-wide tiles, so every head lost its sub-tile tail
+    # and, from the second head on, read the wrong columns. The op now routes those
+    # through a row-major round trip.
+    torch.manual_seed(1234)
+
+    if read_from_input_tensor_kv:
+        in0_shape = [batch, 1, seq_len, num_q_heads * head_dim]
+        in1_shape = [batch, 1, seq_len, 2 * num_kv_heads * head_dim]
+        A = torch.randn(in0_shape)
+        B = torch.randn(in1_shape)
+        in1_t = ttnn.Tensor(B, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
+        src_q, src_k, src_v = A, *torch.split(B, [num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1)
+    else:
+        in0_shape = [batch, 1, seq_len, (num_q_heads + 2 * num_kv_heads) * head_dim]
+        A = torch.randn(in0_shape)
+        in1_t = None
+        src_q, src_k, src_v = torch.split(
+            A, [num_q_heads * head_dim, num_kv_heads * head_dim, num_kv_heads * head_dim], dim=-1
+        )
+    in0_t = ttnn.Tensor(A, dtype).to(ttnn.TILE_LAYOUT).to(device, in_mem_config)
+
+    q, k, v = ttnn.experimental.nlp_create_qkv_heads(
+        in0_t,
+        in1_t,
+        num_heads=num_q_heads,
+        num_kv_heads=num_kv_heads,
+        transpose_k_heads=transpose_k_heads,
+        memory_config=out_mem_config,
+    )
+
+    assert list(q.shape) == [batch, num_q_heads, seq_len, head_dim]
+    if transpose_k_heads:
+        assert list(k.shape) == [batch, num_kv_heads, head_dim, seq_len]
+    else:
+        assert list(k.shape) == [batch, num_kv_heads, seq_len, head_dim]
+    assert list(v.shape) == [batch, num_kv_heads, seq_len, head_dim]
+
+    got_q = ttnn.to_torch(q)
+    got_k = ttnn.to_torch(k)
+    got_v = ttnn.to_torch(v)
+
+    ref_q = torch.reshape(src_q, [batch, seq_len, num_q_heads, head_dim]).transpose(-3, -2)
+    ref_k = torch.reshape(src_k, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    ref_v = torch.reshape(src_v, [batch, seq_len, num_kv_heads, head_dim]).transpose(-3, -2)
+    if transpose_k_heads:
+        ref_k = ref_k.transpose(-2, -1)
+
+    for name, got, ref in (("Q", got_q, ref_q), ("K", got_k, ref_k), ("V", got_v, ref_v)):
+        assert list(got.shape) == list(ref.shape), f"{name} shape {list(got.shape)} != reference {list(ref.shape)}"
+        passing, output_pcc = comp_pcc(got, ref, 0.99 if dtype == ttnn.bfloat8_b else 1.0)
+        logger.debug(f"{name} passing={passing} pcc={output_pcc}")
+        assert passing, f"{name} pcc={output_pcc}"
+
+
+@pytest.mark.parametrize(
+    "out_mem_config",
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),
+    ids=["out_DRAM"],
+)
+@pytest.mark.parametrize(
+    "in_mem_config",
+    (ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM),),
+    ids=["in_DRAM"],
+)
+@pytest.mark.parametrize("dtype", (ttnn.bfloat16,), ids=["BFLOAT16"])
+@pytest.mark.parametrize("transpose_k_heads", (True, False), ids=["transpose_k", "no_transpose_k"])
+@pytest.mark.parametrize("read_from_input_tensor_kv", (False, True), ids=["fused_qkv", "q_and_kv"])
+@pytest.mark.parametrize("head_dim", (72, 80, 100), ids=["head_dim72", "head_dim80", "head_dim100"])
+@pytest.mark.parametrize(
+    "batch, seq_len, num_q_heads, num_kv_heads",
+    ((1, 128, 8, 4), (2, 64, 16, 4)),
+    ids=["mha_8q_4kv", "mha_16q_4kv"],
+)
+def test_nlp_create_qkv_heads_subtile_head_dim(
+    batch,
+    seq_len,
+    head_dim,
+    num_q_heads,
+    num_kv_heads,
+    transpose_k_heads,
+    read_from_input_tensor_kv,
+    dtype,
+    in_mem_config,
+    out_mem_config,
+    device,
+):
+    if head_dim % ttnn.TILE_SIZE == 0:
+        pytest.skip("head_dim already TILE aligned, covered by test_nlp_create_qkv_heads_test")
+    run_nlp_create_qkv_heads_subtile_head_dim_test(
+        batch,
+        seq_len,
+        head_dim,
+        num_q_heads,
+        num_kv_heads,
+        transpose_k_heads,
+        read_from_input_tensor_kv,
+        dtype,
+        in_mem_config,
+        out_mem_config,
+        device,
+    )
+
+
+@pytest.mark.parametrize("read_from_input_tensor_kv", (False, True), ids=["fused_qkv", "q_and_kv"])
+def test_nlp_create_qkv_heads_subtile_head_dim_rejects_sharded(device, expect_error, read_from_input_tensor_kv):
+    """Sharded + sub-tile used to be silently wrong; now it fails loudly instead.
+
+    A sharded input only reaches the row-major fallback through to_layout, which cannot
+    convert a sub-tile width, so the guard has to catch it before that happens.
+    """
+
+    def subtile_sharded():
+        # Small enough for L1: the widths are the real fused/tied-section widths divided over
+        # num_cores, so the shard is a fraction of a core's L1 rather than the whole tensor.
+        batch, seq_len, head_dim = 4, 64, 80
+        num_q_heads, num_kv_heads = 4, 2
+        compute_grid_size = device.compute_with_storage_grid_size()
+        num_cores = num_kv_heads
+        shard_grid = ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, True)
+
+        def width_sharded(tensor):
+            spec = ttnn.ShardSpec(
+                shard_grid, [seq_len * batch, tensor.shape[-1] // num_cores], ttnn.ShardOrientation.ROW_MAJOR
+            )
+            mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, spec)
+            return ttnn.Tensor(tensor, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device, mem_config)
+
+        if read_from_input_tensor_kv:
+            in0_t = width_sharded(torch.randn([seq_len, 1, batch, num_q_heads * head_dim]))
+            in1_t = width_sharded(torch.randn([seq_len, 1, batch, 2 * num_kv_heads * head_dim]))
+        else:
+            in0_t = width_sharded(torch.randn([seq_len, 1, batch, (num_q_heads + 2 * num_kv_heads) * head_dim]))
+            in1_t = None
+
+        ttnn.experimental.nlp_create_qkv_heads(
+            in0_t,
+            in1_t,
+            num_heads=num_q_heads,
+            num_kv_heads=num_kv_heads,
+            transpose_k_heads=False,
+        )
+
+    with expect_error(RuntimeError, "sharded"):
+        subtile_sharded()

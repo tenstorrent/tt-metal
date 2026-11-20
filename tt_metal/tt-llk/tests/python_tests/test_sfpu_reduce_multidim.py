@@ -51,10 +51,10 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    MATH_OP,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
     REDUCE_ORDER,
-    REDUCE_POOL_TYPE,
     TILE_COUNT,
     generate_input_dim,
 )
@@ -98,7 +98,7 @@ MULTIDIM_FORMATS = [
 ]
 
 
-def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
+def get_multidim_reduce_orders(pool_type: ReducePool) -> list[ReduceOrder]:
     """Pass orders (REDUCE_ORDER in the kernel) under the single shared init. RowCol and ColRowCol are
     MAX/MIN only -- there every order leaves the tile extreme at [0][0] -- and put a column reduce after
     a row reduce, which is what breaks if the row path writes the replay slots holding the column path's
@@ -107,7 +107,7 @@ def get_multidim_reduce_orders(reduce_pool: ReducePool) -> list[ReduceOrder]:
     routes them through the UInt16 column reducer) need the opposite direction from the row path for the
     same pool type.
     """
-    if reduce_pool in (ReducePool.Max, ReducePool.Min):
+    if pool_type in (ReducePool.Max, ReducePool.Min):
         return [ReduceOrder.ColRow, ReduceOrder.RowCol, ReduceOrder.ColRowCol]
     return [ReduceOrder.ColRow]
 
@@ -136,7 +136,7 @@ _FLOAT_FORMAT_EPS = {
 }
 
 
-def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float | None:
+def get_multidim_sum_avg_atol(output_format, pool_type, input_bounds) -> float | None:
     """Absolute tolerance for the float multi-axis SUM/AVG chain.
 
     Both chains accumulate N = 32*32 terms (a column pass over 32 rows then a row pass over 32
@@ -146,7 +146,7 @@ def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float
     atol can spuriously fail even though PCC stays ~1.0; size atol to that bound (2x margin). Returns
     None for MAX/MIN and integer formats, leaving the default tolerances in place.
     """
-    if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
+    if pool_type not in (ReducePool.Sum, ReducePool.Average):
         return None
     eps = _FLOAT_FORMAT_EPS.get(output_format)
     if eps is None:
@@ -154,36 +154,36 @@ def get_multidim_sum_avg_atol(output_format, reduce_pool, input_bounds) -> float
     num_terms = TILE_DIM * TILE_DIM
     max_term = max(abs(input_bounds[0]), abs(input_bounds[1]))
     sum_error = 2.0 * max_term * eps * (num_terms**0.5)
-    atol = sum_error if reduce_pool == ReducePool.Sum else sum_error / num_terms
+    atol = sum_error if pool_type == ReducePool.Sum else sum_error / num_terms
     return max(0.05, atol)
 
 
-def reduce_block(block: torch.Tensor, reduce_pool: ReducePool) -> torch.Tensor:
+def reduce_block(block: torch.Tensor, pool_type: ReducePool) -> torch.Tensor:
     """Reduce a 32x32 tile over both dims to a single value (the multi-axis golden)."""
     flat = block.reshape(-1)
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         return flat.max()
-    if reduce_pool == ReducePool.Sum:
+    if pool_type == ReducePool.Sum:
         return flat.sum()
-    if reduce_pool == ReducePool.Min:
+    if pool_type == ReducePool.Min:
         return flat.min()
-    if reduce_pool == ReducePool.Average:
+    if pool_type == ReducePool.Average:
         # avg-of-column-means over a full 32x32 tile equals the overall tile mean (float-only).
         return flat.mean()
-    raise ValueError(f"Unsupported multi-dim reduce pool: {reduce_pool}")
+    raise ValueError(f"Unsupported multi-dim reduce pool: {pool_type}")
 
 
 @parametrize(
     formats=[InputOutputFormat(fmt, fmt) for fmt in MULTIDIM_FORMATS],
-    reduce_pool=lambda formats: get_multidim_pools(formats),
-    reduce_order=lambda reduce_pool: get_multidim_reduce_orders(reduce_pool),
+    pool_type=lambda formats: get_multidim_pools(formats),
+    reduce_order=lambda pool_type: get_multidim_reduce_orders(pool_type),
     num_row_tiles=ROW_TILE_COUNTS,
     dest_acc=[DestAccumulation.Yes],
     input_bounds=lambda formats: get_multidim_input_bounds(formats),
 )
 def test_sfpu_reduce_multidim(
     formats,
-    reduce_pool,
+    pool_type,
     reduce_order,
     num_row_tiles,
     dest_acc,
@@ -233,7 +233,7 @@ def test_sfpu_reduce_multidim(
     # Golden: reduce each 32x32 tile (32-row block) over both dims -> one value per tile.
     golden_blocks = src_A_untilized.reshape(num_row_tiles, TILE_DIM, TILE_DIM)
     golden_vec = torch.stack(
-        [reduce_block(golden_blocks[r], reduce_pool) for r in range(num_row_tiles)]
+        [reduce_block(golden_blocks[r], pool_type) for r in range(num_row_tiles)]
     ).to(format_dict[formats.output_format])
 
     configuration = TestConfig(
@@ -242,7 +242,7 @@ def test_sfpu_reduce_multidim(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
-            REDUCE_POOL_TYPE(reduce_pool),
+            MATH_OP(pool_type=pool_type),
             REDUCE_ORDER(reduce_order),
         ],
         runtimes=[
@@ -277,7 +277,7 @@ def test_sfpu_reduce_multidim(
     # The float SUM/AVG chains accumulate rounding error; size atol to it (PCC still guards
     # correctness). MAX/MIN and integer formats keep the default tolerances.
     reduce_atol = get_multidim_sum_avg_atol(
-        formats.output_format, reduce_pool, input_bounds
+        formats.output_format, pool_type, input_bounds
     )
 
     assert passed_test(

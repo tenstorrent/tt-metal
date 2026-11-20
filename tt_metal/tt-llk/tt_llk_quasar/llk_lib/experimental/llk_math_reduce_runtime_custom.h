@@ -19,7 +19,7 @@ using namespace ckernel::trisc;
 using namespace ckernel::math;
 
 // DEST scratch slot for the second input face-row (F2&F3) partial.
-static constexpr std::uint32_t REDUCE_BLOCK_SLOT1_DST = TILE_R_DIM;
+constexpr std::uint32_t REDUCE_BLOCK_SLOT1_DST = TILE_R_DIM;
 
 /**
  * @brief Program the address modifier used by the block reduce_max_row pool + transpose.

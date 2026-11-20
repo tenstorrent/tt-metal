@@ -11,8 +11,8 @@ from loguru import logger
 import ttnn
 from models.tt_dit.tests.unit.test_ring_joint_attention import create_ring_joint_sdpa_submesh, logical_length_tensor
 from models.tt_dit.utils.padding import get_padded_vision_seq_len
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.unit_tests.operations.sdpa.sdpa_test_utils import fa_rand
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.sdpa_test_utils import fa_rand
 
 
 def create_fabric_router_config(max_payload_size=8192):

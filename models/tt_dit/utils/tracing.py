@@ -442,7 +442,7 @@ def _clone_tensor(value: Any, *, path_label: str) -> Any:
 def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> Any:
     """Apply a function to leaves of nested data structures.
 
-    Recursively traverses nested structures (tuples, lists, dicts) and applies
+    Recursively traverses nested structures (tuples, named ones included, lists, dicts) and applies
     the given function to corresponding leaf elements across all input structures.
 
     Args:
@@ -474,9 +474,10 @@ def _tree_map(f: Callable[..., Any], x: Any, /, *xs: Any, path_label: str) -> An
                 msg = f"tuple lengths of '{path_label}' should be the same: {len(x)} != {len(y)}"
                 raise ValueError(msg)
 
-        return tuple(
+        items = [
             _tree_map(f, *elts, path_label=f"{path_label}[{i}]") for i, elts in enumerate(zip(x, *xs, strict=True))
-        )
+        ]
+        return type(x)(*items) if hasattr(type(x), "_fields") else tuple(items)
 
     if isinstance(x, list) and all(isinstance(y, list) for y in xs):
         for y in xs:
