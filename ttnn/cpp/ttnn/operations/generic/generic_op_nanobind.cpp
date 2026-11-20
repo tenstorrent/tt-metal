@@ -136,15 +136,15 @@ void bind_generic_operation_preparation(nb::module_& mod) {
 
         Args:
             io_tensors (List[ttnn.Tensor]): The tensors the generic_op call would receive.
-            program_descriptor (ttnn.ProgramDescriptor): The program to prepare in SPMD mode (same program on all
-                devices).
-            mesh_program_descriptor (ttnn.MeshProgramDescriptor): The per-device programs to prepare, for explicit
-                per-device control. Pass exactly one of ``program_descriptor`` and ``mesh_program_descriptor``, or
-                pass ``spec`` and ``run_args`` instead.
-            spec (ttnn.experimental.ProgramSpec or ttnn.experimental.MeshProgramSpec): The Metal 2.0 program, as for
-                ``ttnn.experimental.generic_op``.
-            run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): Its run args, with
-                real tensors.
+            program_descriptor (ttnn.ProgramDescriptor, optional): The program to prepare in SPMD mode (same program
+                on all devices).
+            mesh_program_descriptor (ttnn.MeshProgramDescriptor, optional): The per-device programs to prepare, for
+                explicit per-device control. Pass exactly one of ``program_descriptor`` and
+                ``mesh_program_descriptor``, or pass ``spec`` and ``run_args`` instead.
+            spec (ttnn.experimental.ProgramSpec or ttnn.experimental.MeshProgramSpec, optional): The Metal 2.0
+                program, as for ``ttnn.experimental.generic_op``.
+            run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs, optional): Its run
+                args, with real tensors.
 
         Raises:
             RuntimeError: If a kernel does not compile, if the program configuration does not fit the
