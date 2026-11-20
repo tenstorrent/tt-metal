@@ -80,6 +80,10 @@ INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 
 PORT_BATCH_CHUNKS = 4  # cap: packets per reader barrier / sender flush; cb_port_stage holds 2 batches (halved
 # under L1 pressure: port_batch_candidates)
 RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
+PORT_READ_STREAM = int(os.environ.get("AGRMS_READ_STREAM", "1"))  # port reader: per-slot transaction ids, every
+# landed slot pushed at once, the whole stage ring in flight (TRANSPORT, Refinement 3); 0 = batch mode below
+PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode: packets per read barrier + push
+# (None = the batch; 1 measured +3.6 us on the focus case: one 14 KB L1 read in flight is latency-bound)
 OUT_DEPTH = 2
 OUT_UNIT_CAP = 4  # writer batch: small enough that the stores overlap the normalize of the same tile-row
 COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
@@ -841,6 +845,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     if has_beta:
         defines.append(("AGRMS_HAS_BETA", "1"))
     zone_defines = [("AGRMS_ZONES", "1")] if os.environ.get("AGRMS_ZONES") else []  # perf probes only
+    if os.environ.get("AGRMS_ABL"):  # perf probes only: port-kernel ablation bits (wrong output)
+        zone_defines = zone_defines + [("AGRMS_ABL", os.environ["AGRMS_ABL"])]
     defines += zone_defines
     if dense:
         defines.append(("AGRMS_DENSE", "1"))
@@ -888,7 +894,15 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     writer_ct += list(o_acc)
     writer_ct += list(g_acc)
     writer_ct += list(b_acc)
-    port_reader_ct = [tile_bytes, chunk_pages, port_batch, SEM_OWN_LOADED, SEM_LANDED]
+    port_reader_ct = [
+        tile_bytes,
+        chunk_pages,
+        port_batch,
+        SEM_OWN_LOADED,
+        SEM_LANDED,
+        min(PORT_PUSH_PACKETS or port_batch, port_batch),
+        PORT_READ_STREAM,
+    ]
     port_sender_ct = [tile_bytes, chunk_pages, port_batch]
 
     inv_w_bits = _f32_bits(1.0 / geo.W)

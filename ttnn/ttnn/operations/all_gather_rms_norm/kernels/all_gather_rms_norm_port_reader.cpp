@@ -6,8 +6,11 @@
 // send_entry (per outgoing entry, in send order): own entries wait until every own member that this port reads
 //   from has loaded its block (sem_own_loaded); relay entries wait until the upstream entry they forward has
 //   landed (arrival counter >= threshold). The entry's runs are read from the compute cores' cb_x (mirror layout:
-//   the same core / offset on every chip) into cb_port_stage, one slot per packet (<= chunk_pages tiles), in
-//   batches of `group` slots (one read barrier + push per batch; a batch also ends at the entry end).
+//   the same core / offset on every chip) into cb_port_stage, one slot per packet (<= chunk_pages tiles).
+//   Stream mode (default): every slot's read carries its own NoC transaction id; up to the whole stage ring is in
+//   flight and each slot is pushed, in order, the moment its own read has landed (no batch barrier: one 14 KB L1
+//   read in flight is latency-bound). Batch mode: batches of `group` slots, one read barrier + push per
+//   `push_every` slots (a batch also ends at the entry end).
 // notify_landed (serviced before every blocking point, so a final-hop landing is never starved by a relay wait or
 //   by stage back-pressure): incoming entry e has landed once the arrival counter reaches e + 1 (one fused
 //   increment on the entry's last packet); every member it covers gets one local increment of sem_landed.
@@ -29,7 +32,16 @@ constexpr uint32_t chunk_pages = get_compile_time_arg_val(1);  // tiles per pack
 constexpr uint32_t group = get_compile_time_arg_val(2);        // packet slots per batch; the CB holds 2 batches
 constexpr uint32_t sem_own_loaded_id = get_compile_time_arg_val(3);
 constexpr uint32_t sem_landed_id = get_compile_time_arg_val(4);
+constexpr uint32_t push_every = get_compile_time_arg_val(5);  // batch mode: packets per read barrier + push (<= group)
+constexpr bool stream = get_compile_time_arg_val(6) != 0;     // stream mode: per-slot transaction ids, no batch barrier
+constexpr uint32_t slots = 2 * group;                         // cb_port_stage ring (one packet per slot)
+static_assert(!stream || slots <= 15, "one NoC transaction id per stage slot (ids 1..15)");
 constexpr uint32_t chunk_bytes = chunk_pages * tile_bytes;
+#ifndef AGRMS_ABL
+#define AGRMS_ABL 0
+#endif
+constexpr bool abl_no_read = (AGRMS_ABL & 1) != 0;   // perf probes: skip the compute-L1 reads
+constexpr bool abl_no_relay = (AGRMS_ABL & 2) != 0;  // perf probes: relay entries do not wait for their arrival
 
 FORCE_INLINE uint32_t arg(uint32_t i) { return get_arg_val<uint32_t>(i); }
 
@@ -70,19 +82,35 @@ void kernel_main() {
 
     AGZ("pr_all");
     bool own_ready = own_expected == 0;
-    uint32_t batch = 0, need = 0, pos = 0, wptr = 0;
+    // pos: stage slots (one per packet) issued so far; head: slots pushed to the sender. A slot's address is fixed
+    // by its ring position (the sender pops whole batches of `group` slots aligned to multiples of `group`).
+    const uint32_t stage_base = get_write_ptr(cb_stage);
+    uint32_t pos = 0, head = 0;
+    // batch mode: slots of the current reserved run of `need` slots read so far / already pushed
+    uint32_t batch = 0, pushed = 0, need = 0, wptr = 0;
+    // stream mode: hand every landed slot to the sender, in order (each slot's read carries its own transaction id)
+    auto drain = [&]() {
+        if constexpr (stream) {
+            while (head < pos && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + head % slots)) {
+                cb_push_back(cb_stage, chunk_pages);
+                ++head;
+            }
+        }
+    };
     for (uint32_t e = 0; e < num_out; ++e) {
         const uint32_t wait = arg(a);
         const uint32_t n_runs = arg(a + 1);
         a += 2;
-        if (wait == 0) {
+        if (wait == 0 || abl_no_relay) {
             while (!own_ready) {
+                drain();
                 service();
                 invalidate_l1_cache();
                 own_ready = *own_loaded >= own_expected;
             }
         } else {
             while (true) {
+                drain();
                 service();
                 invalidate_l1_cache();
                 if (*arrived >= wait) {
@@ -97,33 +125,63 @@ void kernel_main() {
             const uint32_t n = offn >> 16;
             for (uint32_t t = 0; t < n; t += chunk_pages) {
                 const uint32_t pieces = (n - t) < chunk_pages ? (n - t) : chunk_pages;
-                if (batch == 0) {
-                    need = group - pos % group;
-                    while (!cb_pages_reservable_at_back(cb_stage, chunk_pages * need)) {
+                const uint64_t src = get_noc_addr(xy & 0xFFFF, xy >> 16, x_base + (off + t) * tile_bytes);
+                if constexpr (stream) {
+                    // a free slot: fewer than `slots` in flight + unpopped
+                    while (pos - head == slots ||
+                           !cb_pages_reservable_at_back(cb_stage, chunk_pages * (pos - head + 1))) {
+                        drain();
                         service();
                     }
-                    cb_reserve_back(cb_stage, chunk_pages * need);
-                    wptr = get_write_ptr(cb_stage);
-                }
-                noc_async_read(
-                    get_noc_addr(xy & 0xFFFF, xy >> 16, x_base + (off + t) * tile_bytes),
-                    wptr + batch * chunk_bytes,
-                    pieces * tile_bytes);
-                if (++batch == need) {
-                    noc_async_read_barrier();
-                    cb_push_back(cb_stage, chunk_pages * batch);
-                    pos += batch;
-                    batch = 0;
+                    if (!abl_no_read) {
+                        noc_async_read_set_trid(1 + pos % slots);
+                        noc_async_read(src, stage_base + (pos % slots) * chunk_bytes, pieces * tile_bytes);
+                    }
+                    ++pos;
+                    drain();
+                } else {
+                    if (batch == 0) {
+                        need = group - pos % group;
+                        while (!cb_pages_reservable_at_back(cb_stage, chunk_pages * need)) {
+                            service();
+                        }
+                        cb_reserve_back(cb_stage, chunk_pages * need);
+                        wptr = get_write_ptr(cb_stage);
+                    }
+                    if (!abl_no_read) {
+                        noc_async_read(src, wptr + batch * chunk_bytes, pieces * tile_bytes);
+                    }
+                    ++batch;
+                    if (batch - pushed == push_every || batch == need) {
+                        noc_async_read_barrier();
+                        cb_push_back(cb_stage, chunk_pages * (batch - pushed));
+                        pushed = batch;
+                    }
+                    if (batch == need) {
+                        pos += batch;
+                        batch = pushed = 0;
+                    }
                 }
             }
         }
         a += 2 * n_runs;
-        if (batch > 0) {  // an entry's tail is pushed at once: its fused increment must not wait for later entries
-            noc_async_read_barrier();
-            cb_push_back(cb_stage, chunk_pages * batch);
-            pos += batch;
-            batch = 0;
+        if constexpr (!stream) {
+            if (batch > 0) {  // an entry's tail is pushed at once: its fused increment must not wait for later entries
+                if (batch > pushed) {
+                    noc_async_read_barrier();
+                    cb_push_back(cb_stage, chunk_pages * (batch - pushed));
+                }
+                pos += batch;
+                batch = pushed = 0;
+            }
         }
+    }
+    while (head < pos) {  // stream mode: the last slots (batch mode keeps head == pos == 0)
+        drain();
+        service();
+    }
+    if constexpr (stream) {
+        noc_async_read_set_trid(0);
     }
     while (next_in < num_in) {
         service();
