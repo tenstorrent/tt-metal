@@ -213,12 +213,12 @@ void DevicePrograms::carve_l1() {
     TT_FATAL(spool_mb >= 2, "streaming profiler: the DRISC service drain jobs need a GDDR spool of at least 2 MiB");
     drisc_l1_.spool_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
     drisc_l1_.spool_bytes = spool_mb << 20;
-    // N (kernel ticks between holds) and M (drain sweeps per hold); for tuning, until they are measured.
+    // N (copy turns between holds) and M (drain sweeps per hold); for tuning, until they are measured.
     const auto env_u32 = [](const char* name, uint32_t fallback) {
         const char* value = std::getenv(name);
         return value != nullptr ? static_cast<uint32_t>(std::strtoul(value, nullptr, 10)) : fallback;
     };
-    drain_hold_ticks_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TICKS", 2u), 2u);
+    drain_hold_turns_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS", 1u), 1u);
     drain_hold_sweeps_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_SWEEPS", 1u), 1u);
 }
 
@@ -551,7 +551,7 @@ void DevicePrograms::start_drain(DeviceCtx& ctx, uint32_t relay_index, uint32_t 
     job.write_vc = (relay_index & 2u) ? 0u : 1u;
     job.spool_base = drisc_l1_.spool_addr + (ctx.relay_nocs[relay_index] == 1 ? 0u : spool_half);
     job.spool_bytes = spool_half;
-    job.hold_ticks = drain_hold_ticks_;
+    job.hold_turns = drain_hold_turns_;
     job.hold_sweeps = drain_hold_sweeps_;
     // Reversed so the last-launched cores get the first-serviced slots.
     uint32_t i = 0;

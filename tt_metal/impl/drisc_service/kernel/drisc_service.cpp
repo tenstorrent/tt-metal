@@ -246,6 +246,12 @@ FORCE_INLINE bool pick_client(uint32_t& slot) {
 uint32_t turn_slot;
 uint32_t turn_bytes = l1::CHUNK_SIZE;
 
+// The drain job takes the next turn once the copy clients have started drain::hold_turns turns since its last hold, or
+// at once when no client has a command to carve. Its turn stops accepting; it holds the seat once the transactions in
+// flight retire (main).
+bool drain_handover;
+uint32_t drain_turns;  // copy turns started since the last hold
+
 // Fill the freshly claimed transaction and start its read leg. trid == ring index.
 FORCE_INLINE void start_transaction(
     Transaction& t,
@@ -282,13 +288,19 @@ FORCE_INLINE void start_transaction(
 FORCE_INLINE void accept_transactions(TransactionRing& txn_ring, BounceArena& bounce_arena, DmaInFlight& dma) {
     while (!txn_ring.full()) {
         if (turn_bytes >= l1::CHUNK_SIZE) {
+            if (drain::running() && drain_turns >= drain::hold_turns) {
+                drain_handover = true;
+                return;
+            }
             uint32_t picked;
             if (!pick_client(picked)) {
+                drain_handover = drain::running();
                 return;
             }
             turn_slot = picked;
             turn_bytes = 0;
             next_slot = (picked + 1) % abi::MAX_CLIENTS;
+            ++drain_turns;
         }
         const uint32_t slot = turn_slot;
         Client& client = clients[slot];
@@ -421,8 +433,6 @@ FORCE_INLINE void issue_writes(TransactionRing& txn_ring, DmaInFlight& dma, uint
 // owner until the owner detaches.
 constexpr uint32_t NO_DRAIN_OWNER = abi::MAX_CLIENTS;
 uint32_t drain_owner = NO_DRAIN_OWNER;
-uint32_t drain_ticks;  // kernel ticks since the last hold
-bool drain_handover;   // stop accepting; hold once the transactions in flight retire
 
 // Starts the drain job when the job block's owner word names an attached client.
 void try_start_drain() {
@@ -434,7 +444,7 @@ void try_start_drain() {
         if (clients[s].state == SLOT_ATTACHED && owner == abi::slot_word(abi::SLOT_ATTACH, clients[s].gen)) {
             drain::start(&command_block->slots[s].exit_mailbox, abi::slot_word(abi::SLOT_DETACH, clients[s].gen));
             drain_owner = s;
-            drain_ticks = 0;
+            drain_turns = 0;
             drain_handover = false;
             return;
         }
@@ -562,9 +572,6 @@ int main() {
         if (spins % abi::SLOT_SCAN_TICK_INTERVAL == 0 && !scan_slots()) {
             break;
         }
-        if (drain::running() && ++drain_ticks >= drain::hold_ticks) {
-            drain_handover = true;
-        }
         const uint32_t done_changed = retire_transactions(txn_ring, bounce_arena, dma);
         if (!drain_handover) {
             accept_transactions(txn_ring, bounce_arena, dma);
@@ -579,7 +586,7 @@ int main() {
             drain::hold();
             rearm_after_hold();
             drain_handover = false;
-            drain_ticks = 0;
+            drain_turns = 0;
         }
     }
 

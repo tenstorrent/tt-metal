@@ -220,8 +220,9 @@ struct ControlPage {
 static_assert(offsetof(ControlPage, heartbeat) == offsetof(ControlPage, done_count) + sizeof(uint32_t));
 static_assert(sizeof(ControlPage) <= CONTROL_PAGE_SIZE);
 
-// Drain job: the streaming profiler's drainer, which the kernel runs in holds between its own work. A hold takes the
-// seat for `hold_sweeps` drain sweeps after every `hold_ticks` kernel ticks; the kernel first lets its transactions
+// Drain job: the streaming profiler's drainer, which the kernel runs in holds between its own work. The job takes a
+// turn in the kernel's round-robin after every `hold_turns` copy turns (each up to CHUNK_SIZE bytes), or at once when
+// no client has a command: it holds the seat for `hold_sweeps` drain sweeps. The kernel first lets its transactions
 // retire, and the drain job leaves the NoCs and its staging idle before it hands the seat back. Its staging overlays
 // the bounce arena; what must survive between holds lives here, at the top of L1 above the arena.
 inline constexpr uint32_t DRAIN_MAX_CORES = 18;      // worker cores one drain job drains (140 cores over 8 banks x 2)
@@ -238,7 +239,7 @@ struct DrainJobBlock {
     uint32_t write_vc;    // static VC of the job's host writes
     uint32_t spool_base;  // GDDR spool, as an offset in the seat's bank; 0 bytes is refused
     uint32_t spool_bytes;
-    uint32_t hold_ticks;                // N: kernel ticks between holds
+    uint32_t hold_turns;                // N: copy turns (CHUNK_SIZE each) between holds; at least 1
     uint32_t hold_sweeps;               // M: drain sweeps per hold
     uint32_t core_xy[DRAIN_MAX_CORES];  // kernel_profiler::NocXy words of the drained cores
 };

@@ -236,7 +236,7 @@ constexpr uint32_t kEgressTxn = 3;  // host writes; on the NoC0 seat they share 
 uint32_t write_vc;
 uint32_t spool_base;
 uint32_t spool_bytes;
-uint32_t hold_ticks;
+uint32_t hold_turns;
 uint32_t hold_sweeps;
 uint32_t num_cores;
 uint32_t ring_base;   // lane 0's ring on every worker: the control block plus its control words
@@ -1000,7 +1000,7 @@ inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word) {
     write_vc = job->write_vc;
     spool_base = job->spool_base;
     spool_bytes = job->spool_bytes;
-    hold_ticks = job->hold_ticks != 0 ? job->hold_ticks : 1;
+    hold_turns = job->hold_turns != 0 ? job->hold_turns : 1;
     hold_sweeps = job->hold_sweeps != 0 ? job->hold_sweeps : 1;
     ring_base = cv_src + kCtrlWords * 4u;
     for (uint32_t i = 0; i < num_cores; i++) {
