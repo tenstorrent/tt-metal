@@ -2,22 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/math.hpp>
 #include "pad_rm_sharded_height_only_program_factory.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
-using namespace tt::tt_metal::experimental;
+using tt::tt_metal::experimental::AdvancedKernelRunArgs;
 using namespace tt::constants;
 
 namespace ttnn::prim {
-using ttnn::operations::data_movement::float_to_uint16;
-using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
+using ttnn::operations::data_movement::pack_scalar_into_uint32;
 
 namespace {
 // Names are prefixed per factory: all seven pad factories land in one unity-build
@@ -322,16 +320,7 @@ ttnn::device_operation::ProgramArtifacts PadRmShardedHeightOnlyProgramFactory::c
     // construct const buffer with the pad_value
     bool not_pad_by_zero = pad_value != 0;
 
-    uint32_t packed_pad_value;
-    if (a.dtype() == DataType::INT32) {
-        packed_pad_value = static_cast<uint32_t>(tt::saturating_cast<int32_t>(pad_value));
-    } else if (a.dtype() == DataType::UINT32) {
-        packed_pad_value = tt::saturating_cast<uint32_t>(pad_value);
-    } else if (a.dtype() == DataType::UINT16) {
-        packed_pad_value = pack_two_uint16_into_uint32({float_to_uint16(pad_value), float_to_uint16(pad_value)});
-    } else {
-        packed_pad_value = pack_two_bfloat16_into_uint32({bfloat16(pad_value), bfloat16(pad_value)});
-    }
+    uint32_t packed_pad_value = pack_scalar_into_uint32(a.dtype(), pad_value);
 
     auto all_runtime_args = get_pad_runtime_args_rm_sharded(
         a,

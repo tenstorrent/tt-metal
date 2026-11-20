@@ -26,7 +26,7 @@ from models.demos.vision.generative.stable_diffusion.wormhole.tt.ttnn_functional
 from models.demos.vision.generative.stable_diffusion.wormhole.tt.vae.ttnn_vae import Vae
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 from models.perf.perf_utils import prep_perf_report
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn import unsqueeze_to_4D
 
 

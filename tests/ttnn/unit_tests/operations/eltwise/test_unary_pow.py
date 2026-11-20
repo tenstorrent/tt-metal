@@ -25,7 +25,10 @@ def generate_clean_bf16_tensor(dtype=torch.bfloat16):
     return fp32.to(dtype)
 
 
-@pytest.mark.parametrize("exponent", [2.0, -2.0, -3.56, 0.5, -0.5, -0.566, -2])
+# Integral float exponents dispatch to the integer overload, so -2.0 would repeat -2. Exponent 2.0 is
+# covered over every normal bfloat16 value by test_pow_arange_masking, and +/-0.5 over the bfloat16
+# grid by test_binary_category5_bfloat16.py::test_pow_float_exponent.
+@pytest.mark.parametrize("exponent", [-3.56, -0.566, -2])
 def test_pow(exponent, device):
     torch.manual_seed(42)
     torch_base = torch.rand([4, 4], dtype=torch.bfloat16)
@@ -38,7 +41,10 @@ def test_pow(exponent, device):
     assert_with_ulp(expected_result=torch_output, actual_result=ttnn_output, ulp_threshold=1)
 
 
-@pytest.mark.parametrize("exponent", [0.0, 1.0, 2.0, 3.0, -1.0])
+# test_binary_category5_bfloat16.py::test_pow_int_exponent covers the same dispatch paths on a
+# 4-mantissa grid at 4 ULP; this checks every normal bfloat16 mantissa at 1 ULP. Exponents 0 and 1
+# lower to full_like and assign, which have no mantissa-dependent arithmetic.
+@pytest.mark.parametrize("exponent", [2.0, 3.0, -1.0])
 def test_pow_arange_masking(exponent, device):
     # Generate all possible bit pattern for bf16
     tt_input = generate_clean_bf16_tensor(torch.bfloat16)
@@ -70,9 +76,6 @@ def test_pow_arange_masking(exponent, device):
     [
         (ttnn.UnaryOpType.POWER_ITERATIVE, 0),
         (ttnn.UnaryOpType.POWER_ITERATIVE, 2),
-        (ttnn.UnaryOpType.POWER_ITERATIVE, 3.65),
-        (ttnn.UnaryOpType.POWER_ITERATIVE, -4.2),
-        (ttnn.UnaryOpType.POWER_ITERATIVE, -3.0),
         (ttnn.UnaryOpType.POWER_ITERATIVE, 3.0),
         (ttnn.UnaryOpType.POWER, 0),
         (ttnn.UnaryOpType.POWER, 2),
@@ -80,12 +83,8 @@ def test_pow_arange_masking(exponent, device):
         (ttnn.UnaryOpType.POWER, -1.9),
     ],
 )
+# POWER_ITERATIVE only supports non-negative integer exponents; non-integer values are truncated.
 def test_power_as_activation(device, op_type, exponent):
-    if op_type == ttnn.UnaryOpType.POWER_ITERATIVE and (exponent != int(exponent) or exponent < 0):
-        pytest.xfail(
-            "POWER_ITERATIVE only supports positive integer exponents (Non-integer values are truncated causing output mismatch with expected)"
-        )
-
     x_torch = torch.rand([16, 16], dtype=torch.bfloat16) + 1.5
     z_torch = torch.pow(x_torch + x_torch, exponent)
 

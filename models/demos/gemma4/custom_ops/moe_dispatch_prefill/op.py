@@ -99,10 +99,10 @@ def _cb(core_ranges, index: int, total: int, page: int, dtype) -> ttnn.CBDescrip
     )
 
 
-def is_2d_fabric() -> bool:
+def is_2d_fabric(mesh_device) -> bool:
     """Whether the opened fabric routes in 2D (``FABRIC_2D*``): the kernels then take the portable routing-plane
     connections (``setup_routing_plane_connection`` injects their ``FABRIC_2D`` define)."""
-    return ttnn.get_fabric_config().name in _2D_FABRIC
+    return ttnn.get_fabric_config(mesh_device).name in _2D_FABRIC
 
 
 def mesh_neighbors(mesh_shape, coord, topology, axis: int):
@@ -164,7 +164,7 @@ class _FabricPlan:
             self.rows * self.cols > 1 and self.rows > 1
         ), "the dispatch group (the mesh rows) needs more than one chip"
         self.axis, self.num_links, self.topology = int(cluster_axis), int(num_links), topology
-        self.is_2d = is_2d_fabric()
+        self.is_2d = is_2d_fabric(mesh_device)
         self.l1_alignment = int(ttnn.get_l1_alignment())
         self.packet_header_bytes = int(ttnn.get_tt_fabric_packet_header_size_bytes())
         self.fabric_max_packet = int(ttnn.get_tt_fabric_max_payload_size_bytes())
@@ -212,7 +212,7 @@ class _FabricPlan:
                     if peer == tuple(coord) or not same_group:
                         continue
                     node = self.node(peer)
-                    direction = ttnn.get_eth_forwarding_direction(src, node)
+                    direction = ttnn.get_eth_forwarding_direction(self.mesh_device, src, node)
                     assert direction is not None, f"no Fabric2D forwarding direction from {coord} to {peer}"
                     if direction not in used:
                         used.add(direction)
@@ -223,14 +223,18 @@ class _FabricPlan:
                 assert valid, f"no forwarding links from {coord} to its {label} neighbor"
                 links.append(int(valid[core_link % len(valid)]))
             args = [len(dst_nodes)]
-            args += list(ttnn.setup_routing_plane_connection(src, dst_nodes, links, program, writer_kernel_idx, core))
+            args += list(
+                ttnn.setup_routing_plane_connection(
+                    self.mesh_device, src, dst_nodes, links, program, writer_kernel_idx, core
+                )
+            )
             return args
         neighbors, _ = mesh_neighbors((self.rows, self.cols), coord, self.topology, self.axis)
         args = []
         for n in neighbors:
             if n == tuple(coord):
                 continue
-            args += list(ttnn.setup_fabric_connection(src, self.node(n), core_link, program, core))
+            args += list(ttnn.setup_fabric_connection(self.mesh_device, src, self.node(n), core_link, program, core))
         return args
 
 

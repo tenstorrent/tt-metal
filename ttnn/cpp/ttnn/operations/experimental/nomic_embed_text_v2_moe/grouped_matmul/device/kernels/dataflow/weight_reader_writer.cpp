@@ -241,15 +241,14 @@ void kernel_main() {
                 sender_semaphore.set(0);
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(slot_address),
-                    MulticastEndpoint{},
+                    weight_cb,
                     slot_bytes,
                     num_receivers,
                     {},
                     {.noc_x_start = receivers_start_x,
                      .noc_y_start = receivers_start_y,
                      .noc_x_end = receivers_end_x,
-                     .noc_y_end = receivers_end_y,
-                     .addr = slot_address},
+                     .noc_y_end = receivers_end_y},
                     true);
 #ifdef ARCH_BLACKHOLE
                 noc.async_writes_flushed();
