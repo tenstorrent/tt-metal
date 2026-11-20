@@ -628,7 +628,7 @@ TEST(VclusterDescriptors, G4NotAnEthernetCore) {
     const TempDir dir("g4");
     write_text(
         dir.path() / "package.yaml",
-        replaced(read_text(package_soc_desc()), "[4-0, 4-1, 4-2, 4-3]", "[4-0, 4-1, 4-2]"));
+        replaced(read_text(package_soc_desc()), "4-2, 4-3, 5-0", "4-2, 5-0"));
     EXPECT_EQ(refusals(checked(kLine, dir.path() / "package.yaml"), dir.path() / "package.yaml"), Refusals{4});
 }
 
