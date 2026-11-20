@@ -230,8 +230,10 @@ class TestAer(unittest.TestCase):
         self.assertEqual(aer_check(aer_new(before, {"0000:02:00.0": {"corr": 6}}), 1.0).status, WARN)
         self.assertEqual(aer_check(aer_new(before, {"0000:02:00.0": {"corr": 2}}), 0.1).status, WARN)
 
-    def test_chip_missing_from_before_is_not_judged(self):
-        self.assertEqual(aer_check(aer_new({}, {"0000:02:00.0": {"nonfatal": 4}}), 1.0).status, PASS)
+    def test_a_chip_that_reappears_has_its_errors_counted(self):
+        c = aer_check(aer_new({}, {"0000:02:00.0": {"nonfatal": 4, "corr": 0}}), 1.0)
+        self.assertEqual(c.status, FAIL)
+        self.assertEqual(c.data["flagged"], [{**chip("0000:02:00.0"), "nonfatal": 4}])
 
     def test_a_reset_restarts_the_counts_and_the_window_keeps_what_came_before(self):
         reads = iter(

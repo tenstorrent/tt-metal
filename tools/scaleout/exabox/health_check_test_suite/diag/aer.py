@@ -42,11 +42,12 @@ def read_aer(devices: Path = PCI_DEVICES) -> dict[str, dict[str, int]]:
 
 
 def aer_new(before: dict, after: dict) -> dict[str, dict[str, int]]:
-    """New errors per chip between two reads. A counter that went down was restarted by a reset: it all counts."""
+    """New errors per chip between two reads. A counter that went down was restarted by a reset: it all counts, and
+    so does every counter of a chip that was not in *before* (it dropped off and came back)."""
     new = {}
     for bdf, now in after.items():
         was = before.get(bdf, {})
-        delta = {k: now[k] - was[k] if now[k] >= was[k] else now[k] for k in now if k in was and now[k] != was[k]}
+        delta = {k: n - was.get(k, 0) if n >= was.get(k, 0) else n for k, n in now.items() if n != was.get(k, 0)}
         if delta:
             new[bdf] = delta
     return new

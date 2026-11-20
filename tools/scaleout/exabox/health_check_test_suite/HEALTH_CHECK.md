@@ -641,8 +641,6 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--tier {flash,daily,weekly,full,galaxy,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--mode {plain,full,smoke}` | off | `galaxy` tier: run the bus-bar phase (`diag/busbar.py`: quiet clocks, CCL mix, G3/G3b numeric, N1/N2, step, heavy, code readback) and then the links phase (`diag/links.py`: pair link test, sweep on a fault, fabric open/close) at this length. Not given: neither runs. |
 | `--plan` | off | Print the bus-bar step list for `--mode` (default plain) and exit. Use with `--tier galaxy`. |
-| `--smoke-s N` | 2 | `--mode smoke`: the longest any part's length (s). |
-| `--mix-min A,B,..` | the mode's | The mix part's chunk lengths in minutes, instead of the mode's. |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |

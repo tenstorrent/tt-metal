@@ -11,7 +11,7 @@ step   10 s quiet + 90 s burst, numeric readback after it
 heavy  the DIDT ops back to back, each output checked bit-exact and voted across chips (90 s; full 750 s)
 code   code readback: each core's firmware and kernel code in L1, voted across chips (exalens, no load)
 
---mode smoke keeps every part and cuts each length to min(smoke_s, plain's). A part that fails does not end the
+--mode smoke keeps every part and cuts each length to min(SMOKE_S, plain's). A part that fails does not end the
 phase: the next parts still run and are judged on the chips that are left.
 """
 from __future__ import annotations
@@ -54,17 +54,17 @@ class Step:
         return f"{self.name:<7} {self.seconds:>5} s  {self.what}"
 
 
-def plan(mode: str = "plain", smoke_s: int = SMOKE_S, mix_s: tuple[int, ...] | None = None) -> list[Step]:
-    """The bus-bar steps for *mode*. *mix_s* overrides the mix's chunk lengths (seconds)."""
+def plan(mode: str = "plain") -> list[Step]:
+    """The bus-bar steps for *mode*."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of: {', '.join(MODES)}")
     full = mode == "full"
 
     def s(plain: int, full_s: int | None = None) -> int:
-        return min(smoke_s, plain) if mode == "smoke" else full_s if full and full_s is not None else plain
+        return min(SMOKE_S, plain) if mode == "smoke" else full_s if full and full_s is not None else plain
 
     qq, qb, gap = s(60), s(30), s(10)
-    chunks = mix_s or (s(60), s(120), s(180), s(240, 1500))
+    chunks = (s(60), s(120), s(180), s(240, 1500))
     dbi, l1, noc, rf, rw = s(10, 120), s(12, 60), s(5, 100), s(3, 15), s(35)
     sq, sb, hv = s(10), s(90), s(90, 750)
     xs, code = min(s(10, 750), hv), {"smoke": 1, "plain": 5, "full": 60}[mode]
@@ -179,7 +179,7 @@ def plan(mode: str = "plain", smoke_s: int = SMOKE_S, mix_s: tuple[int, ...] | N
     ]
 
 
-def run_step(step: Step, out: Path, dry_run: bool = False, env: dict | None = None) -> Check:
+def run_step(step: Step, out: Path, dry_run: bool = False) -> Check:
     """Run one step's program in its own process group; FAIL on a non-zero exit, a '<X> FAIL' line or a hang."""
     d = out / step.name
     argv = [sys.executable, str(GALAXY_DIR / step.argv[0]), *(a.format(out=d) for a in step.argv[1:])]
@@ -189,7 +189,7 @@ def run_step(step: Step, out: Path, dry_run: bool = False, env: dict | None = No
     d.mkdir(parents=True, exist_ok=True)
     t0, rc, limit = time.time(), None, step.seconds + SETUP_S
     with open(d / "run.log", "w") as f:
-        p = subprocess.Popen(argv, cwd=GALAXY_DIR, stdout=f, stderr=subprocess.STDOUT, env=env, start_new_session=True)
+        p = subprocess.Popen(argv, cwd=GALAXY_DIR, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
         try:
             rc = p.wait(timeout=limit)
         except subprocess.TimeoutExpired:
@@ -220,17 +220,10 @@ def run_step(step: Step, out: Path, dry_run: bool = False, env: dict | None = No
     )
 
 
-def run_busbar(
-    phase: Phase,
-    out: Path,
-    mode: str,
-    dry_run: bool = False,
-    smoke_s: int = SMOKE_S,
-    mix_s: tuple[int, ...] | None = None,
-) -> bool:
+def run_busbar(phase: Phase, out: Path, mode: str, dry_run: bool = False) -> bool:
     """Every bus-bar step, in order, into *phase*. True when one hung or failed (the links phase then sweeps)."""
     fault = False
-    for step in plan(mode, smoke_s, mix_s):
+    for step in plan(mode):
         log(f"busbar {step.line()}")
         c = run_step(step, out / "busbar", dry_run)
         phase.add(c)
