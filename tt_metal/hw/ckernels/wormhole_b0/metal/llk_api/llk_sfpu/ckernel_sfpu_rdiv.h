@@ -59,15 +59,14 @@ inline void calculate_rdiv(const uint value) {
                         v_elseif (sfpi::abs(r) >= sfpi::abs(in)) { q = q + 1.0f; }
                         v_endif;
                     } else {
-                        // trunc invariant: |r| < |in|
-                        v_if (sfpi::abs(r) >= sfpi::abs(in)) {
+                        // trunc invariant: r has the dividend's sign (or is zero) and |r| < |in|
+                        v_if (r * val < 0.0f || sfpi::abs(r) >= sfpi::abs(in)) {
                             v_if (rq >= 0.0f) { q = q + 1.0f; }
                             v_else { q = q - 1.0f; }
                             v_endif;
                         }
                         v_endif;
-                    }
-                }   
+                    }   
                 v_endif;
                 result = q;
             }

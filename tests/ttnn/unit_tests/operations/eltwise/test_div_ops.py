@@ -845,16 +845,33 @@ def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
     assert torch.all(output_tensor.abs() < abs(scalar))
 
 
-@pytest.mark.parametrize("value", [5.0, 10.0, 28.0, 100.0, -15.0])
+@pytest.mark.parametrize(
+    "value, input_val",
+    [
+        (5.0, 5.0),
+        (10.0, 10.0),
+        (28.0, 28.0),
+        (100.0, 100.0),
+        (-15.0, -15.0),
+        (28.0, 14.0),
+        (1000.0, 5.0),
+    ],
+)
 @pytest.mark.parametrize("round_mode", ["floor", "trunc"])
-def test_rdiv_exactly_divisible(device, value, round_mode):
-    input_torch = torch.tensor([[value]], dtype=torch.float32)
-    input_tt = ttnn.from_torch(input_torch, dtype=ttnn.DataType.FLOAT32, layout=ttnn.TILE_LAYOUT, device=device)
+@pytest.mark.parametrize("dtype", [ttnn.DataType.FLOAT32, ttnn.DataType.BFLOAT16])
+def test_rdiv_exactly_divisible(device, value, input_val, round_mode, dtype):
+    torch_dtype = torch.float32 if dtype == ttnn.DataType.FLOAT32 else torch.bfloat16
+    input_torch = torch.tensor([[input_val]], dtype=torch_dtype)
+    input_tt = ttnn.from_torch(input_torch, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
     output_tt = ttnn.rdiv(input_tt, value=value, round_mode=round_mode)
     output_torch = ttnn.to_torch(output_tt)
+    expected = torch.tensor([[value / input_val]], dtype=torch_dtype)
 
-    assert torch.equal(output_torch, torch.tensor([[1.0]], dtype=torch.float32))
+    if dtype == ttnn.DataType.FLOAT32 or abs(value / input_val) < 100:
+        assert torch.equal(output_torch, expected)
+    else:
+        assert_with_ulp(expected_result=expected, actual_result=output_torch, ulp_threshold=1)
 
 
 RDIV_FULL_RANGES = [
@@ -898,15 +915,21 @@ def test_rdiv_fp32_full_range(device, round_mode, scalar_val):
         output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
 
     output_torch = ttnn.to_torch(output_tt)
-    @pytest.mark.parametrize("round_mode", [None, "floor", "trunc"])
-@pytest.mark.parametrize("k", [-5, -2, -1, 1, 2, 5, 10])
-def test_rdiv_exact_integer_multiples(device, round_mode, k):
-    torch.manual_seed(42)
-    torch_input = torch.tensor(
-        [1.0, 2.0, -3.0, 4.5, -0.5, 16.0],
-        dtype=torch.float32,
-    ).repeat(1, 2, 1, 128 // 6 + 1)[:, :, :32, :128]
-    torch_value = k * torch_input
+    assert_with_ulp(
+        expected_result=torch_golden,
+        actual_result=output_torch,
+        ulp_threshold=1,
+        allow_nonfinite=True,
+    )
+
+
+@pytest.mark.parametrize("round_mode", [None, "floor", "trunc"])
+@pytest.mark.parametrize("scalar_val", [24.0, -24.0])
+def test_rdiv_exact_integer_multiples(device, round_mode, scalar_val):
+    ks = [-6, -4, -3, -2, -1, 1, 2, 3, 4, 6]
+    base_inputs = torch.tensor([scalar_val / k for k in ks], dtype=torch.float32)
+    repeats = (128 // len(base_inputs)) + 1
+    torch_input = base_inputs.repeat(1, 2, 32, repeats)[:, :, :32, :128]
 
     input_tt = ttnn.from_torch(
         torch_input,
@@ -917,14 +940,14 @@ def test_rdiv_exact_integer_multiples(device, round_mode, k):
     )
 
     if round_mode is None:
-        torch_golden = torch_value / torch_input
-        output_tt = ttnn.rdiv(input_tt, value=torch_value)
+        torch_golden = scalar_val / torch_input
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val)
     elif round_mode == "floor":
-        torch_golden = torch.floor(torch_value / torch_input)
-        output_tt = ttnn.rdiv(input_tt, value=torch_value, round_mode="floor")
+        torch_golden = torch.floor(scalar_val / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="floor")
     else:
-        torch_golden = torch.trunc(torch_value / torch_input)
-        output_tt = ttnn.rdiv(input_tt, value=torch_value, round_mode="trunc")
+        torch_golden = torch.trunc(scalar_val / torch_input)
+        output_tt = ttnn.rdiv(input_tt, value=scalar_val, round_mode="trunc")
 
     output_torch = ttnn.to_torch(output_tt)
     assert_with_ulp(
@@ -933,3 +956,23 @@ def test_rdiv_exact_integer_multiples(device, round_mode, k):
         ulp_threshold=1,
         allow_nonfinite=True,
     )
+
+
+def test_rdiv_trunc_just_below_integer(device):
+    just_above_one = torch.nextafter(
+        torch.tensor(1.0, dtype=torch.float32),
+        torch.tensor(2.0, dtype=torch.float32),
+    )
+    torch_input = just_above_one.repeat(1, 1, 32, 32)
+    input_tt = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.DataType.FLOAT32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    torch_golden = torch.trunc(3.0 / torch_input)
+    output_tt = ttnn.rdiv(input_tt, value=3.0, round_mode="trunc")
+    output_torch = ttnn.to_torch(output_tt)
+    assert torch.equal(output_torch, torch_golden)
