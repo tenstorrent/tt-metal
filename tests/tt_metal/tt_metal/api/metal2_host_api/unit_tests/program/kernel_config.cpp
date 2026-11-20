@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// KernelSpec options that MakeProgramFromSpec forwards into the lowered kernel / DFB config.
+// KernelSpec options that the Program constructor forwards into the lowered kernel / DFB config.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -13,7 +13,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
@@ -60,7 +60,7 @@ TEST_F(ProgramSpecTestGen1, CPU_CompilerIncludePathsForwardedToKernelConfig) {
     spec.work_units =
         std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel", "compute_kernel"})};
 
-    Program program = MakeProgramFromSpec(*mesh_device_, spec);
+    Program program(*mesh_device_, spec);
 
     const auto& impl = program.impl();
     auto built_dm = impl.get_kernel_by_spec_name("dm_kernel");
@@ -93,7 +93,7 @@ TEST_F(ProgramSpecTestGen1, CPU_SharedDedicatedNocIsBriscNoc) {
         spec.kernels = {brisc_kernel, ncrisc_kernel};
         spec.work_units = std::vector<WorkUnitSpec>{
             MakeMinimalWorkUnit("work_unit", NodeCoord{0, 0}, {"brisc_kernel", "ncrisc_kernel"})};
-        Program program = MakeProgramFromSpec(*mesh_device_, spec);
+        Program program(*mesh_device_, spec);
 
         const uint32_t tensix_index = MetalContext::instance(program.impl().get_context_id())
                                           .hal()
@@ -139,13 +139,13 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllDisablesProducerSide)
 
     // Default: the producer side has a DM kernel, so implicit sync is on.
     {
-        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/false));
+        Program program(*mesh_device_, make_spec(/*disable_all=*/false));
         const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
         EXPECT_TRUE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
     }
     // disable_dfb_implicit_sync_for_all turns it off for every DFB the kernel binds.
     {
-        auto program = MakeProgramFromSpec(*mesh_device_, make_spec(/*disable_all=*/true));
+        Program program(*mesh_device_, make_spec(/*disable_all=*/true));
         const uint32_t dfb_id = program.impl().get_dfb_handle("dfb_0");
         EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
     }

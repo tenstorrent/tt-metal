@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 
 /// @file
 /// Operations on lists of half-open address ranges [begin, end).

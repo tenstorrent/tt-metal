@@ -7,6 +7,8 @@
 #include "ckernel_sfpu_polyval.h"
 #include "ckernel_trisc_common.h"
 #include "cmath_common.h"
+#include "lltt.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -56,25 +58,46 @@ sfpi_inline sfpi::vFloat _sfpu_tanh_polynomial_(sfpi::vFloat x) {
     return result;
 }
 
-// Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu). calculate_tanh needs no
-// init constants: SFPNONLINEAR's TANH_MODE uses its internal LUT. The template parameters are unused;
-// they keep the Blackhole signature so tanh_tile_init needs no Quasar branch.
+// Loads the coefficients _sfpu_tanh_polynomial_ reads (softcap, situ_glu) and the address mode
+// calculate_tanh stores through. The template parameters are unused; they keep the Blackhole
+// signature so tanh_tile_init needs no Quasar branch.
 template <bool APPROXIMATION_MODE /*unused*/, bool is_fp32_dest_acc_en /*unused*/>
 inline void tanh_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
+    // calculate_tanh stores through ADDR_MOD_6: Dest += SFP_ROWS per pass.
+    addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = ckernel::math::SFP_ROWS}}.set(ADDR_MOD_6);
     sfpi::vConstFloatPrgm0 = 5.876733921468257904052734375e-3;
     sfpi::vConstFloatPrgm1 = -6.6649019718170166015625e-2;
     sfpi::vConstFloatPrgm2 = 0.281917631626129150390625;
 }
 
+// Passes are pipelined (3 slots each): the next pass's load and the previous pass's store sit
+// between an SFPNONLINEAR and its consumer. The store advances Dest through ADDR_MOD_6, set by
+// tanh_init.
+// Values carried between passes are pinned through l_reg[] so the recorded body ends in the state it
+// starts in. Quasar cannot execute while recording, so the body is recorded, then replayed per pass.
+inline constexpr sfpi::LRegs TANH_RESULT_LREG = sfpi::LRegs::LReg1;
+inline constexpr unsigned TANH_REPLAY_START = 0;
+inline constexpr unsigned TANH_REPLAY_LEN = 3;
+
 template <int ITERATIONS = SFPU_ITERATIONS>
 inline void calculate_tanh() {
-#pragma GCC unroll 8
-    for (int d = 0; d < ITERATIONS; d++) {
-        _calculate_tanh_sfp_rows_();
-        ckernel::math::_incr_counters_<0x0, 0x0, ckernel::math::SFP_ROWS, 0x0>();  // does the dest_reg++ (increments by
-                                                                                   // 2 rows)
+    static_assert(ITERATIONS >= 1, "calculate_tanh needs at least one pass");
+
+    sfpi::l_reg[TANH_RESULT_LREG] = sfpi::approx_tanh(sfpi::dst_reg[0]);
+    // Body for pass r: load pass r+1, store pass r (Dest += SFP_ROWS), tanh pass r+1.
+    lltt::record(TANH_REPLAY_START, TANH_REPLAY_LEN);
+    {
+        sfpi::vFloat result = sfpi::l_reg[TANH_RESULT_LREG];
+        sfpi::vFloat next = sfpi::dst_reg[1];
+        sfpi::dst_reg[0].mode(ADDR_MOD_6) = result;
+        sfpi::l_reg[TANH_RESULT_LREG] = sfpi::approx_tanh(next);
     }
+#pragma GCC unroll 8
+    for (int d = 1; d < ITERATIONS; d++) {
+        lltt::replay(TANH_REPLAY_START, TANH_REPLAY_LEN);
+    }
+    sfpi::dst_reg[0].mode(ADDR_MOD_6) = sfpi::vFloat(sfpi::l_reg[TANH_RESULT_LREG]);
 }
 
 }  // namespace sfpu

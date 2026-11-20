@@ -11,7 +11,7 @@
 # this script sets up. Unnarrowed, the system mesh is 8x4 and those rows skip. The half -> device map is per-galaxy, so it comes from
 # gen_pipeline_binding.py --layout 4x4 (generated once per host, galaxy must be idle).
 #
-# Usage, from TT_METAL_HOME:
+# Usage, from TT_METAL_HOME (the repo root):
 #   models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh [--half top|bottom] [-- <extra pytest args>]
 #   models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh -- path/to/test_x.py -k "4x4 and foo"
 #
@@ -79,4 +79,6 @@ else
     -k "4x4${user_k:+ and ($user_k)}"
 fi
 
-exec pytest "$@"
+# python3 -m puts the cwd (TT_METAL_HOME) on sys.path; bare pytest under --import-mode=importlib does not, and the
+# root conftest.py imports from models.
+exec python3 -m pytest "$@"
