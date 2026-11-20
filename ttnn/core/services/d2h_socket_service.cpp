@@ -1012,6 +1012,24 @@ DeviceAddr D2HStreamService::get_metadata_input_addr(const distributed::MeshCoor
     return it->second;
 }
 
+std::shared_ptr<const StreamSenderCoordTable> D2HStreamService::get_sender_coord_table() const {
+    require_d2h_owner(is_owner_, "D2HStreamService::get_sender_coord_table");
+    TT_FATAL(mesh_device_ != nullptr, "D2HStreamService::get_sender_coord_table: mesh device unavailable");
+    const auto& shape = mesh_device_->shape();
+    TT_FATAL(shape.dims() == 2, "D2HStreamService::get_sender_coord_table: expects a 2D mesh");
+    return sender_coord_table_cache_.get(shape[0], shape[1], [this](uint32_t row, uint32_t col, auto& table) {
+        const distributed::MeshCoordinate coord(row, col);
+        table.data_ready_addrs.push_back(static_cast<uint32_t>(get_data_ready_counter_addr(coord)));
+        table.service_cores.push_back(get_service_core(coord));
+        if (!metadata_input_addrs_.empty()) {
+            table.metadata_addrs.push_back(static_cast<uint32_t>(get_metadata_addr(coord)));
+        }
+        if (!termination_addrs_.empty()) {
+            table.termination_addrs.push_back(static_cast<uint32_t>(get_termination_addr(coord)));
+        }
+    });
+}
+
 DeviceAddr D2HStreamService::get_transfer_done_sem_addr() const {
     require_d2h_owner(is_owner_, "D2HStreamService::get_transfer_done_sem_addr");
     TT_FATAL(
