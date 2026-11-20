@@ -196,8 +196,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
  * returns +inf
  * - base = +/-0, pow = +/-0: Returns 1
  * - base = +/-0, pow = +/-NaN: Returns NaN
- * - base = +/-inf: Returns +inf for pow > 0 and +0 for pow < 0, with the sign of an odd integer pow
- * kept for a -inf base; 1 for pow = +/-0 and NaN for pow = +/-NaN
  * - base < 0, pow = integer: Returns proper signed result (negative if odd power)
  * - base < 0, pow = non-integer: Returns NaN (complex result)
  * - Overflow/underflow: Clamped to appropriate limits
@@ -369,33 +367,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_f32_(sfpi::vFloat base, sfpi::vFloat
         v_endif;
         // Quasar: sfpi::is_nan spelled out. SFPI lowers its nearby() compare to a CC-only SFPIADD into
         // read-only LREG8, which leaves the lane mask unchanged on Quasar.
-        v_if(sfpi::exexp(pow, sfpi::ExponentMode::Biased) >= 255 && sfpi::exman(pow) != 0) {
-            y = std::numeric_limits<float>::quiet_NaN();
-        }
-        v_endif;
-    }
-    v_endif;
-
-    // setexp maps an infinite base to mantissa 1 with biased exponent 128, so the
-    // mainline above evaluates 2**(128 * pow): pow(+inf, 0.5) came back as 2**64.
-    // IEEE takes the magnitude from the sign of pow alone, and keeps the sign of a
-    // -inf base only for an odd integer pow. A +-0 exponent keeps the mainline 1.
-    // Quasar: sfpi::is_inf / is_nan spelled out; SFPI lowers their nearby() compare to a
-    // CC-only SFPIADD into read-only LREG8, which leaves the lane mask unchanged on Quasar.
-    v_if(sfpi::exexp(base, sfpi::ExponentMode::Biased) >= 255 && sfpi::exman(base) == 0) {
-        v_if(abs_pow != 0.f) {
-            y = std::numeric_limits<float>::infinity();
-            v_and(pow < 0.f);
-            y = 0.0f;
-        }
-        v_endif;
-        v_if(base < 0.f) {
-            auto inf_pow_int = sfpi::convert<sfpi::vSMag16>(abs_pow, sfpi::RoundMode::Nearest);
-            auto inf_pow_rounded = sfpi::convert<sfpi::vFloat>(inf_pow_int, sfpi::RoundMode::Nearest);
-            v_if(inf_pow_rounded == abs_pow) { y = sfpi::setsgn2(y, inf_pow_int); }
-            v_endif;
-        }
-        v_endif;
         v_if(sfpi::exexp(pow, sfpi::ExponentMode::Biased) >= 255 && sfpi::exman(pow) != 0) {
             y = std::numeric_limits<float>::quiet_NaN();
         }
