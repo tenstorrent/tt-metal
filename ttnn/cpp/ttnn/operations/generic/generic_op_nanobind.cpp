@@ -9,6 +9,7 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <fmt/ranges.h>
@@ -63,6 +64,21 @@ std::vector<MeshCoordinate> devices_of_every(const std::vector<Tensor>& io_tenso
         }
     }
     return devices;
+}
+
+// A tensor parameter name for a message, with each NUL character written as \0: a NUL would end the message on its
+// way to Python, and put a raw NUL byte in logs.
+std::string printable(std::string_view name) {
+    std::string text;
+    text.reserve(name.size());
+    for (const char character : name) {
+        if (character == '\0') {
+            text += "\\0";
+        } else {
+            text += character;
+        }
+    }
+    return text;
 }
 
 // The devices of a MeshProgramSpec's program that the check covers: those of its range that every tensor in io_tensors
@@ -131,7 +147,7 @@ void check_tensor_views(
             "generic_op: tensor parameter '{}' is bound to a view that holds devices {}, but its program runs on "
             "device {}, which the view does not hold. Bind a view that holds every device the program runs on, such as "
             "the tensor itself",
-            parameter,
+            printable(parameter),
             fmt::format("{}", fmt::join(view_devices, ", ")),
             *missing);
     }
@@ -405,8 +421,9 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 devices of the tensor in io_tensors that is on the fewest devices (every other tensor must be on them
                 too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
-                call, or of each range's program. A tensor argument that is a per-device view
-                (ttnn.get_device_tensors) must hold every device its program runs on.
+                call, or of each range's program. A tensor argument that is a partial view of an io_tensors tensor,
+                such as one device's view from ttnn.get_device_tensors, must hold every device its program runs on:
+                bind a one-device view only in a program that runs on that device.
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same

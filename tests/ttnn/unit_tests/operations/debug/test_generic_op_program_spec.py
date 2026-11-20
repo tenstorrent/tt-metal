@@ -989,6 +989,26 @@ def mesh_range(device):
     return ttnn.MeshCoordinateRange(device.shape)
 
 
+def rename_tensor_parameter(spec, run_args, old_name, new_name):
+    """Renames a tensor parameter of a spec, its kernels' bindings and its entry in the run args."""
+    parameters = spec.tensor_parameters
+    for parameter in parameters:
+        if parameter.unique_id == old_name:
+            parameter.unique_id = new_name
+    spec.tensor_parameters = parameters
+    kernels = spec.kernels
+    for kernel in kernels:
+        bindings = kernel.tensor_bindings
+        for binding in bindings:
+            if binding.tensor_parameter_name == old_name:
+                binding.tensor_parameter_name = new_name
+        kernel.tensor_bindings = bindings
+    spec.kernels = kernels
+    tensors = run_args.tensor_args
+    tensors[new_name] = tensors.pop(old_name)
+    run_args.tensor_args = tensors
+
+
 def one_device(column):
     return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, column), ttnn.MeshCoordinate(0, column))
 
@@ -1059,16 +1079,22 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), other_run_args)]),
         )
-    # generic_op pairs run args with the spec's programs by range, so run args in another order are checked too.
-    with expect_error(RuntimeError, message):
+    # generic_op pairs run args with the spec's programs by range, so run args in another order are checked too. The
+    # second program names its input differently, so pairing by position would skip its view as undeclared.
+    rename_tensor_parameter(other_spec, other_run_args, "input", "source")
+    with expect_error(RuntimeError, "tensor parameter 'source' is bound to a view that holds devices"):
         E.generic_op(
             [input_tensor, output_tensor],
             E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), other_spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # A call that generic_op rejects for another reason keeps generic_op's own message: a tensor under a name the spec
-    # does not declare, and run args for a range the spec has no program on.
+    # A call that generic_op rejects for another reason keeps generic_op's own message: a tensor that io_tensors does
+    # not list, a tensor under a name the spec does not declare, and run args for a range the spec has no program on.
+    unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
+    spec, run_args = exp_program(unlisted, output_tensor)
+    with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
+        E.generic_op([input_tensor, output_tensor], spec, run_args)
     spec, run_args = exp_program(first_input, first_output)
     run_args.tensor_args = {"input": first_input, "output": first_output, "extra": second_input}
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
@@ -1092,24 +1118,10 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         )
 
     # The check compares whole names, so a tensor parameter whose name holds a NUL character is checked too. Its message
-    # stops at the NUL, as any C++ exception message does.
-    nul_name = "in\x00put"
+    # writes the NUL as \0.
     spec, run_args = exp_program(second_input, first_output)
-    parameters = spec.tensor_parameters
-    for parameter in parameters:
-        if parameter.unique_id == "input":
-            parameter.unique_id = nul_name
-    spec.tensor_parameters = parameters
-    kernels = spec.kernels
-    for kernel in kernels:
-        bindings = kernel.tensor_bindings
-        for binding in bindings:
-            if binding.tensor_parameter_name == "input":
-                binding.tensor_parameter_name = nul_name
-        kernel.tensor_bindings = bindings
-    spec.kernels = kernels
-    run_args.tensor_args = {nul_name: second_input, "output": first_output}
-    with expect_error(RuntimeError, "generic_op: tensor parameter 'in"):
+    rename_tensor_parameter(spec, run_args, "input", "in\x00put")
+    with expect_error(RuntimeError, r"tensor parameter 'in\\0put' is bound to a view that holds devices"):
         E.generic_op([first_input, first_output], spec, run_args)
 
     # A view, or the whole tensor, that holds the program's device reads that device's part.
