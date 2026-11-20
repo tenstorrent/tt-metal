@@ -31,6 +31,7 @@ RecipeKeyRange ring_distributed_key_range(const RingDistributedSDPAParams& attrs
 void validate_ring_distributed(const RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& t) {
     const uint32_t sq = t.q.logical_shape()[2];
     const uint32_t ring_size = attrs.ring_size;
+    validate_recipe_grid(attrs.program_config);
     TT_FATAL(
         ring_size > 0 && ring_size % 2 == 0 && ring_size <= 32,
         "ring_size must be positive, even and at most 32, got {}",
@@ -65,19 +66,36 @@ RecipeResolution resolve_ring_distributed_recipe_uncached(
     const auto key_range = ring_distributed_key_range(attrs, tensors);
     const RecipeDenseOptions options{};
     RecipeResolution resolution;
-    resolution.program_config = resolve_dense_recipe_blocking(
-        policy,
-        tensors.q,
-        tensors.k,
-        nullptr,
-        nullptr,
-        attrs.program_config,
-        nullptr,
-        0,
-        &key_range,
-        &options,
-        false,
-        recipe_kv_storage(tensors.v.dtype()));
+    auto choose = [&](const std::optional<SDPAProgramConfig>& config) {
+        resolution.program_config = resolve_dense_recipe_blocking(
+            policy,
+            tensors.q,
+            tensors.k,
+            nullptr,
+            nullptr,
+            config,
+            nullptr,
+            0,
+            &key_range,
+            &options,
+            false,
+            recipe_kv_storage(tensors.v.dtype()));
+    };
+    choose(attrs.program_config);
+    if (resolution.program_config && !recipe_chunks_fit(
+                                         {{tensors.q, tensors.k, tensors.v}},
+                                         policy,
+                                         resolution.program_config,
+                                         std::nullopt,
+                                         attrs.output_mem_config,
+                                         key_range,
+                                         options)) {
+        // The caller's chunks do not fit the free L1 in any recipe layout: the op chooses them on the caller's grid.
+        auto config = *resolution.program_config;
+        config.q_chunk_size = 0;
+        config.k_chunk_size = 0;
+        choose(config);
+    }
     resolution.l1_budget = recipe_l1_budget(
         {{tensors.q, tensors.k, tensors.v}},
         policy,

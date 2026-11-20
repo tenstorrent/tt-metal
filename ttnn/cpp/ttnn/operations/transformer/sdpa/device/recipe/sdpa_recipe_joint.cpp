@@ -27,24 +27,37 @@ PrecisionPolicy joint_recipe_policy(const JointSDPAParams& attrs, const JointSDP
 }
 
 void resolve_joint_recipe(JointSDPAParams& attrs, const JointSDPAInputs& tensors) {
+    validate_recipe_grid(attrs.program_config);
     const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.input_q, attrs, tensors), [&] {
         const auto policy = joint_recipe_policy(attrs, tensors);
+        const auto segments = joint_segments(tensors);
+        auto choose = [&](const std::optional<SDPAProgramConfig>& config) {
+            return resolve_dense_recipe_blocking(
+                policy,
+                tensors.input_q,
+                tensors.input_k,
+                &tensors.joint_q,
+                &tensors.joint_k,
+                config,
+                nullptr,
+                0,
+                nullptr,
+                nullptr,
+                false,
+                recipe_kv_storage(tensors.input_v.dtype()));
+        };
         RecipeResolution r;
-        r.program_config = resolve_dense_recipe_blocking(
-            policy,
-            tensors.input_q,
-            tensors.input_k,
-            &tensors.joint_q,
-            &tensors.joint_k,
-            attrs.program_config,
-            nullptr,
-            0,
-            nullptr,
-            nullptr,
-            false,
-            recipe_kv_storage(tensors.input_v.dtype()));
-        r.l1_budget = recipe_l1_budget(
-            joint_segments(tensors), policy, r.program_config, std::nullopt, attrs.output_memory_config, {}, {});
+        r.program_config = choose(attrs.program_config);
+        if (r.program_config &&
+            !recipe_chunks_fit(segments, policy, r.program_config, std::nullopt, attrs.output_memory_config, {}, {})) {
+            // The caller's chunks do not fit the free L1 in any recipe layout: the op chooses them on its grid.
+            auto config = *r.program_config;
+            config.q_chunk_size = 0;
+            config.k_chunk_size = 0;
+            r.program_config = choose(config);
+        }
+        r.l1_budget =
+            recipe_l1_budget(segments, policy, r.program_config, std::nullopt, attrs.output_memory_config, {}, {});
         return r;
     });
     attrs.program_config = resolution.program_config;

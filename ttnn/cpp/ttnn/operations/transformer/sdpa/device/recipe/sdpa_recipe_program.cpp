@@ -90,6 +90,14 @@ uint64_t recipe_free_l1(IDevice& device) {
     return top - device.allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 }
 
+void validate_recipe_grid(const std::optional<SDPAProgramConfig>& program_config) {
+    if (program_config) {
+        const auto& grid = program_config->compute_with_storage_grid_size;
+        TT_FATAL(
+            grid.x > 0 && grid.y > 0, "compute_with_storage_grid_size must be non-zero, got ({}, {})", grid.x, grid.y);
+    }
+}
+
 RecipeResolution memoized_recipe_resolution(std::size_t key, const std::function<RecipeResolution()>& resolve) {
     static std::mutex mutex;
     static std::unordered_map<std::size_t, RecipeResolution> memo;
@@ -1143,9 +1151,49 @@ ProgramDescriptor recipe_program(
     return program;
 }
 
+namespace {
+// The free L1 left after L1 outputs, and the layout estimate of the call's chunks (none for a geometry recipe_program
+// rejects).
+std::pair<uint64_t, std::optional<RecipeL1Estimate>> recipe_l1_need(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options);
+}  // namespace
+
 // The L1 a recipe layout may use (recipe_program's l1_budget). The cap is the blocking chooser's preferred layout (recipe_l1_bytes: double-buffered
 // mask groups and the fused CBs), which is never below the layout recipe_program builds.
 uint64_t recipe_l1_budget(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options) {
+    const auto [budget, estimate] =
+        recipe_l1_need(segments, policy, program_config, attn_mask, output_memory_config, key_range, options);
+    return estimate ? std::min(budget, estimate->preferred) : budget;
+}
+
+bool recipe_chunks_fit(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    const MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options) {
+    const auto [budget, estimate] =
+        recipe_l1_need(segments, policy, program_config, attn_mask, output_memory_config, key_range, options);
+    return !estimate || estimate->minimum <= budget;
+}
+
+namespace {
+std::pair<uint64_t, std::optional<RecipeL1Estimate>> recipe_l1_need(
     const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
     const std::optional<SDPAProgramConfig>& program_config,
@@ -1169,7 +1217,7 @@ uint64_t recipe_l1_budget(
     const uint32_t k_tiles = program_config ? program_config->k_chunk_size / 32 : 16;
     const auto op = segments.size() == 2 ? RecipeOp::Joint : RecipeOp::Dense;
     if (qs[3] % 32 != 0 || !recipe_geometry_supported(q_tiles, k_tiles, d_tiles)) {
-        return budget;  // recipe_program rejects the call
+        return {budget, std::nullopt};  // recipe_program rejects the call
     }
     const RecipeL1Context context{
         .mask_page_bytes = attn_mask            ? attn_mask->buffer()->page_size()
@@ -1179,8 +1227,9 @@ uint64_t recipe_l1_budget(
         .keyed = key_range.active(),
         .vd_tiles = options.head_dim_v ? vd_tiles : 0,
         .v_storage = recipe_kv_storage(v.dtype())};
-    return std::min(budget, recipe_l1_bytes(op, policy, q_tiles, k_tiles, d_tiles, context).preferred);
+    return {budget, recipe_l1_bytes(op, policy, q_tiles, k_tiles, d_tiles, context)};
 }
+}  // namespace
 
 uint64_t recipe_output_l1_bytes(
     const Tensor& q, uint64_t pages, uint32_t page_bytes, const MemoryConfig& memory_config) {

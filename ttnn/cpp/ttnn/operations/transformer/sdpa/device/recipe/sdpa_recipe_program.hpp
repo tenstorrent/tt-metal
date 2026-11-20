@@ -46,6 +46,9 @@ uint64_t recipe_cb_bytes(const tt::tt_metal::ProgramDescriptor& program);
 // pipeline, and static CBs must not overlap them.
 uint64_t recipe_free_l1(tt::tt_metal::IDevice& device);
 
+// A caller's grid must have cores (the ops' common argument rule).
+void validate_recipe_grid(const std::optional<SDPAProgramConfig>& program_config);
+
 // What a recipe call resolves before the program-cache lookup (both are part of the program hash): the blocking the
 // op chooses and the L1 its layout may use.
 struct RecipeResolution {
@@ -210,6 +213,16 @@ tt::tt_metal::ProgramDescriptor recipe_program(
 
 // The L1 bytes a recipe layout may use: the free L1 below the live L1 buffers less the outputs' share, capped at the
 // blocking chooser's preferred layout, so calls with room to spare share one program.
+// Whether the call's explicit chunks fit the free L1 in their smallest layout (recipe_l1_bytes' minimum).
+bool recipe_chunks_fit(
+    const std::vector<std::array<Tensor, 3>>& segments,
+    const PrecisionPolicy& policy,
+    const std::optional<SDPAProgramConfig>& program_config,
+    const std::optional<Tensor>& attn_mask,
+    const tt::tt_metal::MemoryConfig& output_memory_config,
+    const RecipeKeyRange& key_range,
+    const RecipeDenseOptions& options);
+
 uint64_t recipe_l1_budget(
     const std::vector<std::array<Tensor, 3>>& segments,
     const PrecisionPolicy& policy,
