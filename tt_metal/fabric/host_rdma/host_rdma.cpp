@@ -11,6 +11,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <type_traits>
@@ -32,6 +33,7 @@
 #include "llrt/hal.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 #include "tt_metal/distributed/core_writer.hpp"
+#include "tt_metal/distributed/mesh_device_impl.hpp"
 #include "tt_metal/distributed/noc_pinned_buffer.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -67,12 +69,13 @@ constexpr std::chrono::seconds kCreditTimeout{10};
 // UmdDmaDeviceWriter
 // ---------------------------------------------------------------------------------------------------------------------
 
-UmdDmaDeviceWriter::UmdDmaDeviceWriter(const tt::Cluster& cluster) : cluster_(cluster) {}
+UmdDmaDeviceWriter::UmdDmaDeviceWriter(tt::tt_metal::MetalContext& context) :
+    cluster_(context.get_cluster()), dma_enabled_(!context.rtoptions().get_disable_dma_ops()) {}
 
 void UmdDmaDeviceWriter::write(
     ChipId chip, const tt_metal::CoreCoord& virtual_core, uint64_t addr, std::span<const std::byte> data) {
     const bool dma_shape = data.size() >= kMinDmaBytes && data.size() % 4 == 0 && addr % 4 == 0;
-    if (dma_shape && !tt::tt_metal::MetalContext::instance().rtoptions().get_disable_dma_ops()) {
+    if (dma_shape && dma_enabled_) {
         const auto& soc_desc = cluster_.get_soc_desc(chip);
         const tt::umd::CoreCoord core = soc_desc.get_coord_at(virtual_core, CoordSystem::TRANSLATED);
         cluster_.get_driver()->dma_write_to_device(data.data(), data.size(), chip, core, addr);
@@ -192,8 +195,7 @@ TransportFactory host_push_transport(std::shared_ptr<DeviceWriter> writer) {
 // Router channels
 // ---------------------------------------------------------------------------------------------------------------------
 
-RouterChannel find_router_channel(FabricNodeId src, chan_id_t eth_chan) {
-    auto& context = tt::tt_metal::MetalContext::instance();
+RouterChannel find_router_channel(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan) {
     const auto& hal = context.hal();
     TT_FATAL(
         hal.get_arch() == tt::ARCH::BLACKHOLE,
@@ -221,10 +223,14 @@ RouterChannel find_router_channel(FabricNodeId src, chan_id_t eth_chan) {
     rc.slots.slot_bytes = static_cast<uint32_t>(edm_config.channel_buffer_size_bytes);
     rc.connection_info_addr =
         static_cast<uint32_t>(edm_config.sender_channels_worker_conn_info_base_address[rc.channel]);
-    const uint32_t free_slots_stream =
+    rc.connection_semaphore_addr =
+        static_cast<uint32_t>(edm_config.sender_channels_connection_semaphore_address[rc.channel]);
+    rc.producer_cursor_addr =
+        static_cast<uint32_t>(edm_config.sender_channels_buffer_index_semaphore_address[rc.channel]);
+    rc.free_slots_stream =
         builder_context.get_stream_assignment(src.mesh_id).id(StreamRole::SENDER_FREE_SLOTS, 0, rc.channel);
     rc.slots.free_slots_addr = hal.get_noc_overlay_start_addr() +
-                               free_slots_stream * hal.get_noc_stream_reg_space_size() +
+                               rc.free_slots_stream * hal.get_noc_stream_reg_space_size() +
                                hal.get_noc_stream_remote_dest_buf_space_available_update_reg_index() * sizeof(uint32_t);
     TT_FATAL(
         rc.slots.num_slots > 0 && rc.slots.slot_bytes > 0,
@@ -238,17 +244,27 @@ RouterChannel find_router_channel(FabricNodeId src, chan_id_t eth_chan) {
         eth_chan,
         rc.channel);
 
-    // Take up where the router is: it has freed `edm_read_counter` slots of this channel since it started, and (with
-    // the channel idle) its next slot is that count's.
-    cluster.read_reg(
-        &rc.slots.start,
-        tt_cxy_pair(rc.slots.chip, rc.slots.router_core),
-        rc.connection_info_addr + offsetof(HostRdmaChannelInfo, edm_read_counter));
+    // Take up where the channel's last producer left off (its cursor; zero since the router started), and the slots the
+    // router has freed.
+    const auto core = tt_cxy_pair(rc.slots.chip, rc.slots.router_core);
+    SenderChannelProducerCursor cursor{};
+    cluster.read_core(&cursor, sizeof(cursor), core, rc.producer_cursor_addr);
+    TT_FATAL(
+        cursor.write_index < rc.slots.num_slots,
+        "Router {} channel {}: its producer cursor's slot {} is past its {} slots",
+        src,
+        eth_chan,
+        cursor.write_index,
+        rc.slots.num_slots);
+    rc.slots.start_counter = cursor.write_counter;
+    rc.slots.start_index = cursor.write_index;
+    cluster.read_reg(&rc.slots.freed, core, rc.connection_info_addr + offsetof(HostRdmaChannelInfo, edm_read_counter));
     return rc;
 }
 
-void set_router_credit_target(const RouterChannel& rc, const DeviceVisibleAddress& target) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+void set_router_credit_target(
+    tt::tt_metal::MetalContext& context, const RouterChannel& rc, const DeviceVisibleAddress& target) {
+    const auto& cluster = context.get_cluster();
     const auto core = tt_cxy_pair(rc.slots.chip, rc.slots.router_core);
     const auto write = [&](size_t offset, uint32_t value) {
         cluster.write_reg(&value, core, rc.connection_info_addr + offset);
@@ -262,8 +278,8 @@ void set_router_credit_target(const RouterChannel& rc, const DeviceVisibleAddres
     cluster.l1_barrier(rc.slots.chip, {rc.slots.router_core});
 }
 
-void clear_router_credit_target(const RouterChannel& rc) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+void clear_router_credit_target(tt::tt_metal::MetalContext& context, const RouterChannel& rc) {
+    const auto& cluster = context.get_cluster();
     const uint32_t disabled = 0;
     cluster.write_reg(
         &disabled,
@@ -272,8 +288,19 @@ void clear_router_credit_target(const RouterChannel& rc) {
     cluster.l1_barrier(rc.slots.chip, {rc.slots.router_core});
 }
 
-uint32_t hops_between(FabricNodeId src, chan_id_t eth_chan, FabricNodeId dst) {
-    const auto route = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_route(src, dst, eth_chan);
+void save_producer_cursor(
+    tt::tt_metal::MetalContext& context, const RouterChannel& rc, uint32_t counter, uint32_t index) {
+    const auto& cluster = context.get_cluster();
+    SenderChannelProducerCursor cursor{};
+    cursor.write_counter = counter;
+    cursor.write_index = index;
+    cluster.write_core(
+        &cursor, sizeof(cursor), tt_cxy_pair(rc.slots.chip, rc.slots.router_core), rc.producer_cursor_addr);
+    cluster.l1_barrier(rc.slots.chip, {rc.slots.router_core});
+}
+
+uint32_t hops_between(tt::tt_metal::MetalContext& context, FabricNodeId src, chan_id_t eth_chan, FabricNodeId dst) {
+    const auto route = context.get_control_plane().get_fabric_route(src, dst, eth_chan);
     // The route lists each router it passes (two per chip crossed); count the chip changes.
     uint32_t hops = 0;
     FabricNodeId previous = src;
@@ -291,9 +318,10 @@ uint32_t hops_between(FabricNodeId src, chan_id_t eth_chan, FabricNodeId dst) {
 // HostRdmaChannel
 // ---------------------------------------------------------------------------------------------------------------------
 
-chan_id_t HostRdmaChannel::eth_chan_toward(FabricNodeId src, FabricNodeId dst, uint32_t link_idx) {
+chan_id_t HostRdmaChannel::eth_chan_toward(
+    tt::tt_metal::MetalContext& context, FabricNodeId src, FabricNodeId dst, uint32_t link_idx) {
     TT_FATAL(src != dst, "A host_rdma write goes to another chip (src and dst are both {})", src);
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    const auto& control_plane = context.get_control_plane();
     const std::optional<RoutingDirection> direction = control_plane.get_forwarding_direction(src, dst);
     TT_FATAL(direction.has_value(), "No forwarding direction from {} to {}", src, dst);
     const auto eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(src, *direction);
@@ -308,6 +336,7 @@ chan_id_t HostRdmaChannel::eth_chan_toward(FabricNodeId src, FabricNodeId dst, u
 }
 
 std::unique_ptr<HostRdmaChannel> HostRdmaChannel::open_toward(
+    tt::tt_metal::MetalContext& context,
     FabricNodeId src,
     FabricNodeId dst,
     uint32_t link_idx,
@@ -315,19 +344,21 @@ std::unique_ptr<HostRdmaChannel> HostRdmaChannel::open_toward(
     std::shared_ptr<HostMemoryTarget> credits,
     size_t credit_word) {
     return std::make_unique<HostRdmaChannel>(
-        src, eth_chan_toward(src, dst, link_idx), std::move(writer), std::move(credits), credit_word);
+        context, src, eth_chan_toward(context, src, dst, link_idx), std::move(writer), std::move(credits), credit_word);
 }
 
 HostRdmaChannel::HostRdmaChannel(
+    tt::tt_metal::MetalContext& context,
     FabricNodeId src,
     chan_id_t eth_chan,
     std::shared_ptr<DeviceWriter> writer,
     std::shared_ptr<HostMemoryTarget> credits,
     size_t credit_word,
     const TransportFactory& transport) :
-    fabric_context_(tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context()),
-    control_plane_(tt::tt_metal::MetalContext::instance().get_control_plane()),
-    hal_(tt::tt_metal::MetalContext::instance().hal()),
+    context_(context),
+    fabric_context_(context.get_control_plane().get_fabric_context()),
+    control_plane_(context.get_control_plane()),
+    hal_(context.hal()),
     src_(src),
     eth_chan_(eth_chan),
     writer_(std::move(writer)),
@@ -335,8 +366,8 @@ HostRdmaChannel::HostRdmaChannel(
     credit_word_(credit_word) {
     TT_FATAL(
         writer_ != nullptr && credits_ != nullptr, "A host_rdma channel needs a device writer and a credit target");
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    router_ = find_router_channel(src_, eth_chan_);
+    const auto& cluster = context_.get_cluster();
+    router_ = find_router_channel(context_, src_, eth_chan_);
     chip_ = router_.slots.chip;
     router_core_ = router_.slots.router_core;
     slots_base_ = router_.slots.slots_base;
@@ -360,21 +391,21 @@ HostRdmaChannel::HostRdmaChannel(
         cluster.read_core(routing_table_.data(), routing_table_.size(), tt_cxy_pair(chip_, router_core_), table_addr);
     }
 
-    const uint32_t start = router_.slots.start;
-    sent_ = start;
-    known_credits_ = start;
-    next_slot_ = start % num_slots_;
-    credits_->write(credit_word_, start);
+    // Take up the channel's producer cursor (the host is its producer while open).
+    sent_ = router_.slots.start_counter;
+    next_slot_ = router_.slots.start_index;
+    known_credits_ = router_.slots.freed;
+    credits_->write(credit_word_, known_credits_);
 
     transport_ = transport ? transport(router_.slots) : host_push_transport(writer_)(router_.slots);
 
     // The router credits this channel in host memory.
-    set_router_credit_target(router_, credits_->device_address(chip_, credit_word_));
+    set_router_credit_target(context_, router_, credits_->device_address(chip_, credit_word_));
 
     log_debug(
         tt::LogFabric,
         "host_rdma: opened {} eth chan {} (core {}): channel {} at 0x{:x}, {} slots of {} B, doorbell 0x{:x}, "
-        "starting at {} credits",
+        "starting at packet {} (slot {}), {} credits",
         src_,
         eth_chan_,
         router_core_.str(),
@@ -383,15 +414,22 @@ HostRdmaChannel::HostRdmaChannel(
         num_slots_,
         slot_bytes_,
         doorbell_addr_,
-        start);
+        sent_,
+        next_slot_,
+        known_credits_);
 }
 
-HostRdmaChannel::~HostRdmaChannel() {
+HostRdmaChannel::~HostRdmaChannel() noexcept {
+    // No drain: the owner drains before closing (draining could wait on the device indefinitely; #66677). Staged
+    // packets are dropped: the cursor is left at the first one.
     try {
-        drain();
-        clear_router_credit_target(router_);
+        clear_router_credit_target(context_, router_);
+        save_producer_cursor(context_, router_, sent_, staged_ != 0 ? staged_first_slot_ : next_slot_);
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "host_rdma: closing {} eth chan {} failed: {}", src_, eth_chan_, e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogFabric, "host_rdma: closing {} eth chan {} failed with an unknown exception", src_, eth_chan_);
     }
 }
 
@@ -404,7 +442,7 @@ uint64_t HostRdmaChannel::noc_addr(const tt_metal::CoreCoord& virtual_core, uint
            addr;
 }
 
-uint32_t HostRdmaChannel::hops_to(FabricNodeId dst) const { return hops_between(src_, eth_chan_, dst); }
+uint32_t HostRdmaChannel::hops_to(FabricNodeId dst) const { return hops_between(context_, src_, eth_chan_, dst); }
 
 void HostRdmaChannel::build_header(
     FabricNodeId dst,
@@ -610,19 +648,20 @@ namespace sabi = tt::tt_fabric::host_rdma::service_abi;
 
 std::shared_ptr<HostRdmaService> HostRdmaService::create(
     std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core) {
+    TT_FATAL(mesh_device != nullptr, "The host_rdma service needs a mesh device");
     return std::shared_ptr<HostRdmaService>(new HostRdmaService(std::move(mesh_device), logical_core));
 }
 
 HostRdmaService::HostRdmaService(
     std::shared_ptr<tt_metal::distributed::MeshDevice> mesh_device, tt_metal::CoreCoord logical_core) :
-    mesh_device_(std::move(mesh_device)), cluster_(tt::tt_metal::MetalContext::instance().get_cluster()) {
-    auto& context = tt::tt_metal::MetalContext::instance();
-    const auto& hal = context.hal();
-    const auto& fabric_context = context.get_control_plane().get_fabric_context();
-    TT_FATAL(mesh_device_ != nullptr, "The host_rdma service needs a mesh device");
+    mesh_device_(std::move(mesh_device)),
+    context_(mesh_device_->impl().metal_context()),
+    cluster_(context_.get_cluster()) {
+    const auto& hal = context_.hal();
+    const auto& fabric_context = context_.get_control_plane().get_fabric_context();
     TT_FATAL(mesh_device_->get_devices().size() == 1, "The host_rdma service runs on a unit mesh (one chip)");
     chip_ = mesh_device_->get_devices().front()->id();
-    node_ = context.get_control_plane().get_fabric_node_id_from_physical_chip_id(chip_);
+    node_ = context_.get_control_plane().get_fabric_node_id_from_physical_chip_id(chip_);
     core_ = mesh_device_->worker_core_from_logical_core(logical_core);
     is_2d_ = fabric_context.is_2D_routing_enabled();
 
@@ -668,21 +707,20 @@ HostRdmaService::HostRdmaService(
     tt_metal::distributed::EnqueueMeshWorkload(mesh_device_->mesh_command_queue(), workload, /*blocking=*/false);
 }
 
-HostRdmaService::~HostRdmaService() {
-    try {
-        drain();
-    } catch (const std::exception& e) {
-        log_warning(tt::LogFabric, "host_rdma: draining the service on chip {} failed: {}", chip_, e.what());
-    }
+HostRdmaService::~HostRdmaService() noexcept {
+    // No drain: the owner drains before closing (draining could wait on the device indefinitely; #66677). The kernel
+    // stops as soon as it sees `terminate`, closing its connections.
     try {
         for (auto& ch : channels_) {
-            clear_router_credit_target(ch.router);
-            write_word(channel_addr(ch.entry) + offsetof(sabi::Channel, active), 0);
+            clear_router_credit_target(context_, ch.router);
         }
         write_word(layout_addr_ + offsetof(sabi::Header, terminate), 1);
         tt_metal::distributed::Finish(mesh_device_->mesh_command_queue());
     } catch (const std::exception& e) {
         log_warning(tt::LogFabric, "host_rdma: stopping the service on chip {} failed: {}", chip_, e.what());
+    } catch (...) {
+        log_warning(
+            tt::LogFabric, "host_rdma: stopping the service on chip {} failed with an unknown exception", chip_);
     }
 }
 
@@ -705,7 +743,7 @@ void HostRdmaService::write_word(uint32_t addr, uint32_t value) {
 }
 
 size_t HostRdmaService::channel_toward(FabricNodeId dst) {
-    const chan_id_t eth_chan = HostRdmaChannel::eth_chan_toward(node_, dst);
+    const chan_id_t eth_chan = HostRdmaChannel::eth_chan_toward(context_, node_, dst);
     for (size_t i = 0; i < channels_.size(); i++) {
         if (channels_[i].router.eth_chan == eth_chan) {
             return i;
@@ -716,30 +754,42 @@ size_t HostRdmaService::channel_toward(FabricNodeId dst) {
         "The host_rdma service on chip {} serves at most {} routers",
         chip_,
         sabi::MAX_CHANNELS);
-    const auto& fabric_context = tt::tt_metal::MetalContext::instance().get_control_plane().get_fabric_context();
+    const auto& fabric_context = context_.get_control_plane().get_fabric_context();
     Channel ch;
     ch.entry = static_cast<uint32_t>(channels_.size());
-    ch.router = find_router_channel(node_, eth_chan);
+    ch.router = find_router_channel(context_, node_, eth_chan);
+    // The kernel's connection object keeps the slot count in 8 bits and the slot stride in 16.
+    TT_FATAL(
+        ch.router.slots.num_slots <= std::numeric_limits<uint8_t>::max() &&
+            ch.router.slots.slot_bytes <= std::numeric_limits<uint16_t>::max(),
+        "Router {} eth chan {}: {} slots of {} B do not fit a fabric connection",
+        node_,
+        eth_chan,
+        ch.router.slots.num_slots,
+        ch.router.slots.slot_bytes);
     const uint32_t max_payload = static_cast<uint32_t>(std::min<size_t>(
         fabric_context.get_fabric_max_payload_size_bytes(),
         ch.router.slots.slot_bytes - fabric_context.get_fabric_packet_header_size_bytes()));
 
-    // The entry, inactive, then the router's credits pointed at it, then active.
+    // The entry, inactive, then the router's credits pointed at it, then active (the kernel then opens the connection).
     sabi::Channel entry{};
     std::memset(static_cast<void*>(&entry), 0, sizeof(entry));
-    entry.credits = ch.router.slots.start;
-    entry.start = ch.router.slots.start;
+    entry.credits = ch.router.slots.freed;
+    entry.max_payload = max_payload & ~15u;
     entry.router_x = static_cast<uint32_t>(ch.router.slots.router_core.x);
     entry.router_y = static_cast<uint32_t>(ch.router.slots.router_core.y);
     entry.slots_base = ch.router.slots.slots_base;
-    entry.free_slots_addr = ch.router.slots.free_slots_addr;
     entry.num_slots = ch.router.slots.num_slots;
     entry.slot_bytes = ch.router.slots.slot_bytes;
-    entry.max_payload = max_payload & ~15u;
+    entry.free_slots_stream = ch.router.free_slots_stream;
+    entry.connection_semaphore_addr = ch.router.connection_semaphore_addr;
+    entry.connection_info_addr = ch.router.connection_info_addr;
+    entry.producer_cursor_addr = ch.router.producer_cursor_addr;
     cluster_.write_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
     cluster_.l1_barrier(chip_, {core_});
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& hal = context_.hal();
     set_router_credit_target(
+        context_,
         ch.router,
         DeviceVisibleAddress{
             .noc_xy = hal.noc_xy_encoding(core_.x, core_.y),
@@ -780,7 +830,7 @@ sabi::Request HostRdmaService::encode(const WriteRequest& request, const Channel
     r.size = request.size;
     r.dst_dev_id = static_cast<uint16_t>(request.dst.chip_id);
     r.dst_mesh_id = static_cast<uint16_t>(*request.dst.mesh_id);
-    r.hops = is_2d_ ? 0 : hops_between(node_, ch.router.eth_chan, request.dst);
+    r.hops = is_2d_ ? 0 : hops_between(context_, node_, ch.router.eth_chan, request.dst);
     if (request.completion.has_value()) {
         r.completion = {
             static_cast<uint32_t>(request.completion->addr),
@@ -869,13 +919,12 @@ std::string HostRdmaService::describe() const {
         sabi::Channel entry{};
         cluster_.read_core(&entry, offsetof(sabi::Channel, queue), tt_cxy_pair(chip_, core_), channel_addr(ch.entry));
         out += fmt::format(
-            "; eth chan {}: produced {} (host {}), consumed {}, router credits {} (start {}, {} slots)",
+            "; eth chan {}: produced {} (host {}), consumed {}, router credits {} ({} slots)",
             ch.router.eth_chan,
             entry.produced,
             ch.produced,
             entry.consumed,
             entry.credits,
-            entry.start,
             entry.num_slots);
     }
     return out;

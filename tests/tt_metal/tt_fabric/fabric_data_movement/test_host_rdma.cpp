@@ -70,7 +70,7 @@ public:
             GTEST_SKIP() << "Host-initiated RDMA is Blackhole only";
         }
         auto& context = tt::tt_metal::MetalContext::instance();
-        writer_ = std::make_shared<UmdDmaDeviceWriter>(context.get_cluster());
+        writer_ = std::make_shared<UmdDmaDeviceWriter>(context);
         const auto& control_plane = context.get_control_plane();
         l1_base_ = static_cast<uint32_t>(context.hal().get_dev_addr(
             tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED));
@@ -85,8 +85,15 @@ public:
     }
 
     void TearDown() override {
-        channels_.clear();  // drains and withdraws every channel's credit target
-        services_.clear();  // drains and stops the service kernels
+        // Drained first: closing a channel or a service does not wait for its traffic.
+        for (auto& [key, ch] : channels_) {
+            ch->drain();
+        }
+        for (auto& [chip, svc] : services_) {
+            svc->drain();
+        }
+        channels_.clear();  // withdraws every channel's credit target
+        services_.clear();  // stops the service kernels
         chips_.clear();
         writer_.reset();
     }
@@ -102,13 +109,14 @@ protected:
 
     // The channel from `src` toward `dst`: one per router, opened on first use.
     HostRdmaChannel& channel(Chip& src, const Chip& dst) {
-        const chan_id_t eth_chan = HostRdmaChannel::eth_chan_toward(src.node, dst.node);
+        auto& context = tt::tt_metal::MetalContext::instance();
+        const chan_id_t eth_chan = HostRdmaChannel::eth_chan_toward(context, src.node, dst.node);
         auto key = std::make_pair(src.chip, eth_chan);
         auto it = channels_.find(key);
         if (it == channels_.end()) {
             TT_FATAL(src.next_credit_word < kCreditWordsPerChip, "Out of credit words on chip {}", src.chip);
-            auto opened =
-                std::make_unique<HostRdmaChannel>(src.node, eth_chan, writer_, src.credits, src.next_credit_word++);
+            auto opened = std::make_unique<HostRdmaChannel>(
+                context, src.node, eth_chan, writer_, src.credits, src.next_credit_word++);
             it = channels_.emplace(key, std::move(opened)).first;
         }
         return *it->second;
@@ -214,8 +222,8 @@ protected:
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         uint32_t count = 0;
         FabricNodeId previous = src;
-        for (const auto& [node, chan] :
-             control_plane.get_fabric_route(src, dst, HostRdmaChannel::eth_chan_toward(src, dst))) {
+        for (const auto& [node, chan] : control_plane.get_fabric_route(
+                 src, dst, HostRdmaChannel::eth_chan_toward(tt::tt_metal::MetalContext::instance(), src, dst))) {
             if (node != previous) {
                 count++;
                 previous = node;
@@ -466,7 +474,12 @@ TEST_F(HostRdmaFabric2DFixture, DISABLED_DmaPath) {
     for (const auto& target : targets) {
         const tt::umd::CoreCoord umd_core = soc.get_coord_at(target.core, CoordSystem::TRANSLATED);
         for (size_t size = 64; size <= target.max_bytes; size *= 4) {
-            const int iters = size <= 16384 ? 2000 : (size <= 262144 ? 200 : 50);
+            int iters = 50;
+            if (size <= 16384) {
+                iters = 2000;
+            } else if (size <= 262144) {
+                iters = 200;
+            }
             const auto time_us = [&](auto&& op) {
                 op();  // warm
                 const auto t = Clock::now();
@@ -533,9 +546,11 @@ TEST_F(HostRdmaFabric2DFixture, DISABLED_Bandwidth) {
     ASSERT_NE(dst, nullptr);
     {
         auto timed = std::make_shared<TimedDeviceWriter>(writer_);
+        auto& context = tt::tt_metal::MetalContext::instance();
         HostRdmaChannel ch(
+            context,
             src.node,
-            HostRdmaChannel::eth_chan_toward(src.node, dst->node),
+            HostRdmaChannel::eth_chan_toward(context, src.node, dst->node),
             timed,
             src.credits,
             src.next_credit_word++,
@@ -600,6 +615,7 @@ TEST_F(HostRdmaFabric2DFixture, DISABLED_Bandwidth) {
                 timed->word_ns / n / 1e3,
                 (issue_secs * 1e9 - timed->write_ns - timed->fence_ns - timed->word_ns) / n / 1e3);
         }
+        ch.drain();
     }
 
     // The request service: requests of each size from a source window in the source chip's L1, round-robin over a

@@ -305,6 +305,7 @@ set(JITAPI_FILES
     fabric/impl/kernels/edm_fabric/fabric_router_mux_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_relay_extension.cpp
     fabric/impl/kernels/edm_fabric/fabric_router_udm_mux_extension.cpp
+    fabric/impl/kernels/host_rdma_service.cpp
     fabric/impl/kernels/tt_fabric_mux.cpp
     fabric/impl/kernels/tt_fabric_mux_v2.cpp
     fabric/impl/kernels/tt_fabric_mux_v2_forwarder.hpp
