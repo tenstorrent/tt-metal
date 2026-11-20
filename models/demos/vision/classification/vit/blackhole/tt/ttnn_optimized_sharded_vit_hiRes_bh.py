@@ -319,6 +319,7 @@ def vit_attention(
         is_causal=False,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        precision=ttnn.SDPAPrecision.ACCURATE,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
