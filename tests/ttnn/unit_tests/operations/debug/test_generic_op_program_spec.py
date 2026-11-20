@@ -1209,13 +1209,29 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     first_view, second_view = ttnn.get_device_tensors(output)
     first_spec, first_run_args = exp_program(first_input, first_view)
     second_spec, second_run_args = exp_program(second_input, second_view)
+    each_spec = E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)])
     E.generic_op(
         [input_tensor, output],
-        E.MeshProgramSpec(programs=[(one_device(0), first_spec), (one_device(1), second_spec)]),
+        each_spec,
         E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
     )
     result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_close(torch.exp(torch_input), result)
+    # The same mesh call hits the cached programs, and the check runs there too: with the run args swapped, the first
+    # device's program binds the second device's views.
+    entries = mesh_device.num_program_cache_entries()
+    E.generic_op(
+        [input_tensor, output],
+        each_spec,
+        E.MeshProgramRunArgs(programs=[(one_device(0), first_run_args), (one_device(1), second_run_args)]),
+    )
+    assert mesh_device.num_program_cache_entries() == entries
+    with expect_error(RuntimeError, message):
+        E.generic_op(
+            [input_tensor, output],
+            each_spec,
+            E.MeshProgramRunArgs(programs=[(one_device(0), second_run_args), (one_device(1), first_run_args)]),
+        )
 
     # Views are not part of the cache key, so a call that hits a cached program gets the check too, with
     # validate_program_args off as well: here the second device's view in a program on the first device. The same
@@ -1229,6 +1245,8 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     spec, run_args = exp_program(second_input, output_view)
     with expect_error(RuntimeError, message):
         E.generic_op([first_input, output_view], spec, run_args)
+    # prepare_generic_op takes a view that holds its program's device.
+    E.prepare_generic_op([first_input, output_view], *exp_program(first_input, output_view))
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
