@@ -13,7 +13,7 @@ class TrainMetricsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # The metrics are averaged over, and logged every, this many optimizer steps.
-    steps_freq: int = Field(default=10, ge=1)
+    frequency: int = Field(default=10, ge=1)
     # Available: "loss" and "learning_rate".
     metric_names: list[str] = Field(default_factory=lambda: ["loss"])
 
@@ -24,7 +24,7 @@ class ValidationMetricsConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     # The trainer validates before training and every this many optimizer steps; 0 disables validation.
-    steps_freq: int = Field(default=0, ge=0)
+    frequency: int = Field(default=0, ge=0)
     # Available: "loss".
     metric_names: list[str] = Field(default_factory=lambda: ["loss"])
 
