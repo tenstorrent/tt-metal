@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import torch
@@ -35,7 +36,7 @@ DSV3 = get_adapter("deepseek_v3_d_p")
 
 from models.demos.deepseek_v3_d_p.tests import _reuse
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
-    assert_torus_xy_descriptor,
+    certified_torus_fabric,
     fabric2d_device_params,
     torus_x_device_params,
     torus_xy_device_params,
@@ -139,8 +140,10 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
     kept = []
     is_bh = is_blackhole()
     for item in items:
-        marker = item.get_closest_marker("uncollect_if")
-        if marker is None:
+        # Every uncollect_if mark counts, not just the closest: a function-level one and a per-param one
+        # (utils/stage_4x4_params.py) can sit on the same case.
+        markers = list(item.iter_markers("uncollect_if"))
+        if not markers:
             kept.append(item)
             continue
         params = dict(getattr(getattr(item, "callspec", None), "params", {}))
@@ -148,7 +151,7 @@ def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):
         params.setdefault("is_ci_env", is_ci_env)
         params.setdefault("is_ci_v2_env", is_ci_v2_env)
         params.setdefault("is_bh", is_bh)
-        if not marker.kwargs["pred"](**params):
+        if not any(marker.kwargs["pred"](**params) for marker in markers):
             kept.append(item)
 
     return kept
@@ -164,7 +167,8 @@ def pytest_collection_modifyitems(config, items):
 
     Galaxy TorusXY guard (CI): the production ring/ring fabric requires an explicit descriptor and
     a cabling-certified allocation. Generic Galaxy jobs skip it before device open. Certified jobs
-    set PREFILL_TORUS_XY_CERTIFIED=1 and TT_MESH_GRAPH_DESC_PATH. Native Nx1 ring proxies use
+    set PREFILL_TORUS_XY_CERTIFIED=1 and TT_MESH_GRAPH_DESC_PATH. A certified job whose descriptor is
+    the 4x4 Line/Ring stage (one tray half) runs TorusX instead, on the same cabling's X wraps. Native Nx1 ring proxies use
     Fabric2D TorusY and 1xN ring proxies use TorusX; non-ring local shapes remain unwrapped Fabric2D.
     """
     is_ci_env = os.getenv("CI") == "true"
@@ -193,14 +197,14 @@ def pytest_collection_modifyitems(config, items):
     CI_ALLOWED_FABRICS = {
         CT.P150: {(1, 1): [FC.DISABLED, FC.FABRIC_2D]},  # single chip
         CT.P300_X2: {  # 4-chip QuietBox
-            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 and TP4 rings
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 ring
             (2, 2): [FC.FABRIC_2D],
-            (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4 on a 1D fabric
+            (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4
         },
         CT.P150_X8: {
             (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's LoudBox SP8xTP1 rings SP8
             (4, 2): [FC.FABRIC_2D],
-            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line run on a 1D fabric
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {
@@ -250,14 +254,13 @@ def pytest_collection_modifyitems(config, items):
         else:
             return None
 
-    def _is_torus_xy(item):
-        return _get_requested_fabric_cfg(item) == torus_xy_fabric
-
-    torus_xy_items_collected = any(_is_torus_xy(item) for item in items)
-    if torus_xy_items_collected and torus_xy_certified and not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
-        pytest.exit("PREFILL_TORUS_XY_CERTIFIED=1 requires explicit TT_MESH_GRAPH_DESC_PATH", returncode=2)
-    if torus_xy_items_collected and torus_xy_certified:
-        assert_torus_xy_descriptor(os.environ["TT_MESH_GRAPH_DESC_PATH"])
+    # The wrapped fabric this certified allocation may open, which its explicit descriptor decides.
+    certified_fabric = None
+    certifiable = {torus_xy_fabric, FC.FABRIC_2D_TORUS_X}
+    if torus_xy_certified and any(_get_requested_fabric_cfg(item) in certifiable for item in items):
+        if not os.getenv("TT_MESH_GRAPH_DESC_PATH"):
+            pytest.exit("PREFILL_TORUS_XY_CERTIFIED=1 requires explicit TT_MESH_GRAPH_DESC_PATH", returncode=2)
+        certified_fabric = certified_torus_fabric(os.environ["TT_MESH_GRAPH_DESC_PATH"])
 
     # Generic CI galaxies are not wrap-cabling certified. get_cluster_type() opens the chip cluster as a
     # side effect, so call it only when this session collects a wrapped device configuration. This keeps
@@ -278,8 +281,7 @@ def pytest_collection_modifyitems(config, items):
         # not they carry a requires_mesh_topology mark.
         requested_fabric_cfg = _get_requested_fabric_cfg(item)
         if skip_rings:
-            certified_production_torus = requested_fabric_cfg == torus_xy_fabric and torus_xy_certified
-            if requested_fabric_cfg in ring_or_torus_fabrics and not certified_production_torus:
+            if requested_fabric_cfg in ring_or_torus_fabrics and requested_fabric_cfg != certified_fabric:
                 item.add_marker(
                     pytest.mark.skip(
                         reason="Wrapped fabric requires a compatible physical ring; Galaxy TorusXY additionally "
@@ -369,20 +371,28 @@ if _reuse.reuse_enabled():
 
 @pytest.fixture(autouse=True)
 def _assert_certified_torus_profile(request):
-    """Fail closed after mesh open for every certified TorusXY parametrized case."""
+    """Fail closed after mesh open for every certified TorusXY (or 4x4-stage TorusX) parametrized case."""
     params = getattr(getattr(request.node, "callspec", None), "params", {})
     device_params = params.get("device_params")
     if not isinstance(device_params, dict):
         return
-    if device_params.get("fabric_config") != ttnn.FabricConfig.FABRIC_2D_TORUS_XY:
+    expected_topology = {
+        ttnn.FabricConfig.FABRIC_2D_TORUS_XY: (ttnn.Topology.Ring, ttnn.Topology.Ring),
+        ttnn.FabricConfig.FABRIC_2D_TORUS_X: (ttnn.Topology.Linear, ttnn.Topology.Ring),
+    }
+    requested = device_params.get("fabric_config")
+    if requested not in expected_topology:
         return
     if os.getenv("PREFILL_TORUS_XY_CERTIFIED") != "1":
         return
-    request.getfixturevalue("mesh_device")
-    assert ttnn.get_fabric_config() == ttnn.FabricConfig.FABRIC_2D_TORUS_XY
+    # Collection skipped every wrapped case the descriptor does not certify.
+    if certified_torus_fabric(os.environ["TT_MESH_GRAPH_DESC_PATH"]) != requested:
+        return
+    mesh_device = request.getfixturevalue("mesh_device")
+    assert ttnn.get_fabric_config(mesh_device) == requested
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
-    assert per_axis_topology() == (ttnn.Topology.Ring, ttnn.Topology.Ring)
+    assert per_axis_topology(mesh_device=mesh_device) == expected_topology[requested]
 
 
 @pytest.fixture
@@ -611,18 +621,12 @@ def _resolve_hf_snapshot_dir(path: Path) -> Path:
     return path
 
 
-def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
-    """
-    Get model path, downloading from HuggingFace if necessary.
+def find_local_model(variant: TestVariant) -> Optional[Path]:
+    """The variant's checkpoint directory if one is already on this host, else None. Never downloads.
 
-    Args:
-        variant: The TestVariant to resolve weights for.
-        layer_idx: Which layer weights to ensure are available.
-        num_layers: Number of layers to download (default: 6).
-                    When >1, downloads the additional per-layer shards.
-
-    Returns:
-        Path to model directory with weights.
+    Checks, in order: the variant's env var, its default location, its shared location. A
+    random-weight test calls this to decide whether pretrained weights are an option at all, rather
+    than requesting the model_path fixture, which downloads the checkpoint when none is found.
     """
     # Check environment variable first
     env_path = os.getenv(variant.env_var)
@@ -657,6 +661,26 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         if index_file.exists():
             logger.info(f"Using model from shared location: {variant.shared_path}")
             return variant.shared_path.resolve()
+
+    return None
+
+
+def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
+    """
+    Get model path, downloading from HuggingFace if necessary.
+
+    Args:
+        variant: The TestVariant to resolve weights for.
+        layer_idx: Which layer weights to ensure are available.
+        num_layers: Number of layers to download (default: 6).
+                    When >1, downloads the additional per-layer shards.
+
+    Returns:
+        Path to model directory with weights.
+    """
+    local = find_local_model(variant)
+    if local is not None:
+        return local
 
     # Download from HuggingFace
     logger.info(f"Model not found locally. Downloading {variant.hf_repo_id} from HuggingFace...")

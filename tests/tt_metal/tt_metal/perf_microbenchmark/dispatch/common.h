@@ -584,7 +584,7 @@ inline void DeviceData::overflow_check(distributed::MeshDevice::IDevice* device)
 class FDMeshCQTestAccessor {
 public:
     static tt_metal::SystemMemoryManager& sysmem(tt_metal::distributed::FDMeshCommandQueue& cq) {
-        return cq.reference_sysmem_manager();
+        return cq.mesh_device_->impl().get_devices().at(0)->sysmem_manager();
     }
 };
 
