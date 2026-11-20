@@ -20,18 +20,15 @@ inline void lerp_init() {
     }
 }
 
-// fp32 -> bf16 round-to-nearest-even for a value stored straight to a 16-bit Dest: the low 16 bits
-// are left as is, so the result must not be read back or kept in an fp32 Dest.
-// The lsb is a separate helper so the last row can issue the two integer adds apart.
+// fp32 -> bf16 RNE for a 16-bit Dest store only: the low 16 bits are left as is.
+// lsb is split out so the last row can issue the two integer adds apart.
 sfpi_inline sfpi::vUInt _lerp_bf16_rne_lsb_(const sfpi::vFloat in) { return (sfpi::as<sfpi::vUInt>(in) << 15) >> 31; }
 sfpi_inline sfpi::vFloat _lerp_bf16_rne_for_16b_store_(
     const sfpi::vFloat in, const sfpi::vUInt lsb, const sfpi::vUInt bias) {
     return sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(in) + bias + lsb);
 }
 
-// fp32 -> bf16 round-to-nearest-even ("bits + 0x7fff + lsb") for the FAST_INTERPOLATE bf16 loop, same
-// 16-bit store contract as above. bias (0x7fff) and one (1) are bound by the caller, which keeps them in
-// LREGs across rows.
+// fp32 -> bf16 RNE, same 16-bit store contract; bias (0x7fff) and one stay in LREGs across rows.
 sfpi_inline sfpi::vFloat _lerp_fast_bf16_rne_for_16b_store_(
     const sfpi::vFloat in, const sfpi::vUInt bias, const sfpi::vUInt one) {
     sfpi::vUInt bits = sfpi::as<sfpi::vUInt>(in);
@@ -57,13 +54,8 @@ inline void _calculate_lerp_half_scale_(
     if constexpr (!is_fp32_dest_acc_en) {
         rne_bias = 0x7fffU;
     }
-    // lerp: out = input + weight * (end - input), evaluated at half scale as
-    // 2 * (input / 2 + weight * (end / 2 - input / 2)): for weight in [0, 1] no intermediate can
-    // overflow, and the power-of-two scalings are exact above the bottom binade, so the result is
-    // the same as the direct form wherever that one is finite.
-    //
-    // One row per iteration, rotated: row d is formed while row d - 1 is scaled back and stored.
-    // In the loop no instruction reads the result of the SFPMAD/SFPMULI right before it.
+    // out = 2 * (input / 2 + weight * (end / 2 - input / 2)): no overflow for weight in [0, 1].
+    // Rotated, one row per iteration, so no instruction reads the SFPMAD/SFPMULI result right before it.
     sfpi::vFloat half_res;
     {
         const sfpi::vFloat in0 = sfpi::dst_reg[off_in0];
@@ -73,8 +65,7 @@ inline void _calculate_lerp_half_scale_(
         const sfpi::vFloat diff_half = in1 * half - in0_half;
         half_res = in2 * diff_half + in0_half;
     }
-    // Unroll 16 records a 16-instruction replay body for fp32, the SFPU's whole share of the replay
-    // buffer: check the disassembly when changing the loop.
+    // Unroll 16 fills the SFPU's 16 replay slots for fp32; check the disassembly when changing the loop.
 #pragma GCC unroll 16
     for (int d = 1; d < ITERATIONS - 1; d++) {
         const sfpi::vFloat in0 = sfpi::dst_reg[off_in0 + 1];
@@ -135,12 +126,8 @@ inline void _calculate_lerp_fast_interpolate_(
         rne_bias = 0x7fffU;
         rne_one = 1;
     }
-    // lerp: out = (input - weight * input) + weight * end, for weight in [0, 1] only.
-    // No (end - input) difference, so finite inputs cannot overflow for weight in [0, 1], and
-    // weight == 0 / weight == 1 return input / end bit-exact. (1 - weight) * input is formed by
-    // one SFPMAD as input - weight * input, so 1 - weight is never rounded on its own.
-    //
-    // Both loops are ordered so that no instruction reads the result of the SFPMAD right before it.
+    // out = (input - weight * input) + weight * end, weight in [0, 1] only: no overflow, and weight
+    // 0 / 1 return input / end bit-exact. No instruction reads the SFPMAD result right before it.
     if constexpr (is_fp32_dest_acc_en) {
         // Two rows (a, b) per iteration.
 #pragma GCC unroll 8
@@ -159,8 +146,7 @@ inline void _calculate_lerp_fast_interpolate_(
             sfpi::dst_reg[off_out + 1].mode(ADDR_MOD_6) = b_res;
         }
     } else {
-        // One row per iteration, rotated: row d is formed while row d - 1 is rounded and stored,
-        // which keeps the loop body within the 16 SFPU replay slots.
+        // One row per iteration, rotated, to fit the 16 SFPU replay slots.
         const sfpi::vFloat f_in0 = sfpi::dst_reg[off_in0];
         const sfpi::vFloat f_in2 = sfpi::dst_reg[off_in2];
         const sfpi::vFloat f_rem = f_in0 - f_in2 * f_in0;
