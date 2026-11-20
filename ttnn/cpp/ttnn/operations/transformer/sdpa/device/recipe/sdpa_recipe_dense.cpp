@@ -62,6 +62,22 @@ void validate_dense_recipe(const SDPAParams& attrs, const SDPAInputs& tensors, c
     TT_FATAL(!tensors.attn_mask_block_map || tensors.attn_mask, "attn_mask_block_map requires attn_mask");
     TT_FATAL(
         !attrs.output_concat_heads || !chunked, "output_concat_heads is not supported with chunked prefill");
+    if (attrs.use_mla && tensors.v) {
+        // Multi-latent attention with its own V: each Q head reads V head h / (H / Hv).
+        const uint32_t nqh = tensors.q.logical_shape()[1], nvh = tensors.v->logical_shape()[1];
+        TT_FATAL(
+            nvh > 0 && nqh >= nvh && nqh % nvh == 0,
+            "Q num_heads must be >= V num_heads and divisible by V num_heads, and V num_heads must be greater than 0. "
+            "Got Q: {}, V: {}",
+            nqh,
+            nvh);
+    } else if (tensors.v) {
+        TT_FATAL(
+            tensors.v->logical_shape()[1] == tensors.k.logical_shape()[1],
+            "K and V num_heads must match. Got K: {}, V: {}",
+            tensors.k.logical_shape()[1],
+            tensors.v->logical_shape()[1]);
+    }
     if (windowed) {
         TT_FATAL(!chunked, "Windowed SDPA does not support chunked prefill");
         TT_FATAL(window == 0, "Windowed SDPA does not support sliding_window_size");

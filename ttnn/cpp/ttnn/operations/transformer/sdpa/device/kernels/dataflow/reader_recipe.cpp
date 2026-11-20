@@ -53,9 +53,12 @@ constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
 constexpr uint32_t q_pad_tiles = get_named_compile_time_arg_val("q_pad_tiles");
 // Grouped-query attention: query heads per KV head (1: one KV head per query head).
 constexpr uint32_t q_per_kv_head = get_named_compile_time_arg_val("q_per_kv_head");
+// Q heads per V head: q_per_kv_head unless a multi-latent V has its own head count (then kv_rows != 0, unpaged).
+constexpr uint32_t q_per_v_head = get_named_compile_time_arg_val("q_per_v_head");
 // K/V tile rows located one at a time (read_kv_rows; 0: whole chunks): the logical K length. Paged K/V, and MLA's V
 // (v_d_tiles tile columns of rows v_src_d_tiles wide; v_is_k: K's first columns, no V accessor).
 constexpr uint32_t kv_rows = get_named_compile_time_arg_val("kv_rows");
+static_assert(q_per_v_head == q_per_kv_head || kv_rows != 0);
 constexpr uint32_t v_d_tiles = get_named_compile_time_arg_val("v_d_tiles");
 constexpr uint32_t v_src_d_tiles = get_named_compile_time_arg_val("v_src_d_tiles");
 constexpr bool v_is_k = get_named_compile_time_arg_val("v_is_k") != 0;
@@ -536,7 +539,13 @@ FORCE_INLINE void read_recipe() {
             }
         };
         auto k_row = [&](uint32_t t) { return kv_row(t) * d_tiles; };
-        auto v_row = [&](uint32_t t) { return kv_row(t) * v_src_d_tiles; };
+        auto v_row = [&](uint32_t t) {
+            if constexpr (q_per_v_head != q_per_kv_head) {
+                return ((job_head / q_per_v_head) * ((kv_rows + 31) / 32) + t) * v_src_d_tiles;
+            } else {
+                return kv_row(t) * v_src_d_tiles;
+            }
+        };
         const uint32_t kvbase = kv_head * k_chunks * kv_tiles;
         uint32_t qbase;
         if constexpr (q_slab_jobs != 0) {

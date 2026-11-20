@@ -610,13 +610,20 @@ ProgramDescriptor recipe_program(
             TT_FATAL(
                 kshape[3] == qs[3], "SDPA recipes require K's head dim to be Q's, got {} and {}", kshape[3], qs[3]);
         }
+        // MLA may give V its own head count (DeepSeek V3 prefill in V's embedding space: K [B, 1, S, D], V [B, H, S,
+        // Dv]); Q heads are divisible by V heads, each Q head reading V head h / (H / Hv).
+        const bool own_v_heads = !v_is_k && options.head_dim_v != 0 && segments.size() == 1 && !paged;
         TT_FATAL(
-            v_is_k || (vshape[0] == kshape[0] && vshape[1] == kshape[1] && vshape[2] == kshape[2] &&
-                       vshape[3] == (key_range.paged_geometry.active() ? kshape[3] : head_dim_v)),
-            "SDPA recipes require V {} to match K {} with head dim {}",
+            v_is_k ||
+                (vshape[0] == kshape[0] &&
+                 (vshape[1] == kshape[1] || (own_v_heads && vshape[1] > 0 && qs[1] % vshape[1] == 0)) &&
+                 vshape[2] == kshape[2] && vshape[3] == (key_range.paged_geometry.active() ? kshape[3] : head_dim_v)),
+            "SDPA recipes require V {} to match K {} with head dim {} (a multi-latent V may have its own head count "
+            "dividing Q's {} heads, unpaged)",
             vshape,
             kshape,
-            head_dim_v);
+            head_dim_v,
+            qs[1]);
         TT_FATAL(
             !paged || block_rows % 32 == 0, "SDPA recipe paged K/V blocks must be tile multiples, got {}", block_rows);
         TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
@@ -829,6 +836,7 @@ ProgramDescriptor recipe_program(
              {"d_tiles", d_tiles},
              {"q_pad_tiles", compute_q_tiles - q_tiles},
              {"q_per_kv_head", qs[1] / kv_heads},
+             {"q_per_v_head", qs[1] / kv_heads},
              {"kv_rows", 0},
              {"v_d_tiles", d_tiles},
              {"v_src_d_tiles", d_tiles},
@@ -865,13 +873,17 @@ ProgramDescriptor recipe_program(
              {"sink_cta", 0}},
         .config = ReaderConfigDescriptor{}};
     auto& reader_args = reader.named_compile_time_args;
-    if (paged || vd_tiles != d_tiles || v_is_k) {
+    const bool own_v_heads = !v_is_k && !paged && v.logical_shape()[1] != kv_heads;
+    if (paged || vd_tiles != d_tiles || v_is_k || own_v_heads) {
         // K/V tile rows located one at a time (dataflow/reader_recipe.cpp: read_kv_rows): through the page table, and
         // for MLA a V narrower than its source rows (V's own tensor, or K's first head_dim_v columns).
         set_named_arg(reader_args, "kv_rows", k_rows);
         set_named_arg(reader_args, "v_d_tiles", vd_tiles);
         set_named_arg(reader_args, "v_src_d_tiles", v_is_k ? d_tiles : vd_tiles);
         set_named_arg(reader_args, "v_is_k", v_is_k ? 1 : 0);
+        if (own_v_heads) {
+            set_named_arg(reader_args, "q_per_v_head", qs[1] / v.logical_shape()[1]);
+        }
     }
     for (const auto& segment : segments) {
         for (uint32_t i = 0; i < (v_is_k ? 2u : 3u); ++i) {
