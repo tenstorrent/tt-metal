@@ -744,8 +744,9 @@ void Cluster::get_metal_desc_from_tt_desc() {
                           .asic_location = this->get_cluster_desc()->get_asic_location(id),
                       })
                 : driver_soc;
-        if (this->target_type_ == TargetDevice::Silicon) {
-            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        if (this->target_type_ == TargetDevice::Silicon ||
+            (this->target_type_ == TargetDevice::Simulator && umd_soc.device_descriptor_file_path.empty())) {
+            umd_soc.device_descriptor_file_path = default_dram_metadata_yaml;
         }
         std::optional<uint64_t> dram_view_size_limit;
         if (emulator_model != nullptr && !dram_uncapped) {
