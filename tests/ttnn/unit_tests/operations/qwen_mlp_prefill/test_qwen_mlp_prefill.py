@@ -23,14 +23,14 @@ from tests.ttnn.unit_tests.operations.qwen_mlp.test_qwen_mlp_perf import (
     upload,
 )
 from ttnn.operations.qwen_mlp_prefill import qwen_mlp_prefill
-from ttnn.operations.qwen_mlp_prefill.layout import SEGMENT_BYTES
+from ttnn.operations.qwen_mlp_prefill.layout import PACKET_BYTES
 
 
 @pytest.mark.parametrize("sequence_lengths", [SEQUENCE_LENGTHS])
 def test_qwen_mlp_prefill_perf(sequence_lengths):
     torch.manual_seed(0)
     router_config = ttnn.FabricRouterConfig()
-    router_config.max_packet_payload_size_bytes = SEGMENT_BYTES
+    router_config.max_packet_payload_size_bytes = PACKET_BYTES
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING, router_config=router_config)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(2, 2))
     try:
