@@ -28,7 +28,7 @@ constexpr uint8_t LOCAL_DELIVERY_NOC = tt::tt_fabric::edm_to_local_chip_noc;
 // Local delivery uses the other VC of the router's pair (local_write_noc_vc), not the forwards' one. Every local write,
 // inline write and atomic increment goes out on this one VC, here and in execute_chip_unicast_to_local_chip_impl, and
 // the NoC keeps order within a VC, so a packet's data still lands before the increment that announces it.
-constexpr uint8_t LOCAL_DELIVERY_VC = tt::tt_fabric::local_write_noc_vc;
+constexpr uint8_t LOCAL_DELIVERY_NOC_VC = tt::tt_fabric::local_write_noc_vc;
 
 // Whether local writes go into the NoC's software write counters (noc_nonposted_writes_num_issued/acked). Blackhole:
 // yes, as its write API always counts (issue 28758), and a flushed atomic then checks the counters once
@@ -40,7 +40,7 @@ constexpr bool counts_local_writes = is_blackhole_arch;
 FORCE_INLINE void local_write_init() {
     if constexpr (CommandBuffers::presets) {
         while (!noc_cmd_buf_ready(LOCAL_DELIVERY_NOC, CommandBuffers::local_writes));
-        noc_write_init_state<CommandBuffers::local_writes, CQ_NOC_mkp>(LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_VC);
+        noc_write_init_state<CommandBuffers::local_writes, CQ_NOC_mkp>(LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
     }
 }
 
@@ -72,7 +72,7 @@ FORCE_INLINE void local_write(uint32_t src_addr, uint64_t dst_noc_addr, uint32_t
             src_addr,
             dst_noc_addr,
             size,
-            LOCAL_DELIVERY_VC,
+            LOCAL_DELIVERY_NOC_VC,
             /*mcast=*/false,
             /*linked=*/false,
             /*num_dests=*/1,
@@ -98,7 +98,7 @@ FORCE_INLINE void local_atomic_inc(uint64_t addr, uint32_t value, bool flush, ui
     if (flush) {
         flush_write_to_noc_pipeline</*all_writes_counted=*/counts_local_writes>(channel);
     }
-    noc_semaphore_inc<true>(addr, value, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_VC);
+    noc_semaphore_inc<true>(addr, value, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
 }
 
 // An inline write (one word) to this chip, then the local-write buffer's preset restored: on Blackhole the library
@@ -109,7 +109,7 @@ static_assert(
     "the emulated L1 inline write reprograms the local-write command buffer, which local_write_init restores");
 FORCE_INLINE void local_inline_write(uint64_t dst_noc_addr, uint32_t value) {
     noc_inline_dw_write<InlineWriteDst::DEFAULT, /*posted=*/true, /*flush=*/true>(
-        dst_noc_addr, value, INLINE_WRITE_ALL_BYTES, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_VC);
+        dst_noc_addr, value, INLINE_WRITE_ALL_BYTES, LOCAL_DELIVERY_NOC, LOCAL_DELIVERY_NOC_VC);
     local_write_init();
 }
 

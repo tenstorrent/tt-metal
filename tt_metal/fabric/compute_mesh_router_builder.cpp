@@ -900,8 +900,8 @@ void ComputeMeshRouterBuilder::apply_link_settings(
     uint32_t num_links,
     Topology topology,
     bool is_galaxy) {
-    erisc_builder_->config.edm_noc_vc = noc_vc;
-    peer.erisc_builder_->config.edm_noc_vc = noc_vc;
+    erisc_builder_->config.set_edm_noc_vcs(noc_vc);
+    peer.erisc_builder_->config.set_edm_noc_vcs(noc_vc);
     core_placement::CorePlacementContext cctx{
         .topology = topology,
         .is_galaxy = is_galaxy,
