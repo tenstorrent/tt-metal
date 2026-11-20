@@ -77,6 +77,13 @@ ENGRAM_EARLY = (
 # path. Same bf16 rows by construction; V41_PREFILL_DEVICE_EMBED_CHECK=N compares both paths on the first N chunks.
 DEVICE_EMBED = os.environ.get("V41_PREFILL_DEVICE_EMBED", "0") == "1"
 DEVICE_EMBED_CHECK = int(os.environ.get("V41_PREFILL_DEVICE_EMBED_CHECK", "0"))
+# WS6 (prefill TTFT): V41_PREFILL_EMBED_RAGGED=1 (needs DEVICE_EMBED) -- a RAGGED chunk (every prompt's last one) embeds on device
+# too: its ids padded with one extra id that points at a zero row appended to the device table, uploaded as a [sp, 1, S_l] uint32
+# tensor (16 KB) instead of the host path's gathered + zero-padded [chunk, dim] bf16 rows (~42 MB at chunk 4096). The streams are
+# the host path's bit for bit (the device rows match the host gather, DEVICE_EMBED_CHECK; the pad rows are +0 like its zeros).
+# Default off: the host path, which costs ~26 ms of host time at the chunk start while the device idles (WS6 baseline: embed
+# 30.1 ms on ragged chunks vs 3.9 ms on full ones).
+EMBED_RAGGED = os.environ.get("V41_PREFILL_EMBED_RAGGED", "0") == "1"
 
 
 # tt-blaze DS41F-0163 (11-19, the Kernelize review's step 0): V41_PREFILL_DEVPROF=<jsonl> with V41_PREFILL_DEVPROF_STARTS=<chunk
@@ -408,8 +415,11 @@ class V41Prefill:
         assert (self.sp_axis, self.tp_axis) == (0, 1), (self.sp_axis, self.tp_axis)
         t0 = time.time()
         mapper = ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(None, 1))
+        table = self._embedding().contiguous()
+        if EMBED_RAGGED:  # the ragged chunks' pad id (= vocab) reads this zero row
+            table = torch.cat([table, torch.zeros(1, table.shape[1], dtype=table.dtype)], dim=0)
         t = ttnn.from_torch(
-            self._embedding().contiguous(),
+            table,
             device=self.mesh,
             dtype=ttnn.bfloat16,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -418,6 +428,22 @@ class V41Prefill:
         )
         logger.info(f"[v41 prefill] device embedding table {tuple(t.shape)} per chip in {time.time() - t0:.1f} s")
         return t
+
+    def _ragged_ids_dev(self, ids: list):
+        """EMBED_RAGGED: a ragged chunk's ids as the H2D ids tensor's spec ([sp, 1, S_l] uint32, SP-sharded, TP-replicated), the
+        pad positions set to vocab (the table's appended zero row). Freed by the caller right after the embedding (an eager
+        temporary: nothing outlives a replay)."""
+        S_l, vocab = self.chunk // self.sp, int(self._embedding().shape[0])
+        t = torch.full((self.chunk,), vocab, dtype=torch.int32)
+        t[: len(ids)] = torch.tensor(ids, dtype=torch.int32)
+        return ttnn.from_torch(
+            t.view(self.sp, 1, S_l),
+            device=self.mesh,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(0, None)),
+        )
 
     def _streams_device(self, ids_dev):
         """DEVICE_EMBED: [1, 1, S_l, D_l] bf16 TILE per chip straight from the H2D ids (no host round trip)."""
@@ -452,6 +478,16 @@ class V41Prefill:
                     f"[v41 prefill] DEVICE_EMBED_CHECK: device rows {'BIT-IDENTICAL' if same else 'DIFFER'} to the host path on "
                     f"{len(a)} chips (shape {tuple(a[0].shape)} vs {tuple(b[0].shape)})"
                 )
+            return [t] + [ttnn.clone(t) for _ in range(HC - 1)]
+        if (
+            EMBED_RAGGED
+            and self._embed_dev is not None
+            and 0 < len(ids) < self.chunk
+            and max(ids) < self._embedding().shape[0]
+        ):
+            ids_t = self._ragged_ids_dev(ids)
+            t = self._streams_device(ids_t)
+            ttnn.deallocate(ids_t)
             return [t] + [ttnn.clone(t) for _ in range(HC - 1)]
         emb = self._embedding()
         t = torch.tensor(ids, dtype=torch.long)
