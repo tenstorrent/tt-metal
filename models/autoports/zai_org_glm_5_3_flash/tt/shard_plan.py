@@ -1034,6 +1034,66 @@ def pf_kth(keys, rank: int) -> int:
     return 0 if len(keys) < rank else sorted(keys, reverse=True)[rank - 1]
 
 
+def shard_mfast(pair: int, r8: bool = True, agk: bool = True, prefilter: bool = True) -> bool:
+    """rev 77 GLM53_DSA_SHARD_MFAST (a galaxy default, tt/galaxy_defaults.py; 0 elsewhere): the global merge's helper compute in fewer
+    instructions with the same integers (dsa_shard.hpp MFAST, the kernels' MLA_DSA_SHARD_MFAST): no pack copy of the AGK
+    key pages, pf_kth_fast (the running top PF_RANK in registers: pf_kth_regs), pf_keep from the pages, r8_hist_lean
+    (direct coarse counts, the fine bins cleared after each round's pull instead of a 512-B zero per round). Needs R8, AGK
+    and PREFILTER (the kernels #error without them); the pair / the 2x4 never take it"""
+    on = pair > 2 and _flag("GLM53_DSA_SHARD_MFAST")
+    if on and not (r8 and agk and prefilter):
+        raise ValueError(
+            "GLM53_DSA_SHARD_MFAST=1 needs GLM53_DSA_SHARD_R8=1, GLM53_DSA_SHARD_AGK=1 and GLM53_DSA_SHARD_PREFILTER=1"
+        )
+    return on
+
+
+def pf_kth_regs(keys, rank: int = 16) -> int:
+    """dsa_shard.hpp pf_kth_fast, step by step: rank slots t (ascending) start at 0; a key k > t[0] makes slot p
+    min(t[p + 1], max(t[p], k)) and the last slot max(t[-1], k); the scan skips a block of 4 keys whose max <= t[0], the
+    rest one by one -> t[0] (0 below rank keys). == pf_kth for keys >= 0 (tests/test_shard_plan_8x4.py)"""
+    keys = [int(k) for k in keys]
+    if len(keys) < rank:
+        return 0
+    t = [0] * rank
+
+    def take(k):
+        for p in range(rank - 1):
+            t[p] = min(t[p + 1], max(t[p], k))
+        t[rank - 1] = max(t[rank - 1], k)
+
+    i = 0
+    while len(keys) - i >= 4:
+        if max(keys[i : i + 4]) > t[0]:
+            for k in keys[i : i + 4]:
+                if k > t[0]:
+                    take(k)
+        i += 4
+    for k in keys[i:]:
+        if k > t[0]:
+            take(k)
+    return t[0]
+
+
+def pf_keep(arr: list, m: int, base: int, n: int, l: int) -> int:
+    """dsa_shard.hpp pf_keep on a word array (in place: arr[base ..] -> arr[m ..], m <= base): the keys >= l of
+    arr[base, base + n) appended at arr[m ..) in order, each block of 4 read before it is written -> the new m"""
+    i = 0
+    while n - i >= 4:
+        blk = arr[base + i : base + i + 4]
+        if max(blk) >= l:
+            for k in blk:
+                if k >= l:
+                    arr[m] = k
+                    m += 1
+        i += 4
+    for k in arr[base + i : base + n]:
+        if k >= l:
+            arr[m] = k
+            m += 1
+    return m
+
+
 def local_all_pools(n_closed: int, c: int, C: int) -> int:
     """dsa_shard.hpp local_all_pools: the valid pools of chunk core c of C at n_closed closed local pools (pool tiles
     c, c + C, .. < ceil(n_closed / 32), each min(32, n_closed - its first pool) columns)"""

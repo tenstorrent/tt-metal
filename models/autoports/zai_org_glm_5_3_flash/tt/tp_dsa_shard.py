@@ -59,6 +59,7 @@ assert MK.SHARD_RS2_PPC == MK.SHARD_AG8_PPC
 
 
 _PREFILTER_LOGGED: list = []  # the TPMlaShard prefilter log line, once per process
+_MFAST_LOGGED: list = []  # the TPMlaShard MFAST log line, once per process
 _RS1S_LOGGED: list = []  # rev 76: the TPMlaShard RS1-split log line, once per process (the chains assert it)
 
 
@@ -124,7 +125,7 @@ class TPMlaShard(TPM.TPMla):
             self.lane_core[SP.RS1S_NAME] = core
             if not _RS1S_LOGGED:  # one line per process: the chains assert the knob reached the build
                 logger.info(f"TPMlaShard: GLM53_DSA_SHARD_RS1_SPLIT active (RS1 over links 0 + 1, rs1a lane core {core}, "
-                            f"MLA_REV {MK.MLA_REV_RS1_SPLIT})")  # fmt: skip
+                            f"MLA_REV {MK.mla_rev(dict(rs1_split=True, mfast=SP.shard_mfast(self.P, SP.shard_r8(self.P), SP.shard_agk(self.P), SP.shard_prefilter(self.P))))})")  # fmt: skip
                 _RS1S_LOGGED.append(True)
         self.ag_lane, self.rs_lane = self.lane_core["ag1"], self.lane_core["rs1"]
         # rev 60: the token lanes' index cores (t > 4), after the stream lanes (t <= 4 builds: no lane cores, the same
@@ -291,6 +292,13 @@ class TPMlaShard(TPM.TPMla):
                     "TPMlaShard: GLM53_DSA_SHARD_PREFILTER active (MLA_DSA_SHARD_PREFILTER, rev 75 exact merge pre-filter)"
                 )
                 _PREFILTER_LOGGED.append(True)
+            # rev 77 (GLM53_DSA_SHARD_MFAST, a galaxy default): the merge helpers' compute with the same integers (kernel define)
+            mfast = SP.shard_mfast(self.P, r8, agk, prefilter)
+            if mfast and not _MFAST_LOGGED:  # one line per process: the chains assert the knob reached the build
+                logger.info(
+                    "TPMlaShard: GLM53_DSA_SHARD_MFAST active (MLA_DSA_SHARD_MFAST, rev 77 merge helper compute)"
+                )
+                _MFAST_LOGGED.append(True)
             split = dict(first=lambda p: SP.rs1_early_first(p, self.P), wait2=rs_wait[1]) if early else {}
             # rev 76: RS1 over both links -- rs1 (link 1) keeps the blocks of source p for destination q with p + q
             # even, rs1a (link 0, below) the odd ones; each waiter waits for the sources of its parity; one sync
@@ -335,7 +343,7 @@ class TPMlaShard(TPM.TPMla):
             ypg = (SP.AGK_PPC if agk else SP.AG32_PPC) * t  # y_ag pages per block: AGB keeps AGK's page ids
             assert int(ag1.y.shape[-2]) * int(ag1.y.shape[-1]) == geo.n * ypg * 1024, (tuple(ag1.y.shape), ypg)
             return dict(C=self.n, line=self.L, pair=self.P, kph=kph, comb=comb, rs1_early=early, agk=agk, agb=agb, rsb=rsb, r8=r8,
-                        rsnp=rsnp, local_all=local_all, round_marks=rmarks, sel2=sel2, prefilter=prefilter, x_ag=x_ag, y_ag=ag1.y,
+                        rsnp=rsnp, local_all=local_all, round_marks=rmarks, sel2=sel2, prefilter=prefilter, mfast=mfast, x_ag=x_ag, y_ag=ag1.y,
                         x_rs=x_rs, y_rs=x_rs,
                         x_rs2=x_rs1, y_rs2=rs1.y, x_rs2b=x_rs2b, y_rs2b=rs2.y, q_asm=q_asm,
                         ag=ag1, rs=rs1, ag2=ag2, rs2=rs2, ag_lane=ag1.lane_noc()[0], rs_lane=rs1.lane_noc()[0],

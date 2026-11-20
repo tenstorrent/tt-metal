@@ -369,7 +369,9 @@ def test_helper_merge_prefilter(case):
     their 16th-largest list key as L, the keys >= L kept before the rounds, round 0's done check on the union's total)
     == the unfiltered merge and the serial merge -- T_g, k_rem, done, the per-chip quotas, every chip's per-core quotas
     -- at kph 1 / 2 / 4, 4- and 8-bit digits; one message more; on full lists (the >= 64 K regime) the survivors stay
-    near 512 instead of 32 x 512"""
+    near 512 instead of 32 x 512. Rev 77 MFAST (dsa_shard.hpp): pf_kth_fast's register merge (pf_kth_regs) == pf_kth on
+    every list, pf_keep in place over a helper's KPH key pages == the survivors list by list, and r8_hist_lean's rounds
+    (direct coarse counts, the fine bins cleared after each round's pull) == r8_hist's counts from a zero fine area"""
     gen = torch.Generator().manual_seed(74 + len(case))
     if case == "full":  # every chip a full local top-512 of a different random population (the long-context regime)
         lists = []
@@ -397,6 +399,44 @@ def test_helper_merge_prefilter(case):
         got = SP.helper_merge(lists, 0, kph=4, digit_bits=8, prefilter=True)
         logger.info(f"PREFILTER full lists: L {got['prefilter_l']:#x} survivors {got['survivors']} of {32 * 512}")
         assert got["survivors"] < 4 * 512, got["survivors"]
+    # rev 77 MFAST: the helpers' new loops on these lists (+ short / all-equal / duplicate-heavy edge lists)
+    keys = [[kk for kk, _ in v] for v in lists]
+    for v in keys + [list(range(16)), [7] * 40, [0] * 20, [5, 9] * 9 + [1], list(range(40, 0, -1)), [3] * 15]:
+        assert SP.pf_kth_regs(v) == SP.pf_kth(v, 16), (case, v[:8])
+    got = SP.helper_merge(lists, 0, kph=4, digit_bits=8, prefilter=True)
+    pf_l = 0 if got["done"] else got["prefilter_l"]
+    for kph in (1, 2, 4):
+        for h in range(32 // kph):
+            own = keys[h * kph : (h + 1) * kph]
+            arr = [0] * (kph * 512)  # the helper's key pages (AGK: list i at i x CAND_MAX, zero-filled)
+            for i, v in enumerate(own):
+                arr[i * 512 : i * 512 + len(v)] = v
+            m, lens = 0, []
+            for i, v in enumerate(own):  # in place, list by list (the write index never passes an unread key)
+                m0, m = m, SP.pf_keep(arr, m, i * 512, len(v), pf_l)
+                lens.append(m - m0)
+            want = [[kk for kk in v if kk >= pf_l] for v in own]
+            assert arr[:m] == [kk for w in want for kk in w] and lens == [len(w) for w in want], (case, kph, h)
+            fine, prefix, src = [0] * 256, 0, arr[:m]  # r8_hist_lean + r8_unbin along T_g's digits
+            for r in range(4):
+                shift = 24 - 8 * r
+                if r > 0:
+                    # (this model clears what it counted, so it cannot catch a kernel compaction that skips a key: the
+                    # CI pins and the 16-identical-rows gate on the device are the coverage for that)
+                    assert fine == [0] * 256, (case, kph, h, r)  # the previous round's compaction cleared its bins
+                else:
+                    fine = [0] * 256
+                coarse = [0] * 16
+                for kk in src:
+                    fine[(kk >> shift) & 255] += 1
+                    coarse[((kk >> shift) & 255) >> 4] += 1
+                ref = [sum(1 for kk in src if (kk >> shift) & 255 == d) for d in range(256)]
+                assert fine == ref and coarse == [sum(ref[16 * b : 16 * b + 16]) for b in range(16)], (case, kph, h, r)
+                mask = (0xFFFFFFFF << shift) & 0xFFFFFFFF
+                prefix = got["T_g"] & mask
+                for kk in src:
+                    fine[(kk >> shift) & 255] = 0
+                src = [kk for kk in src if kk & mask == prefix]
 
 
 @pytest.mark.parametrize(
@@ -1442,6 +1482,28 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     assert got["GLM53_DSA_SHARD_PREFILTER"] == "1" and SP.shard_prefilter(8)
     assert got["GLM53_DSA_SHARD_RS1_SPLIT"] == "1" and SP.shard_rs1_split(8)
     assert not SP.shard_prefilter(2) and not SP.shard_rs1_split(2)  # (the pair / the 2x4 never take them)
+    # rev 77 GLM53_DSA_SHARD_MFAST: a galaxy default; needs R8 + AGK + PREFILTER; the define names the kernels and
+    # mk_mla.py carry (a renamed define would silently build knob-off)
+    assert GD.KNOBS["GLM53_DSA_SHARD_MFAST"] == got["GLM53_DSA_SHARD_MFAST"] == "1" and SP.shard_mfast(8)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MFAST", raising=False)
+    assert not SP.shard_mfast(8)
+    monkeypatch.setenv("GLM53_DSA_SHARD_MFAST", "1")
+    assert SP.shard_mfast(8, r8=True, agk=True, prefilter=True) and not SP.shard_mfast(2, False, False, False)
+    for need in (dict(r8=False), dict(agk=False), dict(prefilter=False)):
+        with expect_error(ValueError, "GLM53_DSA_SHARD_MFAST=1 needs"):
+            SP.shard_mfast(8, **need)
+    monkeypatch.delenv("GLM53_DSA_SHARD_MFAST")
+    kd = os.path.join(SP.KDIR, "mla")
+    for f, names in (
+        ("att_dsa_shard_dm1.cpp", ("MLA_DSA_SHARD_MFAST", "pf_kth_fast", "pf_keep", "r8_hist_lean", "r8_unbin")),
+        ("dsa_shard.hpp", ("MLA_DSA_SHARD_MFAST", "pf_kth_fast", "pf_keep", "r8_hist_lean", "r8_unbin")),
+    ):
+        with open(os.path.join(kd, f)) as fh:
+            src = fh.read()
+        assert all(nm in src for nm in names), (f, names)
+    with open(os.path.join(os.path.dirname(SP.KDIR), "mk_mla.py")) as fh:
+        src = fh.read()
+    assert '("MLA_DSA_SHARD_MFAST", "1")' in src and "MLA_REV_MFAST = 77" in src
     assert got["GLM53_MLA_DSA_BATON_GROUPS"] == got["GLM53_KDA_VERIFY_PIPE"] == "1"
     assert got["GLM53_MK_READER_PLACE"] == "row" and got["GLM53_REC_SPLIT_VERIFY"] == "2"
     _protect_env(monkeypatch, [k for k in os.environ if k.startswith("GLM53_SPEC_")] + list(GD.SPEC_KNOBS_B16))
@@ -1468,7 +1530,16 @@ def test_galaxy_defaults_shard_tail(monkeypatch):
     got = GD.apply((8, 4), 4096, 4096)
     assert "GLM53_DSA_SHARD_AGK" not in got and not SP.shard_agk(8)
     assert "GLM53_DSA_SHARD_AGB" not in got and not SP.shard_agb(8)  # dropped with AGK, no AGB-needs-AGK error
+    assert "GLM53_DSA_SHARD_MFAST" not in got and not SP.shard_mfast(
+        8, SP.shard_r8(8), SP.shard_agk(8), SP.shard_prefilter(8)
+    )
     assert got["GLM53_DSA_SHARD_RSNP"] == "1" and SP.shard_rsnp(8)  # (RSB still on)
+    for need in ("GLM53_DSA_SHARD_R8", "GLM53_DSA_SHARD_PREFILTER"):  # MFAST rides on R8 + AGK + PREFILTER
+        _protect_env(monkeypatch, keys)
+        monkeypatch.setenv(need, "0")
+        got = GD.apply((8, 4), 4096, 4096)
+        assert need not in got and "GLM53_DSA_SHARD_MFAST" not in got, need
+        assert not SP.shard_mfast(8, SP.shard_r8(8), SP.shard_agk(8), SP.shard_prefilter(8)), need
     _protect_env(monkeypatch, keys)
     monkeypatch.setenv("GLM53_DSA_SHARD_RSB", "0")  # an explicit RSB=0 drops the RSNP default with it
     got = GD.apply((8, 4), 4096, 4096)

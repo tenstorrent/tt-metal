@@ -456,7 +456,18 @@ void kernel_main() {
         uint32_t prefix = 0, mask = 0;
         volatile tt_l1_ptr uint32_t* src = mkeys;
         uint32_t nsrc = n;
-#if defined(MLA_DSA_SHARD_PREFILTER)
+#if defined(MLA_DSA_SHARD_PREFILTER) && defined(MLA_DSA_SHARD_MFAST)
+        // rev 77 MFAST (dsa_shard.hpp): PREFILTER's report and survivors below with pf_kth_fast / pf_keep (the same
+        // values); mkeys stays whole for the per-core tie count below
+        hist[0] = mlashard::pf_kth_fast(mkeys, n);
+        hist[1] = n;
+        report();
+        noc_semaphore_wait_min(sel_sem, ++msgs);
+        invalidate_l1_cache();
+        nsrc = mlashard::pf_keep(
+            mcand, 0, mkeys, n, reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0]);
+        src = mcand;
+#elif defined(MLA_DSA_SHARD_PREFILTER)
         // rev 75 PREFILTER (dsa_shard.hpp): report (this list's PF_RANK-th largest key, its count), take L (merge slot
         // 0), keep the keys >= L in mcand (list order); mkeys stays whole for the per-core tie count below
         hist[0] = mlashard::pf_kth(mkeys, n);
@@ -479,7 +490,9 @@ void kernel_main() {
 #endif
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
             const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
-#if defined(MLA_DSA_R8)
+#if defined(MLA_DSA_SHARD_MFAST)  // dsa_shard.hpp MFAST: every key in src matches (mask, prefix)
+            mlashard::r8_hist_lean(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, shift, r == 0);
+#elif defined(MLA_DSA_R8)
             mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, src, nsrc, mask, prefix, shift);
 #else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -505,6 +518,9 @@ void kernel_main() {
             uint32_t m = 0;
             for (uint32_t i = 0; i < nsrc; ++i) {
                 const uint32_t k = src[i];
+#if defined(MLA_DSA_SHARD_MFAST)
+                mlashard::r8_unbin(mbox + mlashard::R8_FINE_OFF, k, shift);  // (the coordinator's pull has landed)
+#endif
                 if ((k & mask) == prefix) {
                     mcand[m++] = k;
                 }
@@ -635,9 +651,11 @@ void kernel_main() {
             ASSERT(n == 0 || src[n - 1] != 0);  // (a finite score's key is never 0: the pack's zero fill starts at n)
             ASSERT(n == mlashard::CAND_MAX || src[n] == 0);
             len[i] = n;
+#if !defined(MLA_DSA_SHARD_MFAST)  // (dsa_shard.hpp MFAST: list i stays in its page for pf_kth_fast / pf_keep)
             for (uint32_t e = 0; e < n; ++e) {
                 mkeys[ntot + e] = src[e];
             }
+#endif
             ntot += n;
         }
 #else
@@ -657,7 +675,30 @@ void kernel_main() {
                 return true;
             });
 #endif
-#if defined(MLA_DSA_SHARD_PREFILTER)
+#if defined(MLA_DSA_SHARD_PREFILTER) && defined(MLA_DSA_SHARD_MFAST)
+        // rev 77 MFAST (dsa_shard.hpp): PREFILTER's report and survivors below, read from the KPH key pages in place
+        // (no pack): list i's keys >= L appended to mkeys from 0 in list order (len[i] = the survivors)
+        {
+            uint32_t kmin = 0xFFFFFFFFu;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t kq = mlashard::pf_kth_fast(mkeys + i * mlashard::CAND_MAX, len[i]);
+                kmin = kq < kmin ? kq : kmin;
+            }
+            hist[0] = kmin;
+            hist[1] = ntot;
+            report();
+            noc_semaphore_wait_min(sel_sem, ++msgs);
+            invalidate_l1_cache();
+            const uint32_t pf_l = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mbox + mlashard::merge_msg(j, 0))[0];
+            uint32_t m = 0;
+            for (uint32_t i = 0; i < mlashard::KPH; ++i) {
+                const uint32_t m0 = m;
+                m = mlashard::pf_keep(mkeys, m, mkeys + i * mlashard::CAND_MAX, len[i], pf_l);
+                len[i] = m - m0;
+            }
+            ntot = m;
+        }
+#elif defined(MLA_DSA_SHARD_PREFILTER)
         // rev 75 PREFILTER (dsa_shard.hpp): report (the min over the KPH lists of their PF_RANK-th largest key, the
         // keys), take L (merge slot 0), keep the keys >= L in place list by list (stable; len[i] = the survivors)
         {
@@ -695,7 +736,9 @@ void kernel_main() {
         uint32_t nsrc = ntot;
         for (uint32_t r = 0; r < mladsa::ROUNDS; ++r) {
             const uint32_t shift = 32 - mladsa::RADIX_BITS * (r + 1);
-#if defined(MLA_DSA_R8)
+#if defined(MLA_DSA_SHARD_MFAST)  // dsa_shard.hpp MFAST: every key in mkeys[0, nsrc) matches (mask, prefix)
+            mlashard::r8_hist_lean(mbox + mlashard::R8_FINE_OFF, hist, mkeys, nsrc, shift, r == 0);
+#elif defined(MLA_DSA_R8)
             mlashard::r8_hist(mbox + mlashard::R8_FINE_OFF, hist, mkeys, nsrc, mask, prefix, shift);
 #else
             for (uint32_t b = 0; b < mladsa::BINS; ++b) {
@@ -726,6 +769,9 @@ void kernel_main() {
                 uint32_t mi = 0;
                 for (uint32_t e = 0; e < li; ++e) {
                     const uint32_t k = mkeys[b0 + e];
+#if defined(MLA_DSA_SHARD_MFAST)
+                    mlashard::r8_unbin(mbox + mlashard::R8_FINE_OFF, k, shift);  // (the coordinator's pull has landed)
+#endif
                     if ((k & mask) == prefix) {
                         mkeys[m++] = k;
                         ++mi;

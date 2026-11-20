@@ -517,4 +517,142 @@ inline uint32_t pf_kth(volatile tt_l1_ptr uint32_t* src, uint32_t n) {
     return top[0];
 }
 #endif
+// rev 77, MFAST (MLA_DSA_SHARD_MFAST, tt/mk_mla.py GLM53_DSA_SHARD_MFAST; the 8x4 with R8 + AGK + PREFILTER only,
+// unset: every build unchanged): the global merge's helper compute in fewer RISC instructions and L1 accesses, the same
+// integers. Probe 2026-11-19 (32,768 x 16 live, KPH 4: a helper holds 4 lists of 256 keys per token; the coordinator's
+// marks on the lane's first token): a token's merge takes 67 us, ~35 of them the helpers' three passes over their keys
+// (the AGK pages packed into one array 8, pf_kth 20, the filter + round 0 13), rounds 1 - 3 ~5 each (r8_hist zeroes 512
+// B and sums 128 words per round for the ~10 keys left). With MFAST:
+//   - no pack: pf_kth_fast reads each list in its key page, pf_keep compacts the keys >= L from the pages into the
+//     key array (list order: the write index never passes the read index);
+//   - pf_kth_fast: the running top PF_RANK in registers -- a key above the smallest replaces it by a branchless merge
+//     (one min / max pair per slot) instead of pf_kth's shifting insertion on the stack -- and one compare per 4 keys
+//     on the scan;
+//   - r8_hist_lean: each key's fine bin and coarse bucket counted directly (no 128-word coarse sum; every merge key
+//     matches the round's prefix, the compaction kept only those), the fine area zeroed in round 0 only; after each
+//     round's message (the coordinator's pull of the fine counts has landed) the compaction sets the bins it counted
+//     back to 0 (r8_unbin), so rounds 1 - 3 start from a zero area.
+// Every report, message, T_g, k_rem, tie count and quota is the rev-76 value (tt/shard_plan.py pf_kth_regs / pf_keep:
+// tests/test_shard_plan_8x4.py test_helper_merge_prefilter).
+#if defined(MLA_DSA_SHARD_MFAST)
+#if !(defined(MLA_DSA_R8) && defined(MLA_DSA_SHARD_AGK) && defined(MLA_DSA_SHARD_PREFILTER))
+#error "MLA_DSA_SHARD_MFAST: needs MLA_DSA_R8, MLA_DSA_SHARD_AGK and MLA_DSA_SHARD_PREFILTER"
+#endif
+static_assert(PAIR == 8 && LINE == 4, "MFAST: the 8x4 shard");
+static_assert(PF_RANK == 16 && mladsa::BINS == 16 && R8_FINE_BYTES == 512, "MFAST: 16 register slots, R8's two levels");
+inline __attribute__((always_inline)) uint32_t umax(uint32_t a, uint32_t b) { return a > b ? a : b; }
+inline __attribute__((always_inline)) uint32_t umin(uint32_t a, uint32_t b) { return a < b ? a : b; }
+// pf_kth's value: the PF_RANK-th largest of src[0, n) (duplicates counted), 0 below PF_RANK keys. top (ascending)
+// starts as PF_RANK zeros -- for n >= PF_RANK the PF_RANK-th largest of the keys and PF_RANK zeros is the keys' own
+// (keys >= 0) -- and a key k > top[0] drops top[0]: slot p takes min(top[p + 1], max(top[p], k)), the last slot
+// max(top[15], k) (the sorted top PF_RANK of the 17 values; a key <= top[0] changes nothing, as pf_kth's skip)
+inline uint32_t pf_kth_fast(volatile tt_l1_ptr uint32_t* src, uint32_t n) {
+    if (n < PF_RANK) {
+        return 0;
+    }
+    uint32_t t0 = 0, t1 = 0, t2 = 0, t3 = 0, t4 = 0, t5 = 0, t6 = 0, t7 = 0;
+    uint32_t t8 = 0, t9 = 0, t10 = 0, t11 = 0, t12 = 0, t13 = 0, t14 = 0, t15 = 0;
+    auto take = [&](uint32_t k) __attribute__((always_inline)) {  // k > t0: in registers (inlined)
+        t0 = umin(t1, umax(t0, k));
+        t1 = umin(t2, umax(t1, k));
+        t2 = umin(t3, umax(t2, k));
+        t3 = umin(t4, umax(t3, k));
+        t4 = umin(t5, umax(t4, k));
+        t5 = umin(t6, umax(t5, k));
+        t6 = umin(t7, umax(t6, k));
+        t7 = umin(t8, umax(t7, k));
+        t8 = umin(t9, umax(t8, k));
+        t9 = umin(t10, umax(t9, k));
+        t10 = umin(t11, umax(t10, k));
+        t11 = umin(t12, umax(t11, k));
+        t12 = umin(t13, umax(t12, k));
+        t13 = umin(t14, umax(t13, k));
+        t14 = umin(t15, umax(t14, k));
+        t15 = umax(t15, k);
+    };
+    uint32_t i = 0;
+    for (; n - i >= 4; i += 4) {  // the scan: one compare for 4 keys at or below the running PF_RANK-th largest
+        const uint32_t k0 = src[i], k1 = src[i + 1], k2 = src[i + 2], k3 = src[i + 3];
+        if (umax(umax(k0, k1), umax(k2, k3)) <= t0) {
+            continue;
+        }
+        for (uint32_t e = i; e < i + 4; ++e) {
+            const uint32_t k = src[e];
+            if (k > t0) {
+                take(k);
+            }
+        }
+    }
+    for (; i < n; ++i) {
+        const uint32_t k = src[i];
+        if (k > t0) {
+            take(k);
+        }
+    }
+    return t0;
+}
+// the PREFILTER survivors of one list: the keys >= l of src[0, n) appended to dst[m ..) in order -> the new m. In
+// place when dst + m <= src (the KPH lists' pages into the key array): a block of 4 is loaded before any of it is
+// written, so the write index never passes an unread key
+inline uint32_t pf_keep(
+    volatile tt_l1_ptr uint32_t* dst, uint32_t m, volatile tt_l1_ptr uint32_t* src, uint32_t n, uint32_t l) {
+    uint32_t i = 0;
+    for (; n - i >= 4; i += 4) {
+        const uint32_t k0 = src[i], k1 = src[i + 1], k2 = src[i + 2], k3 = src[i + 3];
+        if (umax(umax(k0, k1), umax(k2, k3)) < l) {
+            continue;
+        }
+        if (k0 >= l) {
+            dst[m++] = k0;
+        }
+        if (k1 >= l) {
+            dst[m++] = k1;
+        }
+        if (k2 >= l) {
+            dst[m++] = k2;
+        }
+        if (k3 >= l) {
+            dst[m++] = k3;
+        }
+    }
+    for (; i < n; ++i) {
+        const uint32_t k = src[i];
+        if (k >= l) {
+            dst[m++] = k;
+        }
+    }
+    return m;
+}
+// r8_hist of keys that all match the round's (mask, prefix) -- the merge's candidates (the PREFILTER survivors in round
+// 0, the compaction's keys after): the fine bin and the coarse bucket (the bin's high nibble = r8_hist's 16-word sums)
+// of each key counted directly; the fine area zeroed only when zero_fine (round 0), rounds 1 .. 3 find it zero
+// (r8_unbin in the previous round's compaction)
+inline void r8_hist_lean(
+    uint32_t fine_addr,
+    volatile tt_l1_ptr uint32_t* hist,
+    volatile tt_l1_ptr uint32_t* src,
+    uint32_t n,
+    uint32_t shift,
+    bool zero_fine) {
+    volatile tt_l1_ptr uint32_t* f32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(fine_addr);
+    volatile tt_l1_ptr uint16_t* f16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fine_addr);
+    if (zero_fine) {
+        for (uint32_t w = 0; w < R8_FINE_BYTES / 4; ++w) {
+            f32[w] = 0;
+        }
+    }
+    for (uint32_t b = 0; b < mladsa::BINS; ++b) {
+        hist[b] = 0;
+    }
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t d = (src[i] >> shift) & 255;
+        f16[d] += 1;
+        hist[d >> mladsa::DIGIT_BITS] += 1;
+    }
+}
+// after the round's message (the coordinator's fine pull has landed): key k's fine bin of the round back to 0
+inline __attribute__((always_inline)) void r8_unbin(uint32_t fine_addr, uint32_t k, uint32_t shift) {
+    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(fine_addr)[(k >> shift) & 255] = 0;
+}
+#endif
 }  // namespace mlashard

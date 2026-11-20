@@ -492,6 +492,55 @@ with any kernel edit. Exact by construction: the same bytes land on the same y p
 the same order once both halves are in. Expected: RS1 wait ~305 -> ~150-190 us per DSA layer at t 16 (~-1.2 to
 -1.6 ms per 45-layer step), proportionally less at t 4 / 8. Validation: `_logs/mesh/chain_rs1_1.sh`.
 
+### MFAST: the merge helpers' compute (2026-11-19, MLA_REV 77, default on the 8x4)
+
+Coordinator marks on the lane's first token's global merge (probe at 32,768 x 16 live, KPH 4; a helper holds 4 lists of
+256 keys per token; us after the all-gather landed):
+
+| step | us |
+|---|---|
+| start message | 1.0 |
+| AGK key pages read + pack copy (7.9) + pf_kth (20.1): the PREFILTER reports in | 30.5 |
+| L broadcast + filter + round-0 histogram (12.9 on the helpers) | 14.3 |
+| round 0 on the coordinator (sums, fine pull, message) | 2.2 |
+| rounds 1 / 2 / 3 | 5.3 / 4.9 / 4.1 |
+| tie, per-core quotas, broadcast | 2.6 / 2.1 / 1.2 |
+| one token's merge | 67.3 (token 1: another 67.3) |
+
+The merge sits on the critical path between the all-gather and the lane's last CB_ASEL page. Pipelining the lane's
+2 tokens (token 0's attention during token 1's merge) has nothing left to win: the reader and the compute already start
+token 0 on its own page, and its tree / ship hides behind token 1's reader + compute. The probe span labelled
+`local_select` (the root's owner marks 2 -> 3) is 55 us with token 0 early, 70 us with both tokens at once (MH2) and 70 us
+for one sparse + one idle token, so the window after the merge is already token 1's own chain. MFAST cuts the merge's
+helper compute instead, with the same integers:
+
+- no pack copy: pf_kth_fast reads each list in its AGK key page, and pf_keep compacts the keys >= L into the key array in
+  list order (in place: a block of 4 is loaded before it is written);
+- pf_kth_fast: the running top 16 in registers, a branchless min / max merge per insertion (31 Zbb ops instead of a
+  shifting insertion on the stack), one compare per 4 keys on the scan;
+- r8_hist_lean: each key's fine bin and coarse bucket counted directly (no 128-word coarse sum); the fine area is zeroed
+  in round 0 only, and each round's compaction clears the bins it counted after the coordinator's pull has landed.
+
+The coordinator (ix_dm0) is unchanged. Emulation: tt/shard_plan.py pf_kth_regs / pf_keep (test_helper_merge_prefilter,
+plus the lean rounds' counts vs r8_hist from a zero area). Offline (_pipe_kc/cmp_mfast.sh): knob off, att_dsa_shard_dm1 and
+ix_dm0 at t 1 / 4 / 8 / 16 disassemble identical to 10d2aed6561; knob on, dm1 +0.4-0.5 KB text, ix_dm0 / ix_dm1
+identical; no build without R8 / AGK / PREFILTER.
+
+Device (wt_main19 b78f17f5699; plain traced step, 16 live distinct rows, width 16, galaxy defaults):
+
+| row | ISL (position) | OSL | concurrency | merge (2 tokens) | step | per-row rate |
+|---|---|---|---|---|---|---|
+| off | 32,768 | - (probe step) | 16 | 135.2 us | 27,625.6 us | 36.20 tok/s/u |
+| MFAST | 32,768 | - | 16 | 94.5 us | 27,179.1 us (-1.6 %) | 36.79 tok/s/u |
+| off | 1,048,000 | - | 16 | 189.7 us | 30,940.7 us | 32.32 tok/s/u |
+| MFAST | 1,048,000 | - | 16 | 115.9 us | 30,120.9 us (-2.6 %) | 33.20 tok/s/u |
+
+Every span after the merge is unchanged (the root's marks 2 -> 10 within 0.5 us). The step saves 11 x the merge cut. At
+1 M the helpers hold 4 x 512 keys per token, so the passes MFAST shortens are longer. Bitwise with the knob on: the CI
+pins hold (32,767 x 4 / OSL 128: ids c4e99f0da946d7e5, 55.3 tok/s/u; 1,048,447 x 1: 8effa1b6f899e4c4, 63.2 tok/s/u),
+and 16 identical rows at 4,095 give one id-sequence class with the knob-off hash 8efe8c2ff60acc34. Validation:
+`_logs/mesh/chain_pipe_ab.sh`, `_logs/mesh/chain_pipe_1m.sh`.
+
 ## 11. Batch scaling at 1 M context per user (2026-11-11, #64931 685aaccbc5e defaults)
 
 | users at 1 M each | 1 | 2 | 4 | 8 | 16 |

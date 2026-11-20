@@ -80,13 +80,21 @@ MLA_REV = 75  # 75: the 8x4 global merge's exact pre-filter (GLM53_DSA_SHARD_PRE
 # 76 (GLM53_DSA_SHARD_RS1_SPLIT=1, opt-in, the 8x4): the column scatter RS1 over BOTH links -- a second scatter lane
 # (rs1a, link 0, opened after AG1's waiter closed link 0) sends the blocks of source p for destination q with p + q odd,
 # the rs1 lane (link 1) the rest; the roots signal both lanes and wait for both waiters (att_dsa_shard_dm1.cpp
-# MLA_DSA_SHARD_RS1_SPLIT), the waiters take one parity of sources (fs_send.cpp FS_SRC_STRIDE). Only the knob-on
-# builds carry 76 (mla_rev): with the knob off every define, argument and CB is rev 75's
+# MLA_DSA_SHARD_RS1_SPLIT), the waiters take one parity of sources (fs_send.cpp FS_SRC_STRIDE). An RS1_SPLIT build
+# without MFAST carries 76, one with MFAST 77 (mla_rev): with the knob off every define, argument and CB is rev 75's
 MLA_REV_RS1_SPLIT = 76
+# 77 (GLM53_DSA_SHARD_MFAST=1, a galaxy default, the 8x4 with R8 + AGK + PREFILTER): the global merge's helper compute with the same
+# integers in fewer instructions (kernels/mla/dsa_shard.hpp MFAST: no pack copy of the key pages, the PF_RANK-th largest
+# key in registers, the round histograms without the per-round fine-area zero / coarse sum). Only the knob-on builds
+# carry 77: with the knob off every define and instruction is rev 75 / 76's
+MLA_REV_MFAST = 77
 
 
 def mla_rev(shard=None) -> int:
-    """the MLA_REV define of a build: MLA_REV_RS1_SPLIT for a GLM53_DSA_SHARD_RS1_SPLIT shard build, else MLA_REV"""
+    """the MLA_REV define of a build: MLA_REV_MFAST for a GLM53_DSA_SHARD_MFAST shard build, MLA_REV_RS1_SPLIT for a
+    GLM53_DSA_SHARD_RS1_SPLIT one, else MLA_REV"""
+    if shard and shard.get("mfast"):
+        return MLA_REV_MFAST
     return MLA_REV_RS1_SPLIT if shard and shard.get("rs1_split") else MLA_REV
 
 
@@ -191,11 +199,13 @@ def _shard_line_defs(shard) -> list:
     sel2 = bool((shard or {}).get("sel2"))
     prefilter = bool((shard or {}).get("prefilter"))  # rev 75: dsa_shard.hpp PREFILTER
     rs1s = bool((shard or {}).get("rs1_split"))  # rev 76: dsa_shard.hpp RS1 SPLIT (att_dsa_shard_dm1.cpp)
+    mfast = bool((shard or {}).get("mfast"))  # rev 77: dsa_shard.hpp MFAST (att_dsa_shard_dm1.cpp merge_help)
     assert pair > 2 or not (comb or early or agk or r8 or local_all or rmarks or sel2 or prefilter), (
         "rev 65 COMB / RS1 early, rev 68 AGK, rev 70 R8, rev 72 LOCAL_ALL / ROUND_MARKS, rev 73 SEL2, rev 75 PREFILTER: the 8x4",
         pair,
     )
     assert pair > 2 or not rs1s, ("rev 76 RS1 split: the 8x4", pair)
+    assert not mfast or (pair > 2 and r8 and agk and prefilter), ("rev 77 MFAST: the 8x4 with R8, AGK, PREFILTER", pair)
     if pair > 2:  # rev 65: MLA_DSA_SHARD_COMB / MLA_DSA_SHARD_RS1_EARLY (tt/tp_dsa_shard.py's stream dict, default off)
         return (
             [("MLA_DSA_SHARD_LINE", str(line)), ("MLA_DSA_SHARD_PAIR", str(pair))]
@@ -209,6 +219,7 @@ def _shard_line_defs(shard) -> list:
             + ([("MLA_DSA_SHARD_SEL2", "1")] if sel2 else [])  # rev 73: dsa_shard.hpp SEL2 (needs R8)
             + ([("MLA_DSA_SHARD_PREFILTER", "1")] if prefilter else [])  # rev 75: dsa_shard.hpp PREFILTER
             + ([("MLA_DSA_SHARD_RS1_SPLIT", "1")] if rs1s else [])  # rev 76: dsa_shard.hpp RS1 SPLIT
+            + ([("MLA_DSA_SHARD_MFAST", "1")] if mfast else [])  # rev 77: dsa_shard.hpp MFAST
         )
     assert line in (1, 4), line
     return [("MLA_DSA_SHARD_LINE", str(line))] if line > 1 else []
@@ -2111,7 +2122,9 @@ class MkMla(_MlaBase):
                      (list(pct), {xy: [int(v) for v in prt[xy]] for xy in mine})]  # fmt: skip
             ct, rt, bases = concat_args(parts, mine)
             defs = list(mrole["defines"]) + [d for d in pdefs if d not in mrole["defines"]]
-            rev_now = mla_rev(getattr(self, "_shard_now", None))  # (76 only on a GLM53_DSA_SHARD_RS1_SPLIT build)
+            rev_now = mla_rev(
+                getattr(self, "_shard_now", None)
+            )  # (77 with MFAST, else 76 with RS1_SPLIT, else MLA_REV)
             defs += [("MK_PA_CT", str(bases[1][0])), ("MK_PA_RT", str(bases[1][1])), ("MK_PP_CT", str(bases[2][0])),
                      ("MK_PP_RT", str(bases[2][1])), ("MLA_REV", str(rev_now)), ("MLA_SRC", "0x" + mla_src()[:8])]  # fmt: skip
             if self.dsa is not None:
