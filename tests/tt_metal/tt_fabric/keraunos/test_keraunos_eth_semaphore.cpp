@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Semaphores on Keraunos Ethernet cores (CCE), on the two-chip test descriptors in this directory.
+// Semaphores on Keraunos Ethernet cores (CCE), on the two chips of vcluster/manifests/pair2_eth.yaml.
 // Run with TT_METAL_SLOW_DISPATCH_MODE=1. On Mock these tests check what the host computes and skip
 // before launch: UMD MockChip reads and writes are no-ops.
 
@@ -114,8 +114,7 @@ uint32_t read_word(distributed::MeshDevice& mesh, const EthCore& core, uint32_t 
     return value[0];
 }
 
-// Each chip claims its own Metal DRAM cores, none shared, and opens with DRAM banks (the V3 per-chip SoC
-// descriptors in variants/).
+// Each chip claims its own Metal DRAM cores, none shared, and opens with DRAM banks.
 TEST(KeraunosSocDesc, MetalDramCoresPerChip) {
     auto& cluster = MetalContext::instance().get_cluster();
     if (cluster.arch() != tt::ARCH::QUASAR) {
