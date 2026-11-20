@@ -19,6 +19,19 @@ s5 v1 in one point (BREADCRUMBS PPB.3, DECIDED): today's attention steps are reu
 to lane 0's chips and back (the code computes positions as start + q R + d), so each segment's call covers the full
 8192-row geometry; engine input lane-natural (s2's alternative). Measured walls in BREADCRUMBS PPB.3 (4 x 2k @ 139k:
 294.5 ms with the resident engram table): v2 (s5) is what reaches the bar.
+PB.3A (v2 attention, PACKED_ATTN_ONECALL=on, `tt/packed_onecall.py`): the attention steps ONCE a layer over every
+lane, each chip at its lane's positions / slot caches / history (no moves): per-lane rope rows (`rope.LaneStarts`),
+the window region per lane (per-chip keep mask, region index lists per start-class tuple, one prepared lane send:
+neighbour sends inside a lane, a lane's first chip reading its carry in place from the slot's served snapshot), the
+compressor once with every lane's served writes through lane-offset server-order rows, sparse_sdpa once (sdpa fork
+`kv_lanes`: each chip its lane's history gather buffer), the indexer as ONE ring (indexer fork lanes: up to 4 key
+buffers through one all-gather, each chip its lane's start / kv_len / keys) + one top-k with a per-chip
+valid_length_tensor (per-segment rings when the slots' key capacities differ, DS41-328, or a candidate pool is short).
+Oracle bit-identical (alone vs today, lane equivalence, digests, determinism); walls (resident table): 4 x 2k @ 139k
+122.3 ms = 67.0k new tok/s; mixed (slots sized by position: per-segment rings) 150.8 ms = 54.3k. Not yet: the
+lane-targeted gather (each lane's chips receive only their slot's rows; PB.3H), pad rows out of the MoE dispatch
+(the block's padded-forward mode does not describe lanes as whole SP rows: PB.4), the lanes ring over unequal key
+capacities.
 
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,

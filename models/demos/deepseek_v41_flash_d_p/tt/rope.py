@@ -195,6 +195,36 @@ def indexer_glue() -> bool:
     return settings.get("INDEXER_GLUE") == "on"
 
 
+class LaneStarts(tuple):
+    """PB.3A (PACKED_ATTN_ONECALL=on, tt/packed_onecall.py): the starts of a packed chunk's lanes (lane i = chunk rows
+    [i L, (i + 1) L), L = chunk / lanes; 0 for a lane that computes nothing), passed where a chunk start is expected by
+    the rope tables: ``RopeTable.rows`` / ``CompressRope.rows`` then give each chip the rows of ITS lane's positions
+    (lane start + the row's offset in the lane), the rows of every lane at once. Hashable (a memo key)."""
+
+    def scaled(self, r: int) -> "LaneStarts":
+        """The lanes' first compressed rows at ratio ``r`` (start // r each)."""
+        return LaneStarts(int(s) // r for s in self)
+
+
+def lane_slices(table: ttnn.Tensor, starts: "LaneStarts", lane_rows: int, width: int) -> ttnn.Tensor:
+    """Rows [s, s + lane_rows) of ``table`` for each lane start s, concatenated in lane order ([1, 1, lanes x lane_rows,
+    width], the table's layout): the natural-order rows of a packed chunk. Exact copies of the table's rows."""
+    parts = [
+        ttnn.slice(
+            table,
+            [0, 0, int(s), 0],
+            [1, 1, int(s) + lane_rows, width],
+            memory_config=DRAM,
+            sub_core_grids=sub_cores(table),
+        )
+        for s in starts
+    ]
+    out = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+    for t in parts:
+        dealloc(t)
+    return out
+
+
 class RowsMemo:
     """INDEXER_GLUE=on (P.16): device tensors that depend only on (a load-time table, a chunk start), computed once
     and handed to every caller of the chunk (the rope rows of all 8 layers' kv / attention / indexer steps). Holds
@@ -344,13 +374,25 @@ class RopeTable:
 
     def _rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
-        assert start % 32 == 0 and length % (32 * sp) == 0, (start, length, sp)
-        assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
+        packed = isinstance(start, LaneStarts)  # PB.3A: each lane its own start (tt/packed_onecall.py)
+        if packed:
+            lr = length // len(start)
+            assert lr * len(start) == length and all(s % 32 == 0 and s + lr <= self.max_seq for s in start), (start, lr)
+        else:
+            assert start % 32 == 0 and length % (32 * sp) == 0, (start, length, sp)
+            assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(
-                t, [0, 0, start, 0], [1, 1, start + length, self.width], memory_config=DRAM, sub_core_grids=sub_cores(t)
-            )
+            if packed:
+                sl = lane_slices(t, start, lr, self.width)
+            else:
+                sl = ttnn.slice(
+                    t,
+                    [0, 0, start, 0],
+                    [1, 1, start + length, self.width],
+                    memory_config=DRAM,
+                    sub_core_grids=sub_cores(t),
+                )
             if sp > 1:
                 part = ttnn.mesh_partition(sl, dim=2, cluster_axis=SP_AXIS, memory_config=DRAM)
                 dealloc(sl)

@@ -97,6 +97,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   at 1,044,480 tokens: 2570.5 -> 817.4 MiB (BREADCRUMBS FIX.8).
 - Box: not stated per number in the CHANGELOG except the Xing tests (4x2 LoudBox, 8x p150b); `tests/source.yaml`
   records 4x Blackhole p150b.
+- `kv_lanes` / `kv_lane_of_chip` (sparse_sdpa, fork, opt-in, default None; deepseek_v41_flash_d_p PB.3A): one kv
+  tensor a device, kv_lanes[kv_lane_of_chip[row-major chip]] (same shape / dtype / memory config as kv): one program a
+  device (`device/sparse_sdpa_lanes_device_operation.*`), each the source program with that device's kv address.
+  Measured: bit-identical to v1's per-segment calls on the model's packed oracle (8x4); speed not separated.
 
 ## Limits
 - Narrow V: not with `paged_cache_geometry` or windowed mode; V % 32 == 0 and V <= K.
@@ -137,7 +141,8 @@ Tests: `tests/test_sdpa.py` (model cases, `tests/cases.py`), `tests/unit/test_sd
 - deepseek_v41_flash_d_p: sparse_sdpa `BF16` + `kv_window` (P.38, the default since 2026-11-06: `CKV_FORMAT=bf16`
   with `WINDOW_KV_FORMAT=bf16_tiles`, the compressed layers' bf16 history + per-chip bf16 window region,
   `tt/attention.py` `_sdpa`, max_grid 11x10 on the Galaxy); `ROW_BFP4` + `kv_window` (`CKV_FORMAT=bfp4_rows`); FIX.8
-  (2026-10-28, 2x2 and Galaxy 8x4). Window-only layers: `BF16` / `ROW_BFP8` with max_grid.
+  (2026-10-28, 2x2 and Galaxy 8x4). Window-only layers: `BF16` / `ROW_BFP8` with max_grid. PB.3A
+  (PACKED_ATTN_ONECALL=on): `kv_lanes` in `tt/packed_onecall.py` (one sparse_sdpa over a packed chunk's lanes).
   Earlier: none since FIX.8 (2026-10-21; the model runs stock ttnn.transformer.sparse_sdpa, the
   settings `DS41_WINDOW_SDPA*` are deleted). Before: `tt/attention.py`, `tt/sparse_attention.py`, sparse_sdpa
   `high_precision` + sink + `fp32_scores` + `bf16_probs`; C.swa.attention, S.swa.06, S.swa.11, FIX.2. The options

@@ -459,6 +459,10 @@ void bind_sdpa(nb::module_& mod) {
             max_grid (ttnn.CoreCoord, optional): bring-up fork option, default None (the device's whole compute
                 grid). The op runs on the rectangle (0, 0) .. (max_grid.x - 1, max_grid.y - 1) of it (a Galaxy's
                 110-core cap, deepseek_v41_flash_d_p FIX.15).
+            kv_lanes (list[ttnn.Tensor], optional), kv_lane_of_chip (list[int], optional): bring-up fork option
+                (deepseek_v41_flash_d_p PB.3A, packed prefill), default None (the source program). Each device reads
+                its own kv: kv_lanes[kv_lane_of_chip[c]], c its row-major chip index (r * mesh columns + col); every
+                lane tensor has kv's shape, dtype and memory config; kv is then ignored. One program per device.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.
@@ -483,7 +487,9 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("fp32_scores") = false,
         nb::arg("bf16_probs") = false,
         nb::arg("kv_window") = nb::none(),
-        nb::arg("max_grid") = nb::none());
+        nb::arg("max_grid") = nb::none(),
+        nb::arg("kv_lanes") = nb::none(),
+        nb::arg("kv_lane_of_chip") = nb::none());
 
     ttnn::bind_function<"sparse_sdpa_msa", "ttnn.bringup.">(
         mod,

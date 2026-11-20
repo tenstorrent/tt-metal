@@ -59,6 +59,8 @@ struct RingIndexerScoreDsaMeshWorkloadFactory {
         uint32_t layer_index;
         uint32_t backward_semaphore;
         uint32_t forward_semaphore;
+        uint32_t lane_lo;  // PB.3A natural_query_lane (runtime, not hashed)
+        uint32_t lane_hi;
 
         bool operator==(const ScalarControls&) const = default;
     };
@@ -67,6 +69,7 @@ struct RingIndexerScoreDsaMeshWorkloadFactory {
         std::array<AgArgumentPlan, 4> ag_plans;
         uint32_t device_index{};
         uint32_t tp_index{};
+        uint32_t lane{};  // PB.3A lane_rows > 0: this range's lane
         // Invocation-wide guard, stored on the first shared entry. Addresses are
         // always rebound; only unchanged scalar controls can bypass their updates.
         std::optional<ScalarControls> scalar_controls;

@@ -464,6 +464,9 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         attrs.key_stripe_split,      // bakes the reader's invP divisors: unsplit vs tp-split must not share a program
         attrs.natural_query_blocks,  // bring-up fork: natural query blocks (linear causal geometry)
         attrs.natural_query_rows,    // bring-up fork (P.31): the queries' rows per SP rank (0 = the cache's)
+        attrs.lane_rows > 0,  // bring-up fork (PB.3A): one ring call over every lane (starts / kv_lens not hashed)
+        // the lane -> buffer map: each device's program binds its lane's buffers by position (one program a map)
+        attrs.lane_buffer,
         // bring-up fork block epilogue: its presence adds a define, CBs and writer arguments
         attrs.block_keys,
         attrs.block_max_pin,
@@ -951,7 +954,17 @@ ttnn::Tensor launch_indexer_score(
     std::optional<ttnn::Tensor> block_max_out = std::nullopt,
     bool block_max_pin = false,
     // Bring-up fork (P.31): natural_query_blocks with the queries' own rows per SP rank (operation_attributes_t).
-    uint32_t natural_query_rows = 0) {
+    uint32_t natural_query_rows = 0,
+    // Bring-up fork (PB.3A): one lane of a packed chunk (operation_attributes_t::natural_query_lane_lo / hi).
+    uint32_t natural_query_lane_lo = 0,
+    uint32_t natural_query_lane_hi = 0,
+    // Bring-up fork (PB.3A): one ring call over every lane (operation_attributes_t::lane_rows).
+    uint32_t lane_rows = 0,
+    std::vector<uint32_t> lane_starts = {},
+    std::vector<uint32_t> lane_kv_lens = {},
+    std::vector<uint32_t> lane_buffer = {},
+    std::vector<ttnn::Tensor> k_extra = {},
+    std::vector<ttnn::Tensor> k_local_extra = {}) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::bringup::indexer_score::IndexerScoreDeviceOperation;
@@ -1211,6 +1224,14 @@ ttnn::Tensor launch_indexer_score(
     }
     operation_attributes.natural_query_blocks = natural_query_blocks;
     operation_attributes.natural_query_rows = natural_query_rows;
+    TT_FATAL(
+        natural_query_lane_hi == 0 || (natural_query_blocks && natural_query_lane_lo < natural_query_lane_hi &&
+                                       natural_query_lane_lo % tt::constants::TILE_HEIGHT == 0),
+        "indexer_score: natural_query_lane [{}, {}) needs natural_query_blocks and a tile-aligned lo < hi",
+        natural_query_lane_lo,
+        natural_query_lane_hi);
+    operation_attributes.natural_query_lane_lo = natural_query_lane_lo;
+    operation_attributes.natural_query_lane_hi = natural_query_lane_hi;
     // Bring-up fork block epilogue: the writer biases / pools the untilized scores of the fused ring program.
     const bool epilogue = block_bias.has_value() || block_max_out.has_value();
     TT_FATAL(
@@ -1270,6 +1291,53 @@ ttnn::Tensor launch_indexer_score(
     operation_attributes.block_max_pin = block_max_pin;
     tensor_args.block_bias = std::move(block_bias);
     tensor_args.block_max_out = std::move(block_max_out);
+    if (lane_rows > 0) {  // PB.3A: one ring call over every lane (operation_attributes_t::lane_rows)
+        const size_t lanes = lane_starts.size();
+        TT_FATAL(
+            operation_attributes.fused_ring.has_value() && natural_query_blocks && natural_query_lane_hi == 0 &&
+                !cache_batch_idx.has_value() && !tensor_args.cache_batch_idx_tensor.has_value(),
+            "indexer_score lanes: the fused ring with natural_query_blocks, no natural_query_lane, no cache slot");
+        TT_FATAL(
+            lanes >= 1 && lane_kv_lens.size() == lanes && lane_buffer.size() == lanes &&
+                k_extra.size() == k_local_extra.size() && k_extra.size() + 1 <= 4 &&
+                lane_rows % tt::constants::TILE_HEIGHT == 0,
+            "indexer_score lanes: {} lanes, {} kv_lens, {} buffers, {} / {} extra tensors (at most 3), lane_rows {}",
+            lanes,
+            lane_kv_lens.size(),
+            lane_buffer.size(),
+            k_extra.size(),
+            k_local_extra.size(),
+            lane_rows);
+        uint32_t widest = 0;
+        for (size_t l = 0; l < lanes; ++l) {
+            TT_FATAL(lane_buffer[l] <= k_extra.size(), "indexer_score lanes: lane {} buffer {}", l, lane_buffer[l]);
+            TT_FATAL(
+                lane_starts[l] % tt::constants::TILE_WIDTH == 0, "indexer_score lanes: lane start not tile-aligned");
+            widest = std::max(widest, lane_kv_lens[l]);
+        }
+        TT_FATAL(
+            kv_len.has_value() && *kv_len == widest,
+            "indexer_score lanes: kv_len must be the largest lane's ({} vs {})",
+            kv_len.value_or(0),
+            widest);
+        for (size_t i = 0; i < k_extra.size(); ++i) {
+            // (one shape: lanes of different key capacities scored wrong keys on the smaller lanes,
+            // deepseek_v41_flash_d_p PB.3A tests/packed/test_onecall_sizes.py; cause not isolated)
+            TT_FATAL(
+                k_extra[i].logical_shape() == k.logical_shape() && k_extra[i].dtype() == k.dtype() &&
+                    k_extra[i].memory_config() == k.memory_config() &&
+                    k_local_extra[i].logical_shape() == tensor_args.k_local->logical_shape() &&
+                    k_local_extra[i].dtype() == tensor_args.k_local->dtype() &&
+                    k_local_extra[i].memory_config() == tensor_args.k_local->memory_config(),
+                "indexer_score lanes: k_extra / k_local_extra must match k / k_local (one key capacity)");
+        }
+        operation_attributes.lane_rows = lane_rows;
+        operation_attributes.lane_starts = std::move(lane_starts);
+        operation_attributes.lane_kv_lens = std::move(lane_kv_lens);
+        operation_attributes.lane_buffer = std::move(lane_buffer);
+        tensor_args.k_extra = std::move(k_extra);
+        tensor_args.k_local_extra = std::move(k_local_extra);
+    }
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
@@ -1386,7 +1454,15 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& block_bias,
     const std::optional<ttnn::Tensor>& block_max_out,
     bool block_max_pin,
-    uint32_t natural_query_rows) {
+    uint32_t natural_query_rows,
+    uint32_t natural_query_lane_lo,
+    uint32_t natural_query_lane_hi,
+    uint32_t lane_rows,
+    const std::vector<uint32_t>& lane_starts,
+    const std::vector<uint32_t>& lane_kv_lens,
+    const std::vector<uint32_t>& lane_buffer,
+    const std::vector<ttnn::Tensor>& k_extra,
+    const std::vector<ttnn::Tensor>& k_local_extra) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::bringup::indexer_score::FusedRingConfig fused_ring;
@@ -1503,7 +1579,15 @@ ttnn::Tensor ring_indexer_score_dsa(
         block_bias,
         block_max_out,
         block_max_pin,
-        natural_query_rows);
+        natural_query_rows,
+        natural_query_lane_lo,
+        natural_query_lane_hi,
+        lane_rows,
+        lane_starts,
+        lane_kv_lens,
+        lane_buffer,
+        k_extra,
+        k_local_extra);
 }
 
 }  // namespace ttnn::experimental::bringup

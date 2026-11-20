@@ -162,6 +162,13 @@ class PackedChunk:
         self.trivial = len(segs) == 1 and segs[0].lane == 0  # (today's chunk: nothing moves)
         self.prefetched = False  # (TtDS41Model.take_engram_rows: once a chunk)
         self.mover = None if self.trivial else LaneMover(model.mesh, model.chunk, desc.lanes)
+        # PB.3A (PACKED_ATTN_ONECALL=on, read per chunk): the attention once a layer over every lane (no moves)
+        self.oc = None
+        if not self.trivial and segs:
+            from .packed_onecall import OneCall, onecall_on
+
+            if onecall_on():
+                self.oc = OneCall(self)
 
     # ------------------------------------------------------------------ per segment model fields
     def enter(self, r: SegRun) -> None:
@@ -215,6 +222,8 @@ class PackedChunk:
                     r.restore.append((ik, "key_layer", orig))
 
     def unbind(self) -> None:
+        if self.oc is not None:
+            self.oc.close()
         for r in self.segs:
             for obj, name, v in reversed(r.restore):
                 setattr(obj, name, v)
@@ -287,6 +296,8 @@ class PackedChunk:
         rows zero). ``x``: the attention input (attn_norm), the chips' own rows; not consumed."""
         if self.trivial:
             return self._seg_steps(block, self.segs[0], x)
+        if self.oc is not None:  # PB.3A (PACKED_ATTN_ONECALL=on): once over every lane
+            return self.oc.attention(block, x)
         mv = self.mover
         g = mv.gather(x) if any(r.lane for r in self.segs) else None
         xs = {r.lane: (x if r.lane == 0 else mv.to_lane0(g, r.lane)) for r in self.segs}
@@ -310,6 +321,9 @@ class PackedChunk:
         """DECODER_SKIP (kv_only, layer 20): the compressor of every segment (the KV head's served writes)."""
         if self.trivial:
             self._seg_steps(block, self.segs[0], x, names=("compressor",))
+            return
+        if self.oc is not None:  # PB.3A (PACKED_ATTN_ONECALL=on)
+            self.oc.compress_only(block, x)
             return
         mv = self.mover
         g = mv.gather(x) if any(r.lane for r in self.segs) else None

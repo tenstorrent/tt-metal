@@ -194,6 +194,17 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& block_max_out = std::nullopt,
     bool block_max_pin = false,
     // Bring-up fork (P.31): natural_query_blocks with the queries' own rows per SP rank; 0 = block_cyclic_chunk_local.
-    uint32_t natural_query_rows = 0);
+    uint32_t natural_query_rows = 0,
+    // Bring-up fork (PB.3A, packed prefill): one lane [lo, hi) of the chunk's tokens (operation_attributes_t); hi 0 =
+    // off.
+    uint32_t natural_query_lane_lo = 0,
+    uint32_t natural_query_lane_hi = 0,
+    // Bring-up fork (PB.3A): one ring call over every lane of a packed chunk (operation_attributes_t::lane_rows).
+    uint32_t lane_rows = 0,
+    const std::vector<uint32_t>& lane_starts = {},
+    const std::vector<uint32_t>& lane_kv_lens = {},
+    const std::vector<uint32_t>& lane_buffer = {},
+    const std::vector<ttnn::Tensor>& k_extra = {},
+    const std::vector<ttnn::Tensor>& k_local_extra = {});
 
 }  // namespace ttnn::experimental::bringup

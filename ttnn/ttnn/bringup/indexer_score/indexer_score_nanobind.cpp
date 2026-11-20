@@ -335,6 +335,18 @@ void bind_indexer_score(nb::module_& mod) {
                 natural_query_blocks): the query tokens per SP rank when the queries' chunk is not the key cache's
                 (a small chunk scoring keys a larger chunk wrote): device (d, c) holds positions chunk_start_idx +
                 d*natural_query_rows + c*Sq + [0, Sq). Tile-aligned, >= Sq.
+            natural_query_lane_lo, natural_query_lane_hi: optional ints (default 0, 0 = off; bring-up fork,
+                deepseek_v41_flash_d_p PB.3A packed prefill; needs natural_query_blocks): the chunk tokens [lo, hi)
+                are one lane whose queries start at chunk_start_idx: a device whose natural chunk offset
+                off = d*rows + c*Sq lies in [lo, hi) holds positions chunk_start_idx + (off - lo) + [0, Sq); the
+                other devices keep chunk_start_idx + off (another lane's rows; the caller ignores them). Runtime
+                values (no new program).
+            lane_rows, lane_starts, lane_kv_lens, lane_buffer, k_extra, k_local_extra: optional (default 0 / empty
+                = off; bring-up fork, deepseek_v41_flash_d_p PB.3A: ONE ring call over every lane of a packed
+                chunk; needs natural_query_blocks): lane l = chunk tokens [l lane_rows, (l + 1) lane_rows); a device
+                of lane l scores at chunk start lane_starts[l] with kv_len lane_kv_lens[l] against the keys of buffer
+                lane_buffer[l] (0: k / k_local, i: k_extra[i - 1] / k_local_extra[i - 1]); the ring gathers every
+                buffer's k_local (up to 4); kv_len must be the largest lane's. The lane values are runtime values.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -369,7 +381,15 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("block_bias") = nb::none(),
         nb::arg("block_max_out") = nb::none(),
         nb::arg("block_max_pin") = false,
-        nb::arg("natural_query_rows") = 0);
+        nb::arg("natural_query_rows") = 0,
+        nb::arg("natural_query_lane_lo") = 0,
+        nb::arg("natural_query_lane_hi") = 0,
+        nb::arg("lane_rows") = 0,
+        nb::arg("lane_starts") = std::vector<uint32_t>{},
+        nb::arg("lane_kv_lens") = std::vector<uint32_t>{},
+        nb::arg("lane_buffer") = std::vector<uint32_t>{},
+        nb::arg("k_extra") = std::vector<ttnn::Tensor>{},
+        nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{});
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

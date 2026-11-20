@@ -72,11 +72,13 @@ from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activation
 from .cores import from_torch, max_grid, sub_cores, sub_cores_tiled, to_rm
 from .norm import TtDistributedRmsNorm
 from .rope import (
+    LaneStarts,
     PairPerm,
     RowsMemo,
     deinterleave_perm,
     glue,
     indexer_glue,
+    lane_slices,
     pair_table,
     rope_deinterleaved,
     rope_deinterleaved_bf16,
@@ -141,12 +143,20 @@ class CompressRope:
 
     def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
-        assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
+        packed = isinstance(g0, LaneStarts)  # PB.3A: each lane its own first group (tt/packed_onecall.py)
+        if packed:
+            lr = n // len(g0)
+            assert lr * len(g0) == n and n % (32 * sp) == 0 and max(g0) + lr <= self.rows_max, (g0, n, self.rows_max)
+        else:
+            assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
         for t in (self.cos, self.sin):
-            sl = ttnn.slice(
-                t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM, sub_core_grids=sub_cores(t)
-            )
+            if packed:
+                sl = lane_slices(t, g0, lr, self.width)
+            else:
+                sl = ttnn.slice(
+                    t, [0, 0, g0, 0], [1, 1, g0 + n, self.width], memory_config=DRAM, sub_core_grids=sub_cores(t)
+                )
             tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
             dealloc(sl)
             if sp > 1:
@@ -702,14 +712,20 @@ class TtServedRows:
         for t in (slot, kv, valid):
             self._slot.release(t) if t is slot else self._pos.release(t)
 
-    def write(self, rows_rm: ttnn.Tensor, start: int, end: int, table: bool = True) -> None:
+    def write(
+        self, rows_rm: ttnn.Tensor, start: int, end: int, table: bool = True, idx: ttnn.Tensor | None = None
+    ) -> None:
         """rows_rm [1, 1, S / r, width] bf16 ROW_MAJOR, the chunk's compressed rows in natural order, replicated, rows
         of incomplete groups zero: token positions [start, end) into the cache (the last record whole). ``table``
-        False: the attention table was written already (CKV_FORMAT=bfp4_rows: AttnTable.append_tiles)."""
+        False: the attention table was written already (CKV_FORMAT=bfp4_rows: AttnTable.append_tiles). ``idx`` (PB.3A,
+        a packed chunk's lane): the server-order index row to read rows_rm with (the lane's tokens first; the
+        caller's, not released here) instead of the start's own."""
         g = self.geo
         assert start % 32 == 0 and start < end <= start + g.chunk and end <= self.max_seq, (start, end, self.max_seq)
         k = (start % g.chunk) // 32
-        idx = self.tables.srv_row(k)  # GLUE_FOLD=on (P.19): sliced once per start for the chunk's writes
+        own = idx is None
+        if own:
+            idx = self.tables.srv_row(k)  # GLUE_FOLD=on (P.19): sliced once per start for the chunk's writes
         rows = ttnn.bringup.embedding(
             ttnn.reshape(idx, [1, g.w], sub_core_grids=sub_cores(idx)),
             ttnn.reshape(rows_rm, [g.chunk, self.tok_width], sub_core_grids=sub_cores(rows_rm)),
@@ -718,7 +734,8 @@ class TtServedRows:
             memory_config=DRAM,
             max_grid=max_grid(),
         )
-        self.tables.release_srv(idx)
+        if own:
+            self.tables.release_srv(idx)
         slab = ttnn.reshape(rows, [1, 1, g.w // self.ratio, self.width], sub_core_grids=sub_cores(rows))
         self._put(slab, start, end)
         if self.table is not None and table:  # STATIC_TABLES=on (P.21): the same rows into the table, natural order
@@ -970,7 +987,8 @@ class TtCompressor:
     def __call__(self, x: ttnn.Tensor, start: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         r = self.ratio
         rows = x.shape[-2]
-        assert start % 32 == 0 and rows % r == 0, (start, rows, r)
+        lanes = isinstance(start, LaneStarts)  # PB.3A (tt/packed_onecall.py): each lane its own start, rope only
+        assert (lanes or start % 32 == 0) and rows % r == 0, (start, rows, r)
         if self.full_rows:  # ATTN_SP32=on (P.10): the chip's rows' whole sum, gathered over TP (a data move)
             part = self._mm(x, self.proj_w, dtype=ttnn.float32)
             if self.mesh.shape[TP_AXIS] > 1:
@@ -995,7 +1013,7 @@ class TtCompressor:
         latent = self.norm(pooled)
         dealloc(pooled)
         n = rows // r
-        cos, sin = self.rope.rows(start // r, n * self.mesh.shape[SP_AXIS])
+        cos, sin = self.rope.rows(start.scaled(r) if lanes else start // r, n * self.mesh.shape[SP_AXIS])
         if self.stock:
             return self._rope_stock(latent, cos, sin)
         # ATTN_GLUE=on (P.15): the rope's last ops write bf16 and the re-interleave is a PairPerm matmul
@@ -1040,20 +1058,24 @@ class TtCompressor:
         self.rope.free(cos, sin)  # INDEXER_GLUE=on: the chunk's memoized rows stay
         return ckv, k
 
-    def _gathered(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+    def _gathered(self, t: ttnn.Tensor, valid: int, pre: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """[1, 1, n, w] bf16 TILE row-split -> [1, 1, SP n, w] bf16 ROW_MAJOR on every chip (natural order), rows at
-        or past ``valid`` zero."""
-        g = self._gathered_tile(t, valid)
+        or past ``valid`` zero. ``pre`` (PB.3A): the gathered rows already (not consumed)."""
+        g = self._gathered_tile(t, valid, pre)
         rm = to_rm(g, memory_config=DRAM)
-        if g is not t and rm is not g:
+        if g is not t and g is not pre and rm is not g:
             dealloc(g)
         return rm
 
-    def _gathered_tile(self, t: ttnn.Tensor, valid: int) -> ttnn.Tensor:
+    def _gathered_tile(self, t: ttnn.Tensor, valid: int, pre: ttnn.Tensor | None = None) -> ttnn.Tensor:
         """``_gathered`` before its ROW_MAJOR: [1, 1, SP n, w] bf16 TILE (t itself on one SP row with every row valid;
-        the caller frees it when it is not t)."""
+        the caller frees it when it is not t). ``pre`` (PB.3A, PACKED_ATTN_ONECALL=on: one segment's rows of a
+        packed chunk, gathered once and rolled to row 0 by tt/packed_onecall.py): those rows instead of t's gather
+        (returned as ``pre`` when every row is valid; never freed here)."""
         g = t
-        if self.mesh.shape[SP_AXIS] > 1:
+        if pre is not None:
+            g = pre
+        elif self.mesh.shape[SP_AXIS] > 1:
             g = ccl.all_gather(t, 2, SP_AXIS)
         total = g.shape[-2]
         if valid < total:
@@ -1078,7 +1100,7 @@ class TtCompressor:
                 dealloc(iota)
             masked = ttnn.multiply(g, keep, dtype=ttnn.bfloat16, memory_config=DRAM, sub_core_grids=sub_cores(g))
             dealloc(keep)
-            if g is not t:
+            if g is not t and g is not pre:
                 dealloc(g)
             g = masked
         return g
@@ -1091,6 +1113,7 @@ class TtCompressor:
         end: int,
         caches: TtCompressCaches,
         write_from: int | None = None,
+        gathered: tuple | None = None,
     ) -> None:
         """The chunk's groups complete by actual_end ((j + 1) r <= end) into the served caches; the other rows of the
         chunk (an incomplete last group, pad) written as zeros. Does not consume its inputs. ``write_from`` (P.51,
@@ -1099,13 +1122,21 @@ class TtCompressor:
         lo = int(start) if write_from is None else max(int(start), int(write_from))
         if lo >= end:
             return
+        pres = (None, None) if gathered is None else gathered  # PB.3A: (ckv, k) gathered rows, tt/packed_onecall.py
         if lo > start:
-            for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
-                self._write_from(t, start, lo, end, cache)
+            for t, cache, pre in ((ckv, caches.ckv, pres[0]), (k, caches.index_k, pres[1])):
+                self._write_from(t, start, lo, end, cache, pre)
             return
         valid = end // self.ratio - start // self.ratio  # complete groups of the chunk
-        for t, cache in ((ckv, caches.ckv), (k, caches.index_k)):
+        for t, cache, pre in ((ckv, caches.ckv, pres[0]), (k, caches.index_k, pres[1])):
             table = cache.table
+            if pre is not None:  # (PB.3A: the gathered path; the packed chunk's table-less served caches)
+                assert table is None, "PACKED_ATTN_ONECALL=on: STATIC_TABLES=off (no attention table)"
+                rm = self._gathered(t, valid, pre)
+                cache.write(rm, start, end)
+                if rm is not pre:
+                    dealloc(rm)
+                continue
             if table is not None and table.bfp4 and self.tables.packs("rows", t.shape[-2], start):
                 self._write_packed(t, start, end, valid, cache)  # CKV_PACK_BEFORE_GATHER=on (P.11)
                 continue
@@ -1125,7 +1156,9 @@ class TtCompressor:
                 cache.write(rm, start, end)
             dealloc(rm)
 
-    def _write_from(self, t: ttnn.Tensor, start: int, lo: int, end: int, cache: TtServedRows) -> None:
+    def _write_from(
+        self, t: ttnn.Tensor, start: int, lo: int, end: int, cache: TtServedRows, pre: ttnn.Tensor | None = None
+    ) -> None:
         """DECODER_SKIP=decode (P.51), an encoder replay chunk [start, end) whose rows below ``lo`` (global_write_start,
         start < lo < end) are the cached prefix's: t (as ``write``'s, not consumed) -> the served cache gets only the
         groups of [lo, end): the chunk's natural-order rows shifted up by (lo - start) / r (rows from lo on first; the
@@ -1136,7 +1169,7 @@ class TtCompressor:
         there. The gathered path (never the P.11 pack path), the same bytes as ``write`` for the groups it writes."""
         r = self.ratio
         assert start % 32 == 0 and lo % 32 == 0 and start < lo < end, (start, lo, end)
-        g = self._gathered_tile(t, end // r - start // r)  # [1, 1, S / r, w] TILE natural order, pad rows zero
+        g = self._gathered_tile(t, end // r - start // r, pre)  # [1, 1, S / r, w] TILE natural order, pad rows zero
         table, src = cache.table, g
         if table is not None:
             a = start // r
@@ -1160,7 +1193,7 @@ class TtCompressor:
             dealloc(x)
         if rm is not g:
             dealloc(rm)
-        if g is not t:
+        if g is not t and g is not pre:
             dealloc(g)
         tile = ttnn.to_layout(rot, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(rot))
         if tile is not rot:

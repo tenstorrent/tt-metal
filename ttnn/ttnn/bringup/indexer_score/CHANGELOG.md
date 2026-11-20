@@ -233,3 +233,27 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
 - Run: not on the 8x4: a 2x2 FABRIC_2D sub-mesh of the Galaxy fails the router handshake (K-68); the model's quick A/B
   on the 8x4 exercises the path (rung last, every layer against the golden). Runs on a 2x2 box / in F.1.
 - Files: tests/cases.py, tests/test_indexer_score.py
+
+### PB.3A (deepseek_v41_flash_d_p, 2026-11-20): natural_query_lane and the one-call lanes ring (packed prefill)
+- What: two opt-in options of `ring_indexer_score_dsa` (runtime values except the lane -> buffer map):
+  `natural_query_lane_lo / hi` (with natural_query_blocks): the devices whose natural chunk offset lies in [lo, hi) score
+  at chunk_start_idx + (offset - lo) (one lane of a packed chunk; the others keep today's offsets); `lane_rows`,
+  `lane_starts`, `lane_kv_lens`, `lane_buffer`, `k_extra`, `k_local_extra`: ONE fused ring over every lane, each device
+  scoring its lane's queries against its lane's key buffer with its lane's start and kv_len; the co-scheduled
+  ring_attention all-gather takes up to 4 inputs (every lane buffer's k_local -> k / k_extra), partial readiness off
+  (the AG writer's one-input rule), its extent the largest lane's (kv_len); the cache-hit override re-patches every
+  input's extent and each range's lane values (lane_attributes, host_common). lane_buffer (lane -> buffer map) is
+  hashed: each device's program binds its lane's buffers by position, so a cache hit with another map would read
+  the first map's buffers (found on the oracle: packed2's lane 3 read lane 0's keys); one program a map (<= 16).
+  Every lane buffer must have k's / k_local's shape: lanes of different key capacities (the AG's per-input extents
+  clamped, the override re-patching each input's) scored wrong keys on the smaller lanes (the model's
+  tests/packed/test_onecall_sizes.py; cause not isolated); the model takes per-segment rings there.
+- Why: deepseek_v41_flash_d_p PB.3A (owner 2026-11-19, PACKED_DESIGN.md s5 v2): the packed chunk's indexer as one call
+  instead of one per segment over the full geometry.
+- Default: off (hi 0, lane_rows 0): the program and its hash unchanged.
+- Run: the model's packed oracle on the 8x4 (tests/packed/test_packed_oracle.py, PACKED_ATTN_ONECALL=on: lanes vs the
+  segment alone, bit-identical); no fork unit test on the 8x4 (brief: no fork suites on the 8x4).
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_host_common.hpp,
+  device/indexer_score_device_operation.cpp, device/indexer_score_device_operation.hpp,
+  device/ring_indexer_score_dsa_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.hpp,
+  indexer_score_nanobind.cpp, README.md

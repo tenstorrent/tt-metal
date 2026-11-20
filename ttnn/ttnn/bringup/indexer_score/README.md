@@ -83,6 +83,13 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   heads x 128, T 55296, HiFi2 + fp32 DEST, q 64 x k 32 (probe in CHANGELOG.md): plain 1.68 ms, + block max and pin
   1.96 ms, + bias 1.69 ms; deepseek_v41_flash_d_p P.16: indexer section 25.15 -> 12.94 ms a chunk.
 - Speed: not measured for the plain op.
+- `natural_query_lane_lo / _hi` (ring op, fork, opt-in, default 0 / 0; PB.3A): with natural_query_blocks, the devices
+  whose natural chunk offset lies in [lo, hi) score at chunk_start_idx + (offset - lo); the rest keep today's
+  offsets. Runtime values (no new program).
+- `lane_rows`, `lane_starts`, `lane_kv_lens`, `lane_buffer`, `k_extra`, `k_local_extra` (ring op, fork, opt-in,
+  default 0 / empty; PB.3A): ONE fused ring over the lanes of a packed chunk: each device its lane's start, kv_len and
+  key buffer; the all-gather moves every lane buffer's k_local (up to 4 inputs, no partial readiness); kv_len is the
+  largest lane's. Starts / kv_lens are runtime values; lane_buffer is hashed (one program a lane -> buffer map).
 
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
@@ -121,6 +128,8 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   P.31 (DECODER_SKIP=replay128): the decoder tail's layers 20-39 at a 1024-token chunk score the 5120-token chunks'
   keys with `natural_query_rows`.
   P.40: INDEX_K_FORMAT=bfp8 scores bfloat8_b keys (k_local and the ring buffer) against the bfloat4_b query.
+  PB.3A (PACKED_ATTN_ONECALL=on, `tt/packed_onecall.py`): `natural_query_lane` (a segment's ring call) and the lanes
+  ring (one call over a packed chunk).
 
 ## History
 CHANGELOG.md

@@ -132,6 +132,33 @@ inline QueryGeometryRanks query_geometry_ranks(
     return {device_index / split, device_index % split};
 }
 
+// PB.3A (lane_rows > 0): a device's natural chunk offset (natural_query_blocks: the chunk token its first query is).
+inline uint32_t natural_query_offset(
+    const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
+    TT_FATAL(args.block_cyclic.has_value() && args.natural_query_blocks, "indexer_score lanes: natural query blocks");
+    const uint32_t split = query_geometry_split(args);
+    const uint32_t chunk_local = args.block_cyclic->chunk_local * args.key_compression_ratio * split;
+    const auto ranks = query_geometry_ranks(args, device_index, tp_index);
+    const uint32_t qrows = args.natural_query_rows ? args.natural_query_rows : chunk_local;
+    return ranks.device_index * qrows + ranks.tp_index * Sq;
+}
+
+// PB.3A: the attributes of one lane's devices (a natural_query_lane call of that lane).
+inline operation_attributes_t lane_attributes(const operation_attributes_t& args, uint32_t lane) {
+    TT_FATAL(lane < args.lane_starts.size(), "indexer_score lanes: lane {} of {}", lane, args.lane_starts.size());
+    operation_attributes_t a = args;
+    a.chunk_start_idx = args.lane_starts[lane];
+    a.kv_len = args.lane_kv_lens[lane];
+    a.natural_query_lane_lo = lane * args.lane_rows;
+    a.natural_query_lane_hi = (lane + 1) * args.lane_rows;
+    return a;
+}
+
+inline uint32_t lane_of_device(
+    const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
+    return natural_query_offset(args, device_index, tp_index, Sq) / args.lane_rows;
+}
+
 inline DeviceCausalGeometry device_causal_geometry(
     const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
     const bool has_bc = args.block_cyclic.has_value();
@@ -155,7 +182,11 @@ inline DeviceCausalGeometry device_causal_geometry(
         // c*Sq + [0, Sq): a linear diagonal with no straddle, at any tile-aligned start.
         // natural_query_rows (P.31): the queries' own per-SP-rank rows when their chunk is not the key cache's
         const uint32_t qrows = args.natural_query_rows ? args.natural_query_rows : chunk_local;
-        const uint32_t first = args.chunk_start_idx + device_index * qrows + tp_index * Sq;
+        const uint32_t off = device_index * qrows + tp_index * Sq;
+        // PB.3A (packed prefill): a lane's devices take their positions relative to the lane's first token
+        const bool in_lane =
+            args.natural_query_lane_hi > 0 && off >= args.natural_query_lane_lo && off < args.natural_query_lane_hi;
+        const uint32_t first = args.chunk_start_idx + (in_lane ? off - args.natural_query_lane_lo : off);
         return DeviceCausalGeometry{first / kCausalTileWidth, 0u, 0u};
     }
     TT_FATAL(

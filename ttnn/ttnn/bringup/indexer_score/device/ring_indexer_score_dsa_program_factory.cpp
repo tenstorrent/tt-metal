@@ -84,11 +84,15 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
 }
 
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
-ProgramDescriptor build_ring_program_descriptor(
+// lanes_args / lanes_tensors (PB.3A, lane_rows > 0): the call's own attributes and tensors, the ones the AG gathers
+// (every lane buffer, the largest lane's extent); args / tensors are then this device's lane's.
+ProgramDescriptor build_ring_program_descriptor_impl(
     const operation_attributes_t& args,
     const tensor_args_t& tensors,
     const Tensor& out,
-    const ttnn::MeshCoordinate& coord) {
+    const ttnn::MeshCoordinate& coord,
+    const operation_attributes_t* lanes_args,
+    const tensor_args_t* lanes_tensors) {
     ProgramDescriptor desc;
 
     const auto& q = tensors.q;
@@ -172,7 +176,9 @@ ProgramDescriptor build_ring_program_descriptor(
     const uint32_t sll_t = Tt / ring_size;  // physical tiles per SP shard in gathered K
     // The two-marker protocol requires both ring directions to carry slices. Linear topologies and a two-chip
     // ring leave one direction with no targets, whose writer intentionally discards its local packet stream.
+    // (PB.3A lanes: the gather has up to 4 inputs; the AG's partial readiness needs one)
     const bool partial_readiness_enabled = fused.topology == ttnn::ccl::Topology::Ring && ring_size > 2 &&
+                                           lanes_args == nullptr &&
                                            ag_rt::uses_output_bank_owned_schedule({k_local}, {k}, /*dim=*/2);
     const uint32_t units_per_shard = units_in_group(KC, sll_t);
     const uint32_t work_unit_count = ring_size * units_per_shard;
@@ -710,6 +716,14 @@ ProgramDescriptor build_ring_program_descriptor(
 
     std::vector<Tensor> ag_in = {k_local};
     std::vector<Tensor> ag_out = {k};
+    std::optional<uint32_t> ag_valid_ht = gather_valid_height_tiles(args, k_local);
+    if (lanes_args != nullptr) {  // PB.3A: every lane buffer's local shard, the largest lane's extent
+        ag_in = {*lanes_tensors->k_local};
+        ag_out = {lanes_tensors->k};
+        ag_in.insert(ag_in.end(), lanes_tensors->k_local_extra.begin(), lanes_tensors->k_local_extra.end());
+        ag_out.insert(ag_out.end(), lanes_tensors->k_extra.begin(), lanes_tensors->k_extra.end());
+        ag_valid_ht = gather_valid_height_tiles(*lanes_args, *lanes_tensors->k_local);
+    }
     // The gather concatenates the SP shards along the seq axis (dim 2); the reader's block-cyclic permutation
     // assumes this, so it is a fixed constant, not a configurable knob.
     constexpr int32_t ag_seq_concat_dim = 2;
@@ -733,7 +747,7 @@ ProgramDescriptor build_ring_program_descriptor(
         // (compute_cols_x,1), ...) instead of running off the right grid edge as row-major would.
         ttnn::ccl::CoreAllocationStrategy::COL_MAJOR,
         gather_slice_idx,
-        gather_valid_height_tiles(args, k_local),
+        ag_valid_ht,
         // All FIVE trace-safe arguments together, not three: the helper's metadata path derives the slot
         // AND the valid length on-device, and an absent kv_actual_isl resolves to a default (HOST-storage)
         // Tensor rather than being treated as unused. cache_batch_idx_tensor may legitimately be empty
@@ -776,6 +790,34 @@ ProgramDescriptor build_ring_program_descriptor(
     return desc;
 }
 
+// PB.3A lane_rows > 0: this device's lane attributes and tensors (lane_attributes), the call's for the gather.
+ProgramDescriptor build_ring_program_descriptor(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensors,
+    const Tensor& out,
+    const ttnn::MeshCoordinate& coord) {
+    if (args.lane_rows == 0) {
+        return build_ring_program_descriptor_impl(args, tensors, out, coord, nullptr, nullptr);
+    }
+    const auto& q = tensors.q;
+    const uint32_t tensor_rank = transport_to_tensor_rank(args, transport_rank_for(args, coord, q));
+    const uint32_t tp_index = (args.tp_axis().has_value() && q.device_storage().get_coords().size() > 1)
+                                  ? ttnn::ccl::get_linearized_index_from_physical_coord(q, coord, args.tp_axis())
+                                  : 0u;
+    const uint32_t lane = lane_of_device(args, tensor_rank, tp_index, q.logical_shape()[2]);
+    const auto lane_args = lane_attributes(args, lane);
+    const uint32_t b = args.lane_buffer.at(lane);
+    const Tensor& k = b == 0 ? tensors.k : tensors.k_extra.at(b - 1);
+    tensor_args_t lane_tensors{.q = tensors.q, .k = k, .weights = tensors.weights};
+    lane_tensors.k_local = b == 0 ? *tensors.k_local : tensors.k_local_extra.at(b - 1);
+    lane_tensors.chunk_start_idx_tensor = tensors.chunk_start_idx_tensor;
+    lane_tensors.valid_end_tensor = tensors.valid_end_tensor;
+    lane_tensors.cache_batch_idx_tensor = tensors.cache_batch_idx_tensor;
+    lane_tensors.block_bias = tensors.block_bias;
+    lane_tensors.block_max_out = tensors.block_max_out;
+    return build_ring_program_descriptor_impl(lane_args, lane_tensors, out, coord, &args, &tensors);
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
@@ -816,6 +858,9 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
             (args.tp_axis().has_value() && tensors.q.device_storage().get_coords().size() > 1)
                 ? ttnn::ccl::get_linearized_index_from_physical_coord(tensors.q, range.start_coord(), args.tp_axis())
                 : 0u;
+        if (args.lane_rows > 0) {
+            shared.lane = lane_of_device(args, shared.device_index, shared.tp_index, tensors.q.logical_shape()[2]);
+        }
         for (size_t index = 0; index < kernel_indices.size(); ++index) {
             auto& plan = shared.ag_plans[index];
             plan.kernel_idx = kernel_indices[index];
@@ -894,9 +939,12 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         .num_layers = args.index_cache_num_layers,
         .layer_index = args.index_cache_layer_idx,
         .backward_semaphore = static_cast<uint32_t>(semaphores[0].address()),
-        .forward_semaphore = static_cast<uint32_t>(semaphores[1].address())};
+        .forward_semaphore = static_cast<uint32_t>(semaphores[1].address()),
+        .lane_lo = args.natural_query_lane_lo,
+        .lane_hi = args.natural_query_lane_hi};
     auto& previous_controls = cached.shared_variables.begin()->second.scalar_controls;
-    if (previous_controls == scalar_controls) {
+    const bool lanes = args.lane_rows > 0;  // PB.3A: each range its lane's values, every call
+    if (previous_controls == scalar_controls && !lanes) {
         return;
     }
     const auto changed = [&](auto member) {
@@ -904,7 +952,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     };
     const bool update_extent = changed(&ScalarControls::kv_len) || changed(&ScalarControls::cache_batch);
     const bool update_metadata = changed(&ScalarControls::num_layers) || changed(&ScalarControls::layer_index);
-    const bool update_consumer = update_extent || update_metadata || changed(&ScalarControls::chunk_start);
+    const bool update_consumer = update_extent || update_metadata || changed(&ScalarControls::chunk_start) ||
+                                 changed(&ScalarControls::lane_lo) || changed(&ScalarControls::lane_hi) || lanes;
     const bool update_semaphores =
         changed(&ScalarControls::backward_semaphore) || changed(&ScalarControls::forward_semaphore);
 
@@ -933,7 +982,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const uint32_t slot_metadata_address =
         update_metadata && has_slot_metadata ? tensors.cache_batch_idx_tensor->buffer()->address() : 0u;
     const uint32_t ag_meta_base = ag_rt::reader_metadata_base(/*num_inputs=*/1);
-    std::array<ttsl::SmallVector<std::pair<uint32_t, uint32_t>, 3>, 4> ag_updates;
+    std::array<ttsl::SmallVector<std::pair<uint32_t, uint32_t>, 9>, 4> ag_updates;
     if (update_semaphores) {
         ag_updates[0].emplace_back(ag_rt::kReaderReadySemaphoreFieldOffset, scalar_controls.forward_semaphore);
         ag_updates[1].emplace_back(ag_rt::kReaderReadySemaphoreFieldOffset, scalar_controls.backward_semaphore);
@@ -946,17 +995,25 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         const uint32_t Wt = shape[3] / tt::constants::TILE_WIDTH;
         const uint32_t input_batch_base = ag_rt::input_batch_base_pages(scalar_controls.cache_batch, shape[1], Ht, Wt);
         const auto valid_Ht = gather_valid_height_tiles(args, k_local);
-        const uint32_t valid_pages = std::min(valid_Ht.value_or(Ht), Ht) * Wt;
-
-        for (size_t i : {0u, 1u}) {
-            ag_updates[i].emplace_back(
-                ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kInputBatchBaseFieldOffset, input_batch_base);
-            ag_updates[i].emplace_back(
-                ag_rt::kReaderRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset, valid_pages);
-        }
-        for (size_t i : {2u, 3u}) {
-            ag_updates[i].emplace_back(
-                ag_rt::kWriterRuntimeArgHeaderCount + ag_rt::kValidPagesFieldOffset, valid_pages);
+        // (PB.3A lanes: one descriptor block a gathered input, each its own rows: its extent clamped as the helper
+        // clamps it at creation, min(valid, its rows))
+        const uint32_t n_inputs = 1 + static_cast<uint32_t>(tensors.k_extra.size());
+        TT_FATAL(n_inputs == 1 || !has_slot_metadata, "indexer_score lanes: no cache-slot metadata");
+        for (uint32_t in = 0; in < n_inputs; ++in) {
+            const auto& in_shape = in == 0 ? shape : tensors.k_local_extra[in - 1].padded_shape();
+            const uint32_t in_Ht = in_shape[2] / tt::constants::TILE_HEIGHT;
+            const uint32_t valid_pages = std::min(valid_Ht.value_or(in_Ht), in_Ht) * Wt;
+            const uint32_t block = in * ag_rt::kTensorDescriptorFieldCount;
+            for (size_t i : {0u, 1u}) {
+                ag_updates[i].emplace_back(
+                    ag_rt::kReaderRuntimeArgHeaderCount + block + ag_rt::kInputBatchBaseFieldOffset, input_batch_base);
+                ag_updates[i].emplace_back(
+                    ag_rt::kReaderRuntimeArgHeaderCount + block + ag_rt::kValidPagesFieldOffset, valid_pages);
+            }
+            for (size_t i : {2u, 3u}) {
+                ag_updates[i].emplace_back(
+                    ag_rt::kWriterRuntimeArgHeaderCount + block + ag_rt::kValidPagesFieldOffset, valid_pages);
+            }
         }
     }
     for (auto& [range, program] : cached.workload.get_programs()) {
@@ -1004,7 +1061,13 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
         if (update_consumer) {
-            const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, q.logical_shape()[2]);
+            const auto lane_args = lanes ? lane_attributes(args, shared.lane) : operation_attributes_t{};
+            const auto& a = lanes ? lane_args : args;
+            if (lanes) {  // (the lane's kv_len; the buffers are the call's, k_extra's shape is k's)
+                const auto lane_pcache = persistent_cache_args(a, k);
+                pcache.kv_len_tiles = lane_pcache.kv_len_tiles;
+            }
+            const auto geom = device_causal_geometry(a, shared.device_index, shared.tp_index, q.logical_shape()[2]);
             namespace common = indexer_common;
             auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
             reader_common.at(common::reader::BatchOffset) = pcache.k_batch_page_offset;

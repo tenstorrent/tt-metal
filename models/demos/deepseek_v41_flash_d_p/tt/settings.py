@@ -1358,6 +1358,17 @@ TABLE = {
         "harness (packed_device.run_chunk); each segment's attention runs today's steps on its rows moved to lane 0's "
         "chips (one call a segment a layer); a lone segment in lane 0 is today's chunk, bit-identical",
     ),
+    "PACKED_ATTN_ONECALL": Setting(
+        "off",
+        ("off", "on"),
+        "PB.3A (OWNER 2026-11-19, bringup/PACKED_DESIGN.md s5 v2), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED=on, a chunk of more than one segment (or one not in lane 0): on = the "
+        "attention steps once a layer over every lane, each chip at its own lane's positions, slot caches and history "
+        "(tt/packed_onecall.py: per-lane rope rows, the window region per lane, one sparse_sdpa over one table of every "
+        "lane's history, the indexer ring once per segment with ring_indexer_score_dsa's natural_query_lane); off = "
+        "PB.3's v1 loop (each segment's rows moved to lane 0's chips, today's steps per segment). Bit-identical to the "
+        "loop (tests/packed/test_packed_oracle.py). Default off (the task's: off = PB.3's loop)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

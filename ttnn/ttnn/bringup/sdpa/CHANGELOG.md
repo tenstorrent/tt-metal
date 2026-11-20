@@ -553,3 +553,18 @@ Build fixes after fork_op.py (no behaviour change):
 - Files: `device/kernels/sparse_sdpa_common.hpp`, `device/kernels/dataflow/sparse_sdpa_reader.cpp`,
   `device/kernels/dataflow/sparse_sdpa_writer.cpp`, `device/kernels/compute/sparse_sdpa_compute.cpp`,
   `device/sparse_sdpa_program_factory.cpp`, `device/sparse_sdpa_device_operation.cpp`, the two tests, README.md.
+
+### PB.3A (deepseek_v41_flash_d_p, 2026-11-20): sparse_sdpa kv_lanes (one kv tensor a device)
+- What: opt-in `kv_lanes` (list of up to 8 tensors of kv's shape / dtype / memory config) + `kv_lane_of_chip` (one
+  index a device, row-major chip order): each device reads kv_lanes[kv_lane_of_chip[chip]] (interleaved kv: the lane
+  tensors may differ in rows T, as the source program's key leaves T out). A separate device
+  operation (`device/sparse_sdpa_lanes_device_operation.*`) whose factory takes the mesh coordinate: one program a
+  device, the source factory's descriptor and cache-hit override with that device's kv (only the kv address differs).
+- Why: deepseek_v41_flash_d_p PB.3A (packed prefill, PACKED_DESIGN.md s5 v2): one sparse_sdpa a layer over a packed
+  chunk, each lane's chips reading their segment's gathered history (v1's per-lane buffers) without a copy.
+- Default: off (None): the source program, unchanged.
+- Run: the model's packed oracle on the 8x4 (characteristic layers, PACKED_ATTN_ONECALL=on: bit-identical to the
+  segment alone) and tests/packed/test_onecall_sizes.py (slots of three sizes, rows differing: bit-identical); no fork
+  unit test on the 8x4 (brief).
+- Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
+  sparse_sdpa.hpp, sparse_sdpa.cpp, sdpa_nanobind.cpp, sources.cmake, README.md

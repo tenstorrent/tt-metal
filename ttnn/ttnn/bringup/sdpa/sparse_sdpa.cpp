@@ -4,6 +4,7 @@
 
 #include "sparse_sdpa.hpp"
 #include "device/sparse_sdpa_device_operation.hpp"
+#include "device/sparse_sdpa_lanes_device_operation.hpp"
 #include <tt-metalium/mesh_device.hpp>
 #include <cmath>
 
@@ -28,7 +29,12 @@ ttnn::Tensor sparse_sdpa(
     bool fp32_scores,
     bool bf16_probs,
     const std::optional<ttnn::Tensor>& kv_window,
-    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    std::optional<tt::tt_metal::CoreCoord> max_grid,
+    const std::optional<std::vector<ttnn::Tensor>>& kv_lanes,
+    const std::optional<std::vector<uint32_t>>& kv_lane_of_chip) {
+    TT_FATAL(
+        kv_lanes.has_value() == kv_lane_of_chip.has_value(),
+        "sparse_sdpa: kv_lanes and kv_lane_of_chip must both be set or both unset");
     const uint32_t k_dim = q.logical_shape()[3];  // head dim, from the tensor
     const float resolved_scale = scale.value_or(1.0f / std::sqrt(static_cast<float>(k_dim)));
 
@@ -88,6 +94,30 @@ ttnn::Tensor sparse_sdpa(
         /*default_fp32_acc=*/any_fp8,
         /*default_l1_acc=*/false);
 
+    if (kv_lanes.has_value()) {  // PB.3A: one kv a device (sparse_sdpa_lanes_device_operation.hpp)
+        TT_FATAL(!cache_batch_idx.has_value(), "sparse_sdpa: kv_lanes takes no cache_batch_idx");
+        return ttnn::prim::bringup::sparse_sdpa_lanes(
+            q,
+            *kv_lanes,
+            *kv_lane_of_chip,
+            indices,
+            ttnn::prim::bringup::SparseSDPAParams{
+                .scale = resolved_scale,
+                .v_dim = v_dim,
+                .kv_format = kv_format,
+                .k_chunk_size = k_chunk_size,
+                .compute_kernel_config = kernel_config,
+                .cache_batch_idx = std::nullopt,
+                .block_cyclic = block_cyclic,
+                .high_precision = high_precision,
+                .fp32_output = fp32_output,
+                .fp32_scores = fp32_scores,
+                .bf16_probs = bf16_probs,
+                .max_grid = max_grid,
+            },
+            attention_sink,
+            kv_window);
+    }
     return ttnn::prim::bringup::sparse_sdpa(
         q,
         kv,

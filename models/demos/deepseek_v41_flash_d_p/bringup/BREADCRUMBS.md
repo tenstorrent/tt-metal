@@ -1438,3 +1438,111 @@
   buffer per chip), which also removes the lane moves; the per-lane history / key buffers and the per-index snapshot
   instances / regions of v1 stay usable there.
 - Final check `orchestrator measure --task PB.3` (quick, one process, the single-request path with PACKED=on): rc 0, chunk_wall_ms 233.7, min layer PCC 0.732 (L39), host_transfers_per_layer 0.
+
+## PPB.3A (PB.3A perf, attempt 1): one attention call a layer over every lane (PACKED_ATTN_ONECALL off | on)
+
+- Expected (written before any device run, perf_guide s2): 4 x 2k @ 139k, PB.3's v1 device 255.5 ms a chunk of which
+  202 ms is the attention section (4 full-geometry calls + the lane moves). ONECALL=on removes the moves (~70 ms) and
+  3 of the 4 attention computations except the indexer score (the ring runs once per segment, 4 x ~1.7 ms x 3 index
+  layers = ~+15 ms over one call; its one-call ring is the next step): attention section ~202 -> ~50-60 ms, device
+  ~255 -> ~105-115 ms a chunk; + ~1-2 ms of per-lane copies (history tables, top-k) at 139k. Host: ~-15-20 ms (3 of
+  the 4 attention launch sets and the moves' launches go). Wall ~294 -> ~130-150 ms (resident engram table).
+- Design (DECIDED, OV-58): every per-chip quantity read from the chip's lane, nothing moved (tt/packed_onecall.py
+  docstring). Forks: ttnn.bringup.ring_indexer_score_dsa gets natural_query_lane_lo / hi (runtime values: a lane's
+  chips score at the segment's positions, the other chips keep today's offsets); the sdpa fork is NOT changed yet:
+  each segment's history (v1's per-lane buffers) is copied on its lane's chips into one table buffer (LaneCopy, a
+  Python prepared program) so sparse_sdpa reads one table; the per-chip table option (zero copy) is the follow-up.
+  The lane-first chip's window carry is its own copy of the slot's replicated kept tail (no send across lanes).
+- Load reasons: (1) runner start + tests/packed/test_onecall_ops.py: "needs only the mesh: the two new prepared
+  programs (LaneCopy, LaneSend) bit-exact vs the host, smallest shapes"; (2) oracle rung 1 layer [0] then [0, 1, 2, 3]:
+  "needs the 40-layer gate model (OV-61: one config) but computes only the listed layers".
+- Built (attempt 1): `tt/packed_onecall.py` (OneCall per packed chunk: Lanes geometry, per-tuple per-chip constants
+  (keep masks, region index lists), LaneCopy and LaneSend prepared programs, the one-call q_a / kv / compressor /
+  indexer / window / sparse paths), `tt/rope.LaneStarts` + `lane_slices` (RopeTable / CompressRope rows of each lane
+  at its own start), `TtCompressor.__call__` taking LaneStarts and `write(gathered=)` (a segment's rows gathered once
+  and rolled), PackedChunk.oc (switch read per chunk at begin_packed), Setting PACKED_ATTN_ONECALL (call-time, in
+  batch_call_settings). Fork: ttnn.bringup.ring_indexer_score_dsa natural_query_lane_lo / hi (CHANGELOG).
+- Gotcha: a python edit on the resident runner reloads the model and twice cost a fresh device open ("released
+  model's device memory did not come back"); one of them was a missing import (NameError at layer 2): lint with the
+  pre-commit cache's pyflakes before every submit.
+- Results (resident runner, one 40-layer load): test_onecall_ops (mesh only) LaneCopy records / top-k and LaneSend
+  (2 runs: the prepared program patched) bit-exact on all 32 chips. Oracle with ONECALL=on: layers [0], [0, 1, 2, 3]
+  and [0, 1, 2, 3, 14, 20, 21, 24]: alone vs today 0, lane equivalence 0, slot digests 0 mismatches, determinism 0.
+- Walls, first one-call version (copies of every lane's history into one table, per-segment rings), shipped resident
+  engram table, one 21-layer load: 4 x 2k @ 139264 wall 163.6 ms = 50.1k new tok/s (v1 294.5), device 117.5 ms (v1
+  255.5): experts 37.7, attention 25.8, indexer 19.9 (4 rings), attn_region 10.0 (the window carry gathers), compressor
+  5.7; mixed 174.0 ms = 47.1k (v1 342.9), device 137.3 (indexer 35.3). The 1st mixed attempt asserted: the walls size
+  each slot's caches to its position, so the lanes' gather buffers differ in stride: LaneCopy got a destination
+  stride (each lane's owner blocks at the largest stride, the index rows with it); the sdpa kv_lanes path needs one
+  buffer shape (serving: one slab size), the copy path otherwise.
+- Host probe (tests/packed/test_onecall_host.py, cProfile of one chunk): run_chunk's enqueue alone 163.8 ms = the wall:
+  the chunk is HOST-bound (device 117 ms). 2189 ttnn calls (~50 us each, 109 ms); the window carry read per segment
+  per layer (TtWindowCache._ring_carry: ring slices, a mesh gather, owner slices, concat: ~11 ops) 80 calls, 42 ms;
+  compressor writes 22 ms; snapshots 9 ms (80 sends).
+- Fixes after the profile: (1) the carry of a continuing segment comes from its slot's served snapshot (written at cap
+  == start, every chip's copy of the ring owners' rows: the same bytes, one or two local slices; snapshot_carry_ok /
+  snapshot_carry), the ring carry only otherwise; (2) the sdpa fork's kv_lanes (each chip its lane's gather buffer, no
+  copy; serving's one slab size); (3) the indexer as ONE ring call (fork option lanes: up to 4 key buffers through
+  one all-gather, each chip its lane's start / kv_len / keys) + ONE top-k with a per-chip valid_length_tensor; the
+  candidate pool's padded path (kv_len / 8 < 2048, early chunks) and differing key capacities keep the per-segment
+  rings. Found by the oracle: the cached ring program binds each lane's buffers by position, so the lane -> buffer
+  map must be in the program hash (packed2's lane 3 read lane 0's keys until it was).
+- Oracle after (1)-(3), characteristic layers: all 0 (alone vs today, lane equivalence, digests, determinism).
+- Gate walls' engram table (overseer's question, DS41-325): the gate's walls unit
+  (`BRINGUP_CHUNK=8192 DS41_PACKED=on DS41_PACKED_ATTN_ONECALL=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode
+  ... test_packed_walls.py`) sets no DS41_ENGRAM_TABLE, and the Setting's pytest test value is mmap (F222,
+  settings.py ENGRAM_TABLE test="mmap"): the gate's performance load reads the 94.5 GiB tables through the
+  checkpoint mapping (host 142 vs 39 ms in PB.3). Not fixable inside the test (OV-61: no load-time switch in a
+  test). Fix (ledger, not mine to edit): the walls unit's cmd gets `DS41_ENGRAM_TABLE=resident` (the walls are the
+  only performance-class unit of PB.3A / PB.3H: one load of that class either way). Every number in this section
+  ran with it set.
+- DECIDED (OV-58): pad rows out of the MoE dispatch NOT built here. The block has a padded-forward mode
+  (moe_block_ttnn moe_head/device/kernels/padded_rows.hpp: per SP row a real-row prefix from (slot, start, end)
+  records in the server's rotated layout, up to 8 chunks back to back in EVERY SP row) but a packed chunk's lanes
+  are whole SP rows with lane-natural order: no (start, end) record set gives SP row 2k min(n_k, W) rows and 2k + 1
+  max(0, n_k - W). Needs a fork option there (an explicit real-row count per SP row in the metadata words) read by
+  the head's planner and the tail: PB.4 (MoE row-locality), with the oracle's lane equivalence. The 4 x 2k and mixed
+  targets have no pad rows; 1 x 2k (3 empty lanes) and padded lanes pay the experts of their pad rows.
+- Walls after (1)-(3) + the carry passed straight to the lane send (one 21-layer load, resident engram table):
+  4 x 2k @ 139264 143.0 ms; then the lane-first chip reading its carry IN PLACE from the slot's served snapshot (LaneSend
+  takes per lane a carry tensor + first page + rotation, the engine's shared snapshot tensor deduplicated; no slice
+  ops) and the compressor's served writes of every lane from ONE masked untilize (lane_rows_keep) through lane-offset
+  server-order index rows (Lanes.srv_lane: (d + lane L) mod S, the rows v1's move put first; replay segments keep the
+  rolled path): 4 x 2k 122.0 ms = 67.1k new tok/s (device 92.6, host enqueue ~108-111 ms), 1 x 2k 125.5 ms (16.3k:
+  experts 67 ms of pad rows), mixed 132.1 ms = 62.0k (device 107.3) - but that mixed run took the lanes ring over key
+  buffers of different capacities (the walls size each slot by position), which tests/packed/test_onecall_sizes.py
+  then showed WRONG for the smaller lanes (DS41-328): the ring now needs one capacity, and mixed (sized slots) takes
+  per-segment rings (serving's slots are one size: there the one ring applies). Mixed's op profile (probe): the 547k
+  lane dominates (ring 4.1 ms + top-k 1.7 ms a layer x 3, as the single-request 512k chunk's indexer 17 ms), and
+  the collectives after it absorb the other lanes' wait.
+- Different slot sizes (sizes test): kv_lanes over lane buffers of different rows (each chip its lane's slab stride:
+  topk_rows_lanes, a per-chip fp32 stride) is bit-identical (ring off: 0).
+- Final walls (this code, resident table, one 21-layer load): 4 x 2k @ 139264 122.3 ms = 67.0k new tok/s (device
+  92.5: experts 37.6, attention 25.8, ffn_residual 6.9, indexer 5.8, attn_residual 5.5, engram_rows 3.8, compressor
+  3.3, attn_region 1.7, attn_table 1.5; host exposed 29.8); mixed 150.8 ms = 54.3k (device 123.9, indexer 35.4: the
+  walls' position-sized slots -> per-segment rings, DS41-328); 1 x 2k 125.5 ms (experts 67.2 ms: 6144 pad rows of one
+  id, PB.4). v1 (PB.3): 294.5 / 342.9 / 154.9 ms. Owner targets: 4 x 2k >= 67k (met at the median, 122.3 ms; runs
+  120.4-141.4), mixed >= 64k (not met here: with one key capacity a slot, as serving's slots are, the one ring gives
+  ~132 ms = 62k by the lanes-ring timing of the run before DS41-328's fallback).
+- What is left for the bar (measured): mixed needs the lanes ring over unequal capacities (DS41-328) or equal slots;
+  the longest lane bounds a mixed chunk (the 547k lane's ring + top-k ~5.8 ms an index layer); host ~108-111 ms of
+  enqueue on 4 x 2k (MoE block ~0.9 ms a layer, per-segment snapshot sends 80 a chunk, history tail gathers and
+  key decodes per segment) - the gather hiding (PB.3H) and batching the per-segment writes / snapshots are next.
+- Gotcha: a `gate --check` started as a background tool call is killed at the tool's default 10-minute limit (the
+  device work runs on in the resident runner; the client's results are lost and the next check re-runs every
+  unit): give it run_in_background with a 2 h timeout.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.3A --spec $BRINGUP_SPEC --check`; iteration
+  rungs: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_PACKED_ATTN_ONECALL=on DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py"` (and test_onecall_sizes.py,
+  test_onecall_ops.py); walls / host probe: the walls env + DS41_ENGRAM_TABLE=resident, test_packed_walls.py /
+  test_onecall_host.py (PB3A_PROBE_POS=61440,139264,307200,546816 for the mixed op breakdown).
+- Device opens this task: 7 runner (re)starts (4 after C++ builds, 3 for a model config the runner did not hold or
+  a python reload whose memory did not come back), plus the gate's fresh determinism processes.
+- Gate (`gate PB.3A --check`, after the last code edit): PASS PB.3A. Oracle on 40 layers: lane equivalence 0, alone vs
+  today 0, slot digests 0 mismatches, packed determinism 0; reference: every segment's every layer within its limit,
+  final hidden 0.131 / 0.131 / 0.131 / 0.132 (limit 0.242), top-5 1.0 x 4; determinism 0.0. The gate's walls (its cmd
+  has no DS41_ENGRAM_TABLE: mmap tables, DS41-325): 4 x 2k 243.4, mixed 264.2, 1 x 2k 166.3 ms (vs 122.3 / 150.8 /
+  125.5 with the shipped resident table in the same code).
+- Final check `orchestrator measure --task PB.3A` (quick, single-request path): rc 0, chunk_wall_ms 233.8 (PB.3:
+  233.7), min layer PCC 0.732 (L39, as PB.3), host_transfers_per_layer 0.

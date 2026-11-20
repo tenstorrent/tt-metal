@@ -161,6 +161,25 @@ struct operation_attributes_t {
     // larger chunk wrote): device (d, c) holds positions chunk_start_idx + d*natural_query_rows + c*Sq + [0, Sq).
     // The keys keep the cache's block-cyclic layout (block_cyclic_chunk_local). HASHED.
     uint32_t natural_query_rows{0};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3A, packed prefill; default hi 0 = off): with natural_query_blocks, the
+    // chunk tokens [natural_query_lane_lo, natural_query_lane_hi) are one lane of a packed chunk whose queries start
+    // at chunk_start_idx: a device whose natural chunk offset off = d*rows + c*Sq lies in the lane holds positions
+    // chunk_start_idx + (off - lo) + [0, Sq); every other device keeps chunk_start_idx + off (its rows are another
+    // lane's and are not read). A runtime value like chunk_start_idx: NOT hashed.
+    uint32_t natural_query_lane_lo{0};
+    uint32_t natural_query_lane_hi{0};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3A, packed prefill: ONE ring call over every lane; default lane_rows 0 =
+    // off; fused ring + natural_query_blocks only): lane l = chunk tokens [l lane_rows, (l + 1) lane_rows). A device
+    // takes its lane l (from its natural chunk offset) and scores its queries as one natural_query_lane call of that
+    // lane would: chunk start lane_starts[l], kv_len lane_kv_lens[l], keys gathered from buffer lane_buffer[l] (0: k /
+    // k_local, i >= 1: tensor_args.k_extra[i - 1] / k_local_extra[i - 1]). The ring gathers EVERY buffer's k_local
+    // (one all-gather of up to 4 inputs, no partial readiness); kv_len (the attribute) is the largest lane's, the
+    // gather's extent. lane_starts / lane_kv_lens are runtime values; lane_buffer is HASHED (a device's program binds
+    // its lane's buffers by position: one program a lane -> buffer map).
+    uint32_t lane_rows{0};
+    std::vector<uint32_t> lane_starts{};
+    std::vector<uint32_t> lane_kv_lens{};
+    std::vector<uint32_t> lane_buffer{};
     // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
     // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
     // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.
@@ -204,6 +223,10 @@ struct tensor_args_t {
     std::optional<Tensor> block_bias{std::nullopt};
     std::optional<Tensor> block_max_out{std::nullopt};
     bool has_block_epilogue() const { return block_bias.has_value() || block_max_out.has_value(); }
+    // Bring-up fork (PB.3A, operation_attributes_t::lane_rows): the other lanes' gathered-key buffers (k's shape) and
+    // their local key shards (k_local's), one pair a lane buffer after the first (k / k_local).
+    std::vector<Tensor> k_extra{};
+    std::vector<Tensor> k_local_extra{};
 };
 
 using tensor_return_value_t = Tensor;

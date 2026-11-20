@@ -21,6 +21,7 @@ set(TTNN_OP_BRINGUP_SDPA_SRCS
     device/sdpa_program_factory.cpp
     device/sliding_halo_layout.cpp
     device/sparse_sdpa_device_operation.cpp
+    device/sparse_sdpa_lanes_device_operation.cpp
     device/sparse_sdpa_msa_device_operation.cpp
     device/sparse_sdpa_msa_program_factory.cpp
     device/sparse_sdpa_program_factory.cpp

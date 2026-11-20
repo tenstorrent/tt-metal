@@ -121,6 +121,11 @@ ttnn::Tensor sparse_sdpa(
     bool fp32_scores = false,
     bool bf16_probs = false,
     const std::optional<ttnn::Tensor>& kv_window = std::nullopt,
-    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt);
+    std::optional<tt::tt_metal::CoreCoord> max_grid = std::nullopt,
+    // Bring-up fork option (deepseek_v41_flash_d_p PB.3A, packed prefill; default none = the source program): each
+    // device reads its own kv, kv_lanes[kv_lane_of_chip[row-major chip index]] (same shape / dtype / memory config
+    // as kv); kv itself is then ignored. One program per device (only the kv address differs).
+    const std::optional<std::vector<ttnn::Tensor>>& kv_lanes = std::nullopt,
+    const std::optional<std::vector<uint32_t>>& kv_lane_of_chip = std::nullopt);
 
 }  // namespace ttnn::transformer::bringup
