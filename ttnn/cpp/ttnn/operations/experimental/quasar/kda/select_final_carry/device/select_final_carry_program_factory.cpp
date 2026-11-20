@@ -74,7 +74,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const CoreRangeSet all_cores = kda_factory_detail::merged_core_set(fabric_cores);
     // A 2D multicast leaves every hop in one ETH direction. On a 2D fabric whose SP axis turns, every send goes to
     // each other rank as a 2D unicast, through the connection its route leaves on.
-    const bool unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig()) &&
+    const bool unicast_peers = tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh)) &&
                                !ttnn::ccl::is_axis_straight(*mesh, axis);
     const uint32_t ring_index = ttnn::ccl::get_linearized_index_from_physical_coord(in.prefix_final, coord, axis);
     const auto [targets_forward, targets_backward] =

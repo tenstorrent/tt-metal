@@ -78,8 +78,9 @@ struct MoEDtypes {
 // The block's options. Geometry (mesh shape, torus) is derived from the mesh and the fabric config by
 // MoEBlockResources, never passed in.
 struct MoEBlockConfig {
-    // power of two q: every routed term rounded to a multiple of q, so the combine's fp32 sums are bit-identical in
-    // any landing order (costs no measurable time); 0: off (its one spelling) - long chunks are then nondeterministic
+    // power of two q: every routed term rounded to a whole number of q and summed as an int32 count of q (the packer's
+    // INT32 L1 accumulation), so the combine's sums are bit-identical in any landing order, exact up to (2^31 - 1) q
+    // and saturating there (2^17 at 2^-14); 0: off (its one spelling) - fp32 sums, long chunks then nondeterministic
     float combine_snap = 0x1p-14f;
     // the MoE head's router iterations (HeadLayout.router_iterations): 0 the planner's (by cost, each layout with the
     // fewest that fit), n at least n (tests: the iterated router where the planner would not pick it)
@@ -129,13 +130,13 @@ struct MoEBlockConfig {
 
     // The MoE head's hand-off stride: 4 B in L1_SMALL, else 16 B.
     uint32_t handoff_bytes() const { return persist_l1_small ? 4u : 16u; }
-    // The combine's snap constant: the fp32 bits of C = 1.5 x 2^23 q, 0 when combine_snap is 0 (off).
-    uint32_t snap_bits() const;
+    // The combine's snap step: the fp32 bits of q, 0 when combine_snap is 0 (off).
+    uint32_t snap_step_bits() const;
     void check() const;  // TT_FATAL on an invalid field
     bool operator==(const MoEBlockConfig&) const = default;
 };
 
-uint32_t snap_bits(float q);  // q: 0 (off) or a positive power of two
+uint32_t snap_step_bits(float q);  // q: 0 (off) or a power of two in [2^-126, 2^126] (1 / q a normal fp32 too)
 
 // The experts' GLU activation as the device kernels take it (common/kernels/expert_activation.hpp, the shared and the
 // routed experts alike): its kind as the named compile-time arg kExpertActivationArgName (expert_activation_code: 0

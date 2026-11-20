@@ -141,7 +141,7 @@ class TtKimiK3Transformer(LightweightModule):
         # `reduce_scatter_minimal_async` validates `topology == Ring or Linear` and a None is a
         # TT_FATAL eight frames deep in `all_reduce_async`. Everything below wants the per-axis pair
         # the fabric actually opened, which is what `MLAPrefillAdapter.build_runtime` passes too.
-        topology = topology if topology is not None else per_axis_topology()
+        topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
         self.topology = topology
         self.schedule = KimiK3LayerSchedule.build(model_cfg, first_layer_idx, num_layers)
         self.first_layer_idx = first_layer_idx
@@ -433,6 +433,7 @@ class TtKimiK3Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 

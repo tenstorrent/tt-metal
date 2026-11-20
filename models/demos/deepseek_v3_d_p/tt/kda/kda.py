@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.config import (
     validate_convolution_page_channels,
 )
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import KDARecurrence
-from models.demos.deepseek_v3_d_p.tt.kda.relay_affine_prefix import SlabEntry, persistent_semaphores
+from models.demos.deepseek_v3_d_p.tt.kda.relay_chunk_scan import OutputNorm, SlabEntry, persistent_semaphores
 from models.demos.deepseek_v3_d_p.tt.kda.weights import KDAWeights, load_kda_weights
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
@@ -322,11 +322,13 @@ class ttKDA:
             and self.tensor_parallel_size > 1
             and tuned is not None
             and self._matmul_grid.x < grid.x
-            and ttnn.get_fabric_config().name.startswith("FABRIC_2D")
+            and ttnn.get_fabric_config(mesh_device).name.startswith("FABRIC_2D")
         )
         if fuse:
             topology = ttnn.get_usable_topology(
-                self.weights.input_projection, per_axis_topology()[self.tensor_parallel_axis], self.tensor_parallel_axis
+                self.weights.input_projection,
+                per_axis_topology(mesh_device=mesh_device)[self.tensor_parallel_axis],
+                self.tensor_parallel_axis,
             )
             # The tuned K block must fit the local K shard, and a Ring needs it to divide the shard (no tail block).
             local_k_tiles = self._tp_input_width // ttnn.TILE_SIZE
@@ -404,7 +406,7 @@ class ttKDA:
             ring = (
                 block_tiles >= 2
                 and self.tp_ccl_topology == ttnn.Topology.Ring
-                and per_axis_topology()[self.tensor_parallel_axis] == ttnn.Topology.Ring
+                and per_axis_topology(mesh_device=mesh_device)[self.tensor_parallel_axis] == ttnn.Topology.Ring
                 and ttnn.get_usable_topology(
                     self.weights.output_projection, ttnn.Topology.Ring, self.tensor_parallel_axis
                 )
@@ -586,24 +588,18 @@ class ttKDA:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _kda_rms_norm(
-        self,
-        output: ttnn.Tensor,
-        output_gate: ttnn.Tensor,
-        output_gate_offset: int,
-    ) -> ttnn.Tensor:
-        """Apply the KDA gated RMSNorm epilogue."""
-        config, weights = self.config, self.weights
+    def _kda_rms_norm(self, output: ttnn.Tensor, norm: OutputNorm) -> ttnn.Tensor:
+        """Apply the KDA gated RMSNorm epilogue ``norm`` describes, as its own program."""
         return ttnn.experimental.kda.sigmoid_gated_rms_norm(
             output,
-            output_gate,
-            weights.norm,
-            config.num_heads,
-            epsilon=config.norm_eps,
-            memory_config=self.norm_output_memory_config,
+            norm.gate,
+            norm.weight,
+            norm.num_heads,
+            epsilon=norm.norm_epsilon,
+            memory_config=norm.memory_config,
             compute_kernel_config=self.kda_compute_config,
-            output_dtype=self.gated_rms_output_dtype,
-            gate_column_offset=output_gate_offset,
+            output_dtype=norm.output_dtype,
+            gate_column_offset=norm.gate_column_offset,
         )
 
     def _project_output(
@@ -702,6 +698,17 @@ class ttKDA:
             **convolution_slab,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)
+        # With sequence parallelism the relay applies the gated norm; otherwise its own program does.
+        output_norm = OutputNorm(
+            gate=inputs.projected,
+            weight=self.weights.norm,
+            num_heads=self.config.num_heads,
+            gate_column_offset=inputs.output_gate_offset,
+            norm_epsilon=self.config.norm_eps,
+            output_dtype=self.gated_rms_output_dtype,
+            memory_config=self.norm_output_memory_config,
+        )
+        relay_norm = self.recurrence.applies_output_norm
         result = self.recurrence(
             q=q,
             k=k,
@@ -713,9 +720,12 @@ class ttKDA:
             actual_start=actual_start,
             actual_end=actual_end,
             release_gate=True,
+            output_norm=output_norm if relay_norm else None,
         )
-        output = self._kda_rms_norm(result.output, inputs.projected, inputs.output_gate_offset)
-        ttnn.deallocate(result.output)
+        output = result.output
+        if not relay_norm:
+            output = self._kda_rms_norm(output, output_norm)
+            ttnn.deallocate(result.output)
         # The norm read the output gate, the projection's last columns in use.
         ttnn.deallocate(inputs.projected)
         output = self._project_output(output)

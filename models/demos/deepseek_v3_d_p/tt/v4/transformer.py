@@ -114,7 +114,7 @@ class TtV4Transformer(LightweightModule):
         if forward_chunks != 1:
             raise NotImplementedError(f"DeepSeek-V4 has no packed forward; got forward_chunks={forward_chunks}")
 
-        topology = topology if topology is not None else per_axis_topology()
+        topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
         tp_topology = topology[1] if isinstance(topology, tuple) else topology
         self.mesh_device = mesh_device
         self.config = config
@@ -265,6 +265,7 @@ class TtV4Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run one chunk through this rank's layers.
 
