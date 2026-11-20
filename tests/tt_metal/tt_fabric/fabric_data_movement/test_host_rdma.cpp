@@ -9,10 +9,12 @@
 
 #include <gtest/gtest.h>
 
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <map>
 #include <memory>
+#include <optional>
 #include <random>
 #include <thread>
 #include <vector>
@@ -167,6 +169,57 @@ protected:
 
     // Whether a write from `src` can reach `dst`: on 2D, any chip; on 1D, a chip on the same mesh row or column (a 1D
     // fabric runs lines, and a 1D header counts hops along one).
+    // Workers see the fabric as they would without host_rdma: one worker sender channel per routing plane. The
+    // connection table every worker core reads (written at device init) holds exactly one entry per active router
+    // (one per routing plane in each direction), and each names the router's sender channel 0, never its host_rdma
+    // channel.
+    void check_one_worker_channel_per_routing_plane() {
+        auto& context = tt::tt_metal::MetalContext::instance();
+        const auto& control_plane = context.get_control_plane();
+        const auto& cluster = context.get_cluster();
+        const auto& edm_config = control_plane.get_fabric_context().get_builder_context().get_fabric_router_config();
+        const auto table_addr = context.hal().get_dev_addr(
+            tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::TENSIX_FABRIC_CONNECTIONS);
+        size_t routers = 0;
+        for (const auto& chip : chips_) {
+            // Any worker core: every one holds the same table.
+            const auto worker = devices_map_.at(chip.chip)->worker_core_from_logical_core({2, 2});
+            tt::tt_fabric::tensix_fabric_connections_l1_info_t table{};
+            cluster.read_core(&table, sizeof(table), tt_cxy_pair(chip.chip, worker), table_addr);
+            uint32_t routing_planes = 0;
+            for (const auto direction :
+                 {RoutingDirection::N, RoutingDirection::E, RoutingDirection::S, RoutingDirection::W}) {
+                const auto eth_chans = control_plane.get_active_fabric_eth_channels_in_direction(chip.node, direction);
+                EXPECT_EQ(
+                    eth_chans.size(),
+                    control_plane.get_active_fabric_eth_routing_planes_in_direction(chip.node, direction).size())
+                    << "chip " << chip.chip << " direction " << static_cast<int>(direction);
+                for (const chan_id_t eth_chan : eth_chans) {
+                    routing_planes++;
+                    const auto rc = tt::tt_fabric::host_rdma::find_router_channel(context, chip.node, eth_chan);
+                    ASSERT_NE((table.valid_connections_mask >> eth_chan) & 1u, 0u)
+                        << "chip " << chip.chip << " eth chan " << eth_chan << " has no worker connection";
+                    const auto& entry = table.read_only[eth_chan];
+                    EXPECT_EQ(
+                        entry.edm_worker_location_info_addr,
+                        edm_config.sender_channels_worker_conn_info_base_address[0]);
+                    EXPECT_EQ(
+                        entry.edm_connection_handshake_addr,
+                        edm_config.sender_channels_connection_semaphore_address[0]);
+                    EXPECT_NE(rc.channel, 0u);
+                    EXPECT_NE(entry.edm_worker_location_info_addr, rc.connection_info_addr);
+                    EXPECT_NE(entry.edm_connection_handshake_addr, rc.connection_semaphore_addr);
+                    EXPECT_NE(entry.edm_buffer_base_addr, rc.slots_base);
+                    routers++;
+                }
+            }
+            EXPECT_EQ(static_cast<uint32_t>(std::popcount(table.valid_connections_mask)), routing_planes)
+                << "chip " << chip.chip << ": worker connections, one per routing plane";
+        }
+        log_info(tt::LogTest, "host_rdma: {} routers, one worker sender channel each", routers);
+        EXPECT_GT(routers, 0u);
+    }
+
     static bool reachable(FabricNodeId src, FabricNodeId dst) {
         const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
         if (control_plane.get_fabric_context().is_2D_routing_enabled()) {
@@ -321,6 +374,10 @@ TEST_F(HostRdmaFabric2DFixture, AllGather) { run_all_gather(/*shard_words=*/4096
 
 TEST_F(HostRdmaFabric1DFixture, AToBAllPairs) { run_a_to_b(/*neighbours_only=*/false); }
 TEST_F(HostRdmaFabric1DFixture, AllGather) { run_all_gather(/*shard_words=*/4096, /*rounds=*/3); }
+
+// With the host_rdma channel built, a worker still sees one worker sender channel per routing plane.
+TEST_F(HostRdmaFabric2DFixture, OneWorkerChannelPerRoutingPlane) { check_one_worker_channel_per_routing_plane(); }
+TEST_F(HostRdmaFabric1DFixture, OneWorkerChannelPerRoutingPlane) { check_one_worker_channel_per_routing_plane(); }
 
 // Host-injection bandwidth from one chip to a neighbour (disabled by default: a benchmark, not a check). Run with
 // --gtest_also_run_disabled_tests --gtest_filter=*HostRdma*Bandwidth*.

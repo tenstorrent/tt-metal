@@ -113,7 +113,9 @@
 # Same cmd across all 3 SKUs; prepare_test_matrix fans out one leg per SKU.
 # ============================================================================
 - name: BH fabric 1D unit tests
-  cmd: ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+  cmd: |
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="HostRdmaFabric1DFixture.*"
   skus:
     bh_loudbox:
       timeout: 15
@@ -129,6 +131,7 @@
   cmd: |
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric2D*Fixture.*"
     ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FabricTrafficGeneratorKernelIntegrationTest.*"
+    ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="HostRdmaFabric2DFixture.*"
   skus:
     bh_loudbox:
       timeout: 15
