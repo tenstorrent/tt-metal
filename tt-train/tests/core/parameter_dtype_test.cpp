@@ -58,6 +58,41 @@ const ttnn::Tensor& native(const autograd::TensorPtr& tensor) {
 
 }  // namespace
 
+// The runners' config parsers check the block before the model is built: the same errors as apply_precision_config,
+// and no reduce dtype stored. It gets no parameters, so there is nothing it could convert.
+TEST_F(ParameterDtypeTest, ValidatesThePrecisionConfigWithoutApplyingIt) {
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::FLOAT32);
+    for (const char* training_config :
+         {"seed: 5489",
+          "precision: ~",
+          "precision: {}",
+          "precision: {master_dtype: ~}",
+          "precision: {master_dtype: float32, reduce_dtype: float32}",
+          "precision: {master_dtype: bfloat16, reduce_dtype: bfloat16}"}) {
+        EXPECT_NO_THROW(core::validate_precision_config(YAML::Load(training_config))) << training_config;
+        // Applied, every block here but the fp32 one would store bf16 or nothing instead.
+        EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32) << training_config;
+    }
+
+    const auto validate = [](const char* training_config) {
+        core::validate_precision_config(YAML::Load(training_config));
+    };
+    EXPECT_THAT(
+        [&] { validate("precision: {params_dtype: float32}"); },
+        ThrowsMessage<std::runtime_error>(
+            HasSubstr("Unknown key precision.params_dtype (supported: master_dtype, reduce_dtype)")));
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.master_dtype must be "bfloat16" or "float32")")));
+    // The second key is checked too, not only the first.
+    EXPECT_THAT(
+        [&] { validate("precision: {master_dtype: float32, reduce_dtype: float16}"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr(R"(precision.reduce_dtype must be "bfloat16" or "float32")")));
+    EXPECT_THAT(
+        [&] { validate("precision: float32"); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("training_config.precision must be a map")));
+}
+
 // The two names are applied, any other is rejected, and unset or null means "keep the dtype the model builds". The
 // block holds known keys only, so a typo stops the run instead of training in the model's dtype.
 TEST_F(ParameterDtypeTest, ReadsMasterDtypeFromTheTrainingConfig) {

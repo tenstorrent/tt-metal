@@ -176,6 +176,8 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
+    // A typo under precision stops the run here, before the model is built.
+    ttml::core::validate_precision_config(training_config);
     config.project_name = training_config["project_name"].as<std::string>("tt_train_nano_gpt");
     config.seed = training_config["seed"].as<uint32_t>();
     config.model_save_interval = training_config["model_save_interval"].as<uint32_t>(config.model_save_interval);
