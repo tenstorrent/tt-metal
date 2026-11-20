@@ -33,7 +33,7 @@ KV_CAPACITY=${KV_CAPACITY:-$((1048576 / MATRIX_CHUNK * MATRIX_CHUNK))}   # model
 LAUNCH=${MATRIX_CI_LAUNCH:-discovery}
 DRY_RUN=${MATRIX_CI_DRY_RUN:-0}
 EXPECT_14KW=${MATRIX_CI_EXPECT_14KW:-0}
-TABLE_WAIT_SECS=${TABLE_WAIT_SECS:-2400}
+TABLE_WAIT_SECS=${TABLE_WAIT_SECS:-900}
 PRODUCER_TIMEOUT_SECS=${PRODUCER_TIMEOUT_SECS:-900}
 SHUTDOWN_WAIT_SECS=${SHUTDOWN_WAIT_SECS:-240}
 TCP_INTERFACE="${PREFILL_TCP_INTERFACE:-ens5f0np0}"
@@ -199,7 +199,7 @@ start_runner() {   # launch the runner, wait until all 16 ranks serve, set R0_HO
   RUNNER_PID=$!
   cd "${TT_METAL_HOME}"
 
-  local fatal='could not fit|Timed out while waiting for active ethernet' n=0 logs
+  local fatal='could not fit|Timed out while waiting for active ethernet|TT_FATAL|Traceback|RuntimeError' n=0 logs
   for _ in $(seq 1 $((TABLE_WAIT_SECS / 5))); do
     logs=$(all_runner_logs)
     n=$(grep -oE '\[pp rank [0-9]+\] setup complete' <<< "${logs}" | sort -u | wc -l || true)
