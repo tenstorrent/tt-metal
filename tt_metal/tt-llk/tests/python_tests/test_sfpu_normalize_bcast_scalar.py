@@ -15,6 +15,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 
@@ -65,14 +66,14 @@ LAYOUTS = {
 
 @dataclass
 class NORM_SCALAR_LAYOUT(TemplateParameter):
-    layout: str = "A_in"
-    runtime: int = 0
+    norm_s_layout: str = "A_in"
+    norm_s_runtime: int = 0
 
     def convert_to_cpp(self) -> str:
-        d, m, i, o, p, s, q = LAYOUTS[self.layout]
+        d, m, i, o, p, s, q = LAYOUTS[self.norm_s_layout]
         return (
             f"#define NORM_S_DATA {d}\n#define NORM_S_MEAN {m}\n#define NORM_S_INV {i}\n#define NORM_S_OUT {o}\n"
-            f"#define NORM_S_PACK {p}\n#define NORM_S_SEQ {s}\n#define NORM_S_PRE_OUT {q}\n#define NORM_S_RUNTIME {self.runtime}"
+            f"#define NORM_S_PACK {p}\n#define NORM_S_SEQ {s}\n#define NORM_S_PRE_OUT {q}\n#define NORM_S_RUNTIME {self.norm_s_runtime}"
         )
 
 
@@ -124,7 +125,11 @@ def _check(res, golden, fmt):
     inf_g = torch.isinf(g)
     assert torch.equal(r[inf_g], g[inf_g]), "Inf mismatch"
     fin = ~(nan_g | inf_g)
-    rtol = 2**-20 if fmt == DataFormat.Float32 else 2**-7
+    if fmt == DataFormat.Float32:
+        bad = int((r[fin] != g[fin]).sum())
+        assert bad == 0, f"{bad}/{int(fin.sum())} finite lanes not bit exact"
+        return
+    rtol = 2**-7
     err = (r[fin] - g[fin]).abs()
     tol = rtol * g[fin].abs() + 1e-30
     bad = int((err > tol).sum())
@@ -133,7 +138,9 @@ def _check(res, golden, fmt):
     ), f"{bad}/{int(fin.sum())} finite lanes off (max abs err {float(err.max())})"
 
 
-def run_norm_scalar(case):
+def run_norm_scalar(
+    case, is_perf=False, perf_report=None, run_types=None, loop_factor=1
+):
     if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
         pytest.skip("sfpu_normalize_bcast_scalar is not supported on Quasar")
     case = case[0] if isinstance(case, tuple) else case
@@ -171,7 +178,7 @@ def run_norm_scalar(case):
             F.TILE_COUNT(3),
             F.NUM_BLOCKS(num_blocks),
             F.NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            F.LOOP_FACTOR(1),
+            F.LOOP_FACTOR(loop_factor),
             F.NUM_FACES(),
             F.ZERO_POINT(0),
             F.OUT_ZERO_POINT(0),
@@ -190,11 +197,14 @@ def run_norm_scalar(case):
         "unpack_to_dest": F.unpacks_to_dest(fmt, dest_acc),
         "compile_time_formats": True,
     }
-    cfg = F.create_test_or_perf_config(
-        is_perf=False,
-        run_types=F._resolve_perf_args(False, None, None),
+    cfg = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=F._resolve_perf_args(is_perf, perf_report, run_types),
         test_config_kwargs=kwargs,
     )
+    if is_perf:
+        cfg.run(perf_report)
+        return
     res_from_L1 = cfg.run().result
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
