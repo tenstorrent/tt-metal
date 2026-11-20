@@ -917,7 +917,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     // Wormhole runs its fused chunks from the segment loop (recipe_fused_chunk_step); key-range calls run their edge
     // chunks on the reduce path.
     if constexpr (recipe::fused_active && !recipe::wormhole) {
-        if (!is_first_iter && !recipe_chunk_masked()) {
+        if (!is_first_iter && !recipe_chunk_masked() && !recipe_ring_chunk_reduce()) {
             // MLA-width rings (a narrower V than Q/K, D >= 512) also size-optimize the PACK copy: their pack image
             // put the program 704 B over the kernel config buffer (ring_mla mla_100k, Q160/K320, BH).
             constexpr bool mla_width_ring = recipe::ring && vDHt < DHt && DHt >= 16;
@@ -1829,7 +1829,7 @@ template <
     bool independent_q_release>
 ALWI bool recipe_fused_chunk_step(
     AccumulatorHalf& prev, AccumulatorHalf& cur, bool is_last_iter, bool is_first_iter, bool release_q) {
-    if (is_first_iter || recipe_chunk_masked()) {
+    if (is_first_iter || recipe_chunk_masked() || recipe_ring_chunk_reduce()) {
         return false;
     }
     // As sdpa_inner_loop_step's entry: the fast exp and its headroom constant.

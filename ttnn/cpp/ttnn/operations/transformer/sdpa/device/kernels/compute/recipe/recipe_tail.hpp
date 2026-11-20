@@ -96,6 +96,9 @@ struct RecipeRingMask {
     uint32_t valid_rows = 0;  // keys [0, valid_rows) of the chunk exist
     bool masked = false;      // some QK tile of the chunk is masked: the pack hook runs (conservative)
     bool positional = false;  // this chunk takes the positional mask
+    // Some Q row of the chunk has seen no visible key yet (its max is still the masked value): the reduce path, not
+    // the fused chunk, whose exp of s - m_ref cannot take m_ref = -2^100.
+    bool reduce = false;
     uint32_t q_tile0 = 0;     // the Q chunk's first tile row (shard or sequence frame; rotation: its slab tile)
     uint32_t k_tile0 = 0;     // the chunk's first local K tile
     uint32_t k_seq_tile0 = 0;  // circular KV: the chunk's first sequence tile
@@ -132,6 +135,14 @@ ALWI uint32_t recipe_valid_k_columns(uint32_t tile) {
 
 // Ring: whether this K chunk's QK tiles need the pack-thread mask.
 ALWI bool recipe_ring_chunk_masked() { return recipe_ring_mask.masked; }
+// Ring: whether this K chunk must take the reduce path (RecipeRingMask::reduce; only the sequence frame sets it).
+ALWI bool recipe_ring_chunk_reduce() {
+    if constexpr (recipe::ring && recipe::ring_mask == 2) {
+        return recipe_ring_mask.reduce;
+    } else {
+        return false;
+    }
+}
 
 // Masks no key in a tile (c - r spans [-31, 31]).
 constexpr int32_t kRecipeBandOpen = 64;

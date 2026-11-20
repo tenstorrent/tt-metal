@@ -54,6 +54,12 @@ __attribute__((noinline)) void ring_run_chunk(RecipeAccumulatorState& state, boo
     using namespace recipe_ring_cb;
     // FP32 recipes process one Q tile row per group; paired BF16 recipes two (an odd chunk ends with one row).
     constexpr uint32_t subblock_h = recipe::fp32 ? 1 : 2;
+    if constexpr (recipe::ring_stream_state && recipe::ring_mask == 2) {
+        // A streamed restore leaves the O rows to the fused chunk's per-group waits; the reduce path reads them all.
+        if (recipe_ring_mask.reduce) {
+            recipe_stream_wait_rows(get_compile_time_arg_val(3));
+        }
+    }
     sdpa_recipe_segment<
         get_compile_time_arg_val(3),
         get_compile_time_arg_val(4),
@@ -75,6 +81,17 @@ __attribute__((noinline)) void ring_run_chunk(RecipeAccumulatorState& state, boo
         out,
         true>(state, 1, last, release_q);
 }
+
+// RecipeRingMask::reduce (sequence frame): the smallest key of the finished ring iterations and of this one, the Q
+// chunk's first position, whether this iteration processed a spatial chunk for it, and (sliding) its seeded Q tiles.
+// At file scope, not in kernel_main's frame: that frame sits under the whole recipe step on the TRISC stacks, which
+// Wormhole runs within a few dozen bytes of full (it inlines the step into UNPACK and PACK), and the chunk lambdas
+// capture kernel_main's locals by address. Builds without a sequence frame do not touch them.
+uint32_t seed_key_min;
+uint32_t iter_key_min;
+uint32_t q_min;
+bool spatial_seen;
+uint32_t seeded_rows;
 }  // namespace
 
 __attribute__((optimize("Os"))) void kernel_main() {
@@ -305,6 +322,11 @@ __attribute__((optimize("Os"))) void kernel_main() {
         }
     };
 
+    // Sequence frame: a Q row whose keys so far were all masked keeps the masked value as its max, and the fused chunk
+    // cannot take that (RecipeRingMask::reduce). A key at or before a Q chunk's first row is visible to all its rows
+    // (no window), and a source's smallest key is its first sent chunk's first, so the smallest such key over the
+    // finished ring iterations tells which Q chunks have every row seeded (the same for every Q chunk of the core).
+    seed_key_min = UINT32_MAX;
     RecipeAccumulatorState resident{{sum_a, max_a, out_a}, {sum_b, max_b, out_b}};
     const bool staged = q_per_core > 1;
     bool seen_active_iter = false;
@@ -376,6 +398,11 @@ __attribute__((optimize("Os"))) void kernel_main() {
             return true;
         };
 
+        // This iteration's smallest key (sequence frame, without a window): its local tile 0. If the reader skips that
+        // chunk, the key lies past every Q row of the device (the logical / causal skips), so it seeds nothing.
+        if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
+            iter_key_min = ring_id * local_n.kv_region_Nt;
+        }
         uint32_t chunks_popped = 0;  // every K/V pair this iteration pops, for the phase alignment below
         for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
             const uint32_t q_chunk = remap_q_index(q_flat, num_q_chunks, use_zigzag_balancing) % num_q_chunks;
@@ -417,6 +444,11 @@ __attribute__((optimize("Os"))) void kernel_main() {
                     kv_pad_rotation_enabled
                         ? q_chunk * Sq_chunk_t
                         : logical_nt - ring_size * q_local_padded_Nt + ring_index * q_local_padded_Nt + q_chunk * Sq_chunk_t;
+                // Q tile rows that have seen a visible key (RecipeRingMask::reduce); a row maps to no position counts
+                // as seen. Key tile k reaches every row of Q tile q iff k <= q and (q - k) * 32 < window.
+                static_assert(Sq_chunk_t <= 32, "one bit per Q tile row");
+                constexpr uint32_t all_rows = Sq_chunk_t == 32 ? UINT32_MAX : (1u << Sq_chunk_t) - 1;
+                seeded_rows = 0;
                 recipe_ring_q_block<Sq_chunk_t, vDHt>(
                     resident,
                     staged,
@@ -430,12 +462,39 @@ __attribute__((optimize("Os"))) void kernel_main() {
                         recipe_ring_mask.valid_rows = k_chunk_rows;
                         recipe_ring_mask.masked = true;
                         recipe_ring_mask.positional = true;
+                        recipe_ring_mask.reduce = seeded_rows != all_rows;
                         recipe_ring_mask.q_tile0 = q_tile0;
                         recipe_ring_mask.k_tile0 = ref.source_k_chunk * Sk_chunk_t;
                         if constexpr (circular_kv_slab_count > 1) {
                             recipe_ring_mask.k_seq_tile0 = plan.global_k_chunk_at(chunk) * Sk_chunk_t;
                         }
                         recipe_ring_mask.ring_id = ref.source_ring_id;
+                        if (seeded_rows != all_rows) {
+                            for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                                const uint32_t q = q_global_tile_for_mask_row<kv_pad_rotation_enabled>(r, q_tile0, rotation);
+                                if (q == KV_PAD_ROTATION_INVALID_TILE) {
+                                    seeded_rows |= 1u << r;
+                                    continue;
+                                }
+                                for (uint32_t t = 0; t < Sk_chunk_t; ++t) {
+                                    const uint32_t local = recipe_ring_mask.k_tile0 + t;
+                                    if (kv_pad_rotation_enabled && local >= kv_local_padded_Nt) {
+                                        break;
+                                    }
+                                    const uint32_t k = circular_kv_slab_count > 1
+                                                           ? recipe_ring_mask.k_seq_tile0 + t
+                                                           : chunked_kv_global_tile_for_local(
+                                                                 ref.source_ring_id,
+                                                                 local,
+                                                                 local_n.q_chunk_group_tile_count,
+                                                                 local_n.kv_region_Nt);
+                                    if (k <= q && (q - k) * tt::constants::TILE_HEIGHT < sliding_window_size) {
+                                        seeded_rows |= 1u << r;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                         run_chunk(state, last_k, last_k);
                     });
                 continue;
@@ -453,6 +512,16 @@ __attribute__((optimize("Os"))) void kernel_main() {
                 live_chunks += (chunk_sent(k_chunk) && k_chunk < k_end) ? 1 : 0;
             }
             ASSERT(live_chunks > 0);
+            // The Q chunk's first position (RecipeRingMask::reduce); rows mapping to no position do not count.
+            q_min = q_tile0;
+            if constexpr (recipe::ring_mask == 2 && kv_pad_rotation_enabled) {
+                q_min = UINT32_MAX;
+                for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                    const uint32_t q = q_global_tile_for_mask_row<true>(r, q_tile0, rotation);
+                    q_min = q != KV_PAD_ROTATION_INVALID_TILE && q < q_min ? q : q_min;
+                }
+            }
+            spatial_seen = false;
             uint32_t k_chunk = 0;
             recipe_ring_q_block<Sq_chunk_t, vDHt>(
                 resident,
@@ -493,6 +562,10 @@ __attribute__((optimize("Os"))) void kernel_main() {
                             }
                         }
                     }
+                    if constexpr (recipe::ring_mask == 2) {
+                        recipe_ring_mask.reduce = !(seed_key_min <= q_min || (spatial_seen && iter_key_min <= q_min));
+                        spatial_seen |= !joint;
+                    }
                     recipe_ring_mask.valid_rows = valid;
                     recipe_ring_mask.positional = positional;
                     recipe_ring_mask.masked = positional || valid < k_chunk_rows;
@@ -532,6 +605,9 @@ __attribute__((optimize("Os"))) void kernel_main() {
             for (uint32_t dummy = 0; dummy < dummy_kv_chunks_for_phase_alignment<false, false>(chunks_popped); ++dummy) {
                 recipe_ring_pop_chunk<k_chunk_tiles, v_chunk_tiles>();
             }
+        }
+        if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
+            seed_key_min = iter_key_min < seed_key_min ? iter_key_min : seed_key_min;
         }
     }
 }
