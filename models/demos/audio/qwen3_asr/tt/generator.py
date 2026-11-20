@@ -52,6 +52,12 @@ class Qwen3ASRGenerator(Generator):
         "supports_sample_on_device": True,
     }
 
+    @classmethod
+    def get_max_tokens_all_users(cls, **kwargs) -> int:
+        """KV-cache tokens across all users. The shared fallback (131072) does not fit
+        next to the weights in one N150's DRAM; 32768 is 16 users at 2048 tokens."""
+        return 32_768
+
     def __init__(self, model, model_args, mesh_device, tokenizer=None, encoder_params=None):
         super().__init__(model, model_args, mesh_device, tokenizer=tokenizer)
         self.encoder_params = encoder_params

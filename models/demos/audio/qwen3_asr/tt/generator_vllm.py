@@ -10,12 +10,10 @@ processor; this class registers that processor and serves the model through
 """
 import torch
 from huggingface_hub import snapshot_download
-from vllm.model_executor.models.interfaces import SupportsMultiModal
-from vllm.model_executor.models.qwen3_asr import (
-    Qwen3ASRDummyInputsBuilder,
-    Qwen3ASRMultiModalProcessor,
-    Qwen3ASRProcessingInfo,
-)
+from vllm.model_executor.models.interfaces import SupportsMultiModal, SupportsTranscription
+from vllm.model_executor.models.qwen3_asr import Qwen3ASRDummyInputsBuilder
+from vllm.model_executor.models.qwen3_asr import Qwen3ASRForConditionalGeneration as _UpstreamQwen3ASR
+from vllm.model_executor.models.qwen3_asr import Qwen3ASRMultiModalProcessor, Qwen3ASRProcessingInfo
 from vllm.multimodal import MULTIMODAL_REGISTRY
 
 from models.demos.audio.qwen3_asr.demo.transcribe import find_text_decoder
@@ -26,7 +24,17 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
 @MULTIMODAL_REGISTRY.register_processor(
     Qwen3ASRMultiModalProcessor, info=Qwen3ASRProcessingInfo, dummy_inputs=Qwen3ASRDummyInputsBuilder
 )
-class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal):
+class Qwen3ASRForConditionalGeneration(Qwen3ASRGenerator, SupportsMultiModal, SupportsTranscription):
+    # Speech-to-text serving (prompt with the `prompt` field as system turn, audio clip
+    # length, output cleanup) is upstream's; its classmethods are bound to this class
+    # because inheriting the upstream class would build its torch layers.
+    supported_languages = _UpstreamQwen3ASR.supported_languages
+    get_placeholder_str = classmethod(_UpstreamQwen3ASR.get_placeholder_str.__func__)
+    get_speech_to_text_config = classmethod(_UpstreamQwen3ASR.get_speech_to_text_config.__func__)
+    get_generation_prompt = classmethod(_UpstreamQwen3ASR.get_generation_prompt.__func__)
+    post_process_output = classmethod(_UpstreamQwen3ASR.post_process_output.__func__)
+    get_streaming_post_processor_cls = classmethod(_UpstreamQwen3ASR.get_streaming_post_processor_cls.__func__)
+
     @classmethod
     def initialize_vllm_model(
         cls, hf_config, mesh_device, max_batch_size, max_seq_len, tt_data_parallel=1, optimizations=None
