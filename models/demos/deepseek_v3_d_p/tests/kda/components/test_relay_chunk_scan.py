@@ -591,11 +591,12 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
     return pytest.param(*case.values, reference_us, margin, marks=case.marks, id=case_id)
 
 
-# Device-time references in us, with K3's payload, two-sided (faster fails too: re-centre it): Galaxy on TorusXY and a
-# 4x4 stage on its X ring. LoudBox and QuietBox (TorusY) report until a CI run gives their references.
+# Device-time references in us, with K3's payload and its output gate, two-sided (faster fails too: re-centre it):
+# Galaxy on TorusXY. The 4x4 stage on its X ring, LoudBox and QuietBox (TorusY) report until a CI run gives their
+# references.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 174.2, 0.05),
-    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 148.3, 0.05),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 231.1, 0.05),
+    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", None, 0.05),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", None, 0.05),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", None, 0.05),
 ]
