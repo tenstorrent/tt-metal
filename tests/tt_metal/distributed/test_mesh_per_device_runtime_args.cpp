@@ -484,7 +484,7 @@ void PerDeviceRuntimeArgsChecks::slot_field_removed_then_neighbour_set() {
     const MeshCoordinateRange range(mesh_device_->shape());
     const CoreCoord core{0, 0};
     const uint32_t results = results_addr();
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device_);
     const auto kernel = create_kernel(program, CoreRangeSet(CoreRange(core)), results, DataMovementProcessor::RISCV_0);
     SetRuntimeArgs(program, kernel, core, default_args(core));
     SetCommonRuntimeArgs(program, kernel, default_common_args());

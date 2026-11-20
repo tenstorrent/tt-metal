@@ -294,7 +294,7 @@ void BM_Setter(benchmark::State& state) {
             set = changed ? set ^ 1 : set;
         }
     } else {
-        Program program = CreateProgram();
+        Program program = CreateProgram(mesh_device());
         const KernelHandle kernel = CreateKernel(
             program,
             "tests/tt_metal/tt_metal/test_kernels/misc/runtime_args_kernel.cpp",
