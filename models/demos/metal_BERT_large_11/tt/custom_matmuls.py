@@ -88,7 +88,7 @@ def bert_large_ff1_matmul(
         or (output_mem_config.buffer_type == ttnn.BufferType.DRAM)
         or (
             input_tensor_a.memory_config().buffer_type == ttnn.BufferType.DRAM
-            and input_tensor_b.memory_config().buffer_type == tttn.BufferType.DRAM
+            and input_tensor_b.memory_config().buffer_type == ttnn.BufferType.DRAM
         )
     ), "For BFLOAT16, if output is on L1, one of in0 or in1 must be on DRAM!"
     assert input_tensor_a.padded_shape == [batch_size, 1, 384, 1024], "Unsupported input shape"
