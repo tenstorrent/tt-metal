@@ -7450,9 +7450,78 @@
   },
   "waiting": null
  },
+ "PB.7C": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d0abb91574d8cdcab1dda347ce09f24b4a450243",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "93166327-29b7-49ff-9dca-d97adf628e83"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "ABORTED",
+    "t": "2026-11-20T16:59:48",
+    "why": "Overseer: started before PB.8's reject was applied (PB.8's uncommitted mhc_post change was still in the tree). Stopped at once; PB.8 is reverted first. Start clean on the next attempt."
+   },
+   {
+    "attempt": 1,
+    "from": "RUNNING",
+    "role": "perf",
+    "status": "RESUMED",
+    "t": "2026-11-20T16:59:58"
+   }
+  ],
+  "role": "perf",
+  "status": "TODO",
+  "waiting": null
+ },
  "PB.8": {
+  "ab_pending": null,
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d0abb91574d8cdcab1dda347ce09f24b4a450243",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "a72ff1beb2fa0ffd78ba8438f67599c498d8554b",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "e6413c1d49e3d144b0349ea968e1ea4d7d941470",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "f418c11a-ca42-46e5-8c6f-315023d1e091"
+  },
+  "attempt": 1,
   "attempts": 0,
-  "status": "TODO"
+  "history": [
+   {
+    "status": "REJECTED",
+    "t": "2026-11-20T17:01:05"
+   }
+  ],
+  "reason": [
+   "rejected by the owner on the A/B report /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/PB.8/table.md; reverted 22 files (old path)"
+  ],
+  "role": "perf",
+  "status": "REJECTED",
+  "waiting": null
  },
  "PB.8P": {
   "attempts": 0,
