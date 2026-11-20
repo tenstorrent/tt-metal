@@ -2,7 +2,10 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <algorithm>
+#include <functional>
 #include <type_traits>
+#include <vector>
 #include "outbound_socket_service_sync_device_operation.hpp"
 
 #include <tt-metalium/mesh_coord.hpp>
@@ -24,8 +27,8 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             tensor_args.input.has_value() == !args.metadata_only,
         "outbound_socket_service_sync: pass an input and a backing tensor unless metadata_only");
     TT_FATAL(
-        args.metadata_only || tensor_args.metadata.has_value() || args.metadata_size_bytes == 0,
-        "outbound_socket_service_sync: metadata_size_bytes > 0 requires a metadata tensor");
+        !args.metadata_only || (tensor_args.metadata.has_value() && tensor_args.extra_inputs.empty()),
+        "outbound_socket_service_sync: metadata_only takes a metadata tensor and no extra inputs");
     // The tensor that fixes the mesh: the backing, or the metadata record when there is no payload.
     const Tensor& anchor = args.metadata_only ? *tensor_args.metadata : *tensor_args.backing;
     TT_FATAL(
@@ -113,6 +116,31 @@ void OutboundSocketServiceSyncOperation::validate_on_program_cache_miss(
             args.metadata_addrs.size() == args.data_ready_addrs.size(),
             "outbound_socket_service_sync: per-coord metadata addresses are inconsistent");
     }
+    // Each buffer in one tensor slot: the cached program binds every base address to the slot that held it on this
+    // call, so an aliased call would leave a cache entry that patches two addresses from one slot on later hits.
+    // (After the per-tensor checks, so a host or deallocated input, backing or extra input fails with its own message.)
+    {
+        std::vector<const Buffer*> slots;
+        for (const auto* t :
+             {tensor_args.input ? &*tensor_args.input : nullptr,
+              tensor_args.backing ? &*tensor_args.backing : nullptr,
+              tensor_args.metadata ? &*tensor_args.metadata : nullptr}) {
+            if (t != nullptr) {
+                slots.push_back(t->buffer());
+            }
+        }
+        for (const auto& t : tensor_args.extra_inputs) {
+            slots.push_back(t.buffer());
+        }
+        for (const auto& t : tensor_args.extra_backings) {
+            slots.push_back(t.buffer());
+        }
+        std::sort(slots.begin(), slots.end(), std::less<>{});
+        TT_FATAL(
+            std::adjacent_find(slots.begin(), slots.end()) == slots.end(),
+            "outbound_socket_service_sync: a buffer is passed in more than one tensor slot (an input that is also a "
+            "backing, the metadata or another segment); pass distinct tensors");
+    }
 }
 
 OutboundSocketServiceSyncOperation::spec_return_value_t OutboundSocketServiceSyncOperation::compute_output_specs(
@@ -161,8 +189,8 @@ ttnn::Tensor outbound_socket_service_sync_impl(
         "outbound_socket_service_sync: pass an input (backing) tensor, metadata, or both");
     const bool metadata_only = !input.has_value();
     // Tensor mode copies input -> the service backing tensor (page geometry from the
-    // backing). Metadata-only has no backing, so the record supplies geometry and stands in
-    // for the (kernel-unused) input/backing slots.
+    // backing). Metadata-only has no input or backing: the record supplies the page geometry,
+    // and the op gets only the metadata tensor (also its output).
     const ttnn::Tensor& backing = metadata_only ? *metadata : service.get_backing_tensor();
     const ttnn::Tensor& input_t = metadata_only ? *metadata : *input;
     auto* mesh_device = backing.device();

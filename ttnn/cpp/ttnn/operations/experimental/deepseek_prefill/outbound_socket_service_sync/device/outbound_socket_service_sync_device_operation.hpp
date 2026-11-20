@@ -27,7 +27,7 @@ struct OutboundSocketServiceSyncOperation {
     using operation_attributes_t = OutboundSocketServiceSyncParams;
     using tensor_args_t = OutboundSocketServiceSyncInputs;
     // The op fills the service-owned backing tensor in place; the (single) output IS
-    // that backing tensor (no new allocation).
+    // that backing tensor (no new allocation), or the metadata tensor in metadata-only mode.
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;

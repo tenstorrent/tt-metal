@@ -174,6 +174,82 @@ def test_d2d_socket_sync(mesh_device, metadata_words):
         del sender
 
 
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (8, 4),
+            torus_xy_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="torus-xy-8x4",
+        ),
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.parametrize("warm", [False, True], ids=["cold_cache", "warm_cache"])
+def test_d2d_socket_sync_rejects_an_aliased_backing(mesh_device, warm, expect_error):
+    """The op binds each base address to the tensor slot that held it when the program was built, so a call that
+    passes the sender's own backing as its input would cache a program that patches the backing from the input.
+    Rejected on a miss (cold) and on a hit after a valid call (warm)."""
+    if not is_blackhole():
+        pytest.skip("D2DStreamService needs Blackhole (or UBB Galaxy) service cores")
+    rows_total, cols = mesh_device.shape[0], mesh_device.shape[1]
+    half = rows_total // 2
+    sender_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(0, 0))
+    receiver_mesh = mesh_device.create_submesh(ttnn.MeshShape(half, cols), offset=ttnn.MeshCoordinate(half, 0))
+    sender_mesh.enable_program_cache()
+    receiver_mesh.enable_program_cache()
+    global_spec = ttnn.TensorSpec(
+        shape=ttnn.Shape([1, 1, half * _TOKENS_PER_ROW, _HIDDEN]),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        buffer_type=ttnn.BufferType.DRAM,
+    )
+    sender, receiver = ttnn.D2DStreamService.create_pair(
+        sender_mesh=sender_mesh,
+        receiver_mesh=receiver_mesh,
+        global_spec=global_spec,
+        mapper=_shard_mapper(sender_mesh),
+        fifo_size_bytes=_FIFO_SIZE_BYTES,
+        sender_worker_cores=_WORKER_CORES,
+        receiver_worker_cores=_WORKER_CORES,
+        socket_buffer_type=ttnn.BufferType.L1,
+        metadata_size_bytes=4,
+        share_fabric_links=False,
+    )
+    backing = sender.get_backing_tensor()
+    record = _to_device(
+        torch.tensor([7], dtype=torch.int32).reshape(1, 1, 1, -1), sender_mesh, _replicate_mapper(sender_mesh)
+    )
+    try:
+        if warm:  # a valid call first, so the aliased one is a cache hit
+            torch_in = torch.arange(half * _TOKENS_PER_ROW * _HIDDEN, dtype=torch.int32).reshape(1, 1, -1, _HIDDEN)
+            tt_in = _to_device(torch_in, sender_mesh, _shard_mapper(sender_mesh))
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(sender, tt_in, metadata=record)
+            ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(receiver, metadata_size_bytes=4)
+            ttnn.synchronize_device(sender_mesh)
+            ttnn.synchronize_device(receiver_mesh)
+            ttnn.deallocate(tt_in)
+        entries = sender_mesh.num_program_cache_entries()
+        with expect_error(RuntimeError, "more than one tensor slot"):
+            ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(sender, backing, metadata=record)
+        # Nothing was built for the rejected call. Warm, it has the valid call's specs and attributes, so it maps to
+        # that call's entry; the op has no hit validator, so the same check runs there.
+        assert sender_mesh.num_program_cache_entries() == entries
+        assert not warm or entries > 0
+    finally:
+        ttnn.deallocate(record)
+        del backing
+        del receiver
+        del sender
+
+
 def _bf16_tile_to_device(torch_bf16, mesh, mapper):
     return ttnn.from_torch(
         torch_bf16,

@@ -55,6 +55,7 @@ ProgramDescriptor build_descriptor_at(
     const uint32_t num_workers = static_cast<uint32_t>(workers.size());
     TT_FATAL(num_workers > 0, "outbound_socket_service_sync: worker_cores must contain at least one core");
 
+    // Metadata-only: the record's buffer, for the address-free accessor args only (never bound at word 0).
     Buffer* input_buffer = input.buffer();
     Buffer* backing_buffer = args.metadata_only ? nullptr : backing_out.buffer();
     Buffer* metadata_buffer = has_metadata ? tensor_args.metadata->buffer() : nullptr;
