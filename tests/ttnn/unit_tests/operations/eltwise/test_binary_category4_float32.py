@@ -488,8 +488,8 @@ def test_xlogy_matches_log(device):
 
     result = ttnn.to_torch(ttnn.xlogy(to_float32_tt_tensor(values_x, device), to_float32_tt_tensor(values_y, device)))
 
-    # Reference is the op's own accurate log, computed in float64 for a stable
-    # bound, then rounded to float32.
+    # Reference is x * log(y) computed in float64 by torch for a stable bound,
+    # then rounded to float32.
     reference = (values_x.double() * torch.log(values_y.double())).to(torch.float32)
     assert_with_ulp(expected_result=reference, actual_result=result, ulp_threshold=4)
 

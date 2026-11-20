@@ -120,16 +120,16 @@ inline void calculate_sfpu_binary(
                 /*HAS_BASE_SCALING=*/false,
                 is_fp32_dest_acc_en>(sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi], /*log_base_scale_factor=*/0);
             if constexpr (!is_fp32_dest_acc_en) {
-                // The Dest round trip this replaces narrowed the log to the 16-bit Dest, so the
-                // product stays bit-identical on that Dest. RNE, the same rounding calculate_log
-                // applies to the log op's own output.
+                // Round the log to bf16 with RNE, the same way calculate_log rounds the log op's own
+                // output, as the Dest round trip this replaces narrowed it to the 16-bit Dest.
                 log_in1 = sfpi::convert<sfpi::vFloat16b>(log_in1, sfpi::RoundMode::Nearest);
             }
             // y is dead once its log exists, and x is read only now, so neither is live across the log.
             sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
             sfpi::vFloat product = log_in1 * in0;
             // y is read back from Dest for the guard (its slot is not written until the store below), so it
-            // is not held live across the log. The log body gives +-inf, not NaN, for y < 0.
+            // is not held live across the log. The log body already returns NaN for y < 0 and NaN y, but it
+            // normalises -0.0 to +0.0 (-> -inf); this guard keeps xlogy(x, -0.0) = NaN (test_xlogy_nonpositive).
             sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
             v_if((in1 < 0.0f) || (in1 == nan)) { product = nan; }
             v_endif;
