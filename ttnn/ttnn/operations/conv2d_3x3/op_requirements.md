@@ -256,7 +256,7 @@
   - The gather is ~17 us on two RISCs at ~84 cycles per 512 B face read, plus ~4 us of exposed slab fill.
 - **Next, not taken**: a progressive per-subblock in0 wait inside one `matmul_block` call (a shared-helper change) plus a bias fold into the matmul. Each alone moves the wall by at most ~2 us, because the other half then binds.
 
-### [ ] Refinement 7 — Per-side padding (padding_mode "asymmetric") for FLUX.2, interleaved path
+### [x] Refinement 7 — Per-side padding (padding_mode "asymmetric") for FLUX.2, interleaved path
 
 **Goal**:
 - Add `"asymmetric"` to `SUPPORTED["padding_mode"]`: padding given as `(top, bottom, left, right)` whose sides differ, each side 0 or `dilation`. The tagger and `output_hw` already classify and size it (`conv2d_3x3.py`: `padding_sides`, `canonical_padding`, `tag_padding_mode`); the kernels do not handle it yet, so every such cell is refused today.
@@ -298,3 +298,5 @@
 - Every previously passing cell still passes (golden was 1604 passed / 236 xfailed / 576 skipped before this refinement).
 - The FLUX.2 `[perf]` cases meet the performance bar.
 - The Panoptic `[perf]` cases are within noise.
+
+**Outcome**: per-side padding is coordinate algebra on the interleaved walk (rows by `top`, columns by `left`); sharded x asymmetric is EXCLUSIONS. All 17 FLUX.2 bh2x4 `[perf]` cases, real `(0, 0, 1, 1)` call, median of 3: -0.44% to +0.72% of `measured_ns_blackhole` (e.g. up3.res 1026x2048 32->128 3584587 vs 3583793 ns, up2.upsample 1026x2048 64->256 9657214 vs 9659221 ns), PCC 0.999999. Panoptic: the 45 LOOSE outputs are bit-identical (sha256) and the 22 compare cases move -1.7% to +1.75% (same kernels; noise). Not covered by a bar: the encoder downsamplers `(0, 1, 0, 1)` s2 are 13-17% slower than the symmetric proxy at 512² x 256, 1024² x 256 and 2048² x 128 (flat elsewhere), because left pad 0 closes S2_TAPS and they take the strided window. Next: teach S2_TAPS the left-pad-0 layout (kw = 0 even pixels, kw = 1 odd, kw = 2 even shifted one with the next input tile's pixel 0 in place of the previous tile's pixel 31). Not done here: it is a new DEST/packer move pattern in raw LLK, not coordinate algebra, and no FLUX.2 perf case runs it.

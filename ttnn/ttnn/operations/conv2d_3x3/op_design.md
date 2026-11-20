@@ -6,7 +6,7 @@
 |-------|-------|
 | Classification | fused (im2col gather + tilize + matmul with K-accumulation + bias/ReLU epilogue), one device program per call |
 | Goal | Dense 3x3 convolution of ONE image (batch 1, groups 1) on the flattened channels-last contract `[1, 1, H*W, C_in] -> [1, 1, H_out*W_out, C_out]`, multi-core from Phase 0, structured so the Panoptic-DeepLab sharded TILE bf8_b layers (LOOSE_CASES) are reached by placement/format refinements, plus one scheme-change (BLOCK_SHARDED K-combine). |
-| Math | `out[o, n] = act( bias[n] + sum_{kh,kw in 0..2, c < C_in} in[h_in, w_in, c] * w[n, c, kh, kw] )`, `o = h_out*W_out + w_out`, `h_in = h_out*s + kh*d - p`, `w_in = w_out*s + kw*d - p`, `in = 0` outside `[0,H) x [0,W)`, `act in {identity, relu}`. As a matmul: `OUT[M, N] = A[M, K_p] x Wp[K_p, N]`, `M = H_out*W_out`, `N = C_out`, `K_p = 3*roundup32(3*C_in_p)`. |
+| Math | `out[o, n] = act( bias[n] + sum_{kh,kw in 0..2, c < C_in} in[h_in, w_in, c] * w[n, c, kh, kw] )`, `o = h_out*W_out + w_out`, `h_in = h_out*s + kh*d - top`, `w_in = w_out*s + kw*d - left` (padding `p` = all four sides; per-side `(top, bottom, left, right)`), `in = 0` outside `[0,H) x [0,W)`, `act in {identity, relu}`. As a matmul: `OUT[M, N] = A[M, K_p] x Wp[K_p, N]`, `M = H_out*W_out`, `N = C_out`, `K_p = 3*roundup32(3*C_in_p)`. |
 | Output geometry | `H_out = (H + 2p - 2d - 1)//s + 1`, same for `W_out`. |
 | References | `eval/golden_tests/conv2d_3x3/feature_spec.py` (TARGET/INPUTS/LOOSE_CASES), `.../helpers.py` (oracle, tolerances, harness order), `docs/NOC_ALIGNMENT_IN_TT_METAL.md`, `.claude/references/blocking-model.md`, `.claude/references/l1-footprint-discipline.md`, `ttnn/cpp/ttnn/kernel_lib/{matmul_block,tilize,bias_add}_helpers.hpp`, `ttnn/ttnn/operations/examples/master.md` (entries: compute_block_size, matmul_output_subblock, double_buffer, read_coalescing, mcast_topology, shared_input_reuse, split_reader, bank_stagger, noc_placement), `l1_ledger.md` (this directory) |
 
@@ -19,7 +19,7 @@
 | input_height (H) | int | yes | `>= 1` | — | CT |
 | input_width (W) | int | yes | `>= 1` | — | CT |
 | bias | ttnn.Tensor or None | no | output of `prepare_conv2d_bias` | None | address RT; presence CT (`has_bias`) |
-| padding (p) | int | no | `>= 0` (TARGET: `0` or `== dilation`) | 0 | CT |
+| padding (p) | int or `(top, bottom, left, right)` | no | every side `>= 0` (TARGET: `0`, `== dilation`, or per-side with each side `0` or `dilation`) | 0 | CT (`pad_top`, `pad_left`) |
 | stride (s) | int | no | `{1, 2}` | 1 | CT |
 | dilation (d) | int | no | `{1, 2, 4, 6, 8, 12, 18}` | 1 | CT |
 | activation | str or None | no | `None`, `"relu"` | None | CT (`relu`) |
@@ -208,7 +208,7 @@ No multicast, no semaphore, no cross-core barrier exists in Phase 0. Refinement 
 
 | Stage | Format | Mechanism | Notes |
 |-------|--------|-----------|-------|
-| Input DRAM -> `cb_halo_slab` | RM bf16, one pixel row (`C_in_p*2` B) per slab page | reader: TensorAccessor page reads (`noc_async_read_page`, `dataflow_api.h:1241`), runs from `num_contiguous_pages` (= 1 on interleaved) | kh-band ordered; band kh stored at slab pixel offset `kh*band_stride_px`; pixel q of band kh at `kh*band_stride_px + q - (f + kh*d*W)`, `f = (ho0*s - p)*W + wo0*s - p` (can be negative; only in-image pixels are read). Overlapping bands therefore coincide in the slab. |
+| Input DRAM -> `cb_halo_slab` | RM bf16, one pixel row (`C_in_p*2` B) per slab page | reader: TensorAccessor page reads (`noc_async_read_page`, `dataflow_api.h:1241`), runs from `num_contiguous_pages` (= 1 on interleaved) | kh-band ordered; band kh stored at slab pixel offset `kh*band_stride_px`; pixel q of band kh at `kh*band_stride_px + q - (f + kh*d*W)`, `f = (ho0*s - top)*W + wo0*s - left` (can be negative; only in-image pixels are read). Overlapping bands therefore coincide in the slab. |
 | `cb_halo_slab` -> `cb_im2col_rm` | RM bf16, tile-sized pages (32 rows x `bk*32` cols = `bk` bf16 tiles per tile-row) | reader: self-aimed L1->L1 NoC reads (`local_copy_helpers_dataflow.hpp:57`) + zero reads from `MEM_ZEROS_BASE` | row r of tile-row t at byte `(r * bk*32*2)` within the tile-row's `bk` pages; slot of tap kw at `kw*C_in_p*2`. |
 | `cb_im2col_rm` -> `cb_im2col_tiles` | TILE (in0 format: bf16 Phase 0) | compute: `tilize<bk>` symmetric, `bm` tile-rows | inside the matmul's PreKBlockFn |
 | weights DRAM -> `cb_weights` | TILE weight_dtype | writer: TensorAccessor tile reads, page `(kt0 + k)*C_out_p/32 + n_tile_start + n` | k-major, n-fastest = matmul in1 layout (`in1_per_core_w = block_n_tiles`) |
@@ -231,7 +231,7 @@ Deferred inter-Tensix contracts (kept reachable by the structure above):
 |-------|---------------|---------------|------------|------------|--------------------------|
 | 1 | `weight_dtype=bfloat8_b` (incl. mixed bf16 x bf8_b) | `cb_weights`/`cb_bias` in bf8_b; matmul srcA (in1) bf8_b vs srcB (in0) bf16 — the helper's INPUT reconfig already sets both sources; mixed cells leave EXCLUSIONS | knob-turn (format) | — | all 23 |
 | 2 | `activation=relu` | PACK_RELU zero around `finalize_block` only (no-bias: `OutWithRelu`, then explicit clear) | knob-turn (CT flag) | — | 21 |
-| 3 | `stride_mode=strided` | values: `band_len_px` with s, gather row mapping `h_in = ho*s + kh*d - p` | knob-turn | — | stem.conv1, res3.0, res4.0 |
+| 3 | `stride_mode=strided` | values: `band_len_px` with s, gather row mapping `h_in = ho*s + kh*d - top` | knob-turn | — | stem.conv1, res3.0, res4.0 |
 | 4 | `channel_alignment=c_in_unaligned` | zero-fill of kh-block K pad and `C_in..C_in_p` lanes in the gather/slab; `C_in_p` rule | knob-turn | — | stem.conv1 |
 | 5 | `memory_layout=HEIGHT_SHARDED` (RM) | R2 | placement | 1-4 for stem.conv1 | stem.conv1 |
 | 6 | `layout=TILE`, `dtype=bfloat8_b` | R3 (untilize phase) | new compute phase on the same blocking | — | 22 |
@@ -478,3 +478,10 @@ Measured reasons and numbers: `changelog.md` "Perf 15".
 | Face-split kw-fold ACC | `kernels/conv2d_3x3_kw_fold.hpp` (`pack_fst`, `fs_unpack_*`, `fs_math_*`), `KWF_PITCH = 64`, `KWF_BIAS_ROWS_BYTES = 128`, `KWF_MAX_PLANE_BYTES` | Each 1-tile-wide fp32 ACC plane is two [rows, 16] half-planes (left: columns 0-15, right: 16-31, half the plane bytes apart). Q packs write a run of tiles as two replayed streams of 4-row PACRs, one per half-plane. The final pass unpacks each output tile as two 2-face runs (no tilize), adds the bias row by srcB row-broadcast, and packs in Default mode. The reader decodes one fp32 bias row per output column tile. Planes over 8191 rows are not taken (the unpacker's 16-bit x_dim); no kw-fold shape that fits L1 reaches that. |
 | Partner reads round 0 | `WEIGHT_SERVER_R0_SHARE = (7, 12)`, server reader / writer (`SERVER_R0_SELF_READ`, arg `r0_split`), `kernels/conv2d_3x3_server_pages.hpp` | Every partner's writer reads the partner's part of round 0 on NoC0 at kernel start; its reader reads only the later rounds. The first server takes 7/12 of round 0's slot rows (the extra rows to the earliest chunks); later rounds keep the halves. |
 | Slab-direct round 0 without acks | reader `r0_try`, `SD_R0_READY_SEM` / `SD_R0_LOCAL_SEM` (two semaphores, was three) | The sender's reader multicasts round 0 as soon as its writer has the round and its bias split. Receivers only reserve their slot; there is no ack count (the slot is fresh at kernel start). |
+
+## Refinement 7 amendment: per-side padding
+
+| Change | Where | Rule |
+|--------|-------|------|
+| `pad_top` / `pad_left` | `Conv3x3Geometry.padding` (int or `(top, bottom, left, right)`; properties `pad_sides`, `pad_top`, `pad_left`), reader CT 9 / 76, writer CT 27 / 74, `SD_PAD_TOP` / `SD_PAD_LEFT`, every gather / footprint / slab-direct helper | Rows shift by `top`, columns by `left`; `bottom` / `right` only set `H_out` / `W_out` and how far the last taps reach past the image (zero fill outside `[0, H) x [0, W)` as before; slab-direct's gap is `max(left, overreach)`). Int padding passes the same value to both, so symmetric calls compile to the same kernels. |
+| Symmetric-only fast paths | `s2_taps_capable` (p == 1), center taps, N-slice center taps, padded slab, kw-fold, the K split's cost model (p == d) | Their gates compare the int form, so a per-side call takes the general walk. Interleaved stride 1 needs none of them: the FLUX.2 `(0, 0, 1, 1)` convs run the symmetric path's speed. Stride-2 `(0, 1, 0, 1)` falls from S2_TAPS to the strided window (left pad 0 puts tap 2's last pixel in the next input tile, which S2_TAPS does not build). Sharded x per-side is an EXCLUSIONS cell. |
