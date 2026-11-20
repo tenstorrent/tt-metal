@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 import torch
 
@@ -15,6 +17,14 @@ from tt_py_test_utils_common.utility_functions import (
     tt2torch_tensor,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    UnreadableDocstring,
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def pad_and_fold_conv_activation_for_unity_stride(activation_pyt_nchw_tensor, pad_h, pad_w, stride_h, stride_w):
@@ -415,6 +425,153 @@ def test_fold(act_shape, stride_h, stride_w, device):
     actual = tt2torch_tensor(tt_out)
 
     torch.testing.assert_close(actual, expected)
+
+
+def _fold_reference(x, stride_h, stride_w, padding=(0, 0), collapse_output=False):
+    """torch fold of an [N, H, W, C] tensor after the zero padding ttnn.fold takes: [pad_h, pad_w],
+    [top, bottom, left, right] or [top, bottom, left, right, c_front, c_back]. Computed in float64, which holds every
+    value of the dtypes under test exactly."""
+    if len(padding) == 2:
+        padding = [padding[0], padding[0], padding[1], padding[1], 0, 0]
+    elif len(padding) == 4:
+        padding = list(padding) + [0, 0]
+    top, bottom, left, right, c_front, c_back = padding
+    x = torch.nn.functional.pad(x.to(torch.float64), (c_front, c_back, left, right, top, bottom))
+    n, h, w, c = x.shape
+    out = x.reshape(n, h // stride_h, stride_h, w // stride_w, stride_w, c).permute(0, 1, 3, 2, 4, 5)
+    out = out.reshape(n, h // stride_h, w // stride_w, c * stride_h * stride_w)
+    return out.reshape(1, 1, -1, out.shape[-1]) if collapse_output else out
+
+
+def _fold_output_dtype(dtype):
+    return ttnn.bfloat16 if dtype == ttnn.bfloat8_b else dtype
+
+
+# (shape, stride_h, stride_w, padding). With C=16 a TILE input takes the tile-native path, with C=3 the untilize one.
+_DOCSTRING_CASES = [((2, 8, 12, 16), 2, 2, [0, 0]), ((1, 6, 9, 3), 3, 3, [0, 0])]
+# A ROW_MAJOR input also takes each padding form.
+_DOCSTRING_PADDED_CASES = [
+    ((1, 4, 2, 8), 2, 3, [1, 2]),
+    ((2, 4, 5, 8), 3, 2, [0, 2, 1, 0]),
+    ((1, 5, 6, 4), 2, 3, [1, 0, 2, 1, 1, 3]),
+]
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.fold))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.fold))
+def test_fold_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.fold docstring lists, and a ROW_MAJOR input with
+    each padding form. The output takes the input's memory configuration by default, and the other interleaved buffer
+    type through override_memory_config together with collapse_output.
+
+    A BFLOAT16 TILE input leaves out NaN, as the docstring requires, and compares zeros by value. A BFLOAT8_B input is
+    compared with its own block-float values, which its BFLOAT16 output holds exactly.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    other_buffer_type = ttnn.BufferType.L1 if buffer_type == ttnn.BufferType.DRAM else ttnn.BufferType.DRAM
+    bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+    cases = _DOCSTRING_CASES + (_DOCSTRING_PADDED_CASES if layout == ttnn.ROW_MAJOR_LAYOUT else [])
+    for shape, stride_h, stride_w, padding in cases:
+        input_tensor = ttnn.from_torch(
+            full_range_input(shape, dtype, nan=not bfloat16_tile),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=memory_config,
+        )
+        for collapse_output, override in ((False, None), (True, interleaved_memory_config(other_buffer_type))):
+            output = ttnn.fold(
+                input_tensor,
+                stride_h,
+                stride_w,
+                padding=padding,
+                override_memory_config=override,
+                collapse_output=collapse_output,
+            )
+
+            assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+            assert output.dtype == _fold_output_dtype(dtype)
+            assert output.memory_config() == (memory_config if override is None else override)
+            expected = _fold_reference(ttnn.to_torch(input_tensor), stride_h, stride_w, padding, collapse_output)
+            assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+
+
+def _height_sharded_l1(rows, width, num_cores, device):
+    """HEIGHT_SHARDED L1 memory configuration of a tensor of rows x width elements, over num_cores cores."""
+    grid = ttnn.num_cores_to_corerangeset(num_cores, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(grid, [rows // num_cores, width], ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.fold))
+def test_fold_docstring_sharded_inputs(dtype, layout, device):
+    """Runs every dtype and layout the ttnn.fold docstring lists on a HEIGHT_SHARDED L1 input with a shard width of C.
+    A TILE input has W=32, so its rows hold no tile padding. A ROW_MAJOR input, with C=8 (16 or 32 bytes), also takes
+    H and W padding, and C padding to 16. The output stays HEIGHT_SHARDED in L1."""
+    check_readable(dtype, layout)
+    bfloat16_tile = dtype == ttnn.bfloat16 and layout == ttnn.TILE_LAYOUT
+    if layout == ttnn.TILE_LAYOUT:
+        (n, h, w, c), num_cores, paddings = (1, 4, 32, 32), 2, [[0, 0]]
+    else:
+        (n, h, w, c), num_cores, paddings = (2, 8, 8, 8), 4, [[0, 0], [1, 1], [0, 0, 0, 0, 2, 6]]
+    input_tensor = ttnn.from_torch(
+        full_range_input((n, h, w, c), dtype, nan=not bfloat16_tile),
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=_height_sharded_l1(n * h * w, c, num_cores, device),
+    )
+    for padding in paddings:
+        output = ttnn.fold(input_tensor, 2, 2, padding=padding)
+
+        assert output.layout == ttnn.ROW_MAJOR_LAYOUT
+        assert output.dtype == _fold_output_dtype(dtype)
+        assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        assert output.memory_config().buffer_type == ttnn.BufferType.L1
+        expected = _fold_reference(ttnn.to_torch(input_tensor), 2, 2, padding)
+        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not bfloat16_tile)
+
+
+def _docstring_override_shard_layouts():
+    """Shard layouts the ttnn.fold docstring lists for override_memory_config."""
+    try:
+        line = next(line for line in ttnn.fold.__doc__.splitlines() if "override_memory_config (" in line)
+        names = re.findall(r"\b((?:HEIGHT|WIDTH|BLOCK)_SHARDED)\b", line.split("Defaults to")[0])
+        assert names, f"no shard layouts named on: {line.strip()!r}"
+        return [pytest.param(getattr(ttnn.TensorMemoryLayout, name), id=name) for name in dict.fromkeys(names)]
+    except Exception as error:
+        reason = UnreadableDocstring(f"could not read the override_memory_config line: {error}")
+        return [pytest.param(reason, id="docstring-unreadable")]
+
+
+@pytest.mark.parametrize("memory_layout", _docstring_override_shard_layouts())
+def test_fold_docstring_sharded_override(memory_layout, device):
+    """Folds an interleaved input into each shard layout the docstring lists for override_memory_config, in L1, with
+    a shard spec and without one."""
+    check_readable(memory_layout)
+    x = full_range_input((1, 8, 8, 16), ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # The output is [1, 4, 4, 64]: 16 rows of 64 values, split over 4 cores.
+    grid = ttnn.num_cores_to_corerangeset(4, device.compute_with_storage_grid_size(), True)
+    shard_shape = {
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED: [4, 64],
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED: [16, 16],
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED: [8, 32],
+    }[memory_layout]
+    if memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+        grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+    with_spec = ttnn.MemoryConfig(
+        memory_layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    )
+    for override in (with_spec, ttnn.MemoryConfig(memory_layout, ttnn.BufferType.L1)):
+        output = ttnn.fold(input_tensor, 2, 2, override_memory_config=override)
+
+        assert output.memory_config().memory_layout == memory_layout
+        assert output.memory_config().buffer_type == ttnn.BufferType.L1
+        assert output.memory_config().shard_spec is not None
+        assert_exact(_fold_reference(x, 2, 2), ttnn.to_torch(output))
 
 
 @pytest.mark.parametrize("dtype", [ttnn.int32, ttnn.uint32, ttnn.uint8])

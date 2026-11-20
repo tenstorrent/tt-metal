@@ -23,19 +23,44 @@ namespace ttnn::operations::data_movement {
 
 void bind_fold_operation(nb::module_& mod) {
     const auto* doc = R"doc(
-        NHWC space-to-depth. Packs every stride_h * stride_w neighbourhood at position
-        (h * stride_h, w * stride_w) into the channel dim at position (h, w). Shapes below
-        use the padded H/W/C (any HW / channel padding is applied before folding).
-
-        Output shape: (N, Hp/stride_h, Wp/stride_w, Cp * stride_h * stride_w)
-        where Hp, Wp, Cp are the padded input dims.
+        Moves each ``stride_h x stride_w`` block of pixels of an ``[N, H, W, C]`` tensor into the channel dimension
+        (space-to-depth). `padding` first pads the input with zeros to ``[N, Hp, Wp, Cp]``. Output pixel ``(n, h, w)``
+        then holds pixel ``(n, h * stride_h + i, w * stride_w + j)`` of the padded input in channels
+        ``(i * stride_w + j) * Cp`` to ``(i * stride_w + j + 1) * Cp - 1``, for every ``i`` below `stride_h` and every
+        ``j`` below `stride_w`.
 
         Args:
-            input (ttnn.Tensor): Input tensor [N, H, W, C].
-            stride_h (int): Stride along H.
-            stride_w (int): Stride along W.
-            collapse_output (bool, optional): Default False. When True, returns
-                (1, 1, N * Hp/stride_h * Wp/stride_w, Cp * stride_h * stride_w) instead.
+            input (ttnn.Tensor): the input tensor, of shape ``[N, H, W, C]``.
+            stride_h (int): the height of each block. Must be greater than 0 and divide ``Hp``.
+            stride_w (int): the width of each block. Must be greater than 0 and divide ``Wp``.
+            use_transpose_as_fold (bool, optional): `True` selects a legacy implementation; this page documents `False`. Defaults to `False`.
+            output_shape (ttnn.Shape, optional): Must be `None` when `use_transpose_as_fold` is `False`. Defaults to `None`.
+            padding (List[int], optional): Zero padding applied before the fold: ``[pad_h, pad_w]`` pads both sides of ``H`` by ``pad_h`` and both sides of ``W`` by ``pad_w``; ``[pad_top, pad_bottom, pad_left, pad_right]`` pads each side of ``H`` and ``W``; ``[pad_top, pad_bottom, pad_left, pad_right, pad_c_front, pad_c_back]`` also pads both ends of ``C``. For a TILE input every value must be 0. Defaults to `[0, 0]`.
+            grid_size (ttnn.CoreRangeSet, optional): Must be `None` when `use_transpose_as_fold` is `False`. Defaults to `None`.
+            override_memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output: interleaved in DRAM or L1, or HEIGHT_SHARDED, WIDTH_SHARDED or BLOCK_SHARDED in L1. For a sharded configuration without a shard spec, the operation chooses one. Defaults to `None`, which keeps an interleaved input's memory configuration and gives a HEIGHT_SHARDED input a HEIGHT_SHARDED L1 output.
+            collapse_output (bool, optional): Whether to merge the batch and spatial dimensions of the output, giving it shape ``[1, 1, N * (Hp / stride_h) * (Wp / stride_w), Cp * stride_h * stride_w]``. Defaults to `False`.
+
+        Returns:
+            ttnn.Tensor: the output tensor, of shape ``[N, Hp / stride_h, Wp / stride_w, Cp * stride_h * stride_w]``, in ROW_MAJOR layout with the input's dtype. A ``BFLOAT8_B`` input gives a ``BFLOAT16`` output.
+
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32, UINT16
+                 - TILE, ROW_MAJOR
+               * - BFLOAT8_B
+                 - TILE
+
+            ``BFLOAT16`` TILE input values must not be NaN.
+
+        Memory Support:
+            - Interleaved: DRAM and L1
+            - Sharded: HEIGHT_SHARDED in L1, with a shard width equal to ``C``. A ROW_MAJOR input needs ``C`` and ``Cp`` times the element size to be multiples of 16 bytes. With ``H`` or ``W`` padding, a device opened with a non-zero ``l1_small_size`` is needed.
     )doc";
 
     ttnn::bind_function<"fold">(

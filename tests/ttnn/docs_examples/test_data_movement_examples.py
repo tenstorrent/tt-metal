@@ -101,6 +101,15 @@ def test_repeat(device):
     logger.debug(f"Repeated Tensor Shape: {repeated_tensor.shape}")  # Shape([2, 4])
 
 
+def test_fold(device):
+    # Create an [N, H, W, C] tensor
+    input_tensor = ttnn.rand((1, 4, 6, 8), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    # Move each 2x3 block of pixels into the channel dimension
+    folded_tensor = ttnn.fold(input_tensor, stride_h=2, stride_w=3)
+    logger.debug(f"Folded Tensor Shape: {folded_tensor.shape}")  # Shape([1, 2, 2, 48])
+
+
 def test_repeat_interleave(device):
     # Create a tensor to repeat interleave
     input_tensor = ttnn.rand((10, 10), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
