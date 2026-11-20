@@ -318,6 +318,7 @@ class TtNomicBertAttention(LightweightModule):
             scale=1.0,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             memory_config=heads_memory,
         )
         for tensor in (rotated_query, rotated_key, value):
