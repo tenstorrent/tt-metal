@@ -40,21 +40,47 @@ inline uint32_t relay_chunk_scan_sender_slots(uint32_t key_tiles, tt::ARCH arch)
     return std::min(4u, fabric_packet_headers_per_risc(arch) / relay_chunk_scan_column_packets(key_tiles));
 }
 
-// Heads one sender serves: each needs its own count semaphore on the sender core, the fabric connection takes two
-// more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes), and the output gate's partial
-// sums swap takes the last two (a sender may be a helper).
+// Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes two
+// more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
 inline constexpr uint32_t relay_chunk_scan_sender_semaphores = 16;
 inline constexpr uint32_t relay_chunk_scan_connection_semaphores = 2;
-inline constexpr uint32_t relay_chunk_scan_gate_semaphores = 2;
 inline constexpr uint32_t relay_chunk_scan_max_heads_per_link =
-    relay_chunk_scan_sender_semaphores - relay_chunk_scan_connection_semaphores - relay_chunk_scan_gate_semaphores;
+    relay_chunk_scan_sender_semaphores - relay_chunk_scan_connection_semaphores;
 // The fabric connections a sender may open (the fewest RoutingPlaneConnectionManager::MaxConnections allows).
 inline constexpr uint32_t relay_chunk_scan_max_connections = 4;
 
-// The cores of each head: the op's cores are the heads' cores, head by head, then two senders per link, then a helper
-// per head.
+// The relay's hop runs on relay cores, each serving up to this many heads of one link: heads h and h + num_links,
+// consecutive in the link's sender order, so a relay core's heads arrive one after the other.
+inline constexpr uint32_t relay_chunk_scan_heads_per_relay_core = 2;
+
+// Head h's relay core and its slot there (its landing and next-state buffers): the relay cores are link 0's, then
+// link 1's, ..., each link's heads h = link, link + num_links, ... paired in order.
+struct RelaySlot {
+    uint32_t core;
+    uint32_t slot;
+};
+// The relay cores of links [0, links).
+inline uint32_t relay_chunk_scan_relay_cores(uint32_t heads, uint32_t num_links, uint32_t links) {
+    constexpr uint32_t per_core = relay_chunk_scan_heads_per_relay_core;
+    uint32_t cores = 0;
+    for (uint32_t l = 0; l < links && l < heads; ++l) {
+        cores += ((heads - l + num_links - 1) / num_links + per_core - 1) / per_core;
+    }
+    return cores;
+}
+inline uint32_t relay_chunk_scan_relay_cores(uint32_t heads, uint32_t num_links) {
+    return relay_chunk_scan_relay_cores(heads, num_links, num_links);
+}
+inline RelaySlot relay_chunk_scan_relay_slot(uint32_t head, uint32_t heads, uint32_t num_links) {
+    constexpr uint32_t per_core = relay_chunk_scan_heads_per_relay_core;
+    const uint32_t index = head / num_links;
+    return {relay_chunk_scan_relay_cores(heads, num_links, head % num_links) + index / per_core, index % per_core};
+}
+
+// The cores of each head: the op's cores are the heads' correction cores, head by head, then two senders per link,
+// then the relay cores.
 inline uint32_t relay_chunk_scan_cores_per_head(size_t cores, uint32_t heads, uint32_t num_links) {
-    return (cores - 2 * num_links - heads) / heads;
+    return (cores - 2 * num_links - relay_chunk_scan_relay_cores(heads, num_links)) / heads;
 }
 
 // Legacy program descriptors: the metal2 ProgramSpec cannot yet open fabric connections.

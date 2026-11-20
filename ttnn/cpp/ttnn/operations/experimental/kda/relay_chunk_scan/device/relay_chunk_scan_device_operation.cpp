@@ -93,14 +93,17 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
     const auto* mesh = in.packed.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(mesh->shape()[attrs.sequence_parallel_axis] >= 2, "{}: needs at least two SP ranks", operation_name);
-    // Each head's cores, then the relay's sender per link and the final carry's second, then a helper per head.
+    // Each head's correction cores, then the relay's sender per link and the final carry's second, then the relay
+    // cores.
     const uint32_t senders = 2 * attrs.num_links;
     const uint32_t chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
     TT_FATAL(attrs.num_links > 0, "{}: needs at least one link", operation_name);
+    const uint32_t relay_cores = relay_chunk_scan_relay_cores(heads, attrs.num_links);
     TT_FATAL(
-        attrs.cores.size() > senders + heads && (attrs.cores.size() - senders) % heads == 0,
-        "{}: needs the same number of cores per head, then two senders per link, then a helper per head",
-        operation_name);
+        attrs.cores.size() > senders + relay_cores && (attrs.cores.size() - senders - relay_cores) % heads == 0,
+        "{}: needs the same number of cores per head, then two senders per link, then {} relay cores",
+        operation_name,
+        relay_cores);
     const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), heads, attrs.num_links);
     TT_FATAL(
         chunks % cores_per_head == 0,
@@ -116,21 +119,10 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         attrs.num_links,
         (heads + attrs.num_links - 1) / attrs.num_links,
         relay_chunk_scan_max_heads_per_link);
-    // A helper may be a sender, nothing else may share a core.
-    const std::span<const CoreCoord> helper_cores(attrs.cores.data() + attrs.cores.size() - heads, heads);
     TT_FATAL(
-        std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end() - heads).size() == attrs.cores.size() - heads,
-        "{}: the heads' and senders' cores must be distinct",
+        std::set<CoreCoord>(attrs.cores.begin(), attrs.cores.end()).size() == attrs.cores.size(),
+        "{}: the op's cores must be distinct",
         operation_name);
-    const auto correction_end = attrs.cores.begin() + heads * cores_per_head;
-    for (const auto& helper : helper_cores) {
-        TT_FATAL(
-            std::find(attrs.cores.begin(), correction_end, helper) == correction_end &&
-                std::count(helper_cores.begin(), helper_cores.end(), helper) == 1,
-            "{}: helper {} must be distinct from the heads' cores and the other helpers",
-            operation_name,
-            helper);
-    }
     const auto grid = mesh->compute_with_storage_grid_size();
     for (const auto& core : attrs.cores) {
         TT_FATAL(
@@ -169,11 +161,7 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         relay_chunk_scan_column_packets(key_tiles),
         fabric_packet_headers_per_risc(mesh->arch()));
 
-    std::vector<CoreCoord> head_cores;
-    head_cores.reserve(heads);
-    for (uint32_t h = 0; h < heads; ++h) {
-        head_cores.push_back(attrs.cores[h * cores_per_head]);
-    }
+    const std::vector<CoreCoord> relay_core_list(attrs.cores.end() - relay_cores, attrs.cores.end());
     kda_factory_detail::check_allocated_device_tensor(in.landing, operation_name, "landing");
     kda_factory_detail::check_layout(in.landing, tt::tt_metal::Layout::TILE, operation_name, "landing");
     kda_factory_detail::check_dtype(in.landing, tt::tt_metal::DataType::FLOAT32, operation_name, "landing");
@@ -185,18 +173,18 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         "{}: landing must be height-sharded in L1",
         operation_name);
     const auto& shard = *memory.shard_spec();
+    constexpr uint32_t landing_states = relay_landing_slots * relay_chunk_scan_heads_per_relay_core;
     TT_FATAL(
-        in.landing.physical_volume() == relay_landing_slots * heads * key_dim * key_dim &&
-            shard.shape[0] == relay_landing_slots * key_dim && shard.shape[1] == key_dim &&
-            kda_factory_detail::same_cores(shard.grid, head_cores),
-        "{}: landing must hold {} {} x {} states per head core",
+        in.landing.physical_volume() == landing_states * relay_cores * key_dim * key_dim &&
+            shard.shape[0] == landing_states * key_dim && shard.shape[1] == key_dim &&
+            kda_factory_detail::same_cores(shard.grid, relay_core_list),
+        "{}: landing must hold {} {} x {} states per relay core",
         operation_name,
-        relay_landing_slots,
+        landing_states,
         key_dim,
         key_dim);
-    // The output gate's workspace, on the heads' cores and the helpers.
-    std::vector<CoreCoord> gate_cores(attrs.cores.begin(), correction_end);
-    gate_cores.insert(gate_cores.end(), helper_cores.begin(), helper_cores.end());
+    // The output gate's workspace, on the correction cores.
+    const std::vector<CoreCoord> gate_cores(attrs.cores.begin(), attrs.cores.begin() + heads * cores_per_head);
     kda_factory_detail::check_allocated_device_tensor(in.gate_workspace, operation_name, "gate_workspace");
     kda_factory_detail::check_same_device(in.packed, in.gate_workspace, operation_name, "gate_workspace");
     kda_factory_detail::check_layout(in.gate_workspace, tt::tt_metal::Layout::TILE, operation_name, "gate_workspace");
@@ -207,7 +195,7 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         workspace.buffer_type() == tt::tt_metal::BufferType::L1 &&
             workspace.memory_layout() == tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED &&
             kda_factory_detail::same_cores(workspace.shard_spec()->grid, gate_cores),
-        "{}: gate_workspace must be height-sharded in L1 over the heads' cores and the helpers",
+        "{}: gate_workspace must be height-sharded in L1 over the correction cores",
         operation_name);
     kda_factory_detail::check_distinct_buffers(
         {{&in.packed, "packed"},

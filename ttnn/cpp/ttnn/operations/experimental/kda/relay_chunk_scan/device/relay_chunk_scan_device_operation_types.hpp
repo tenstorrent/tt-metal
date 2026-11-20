@@ -14,17 +14,17 @@
 
 namespace ttnn::experimental::prim {
 
-// The relay's persistent counters: its entry-state, final-state and final-carry arrivals, then the output gate's
-// handshakes: x's and W's block counts, and a head core's g landed.
-inline constexpr uint32_t relay_semaphores = 6;
+// The relay's persistent counters: its entry-state, final-state and final-carry arrivals, then the output gate's x's
+// and W's block counts.
+inline constexpr uint32_t relay_semaphores = 5;
 
 struct RelayChunkScanParams {
     uint32_t sequence_parallel_axis;
     uint32_t local_rows;
     uint32_t num_links;
-    // The same number of cores per head, head by head (core j of a head corrects its j-th share of the chunks, and the
-    // head's first core also runs the relay's hop), then two sender cores per link: the relay's, and the final carry's
-    // second, then a helper core per head (which forms the output gate of the head's first core's chunks).
+    // The same number of correction cores per head, head by head (core j of a head forms the output gate of and
+    // corrects its j-th share of the chunks), then two sender cores per link: the relay's, and the final carry's
+    // second, then the relay cores (relay_chunk_scan_relay_slot: each runs the hop of up to two heads of one link).
     std::vector<tt::tt_metal::CoreCoord> cores;
     // The gated output norm: heads per batch (the output is [B, T, H*V]), the output gate's math fidelity, epsilon,
     // and the output's dtype and memory.
@@ -41,7 +41,8 @@ struct RelayChunkScanParams {
     uint32_t slab_index_offset = 0;
 };
 
-// The landing buffer's K x K slots per head core: entry state, final state.
+// The landing buffer's K x K states per head: entry state, final state (relay_chunk_scan_heads_per_relay_core of each
+// per relay core).
 inline constexpr uint32_t relay_landing_slots = 2;
 
 struct RelayChunkScanInputs {
@@ -51,14 +52,12 @@ struct RelayChunkScanInputs {
     Tensor terms;
     Tensor initial_state;
     Tensor actual_start;
-    // L1, height-sharded relay_landing_slots K x K states per head core (each head's first core), in order: the entry
-    // state the predecessor writes and the final state the last rank writes into the first rank's. Consecutive calls
-    // need a barrier across the SP line between them: a rank's predecessor's next call overwrites them as soon as it
-    // starts.
+    // L1, height-sharded over the relay cores, per relay core a K x K state per head slot of the entry states the
+    // predecessor writes, then of the final states the last rank writes into the first rank's. Consecutive calls need a
+    // barrier across the SP line between them: a rank's predecessor's next call overwrites them as soon as it starts.
     Tensor landing;
-    // L1, height-sharded over the heads' cores and the helpers, the same bytes on each: the output gate's K blocks of x
-    // and W (and the head-only buffers they alias). Only used within the call: allocated right before it, it lands in
-    // whatever L1 the layer has freed by then.
+    // L1, height-sharded over the correction cores, the same bytes on each: the output gate's K blocks of x and W. Only
+    // used within the call: allocated right before it, it lands in whatever L1 the layer has freed by then.
     Tensor gate_workspace;
     // The rank's final transition in complement form, which the first rank applies to the relayed final state when
     // the interval ends in a separated tail, and the optional exclusive valid end that decides it.
