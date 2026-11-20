@@ -51,12 +51,17 @@ inline constexpr TridRange kPrefetchFetchQ{
 inline constexpr TridRange kPrefetchRelayLinear{.first = kPrefetchFetchQ.end(), .count = 2};
 
 #if defined(ARCH_QUASAR)
-// The Tensor prefetcher kernels on a dispatch engine: one id per kernel in tensor_prefetcher_kernels(), counted
-// down from the top, for the most kernels a dispatch engine runs.
+// The Tensor prefetcher kernels on a dispatch engine: the top tensor_prefetcher_fifo::kMaxTrids ids, which the
+// kernels in tensor_prefetcher_kernels() divide by the counts they name. A kernel keeps that many groups of
+// transactions in flight and waits on each group by its id.
 inline constexpr TridRange kTensorPrefetcher{
-    .first = kMaxTrid + 1 - tt::tt_metal::tensor_prefetcher_fifo::kMaxKernels,
-    .count = tt::tt_metal::tensor_prefetcher_fifo::kMaxKernels};
-constexpr uint32_t tensor_prefetcher_trid(uint32_t kernel_index) { return kTensorPrefetcher.end() - 1 - kernel_index; }
+    .first = kMaxTrid + 1 - tt::tt_metal::tensor_prefetcher_fifo::kMaxTrids,
+    .count = tt::tt_metal::tensor_prefetcher_fifo::kMaxTrids};
+// The `count` ids of a Tensor prefetcher kernel, `offset` ids into kTensorPrefetcher (TensorPrefetcherKernel gives
+// each kernel its own).
+constexpr TridRange tensor_prefetcher_trids(uint32_t offset, uint32_t count) {
+    return {.first = kTensorPrefetcher.first + offset, .count = count};
+}
 #endif
 
 // The command-queue ranges chain up from 1, each starting where the one before it ends, so only the top of the
