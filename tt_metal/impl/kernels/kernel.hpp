@@ -225,18 +225,19 @@ using FabricConnectionWordsByDevice =
 
 // Metal 2.0: per-kernel resolved fabric connection binding (KernelAdvancedOptions::FabricConnectionBinding).
 // Emitted as a constexpr token in the `fabric::` namespace. On every node of the kernel, the binding owns
-// num_targets * kWordsPerTarget RTA words from rta_word, one block per target in target order:
+// num_targets * words_per_target RTA words from rta_word, one block per target in target order:
 //   [router ethernet channel, teardown semaphore id, buffer index semaphore id]
 // Each node of the kernel is in the spec's links.
 // The words are immutable and differ per device that the Program runs on: the runtime writes the first device's words
 // on every node when it creates the node's RTA buffer. Where the Program runs on another device, the MeshWorkload gives
 // that device its own words as per-device runtime args (see ProgramImpl::device_specific_runtime_args).
 struct FabricConnectionBindingHandle {
-    static constexpr uint32_t kWordsPerTarget = 3;
+    static constexpr uint32_t kWordsPerTarget1D = 3;
 
     std::string accessor_name;  // user-facing identifier (kernel symbol in `fabric::`)
     uint32_t rta_word = 0;      // word index of the binding's first RTA word, on every node
     uint32_t num_targets = 0;
+    uint32_t words_per_target = 0;
     // The words of each node in the spec's links, on each device.
     FabricConnectionWordsByDevice words_by_device;
 };

@@ -162,6 +162,7 @@ FabricConnectionsBySpec RegisterFabricConnections(
         });
         ResolvedFabricConnection& resolved = connections[connection.unique_id];
         resolved.num_targets = static_cast<uint32_t>(targets_by_device.front().size());
+        resolved.words_per_target = FabricConnectionBindingHandle::kWordsPerTarget1D;
         std::ranges::transform(coords, std::back_inserter(resolved.words_by_device), [](const auto& coord) {
             return std::make_pair(coord, std::unordered_map<NodeCoord, std::vector<uint32_t>>{});
         });
@@ -218,9 +219,10 @@ FabricConnectionBindingsForKernel ResolveFabricConnectionBindingsForKernel(
             .accessor_name = binding.accessor_name,
             .rta_word = rta_word,
             .num_targets = resolved.num_targets,
+            .words_per_target = resolved.words_per_target,
             .words_by_device = resolved.words_by_device,
         });
-        rta_word += resolved.num_targets * FabricConnectionBindingHandle::kWordsPerTarget;
+        rta_word += resolved.num_targets * resolved.words_per_target;
     }
     out.section_words = rta_word - fabric_connection_base_rta_word;
     return out;
