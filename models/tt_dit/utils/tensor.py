@@ -645,11 +645,12 @@ def _reassemble_2d(
             out[tuple(slices)] = shard
         return out
 
+    # A mesh axis without a concat dim holds replicas: take those at its coordinate 0.
     if d0 is not None:
-        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][0]))
+        by_pos = sorted(((c, s) for c, s in zip(mesh_coords, shards) if int(c[1]) == 0), key=lambda x: int(x[0][0]))
         return torch.cat([s for _, s in by_pos], dim=d0)
     if d1 is not None:
-        by_pos = sorted(zip(mesh_coords, shards), key=lambda x: int(x[0][1]))
+        by_pos = sorted(((c, s) for c, s in zip(mesh_coords, shards) if int(c[0]) == 0), key=lambda x: int(x[0][1]))
         return torch.cat([s for _, s in by_pos], dim=d1)
     return shards[0]
 

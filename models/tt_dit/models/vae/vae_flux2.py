@@ -23,7 +23,6 @@ from .vae import (
     VaeMidBlock,
     VaeNormDescGroup,
     VaeUpBlock,
-    _all_gather_hw,
     _norm,
     fold_quant_conv_mean,
 )
@@ -292,7 +291,8 @@ class Flux2VaeEncoder(Module):
                 layout.
 
         Returns:
-            The latent mean of shape (B, H / 8, W / 8, z_channels), replicated.
+            The latent mean of shape (B, H / 8, W / 8, z_channels), split over the H and W axes like
+            the input.
         """
         x = self.conv_in.forward(x)
 
@@ -306,5 +306,16 @@ class Flux2VaeEncoder(Module):
         if self._ctx.ccl_manager is not None and self._ctx.tp_axis is not None:
             x = self._ctx.ccl_manager.all_gather(x, dim=-1, mesh_axis=self._ctx.tp_axis, use_hyperparams=True)
 
-        x = self.conv_out.forward(x)
-        return _all_gather_hw(self._ctx, x)
+        # The latents stay split over the H and W axes for the host to assemble (see output_concat_dims),
+        # which on a single host saves gathering them on the device, at a program per image size.
+        return self.conv_out.forward(x)
+
+    def output_concat_dims(self) -> list[int | None]:
+        """Per mesh axis, the dimension of the [N, H, W, C] output its shards are split along, or None
+        where the output is not split; the concat_dims of fast_device_to_host."""
+        dims: list[int | None] = [None] * len(tuple(self._ctx.device.shape))
+        if self._ctx.h_factor > 1 and self._ctx.h_mesh_axis is not None:
+            dims[self._ctx.h_mesh_axis] = 1
+        if self._ctx.w_factor > 1 and self._ctx.w_mesh_axis is not None:
+            dims[self._ctx.w_mesh_axis] = 2
+        return dims

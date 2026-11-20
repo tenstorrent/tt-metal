@@ -188,18 +188,30 @@ def test_vae_flux2_decoder(
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize(("height", "width"), [(1024, 1024)], ids=["1024"])
-def test_vae_flux2_encoder(*, mesh_device: ttnn.MeshDevice, height: int, width: int) -> None:
+@pytest.mark.parametrize(
+    ("tp_axis", "h_axis", "w_axis"),
+    [(0, 1, None), (None, 1, 0)],
+    ids=["tp_h", "h_w"],
+)
+def test_vae_flux2_encoder(
+    *,
+    mesh_device: ttnn.MeshDevice,
+    height: int,
+    width: int,
+    tp_axis: int | None,
+    h_axis: int,
+    w_axis: int | None,
+) -> None:
+    """The encoder with the channels and rows split, and with the rows and columns split as the
+    pipeline's presets do. The output is read as the pipeline reads it."""
     torch.manual_seed(0)
-
-    tp_axis = 0
-    h_axis = 1 - tp_axis
 
     torch_model = reference.AutoencoderKLFlux2.from_pretrained("black-forest-labs/FLUX.2-dev", subfolder="vae")
     assert isinstance(torch_model, reference.AutoencoderKLFlux2)
     torch_model.eval()
 
     ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear)
-    vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=None)
+    vae_parallel_config = Flux2VaeParallelConfig.from_axes(mesh_device, tp_axis=tp_axis, h_axis=h_axis, w_axis=w_axis)
 
     tt_model = Flux2VaeEncoder(
         in_channels=torch_model.config.in_channels,
@@ -218,14 +230,19 @@ def test_vae_flux2_encoder(*, mesh_device: ttnn.MeshDevice, height: int, width: 
         torch_output = torch_model.encode(image).latent_dist.mode()  # [B, C, H / 8, W / 8]
 
     h_mesh_axis = vae_parallel_config.h_parallel.mesh_axis if vae_parallel_config.h_parallel is not None else None
+    w_mesh_axis = vae_parallel_config.w_parallel.mesh_axis if vae_parallel_config.w_parallel is not None else None
     tt_image = tensor.from_torch(
         image.permute(0, 2, 3, 1),
         device=mesh_device,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        mesh_axes=[None, h_mesh_axis, None, None],
+        mesh_axes=[None, h_mesh_axis, w_mesh_axis, None],
     )
     tt_out = tt_model.forward(tt_image)
     ttnn.synchronize_device(mesh_device)
 
-    tt_out_torch = tensor.to_torch(tt_out).permute(0, 3, 1, 2)  # [B, C, H / 8, W / 8]
+    tt_out_torch = tensor.fast_device_to_host(
+        tt_out, mesh_device, tt_model.output_concat_dims(), ccl_manager=ccl_manager
+    ).permute(
+        0, 3, 1, 2
+    )  # [B, C, H / 8, W / 8]
     assert_quality(torch_output, tt_out_torch, pcc=0.999, relative_rmse=0.03)
