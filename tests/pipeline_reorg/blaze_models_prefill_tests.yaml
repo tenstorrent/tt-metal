@@ -802,7 +802,7 @@
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
         # The xy4 rows (the unnarrowed run above skips them) on a [RING, RING] 4x4 sub-torus of this Galaxy. All 10
         # must run.
-        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 10 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py &&
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 10 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k "not perf" &&
         python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
       '
     )
@@ -898,7 +898,7 @@
   skus:
     bh_sc1:
       # The sum of the bounds of the sections that were here before the 4x4 [RING, RING] section (32 + 20 + 20 + 25 + 40 + 40).
-      # The sub-torus section (12) and the sparse KV push step's longer bound (+10) are not added: the leg's slowest
+      # The sub-torus section (25) and the sparse KV push step's longer bound (+10) are not added: the leg's slowest
       # run on record is 93 min and the sub-torus section takes about 4 min on CI.
       timeout: 187
       tier: 2

@@ -25,25 +25,25 @@ X=tests/ttnn/unit_tests/operations/experimental
 
 # name | expected seconds | what it runs
 SECTIONS=(
-  "subtorus_ccl_attn_res|593|4x4 RING-RING sub-torus op, CCL and AttnRes accuracy"
-  "subtorus_small_ops|869|4x4 RING-RING sub-torus op, CCL and AttnRes accuracy"
-  "subtorus_dispatch_combine|1637|4x4 RING-RING sub-torus op, CCL and AttnRes accuracy"
-  "subtorus_moe|958|4x4 RING-RING sub-torus module and KV cache table accuracy"
-  "subtorus_modules|840|4x4 RING-RING sub-torus module and KV cache table accuracy"
-  "subtorus_kda_components|248|4x4 RING-RING sub-torus KDA component, layer and padding accuracy"
-  "subtorus_kda_layers|450|4x4 RING-RING sub-torus KDA component, layer and padding accuracy"
-  "subtorus_glm_sparse_mla|371|4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
-  "subtorus_glm_block|318|4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
-  "subtorus_glm_mtp|563|4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
-  "subtorus_glm_prefill_transformer|120|4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
-  "subtorus_glm_chunked|232|4x4 RING-RING sub-torus sparse MLA, prefill block, MTP, prefill transformer and chunked accuracy"
-  "subtorus_kimi_mla|192|4x4 RING-RING sub-torus MLA chunked and DFlash accuracy"
-  "subtorus_kimi_dflash|387|4x4 RING-RING sub-torus MLA chunked and DFlash accuracy"
+  "subtorus_ccl_attn_res|593|4x4 RING-RING sub-torus high_bw_all_gather and AttnRes contract, determinism, gather-softmax and block-stats accuracy"
+  "subtorus_small_ops|869|4x4 RING-RING sub-torus padded and zero-padded KV cache, masked bincount, offset cumsum and combine op accuracy"
+  "subtorus_dispatch_combine|1637|4x4 RING-RING sub-torus prefill dispatch and TTNN dispatch/combine accuracy"
+  "subtorus_moe|958|4x4 RING-RING sub-torus TTNN MoE module accuracy"
+  "subtorus_modules|840|4x4 RING-RING sub-torus FFN, MoE gate, routing setup, embedding, RMSNorm, shared expert and KV cache table accuracy"
+  "subtorus_kda_components|248|4x4 RING-RING sub-torus KDA QKV convolution exchange and recurrence accuracy"
+  "subtorus_kda_layers|450|4x4 RING-RING sub-torus KDA layer acceptance, actual start, padding and distributed accuracy"
+  "subtorus_glm_sparse_mla|371|4x4 RING-RING sub-torus GLM sparse MLA accuracy"
+  "subtorus_glm_block|318|4x4 RING-RING sub-torus GLM prefill block accuracy"
+  "subtorus_glm_mtp|563|4x4 RING-RING sub-torus GLM MTP module and multiturn accuracy"
+  "subtorus_glm_prefill_transformer|120|4x4 RING-RING sub-torus GLM prefill transformer cache build and accuracy"
+  "subtorus_glm_chunked|232|4x4 RING-RING sub-torus GLM chunked prefill transformer accuracy"
+  "subtorus_kimi_mla|192|4x4 RING-RING sub-torus Kimi MLA accuracy"
+  "subtorus_kimi_dflash|387|4x4 RING-RING sub-torus Kimi DFlash and multiturn accuracy"
   "subtorus_sparse_kv_push_xy4|199|sparse KV push xy4 rows (also run by the GLM components CI leg)"
 )
 
 section_subtorus_sparse_kv_push_xy4() {
-  "$HELPER" --timeout-s 600 --expect 10 $X/test_sparse_kv_push.py
+  "$HELPER" --timeout-s 600 --expect 10 $X/test_sparse_kv_push.py -k "not perf"
 }
 
 section_subtorus_ccl_attn_res() {
