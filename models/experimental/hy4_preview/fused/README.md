@@ -65,6 +65,9 @@ storage formats loses the same tokens: what is left is the routed experts' singl
 on layers 42 to 77 recovers it at +26 % expert bytes per pass; not built). The FP8 latent rows are stored truncated
 toward zero (about 4 % low); a scalar folded into the attention weights (`AttnLayer(latent_scale=1.0430)`)
 compensates.
+That scalar is a stopgap: it removes the mean bias only, and it cannot stay once prefill and decode read the same
+weights. Rows packed with rounding to nearest need none (the append here has that form, `append="nearest"`); the
+scalar goes when the prefill pack rounds.
 
 ### RoPE pairing of the reference
 `modeling_hy_v4.py` rotates half-split pairs `(i, i+32)` of the checkpoint's 64 rope rows; vLLM's Hy4 implementation
@@ -73,6 +76,9 @@ pairing the reference fails simple probes beyond a few dozen tokens of context; 
 them at 2,500 tokens. `HY4_ROPE_PAIRING=half_split|interleaved` selects it in `reference/attention.py` and
 `tt/frames.py` (default `half_split`, the behaviour before this change); `reference/hf_harness.py` applies the same
 switch to the HF model and records the pairing in a golden's metadata.
+Both on-disk weight caches carry the pairing in their path (`tt/model.py` `WeightCache`, the projections' stream
+cache), so a cache of one pairing is never loaded under the other. The default becomes `interleaved` in the same
+change as the prefill stack's conversion, so that the two never disagree on one branch.
 
 ## Notes on this tree
 - Comments cite sections of `PLAN.md`: the pieces' development notes, which are not part of this tree.

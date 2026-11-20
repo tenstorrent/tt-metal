@@ -91,7 +91,11 @@ def load_host_stream(out, layer, fmt_name, chip, group):
 
 
 def stream_cache(out, layer, fmt_name, chip, group):
-    return str(Path(out) / f"layer{layer}" / fmt_name / f"chip{chip:02d}.{group}")
+    """The cache file of one chip's group. The RoPE pairing of the process is part of the path: the streams hold q_b,
+    kv_a and the index weights in the frame of tt/frames.py, which depends on it at equal shapes."""
+    from models.experimental.hy4_preview.reference.attention import rope_pairing
+
+    return str(Path(out) / f"rope-{rope_pairing()}" / f"layer{layer}" / fmt_name / f"chip{chip:02d}.{group}")
 
 
 def placeholder_share(chip, full):

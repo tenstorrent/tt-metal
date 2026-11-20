@@ -573,7 +573,11 @@ class AttnLayer:
         # reader_frames: sparse_mla's row reader takes its addresses from fused/kv_store's frame tables (identity
         # tables on today's store) instead of the slot arithmetic
         self.reader_frames = reader_frames
-        # latent_scale: ONE scalar c on the FP8 part of every stored row at read, folded into the weights that read it
+        # latent_scale: a STOPGAP for rows a truncating pack wrote (ttnn's per_token_cast_to_fp8 cuts the mantissa, the
+        # stored values are about 4 % low). It removes the mean bias only, and it lives in weights a prefill sharing
+        # them would read too: it goes when the pack rounds to nearest (this piece's own append has that form:
+        # append="nearest", HY4A_FP8_NEAREST), and the two are never combined (the assert below).
+        # ONE scalar c on the FP8 part of every stored row at read, folded into the weights that read it
         # (set_weights: the absorption w_k for the scores' content columns, w_v on the value side). It undoes the
         # mean of the truncating cast's bias (1.0430: PLAN.md sections 12a, 17); every row must then carry that bias,
         # so the append stays "truncate".

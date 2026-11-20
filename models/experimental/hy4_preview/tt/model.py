@@ -238,6 +238,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.experimental.hy4_preview.reference import decoder as reference
+from models.experimental.hy4_preview.reference.attention import rope_pairing
 from models.experimental.hy4_preview.reference.indexer import Hy4Indexer, IndexerConfig
 from models.experimental.hy4_preview.reference.indexer import full_layers as indexer_layer_types
 from models.experimental.hy4_preview.reference.lm_head import LMHeadConfig
@@ -343,8 +344,11 @@ class WeightCache:
     another tensor's file.
 
     The directory name carries what the files depend on: the mesh, the hidden axis, both weight
-    dtypes and FORMAT, which has to be raised whenever a module changes what it uploads or in
-    which order (the cache cannot see that).
+    dtypes, the RoPE pairing of the process (reference/attention.py rope_pairing: the frames of
+    tt/frames.py reorder the rope rows of q_b, kv_a and the indexer by it, with the same shapes
+    either way, so a cache of the other pairing would load without an error and be wrong) and
+    FORMAT, which has to be raised whenever a module changes what it uploads or in which order
+    (the cache cannot see that).
 
     The numbering lives in a patch of ``ttnn.from_torch`` that is in place only inside ``group``:
     the modules have no hook for their uploads (tt/common.py MeshPlan would be the place for one).
@@ -358,7 +362,7 @@ class WeightCache:
         shape = "x".join(str(n) for n in (plan.mesh_shape or (1, 1)))
         self.directory = Path(root) / (
             f"{shape}_hidden{plan.hidden_axis}_{_dtype_name(weight_dtype)}_experts-{_dtype_name(expert_dtype)}"
-            f"_v{self.FORMAT}"
+            f"_rope-{rope_pairing()}_v{self.FORMAT}"
         )
         self._active = None
 
