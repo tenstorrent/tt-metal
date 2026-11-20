@@ -82,11 +82,22 @@ uint32_t self_words(const Plan& plan, const Coupling& coupling, const Reading& b
 // Nonzero corrected differences only.
 std::vector<Delta> diff(const Plan& plan, const Coupling& coupling, const Reading& before, const Reading& after);
 
+// Drift of one register while nothing of ours runs: words = per_pair + per_second * window seconds.
+struct IdleFit {
+    double per_pair = 0.0;
+    double per_second = 0.0;
+};
+
+// Line through a back-to-back snapshot pair and a spaced one, clamped to no negative term.
+IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, double spaced_seconds);
+
 std::string counter_name(llk::perf::dram::DramCounter counter);
 
 // Slow dispatch hooks, no-ops unless TT_METAL_PROFILE_DRAM_COUNTERS is set. begin_program snapshots right before the
 // go signal; end_pending closes the program in flight on the chip once its cores are idle.
 void begin_program(MetalContext& ctx, IDevice& device, const Program& program);
 void end_pending(MetalContext& ctx, ChipId chip);
+// Drops the state of every chip of the context, which closes its devices.
+void release(MetalContext& ctx);
 
 }  // namespace tt::tt_metal::dram_counters

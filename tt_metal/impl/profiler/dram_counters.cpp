@@ -8,9 +8,10 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
 #include <thread>
-#include <unordered_map>
+#include <utility>
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
@@ -71,7 +72,8 @@ struct DeviceState {
 };
 
 std::mutex g_mutex;
-std::unordered_map<ChipId, DeviceState> g_devices;
+// Contexts can share chip ids, so the state is per context and chip.
+std::map<std::pair<int, ChipId>, DeviceState> g_devices;
 bool g_traffic_started = false;
 bool g_idle_started = false;
 
@@ -168,11 +170,12 @@ std::vector<double> window_words(const DeviceState& st, const Reading& a, const 
 // the traffic of other agents.
 void calibrate_idle(MetalContext& ctx, ChipId chip, DeviceState& st) {
     std::vector<std::vector<double>> tight, spaced;
-    std::vector<double> spaced_seconds;
+    std::vector<double> tight_seconds, spaced_seconds;
     for (int i = 0; i < kCalibrationPairs; i++) {
         const Reading a = read_all(ctx, chip, st);
         const Reading b = read_all(ctx, chip, st);
         tight.push_back(window_words(st, a, b));
+        tight_seconds.push_back(std::chrono::duration<double>(b.time - a.time).count());
     }
     for (int i = 0; i < kCalibrationPairs; i++) {
         const Reading a = read_all(ctx, chip, st);
@@ -184,16 +187,17 @@ void calibrate_idle(MetalContext& ctx, ChipId chip, DeviceState& st) {
     const size_t n = tight[0].size();
     st.idle_per_pair.assign(n, 0.0);
     st.idle_per_second.assign(n, 0.0);
-    const double seconds = median(spaced_seconds);
+    const double tight_s = median(tight_seconds);
+    const double spaced_s = median(spaced_seconds);
     for (size_t i = 0; i < n; i++) {
         std::vector<double> t, s;
         for (int k = 0; k < kCalibrationPairs; k++) {
             t.push_back(tight[k][i]);
             s.push_back(spaced[k][i]);
         }
-        const double per_pair = std::max(0.0, median(t));
-        st.idle_per_pair[i] = per_pair;
-        st.idle_per_second[i] = std::max(0.0, (median(s) - per_pair) / seconds);
+        const IdleFit fit = fit_idle(median(t), tight_s, median(s), spaced_s);
+        st.idle_per_pair[i] = fit.per_pair;
+        st.idle_per_second[i] = fit.per_second;
     }
 }
 
@@ -279,8 +283,9 @@ bool prepare(MetalContext& ctx, ChipId chip, DeviceState& st) {
         st.coupling = measure_coupling(ctx, chip, st);
         if (rt.get_profiler_dram_counters_calibrate()) {
             calibrate_idle(ctx, chip, st);
-            write_idle_log(chip, st);
         }
+        // Raw captures still restart the file, so the decoder never applies an older calibration to them.
+        write_idle_log(chip, st);
     } catch (const std::exception& e) {
         log_warning(
             tt::LogMetal,
@@ -377,6 +382,15 @@ std::vector<Delta> diff(const Plan& plan, const Coupling& coupling, const Readin
     return out;
 }
 
+IdleFit fit_idle(double tight_words, double tight_seconds, double spaced_words, double spaced_seconds) {
+    IdleFit fit;
+    if (spaced_seconds > tight_seconds) {
+        fit.per_second = std::max(0.0, (spaced_words - tight_words) / (spaced_seconds - tight_seconds));
+    }
+    fit.per_pair = std::max(0.0, tight_words - fit.per_second * tight_seconds);
+    return fit;
+}
+
 std::string counter_name(dc::DramCounter counter) {
     switch (counter) {
         case dc::DramCounter::NIU_SLV_RD_REQ_RECEIVED: return "NIU_SLV_RD_REQ_RECEIVED";
@@ -396,7 +410,7 @@ void begin_program(MetalContext& ctx, IDevice& device, const Program& program) {
     }
     const ChipId chip = device.id();
     std::lock_guard<std::mutex> lock(g_mutex);
-    DeviceState& st = g_devices[chip];
+    DeviceState& st = g_devices[{ctx.get_context_id().get(), chip}];
     try {
         if (!prepare(ctx, chip, st)) {
             return;
@@ -418,7 +432,7 @@ void end_pending(MetalContext& ctx, ChipId chip) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_mutex);
-    auto it = g_devices.find(chip);
+    auto it = g_devices.find({ctx.get_context_id().get(), chip});
     if (it == g_devices.end() || !it->second.pending) {
         return;
     }
@@ -439,6 +453,12 @@ void end_pending(MetalContext& ctx, ChipId chip) {
     } catch (const std::exception& e) {
         disable_after_failure(st, e);
     }
+}
+
+void release(MetalContext& ctx) {
+    const int context = ctx.get_context_id().get();
+    std::lock_guard<std::mutex> lock(g_mutex);
+    std::erase_if(g_devices, [context](const auto& entry) { return entry.first.first == context; });
 }
 
 }  // namespace tt::tt_metal::dram_counters

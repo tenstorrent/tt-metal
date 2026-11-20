@@ -6,4 +6,4 @@ Read-only scripts for a Blackhole card; see `docs/performance_counters/dram_coun
 - `dram_niu_probe.py`: do the NIU read counters of the DRAM tiles move at the header address (known host read), any architecture.
 - `dram_validate.py`: known-bytes workload with `TT_METAL_PROFILE_DRAM_COUNTERS` off and on.
 
-Run each only on an idle card nothing else has open. The scripts never write a device register.
+Run each only on an idle card nothing else has open. The scripts never write a device register. `--device` picks the card: the busy check, the exalens readers and the example `dram_validate.py` runs all use only that one.

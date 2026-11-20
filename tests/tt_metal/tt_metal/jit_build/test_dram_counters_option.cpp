@@ -158,5 +158,19 @@ TEST(DramCountersDiff, WriteCountersNeverGetSelfCorrection) {
     EXPECT_EQ(deltas[0].self_words, 0u);
 }
 
+TEST(DramCountersIdleFit, ConstantRateRecoversBothTerms) {
+    // 5 words per snapshot pair plus 1000 words per second, sampled over 1 ms and 21 ms windows.
+    const IdleFit fit = fit_idle(5.0 + 1.0, 0.001, 5.0 + 21.0, 0.021);
+    EXPECT_NEAR(fit.per_pair, 5.0, 1e-9);
+    EXPECT_NEAR(fit.per_second, 1000.0, 1e-6);
+}
+
+TEST(DramCountersIdleFit, NoTermGoesNegative) {
+    const IdleFit fit = fit_idle(10.0, 0.001, 4.0, 0.021);
+    EXPECT_EQ(fit.per_second, 0.0);
+    EXPECT_EQ(fit.per_pair, 10.0);
+    EXPECT_EQ(fit_idle(1.0, 0.001, 1001.0, 0.002).per_pair, 0.0);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::dram_counters
