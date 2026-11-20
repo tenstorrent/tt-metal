@@ -121,6 +121,10 @@ class TT_Vision_Attention(Module):
             program_config=program_config,
             scale=self.scale,
             compute_kernel_config=self.compute_kernel_config,
+            # Ring joint SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+            precision=ttnn.SDPAPrecision.ACCURATE
+            if self.compute_kernel_config is not None and self.compute_kernel_config.fp32_dest_acc_en
+            else None,
             dim=2,
             multi_device_global_semaphore=ccl.ring_attention_semaphores(self.ccl_slot),
             num_links=ccl.num_links,
