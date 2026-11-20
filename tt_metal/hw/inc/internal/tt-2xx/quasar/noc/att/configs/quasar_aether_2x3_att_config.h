@@ -37,19 +37,19 @@ constexpr std::uint32_t ATT_WORKER_GRID_Y = 1;
 constexpr std::uint32_t ATT_TILE_GRID_X = 2;
 constexpr std::uint32_t ATT_TILE_GRID_Y = 3;
 
-constexpr std::uint8_t ATT_WORKER_SELECTORS[] = {0, 1};
+inline constexpr std::uint8_t ATT_WORKER_SELECTORS[] = {0, 1};
 
 // Endpoint words ((y << 6) | x) by selector: the inverse map software needs to
 // resolve a core's own selector from its NOC_NODE_ID (see the QSR1 config for
 // the full rationale). On this map they are additionally the SOURCE the
 // bring-up replay programs the hardware endpoint table from - there is no boot
 // image on the emulator - and the image test checks that consistency.
-constexpr std::uint16_t ATT_WORKER_ENDPOINT_WORDS[] = {0x40, 0x41};
-constexpr std::uint16_t ATT_FULL_TILE_ENDPOINT_WORDS[] = {0x40, 0x41, 0x00, 0x01, 0x80, 0x81};
+inline constexpr std::uint16_t ATT_WORKER_ENDPOINT_WORDS[] = {0x40, 0x41};
+inline constexpr std::uint16_t ATT_FULL_TILE_ENDPOINT_WORDS[] = {0x40, 0x41, 0x00, 0x01, 0x80, 0x81};
 
 // Array index uses tt-metal/UMD-visible y*2+x. Selectors 0..3 match
 // aether_utils.h; the top row holds the dispatch tile (0,2) and the PCIe tile.
-constexpr std::uint8_t ATT_TILE_SELECTORS[] = {
+inline constexpr std::uint8_t ATT_TILE_SELECTORS[] = {
     2,
     3,  // y=0: DRAM
     0,
@@ -60,7 +60,7 @@ constexpr std::uint8_t ATT_TILE_SELECTORS[] = {
 
 // Matches Aether::configure_aether_dram(GRID_2x3): bank 0 targets (0,0)
 // through selector 2 and bank 1 targets (1,0) through selector 3.
-constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {2, 3};
+inline constexpr std::uint8_t ATT_LOGICAL_DRAM_SELECTORS[] = {2, 3};
 
 // QSR1 slot-14 geometry scaled to this endpoint table: selector bits [31:26]
 // of the base fold to 0, so base | local selects entry 0 - the per-initiator
