@@ -11,10 +11,14 @@
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/validation/resource/resource.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 void ValidateScratchpadSpec(
     const ScratchpadSpec& scratchpad, const CollectedSpecData& collected, uint32_t l1_alignment, tt::ARCH arch) {
+    TT_FATAL(
+        !scratchpad.advanced_options.override_placement || !scratchpad.advanced_options.override_placement->empty(),
+        "ScratchpadSpec '{}' override_placement must be non-empty",
+        scratchpad.unique_id);
     TT_FATAL(
         scratchpad.size_per_node != 0,
         "ScratchpadSpec '{}' has size_per_node == 0; a scratchpad must reserve a non-zero number of bytes "
@@ -44,7 +48,7 @@ void ValidateScratchpadSpec(
                 occupied_nodes = occupied_nodes.merge(collected.kernel_node_set.at(kernel->unique_id));
             }
         }
-        ValidateSRAMArenaAllocation(
+        experimental::ValidateSRAMArenaAllocation(
             SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
             collected,
             fmt::format("ScratchpadSpec '{}'", scratchpad.unique_id),
@@ -86,4 +90,4 @@ void ValidateScratchpadsUsed(const ValidationContext& ctx) {
     }
 }
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

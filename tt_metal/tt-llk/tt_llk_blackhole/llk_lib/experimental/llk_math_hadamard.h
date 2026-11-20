@@ -107,8 +107,8 @@ inline void _llk_math_hadamard_h128_configure_addrmod_()
 // 1/sqrt(128) as float32 (= sqrt(2)/16 ≈ 0.08838834764831843).
 // Precomputed as constexpr so kH128NormBits folds into the
 // _sfpu_load_config32_ immediates at compile time.
-static constexpr float kH128NormScale        = 0.08838834764831843f;
-static constexpr std::uint32_t kH128NormBits = __builtin_bit_cast(std::uint32_t, kH128NormScale);
+constexpr float kH128NormScale        = 0.08838834764831843f;
+constexpr std::uint32_t kH128NormBits = __builtin_bit_cast(std::uint32_t, kH128NormScale);
 
 template <MathFidelity math_fidelity = MathFidelity::HiFi4, bool normalize = true>
 inline void _llk_math_hadamard_h128_init_()
