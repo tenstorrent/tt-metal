@@ -30,8 +30,11 @@ Category 5: division family + power
  5. ttnn.floor_div   - floor(a / b)
  6. ttnn.pow         - tensor ** exponent (int / float / tensor)
 
-div/div_no_nan/floor_div are checked exact against the device's own bfloat16
-quotient (see _bf16_quotient). divide's rounding_mode=None also covers
+div/div_no_nan are checked exact against the device's own bfloat16 quotient
+(see _bf16_quotient). div's trunc/floor modes and floor_div keep the quotient
+in float32 until it is rounded, so they're checked exact against torch's
+rounded float32 quotient instead (see _rounded_quotient), apart from operands
+below 2**-104 (see _tiny_operand). divide's rounding_mode=None also covers
 fast_and_approximate_mode=True (the FPU path), which is genuinely distinct
 from the accurate/SFPU path the trunc/floor branches force. remainder/fmod
 use a magnitude-matched grid since a - b * trunc(a / b) loses precision once
@@ -65,6 +68,29 @@ def _bf16_quotient(tt_a, tt_b, input_a, input_b):
     # fully cold, but that's still strictly better than no check at all.
     assert recip_underflow.sum() > 0, "expected at least one |b| >= 2**126 reciprocal-underflow lane in this grid"
     return torch.where(recip_underflow, torch.zeros_like(bf16_quotient), bf16_quotient)
+
+
+def _rounded_quotient(input_a, input_b, rounding_mode):
+    """trunc/floor of the float32 quotient, narrowed to bfloat16 only after
+    rounding -- what div's rounding modes compute. Rounding the bfloat16
+    quotient instead is wrong whenever it rounds up onto an integer, e.g.
+    floor(386 / 3) would be 129 (#65791).
+    """
+    quotient = flush_subnormal_values_to_zero(input_a.float() / input_b.float())
+    rounded = torch.trunc(quotient) if rounding_mode == "trunc" else torch.floor(quotient)
+    return rounded.to(torch.bfloat16).float()
+
+
+def _tiny_operand(*inputs):
+    """Lanes where any nonzero operand is below 2**-104: widening those to
+    float32 on device adds ~2**-127 (https://github.com/tenstorrent/tt-metal/issues/66568),
+    which the float32 quotient of div's rounding modes inherits.
+    """
+    mask = torch.zeros_like(inputs[0], dtype=torch.bool)
+    for values in inputs:
+        values = values.float()
+        mask |= (values != 0) & (values.abs() < 2.0**-104)
+    return mask
 
 
 @pytest.mark.parametrize(
@@ -125,14 +151,34 @@ def test_divide_round_modes(device, rounding_mode, fast_and_approximate_mode):
         )
         return
 
-    bf16_quotient = _bf16_quotient(tt_a, tt_b, input_a, input_b)
-    if rounding_mode == "trunc":
-        golden = torch.trunc(bf16_quotient)
-    elif rounding_mode == "floor":
-        golden = torch.floor(bf16_quotient)
-    else:
-        golden = bf16_quotient
+    if rounding_mode is None:
+        assert_equal(_bf16_quotient(tt_a, tt_b, input_a, input_b), result)
+        return
+
+    golden = _rounded_quotient(input_a, input_b, rounding_mode)
+    tiny = _tiny_operand(input_a, input_b)
+    assert_equal(golden[~tiny], result[~tiny])
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
+def test_divide_round_modes_near_integer(device, rounding_mode, layout):
+    """Quotients just short of an integer, where the bfloat16 quotient rounds
+    up onto it, e.g. 386 / 3 = 128.67 -> 129 (#65791).
+    """
+    input_a = torch.tensor([[15.6875, 386.0, 4.9375, 7296.0]], dtype=torch.bfloat16)
+    input_b = torch.tensor([[3.140625, 3.0, -0.129882812, -260.0]], dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(input_a, layout=layout, device=device)
+    tt_b = ttnn.from_torch(input_b, layout=layout, device=device)
+
+    golden = torch.div(input_a.float(), input_b.float(), rounding_mode=rounding_mode)
+    result = ttnn.to_torch(ttnn.divide(tt_a, tt_b, rounding_mode=rounding_mode)).float()
     assert_equal(golden, result)
+    result = ttnn.to_torch(ttnn.divide(tt_a, 3.0, rounding_mode=rounding_mode)).float()
+    assert_equal(torch.div(input_a.float(), 3.0, rounding_mode=rounding_mode), result)
+    # floor_div's inf passthrough goes through ttnn.where, which only takes TILE inputs.
+    if rounding_mode == "floor" and layout == ttnn.TILE_LAYOUT:
+        assert_equal(golden, ttnn.to_torch(ttnn.floor_div(tt_a, tt_b)).float())
 
 
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
@@ -179,7 +225,8 @@ _DIV_SCALAR_VALUES = [-5.1, 0.0, 10.9]
 def test_divide_scalar(device, fast_and_approximate_mode, rounding_mode, scalar):
     """Tensor-scalar ttnn.divide over the stratified grid. This overload
     multiplies by a host-computed reciprocal instead of dividing directly, so
-    it's only a few ULP accurate, not bit-exact.
+    with rounding_mode=None it's only a few ULP accurate, not bit-exact. The
+    trunc/floor modes divide in float32 and are checked exact.
 
     fast_and_approximate_mode only has an effect when rounding_mode is None:
     the trunc/floor branch suppresses it on bfloat16 (workaround for #43209),
@@ -200,6 +247,9 @@ def test_divide_scalar(device, fast_and_approximate_mode, rounding_mode, scalar)
             ttnn.divide(tt_a, scalar, rounding_mode=rounding_mode, fast_and_approximate_mode=fast_and_approximate_mode)
         ).float()
         golden = torch.sign(input_a.float()) * float("inf")
+        if rounding_mode is not None:
+            tiny = _tiny_operand(input_a)
+            golden, result = golden[~tiny], result[~tiny]
         assert_div_by_zero_outputs(golden, result)
         return
 
@@ -209,12 +259,16 @@ def test_divide_scalar(device, fast_and_approximate_mode, rounding_mode, scalar)
         ttnn.divide(tt_a, scalar, rounding_mode=rounding_mode, fast_and_approximate_mode=fast_and_approximate_mode)
     ).float()
 
+    if rounding_mode is not None:
+        # The scalar is packed in the input's dtype, so the device divides by bfloat16(scalar).
+        bf16_scalar = torch.full_like(input_a, scalar)
+        golden = _rounded_quotient(input_a, bf16_scalar, rounding_mode)
+        tiny = _tiny_operand(input_a)
+        assert_equal(golden[~tiny], result[~tiny])
+        return
+
     raw_quotient = flush_subnormal_values_to_zero((input_a.float() / scalar).clone())
     golden = raw_quotient.to(torch.bfloat16).float()
-    if rounding_mode == "trunc":
-        golden = torch.trunc(golden)
-    elif rounding_mode == "floor":
-        golden = torch.floor(golden)
 
     # FPU fast mode (rounding_mode=None only) can flush a tiny-but-nonzero
     # quotient to 0 near underflow, similar in spirit to the SFPU subnormal
@@ -446,14 +500,14 @@ def test_floor_div(device):
     tt_a = to_tt_tensor(input_a, device)
     tt_b = to_tt_tensor(input_b, device)
 
-    bf16_quotient = _bf16_quotient(tt_a, tt_b, input_a, input_b)
+    golden = _rounded_quotient(input_a, input_b, "floor")
     # Same NaN-divisor quirk as div_no_nan above.
     nan_divisor = torch.isnan(input_b) & torch.isfinite(input_a)
-    bf16_quotient = torch.where(nan_divisor, torch.zeros_like(bf16_quotient), bf16_quotient)
-    golden = torch.floor(bf16_quotient)
+    golden = torch.where(nan_divisor, torch.zeros_like(golden), golden)
 
     result = ttnn.to_torch(ttnn.floor_div(tt_a, tt_b)).float()
-    assert_equal(golden, result)
+    tiny = _tiny_operand(input_a, input_b)
+    assert_equal(golden[~tiny], result[~tiny])
 
 
 @pytest.mark.parametrize("scalar", _DIV_SCALAR_VALUES)

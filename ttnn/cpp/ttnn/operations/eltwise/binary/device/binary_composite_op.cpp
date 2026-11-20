@@ -407,12 +407,15 @@ Tensor div_scalar_impl(
     const std::optional<const DataType> requested_dtype =
         output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
 
-    // The quotient has to stay in floating point until it is rounded: narrowing it to an integer
-    // dtype first truncates toward zero, which would turn floor(-3.5) into -3 instead of -4. An
-    // integer destination is therefore filled by a typecast after the rounding step.
-    const bool cast_after_rounding = requested_dtype.has_value() && !tt::tt_metal::is_floating_point(*requested_dtype);
+    // The quotient has to stay in float32 until it is rounded. Narrowing it first changes the result: an
+    // integer dtype truncates toward zero, turning floor(-3.5) into -3 instead of -4, and bfloat16 rounds a
+    // quotient just below an integer up onto it, turning floor(386 / 3) into 129 instead of 128. Any other
+    // destination is therefore filled by a typecast after the rounding step.
+    const DataType result_dtype = requested_dtype.value_or(input.dtype());
+    const bool cast_after_rounding = result_dtype != DataType::FLOAT32 &&
+                                     (requested_dtype.has_value() || tt::tt_metal::is_floating_point(input.dtype()));
     const std::optional<const DataType> quotient_dtype =
-        cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
+        cast_after_rounding ? std::optional<const DataType>{DataType::FLOAT32} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
     // ttnn::divide's tensor-scalar overload takes no scalar_is_lhs, so go straight to the
@@ -438,7 +441,7 @@ Tensor div_scalar_impl(
     if (!cast_after_rounding) {
         return rounded;
     }
-    return ttnn::typecast(rounded, *requested_dtype, output_mem_config, output_tensor, sub_core_grids);
+    return ttnn::typecast(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 }  // namespace
@@ -614,12 +617,15 @@ Tensor div(
     const std::optional<const DataType> requested_dtype =
         output_tensor.has_value() ? std::optional<const DataType>{output_tensor->dtype()} : output_dtype;
 
-    // The quotient has to stay in floating point until it is rounded: narrowing it to an integer
-    // dtype first truncates toward zero, which would turn floor(-3.5) into -3 instead of -4. An
-    // integer destination is therefore filled by a typecast after the rounding step.
-    const bool cast_after_rounding = requested_dtype.has_value() && !tt::tt_metal::is_floating_point(*requested_dtype);
+    // The quotient has to stay in float32 until it is rounded. Narrowing it first changes the result: an
+    // integer dtype truncates toward zero, turning floor(-3.5) into -3 instead of -4, and bfloat16 rounds a
+    // quotient just below an integer up onto it, turning floor(386 / 3) into 129 instead of 128. Any other
+    // destination is therefore filled by a typecast after the rounding step.
+    const DataType result_dtype = requested_dtype.value_or(input_a.dtype());
+    const bool cast_after_rounding = result_dtype != DataType::FLOAT32 &&
+                                     (requested_dtype.has_value() || tt::tt_metal::is_floating_point(input_a.dtype()));
     const std::optional<const DataType> quotient_dtype =
-        cast_after_rounding ? std::optional<const DataType>{} : output_dtype;
+        cast_after_rounding ? std::optional<const DataType>{DataType::FLOAT32} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
 
     std::optional<Tensor> divided = ttnn::divide(
@@ -641,7 +647,7 @@ Tensor div(
     if (!cast_after_rounding) {
         return rounded;
     }
-    return ttnn::typecast(rounded, *requested_dtype, output_mem_config, output_tensor, sub_core_grids);
+    return ttnn::typecast(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor div_no_nan(
