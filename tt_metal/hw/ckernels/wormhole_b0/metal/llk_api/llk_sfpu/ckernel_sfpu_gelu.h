@@ -393,6 +393,33 @@ sfpi_inline sfpi::vFloat _sfpu_one_plus_tanh_negative_fp32_(sfpi::vFloat u) {
     return -rcp;
 }
 
+// u = sqrt(2/pi) * (x + 0.044715 * x^3) for the lane's current Dest value.
+sfpi_inline sfpi::vFloat _sfpu_gelu_tanh_u_() {
+    constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
+    constexpr float GELU_TANH_K = 0.044715f;
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    sfpi::vFloat p = GELU_TANH_K * (x * x) + 1.0f;
+    return SQRT_2_OVER_PI * (x * p);
+}
+
+// GELU tanh for -13.375 < x < 0 without the 1 + tanh(u) cancellation: down to x = -6 it is 0.5 * x / (t + 1);
+// below that 1 + tanh(u) = 2 * exp(2u) / (1 + exp(2u)) is 2 * exp(2u) to fp32, so it is x * exp(2u) from the fused
+// tail helper that the derivative uses (0 once that falls under the smallest normal float). Reads the Dest value
+// itself, so only the result is live across the call; the lanes outside that range get 0.
+sfpi_inline sfpi::vFloat _sfpu_gelu_tanh_negative_fp32_() {
+    sfpi::vFloat out = 0.0f;
+    sfpi::vFloat x = sfpi::dst_reg[0];
+    v_if(x > -6.0f) {
+        out = _sfpu_one_plus_tanh_negative_fp32_(_sfpu_gelu_tanh_u_()) * (0.5f * sfpi::dst_reg[0]);
+    }
+    v_elseif(x > -13.375f) {
+        sfpi::vFloat u2 = _sfpu_gelu_tanh_u_() * 2.0f;
+        out = x_times_exp_negative_tail(sfpi::dst_reg[0], u2);
+    }
+    v_endif;
+    return out;
+}
+
 template <bool is_fp32_dest_acc_en, int ITERATIONS = 8>
 inline void calculate_gelu_tanh() {
     constexpr float SQRT_2_OVER_PI = 0.7978845608028654f;
@@ -416,12 +443,11 @@ inline void calculate_gelu_tanh() {
         result = half_x * t + half_x;
 
         // For x < 0, 1 + tanh(u) cancels as tanh(u) -> -1, so the sum above loses all its bits (exactly 0 for
-        // x < -6). Down to -6 use 1 / (t + 1); below that 1 + tanh(u) = 2 * exp(2u) / (1 + exp(2u)) is exp(2u) to
-        // fp32, and x * exp(2u) comes from the fused tail helper that the derivative uses. The result is 0 once
-        // it falls under the smallest normal float.
+        // x < -6). The negative helper reads x from Dest again to keep few values live.
+        sfpi::vFloat negative_result = _sfpu_gelu_tanh_negative_fp32_();
+        x = sfpi::dst_reg[0];
         v_if(x < 0.0f) {
-            v_if(x > -6.0f) { result = half_x * _sfpu_one_plus_tanh_negative_fp32_(u); }
-            v_elseif(x > -13.375f) { result = x_times_exp_negative_tail(x, u + u); }
+            v_if(x > -13.375f) { result = negative_result; }
             v_endif;
         }
         v_endif;
