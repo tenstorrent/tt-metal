@@ -995,7 +995,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                 )
                 segs = []
                 for _, c0, n, _ in spec.parts:
-                    segs += [n, 1 if (mask and c0 + n == geo.sw) else 0]
+                    segs += [n, geo.v if (mask and c0 + n == geo.sw) else 0]  # slice-last tile: valid columns
                 n_m = [_f32_bits(s.valid_cols) for s in mm.members]
                 dense_c, dense_w, dense_r = [], [], []
                 store_col0, store_w = q0_out(spec, geo), spec.core_w
