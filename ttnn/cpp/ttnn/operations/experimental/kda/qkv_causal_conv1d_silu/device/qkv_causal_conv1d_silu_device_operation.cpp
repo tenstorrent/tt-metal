@@ -23,6 +23,25 @@ QkvCausalConv1dSiluOperation::program_factory_t QkvCausalConv1dSiluOperation::se
     return QkvCausalConv1dSiluProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void QkvCausalConv1dSiluOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& in) {
+    kda_factory_detail::check_allocated_on_device(
+        in.input,
+        {{&in.input, "input"},
+         {&in.history, "history"},
+         {&in.tap0, "tap0"},
+         {&in.tap1, "tap1"},
+         {&in.tap2, "tap2"},
+         {&in.tap3, "tap3"},
+         {&in.actual_start, "actual_start"},
+         {in.predecessor_carry ? &*in.predecessor_carry : nullptr, "predecessor_carry"},
+         {in.exchange_buffer ? &*in.exchange_buffer : nullptr, "exchange_buffer"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"},
+         {in.slab_index ? &*in.slab_index : nullptr, "slab_index"}},
+        "qkv_causal_conv1d_silu");
+}
+
 void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
@@ -37,6 +56,9 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
         TT_FATAL(
             in.predecessor_carry->tensor_spec() == in.history.tensor_spec(), "qkv convolution: carries must match");
     }
+    TT_FATAL(
+        !in.slab_index.has_value() || in.exchange_buffer.has_value(),
+        "qkv_causal_conv1d_silu: slab_index needs the fabric exchange (qkv_causal_conv1d_silu_with_carry)");
     if (in.actual_end.has_value()) {
         check_actual_start(in.input, *in.actual_end, operation_name);
     }
@@ -155,9 +177,14 @@ void QkvCausalConv1dSiluOperation::validate_on_program_cache_miss(
     // coincide, so the shape alone cannot tell them apart.
     const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
     const auto width = static_cast<uint32_t>(channels);
+    const uint32_t entries = in.slab_index.has_value() ? history_shape[0] : 1;
+    if (in.slab_index.has_value()) {
+        check_slab_index(
+            in.input, in.history, *in.slab_index, attrs.slab_index_scale, attrs.slab_index_offset, operation_name);
+    }
     const Shape expected_history_shape =
-        tail.token_paged ? Shape({1, qkv_conv::history_rows, width})
-                         : Shape({1, width / tail.page_channels, qkv_conv::history_rows * tail.page_channels});
+        tail.token_paged ? Shape({entries, qkv_conv::history_rows, width})
+                         : Shape({entries, width / tail.page_channels, qkv_conv::history_rows * tail.page_channels});
     TT_FATAL(
         history_shape == expected_history_shape,
         "qkv_causal_conv1d_silu: history must be {} for Q+K+V = {} and page_channels = {}, got {}",
@@ -194,7 +221,9 @@ QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::
         TensorSpec(Shape({1, attrs.sequence, attrs.q_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.k_width}), layout),
         TensorSpec(Shape({1, attrs.sequence, attrs.v_width}), layout)};
-    if (in.exchange_buffer.has_value()) {
+    if (in.slab_index.has_value()) {
+        specs.push_back(in.history.tensor_spec());
+    } else if (in.exchange_buffer.has_value()) {
         specs.push_back(TensorSpec(
             in.history.logical_shape(),
             TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), ttnn::DRAM_MEMORY_CONFIG)));
@@ -205,8 +234,14 @@ QkvCausalConv1dSiluOperation::spec_return_value_t QkvCausalConv1dSiluOperation::
 QkvCausalConv1dSiluOperation::tensor_return_value_t QkvCausalConv1dSiluOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     tensor_return_value_t outputs;
-    for (const auto& spec : compute_output_specs(attrs, in)) {
-        outputs.push_back(create_device_tensor(spec, in.input.device()));
+    const auto specs = compute_output_specs(attrs, in);
+    for (uint32_t i = 0; i < 3; ++i) {
+        outputs.push_back(create_device_tensor(specs[i], in.input.device()));
+    }
+    if (in.slab_index.has_value()) {
+        outputs.push_back(in.history);
+    } else if (specs.size() > 3) {
+        outputs.push_back(create_device_tensor(specs[3], in.input.device()));
     }
     return outputs;
 }

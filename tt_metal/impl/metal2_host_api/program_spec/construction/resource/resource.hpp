@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
@@ -19,7 +19,7 @@
 #include "impl/program/program_impl.hpp"
 #include "jit_build/jit_build_settings.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Break down of program & kernel construction by resource type.
 // For each resource, there are always two sides:
@@ -212,8 +212,10 @@ struct ScratchpadBindingsForKernel {
     uint32_t section_words = 0;  // == number of scratchpad bindings
 };
 
+// Resolves scratchpad metadata and placement for each binding of a kernel.
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
+    const CoreRangeSet& kernel_nodes,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
     size_t scratchpad_base_crta_word);
 
@@ -259,4 +261,4 @@ struct KernelResourceBindings {
 KernelResourceBindings ResolveKernelResourceBindings(
     const KernelSpec& kernel_spec, const CollectedSpecData& collected, const ProgramResources& resources);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

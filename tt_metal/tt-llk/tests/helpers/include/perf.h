@@ -47,6 +47,14 @@ enum class PerfRunType
     SFPU_ISOLATE
 };
 
+// The PACK_ISOLATE and L1_CONGESTION pack loops release every dest section as tile_regs_release does in production
+// (Wormhole only for now: without the drain its four packers can lock into their slow pattern for the whole loop)
+#if defined(ARCH_WORMHOLE)
+constexpr bool PERF_PACK_SECTION_RELEASE = true;
+#else
+constexpr bool PERF_PACK_SECTION_RELEASE = false;
+#endif
+
 // The run types whose source mock goes through the MOP expander: on Wormhole, MATH_ISOLATE's unpack mock and
 // UNPACK_ISOLATE's math mock. Every other caller (other run types, Blackhole, Quasar) keeps the RISC-V loop mocks below.
 template <PerfRunType RUN_TYPE>
@@ -382,11 +390,11 @@ inline void _perf_unpack_set_valid(std::uint32_t source)
     // instruction that also keeps the unpacker's bank sequencing
     if (set_a)
     {
-        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, ckernel::p_unpacr::UNP_SET_DVALID);
     }
     if (set_b)
     {
-        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+        TT_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, ckernel::p_unpacr::UNP_SET_DVALID);
     }
 
 #else
@@ -431,11 +439,11 @@ inline void _perf_unpack_loop_set_valid(std::uint32_t iterations)
         (void)cond_clear_b;
         if constexpr (set_a)
         {
-            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_A, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, ckernel::p_unpacr::UNP_SET_DVALID);
         }
         if constexpr (set_b)
         {
-            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, 2 /*set dvalid only*/);
+            TTI_UNPACR_NOP(ckernel::p_unpacr::UNP_B, 1 /*Set_Dvalid*/, ckernel::p_unpacr::UNP_STALL_UNP_WR, 0, 0, ckernel::p_unpacr::UNP_SET_DVALID);
         }
 #else
         TTI_STALLWAIT(ckernel::p_stall::STALL_TDMA, cond_clear_a | cond_clear_b);

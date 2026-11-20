@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
-from tests.ttnn.utils_for_testing import assert_allclose, maybe_trace
+from tt_py_test_utils_common.utils_for_testing import assert_allclose, maybe_trace
 
 DEEPSEEK_SHAPES_DTYPES = [[(1, 1, 32, 256), ttnn.bfloat16, (1, 1, 32, 8), ttnn.uint16]]
 
