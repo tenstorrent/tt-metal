@@ -285,6 +285,13 @@ if [ -n "${VARIANT}" ]; then
   REQUIRE_TPS=0
   EXPECTED_TPS=""
 fi
+# PREFILL_PERF_GATE=0: gate on PCC only. The run still writes its perf summary and metrics JSON (the scaling summary
+# reads those), but no baseline, PREFILL_EXPECTED_TPS or PREFILL_REQUIRE_TPS can fail it.
+if [ "${PREFILL_PERF_GATE:-1}" = 0 ]; then
+  PERF_BASELINES=""
+  REQUIRE_TPS=0
+  EXPECTED_TPS=""
+fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
