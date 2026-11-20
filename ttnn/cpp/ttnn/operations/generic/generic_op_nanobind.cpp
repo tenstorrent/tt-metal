@@ -21,7 +21,35 @@ namespace ttnn::operations::generic {
 // Defined in generic_op_device_operation.cpp
 ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDescriptor& program_descriptor);
 
-// Its docstring's Note, after the first paragraph, is word for word the same as the other form's; change them together.
+// The paragraphs that the Note sections of both generic_op forms' docstrings share, after each form's own first
+// paragraph.
+constexpr const char* OUTPUT_LABEL_FIX = R"doc(
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
+            the program has not run, so give back the label the output had before the call with
+            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
+            ``output.tensor_topology()``, which returns a copy.
+
+            If the program places the output's data otherwise, such as the same data on every device from a sharded
+            input, or different data on each device from replicated inputs, fix the label the same way after each call
+            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
+            gives its own tensors with that placement, from the output's devices::
+
+                coords = output.tensor_topology().mesh_coords()
+                shape = output.device().shape
+                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor
+                # (ttnn.from_torch gives it the 1-D form, MeshShape([len(coords)]) with one Replicate):
+                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
+                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
+
+            A label can also give each mesh axis its own placement: ``shape`` with one placement for each of its
+            axes, as ``ttnn.create_mesh_mapper`` labels a tensor for a ``ttnn.MeshMapperConfig`` that does not
+            override the mesh shape. Split each tensor dimension across one mesh axis at most: ttnn's ops relabel any
+            other axis it is split across as replicated. Tensors on part of the mesh, and data that no label
+            describes, such as a partial sum on each device, are not covered here. Fix another tensor's label the
+            same way if the program changes how its data is placed.
+)doc";
+
 void bind_generic_operation(nb::module_& mod) {
     std::string doc =
         R"doc(
@@ -49,32 +77,9 @@ void bind_generic_operation(nb::module_& mod) {
             tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the
             output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
             is compiled and before some of generic_op's checks, so a call that raises can still change it.
-
-            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
-            the program has not run, so give back the label the output had before the call with
-            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
-            ``output.tensor_topology()``, which returns a copy.
-
-            If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, or different data on each device from replicated inputs, fix the label the same way after each call
-            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
-            gives its own tensors with that placement, from the output's devices::
-
-                coords = output.tensor_topology().mesh_coords()
-                shape = output.device().shape
-                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor
-                # (ttnn.from_torch gives it the 1-D form, MeshShape([len(coords)]) with one Replicate):
-                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
-                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
-                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
-
-            A label can also give each mesh axis its own placement: ``shape`` with one placement for each of its
-            axes, as ``ttnn.create_mesh_mapper`` labels a tensor for a ``ttnn.MeshMapperConfig`` that does not
-            override the mesh shape. Split each tensor dimension across one mesh axis at most: ttnn's ops relabel any
-            other axis it is split across as replicated. Tensors on part of the mesh, and data that no label
-            describes, such as a partial sum on each device, are not covered here. Fix another tensor's label the
-            same way if the program changes how its data is placed.
-
+)doc";
+    doc += OUTPUT_LABEL_FIX;
+    doc += R"doc(
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
         )doc";
@@ -182,7 +187,6 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         mod, doc, mesh_program_overload, program_overload, program_spec_overload, mesh_program_spec_overload);
 }
 
-// Its docstring's Note, after the first paragraph, is word for word the same as the other form's; change them together.
 void bind_generic_operation_program_spec(nb::module_& mod) {
     using ttnn::experimental::MeshProgramRunArgs;
     using ttnn::experimental::MeshProgramSpec;
@@ -224,32 +228,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             mesh axis usually makes the output sharded along it. Other tensors in io_tensors keep their labels. The
             label changes before the program is compiled and before some of the call's checks, such as those of the
             run args against the spec, so a call that raises can still change it.
-
-            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
-            the program has not run, so give back the label the output had before the call with
-            ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
-            ``output.tensor_topology()``, which returns a copy.
-
-            If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, or different data on each device from replicated inputs, fix the label the same way after each call
-            that runs it. When every tensor in io_tensors is on every device of the mesh, build the label that ttnn
-            gives its own tensors with that placement, from the output's devices::
-
-                coords = output.tensor_topology().mesh_coords()
-                shape = output.device().shape
-                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor
-                # (ttnn.from_torch gives it the 1-D form, MeshShape([len(coords)]) with one Replicate):
-                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
-                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
-                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
-
-            A label can also give each mesh axis its own placement: ``shape`` with one placement for each of its
-            axes, as ``ttnn.create_mesh_mapper`` labels a tensor for a ``ttnn.MeshMapperConfig`` that does not
-            override the mesh shape. Split each tensor dimension across one mesh axis at most: ttnn's ops relabel any
-            other axis it is split across as replicated. Tensors on part of the mesh, and data that no label
-            describes, such as a partial sum on each device, are not covered here. Fix another tensor's label the
-            same way if the program changes how its data is placed.
-
+)doc";
+    const char* doc_after_note = R"doc(
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
                 DFB at fault; if a tensor is on another MeshDevice or misses a device the program runs on; if the
@@ -262,6 +242,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
         )doc";
+    const std::string full_doc = std::string(doc) + OUTPUT_LABEL_FIX + doc_after_note;
 
     auto program_spec_overload = ttnn::overload_t(
         static_cast<Tensor (*)(const std::vector<Tensor>&, const ProgramSpec&, const ProgramRunArgs&)>(
@@ -278,7 +259,7 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
         nb::arg("run_args"));
 
     ttnn::bind_function<"generic_op", "ttnn.experimental.">(
-        mod, doc, program_spec_overload, mesh_program_spec_overload);
+        mod, full_doc.c_str(), program_spec_overload, mesh_program_spec_overload);
 
     mod.def(
         "compute_program_spec_hash",
