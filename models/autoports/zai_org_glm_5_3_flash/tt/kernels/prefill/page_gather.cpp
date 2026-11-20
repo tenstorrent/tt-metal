@@ -38,7 +38,7 @@ void kernel_main() {
         constexpr uint32_t BOUND_DIV = get_compile_time_arg_val(5);
         const uint32_t bound_addr = get_arg_val<uint32_t>(5);
         // the word in its OWN 64-byte slot (a Blackhole DRAM read needs 64-byte alignment; expand_rows 2026-10-21)
-        const InterleavedAddrGen<true> bound_g{.bank_base_address = bound_addr, .page_size = 4};
+        const auto bound_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), bound_addr, 4);
         noc_async_read(bound_g.get_noc_addr(0), base, 64);
         noc_async_read_barrier();
         const uint32_t lim = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base)[0] / BOUND_DIV;
@@ -49,13 +49,14 @@ void kernel_main() {
         }
     }
 #endif
-    const InterleavedAddrGen<true> table_g{.bank_base_address = table_addr, .page_size = TABLE_BYTES};
+    const auto table_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), table_addr, TABLE_BYTES);
     noc_async_read(table_g.get_noc_addr(0), base, TABLE_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr int32_t* table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(base);
     const uint32_t buf = base + TABLE_ALIGNED;
-    const InterleavedAddrGen<true> src{.bank_base_address = src_addr, .page_size = TILE_BYTES};
-    const InterleavedAddrGen<true> dst{.bank_base_address = dst_addr, .page_size = TILE_BYTES};
+    const auto src = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, TILE_BYTES);
+    const auto dst = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, TILE_BYTES);
 
     uint32_t slot = 0;
     for (uint32_t i = first; i < first + count; ++i) {

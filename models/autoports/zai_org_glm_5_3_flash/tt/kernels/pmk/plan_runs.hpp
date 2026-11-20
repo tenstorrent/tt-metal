@@ -67,20 +67,22 @@ FORCE_INLINE void phase_main() {
     uint32_t* sofs = scratch + RMAX + 32 * P;  // per chunk: span start in scratch (words)
     uint32_t* cur = sofs + P;                  // per chunk: the next staged token's index in scratch
 
-    const InterleavedAddrGen<true> hist_g{.bank_base_address = hist_addr, .page_size = EP * 4};
+    const auto hist_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), hist_addr, EP * 4);
     for (uint32_t r = 0; r < P; ++r) {
         noc_async_read(hist_g.get_noc_addr(r), reinterpret_cast<uint32_t>(hist + r * EP), EP * 4);
     }
-    const InterleavedAddrGen<true> cnt_g{.bank_base_address = cnt_addr, .page_size = EP * 4};
-    const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = EP * 4};
-    const InterleavedAddrGen<true> meta_g{.bank_base_address = meta_addr, .page_size = 32 * 4};
+    const auto cnt_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cnt_addr, EP * 4);
+    const auto start_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, EP * 4);
+    const auto meta_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), meta_addr, 32 * 4);
     noc_async_read(cnt_g.get_noc_addr(0), reinterpret_cast<uint32_t>(cnt), EP * 4);
     noc_async_read(start_g.get_noc_addr(0), reinterpret_cast<uint32_t>(start), EP * 4);
     noc_async_read(meta_g.get_noc_addr(0), reinterpret_cast<uint32_t>(meta), 32 * 4);
     noc_async_read_barrier();
     const uint32_t used = *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta);
-    const InterleavedAddrGen<true> stage_g{.bank_base_address = stage_addr, .page_size = CHUNK * 4};
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = CAP * 4};
+    const auto stage_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), stage_addr, CHUNK * 4);
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, CAP * 4);
     // (cf3h-k, 2026-10-26) phase_main is not a template: a static_assert inside a discarded if-constexpr branch is
     // still checked, so the windowed form's two conditions live here, each OR'ed with the direct form's selector (the
     // merged build failed every PMK_PLAN_RUNS_NB > 1 compile -- W7's B2.3 plan_runs_nb 2 -- on the windowed branch's

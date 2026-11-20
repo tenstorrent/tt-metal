@@ -41,6 +41,10 @@ FORCE_INLINE void cb_rewind_range(uint32_t first, uint32_t n) {
 #include "api/dataflow/dataflow_api.h"
 
 namespace mk {
+// the type of a DRAM-interleaved TensorAccessor (tensor_accessor::make_interleaved_dspec<true>()), for helper
+// parameters
+using DramAcc = decltype(TensorAccessor(tensor_accessor::make_interleaved_dspec<true>(), 0u, 0u));
+
 // BRISC / NCRISC: both pointers (a data-movement RISC is the producer or the consumer of a CB, or both)
 FORCE_INLINE void cb_rewind(uint32_t cb) {
     LocalCBInterface& i = get_local_cb_interface(cb);

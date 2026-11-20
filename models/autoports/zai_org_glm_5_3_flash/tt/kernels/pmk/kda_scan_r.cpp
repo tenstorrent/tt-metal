@@ -37,13 +37,20 @@ void kernel_main() {
 
     const uint32_t head = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t vblk = get_arg_val<uint32_t>(ph_rt0 + 1);
-    const InterleavedAddrGen<true> s_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 2), .page_size = T32};
-    const InterleavedAddrGen<true> terms{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 3), .page_size = TB};
-    const InterleavedAddrGen<true> go_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 4), .page_size = TB};
-    const InterleavedAddrGen<true> w_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 5), .page_size = T32};
-    const InterleavedAddrGen<true> valid_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 6), .page_size = 4};
-    const InterleavedAddrGen<true> probe_g{
-        .bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 7), .page_size = PROBE_ROW_BYTES};
+    const auto s_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 2), T32);
+    const auto terms = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 3), TB);
+    const auto go_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 4), TB);
+    const auto w_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 5), T32);
+    const auto valid_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 6), 4);
+    const auto probe_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        get_arg_val<uint32_t>(ph_rt0 + 7),
+        PROBE_ROW_BYTES);
     const uint32_t n_item = get_arg_val<uint32_t>(ph_rt0 + 8), spread = get_arg_val<uint32_t>(ph_rt0 + 9);
     uint32_t pr_chunks = 0, pr_chk_in = 0, pr_chk_s = 0;
 

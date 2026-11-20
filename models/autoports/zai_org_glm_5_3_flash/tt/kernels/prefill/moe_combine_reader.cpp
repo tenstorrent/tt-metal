@@ -26,9 +26,9 @@ void kernel_main() {
     if (n == 0) {
         return;
     }
-    const InterleavedAddrGen<true> og{.bank_base_address = out_addr, .page_size = BF16_TILE};
-    const InterleavedAddrGen<true> dg{.bank_base_address = dest_addr, .page_size = K * C * 4};
-    const InterleavedAddrGen<true> wg{.bank_base_address = w_addr, .page_size = K * C * 4};
+    const auto og = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, BF16_TILE);
+    const auto dg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dest_addr, K * C * 4);
+    const auto wg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), w_addr, K * C * 4);
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
 
     const uint32_t idx = get_write_ptr(CB_IDX);  // [K][32] dest | [K][32] w | 64 x 64-B staging blocks

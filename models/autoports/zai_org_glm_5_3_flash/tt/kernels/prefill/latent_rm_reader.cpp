@@ -30,7 +30,7 @@ void kernel_main() {
     const uint32_t nc = get_arg_val<uint32_t>(5);
 
     const uint32_t scr = get_write_ptr(CB_SCR);
-    const InterleavedAddrGen<true> bound_g{.bank_base_address = bound_addr, .page_size = 4};
+    const auto bound_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), bound_addr, 4);
     noc_async_read(bound_g.get_noc_addr(0), scr, 64);  // its own 64-byte slot (BH DRAM read alignment)
     noc_async_read_barrier();
     uint32_t lim = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scr)[0] * BPU;
@@ -42,11 +42,13 @@ void kernel_main() {
     if (n == 0) {
         return;
     }
-    const InterleavedAddrGen<true> table_g{.bank_base_address = table_addr, .page_size = TABLE_BYTES};
+    const auto table_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), table_addr, TABLE_BYTES);
     noc_async_read(table_g.get_noc_addr(0), scr + 64, TABLE_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr int32_t* table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(scr + 64);
-    const InterleavedAddrGen<true> src{.bank_base_address = cache_addr, .page_size = TILE_BYTES};
+    const auto src =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cache_addr, TILE_BYTES);
     for (uint32_t lb = ci; lb < lim; lb += nc) {
         const int32_t p_ = table[lb];
         const uint32_t p0 = (p_ < 0 ? 0u : static_cast<uint32_t>(p_)) * TPP;

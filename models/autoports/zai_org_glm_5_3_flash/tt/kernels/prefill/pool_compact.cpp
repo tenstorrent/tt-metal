@@ -33,7 +33,7 @@ void kernel_main() {
     }
 
     const uint32_t base = get_write_ptr(GATHER_CB);
-    const InterleavedAddrGen<true> bound_g{.bank_base_address = bound_addr, .page_size = 4};
+    const auto bound_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), bound_addr, 4);
     noc_async_read(bound_g.get_noc_addr(0), base, 64);
     noc_async_read_barrier();
     const uint32_t lim = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base)[0];
@@ -42,13 +42,14 @@ void kernel_main() {
         return;
     }
     const uint32_t tbl = base + 64;
-    const InterleavedAddrGen<true> table_g{.bank_base_address = table_addr, .page_size = TABLE_BYTES};
+    const auto table_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), table_addr, TABLE_BYTES);
     noc_async_read(table_g.get_noc_addr(0), tbl, TABLE_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr int32_t* table = reinterpret_cast<volatile tt_l1_ptr int32_t*>(tbl);
     const uint32_t buf = tbl + TABLE_ALIGNED;  // two tiles: double-buffered output tiles
-    const InterleavedAddrGen<true> src{.bank_base_address = src_addr, .page_size = TILE_BYTES};
-    const InterleavedAddrGen<true> dst{.bank_base_address = dst_addr, .page_size = TILE_BYTES};
+    const auto src = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, TILE_BYTES);
+    const auto dst = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, TILE_BYTES);
 
     uint32_t slot = 0;
     for (uint32_t lu = first; lu < first + count; ++lu) {

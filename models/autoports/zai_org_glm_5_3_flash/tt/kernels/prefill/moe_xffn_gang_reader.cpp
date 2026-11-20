@@ -62,9 +62,12 @@ void kernel_main() {
     uint64_t* dn_base = gu_base + W_T;
     {
         XP_TIC();
-        const InterleavedAddrGen<true> cnt_g{.bank_base_address = cnt_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> tbl_g{.bank_base_address = tbl_addr, .page_size = 2 * E * 4};
+        const auto cnt_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cnt_addr, EP * 4);
+        const auto start_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, EP * 4);
+        const auto tbl_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), tbl_addr, 2 * E * 4);
         noc_async_read(cnt_g.get_noc_addr(0), reinterpret_cast<uint32_t>(cnt), EP * 4);
         noc_async_read(start_g.get_noc_addr(0), reinterpret_cast<uint32_t>(start), EP * 4);
         noc_async_read(tbl_g.get_noc_addr(0), reinterpret_cast<uint32_t>(tbl), (2 * E * 4 + 63) / 64 * 64);

@@ -30,13 +30,13 @@ void kernel_main() {
     }
 
     const uint32_t base = get_write_ptr(0);
-    const InterleavedAddrGen<true> idx_g{.bank_base_address = idx_addr, .page_size = IDX_BYTES};
+    const auto idx_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), idx_addr, IDX_BYTES);
     noc_async_read(idx_g.get_noc_addr(0), base, IDX_BYTES);
     noc_async_read_barrier();
     volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(base);
     const uint32_t buf = base + IDX_ALIGNED;
-    const InterleavedAddrGen<true> src{.bank_base_address = src_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> dst{.bank_base_address = dst_addr, .page_size = ROW_BYTES};
+    const auto src = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), src_addr, ROW_BYTES);
+    const auto dst = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dst_addr, ROW_BYTES);
 
     const uint32_t end = first + count;
     for (uint32_t r = first; r < end;) {

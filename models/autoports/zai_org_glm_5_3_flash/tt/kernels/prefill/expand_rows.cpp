@@ -53,8 +53,8 @@ void kernel_main() {
     }
 
     const uint32_t base = get_write_ptr(0);
-    const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = 4};
-    const InterleavedAddrGen<true> rbase_g{.bank_base_address = base_addr, .page_size = 4};
+    const auto start_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, 4);
+    const auto rbase_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), base_addr, 4);
     noc_async_read(start_g.get_noc_addr(0), base, 4);
     noc_async_read(rbase_g.get_noc_addr(0), base + 64, 4);
     uint32_t rank = 0, nchips = 1;
@@ -62,7 +62,8 @@ void kernel_main() {
     if constexpr (SHARD) {
         const uint32_t shard_addr = get_arg_val<uint32_t>(6);
         counts_addr = get_arg_val<uint32_t>(7);
-        const InterleavedAddrGen<true> shard_g{.bank_base_address = shard_addr, .page_size = 64};
+        const auto shard_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), shard_addr, 64);
         noc_async_read(shard_g.get_noc_addr(0), base + 128, 64);
     }
     noc_async_read_barrier();
@@ -79,9 +80,11 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* pools = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_pools);
     volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_out);
     volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(l1_counts);
-    const InterleavedAddrGen<true> pools_g{.bank_base_address = pools_addr, .page_size = POOLS_BYTES};
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = OUT_BYTES};
-    const InterleavedAddrGen<true> counts_g{.bank_base_address = counts_addr, .page_size = COUNTS_BYTES};
+    const auto pools_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), pools_addr, POOLS_BYTES);
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, OUT_BYTES);
+    const auto counts_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), counts_addr, COUNTS_BYTES);
     // SHARD: a global token id -> (owned here?, local row id)
     auto local_of = [&](uint32_t t) -> uint32_t { return (t / UNIT / nchips) * UNIT + t % UNIT; };
     auto owned = [&](uint32_t t) -> bool { return (t / UNIT) % nchips == rank; };

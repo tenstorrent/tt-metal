@@ -70,9 +70,11 @@ void kernel_main() {
     const uint32_t w_l1 = idx_l1 + K * 32 * 4;
     volatile tt_l1_ptr uint32_t* idx = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_l1);
     volatile tt_l1_ptr uint32_t* wl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_l1);
-    const InterleavedAddrGen<true> out_g{.bank_base_address = out_addr, .page_size = ROW_BYTES};
-    const InterleavedAddrGen<true> dest_g{.bank_base_address = dest_addr, .page_size = K * C * 4};
-    const InterleavedAddrGen<true> wt_g{.bank_base_address = wt_addr, .page_size = W_TILE_BYTES};
+    const auto out_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), out_addr, ROW_BYTES);
+    const auto dest_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dest_addr, K * C * 4);
+    const auto wt_g =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), wt_addr, W_TILE_BYTES);
 
     for (uint32_t u = u0; u < u0 + nu; ++u) {
         const uint32_t chunk = u / H_SPLIT;

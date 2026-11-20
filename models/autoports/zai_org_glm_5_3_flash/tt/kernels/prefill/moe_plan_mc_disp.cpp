@@ -36,9 +36,9 @@ void kernel_main() {
     uint32_t* disp = reinterpret_cast<uint32_t*>(base_l1);
     uint32_t* bufs = disp + DCHUNK;  // [2][ids BLK | dest BLK]
     uint32_t* lo_w = bufs + 4 * BLK;
-    const InterleavedAddrGen<true> lo_g{.bank_base_address = lo_addr, .page_size = 32 * 4};
-    const InterleavedAddrGen<true> ids_g{.bank_base_address = ids_addr, .page_size = N * 4};
-    const InterleavedAddrGen<true> dest_g{.bank_base_address = dest_addr, .page_size = N * 4};
+    const auto lo_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), lo_addr, 32 * 4);
+    const auto ids_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ids_addr, N * 4);
+    const auto dest_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), dest_addr, N * 4);
     auto issue = [&](uint32_t b) {
         uint32_t* buf = bufs + (b & 1) * 2 * BLK;
         noc_async_read(ids_g.get_noc_addr(0, b * BLK * 4), reinterpret_cast<uint32_t>(buf), BLK * 4);
@@ -70,7 +70,7 @@ void kernel_main() {
         noc_async_read_barrier();
     }
     asm volatile("fence" ::: "memory");  // the table is in L1 before the NoC reads it
-    const InterleavedAddrGen<true> disp_g{.bank_base_address = disp_addr, .page_size = CAP * 4};
+    const auto disp_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), disp_addr, CAP * 4);
     noc_async_write(reinterpret_cast<uint32_t>(disp), disp_g.get_noc_addr(0, d0 * 4), nd * 4);
     noc_async_write_barrier();
 }

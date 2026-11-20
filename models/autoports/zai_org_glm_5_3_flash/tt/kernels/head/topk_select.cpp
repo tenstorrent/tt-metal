@@ -243,13 +243,15 @@ void kernel_main() {
 
 #if defined(TOPK_SAMPLE)
     // the sampler's params + RNG pages -> L1 (written by the host between steps; the RNG page also by this kernel)
-    const InterleavedAddrGen<true> spar{.bank_base_address = get_arg_val<uint32_t>(TOPK_SAMPLE_RT), .page_size = 512};
-    const InterleavedAddrGen<true> srng{
-        .bank_base_address = get_arg_val<uint32_t>(TOPK_SAMPLE_RT + 1), .page_size = 512};
+    const auto spar = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(TOPK_SAMPLE_RT), 512);
+    const auto srng = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(TOPK_SAMPLE_RT + 1), 512);
     noc_async_read_page(0, spar, get_write_ptr(TOPK_SAMPLE_CB));
     noc_async_read_page(0, srng, get_write_ptr(TOPK_SAMPLE_CB) + 512);
     if (get_arg_val<uint32_t>(4) != 0) {  // this step's decode positions (advanced below, after the rows)
-        const InterleavedAddrGen<true> spos{.bank_base_address = get_arg_val<uint32_t>(4), .page_size = 128};
+        const auto spos =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(4), 128);
         noc_async_read_page(0, spos, get_write_ptr(TOPK_SAMPLE_CB) + 1024);
     } else {  // no positions: every row counts as active
         volatile tt_l1_ptr int32_t* p0 =
@@ -261,7 +263,8 @@ void kernel_main() {
 #endif
     mk::wait_handoff(TOPK_SEM, NREAD);  // every reader's rows landed in DRAM (write barrier before its increment)
     MK_MARK();                          // 1: the readers are done
-    const InterleavedAddrGen<true> pages{.bank_base_address = get_arg_val<uint32_t>(2), .page_size = TOPK_PAGE};
+    const auto pages = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(2), TOPK_PAGE);
     for (uint32_t rd = 0; rd < NREAD; ++rd) {
         noc_async_read_page(rd, pages, get_write_ptr(TOPK_LAND_CB) + rd * TOPK_PAGE);
     }
@@ -410,7 +413,7 @@ void kernel_main() {
 #endif
     const uint32_t pos_addr = get_arg_val<uint32_t>(4);
     if (pos_addr != 0) {  // decode positions: +1 on the active rows (after this step's sampling)
-        const InterleavedAddrGen<true> pos{.bank_base_address = pos_addr, .page_size = 128};
+        const auto pos = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), pos_addr, 128);
         const uint32_t buf = get_write_ptr(TOPK_OUT_CB);
         noc_async_read_page(0, pos, buf);
         noc_async_read_barrier();
@@ -425,8 +428,10 @@ void kernel_main() {
         // per-chunk copies (Stage 14b sparse_dsa: MkMla reads cur_pos rows 0..3 of ITS chunk's tensor): copy c gets
         // rows 4c..4c+3 at its rows 0..3 (the rest of its page: the following rows, never read)
         for (uint32_t c = 0; c < TOPK_POS_COPIES; ++c) {
-            const InterleavedAddrGen<true> dst{
-                .bank_base_address = get_arg_val<uint32_t>(TOPK_POS_COPY_RT + c), .page_size = 128};
+            const auto dst = TensorAccessor(
+                tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+                get_arg_val<uint32_t>(TOPK_POS_COPY_RT + c),
+                128);
             noc_async_write(buf + 16 * c, get_noc_addr(0, dst), 128);
         }
 #endif

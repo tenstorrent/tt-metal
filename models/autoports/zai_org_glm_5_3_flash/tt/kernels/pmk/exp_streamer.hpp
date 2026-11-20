@@ -174,9 +174,11 @@ FORCE_INLINE void phase_main() {
     volatile tt_l1_ptr uint32_t* m0 = start + EP;
     {
         SP_TIC();
-        const InterleavedAddrGen<true> cnt_g{.bank_base_address = cnt_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> start_g{.bank_base_address = start_addr, .page_size = EP * 4};
-        const InterleavedAddrGen<true> m0_g{.bank_base_address = m0_addr, .page_size = EP * 4};
+        const auto cnt_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), cnt_addr, EP * 4);
+        const auto start_g =
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), start_addr, EP * 4);
+        const auto m0_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), m0_addr, EP * 4);
         noc_async_read(cnt_g.get_noc_addr(0), reinterpret_cast<uint32_t>(cnt), EP * 4);
         noc_async_read(start_g.get_noc_addr(0), reinterpret_cast<uint32_t>(start), EP * 4);
         noc_async_read(m0_g.get_noc_addr(0), reinterpret_cast<uint32_t>(m0), EP * 4);
@@ -352,8 +354,8 @@ FORCE_INLINE void phase_main() {
         gu_base = reinterpret_cast<uint64_t*>((tbl0 + 2 * E * 4 + 63) & ~63u);
         dn_base = gu_base + W_T;
         SP_TIC();
-        const InterleavedAddrGen<true> tbl_g{
-            .bank_base_address = m0_addr, .page_size = 2 * E * 4};  // RT0 + 2 = the table
+        const auto tbl_g = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), m0_addr, 2 * E * 4);  // RT0 + 2 = the table
         noc_async_read(tbl_g.get_noc_addr(0), tbl0, (2 * E * 4 + 63) / 64 * 64);
         noc_async_read_barrier();
         SP_TOC(c_plan);
@@ -532,7 +534,8 @@ FORCE_INLINE void phase_main() {
         row[exps::S_SPAN] = static_cast<uint32_t>(sp_end - sp_start);
         row[exps::S_START] = static_cast<uint32_t>(sp_start);
         row[exps::S_END] = static_cast<uint32_t>(sp_end);
-        const InterleavedAddrGen<true> probe{.bank_base_address = get_arg_val<uint32_t>(RT0 + 11), .page_size = 64};
+        const auto probe = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(RT0 + 11), 64);
         noc_async_write(reinterpret_cast<uint32_t>(row), probe.get_noc_addr(get_arg_val<uint32_t>(RT0 + 12)), 64);
         noc_async_write_barrier();
     }

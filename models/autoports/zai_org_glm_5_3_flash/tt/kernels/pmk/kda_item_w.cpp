@@ -34,8 +34,10 @@ void kernel_main() {
 
     const uint32_t head = get_arg_val<uint32_t>(ph_rt0 + 0);
     const uint32_t slot = get_arg_val<uint32_t>(ph_rt0 + 1);
-    const InterleavedAddrGen<true> terms{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 2), .page_size = TB};
-    const InterleavedAddrGen<true> valid_g{.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 3), .page_size = 4};
+    const auto terms = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 2), TB);
+    const auto valid_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 3), 4);
 
     // valid_end: staged in the tail of the OUT ring's last page (the compute reaches it only at the end of item 1)
     const uint32_t scratch = get_write_ptr(CB_OUT) + (2 * NP - 1) * TB + TB - 64;
@@ -44,8 +46,10 @@ void kernel_main() {
     const uint32_t ve = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[0];
 
     const uint32_t nx = get_arg_val<uint32_t>(ph_rt0 + 4), ny = get_arg_val<uint32_t>(ph_rt0 + 5);
-    const InterleavedAddrGen<true> probe_g{
-        .bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 6), .page_size = PROBE_ROW_BYTES};
+    const auto probe_g = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+        get_arg_val<uint32_t>(ph_rt0 + 6),
+        PROBE_ROW_BYTES);
     uint32_t pr_items = 0, pr_chk = 0;
     volatile tt_l1_ptr uint32_t* baton = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_KDA));
     for (uint32_t c = slot; c < NCH; c += CPH) {

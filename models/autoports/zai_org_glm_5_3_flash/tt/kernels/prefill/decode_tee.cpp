@@ -30,6 +30,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/assert.h"
+#include "models/autoports/zai_org_glm_5_3_flash/tt/kernels/mk/mk_common.hpp"
 
 namespace {
 constexpr uint32_t SB = 4096;   // fp32 tile
@@ -43,9 +44,9 @@ FORCE_INLINE uint32_t tile_off(uint32_t r, uint32_t c) {
 
 // pages [first, first + n) of src -> [dst_first, dst_first + n) of dst, two pages in flight
 FORCE_INLINE void copy_pages(
-    const InterleavedAddrGen<true>& src,
+    const mk::DramAcc& src,
     uint32_t first,
-    const InterleavedAddrGen<true>& dst,
+    const mk::DramAcc& dst,
     uint32_t dst_first,
     uint32_t n,
     uint32_t bytes,
@@ -69,7 +70,7 @@ FORCE_INLINE void copy_pages(
 void kernel_main() {
     const uint32_t ctl_addr = get_arg_val<uint32_t>(0);
     const uint32_t a = get_write_ptr(TEE_CB), b = a + SB, ca = b + SB, cb = ca + CB_, ctl = cb + CB_;
-    const InterleavedAddrGen<true> ctl_g{.bank_base_address = ctl_addr, .page_size = CTL_BYTES};
+    const auto ctl_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ctl_addr, CTL_BYTES);
     noc_async_read(ctl_g.get_noc_addr(0), ctl, CTL_BYTES);
     noc_async_read_barrier();
     invalidate_l1_cache();
@@ -92,10 +93,14 @@ void kernel_main() {
         const uint32_t s_slot = w[1 + 4 * i], d_slot = w[2 + 4 * i];
         ASSERT(s_slot < n_slots && d_slot < n_slots);
         const uint32_t sc = s_slot / chunk, sr = s_slot % chunk, dc = d_slot / chunk, dr = d_slot % chunk;
-        const InterleavedAddrGen<true> s_src{.bank_base_address = get_arg_val<uint32_t>(1 + 2 * sc), .page_size = SB};
-        const InterleavedAddrGen<true> s_dst{.bank_base_address = get_arg_val<uint32_t>(1 + 2 * dc), .page_size = SB};
-        const InterleavedAddrGen<true> c_src{.bank_base_address = get_arg_val<uint32_t>(2 + 2 * sc), .page_size = CB_};
-        const InterleavedAddrGen<true> c_dst{.bank_base_address = get_arg_val<uint32_t>(2 + 2 * dc), .page_size = CB_};
+        const auto s_src = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(1 + 2 * sc), SB);
+        const auto s_dst = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(1 + 2 * dc), SB);
+        const auto c_src = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(2 + 2 * sc), CB_);
+        const auto c_dst = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(2 + 2 * dc), CB_);
         copy_pages(s_src, sr * n_s, s_dst, dr * n_s, n_s, SB, a, b);
         for (uint32_t p = 0; p < n_c; ++p) {
             noc_async_read(c_src.get_noc_addr(p), ca, CB_);
@@ -113,8 +118,10 @@ void kernel_main() {
     constexpr uint32_t NT = get_compile_time_arg_val(0);
     constexpr uint32_t TPP = get_compile_time_arg_val(1);
     constexpr uint32_t TR = get_compile_time_arg_val(2);
-    const InterleavedAddrGen<true> store{.bank_base_address = get_arg_val<uint32_t>(1), .page_size = CB_};
-    const InterleavedAddrGen<true> ring{.bank_base_address = get_arg_val<uint32_t>(2), .page_size = CB_};
+    const auto store =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(1), CB_);
+    const auto ring =
+        TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(2), CB_);
     for (uint32_t i = 0; i < n_pairs; ++i) {
         const uint32_t s_slot = w[1 + 4 * i], d_slot = w[2 + 4 * i];
         const uint32_t p0 = w[3 + 4 * i], p1 = w[4 + 4 * i];

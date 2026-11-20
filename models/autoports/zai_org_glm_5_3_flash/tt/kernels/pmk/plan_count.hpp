@@ -35,7 +35,7 @@ FORCE_INLINE void phase_main() {
     const uint32_t p0 = i * CHUNK;
     const uint32_t n = p0 >= N ? 0 : (N - p0 < CHUNK ? N - p0 : CHUNK);
 
-    const InterleavedAddrGen<true> lo_g{.bank_base_address = lo_addr, .page_size = 32 * 4};
+    const auto lo_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), lo_addr, 32 * 4);
     noc_async_read(lo_g.get_noc_addr(0), reinterpret_cast<uint32_t>(lo_w), 32 * 4);
     if (n > 0) {
 #ifdef PMK_IDS_U16
@@ -45,7 +45,8 @@ FORCE_INLINE void phase_main() {
         {
             constexpr uint32_t K_ = PMK_IDS_K;
             constexpr uint32_t C_ = N / K_;
-            const InterleavedAddrGen<true> ids_g{.bank_base_address = ids_addr, .page_size = C_ * 2 * K_};
+            const auto ids_g =
+                TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ids_addr, C_ * 2 * K_);
             uint32_t* raw = lo_w + 32;  // scratch past every table of this phase: up to CHUNK rows x 16 B (+64)
             uint32_t p = 0;
             while (p < n) {
@@ -64,7 +65,7 @@ FORCE_INLINE void phase_main() {
             }
         }
 #else
-        const InterleavedAddrGen<true> ids_g{.bank_base_address = ids_addr, .page_size = N * 4};
+        const auto ids_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ids_addr, N * 4);
         noc_async_read(ids_g.get_noc_addr(0, p0 * 4), reinterpret_cast<uint32_t>(ids), (n * 4 + 63) / 64 * 64);
 #endif
     }
@@ -80,7 +81,7 @@ FORCE_INLINE void phase_main() {
         }
     }
     asm volatile("fence" ::: "memory");  // the counts are in L1 before the NoC reads them
-    const InterleavedAddrGen<true> hist_g{.bank_base_address = hist_addr, .page_size = EP * 4};
+    const auto hist_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), hist_addr, EP * 4);
     noc_async_write(reinterpret_cast<uint32_t>(cnt), hist_g.get_noc_addr(i), EP * 4);
     noc_async_write_barrier();
 }

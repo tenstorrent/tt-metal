@@ -29,10 +29,10 @@ void kernel_main() {
     const uint32_t p0 = i * CHUNK;
     const uint32_t n = p0 >= N ? 0 : (N - p0 < CHUNK ? N - p0 : CHUNK);
 
-    const InterleavedAddrGen<true> lo_g{.bank_base_address = lo_addr, .page_size = 32 * 4};
+    const auto lo_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), lo_addr, 32 * 4);
     noc_async_read(lo_g.get_noc_addr(0), reinterpret_cast<uint32_t>(lo_w), 32 * 4);
     if (n > 0) {
-        const InterleavedAddrGen<true> ids_g{.bank_base_address = ids_addr, .page_size = N * 4};
+        const auto ids_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ids_addr, N * 4);
         noc_async_read(ids_g.get_noc_addr(0, p0 * 4), reinterpret_cast<uint32_t>(ids), (n * 4 + 63) / 64 * 64);
     }
     noc_async_read_barrier();
@@ -47,7 +47,7 @@ void kernel_main() {
         }
     }
     asm volatile("fence" ::: "memory");  // the counts are in L1 before the NoC reads them
-    const InterleavedAddrGen<true> hist_g{.bank_base_address = hist_addr, .page_size = EP * 4};
+    const auto hist_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), hist_addr, EP * 4);
     noc_async_write(reinterpret_cast<uint32_t>(cnt), hist_g.get_noc_addr(i), EP * 4);
     noc_async_write_barrier();
 }

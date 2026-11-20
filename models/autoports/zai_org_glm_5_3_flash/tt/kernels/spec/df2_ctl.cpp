@@ -40,7 +40,7 @@ constexpr uint32_t TOK_PAGE = 256, REC_PAGE = 256, POS_PAGE = 128, B16_PAGE = 64
 constexpr uint32_t W_N = 0, W_C = 1, W_D = 16;
 
 FORCE_INLINE uint64_t dram(uint32_t addr, uint32_t page_size, uint32_t page) {
-    const InterleavedAddrGen<true> g = {.bank_base_address = addr, .page_size = page_size};
+    const auto g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), addr, page_size);
     return g.get_noc_addr(page);
 }
 FORCE_INLINE volatile tt_l1_ptr uint32_t* u32(uint32_t l1) {

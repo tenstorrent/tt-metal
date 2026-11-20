@@ -46,7 +46,7 @@ void kernel_main() {
     const uint32_t sc_c = get_arg_val<uint32_t>(2);
 
     const uint32_t a = get_write_ptr(SIO_CB), b = a + SB, ca = b + SB, cb = ca + CB_;
-    const InterleavedAddrGen<true> ctl_g{.bank_base_address = ctl_addr, .page_size = 32 * 4};
+    const auto ctl_g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), ctl_addr, 32 * 4);
     noc_async_read(ctl_g.get_noc_addr(0), a, 32 * 4);
     noc_async_read_barrier();
     const uint32_t NONE = 0xFFFFFFFFu;
@@ -54,18 +54,22 @@ void kernel_main() {
     const uint32_t fresh = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a)[1];
     const uint32_t src_word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a)[2];
     const uint32_t snap_slot = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(a)[3];
-    const InterleavedAddrGen<true> s_scr{.bank_base_address = sc_s, .page_size = SB};
-    const InterleavedAddrGen<true> c_scr{.bank_base_address = sc_c, .page_size = CB_};
+    const auto s_scr = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sc_s, SB);
+    const auto c_scr = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), sc_c, CB_);
 
 #ifdef STATE_COPY
     (void)fresh;
     (void)snap_slot;
     const uint32_t s_slot_i = src_word, d_slot_i = dst_slot;
     const uint32_t sc = s_slot_i / chunk, sr = s_slot_i % chunk, dc = d_slot_i / chunk, dr = d_slot_i % chunk;
-    const InterleavedAddrGen<true> s_src{.bank_base_address = get_arg_val<uint32_t>(3 + 2 * sc), .page_size = SB};
-    const InterleavedAddrGen<true> s_dst{.bank_base_address = get_arg_val<uint32_t>(3 + 2 * dc), .page_size = SB};
-    const InterleavedAddrGen<true> c_src{.bank_base_address = get_arg_val<uint32_t>(4 + 2 * sc), .page_size = CB_};
-    const InterleavedAddrGen<true> c_dst{.bank_base_address = get_arg_val<uint32_t>(4 + 2 * dc), .page_size = CB_};
+    const auto s_src = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(3 + 2 * sc), SB);
+    const auto s_dst = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(3 + 2 * dc), SB);
+    const auto c_src = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(4 + 2 * sc), CB_);
+    const auto c_dst = TensorAccessor(
+        tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(4 + 2 * dc), CB_);
     (void)s_scr;
     (void)c_scr;
     for (uint32_t p = 0; p < n_s; p += 2) {
@@ -97,8 +101,8 @@ void kernel_main() {
     const uint32_t slot = src_word == NONE ? dst_slot : src_word;
     const uint32_t cidx = slot / chunk, rd = slot % chunk;
     const uint32_t st_s = get_arg_val<uint32_t>(3 + 2 * cidx), st_c = get_arg_val<uint32_t>(4 + 2 * cidx);
-    const InterleavedAddrGen<true> s_slot{.bank_base_address = st_s, .page_size = SB};
-    const InterleavedAddrGen<true> c_slot{.bank_base_address = st_c, .page_size = CB_};
+    const auto s_slot = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), st_s, SB);
+    const auto c_slot = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), st_c, CB_);
     const uint64_t zeros = get_noc_addr(MEM_ZEROS_BASE);
     if (fresh) {
         for (uint32_t off = 0; off < SB; off += MEM_ZEROS_SIZE) {
@@ -151,8 +155,8 @@ void kernel_main() {
         const uint32_t oslot = o == 0 ? dst_slot : snap_slot;
         const uint32_t ocidx = oslot / chunk, ord = oslot % chunk;
         const uint32_t os_s = get_arg_val<uint32_t>(3 + 2 * ocidx), os_c = get_arg_val<uint32_t>(4 + 2 * ocidx);
-        const InterleavedAddrGen<true> so_slot{.bank_base_address = os_s, .page_size = SB};
-        const InterleavedAddrGen<true> co_slot{.bank_base_address = os_c, .page_size = CB_};
+        const auto so_slot = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), os_s, SB);
+        const auto co_slot = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), os_c, CB_);
         for (uint32_t p = 0; p < n_s; p += 2) {
             noc_async_read(s_scr.get_noc_addr(p), a, SB);
             if (p + 1 < n_s) {

@@ -39,21 +39,22 @@
 #define PMK_B_RTA_COUNT() ((void)0)
 #endif
 #if defined(PMK_B_ARG_TABLE) && !defined(COMPILE_FOR_TRISC)
-#define PMK_B_PROLOGUE()                                                                                     \
-    do {                                                                                                     \
-        const uint32_t tbl_ = get_arg_val<uint32_t>(0);                                                      \
-        const uint32_t row_ = get_arg_val<uint32_t>(1);                                                      \
-        const uint32_t ndyn_ = get_arg_val<uint32_t>(2);                                                     \
-        const uint32_t dst_ = ((get_write_ptr(PMK_B_ARG_CB) + 63) & ~63u) + PMK_B_ARG_SLOT * PMK_B_ARG_PAGE; \
-        const InterleavedAddrGen<true> t_{.bank_base_address = tbl_, .page_size = PMK_B_ARG_PAGE};           \
-        noc_async_read(t_.get_noc_addr(row_), dst_, PMK_B_ARG_PAGE);                                         \
-        noc_async_read_barrier();                                                                            \
-        volatile tt_l1_ptr uint32_t* rw_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_);             \
-        for (uint32_t i_ = 0; i_ < ndyn_; i_++) {                                                            \
-            rw_[get_arg_val<uint32_t>(3 + 2 * i_)] = get_arg_val<uint32_t>(4 + 2 * i_);                      \
-        }                                                                                                    \
-        rta_l1_base = reinterpret_cast<uint32_t tt_l1_ptr*>(dst_);                                           \
-        PMK_B_RTA_COUNT();                                                                                   \
+#define PMK_B_PROLOGUE()                                                                                       \
+    do {                                                                                                       \
+        const uint32_t tbl_ = get_arg_val<uint32_t>(0);                                                        \
+        const uint32_t row_ = get_arg_val<uint32_t>(1);                                                        \
+        const uint32_t ndyn_ = get_arg_val<uint32_t>(2);                                                       \
+        const uint32_t dst_ = ((get_write_ptr(PMK_B_ARG_CB) + 63) & ~63u) + PMK_B_ARG_SLOT * PMK_B_ARG_PAGE;   \
+        const auto t_ =                                                                                        \
+            TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), tbl_, PMK_B_ARG_PAGE); \
+        noc_async_read(t_.get_noc_addr(row_), dst_, PMK_B_ARG_PAGE);                                           \
+        noc_async_read_barrier();                                                                              \
+        volatile tt_l1_ptr uint32_t* rw_ = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst_);               \
+        for (uint32_t i_ = 0; i_ < ndyn_; i_++) {                                                              \
+            rw_[get_arg_val<uint32_t>(3 + 2 * i_)] = get_arg_val<uint32_t>(4 + 2 * i_);                        \
+        }                                                                                                      \
+        rta_l1_base = reinterpret_cast<uint32_t tt_l1_ptr*>(dst_);                                             \
+        PMK_B_RTA_COUNT();                                                                                     \
     } while (0)
 #else
 #define PMK_B_PROLOGUE() \

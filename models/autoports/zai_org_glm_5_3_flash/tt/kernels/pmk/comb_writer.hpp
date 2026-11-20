@@ -31,7 +31,7 @@ FORCE_INLINE void phase_main() {
     if (nu == 0) {
         return;
     }
-    const InterleavedAddrGen<true> yg{.bank_base_address = y_addr, .page_size = TILE_BYTES};
+    const auto yg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), y_addr, TILE_BYTES);
 #if !defined(PMK_COMB_STRIDE)
 #define PMK_COMB_STRIDE \
     1  // units u0, u0 + 1, .. (contiguous); PMK_COMB_STRIDE = P: u0 + k P (the block halves land in rounds)

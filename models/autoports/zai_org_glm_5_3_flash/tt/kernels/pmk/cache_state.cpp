@@ -70,14 +70,16 @@ void kernel_main() {
             continue;
         }
         const uint32_t cidx = slot / CHUNK, rd = slot % CHUNK;
-        const InterleavedAddrGen<SCR_DRAM> s_scr{
-            .bank_base_address = get_arg_val<uint32_t>(RT_SCR + 2 * k), .page_size = SB};
-        const InterleavedAddrGen<SCR_DRAM> c_scr{
-            .bank_base_address = get_arg_val<uint32_t>(RT_SCR + 2 * k + 1), .page_size = CB_};
-        const InterleavedAddrGen<true> s_stk{
-            .bank_base_address = get_arg_val<uint32_t>(RT_STK + 2 * cidx), .page_size = SB};
-        const InterleavedAddrGen<true> c_stk{
-            .bank_base_address = get_arg_val<uint32_t>(RT_STK + 2 * cidx + 1), .page_size = CB_};
+        const auto s_scr = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec<SCR_DRAM>(), get_arg_val<uint32_t>(RT_SCR + 2 * k), SB);
+        const auto c_scr = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec<SCR_DRAM>(), get_arg_val<uint32_t>(RT_SCR + 2 * k + 1), CB_);
+        const auto s_stk = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(RT_STK + 2 * cidx), SB);
+        const auto c_stk = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(),
+            get_arg_val<uint32_t>(RT_STK + 2 * cidx + 1),
+            CB_);
         // S: scratch pages -> the slot's pages, two in flight
         for (uint32_t p = first_s; p < first_s + count_s; p += 2) {
             const bool two = p + 1 < first_s + count_s;

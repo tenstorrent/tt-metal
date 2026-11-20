@@ -24,10 +24,10 @@ void kernel_main() {
     if (n == 0) {
         return;
     }
-    const InterleavedAddrGen<true> yg{.bank_base_address = y_addr, .page_size = Y_PAGE};
-    const InterleavedAddrGen<true> pg{.bank_base_address = post_addr, .page_size = FP32_TILE};
-    const InterleavedAddrGen<true> cg{.bank_base_address = comb_addr, .page_size = FP32_TILE};
-    const InterleavedAddrGen<true> xg{.bank_base_address = x_addr, .page_size = FP32_TILE};
+    const auto yg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), y_addr, Y_PAGE);
+    const auto pg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), post_addr, FP32_TILE);
+    const auto cg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), comb_addr, FP32_TILE);
+    const auto xg = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), x_addr, FP32_TILE);
 
     uint32_t cur_r = 0xFFFFFFFFu;
     for (uint32_t u = u0; u < u0 + n; ++u) {

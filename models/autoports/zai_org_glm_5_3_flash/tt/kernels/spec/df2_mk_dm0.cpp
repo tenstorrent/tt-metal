@@ -35,7 +35,7 @@ static_assert(NQH % NKVH == 0, "whole GQA groups per chip");
 static_assert(NH_ALL <= N_OWNERS, "one head per owner");
 
 FORCE_INLINE uint64_t dram(uint32_t addr, uint32_t page_size, uint32_t page) {
-    const InterleavedAddrGen<true> g = {.bank_base_address = addr, .page_size = page_size};
+    const auto g = TensorAccessor(tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), addr, page_size);
     return g.get_noc_addr(page);
 }
 

@@ -176,7 +176,8 @@ void kernel_main() {
 #endif
     uint32_t src0 = b0;  // row 0's source state row
     {
-        const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = 128};
+        const auto sg = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 11), 128);
         noc_async_read(sg.get_noc_addr(0), scratch + 7 * ROW, 64);
         noc_async_read_barrier();
 #if defined(REC_CHAIN_GROUPS)
@@ -356,7 +357,8 @@ void kernel_main() {
 #endif
     uint32_t src0 = b0;  // row 0's source state row
     {
-        const InterleavedAddrGen<true> sg = {.bank_base_address = get_arg_val<uint32_t>(ph_rt0 + 11), .page_size = 128};
+        const auto sg = TensorAccessor(
+            tensor_accessor::make_interleaved_dspec</*is_dram=*/true>(), get_arg_val<uint32_t>(ph_rt0 + 11), 128);
         constexpr uint32_t SEL_OFF = 7 * 128 * 4;  // past the 7 fp32 scratch rows (as the v2 path's 7 * ROW)
         noc_async_read(sg.get_noc_addr(0), scratch + SEL_OFF, 64);
         noc_async_read_barrier();
