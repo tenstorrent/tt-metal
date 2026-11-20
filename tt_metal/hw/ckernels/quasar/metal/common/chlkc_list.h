@@ -32,10 +32,17 @@ using namespace ckernel;
 
 std::uint32_t run_kernel() {
 #ifdef UCK_CHLKC_MATH
-    ckernel::zeroacc();
+    if constexpr (!UnpackToDestEn) {
+        ckernel::zeroacc();
+    }
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
+    // With unpack-to-dest the unpack thread is DEST's first writer, so it clears DEST itself: ZEROACC acts at
+    // instruction issue (assembly.yaml), ahead of this thread's UNPACRs; issued from math it would race them.
+    if constexpr (UnpackToDestEn) {
+        ckernel::zeroacc();
+    }
     ckernel::zerosrc();
 #endif
 
