@@ -128,9 +128,11 @@ private:
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.
-// Lists record raw device addresses, not tensors. Replay reads and writes the addresses of the tensors passed to the
-// recorded ops whether or not those tensors are still allocated; what lives there is the caller's responsibility.
-// Tensors a recorded op allocated for itself are kept alive by the list until it is deallocated or destroyed.
+// Lists record raw device addresses, not tensors. Until it is deallocated or destroyed, the list keeps alive only the
+// tensors an op's program factory allocated and cached with its program. Replay reads and writes the addresses of
+// every other tensor the recorded ops used whether or not it is still allocated; what lives there is the caller's
+// responsibility. That includes intermediates an op frees while recording, such as the tensor between the two pads
+// ttnn::pad records for a height-sharded input padded in both width and height.
 class CommandList {
 public:
     CommandList(CommandList&&) noexcept = default;
