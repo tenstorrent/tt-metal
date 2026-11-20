@@ -397,6 +397,15 @@ A, B = "a" * 40, "b" * 40
 CLEAN = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 
+@pytest.fixture(autouse=True)
+def _ssh_ok(monkeypatch):
+    """main's ssh probe would reach for the fake hosts; tests that check it call _real_ssh_error."""
+    monkeypatch.setattr(gwdt_quad, "ssh_error", lambda hosts, **kw: None)
+
+
+_real_ssh_error = gwdt_quad.ssh_error
+
+
 def _fake_checkouts(monkeypatch, outs: dict[str, str | None]):
     """The checkout script on h prints outs[h]; None is a host where it fails. The local host is h0."""
     monkeypatch.setattr(gwdt_quad.socket, "gethostname", lambda: "h0")
@@ -441,7 +450,7 @@ def test_checkout_names_hosts_that_differ(monkeypatch):
         ["h0", A[:11], "none", "this host"],
         ["h1", A[:11], "a.py, b.py, c.py +1 more", "DIFFERS"],
         ["h2", B[:11], "none", "DIFFERS"],
-        ["h3", "-", "-", f"DIFFERS: no readable git checkout at {REPO}"],
+        ["h3", "-", "-", f"DIFFERS: cannot read {REPO}: exit status 128"],
     ]
 
 
@@ -683,3 +692,54 @@ def test_now_follows_a_running_fallback(tmp_path):
     assert now_text(step.state) == "fallback bring-up"
     Screen([step], ["hdr"], tmp_path / "status.json", {}).write_status()
     assert json.loads((tmp_path / "status.json").read_text())["now"] == "fallback bring-up"
+
+
+def _fake_ssh(monkeypatch, results: dict):
+    """ssh to h exits results[h] = (returncode, stderr); the local host is h0."""
+    monkeypatch.setattr(gwdt_quad.socket, "gethostname", lambda: "h0")
+
+    def run(argv, **kw):
+        rc, err = results[argv[-2]]
+        return gwdt_quad.subprocess.CompletedProcess(argv, rc, "", err)
+
+    monkeypatch.setattr(gwdt_quad.subprocess, "run", run)
+
+
+def test_ssh_error_names_hosts_and_ssh_reason(monkeypatch):
+    denied = (255, "Warning: Permanently added h2.\nPermission denied (publickey).\n")
+    _fake_ssh(monkeypatch, {"h1": (0, ""), "h2": denied, "h3": (1, "")})
+    assert _real_ssh_error(HOSTS) == (
+        "cannot ssh from here to h2 (ssh failed: Permission denied (publickey).), h3 (exit status 1)"
+    )
+    _fake_ssh(monkeypatch, dict.fromkeys(HOSTS, (0, "")))
+    assert _real_ssh_error(HOSTS) is None
+
+
+def test_checkout_row_says_why_a_host_could_not_be_read(monkeypatch):
+    monkeypatch.setattr(gwdt_quad.socket, "gethostname", lambda: "h0")
+
+    def run(argv, **kw):
+        if argv[0] == "bash":
+            return gwdt_quad.subprocess.CompletedProcess(argv, 0, _out(A), "")
+        return gwdt_quad.subprocess.CompletedProcess(argv, 255, "", "Permission denied (publickey).\n")
+
+    monkeypatch.setattr(gwdt_quad.subprocess, "run", run)
+    assert _cells(gwdt_quad.checkout_error(REPO, HOSTS))[2] == [
+        "h1",
+        "-",
+        "-",
+        f"DIFFERS: cannot read {REPO}: ssh failed: Permission denied (publickey).",
+    ]
+
+
+def test_quad_aborts_when_ssh_fails(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.delenv("SSH_AUTH_SOCK", raising=False)
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "ssh_error", lambda hosts: "cannot ssh from here to h1 (ssh failed: denied)")
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda *a, **k: pytest.fail("checkout check ran"))
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    out = capsys.readouterr().out
+    assert "cannot ssh from here to h1" in out and "SSH_AUTH_SOCK is not set" in out and "ssh -A" in out

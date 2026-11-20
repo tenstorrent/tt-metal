@@ -366,6 +366,30 @@ def _host_cmd(host: str, cmd: str) -> list[str]:
 
 
 SHARED_PROBE_TIMEOUT_S = 30
+SSH_FAILED = 255  # ssh's own exit status: it never ran the command
+
+
+def _why(p: subprocess.CompletedProcess) -> str:
+    """Why a host command failed: its last stderr line, marked as ssh's own when ssh never ran it."""
+    last = (p.stderr.strip().splitlines() or [f"exit status {p.returncode}"])[-1].strip()
+    return f"ssh failed: {last}" if p.returncode == SSH_FAILED and p.args[0] == "ssh" else last
+
+
+def ssh_error(hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S) -> str | None:
+    """None when this host can ssh to every other host without a prompt, else which hosts and why. tt-run starts
+    every stage over ssh, and the other probes need it too, so their own failures would only blame the wrong thing."""
+    failed = []
+    for h in hosts:
+        if _is_local(h):
+            continue
+        try:
+            p = subprocess.run(_host_cmd(h, "true"), capture_output=True, text=True, timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            failed.append(f"{_short(h)} (timed out after {timeout_s}s)")
+            continue
+        if p.returncode != 0:
+            failed.append(f"{_short(h)} ({_why(p)})")
+    return f"cannot ssh from here to {', '.join(failed)}" if failed else None
 
 
 def shared_dir_error(d: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S) -> str | None:
@@ -424,12 +448,15 @@ def parse_checkout(out: str) -> Checkout | None:
     return Checkout(lines[0], lines[1], tuple(sorted(set(filter(None, lines[2:])))))
 
 
-def _checkout(repo: Path, host: str, timeout_s: int) -> Checkout | None:
+def _checkout(repo: Path, host: str, timeout_s: int) -> Checkout | str:
+    """The host's checkout, or why it could not be read."""
     try:
         p = subprocess.run(_host_cmd(host, checkout_script(repo)), capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired:
-        return None
-    return parse_checkout(p.stdout) if p.returncode == 0 else None
+        return f"timed out after {timeout_s}s"
+    if p.returncode != 0:
+        return _why(p)
+    return parse_checkout(p.stdout) or f"unexpected checkout probe output {p.stdout.strip()[:60]!r}"
 
 
 def _changes(c: Checkout) -> str:
@@ -465,19 +492,19 @@ def checkout_error(
     stale or locally edited checkout fails as if a galaxy were bad. With dirty=False only the commits are compared."""
     here = socket.gethostname()
     local = _checkout(repo, here, timeout_s)
-    if local is None:
-        return f"cannot read the git checkout {repo} here"
+    if isinstance(local, str):
+        return f"cannot read the git checkout {repo} here: {local}"
     rows, differs = [], False
     for h in hosts if any(_is_local(h) for h in hosts) else [here, *hosts]:
         c = local if _is_local(h) else _checkout(repo, h, timeout_s)
         if _is_local(h):
             note = "this host"
-        elif c is None or c.head != local.head or (dirty and c.fingerprint != local.fingerprint):
+        elif isinstance(c, str) or c.head != local.head or (dirty and c.fingerprint != local.fingerprint):
             note, differs = "DIFFERS", True
         else:
             note = ""
-        if c is None:
-            rows.append([_short(h), "-", *(["-"] if dirty else []), f"{note}: no readable git checkout at {repo}"])
+        if isinstance(c, str):
+            rows.append([_short(h), "-", *(["-"] if dirty else []), f"{note}: cannot read {repo}: {c}"])
         else:
             rows.append([_short(h), c.head[:11], *([_changes(c)] if dirty else []), note])
     if not differs:

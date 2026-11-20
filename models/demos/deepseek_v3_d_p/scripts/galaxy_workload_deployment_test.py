@@ -288,6 +288,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.quad and not args.co and checkout_skip != gwdt_quad.CHECKOUT_FULL:
         skipped = "the checkout check" if checkout_skip == gwdt_quad.CHECKOUT_OFF else "the uncommitted-changes check"
         print(f"note: {gwdt_quad.SKIP_CHECKOUT_ENV}={checkout_skip}: skipping {skipped}")
+    if args.quad and not args.co and (err := gwdt_quad.ssh_error(hosts)):
+        agent = "" if os.environ.get("SSH_AUTH_SOCK") else " SSH_AUTH_SOCK is not set in this shell: no ssh agent."
+        print(
+            f"error: --quad needs passwordless ssh from this host to every other host (tt-run starts the stages over "
+            f"ssh); {err}.{agent}\nIf you logged in without agent forwarding, reconnect with ssh -A and rerun."
+        )
+        return 2
     if (
         args.quad
         and not args.co
