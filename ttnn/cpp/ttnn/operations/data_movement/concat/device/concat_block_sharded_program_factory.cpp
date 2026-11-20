@@ -588,7 +588,7 @@ ttnn::device_operation::ProgramArtifacts ConcatBlockShardedProgramFactory::creat
             arrays[7][k] = td.num_rows;
         }
         for (size_t a = 0; a < arrays.size(); a++) {
-            run_args.runtime_array_arg_values[COPY_ARRAYS[a]][core] = std::move(arrays[a]);
+            run_args.runtime_array_arg_values[COPY_ARRAYS[a]][core] = arrays[a];
         }
     };
 
