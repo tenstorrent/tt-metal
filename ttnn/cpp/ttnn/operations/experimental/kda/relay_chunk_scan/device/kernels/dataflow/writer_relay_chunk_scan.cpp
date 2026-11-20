@@ -33,8 +33,10 @@ constexpr uint32_t slab_scale = get_compile_time_arg_val(slab_ct + 2);
 constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
-// The output gate's operands (gate_matmul_dataflow.hpp), whose args follow the senders' in the common args.
-using Gate = kda_gate::Operands<slab_ct + 6>;
+// The output gate's operands (gate_matmul_dataflow.hpp), whose args follow the senders' in the common args, and whether
+// the heads of these cores move their W north on this kernel's NoC 1 (else x, see the reader).
+constexpr bool w_north = get_compile_time_arg_val(slab_ct + 6);
+using Gate = kda_gate::Operands<slab_ct + 7>;
 constexpr uint32_t state_tiles = kt * kt;
 
 // Every core of a head writes its chunk outputs, and every other core of a head first shares the output gate's W. The
@@ -53,10 +55,10 @@ void kernel_main() {
     const uint32_t back_sender_xy = get_common_arg_val<uint32_t>(3 + num_links + head % num_links);
     const uint32_t notify_semaphore = get_semaphore(head / num_links);
 
-    // The output gate's operand this kernel moves for the core's matmul: the head's W when it moves north on this
-    // NoC 1, else x of its chunks (in the group of the head batch's cores at this place).
+    // The output gate's operand this kernel moves for the core's matmul: the head's W, or x of its chunks (in the
+    // group of the head batch's cores at this place).
     if (!relay_head) {
-        if (Gate::w_north(head)) {
+        if constexpr (w_north) {
             Gate::move_w(head);
         } else {
             Gate::move_x(

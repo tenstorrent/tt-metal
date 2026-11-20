@@ -23,10 +23,10 @@ using Gate = kda_gate::Operands<5>;
 void kernel_main() {
     const uint32_t head = get_arg_val<uint32_t>(0);
     const uint32_t head_xy = get_arg_val<uint32_t>(1);
+    // The head core is below a helper whose head's W moves north, above one whose W moves south.
+    const bool north = get_arg_val<uint32_t>(2);
     const uint32_t x_group = head / Gate::heads * cores_per_head;
     const uint32_t first_row = head / Gate::heads * num_chunks;
-    // The head core is below a helper whose head's W moves north, above one whose W moves south.
-    const bool north = Gate::w_north(head);
     if constexpr (moves_x && moves_w) {
         // Each operand as far as its group lets it.
         auto x = Gate::x_share(x_group);

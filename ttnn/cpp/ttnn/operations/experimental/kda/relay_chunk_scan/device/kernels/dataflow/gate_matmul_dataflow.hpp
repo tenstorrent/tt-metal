@@ -81,6 +81,35 @@ public:
     // blocks have moved.
     template <typename Read>
     FORCE_INLINE bool step(uint32_t blocks, const Read& read) {
+        if (in_) {
+            take(blocks, read);
+            while (pushed_ < reserved_ && counted(valid_, pushed_ + 1)) {
+                cb_push_back(cb_, block_tiles_);
+                ++pushed_;
+            }
+        } else {
+            // Send what has landed, then read into the slots that frees: the sends never wait on later reads.
+            land();
+            // A block goes to compute once it has been sent: compute then never reuses a slot's storage (the CB's
+            // aliases) while a block is still being sent from it.
+            while (pushed_ < loaded_ && taken(pushed_ + 1)) {
+                send(slot(pushed_));
+                cb_push_back(cb_, block_tiles_);
+                ++pushed_;
+            }
+            take(blocks, read);
+            land();
+            if (pushed_ == blocks) {
+                noc_async_read_set_trid(0);
+            }
+        }
+        return pushed_ == blocks;
+    }
+
+    // Take every free slot: a leader reads its block into it (under the slot's read transaction id), a receiver tells
+    // its leader.
+    template <typename Read>
+    FORCE_INLINE void take(uint32_t blocks, const Read& read) {
         while (reserved_ < blocks && reserved_ - pushed_ < slots_ &&
                cb_pages_reservable_at_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_)) {
             cb_reserve_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_);
@@ -91,29 +120,18 @@ public:
                         reserved_ + 1);
                 }
             } else {
+                noc_async_read_set_trid(1 + reserved_ % slots_);
                 read(reserved_, slot(reserved_));
             }
             ++reserved_;
         }
-        if (in_) {
-            while (pushed_ < reserved_ && counted(valid_, pushed_ + 1)) {
-                cb_push_back(cb_, block_tiles_);
-                ++pushed_;
-            }
-        } else {
-            if (loaded_ < reserved_) {
-                noc_async_read_barrier();
-                loaded_ = reserved_;
-            }
-            // A block goes to compute once it has been sent: compute then never reuses a slot's storage (the CB's
-            // aliases) while a block is still being sent from it.
-            while (pushed_ < loaded_ && taken(pushed_ + 1)) {
-                send(slot(pushed_));
-                cb_push_back(cb_, block_tiles_);
-                ++pushed_;
-            }
+    }
+
+    // A leader's blocks whose reads have landed.
+    FORCE_INLINE void land() {
+        while (loaded_ < reserved_ && ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + loaded_ % slots_)) {
+            ++loaded_;
         }
-        return pushed_ == blocks;
     }
 
     // After the last of `blocks` blocks: retire the counts and take this call's off the counter.
@@ -218,8 +236,7 @@ private:
 // rows and columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0: none), W's
 // tile columns, the heads per batch, the x groups (W's follow, one per head), where the group table and the gate's
 // common args start, then the input's, the local input's and W's accessor args. Common args: the input, the local
-// input, W, the TP rank, x's and W's block counts, then a bit per head: whether its W moves north (on NoC 1, from the
-// head's last core, its helper above) rather than south (on NoC 0, from its second core, its helper below).
+// input, W, the TP rank, and x's and W's block counts.
 template <uint32_t ct>
 struct Operands {
     static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
@@ -243,10 +260,6 @@ struct Operands {
     // x of a correction core's chunks, or its head's W: whichever the other kernel leaves it.
     static void move_x(uint32_t group, uint32_t first_row) { x_share(group).all(blocks, x_read(first_row)); }
     static void move_w(uint32_t head) { w_share(head).all(blocks, w_read(head)); }
-
-    static bool w_north(uint32_t head) {
-        return (get_common_arg_val<uint32_t>(common + 6 + head / 32) >> head % 32) & 1;
-    }
 
     // x's tile rows [first_row, first_row + rows), in the x group `group`.
     static Share x_share(uint32_t group) {

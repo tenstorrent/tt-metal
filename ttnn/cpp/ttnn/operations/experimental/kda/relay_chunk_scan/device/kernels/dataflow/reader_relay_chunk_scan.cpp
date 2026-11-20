@@ -72,8 +72,11 @@ constexpr uint32_t cb_gate = get_compile_time_arg_val(norm_ct + 1);
 constexpr uint32_t cb_weight = get_compile_time_arg_val(norm_ct + 2);
 constexpr uint32_t heads = get_compile_time_arg_val(norm_ct + 3);
 constexpr auto weight_args = TensorAccessorArgs<norm_ct + 4>();
-// The output gate's operands (gate_matmul_dataflow.hpp).
-using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset()>;
+// The output gate's operands (gate_matmul_dataflow.hpp). Whether the heads of these cores move their W north, on the
+// writer's NoC 1 from their last core to a helper above (this kernel then moves x), or south, on this kernel's NoC 0
+// from their second core to a helper below (the writer then moves x).
+constexpr bool w_north = get_compile_time_arg_val(weight_args.next_compile_time_args_offset());
+using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset() + 1>;
 constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 
 // Every core of a head corrects its chunks of the head from the head's seeds; the head's first core is also the
@@ -200,9 +203,9 @@ void kernel_main() {
     cb_push_back(cb_ctl, 1);
 
     // The output gate's operand this kernel moves for the core's matmul: x of its chunks (in the group of the head
-    // batch's cores at this place) when the head's W moves north on the writer's NoC 1, else W, south on this NoC 0.
+    // batch's cores at this place), or the head's W.
     if (!relay_head) {
-        if (Gate::w_north(head)) {
+        if constexpr (w_north) {
             Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk);
         } else {
             Gate::move_w(head);
