@@ -201,5 +201,9 @@ def test_row_bcast_low_precision_inputs_fp32_output(device, in_dtype, op_name, a
 
     out = ttnn.to_torch(ttnn_op(a, b, dtype=ttnn.float32)).float()
     assert out.shape == ref.shape
-    # Inputs are read back as their exact values and the output is fp32, so add/sub/mul are exact up to fp32 rounding.
-    assert torch.allclose(out, ref, atol=1e-5, rtol=1e-5), f"max abs err {(out - ref).abs().max()}"
+    # The inputs are read back as their exact values and the output is fp32, so multiply and fp32 inputs are exact up to
+    # fp32 rounding. add/subtract of bf16/bf8/bf4 inputs run on the FPU, which keeps a 10-bit mantissa in the result
+    # (errors up to 2**-9 on ttsim for |x| < 8), so allow one such ulp there. The broken LLK path was off by whole units.
+    exact = op_name == "multiply" or in_dtype == ttnn.float32
+    atol = 1e-5 if exact else 2**-8
+    assert torch.allclose(out, ref, atol=atol, rtol=1e-5), f"max abs err {(out - ref).abs().max()}"
