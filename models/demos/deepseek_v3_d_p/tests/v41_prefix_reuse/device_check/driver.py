@@ -103,12 +103,23 @@ DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", "2541"))
 DECODER_BIT = 1 << 28
 
 
+# WS13: PREFIX_CHECK_HOST_IDS=1 also writes every pushed chunk into the host-ids ring, as tt-d-gen does with
+# TT_DGEN_PREFILL_HOST_IDS=1 (the runner's V41_PREFILL_HOST_IDS reads it: next-chunk Engram prefetch)
+HOST_IDS = None
+if os.environ.get("PREFIX_CHECK_HOST_IDS", "0") == "1":
+    from models.demos.common.prefill.runners.host_ids import HostIdsWriter, host_ids_path
+
+    HOST_IDS = HostIdsWriter(host_ids_path(os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")), CHUNK)
+
+
 def push(toks: list, start: int, end: int, last: bool, mark: bool = True) -> None:
     body = toks[start:end] + [1] * (CHUNK - (end - start))
     word = (MARKED | (LAST if last else 0)) if mark else 0
     if mark and DECODER_MARK and end > len(toks) - DECODER_CONE and end > start:
         word |= DECODER_BIT
     header = struct.pack("<3i", word, start, end)
+    if HOST_IDS is not None:
+        HOST_IDS.write(word, start, end, body)  # before the H2D push: the runner may look for it as soon as it arrives
     pp._push(service, PAYLOAD, pp._h2d_rows(body, start if end > start else 0), None, header)
 
 

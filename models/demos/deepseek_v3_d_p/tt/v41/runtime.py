@@ -21,6 +21,7 @@ import os
 import time
 from types import SimpleNamespace
 
+import numpy as np
 import torch
 from loguru import logger
 
@@ -45,6 +46,9 @@ RESTORE_SYNC = os.environ.get("V41_PREFILL_RESTORE_SYNC", "1") == "1"
 # (V41_PREFILL_DECODER=1's behaviour), so a misconfigured pair is slow, never inexact.
 DECODER_MARKED = DECODER and os.environ.get("V41_PREFILL_DECODER_MARKED", "0") == "1"
 IDS_COL0 = os.environ.get("V41_PREFILL_IDS_COL0", "0") == "1"  # prefill TTFT plan 1.4 (WS1): ids from TP column 0 only
+HOST_IDS = (
+    os.environ.get("V41_PREFILL_HOST_IDS", "0") == "1"
+)  # WS13: next-chunk Engram prefetch from the engine's host ids
 DECODER_CONE = int(os.environ.get("V41_PREFILL_DECODER_CONE", str(CONE)))
 
 
@@ -140,6 +144,19 @@ class V41PrefillRuntime:
         self._prefix = None
         # DS41F-0073 marked decoder chunks: (slot, burst end, decoder start) per marked burst's last chunk (tests read it)
         self.cone_checks: list = []
+        # V41_PREFILL_HOST_IDS (WS13): the engine's host-side copy of the chunks it pushed (tt-d-gen TT_DGEN_PREFILL_HOST_IDS=1)
+        # -> the next chunk's Engram rows are gathered while this chunk runs. The model still reads every value from the
+        # device; an early gather is used only when it equals the chunk's own (engram_prefetch.py). Off = as before.
+        self._hostids = self._eprefetch = None
+        self._hi = {"matched": 0, "unmatched": 0, "ids_differ": 0, "next_missing": 0}
+        if HOST_IDS:
+            from models.demos.common.prefill.runners.host_ids import HostIdsReader, host_ids_path
+
+            from .engram_prefetch import EngramPrefetch
+
+            self._hostids = HostIdsReader(host_ids_path(os.environ.get("PREFILL_H2D_SERVICE_ID", "ds_prefill")))
+            self._eprefetch = EngramPrefetch(self.engram, self.chunk_size)
+            logger.info(f"[v41 runtime] V41_PREFILL_HOST_IDS: next-chunk Engram prefetch from {self._hostids.path}")
 
     # ---- KV export ----------------------------------------------------------------------------------------------------
     def allocate_kv_cache(self):
@@ -234,6 +251,56 @@ class V41PrefillRuntime:
             logger.info(f"[v41 runtime] V41_PREFILL_IDS_COL0: ids read from {sp} of {sp * tp} chips (== composed read)")
         return ids
 
+    def _host_ids_match(self, word: int, start: int, end: int, dev_ids) -> int | None:
+        """WS13: the engine's host-side entry for the chunk just read from the device (None: off / not found). Counts, never
+        trusts: an entry whose ids differ from the device's is logged (the prefetch check rejects its rows anyway)."""
+        if self._hostids is None:
+            return None
+        s = self._hostids.match(int(word), int(start), int(end))
+        if s is None:
+            self._hi["unmatched"] += 1
+            return None
+        self._hi["matched"] += 1
+        e = self._hostids.entry(s)
+        n = len(dev_ids)
+        if (
+            e is None
+            or len(e[3]) < n
+            or not np.array_equal(e[3][:n].astype(np.int64), np.asarray(dev_ids, dtype=np.int64))
+        ):
+            self._hi["ids_differ"] += 1
+            if self._hi["ids_differ"] <= 3:
+                logger.warning(
+                    f"[v41 runtime] V41_PREFILL_HOST_IDS: host ids of chunk [{start}, {end}) differ from the device's"
+                )
+        return s
+
+    def _prefetch_next(self, cur) -> None:
+        """WS13: start gathering the Engram rows of the chunk the engine pushed after chunk number ``cur``."""
+        if cur is None or self._eprefetch is None:
+            return
+        e = self._hostids.entry(int(cur) + 1)
+        if e is None:
+            self._hi["next_missing"] += 1
+            return
+        w2, s2, e2, ids2 = e
+        slot2, _ = split_slot_word(int(w2))
+        real2 = int(e2) - int(s2)
+        if not (0 <= slot2 < self.num_users and 0 < real2 <= self.chunk_size and len(ids2) >= real2):
+            return
+        self._eprefetch.prefetch(int(slot2), ids2[:real2].tolist(), int(s2))
+
+    def _prefetch_note(self, before: dict) -> str:
+        st = self._eprefetch.stats
+        n = sum(self._hi.values())
+        if n and n % 64 == 0:
+            logger.info(f"[v41 runtime] {self._eprefetch.summary()}; host ids {self._hi}")
+        if st["hits"] > before["hits"]:
+            return " (engram prefetch hit)"
+        if st["misses"] > before["misses"]:
+            return " (engram prefetch miss)"
+        return ""
+
     def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kwargs):
         """Main's runner hands each chunk's metadata tensor to the runtime; this single untraced rank never forwards it, so it
         frees it after the chunk (as the reference runtimes do; the pre-merge runner leaked it as record_dev)."""
@@ -269,6 +336,8 @@ class V41PrefillRuntime:
         ids = input_tensor if isinstance(input_tensor, list) else self._token_ids_from_device(input_tensor)
         real = int(actual_end) - int(actual_start)
         assert 0 < real <= self.chunk_size and len(ids) >= real
+        hcur = None if warmup else self._host_ids_match(word, int(actual_start), int(actual_end), ids[:real])
+        pf0 = dict(self._eprefetch.stats) if self._eprefetch is not None else None
         if not warmup and int(actual_start) == 0:
             self._reused[int(slot_id)] = 0
         if not warmup and os.environ.get("V41_PREFILL_ISLANDS", "0") == "1" and not self.pf.islands:
@@ -291,6 +360,7 @@ class V41PrefillRuntime:
                     int(slot_id), int(actual_start), int(actual_end), int(request_id), t_skip, reuse.last_restored
                 )
                 reuse.after_acks(int(slot_id), last)  # H2: a burst's last chunk -> the tips of the prompts it left
+                self._prefetch_next(hcur)  # WS13: this chunk's history is in (restored); the next one may be computed
                 return None
             if getattr(reuse, "last_silent", 0):
                 # the resume recomputed chunks counted as reused above: they were computed after all
@@ -314,14 +384,20 @@ class V41PrefillRuntime:
                 f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id}: host embedding (the resume replayed the "
                 f"islands while this chunk's H2D ids tensor waited unread)"
             )
+        eng = self.engram
+        if self._eprefetch is not None and not warmup:
+            # WS13: the islands path's rows_async takes a matching early gather; the hook starts the NEXT chunk's
+            eng = self._eprefetch
+            self.pf._after_engram_hook = (lambda: self._prefetch_next(hcur)) if hcur is not None else None
         try:
-            self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), self.engram, None, decoder=decoder)
+            self.pf._chunk([int(v) for v in ids[:real]], int(actual_start), eng, None, decoder=decoder)
         except BaseException:
             if reuse is not None:
                 reuse.invalidate(int(slot_id), "a chunk failed")
             raise
         finally:
             self.pf._ids_dev = None
+            self.pf._after_engram_hook = None
         t1 = time.time()
         export_chunk(kv_caches, self.pf, slot_id, int(actual_start), int(actual_end), decoder=decoder)
         if DECODER_MARKED and last and not warmup:
@@ -366,6 +442,7 @@ class V41PrefillRuntime:
             f"[v41 runtime] chunk [{actual_start}, {actual_end}) slot {slot_id} in {t4 - t0:.2f} s "
             f"(compute issue {t1 - t0:.2f} + export issue {t2 - t1:.2f} + sync {t3 - t2:.2f} + acks {t4 - t3:.2f})"
             + (f" (incl. host-store read {t_store:.3f})" if t_store else "")
+            + (self._prefetch_note(pf0) if pf0 is not None and not warmup else "")
             + (" (warm-up)" if warmup else "")
             + ({True: " (decoder)", False: " (encoder + layer 20 KV-only)"}.get(decoder, "") if DECODER_MARKED else "")
         )

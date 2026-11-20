@@ -919,6 +919,7 @@ class V41Prefill:
             ttnn.deallocate(h)
             mark("kv_only")
         self.kv_actual += real_len
+        self._run_after_engram_hook()
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot}")
 
@@ -1012,6 +1013,7 @@ class V41Prefill:
                 mark("engram.dev")
                 if HP.ON:
                     HP.mark("engram.forward")
+                self._run_after_engram_hook()
             if kv_only20 and L >= self.cfg.first_decoder_layer:
                 if HP.ON:
                     HP.mark("other")
@@ -1033,6 +1035,7 @@ class V41Prefill:
             ttnn.deallocate(h)
             mark("kv_only")
         self.kv_actual += real_len
+        self._run_after_engram_hook()  # a chunk whose Engram layers ran inside a super segment (or none)
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot} (islands)")
         if HP.ON:
@@ -1040,6 +1043,18 @@ class V41Prefill:
             logger.info(
                 f"[v41 hostprof] chunk [{start}, {start + real_len}) slot {self.slot} kv20={int(kv_only20)} {HP.report()}"
             )
+
+    def _run_after_engram_hook(self) -> None:
+        """V41_PREFILL_HOST_IDS (WS13): the runtime's once-per-chunk callback, run right after the first Engram layer is
+        issued -- this chunk's own Engram hash is done (it advances the slot's n-gram history) and the device has the rest
+        of the chunk queued, so host work here hides under device time."""
+        hook = getattr(self, "_after_engram_hook", None)
+        if hook is None:
+            return
+        self._after_engram_hook = None
+        hook()
+        if HP.ON:
+            HP.mark("engram.prefetch")
 
     # ---- export ---------------------------------------------------------------------------------------------------
     def _window(self, state) -> torch.Tensor:
