@@ -34,10 +34,8 @@ public:
     };
 
     // `shards` on disjoint cores of each device. `mesh_device` is the MeshDevice the devices belong to, for addressing
-    // by MeshCoordinate. `lockstep_address`: on each device, every shard is at one address and one size, checked when
-    // allocated.
-    KernelConfigBufferImpl(
-        std::vector<Shards> shards, bool lockstep_address, const distributed::MeshDevice* mesh_device);
+    // by MeshCoordinate.
+    KernelConfigBufferImpl(std::vector<Shards> shards, const distributed::MeshDevice* mesh_device);
 
     // The largest shard on any device.
     uint32_t max_size() const { return max_size_; }
@@ -51,13 +49,8 @@ public:
 
     // The shards on `core` of `device_id`, or null.
     const Shards* find(ChipId device_id, const CoreCoord& core) const;
-    // Whether the buffer has shards on `device_id`, a device local to this host.
-    bool has_shard_on(ChipId device_id) const { return shard_map_.contains(device_id); }
     bool is_allocated() const;
     void deallocate();
-    // Whether, on each device, every shard is at one address. Only such a buffer runs a program with Tensix program
-    // semaphores: a kernel signals a peer's semaphore at its own semaphore's address.
-    bool lockstep_address() const { return lockstep_address_; }
 
 private:
     ChipId device_id(const distributed::MeshCoordinate& device_coord) const;
@@ -68,7 +61,6 @@ private:
     std::unordered_map<ChipId, std::unordered_map<CoreCoord, size_t>> shard_map_;
     const distributed::MeshDevice* mesh_device_ = nullptr;
     uint32_t max_size_ = 0;
-    bool lockstep_address_ = false;
 };
 
 }  // namespace experimental

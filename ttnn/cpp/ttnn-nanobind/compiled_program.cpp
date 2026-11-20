@@ -17,8 +17,8 @@ namespace ttnn::compiled_program {
 namespace {
 
 tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
-    ttnn::device_operation::CompiledProgram& compiled, bool lockstep_address) {
-    return ttnn::device_operation::create_kernel_config_buffer(compiled, lockstep_address);
+    ttnn::device_operation::CompiledProgram& compiled) {
+    return ttnn::device_operation::create_kernel_config_buffer(compiled);
 }
 
 }  // namespace
@@ -57,19 +57,16 @@ void py_module(nb::module_& mod) {
         garbage collected.
 
         Needs slow dispatch and the device opened with ``TT_METAL_ALLOCATOR_MODE_HYBRID=1``. Rejects programs with
-        Tensix program semaphores unless ``lockstep_address``.
+        Tensix program semaphores.
 
         Args:
             compiled_program (ttnn.experimental.CompiledProgram): The program to size the buffer for.
-            lockstep_address (bool, optional): Put every core's shard at one address, sized for the largest block,
-                so the program may use Tensix program semaphores. Needs the cores' free L1 to start at the same
-                address. Default: False.
 
         Returns:
             KernelConfigBuffer: The buffer.
         )doc";
     ttnn::bind_function<"create_kernel_config_buffer", "ttnn.experimental.">(
-        mod, doc, &create_kernel_config_buffer, nb::arg("compiled_program"), nb::arg("lockstep_address") = false);
+        mod, doc, &create_kernel_config_buffer, nb::arg("compiled_program"));
 }
 
 }  // namespace ttnn::compiled_program
