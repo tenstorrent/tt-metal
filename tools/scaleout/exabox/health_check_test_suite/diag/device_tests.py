@@ -96,8 +96,9 @@ PYTESTS = {
     # the TP line of 4 and the SP line of 8. The traffic is the fabric under
     # compute load, which the gtest link tests (slow dispatch, idle compute) do
     # not give. Only the plain 2D mesh fabric cases run: they need no wrap-around
-    # cables, so a healthy galaxy passes whatever its cabling (a torus case fails
-    # fabric init on a box without the torus cables).
+    # cables (a torus case fails fabric init on a box without the torus cables).
+    # As for didt_matmul_galaxy, torus-cabled units need TT_MESH_GRAPH_DESC_PATH
+    # set to the matching descriptor (HEALTH_CHECK.md).
     "fabric_all_gather_matmul_galaxy": {
         "target": "tests/ttnn/unit_tests/operations/ccl/blackhole_CI/galaxy/galaxy_nightly/"
         "test_all_gather_minimal_matmul_fabric2d_bh.py",

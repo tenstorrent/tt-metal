@@ -176,7 +176,7 @@ _TRACE_LINE_RE = re.compile(r"^(\d+\.\s|Location:)")
 
 def _short_error(e: Exception, lines: int = 2) -> str:
     """An error's first message lines on one line, without colour codes or the stack trace under them."""
-    text = [ln.strip() for ln in _ANSI_RE.sub("", str(e)).splitlines()]
+    text = [" ".join(ln.split()) for ln in _ANSI_RE.sub("", str(e)).splitlines()]
     return "; ".join([ln for ln in text if ln and not _TRACE_LINE_RE.match(ln)][:lines])
 
 
