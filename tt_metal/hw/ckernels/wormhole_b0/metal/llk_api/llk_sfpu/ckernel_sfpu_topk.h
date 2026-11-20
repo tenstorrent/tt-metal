@@ -1290,16 +1290,20 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
     // compare-exchange / store8 at immediates 0, ld_dist, 128, 128 + ld_dist, plus INCRWC
     // Dst += 4. SFPLOAD/SFPSTORE address Imm10 + RWC.Dst, so walking RWC.Dst by the group
     // stride reaches the same rows the per-group dst_offset used to be folded into every
-    // TT_ encoding on the RISC-V. Record the body once (slots 0..merge_body-1, Exec so the
-    // first group runs while recording) and issue one REPLAY per group; the RISC is left with
-    // the face skip inside a run (+16 rows, two INCRWC) and the run-to-run re-base (the same
-    // SETC16 + SETRWC pair the quadrant step uses). The rank-stamped arm splits the body at
-    // the loads so its per-run rank iota can sit between the index loads and the stamp.
+    // TT_ encoding on the RISC-V. Record the body once (Exec so the first group runs while
+    // recording) and issue one REPLAY per group; the RISC is left with the face skip inside a
+    // run (+16 rows, two INCRWC) and the run-to-run re-base (the same SETC16 + SETRWC pair the
+    // quadrant step uses). The 23-instruction rank-stamped body does not fit the SFPU replay
+    // slots, so it replays two windows (load8 + left-run stamp; rank advance + swap + store8)
+    // around an inline right-run stamp.
     constexpr int merge_ldst = FUSED ? 2 : 4;
-    constexpr int merge_cmp = (RANK_STAMPED ? 13 : 0) + (STABLE_SORT ? 6 : 1);
-    constexpr int merge_body = 2 * merge_ldst + merge_cmp + 1;
-    constexpr int merge_ld_win = RANK_STAMPED ? merge_ldst : merge_body;
-    static_assert(merge_body <= 32, "merge replay body exceeds the replay buffer");
+    constexpr int merge_left_stamp = RANK_STAMPED ? 5 : 0;
+    constexpr int merge_cmp = RANK_STAMPED ? 2 : (STABLE_SORT ? 6 : 1);
+    constexpr int merge_head = merge_ldst + merge_left_stamp;  // slots [0, merge_head)
+    constexpr int merge_body = merge_head + merge_cmp + merge_ldst + 1;
+    static_assert(
+        merge_body <= static_cast<int>(ckernel::math::replay_buf_offset),
+        "merge replay windows must stay in the SFPU half of the replay buffer");
     bool record_body = true;
 
     std::uint32_t dst_addr_offset = 0;
@@ -1320,53 +1324,57 @@ inline void _bitonic_topk_merge(const int m_iter, const int k) {
 
             while (datums_compared < total_datums_to_compare) {
                 for (std::uint32_t ii = 0; ii < inner_d; ii++) {
-                    if (record_body) {
-                        lltt::record<lltt::Exec>(0, merge_ld_win);
-                        bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
-                    } else {
-                        lltt::replay(0, merge_ld_win);
-                    }
+                    // Rank-stamped: re-key both runs' value lo16 with fresh sign-conditioned
+                    // local ranks so this merge AND the rebuild that follows it compare
+                    // distinct keys whose tie order is the true index order. The true
+                    // indices are live in LREG4/5 from load8: from there to the swap,
+                    // ALU-only writes to LREG0..3 (TEN-2932).
+                    // largest = !top_min: complement the lanes whose sign matches the
+                    // kept extreme, exactly as the fused-key conditioning does.
+                    [[maybe_unused]] constexpr int stamp_cc =
+                        top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
                     if constexpr (RANK_STAMPED) {
-                        // Re-key both runs' value lo16 with fresh sign-conditioned local
-                        // ranks so this merge AND the rebuild that follows it compare
-                        // distinct keys whose tie order is the true index order. The
-                        // true indices are live in LREG4/5 from the load above: from
-                        // here to the swap, ALU-only writes to LREG0..3 (TEN-2932).
                         if (ii == 0) {
                             // Fresh per-pair rank iota: rank = 4*ii + (j>>3) (each load
                             // covers 4 consecutive run positions per lane group;
                             // LTILEID = 2*j). Left-run base is 0 for every in-tree
-                            // caller -- one merge call per tile pair.
+                            // caller -- one merge call per tile pair. load8 leaves LREG2 intact.
                             TTI_SFPMOV(0, p_sfpu::LTILEID, p_sfpu::LREG2, 0);
                             TTI_SFPSHFT((-4) & 0xFFF, 0, p_sfpu::LREG2, 1);
                         }
-                        if (record_body) {
-                            lltt::record<lltt::Exec>(merge_ldst, merge_body - merge_ldst);
-                        } else {
-                            lltt::replay(merge_ldst, merge_body - merge_ldst);
-                        }
                     }
                     if (record_body) {
+                        lltt::record<lltt::Exec>(0, RANK_STAMPED ? merge_head : merge_body);
+                        bitonic_topk_load8<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(0, ld_dist);
                         if constexpr (RANK_STAMPED) {
-                            // largest = !top_min: complement the lanes whose sign matches the
-                            // kept extreme, exactly as the fused-key conditioning does.
-                            constexpr int stamp_cc =
-                                top_min ? sfpi::SFPSETCC_MOD1_LREG_LT0 : sfpi::SFPSETCC_MOD1_LREG_GTE0;
                             // Left run: global direction, lower rank range.
                             TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG0, 0);
                             TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
                             TTI_SFPSETCC(0, p_sfpu::LREG0, 0, stamp_cc);
                             TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG0, 0);
                             TOPK_SFPENCC_ALL_LANES_ON();
-                            // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
-                            // a single XOR because 2K is a power of two and rank < 2K.
-                            TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
-                            TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
-                            TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
-                            TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
-                            TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
-                            TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
-                            TOPK_SFPENCC_ALL_LANES_ON();
+                        }
+                    } else {
+                        lltt::replay(0, RANK_STAMPED ? merge_head : merge_body);
+                    }
+                    if constexpr (RANK_STAMPED) {
+                        // Right run: mirror direction, upper range -- rank' = (2K-1) - rank,
+                        // a single XOR because 2K is a power of two and rank < 2K.
+                        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+                        TTI_SFPXOR(0, p_sfpu::LREG13, p_sfpu::LREG3, 0);
+                        TTI_SFPAND(0, p_sfpu::LREG14, p_sfpu::LREG1, 0);
+                        TTI_SFPOR(0, p_sfpu::LREG3, p_sfpu::LREG1, 0);
+                        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, stamp_cc);
+                        TTI_SFPXOR(0, p_sfpu::LREG12, p_sfpu::LREG1, 0);
+                        TOPK_SFPENCC_ALL_LANES_ON();
+                        if (record_body) {
+                            lltt::record<lltt::Exec>(merge_head, merge_body - merge_head);
+                        } else {
+                            lltt::replay(merge_head, merge_body - merge_head);
+                        }
+                    }
+                    if (record_body) {
+                        if constexpr (RANK_STAMPED) {
                             // Advance to the next 4 run positions.
                             TTI_SFPIADD(
                                 4,
