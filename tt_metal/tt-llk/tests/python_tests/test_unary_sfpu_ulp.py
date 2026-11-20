@@ -29,8 +29,8 @@ from helpers.ulp_table import MEASURED_ARCH, Metric
 from helpers.utils import _record_ulp_measurement, passed_test
 from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
-# `accuracy` is the marker the general LLK workflows deselect; only the `llk-sfpu-ulp-*`
-# workflows run it. Every unkeyed budget is a measurement on the table's own
+# `accuracy` is the marker the general LLK legs deselect; only the `llk_sfpu_ulp_*` legs
+# run it, by file. Every unkeyed budget is a measurement on the table's own
 # architecture and binds nowhere else, so on a chip with no table of its own (Quasar)
 # nothing here can fail.
 pytestmark = [

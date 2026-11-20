@@ -192,6 +192,8 @@ jobs:
         env:
           PYTEST_MARKERS: ${{ inputs.pytest-markers }}
           PYTEST_ADDOPTS: --store-durations --clean-durations
+          # run_sfpu_ulp_pr_check.sh reads the PR's labels (ulp-budget-raise-approved).
+          GH_TOKEN: ${{ github.token }}
         run: |
           ${{ matrix.test-group.cmd }}
 
