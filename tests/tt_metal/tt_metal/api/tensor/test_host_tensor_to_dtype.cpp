@@ -33,15 +33,8 @@ namespace tt::tt_metal {
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-// Deterministic ramp for test data
-template <typename T>
-std::vector<T> make_ramp(size_t count) {
-    std::vector<T> data(count);
-    for (size_t i = 0; i < count; ++i) {
-        data[i] = static_cast<T>(static_cast<float>(i % 251));
-    }
-    return data;
-}
+// Deterministic ramp for test data (shared; well defined for every element type, including int8_t)
+using ::test_utils::make_ramp;
 
 std::vector<float> make_bfp_data(const Shape& shape, const Tile& tile) {
     // Boundary-sensitive to faces: cycles face indices and steps magnitudes for BFP checks.

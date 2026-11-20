@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <random>
 #include <tt-metalium/core_coord.hpp>
@@ -593,16 +594,26 @@ namespace DeviceDataUpdater {
 // Update DeviceData for linear write
 // Mirrors a dispatcher linear-write transaction into the DeviceData expectation model
 // Takes provided payload and pushes exactly those values into destination worker_range
+// If xfer_size_bytes is given, only the full 32-bit words covered by it are recorded (the payload may be rounded up to
+// a whole number of words, see DispatchPayloadGenerator::generate_payload, so it can have a trailing partial word
+// that the write only partly covers; that word is not modeled as valid)
 inline void update_linear_write(
-    const std::vector<uint32_t>& payload, DeviceData& device_data, const CoreRange& worker_range, bool is_mcast) {
+    const std::vector<uint32_t>& payload,
+    DeviceData& device_data,
+    const CoreRange& worker_range,
+    bool is_mcast,
+    std::optional<uint32_t> xfer_size_bytes = std::nullopt) {
+    const size_t num_words = xfer_size_bytes.has_value()
+                                 ? std::min<size_t>(payload.size(), *xfer_size_bytes / sizeof(uint32_t))
+                                 : payload.size();
     // Update expected device_data
     if (is_mcast) {
-        for (const uint32_t datum : payload) {
-            device_data.push_range(worker_range, datum, true);
+        for (size_t i = 0; i < num_words; ++i) {
+            device_data.push_range(worker_range, payload[i], true);
         }
     } else {
-        for (const uint32_t datum : payload) {
-            device_data.push_one(worker_range.start_coord, 0, datum);
+        for (size_t i = 0; i < num_words; ++i) {
+            device_data.push_one(worker_range.start_coord, 0, payload[i]);
         }
     }
     // Relevel for next multicast command
@@ -814,10 +825,12 @@ public:
 
     // Generates either deterministic (coherent) or random 32-bit words
     // for the requested byte count
+    // The byte count is rounded up to a whole number of words, so that payload.data() always backs at least
+    // xfer_size_bytes bytes even when it is not a multiple of 4
     // In coherent mode, the counter is incremented so validation knows
     // the exact pattern
     std::vector<uint32_t> generate_payload(uint32_t xfer_size_bytes) {
-        const uint32_t size_words = xfer_size_bytes / sizeof(uint32_t);
+        const uint32_t size_words = (xfer_size_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
         std::vector<uint32_t> payload;
         payload.reserve(size_words);
 
@@ -850,7 +863,8 @@ public:
     std::vector<uint32_t> generate_payload_with_core(
         const CoreCoord& core_id,  // Pass the core to use
         uint32_t xfer_size_bytes) {
-        const uint32_t size_words = xfer_size_bytes / sizeof(uint32_t);
+        // Rounded up to a whole number of words (see generate_payload)
+        const uint32_t size_words = (xfer_size_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
         std::vector<uint32_t> payload;
         payload.reserve(size_words);
 
