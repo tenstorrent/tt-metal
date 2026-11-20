@@ -226,6 +226,11 @@ case "${MODEL}" in
       DFLASH_PCC_THRESHOLD="${PREFILL_DFLASH_PCC:-0.85}"
       PRODUCER_ENV="export PREFILL_DFLASH_PCC=${DFLASH_PCC_THRESHOLD};"
       TABLE_WAIT_DEFAULT=7200
+    elif [ "${VARIANT}" = _packed ]; then
+      # Two 2,560-token chunks per forward (kimi_k3_packed.json), traced with D2H acks; one slot fewer than
+      # kimi_k3.json, for the traced packed forward's scratch slot. Same golden and PCC gate: packing moves the MoE
+      # output by rounding only.
+      MANIFEST="${MANIFEST_DIR}/kimi_k3_packed.json"
     fi
     # 8x4 slots as #63502 measured them: 100, 34 with the drafter.
     kimi_layout "${PREFILL_TTNN_CACHE:-/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill}" \
