@@ -145,7 +145,9 @@ def build_v41_moe(
         gate_fallback_mode=GateComputeMode.DEVICE_FP32,
         weight_cache_path=weight_cache_path,
         layer_idx=layer,
-        overlap_shared_expert_with_dispatch=True,
+        # tt-blaze DS41F-0169 diagnostic: V41_PREFILL_MOE_NO_OVERLAP=1 runs the shared expert and dispatch sequentially (no
+        # sub-devices; the shared expert's reduce-scatter then keeps the column topology, so not bit-identical to the default)
+        overlap_shared_expert_with_dispatch=os.environ.get("V41_PREFILL_MOE_NO_OVERLAP", "0") != "1",
         routing_use_l1_small_for_semaphores=True,
         rms_norm_eps=cfg.norm_eps,
         score_func=cfg.score_func,
