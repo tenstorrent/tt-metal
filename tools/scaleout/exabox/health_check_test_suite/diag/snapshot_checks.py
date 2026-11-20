@@ -24,6 +24,7 @@ from .galaxy import (
     parse_bdf_physical,
 )
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
+from .naming import chip
 
 # GDDR train+BIST bitmask layout — tt-system-firmware telemetry.h:103-118.
 # Exposed by tt-smi -s as smbus_telem.DDR_STATUS (legacy WH name; on BH this is
@@ -79,9 +80,93 @@ def pcie_enum_check(devs: list[dict], name: str = "pcie_enum_count") -> Check:
             "actual": n,
             "expected": EXPECTED_CHIP_COUNT,
             "missing_bdfs": missing_bdfs_enum,
+            "missing": [chip(b) for b in missing_bdfs_enum],
             "actual_bdfs": actual_bdfs,
         },
         ip="pcie",
+    )
+
+
+# Plausible range of each tt-smi telemetry reading; anything else (the 65535 and
+# 0xFFFF sentinels, 0, negative, text) is garbage and is never judged.
+PLAUSIBLE = {
+    "asic_temperature": (1.0, 150.0),
+    "power": (1.0, 1000.0),
+    "current": (1.0, 2000.0),
+    "voltage": (0.3, 1.5),
+}
+# C8 WARN thresholds, as tray-test's: max temperature, power, current and min vcore.
+C8_TEMP_C, C8_POWER_W, C8_CURRENT_A, C8_VCORE_V = 75.0, 320.0, 400.0, 0.66
+
+
+def _reading(d: dict, key: str) -> float | None:
+    """The chip's telemetry value for ``key``, or None when missing or implausible."""
+    try:
+        v = float(d.get("telemetry", {}).get(key))
+    except (TypeError, ValueError):
+        return None
+    lo, hi = PLAUSIBLE[key]
+    return v if lo <= v <= hi else None
+
+
+def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
+    """``asic_thermal_precheck`` (FAIL at a chip's thermal limit, WARN within 20 C of it) and ``c8_telemetry`` (WARN)."""
+    rows, ignored = [], []
+    for d in devs:
+        c = chip(d["board_info"]["bus_id"])
+        row = {**c, **{k: _reading(d, k) for k in PLAUSIBLE}}
+        try:
+            row["thm_limit"] = float(d.get("limits", {}).get("thm_limit"))
+        except (TypeError, ValueError):
+            row["thm_limit"] = 110.0
+        rows.append(row)
+        ignored += [{**c, "reading": k} for k in PLAUSIBLE if row[k] is None]
+    hot = [r for r in rows if r["asic_temperature"] is not None]
+    over = [r for r in hot if r["asic_temperature"] >= r["thm_limit"]]
+    warm = [r for r in hot if r["asic_temperature"] >= r["thm_limit"] - 20 and r not in over]
+    top = max(hot, key=lambda r: r["asic_temperature"], default=None)
+    phase.add(
+        Check(
+            name="asic_thermal_precheck",
+            status=FAIL if over else WARN if warm else PASS,
+            details=(
+                "".join(
+                    f"{r['bdf']} (tray {r['tray']} ASIC {r['asic']}) {r['asic_temperature']:.1f}C at limit {r['thm_limit']:.0f}C; "
+                    for r in over + warm
+                )
+                or (f"hottest {top['bdf']} {top['asic_temperature']:.1f}C" if top else "no plausible temperature reading")
+            ).rstrip("; ")
+            + (f"; {len(ignored)} implausible readings ignored" if ignored else ""),
+            data={
+                "hottest_chip": top["bdf"] if top else None,
+                "hottest_temp_c": top["asic_temperature"] if top else None,
+                "over": [r["bdf"] for r in over],
+                "per_chip": rows,
+                "ignored": ignored,
+            },
+            ip="thermal",
+            console_visible=bool(over or warm),
+        )
+    )
+    flagged = [
+        {**{k: r[k] for k in ("bdf", "tray", "asic")}, "why": why}
+        for r in rows
+        for why in (
+            *(["temperature"] if (r["asic_temperature"] or 0) >= C8_TEMP_C else []),
+            *(["power"] if (r["power"] or 0) >= C8_POWER_W else []),
+            *(["current"] if (r["current"] or 0) >= C8_CURRENT_A else []),
+            *(["vcore"] if r["voltage"] is not None and r["voltage"] < C8_VCORE_V else []),
+        )
+    ]
+    phase.add(
+        Check(
+            name="c8_telemetry",
+            status=WARN if flagged else PASS,
+            details="; ".join(f"{f['bdf']} (tray {f['tray']} ASIC {f['asic']}) {f['why']}" for f in flagged)
+            or f"temperature, power, current and vcore in range on {len(rows)} chips",
+            data={"flagged": flagged, "ignored": ignored},
+            ip="asic",
+        )
     )
 
 
@@ -721,34 +806,8 @@ def validate_snapshot(snap: dict, phase: Phase) -> str | None:
             )
         )
 
-    # 14. ASIC thermal pre-check — kept in JSON only.
-    temps = []
-    for d in devs:
-        t = d.get("telemetry", {}).get("asic_temperature")
-        if t is not None:
-            try:
-                temps.append((d["board_info"]["bus_id"], float(t)))
-            except (ValueError, TypeError):
-                pass
-    if temps:
-        hottest_bdf, hottest_t = max(temps, key=lambda x: x[1])
-        thm_limit = float(devs[0].get("limits", {}).get("thm_limit", 110))
-        threshold = thm_limit - 20  # idle should be well below throttle
-        status = PASS if hottest_t < threshold else WARN
-        phase.add(
-            Check(
-                name="asic_thermal_precheck",
-                status=status,
-                details=f"hottest chip {hottest_bdf} @ {hottest_t:.1f}°C (limit {thm_limit}°C)",
-                data={
-                    "hottest_chip": hottest_bdf,
-                    "hottest_temp_c": hottest_t,
-                    "thm_limit_c": thm_limit,
-                    "all_temps_c": dict(temps),
-                },
-                ip="thermal",
-                console_visible=False,
-            )
-        )
+    # 14. Thermal pre-fault and C8 telemetry, from tt-smi's own telemetry block (no device open).
+    # A reading that is not a plausible number is listed under "ignored" and never judged.
+    _thermal_and_telemetry(devs, phase)
 
     return rev

@@ -22,6 +22,9 @@
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
 #   full            weekly + sys-triage bundle, if the host has the package and BMC credentials:
 #                   everything, for the logs on a DIIM ticket
+#   galaxy          the unit's health for a caller that runs its own load: snapshot validate
+#                   (chips by BDF, tray and ASIC, thermal, telemetry) + one -glx_reset (never -r)
+#                   + host_side triage with the AER before/after diff. No tests
 #   pre_bmc_reboot  data collection before a BMC reboot, no resets: snapshot
 #                   + triage (host_side + device_side)
 #                   + QSFP tests (ETH link, cabling and module state), if the host has the package
@@ -39,7 +42,7 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
+Usage: $0 {flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
 
 Tiers:
   flash           Quick ETH link health, the unit read as found: snapshot validate + two
@@ -50,6 +53,8 @@ Tiers:
                   + didt matmul stress + fabric all-gather under matmul (pytest)
                   + HSC and chip recount around the tests + post-test reset + triage + QSFP tests
   full            weekly + sys-triage: everything, for the logs on a DIIM ticket
+  galaxy          Snapshot validate + one -glx_reset (never -r) + host_side triage with the AER
+                  before/after diff. No tests; pass --skip-reset to read the unit as found.
   pre_bmc_reboot  Data collection before a BMC reboot: snapshot + triage + QSFP tests
                   + sys-triage. No resets, no tests.
   post_bmc_reboot The same as pre_bmc_reboot for now, run after the BMC reboot.
@@ -105,13 +110,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+    flash|daily|weekly|full|galaxy|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" >&2
+        echo "Error: unknown tier '$TIER'. Expected: flash, daily, weekly, full, galaxy, pre_bmc_reboot, post_bmc_reboot" >&2
         show_help
         exit 1
         ;;

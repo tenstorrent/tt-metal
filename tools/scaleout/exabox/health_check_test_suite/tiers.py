@@ -18,7 +18,7 @@ whose phase is left out of the report when there is nothing to run.
 
 Where the steps a tier can name are defined:
 
-    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset"
+    resets, post_test_resets  tt-smi flags: "-r" or "-glx_reset" (never "-r" in a glx_reset_only tier)
     tests                     TESTS (gtest) and PYTESTS (pytest) in diag/device_tests.py
     triage                    TRIAGE_TOOLS in diag/triage.py
 
@@ -78,6 +78,14 @@ class Tier:
     # ETH sweep; it sits in the same slot as triage, after the post-test reset.
     qsfp_tests: bool = False
 
+    # Judge the new PCIe AER errors per chip between the start of the run and the
+    # end of the triage phase (diag/aer.py). Needs triage.
+    aer_diff: bool = False
+
+    # The only reset the tier may run is -glx_reset. _validate() rejects a -r in
+    # its resets or post-test resets.
+    glx_reset_only: bool = False
+
     # Collect the syseng sys-triage bundle. It is the record of a unit's state
     # taken before the BMC power cycles it, and its vuart and scratch reads are
     # worth most on a unit that has not been reset since it misbehaved.
@@ -121,6 +129,16 @@ TIERS: dict[str, Tier] = {
     # weekly plus the sys-triage bundle: everything, for a unit with an issue,
     # so the run's logs can go straight on its DIIM ticket.
     "full": replace(_WEEKLY, sys_triage=True),
+    # What a caller that runs its own load wants of the unit's health: the
+    # snapshot checks (chips by BDF, tray and ASIC, thermal, telemetry), a
+    # -glx_reset (callers pass --skip-reset to read the unit as found), and the
+    # host-side triage with its AER before/after diff. No tests, no ETH reads.
+    "galaxy": Tier(
+        resets=("-glx_reset",),
+        triage=("host_side",),
+        aer_diff=True,
+        glx_reset_only=True,
+    ),
     # Data collection before a BMC reboot. No resets and no tests: a reset
     # would wipe the state the triage, QSFP and sys-triage phases are there to
     # record, and a stress test on a unit already headed for a power cycle only
@@ -157,6 +175,10 @@ def _validate() -> None:
         problems += [
             f"{name}: unknown post-test reset flag {f!r}" for f in tier.post_test_resets if f not in RESET_FLAGS
         ]
+        if tier.glx_reset_only:
+            problems += [f"{name}: -r is not allowed" for f in (*tier.resets, *tier.post_test_resets) if f == "-r"]
+        if tier.aer_diff and not tier.triage:
+            problems.append(f"{name}: aer_diff needs triage")
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:
