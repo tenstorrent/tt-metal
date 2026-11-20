@@ -669,11 +669,11 @@ ttnn::Tensor pad_with_route(
         const auto& requested_config = memory_config_arg.value_or(input_tensor.memory_config());
         // Allocated and filled on the device, keeping the input's mesh topology: a host upload fails inside trace
         // capture.
-        const TensorSpec output_spec(
+        const tt::tt_metal::TensorSpec output_spec(
             output_shape,
             TensorLayout(
                 input_tensor.dtype(),
-                PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
+                tt::tt_metal::PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
                 MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()}));
         ttnn::Tensor output_tensor =
             create_device_tensor(output_spec, input_tensor.device(), input_tensor.tensor_topology());
