@@ -29,7 +29,8 @@ def test_all_gather_minimal_perf_t3000(warmup_iters, arch_type, perf_target_avg_
 
     cols = ["DEVICE KERNEL"]
     # Production ttnn.all_gather emits the AllGather device op (not AllGatherAsync).
-    # TODO: recalibrate the perf_target_avg window above on T3K for the packet-walk all_gather; both bounds predate it.
+    # NOTE: op_name and the perf_target_avg window above are inherited from the old
+    # experimental op and must be confirmed/recalibrated against the production op on T3K hardware.
     op_name = "AllGather"
 
     profiler.start("run")

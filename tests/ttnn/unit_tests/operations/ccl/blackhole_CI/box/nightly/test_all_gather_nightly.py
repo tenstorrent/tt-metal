@@ -4,6 +4,8 @@
 
 from tt_py_test_utils_common.all_gather_validate import ti_cond_skip, validate_test
 
+import math
+
 import pytest
 import torch
 import ttnn
@@ -235,16 +237,35 @@ def test_all_gather_linear_4D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# A ring of every device in the box: multicast, then unicast with short row-major rows (256-512 B per device, so packets
-# of 4 KB or less and 5 workers) and with 1-2 tiles per device per output row.
+# Blackhole's ring crossover in all_gather's factory selection: unicast once the busiest link-direction carries this
+# many bytes, i.e. each device's input bytes * (N - 1) / (2 * links).
+BH_RING_UNICAST_LINK_BYTES = 233_000
+# Each ring row sits this far below (multicast) or above (unicast) the crossover on every device and link count.
+RING_FACTORY_MARGIN = 4
+
+
+def ring_input_rows(num_devices, num_links, row_bytes, unicast):
+    """Rows of each device's input, a multiple of 32, about RING_FACTORY_MARGIN times below or above the crossover."""
+    link_bytes = (
+        BH_RING_UNICAST_LINK_BYTES * RING_FACTORY_MARGIN
+        if unicast
+        else BH_RING_UNICAST_LINK_BYTES / RING_FACTORY_MARGIN
+    )
+    tile_rows = link_bytes * 2 * num_links / ((num_devices - 1) * row_bytes * 32)
+    return 32 * max(1, math.ceil(tile_rows) if unicast else math.floor(tile_rows))
+
+
+# A ring of every device in the box: multicast, then unicast with short row-major rows (256 B per device, so packets of
+# 4 KB or less and 5 workers) and with 1 tile per device per output row. Each device's input width is fixed and its
+# height is set from the ring's device and link counts, so each row stays on its factory on any box.
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(2)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout",
+    "input_width, layout, unicast",
     [
-        ([1, 1, 128, 2048], 3, ttnn.TILE_LAYOUT),
-        ([1, 1, 1024, 1024], 3, ttnn.ROW_MAJOR_LAYOUT),
-        ([1, 1, 4096, 256], 3, ttnn.TILE_LAYOUT),
+        (64, ttnn.TILE_LAYOUT, False),
+        (128, ttnn.ROW_MAJOR_LAYOUT, True),
+        (32, ttnn.TILE_LAYOUT, True),
     ],
     ids=["multicast", "unicast_rm_short_rows", "unicast_narrow_tile_rows"],
 )
@@ -288,10 +309,10 @@ def test_all_gather_linear_4D_nightly(
 @pytest.mark.parametrize("cluster_axis", [0])
 def test_all_gather_ring_nightly(
     bh_1d_mesh_device,
-    ag_output_shape,
-    dim,
-    ag_input_dtype,
+    input_width,
     layout,
+    unicast,
+    ag_input_dtype,
     mem_config_input,
     mem_config_ag,
     enable_trace,
@@ -304,10 +325,12 @@ def test_all_gather_ring_nightly(
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((num_devices, 1)))
     else:
         submesh_device = bh_1d_mesh_device.create_submesh(ttnn.MeshShape((1, num_devices)))
+    num_links = ttnn.get_num_links(submesh_device, cluster_axis=cluster_axis)
+    rows = ring_input_rows(num_devices, num_links, input_width * 2, unicast)  # 2 B per bfloat16
     run_all_gather_impl(
         submesh_device,
-        ag_output_shape,
-        dim,
+        [1, 1, rows, input_width * num_devices],
+        3,
         ag_input_dtype,
         layout,
         mem_config_input,
