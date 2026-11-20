@@ -1916,3 +1916,100 @@
   gathers 11.94 of 12.67 ms exposed, DS41-334), 4x2k_p139264 109.8 ms (74.6k >= 67k), mixed 126.3 ms (64.9k >= 64k;
   attempt 1 measured 128.6, process spread as in DS41-335), 1x2k_p139264 88.5 ms. DRAM at 1M with all 4 histories held:
   40-layer 23.00 GiB a chip, headroom 9.00 GB of 32. determinism_max_abs_diff 0.0. Table: results/PB.5C_packed_walls.md.
+
+## PPB.6L (PB.6L perf, attempt 1): the history gathers hidden at ~1M histories too (PACKED_LONG_HIDE off | on)
+
+- Expected (perf_guide s2, written before any model code change): PB.5C 4x2k_p1m: gathers 12.67 ms reference, 11.94
+  exposed (per segment 2.09 / 3.91 / 4.02 / 1.92), prep (packs) 5.43 ms, wall 203.6 ms, device 192.0. If the gathers
+  are spread so every region's compute outlasts its gathers: exposed -> <= 3 ms (frac <= 0.25), device -9..-11 ms,
+  wall ~-9..-11 ms (the 1M chunk is device-bound: host exposed 11.6 ms), host ~0. 139k / mixed: 0 (no change there
+  unless the new placement changes their regions). The attention section's 97 vs 30 ms: unknown until the probe.
+- Load (1): tests/packed/test_long_hide_probe.py on the runner's held walls load (layers 0-20, 8192, slots at the one
+  capacity): "needs the walls' performance load: the question is the 1M case's per-region gather vs compute times and
+  the attention section's ops at real 1M slots, which only that load has; the runner already holds it (no new load)".
+- Probe (1) (tests/packed/test_long_hide_probe.py, 4 x 2k at 1,040,384 - k x 4096, one rt + op profile a side; the
+  runner's 21-layer walls load): HIDE=off device 188.0 ms (engram_rows 62.2, experts 37.2, indexer 36.9, attention
+  27.0, attn_table 4.9); HIDE=on 191.9 ms (attention 94.3, experts 39.2, indexer 37.6). WHY the attention section is 97
+  vs ~30 ms at 139k: 45.0 of it is the index-key decodes (bringup.unpack_fp8_rows x 12 = 3 index sources x 4 segments,
+  65,024 history rows a chip each at 1M), which run in the "dec" region at layer 1's engram wait and are charged to
+  the attention section there (off: the engram_rows section). PB.3K put them on a 4 x 2 core rectangle (host cost at
+  139k: 8,704 rows a chip); at 1M that is ~3.7 ms a call. The rest of the section is the gathers' exposed time and the
+  stalls; sparse_sdpa (12.6 ms) and the projections do not scale with history. WHY the gathers are exposed at 1M:
+  regions (device clock stamps) attn0 compute 1.54 ms, gather past it 1.26; attn1 (2 gathers) 3.22 incl. a 1.93 ms
+  stall + 2.03 past; attn2..attn13 (one gather each) compute ~1.8 ms, past ~0.95-1.0; the dec region (45.5 ms) hid
+  its one gather. A 1M item gathered on column 11 takes ~2.8 ms (serial next to the links 1.0-1.05 ms): longer than
+  any attention phase (~1.8 ms) it sits beside; no semaphore / region-switch wait seen (stalls only where 2 gathers
+  share a region: the second's launch waits for the first).
+- Bench (2) (same probe, PB6L_PROBE_BENCH=1, host-timed, synced, median of 5; one 1M item: R 16384 local rows, h 16256
+  an owner, 32 owners, 158.8 MiB a chip): serial 1.13 ms (L/2 0.64, L/4 0.40); gather column alone 2.75 (1.51, 0.87):
+  linear in the rows (~0.15 ms fixed); beside a DRAM-bound multiply chain 4.45 vs compute 2.44; num_links 2 / 1 no
+  better. Decode of 65,024 rows a chip: 4x2 cores 4.10 ms, 8x4 1.47, 11x5 1.17, 11x10 0.94 (incl. ~0.16 sync).
+- Expected (written before the model change): PACKED_LONG_HIDE=on = (a) the index-key decodes on the whole compute
+  grid when a lane's history is long (>= 16384 rows a chip; 139k stays on 4 x 2: its host cost): 1M decodes 45 ->
+  ~10 ms device; (b) every history item gathered in pieces of <= ~6k rows an owner (~1.1 ms on column 11) through a
+  forked high_bw_all_gather that moves a row RANGE [a, b) of every owner to its fixed slot (stock moves only a prefix):
+  a piece fits beside one attention phase; (c) more cover: the index top-k (local, 110 cores, ~3.2 ms a layer at 1M)
+  a region too, the decodes one step each; (d) the pieces planned over all regions before each source's reader by
+  estimated ms (cover vs gather), earliest deadline first ("start the next source earlier"); every item its own record
+  buffer for the chunk (a piece may run regions after its pack). Expected at 4x2k_p1m: device 192 -> ~148 ms, gathers
+  exposed 11.9 -> <= ~3 ms (frac <= 0.25), wall 203.6 -> ~160 ms (~51k new tok/s); host +~1-2 ms (more launches,
+  wide decodes). 4x2k_p139264: items fit one piece, decodes unchanged: ~0 (the plan may hide a little more). mixed:
+  the 308k / 547k lanes' decodes wide (device -5..-8 ms), pieces for 547k: device -5..-8 ms, host +~1 ms.
+- Load (2): the fork test (tests/packed/test_range_gather_fork.py -> the fork's tests/unit/test_range_gather.py) on the
+  runner's mesh, "needs only the mesh: the range gather vs the host, smallest shapes first" (the C++ build restarted
+  the runner: 1 open). Load (3): test_long_hide_probe on the walls load, "needs the walls' performance load: the
+  change's regions, pieces and digests at real 1M slots" (the runner restarted for the build, so one model load).
+- Load (4): test_packed_walls (cases 4x2k_p1m, 4x2k_p139264, mixed; the gate's walls env, switch on) on the walls
+  load: "needs the walls' performance load: the gate's own metrics (gather exposed frac at 1M, the 139k / mixed
+  serving targets) on the change".
+- Built (PACKED_LONG_HIDE=on, call-time, bringup/hooks.py batch_call_settings; default off = PB.3H / PB.3K):
+  (a) tt/index_keys._decode: a decode of >= DECODE_WIDE_ROWS (16384) rows a chip on max_grid (11 x 10; non-matmul,
+  inside the regions' compute sub-device), shorter ones on PB.3K's 4 x 2 (DS41-336). (b) fork
+  ttnn.bringup.high_bw_all_gather (ttnn/ttnn/bringup/high_bw_all_gather_ttnn, fork_op.py of the stock op): option
+  gathered_dim_start, each rank's rows [a, b) into the same rows of its fixed slot (kernel define HBAG_FIRST_PAGE, one
+  common arg; off = the stock program); tt/history_gather.prefetch_gather_range / prefetch_mark. (c)
+  tt/gather_hide.Hide._long_plan, when an item is longer than one attention phase hides (a ~1M lane; else PB.3H's
+  plan): regions in time order (attention phases, the decodes at the first engram layer, the index top-k of the
+  source layers, a region now: packed_onecall._one_ring -> Hide.topk), each given rows worth its estimated cover,
+  the most urgent source first, items cut where a region's cover ends; what no region before the reader takes is
+  gathered serially at the table (2.4x faster there than on the gather column, DS41-337: the plan under-fills, an
+  overrun costs more); every item packed into a record buffer of its own, the packs as trailing compute steps of an
+  earlier region (passing its result through); gathers placed in a region by estimated time (Split.region cover / own).
+  Cores: the gathers on column 11 (10 cores, as PB.3H), the decodes / packs / top-k on the 110-core matmul grid.
+  No new matmul. Bit-identical by construction (data moves into the same rows; row-local decodes; the top-k on its
+  own 110 cores).
+- DECIDED (OV-58): the gate's oracle (frozen) never reaches the piece plan (its segments' histories are 1-2 chunks:
+  one attention phase hides them whole), so the new path's bit-identity is checked by the probe at 1M: served-cache
+  records of every slot and layer (200) + the last layer's output, LONG on / LONG off / no hide: 0 of 201 differ.
+- DECIDED (OV-58): tails regions at layers 8 / 14 are ~0.27 ms of compute (the tail gather fills them): no pieces
+  there (cover 0); the packs-as-steps and the time-based placement cut the 1M regions' stalls 5.5 -> ~0.7 ms.
+- stock ttnn.experimental.high_bw_all_gather instead of ttnn.bringup.high_bw_all_gather: every prefix gather (the
+  serial path, the tails, PACKED_LONG_HIDE=off) keeps the stock op; only a row range needs the fork.
+- Measured (walls, the gate's walls env, switch on, one 21-layer load, slots at 1,048,576; median of 10):
+  | case | PB.5C (gate) | PB.6L on | device | gathers ref / exposed (frac) | new tok/s |
+  | 4x2k_p1m | 203.6 ms | 157.9 ms | 192.0 -> 143.2 | 12.78 / 2.38 (0.186; was 11.94, 0.942) | 51.9k (40.2k) |
+  | 4x2k_p139264 | 109.8 | 110.5 | 99.4 -> 100.4 | 2.26 / 0.45 (0.20) | 74.1k (>= 67k) |
+  | mixed | 126.3 | 125.5 | 117.2 -> 110.2 | 3.65 / 0.25 (0.07) | 65.3k (>= 64k) |
+  Per segment at 1M, exposed / hidden ms: before 2.09 / 1.00, 3.91 / -0.76, 4.02 / -0.80, 1.92 / 1.29; after
+  0.43 / 2.67, 0.81 / 2.43, 0.44 / 2.77, 0.46 / 2.76 (combined tails 0.23). A/B in one process (off / on
+  alternated, median of 10): 139k 109.2 / 109.0, mixed 127.8 / 124.8, 1M 202.9 / 160.8 ms.
+- vs expected: device 192 -> 143 (expected ~148), wall 204 -> 158 (expected ~160); 139k 0 as expected; mixed -3 ms
+  (the 308k / 547k lanes' wide decodes; their items fit one attention phase: PB.3H's plan).
+- Left at 1M (device 143 ms): indexer ~38 (ring score 8 ms a layer, top-k 3.2: the longest lane), experts ~38,
+  attention ~27 (sparse_sdpa 12.6), the 12 packs ~5 ms (now inside regions), the decodes ~3.9 ms.
+- Re-run: probe `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+  DS41_PACKED_HOST_FAST=on DS41_PACKED_LANE_BALANCE=on DS41_PACKED_MOE=on BRINGUP_POS_TOKENS=agentic_cc
+  DS41_DECODER_SKIP=decode PB6L_PROBE_SIDES=off:off,on:off,on:on PB6L_PROBE_OPS=0 scripts/run_safe_pytest.sh --run-all
+  --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_long_hide_probe.py"` (PB6L_PROBE_AB=139k,mixed,1m
+  the A/B; PB6L_PROBE_BENCH=1 the bench); walls: the gate's walls cmd (PACKED_WALL_CASES, PB3H_STAMP_DUMP); fork test:
+  the same env + tests/packed/test_range_gather_fork.py.
+- Final check `orchestrator measure --task PB.6L` (quick, single-request path at its short default position: no long
+  decode, no piece plan): rc 0, chunk_wall_ms 239.0 (spread 26.5; PB.5C 216.7: run spread, the path is unchanged
+  there), min layer PCC 0.732 (L39, as before), host_transfers_per_layer 0.
+- Gate (`gate PB.6L --check`, after the last code edit, pre-commit clean): PASS PB.6L. Oracle (40 layers): lane
+  equivalence 0, alone vs today 0, slot digests 0, packed determinism 0; determinism 0.0. Walls (switch on):
+  4x2k_p1m 156.7 ms (52.3k new tok/s; gathers 12.76 ref / 2.08 exposed, frac 0.163; per segment exposed / hidden
+  0.03 / 3.21, 1.47 / 1.61, 0.16 / 3.06, 0.34 / 2.88, tails 0.08), 4x2k_p139264 109.2 (75.0k), mixed 124.6 (65.7k),
+  4xp50_p139264 108.1, 1x2k_p139264 89.1; DRAM 40-layer at 1M 23.08 GiB a chip (the 12 item record buffers +~0.06).
+  Table: results/PB.6L_packed_walls.md (written by the walls test).

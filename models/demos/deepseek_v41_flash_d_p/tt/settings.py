@@ -1417,6 +1417,21 @@ TABLE = {
         "prepared copy program (tt/lane_rows.py); off = PB.3H. The same bytes at the same rows (data moves, row-local "
         "ops). Default off (the task's: on = the change; the gate sets it)",
     ),
+    "PACKED_LONG_HIDE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.6L (OWNER 2026-11-19 20:55, overseer 2026-11-20 08:25), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED_GATHER_HIDE=on: the per-segment history gathers hidden at ~1M histories too. "
+        "on = (a) a lane's index-key history decodes on the whole compute grid when it is long (>= "
+        "index_keys.DECODE_WIDE_ROWS rows a chip; shorter ones stay on PB.3K's 4 x 2 rectangle: their host cost); (b) "
+        "every history item gathered in pieces of <= gather_hide.PIECE_ROWS rows an owner (ttnn.bringup."
+        "high_bw_all_gather gathered_dim_start: an owner's row range into its fixed slot), each item packed into a "
+        "record buffer of its own for the chunk; (c) the pieces planned over every cover region before their source's "
+        "reader by estimated ms (attention phases, the decodes one step a segment, and the index top-k of the "
+        "source layers, a region too), earliest source first; off = PB.3H's plan (whole items, the most urgent source's "
+        "items over the attention phases before its reader). The same bytes at the same rows (data moves, row-local "
+        "decodes, the top-k on its own 110 cores). Default off (the task's: on = the change; the gate sets it)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

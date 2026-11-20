@@ -229,6 +229,14 @@ Design rules (from the start, not as a later optimization):
    not reached by its source's table is gathered there serially. Bit-identical (the oracle's packed3 case, histories
    of whole chunks). Measured (walls, device clock stamps: the real-time profiler cannot show two sub-devices at
    once): exposed / serial gather time 0.113 at 4 x 2k @ 139k, 0.177 mixed (BREADCRUMBS PPB.3H).
+   At ~1M histories (PB.6L, PACKED_LONG_HIDE=on): a 1M item takes ~2.8 ms on the gather column, longer than any
+   attention phase (~1.8 ms), so whole items were exposed (11.9 of 12.7 ms). Now, when an item is longer than one
+   attention phase hides: every item in pieces (ttnn.bringup.high_bw_all_gather gathered_dim_start: an owner's row
+   range into its fixed slot) sized to each region's cover (the attention phases, the index-key decodes, the index
+   top-k of the source layers), the rest gathered serially at the table (faster there than on the gather column); the
+   items' packs as compute steps of earlier regions. 2.4 of 12.8 ms exposed at 4 x 2k @ ~1M (BREADCRUMBS PPB.6L).
+   The index-key history decodes (12 a chunk) run on the whole compute grid when long (>= 16384 rows a chip): at 1M
+   they were 45 ms of the chunk on 4 x 2 cores (DS41-336).
 4. **Batch per-segment launches.** The 4 segments' served writes of a source (compressed KV + index keys) go in one
    prepared program (per-lane slot / start / valid runtime args); the 4 snapshot writes of a layer in one
    snapshot_send program (P.65's tree, 4 owners); the per-lane carry reads folded into window_send's program. Target:

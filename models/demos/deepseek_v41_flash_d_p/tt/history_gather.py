@@ -441,6 +441,44 @@ def prefetch_gather(plan, sub: dict | None = None) -> None:
     STATS["prefetch"] += 1
 
 
+def prefetch_mark(plan) -> None:
+    """PACKED_LONG_HIDE=on (PB.6L): the prefetch marker of a ``prefetch_prepare`` plan set at its pack (host only),
+    before its pieces are gathered: the tail (``tail_prepare`` / ``gather``) then moves only the chunk's own periods,
+    rows the pieces never write. Every piece is gathered before the source's reader (gather_hide.Hide.flush at the
+    table, after the regions' joins)."""
+    ckv_cache, buf, src, h, owners, axis, start = plan
+    buf.owner = None  # (rows [0, h) only until ``gather`` completes it)
+    buf.pre = (id(ckv_cache), start, ckv_cache.version, h)
+    STATS["prefetch"] += 1
+
+
+def prefetch_gather_range(plan, a: int, b: int, sub: dict | None = None) -> None:
+    """PACKED_LONG_HIDE=on (PB.6L): rows [a, b) of every owner of a ``prefetch_prepare`` plan's packed records into
+    the same rows of each owner's fixed slot of the source's buffer (ttnn.bringup.high_bw_all_gather
+    gathered_dim_start; a = 0: the prefix, as ``prefetch_gather``). A bf16 plan (no records) moves its whole history
+    at once. ``sub``: the gather sub-device's arguments."""
+    ckv_cache, buf, src, h, owners, axis, start = plan
+    assert 0 <= a < b <= h, (a, b, h)
+    if src is None:
+        assert (a, b) == (0, h), "PB.6L: pieces of a bf16 history (the slab is ND-sharded: no range gather)"
+        _gather_full(ckv_cache, buf, src, h, owners, axis, sub)
+        return
+    s0, s1 = ccl._sems(buf.mesh, axis)
+    with _Traced("gather", ckv_cache):
+        ttnn.bringup.high_bw_all_gather(
+            src,
+            2,
+            buf.tensor,
+            cluster_axis=axis,
+            num_links=ccl.AG_LINKS,
+            gathered_dim_size=owners * (b - a),
+            gathered_dim_start=a if a > 0 else None,
+            ready_semaphore=s0,
+            data_valid_semaphore=s1,
+            **dict(sub or {}),
+        )
+
+
 def tail_prepare(ckv_cache, start: int, local_rows: int, loc: HistoryBuffer | None = None):
     """PB.3H: the tail of ``gather(ckv_cache, local_rows, start)`` ahead of its call, up to its gather (pack + slice).
     None when ``gather`` would not take the tail path (no matching prefetch: it then gathers in full itself)."""

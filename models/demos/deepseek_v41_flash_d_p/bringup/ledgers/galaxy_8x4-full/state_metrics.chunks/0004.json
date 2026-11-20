@@ -526,5 +526,19 @@
   "packed_wall_ms_4x2k_p1m_tagentic_cc": 203.6,
   "packed_wall_ms_4xp50_p139264_tagentic_cc": 109.2,
   "packed_wall_ms_mixed_tagentic_cc": 126.3
+ },
+ "PB.6L": {
+  "packed_alone_vs_today_max_abs_diff": 0.0,
+  "packed_determinism_max_abs_diff": 0.0,
+  "packed_gather_exposed_frac_4x2k_p1m_tagentic_cc": 0.1627,
+  "packed_lane_equiv_max_abs_diff": 0.0,
+  "packed_serving_tok_s_4x2k_p139264_tagentic_cc": 75018.3,
+  "packed_serving_tok_s_mixed_tagentic_cc": 65746.4,
+  "packed_slot_digest_mismatches": 0,
+  "packed_wall_ms_1x2k_p139264_tagentic_cc": 89.1,
+  "packed_wall_ms_4x2k_p139264_tagentic_cc": 109.2,
+  "packed_wall_ms_4x2k_p1m_tagentic_cc": 156.7,
+  "packed_wall_ms_4xp50_p139264_tagentic_cc": 108.1,
+  "packed_wall_ms_mixed_tagentic_cc": 124.6
  }
 }

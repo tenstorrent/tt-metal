@@ -1211,7 +1211,11 @@ class OneCall:
             cands = topk_large_indices(rm, k=ix.ctopk, valid_length_tensor=lanes.u32(nbv))
             dealloc(rm)
             self._keep(("cands", i), cands)
-        top = topk_large_indices(logits, k=ix.topk, valid_length_tensor=lanes.u32(tuple(lens)))
+        vl = lanes.u32(tuple(lens))
+        if self.hide is not None:  # PB.6L (PACKED_LONG_HIDE=on): the top-k a region beside history pieces
+            top = self.hide.topk(i, [lambda _: topk_large_indices(logits, k=ix.topk, valid_length_tensor=vl)])
+        else:
+            top = topk_large_indices(logits, k=ix.topk, valid_length_tensor=vl)
         dealloc(logits)
         assert ix.tp == 1 or ix.local, "PACKED_ATTN_ONECALL=on: INDEXER_TOPK_LOCAL=on"
         self._keep(("top", i), top)

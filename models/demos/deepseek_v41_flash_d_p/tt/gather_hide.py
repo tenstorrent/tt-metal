@@ -49,6 +49,8 @@ nothing there (the serial path)."""
 
 from __future__ import annotations
 
+from collections import defaultdict
+
 import ttnn
 from models.demos.common.bringup.testing import profiler
 
@@ -67,6 +69,7 @@ def _rect(x0: int, y0: int, x1: int, y1: int) -> ttnn.CoreRangeSet:
 
 
 STATS = {"regions": 0, "prefetch": 0, "tails": 0, "flushed": 0}  # since load (diagnostic, tests)
+LAST_PLAN: dict = {}  # PB.6L (diagnostic): the last packed chunk's piece plan (regions, unplaced, cover)
 LOG: list = []  # (diagnostic, with history_gather.TRACE on) per region: (lanes of its gathers, [(kind, slot), ...])
 
 _STAMP_KERNEL = r"""
@@ -205,17 +208,35 @@ class Split:
         self.mgr = mesh.create_sub_device_manager([ttnn.SubDevice([self.compute]), ttnn.SubDevice([self.gather])], 0)
         self.sub = dict(subdevice_id=ttnn.SubDeviceId(1), sub_core_grids=self.gather)
 
-    def region(self, gathers: list, steps: list, section: str):
+    def region(self, gathers: list, steps: list, section: str, after_last: bool = False, cover=None, own=None):
         """``gathers`` [(lane, fn(sub))] (each enqueues one gather on sub-device 1) beside the compute ``steps`` (each
         fn(previous result), sub-device 0); returns the last step's result. The first gather before the steps
         (its fence waits for the other chips, the compute needs no one: V3's order), gather j >= 1 before step
         min(n - 1, ceil(j n / k)). ``section``: the profile section the steps are charged to (the gathers: "history_gather").
+        PB.6L: ``after_last`` lets a gather go after the last step (n: a 1-step region); ``cover`` (the steps' estimated
+        ms, gathers given as (lane, fn, est ms)): gather j >= 1 before the step at which the gathers before it are
+        estimated done (the steps taken as equally long), so its launch does not hold the compute launches behind it.
         """
         mesh = self.mesh
         k, n = len(gathers), len(steps)
         at = {}
-        for j, g in enumerate(gathers):
-            at.setdefault(0 if j == 0 or n < 2 else max(1, min(n - 1, -(-j * n // k))), []).append(g)
+        if cover is not None:  # PB.6L: by estimated time over the first ``own`` steps (the rest: packs, after them)
+            done, m = 0.0, n if own is None else own
+            for j, (lane, g, ms) in enumerate(gathers):
+                pos = (
+                    0 if j == 0 else max(j, min(m, -(-int(round(done * m * 1000)) // max(1, int(round(cover * 1000))))))
+                )
+                pos = min(pos, n)  # (one gather a step where the steps allow: its launch waits for the one before)
+                at.setdefault(pos, []).append((lane, g))
+                done += ms
+            gathers = [(lane, g) for lane, g, _ in gathers]
+        for j, g in enumerate(gathers if cover is None else ()):
+            if (
+                after_last
+            ):  # PB.6L: gather j >= 1 before step ceil(j n / k), or after the last step (n: a 1-step region)
+                at.setdefault(0 if j == 0 else max(1, min(n, -(-j * n // k))), []).append(g)
+            else:
+                at.setdefault(0 if j == 0 or n < 2 else max(1, min(n - 1, -(-j * n // k))), []).append(g)
         st = stamps(mesh) if history_gather.TRACE is not None else None
         log = []
         mesh.load_sub_device_manager(self.mgr)
@@ -238,6 +259,15 @@ class Split:
                             log.append(("after", lane, st("compute")))
                     profiler.signpost(section)
                     out = step(out)
+                for j, (lane, g) in enumerate(at.get(n, ())):  # (PB.6L: after the last step)
+                    if st is not None:
+                        log.append(("before", lane, st("compute")))
+                    profiler.signpost("history_gather")
+                    a = ttnn._ttnn.get_device_operation_id() if st is not None else None
+                    g(self.sub)
+                    if st is not None:
+                        log.append(("ids", lane, (a, ttnn._ttnn.get_device_operation_id())))
+                        log.append(("after", lane, st("compute")))
             if st is not None:
                 log.append(("end_compute", None, st("compute")))
                 log.append(("end_gather", gathers[-1][0], st("gather")))
@@ -249,6 +279,33 @@ class Split:
 
 
 DEC_WEIGHT = 0.5  # the index-key decodes' region against an attention phase (PB.3H walls: ~0.6-1 vs ~1.3-1.5 ms)
+
+# PACKED_LONG_HIDE=on (PB.6L): the planning estimates (ms; they place work, the bytes never depend on them). Measured
+# on the 8x4 at 1M (tests/packed/test_long_hide_probe.py: bench and region stamps): a history gather on the gather
+# column ~0.15 ms + its bytes at ~64 MB/ms alone, ~2x slower beside a DRAM-bound step (the decodes, the top-k), as
+# fast beside the attention phase (sparse_sdpa, matmuls); serially (every core, next to the links) ~2.4x faster.
+# A region's cover = the ms of gathering (at the alone rate) it hides: attention phase ~1.7-1.8 ms of compute -> 1.6
+# (1M stamps: a 1.5 ms piece beside it, 0.00 ms past on every one of 12; 1.8: 0.03-0.14 past, two pieces 0.4-0.6:
+# an overrun on the gather column costs ~2.4x the same rows gathered serially at the table, so the plan under-fills); the tails region at layers 8 / 14 is ~0.27 ms of compute, the
+# tail gather fills it -> 0; the index top-k ~3.1e-6 ms a position of the longest lane, half of it (one 9k-row piece
+# beside a 3.2 ms top-k: 0.00 past); the decodes (~200 rows/us on 11 x 10 cores, ~17.6 on 4 x 2; the region measured
+# 7.8 ms at 1M beside 1.75 ms of pieces, 0 past) at the alone rate.
+GATHER_FIXED_MS, GATHER_BYTES_MS = 0.15, 64e6
+COVER_ATTN_MS, COVER_TAILS_MS = 1.6, 0.0
+DEC_COVER = 1.2  # the decodes' region measured 5.3-8.5 ms at 1M against ~3.9 ms of decodes
+# the items' packs (slice + tilize + ckv_bfp4 of a whole history: ~0.4 ms at 1M, DRAM-bound) as compute steps of an
+# earlier region: at most this many a region, each adding this much cover
+PACKS_A_REGION, PACK_COVER_MS = 2, 0.2
+TOPK_MS_A_POSITION, DEC_ROWS_US_WIDE, DEC_ROWS_US_NARROW = 3.1e-6, 200.0, 17.6
+DRAM_BOUND_SLOWDOWN = 2.0  # (the top-k's)
+MIN_PIECE_ROWS = 512  # a smaller remainder of a region's cover is left unused; of an item, goes with its last piece
+# at most a region: a later gather's launch waits for the one before it (and holds the compute launches behind it)
+REGION_GATHERS = {"attn": 2, "dec": 4, "topk": 2, "tails": 1}
+
+
+def long_on() -> bool:
+    """PACKED_LONG_HIDE=on (PB.6L; call-time, bringup/hooks.py batch_call_settings)."""
+    return settings.get("PACKED_LONG_HIDE") == "on"
 
 
 def _balance(items: list, slots: list, chunk: int) -> dict:
@@ -298,6 +355,12 @@ class Hide:
         engram = getattr(m, "engram", None) or {}
         self.dec_layer = min(engram) if engram else None  # (the index keys are decoded at this layer's engram wait)
         self.dec_done = False
+        # PB.6L: the pieces' plan over every cover region (``_long_plan``) when an item is longer than one attention
+        # phase hides whole (a ~1M lane); shorter histories keep PB.3H's plan (whole items: no piece, pack or region
+        # beyond it; 4 x 2k at 139k A/B: the pieces' plan +1.0 ms wall, PB.3H's 0)
+        self.long = long_on() and self._long_items()
+        if self.long:
+            self._long_plan()
 
     # ------------------------------------------------------------------ buffers
     def _loc(self, ckv, k: int):
@@ -306,6 +369,18 @@ class Hide:
         R = int(ckv.slab.rows)
         return _held(
             _LOC, (id(self.mesh), R, k), self.mesh, lambda: history_gather.HistoryBuffer(self.mesh, R, None, True)
+        )
+
+    def _loc_item(self, ckv, j: int):
+        """PB.6L: item j's own record buffer for the chunk (its pieces may run regions after other items' packs)."""
+        if not history_gather.bfp4_on():
+            return None
+        R = int(ckv.slab.rows)
+        return _held(
+            _LOC,
+            (id(self.mesh), R, "item", j),
+            self.mesh,
+            lambda: history_gather.HistoryBuffer(self.mesh, R, None, True),
         )
 
     def _small(self, plans: list):
@@ -354,6 +429,8 @@ class Hide:
     def attention(self, i: int, steps: list, key=None):
         """Layer i's attention phase (``steps``: fn(previous result) each) as a region beside its share of the
         pending prefetch gathers; returns the last step's result."""
+        if self.long:
+            return self._long_region(("attn", i) if key is None else key, steps, "attention")
         items = self._take(i) if key is None else self._slot(key, i)
         plans = []
         for k, (s, r, ckv) in enumerate(items):
@@ -371,6 +448,9 @@ class Hide:
 
     def flush(self, s: int) -> None:
         """Source s's items not gathered yet (its first reader is here): serially, as off."""
+        if self.long:
+            self._long_flush(s)
+            return
         rest = [it for it in self.items if it[0] == s]
         if not rest:
             return
@@ -397,7 +477,11 @@ class Hide:
         s, i = block.kv_src, block.layer
         if s != i or s not in self.sources:
             return serial()
-        self.flush(s)
+        if self.long:  # PB.6L: the source's items packed (their markers set); their pieces may still run at the top-k
+            for j in [j for j, it in enumerate(self.items) if it is not None and it[0] == s]:
+                self._pack(j)
+        else:
+            self.flush(s)
         plans = []
         for k, r in enumerate(self.oc.pk.segs):
             c = r.state.compress.get(s)
@@ -409,16 +493,248 @@ class Hide:
             p = history_gather.tail_prepare(ckv, r.start, local_rows, loc=self._loc(ckv, k))
             if p is not None:
                 plans.append(p)
+        pieces = [(lane, g) for lane, g, _ in self._long_gathers(("tails", i))] if self.long else []
         if not plans:
+            if pieces:
+                return self.split.region(pieces, steps, "indexer", after_last=True)
             return serial()
         STATS["tails"] += len(plans)
         # ONE gather for every segment's tail (each owner's rows of every segment, segment after segment): a tail is
         # latency-bound (~0.45 ms on the gather column for 1.3 MB, PB.3H stamps), four back to back stalled the steps
         small = self._small(plans)
         x = history_gather.tails_input(plans)
-        out = self.split.region([(-1, lambda sub: history_gather.tails_gather(plans, x, small, sub))], steps, "indexer")
+        gathers = [(-1, lambda sub: history_gather.tails_gather(plans, x, small, sub))] + pieces
+        out = self.split.region(gathers, steps, "indexer", after_last=self.long)
         history_gather.tails_finish(plans, small)
         return out
 
+    def topk(self, i: int, steps: list):
+        """PB.6L: layer i's index top-k (local, its own 110 cores) as a region beside the pieces planned there."""
+        if not self.long:
+            out = None
+            for step in steps:
+                out = step(out)
+            return out
+        return self._long_region(("topk", i), steps, "indexer")
+
+    # ------------------------------------------------------------------ PB.6L: pieces over every cover region
+    def _long_plan(self) -> None:
+        """Every item's history planned as pieces over the cover regions before its source's reader: regions in time
+        order (per layer: its tails region at a source layer, its index top-k, its attention phase; the decodes at the
+        first engram layer), each given rows worth its estimated cover (``cover``: ms of gathering it hides), the most
+        urgent source first, its items largest first, an item cut where a region's cover ends (a piece = an owner's
+        row range, ttnn.bringup.high_bw_all_gather gathered_dim_start). What no region before the reader takes is
+        gathered serially at the source's table (``_long_flush``: next to the links, ~2.4x faster than on the
+        gather column)."""
+        m = self.oc.model
+        segs = self.oc.pk.segs
+        self.packs = {}  # j -> prefetch_prepare plan (None: nothing to gather)
+        self.left = {}  # j -> pieces not gathered yet
+        rec = self._rec = history_gather.REC if history_gather.bfp4_on() else history_gather.WIDTH * 2
+        top = max((int(r.start) for r in segs), default=0)
+        cover, order = {}, []
+        for i in self.order:
+            blk = m.blocks.get(i)
+            if blk is not None and i in self.sources and getattr(blk, "kv_src", None) == i:
+                order.append(("tails", i))
+                cover[("tails", i)] = COVER_TAILS_MS
+            if blk is not None and getattr(blk, "indexer", None) is not None and m.cfg.is_index_source(i):
+                order.append(("topk", i))
+                cover[("topk", i)] = TOPK_MS_A_POSITION * top / DRAM_BOUND_SLOWDOWN
+            if self.dec_layer == i:
+                order.append(("dec",))
+            order.append(("attn", i))
+            cover[("attn", i)] = COVER_ATTN_MS
+        if self.dec_layer is not None:
+            from . import index_keys
+
+            us = 0.0
+            for r in segs:
+                for i in m.index_sources():
+                    c = r.state.compress.get(i)
+                    if c is None or not getattr(c.index_k, "k_served", False):
+                        continue
+                    lo, _ = index_keys._span(c.index_k, r.start)
+                    wide = lo >= index_keys.DECODE_WIDE_ROWS
+                    us += lo / (DEC_ROWS_US_WIDE if wide else DEC_ROWS_US_NARROW)
+            cover[("dec",)] = DEC_COVER * us / 1e3
+
+        def allowed(key, s: int) -> bool:
+            if key[0] == "attn":
+                return key[1] < s
+            if key[0] in ("topk", "tails"):
+                return key[1] <= s
+            return self.dec_layer < s
+
+        by_src = defaultdict(list)
+        for j, (s, r, ckv) in enumerate(self.items):
+            key = getattr(ckv, "history_key", None)
+            h = (int(r.start) // self.chunk) * (ckv.stripe // ckv.ratio) if isinstance(key, tuple) else 0
+            if h > 0:
+                by_src[s].append((h, j, int(ckv.owners)))
+
+        def place(cover: dict):
+            lplan, unplaced, left = defaultdict(list), [], dict(cover)
+            for s in sorted(by_src):
+                queue = [[j, 0, h, owners] for h, j, owners in sorted(by_src[s], reverse=True)]
+                for key in order:
+                    if not queue:
+                        break
+                    if not allowed(key, s):
+                        continue
+                    while queue and len(lplan[key]) < REGION_GATHERS[key[0]]:
+                        j, a, h, owners = queue[0]
+                        room = (left[key] - GATHER_FIXED_MS) * GATHER_BYTES_MS / (owners * rec)
+                        if not history_gather.bfp4_on():  # (a bf16 history moves whole: the slab is ND-sharded)
+                            room = h - a if room >= (h - a) else 0
+                        take = h - a if room >= h - a else int(room) // 32 * 32
+                        if h - a - take < MIN_PIECE_ROWS:  # (no tiny last piece: its fixed cost and launch wait)
+                            take = h - a if room + MIN_PIECE_ROWS >= h - a else take - MIN_PIECE_ROWS
+                        if take < min(MIN_PIECE_ROWS, h - a):
+                            break
+                        lplan[key].append((j, a, a + take))
+                        left[key] -= GATHER_FIXED_MS + owners * take * rec / GATHER_BYTES_MS
+                        if a + take >= h:
+                            queue.pop(0)
+                        else:
+                            queue[0][1] = a + take
+                for j, a, h, owners in queue:
+                    unplaced.append((j, a, h))
+            return lplan, unplaced, left
+
+        def firsts(lplan) -> dict:
+            """item -> the time index of its first piece's region (its source's attention, the table, if none)"""
+            out = {}
+            for t, key in enumerate(order):
+                for j, _, _ in lplan.get(key, ()):
+                    out.setdefault(j, t)
+            for s_ in by_src:
+                for _, j, _ in by_src[s_]:
+                    out.setdefault(j, order.index(("attn", s_)) if ("attn", s_) in order else len(order))
+            return out
+
+        # the items' packs as leading compute steps of earlier regions (``pack_at``): each at least one region before
+        # its first piece (the region's join orders it before the gather), the earliest needed first; they add cover
+        lplan, unplaced, left = place(cover)
+        first = firsts(lplan)
+        self.pack_at = defaultdict(list)
+        if history_gather.bfp4_on():
+            todo = sorted(first, key=lambda j: (first[j], j))
+            for t, key in enumerate(order):
+                if key[0] == "tails":
+                    continue
+                for j in [j for j in todo if first[j] > t][:PACKS_A_REGION]:
+                    self.pack_at[key].append(j)
+                    todo.remove(j)
+            cover2 = {k: v + PACK_COVER_MS * len(self.pack_at.get(k, ())) for k, v in cover.items()}
+            lplan, unplaced, left = place(cover2)
+            first = firsts(lplan)
+            for t, key in enumerate(order):  # (an item whose first piece moved up to its pack's region: packed at use)
+                self.pack_at[key] = [j for j in self.pack_at.get(key, ()) if first[j] > t]
+            cover = cover2
+        self.lplan, self.unplaced = lplan, unplaced
+        for key, units in self.lplan.items():
+            for j, a, b in units:
+                self.left[j] = self.left.get(j, 0) + 1
+        for j, a, b in self.unplaced:
+            self.left[j] = self.left.get(j, 0) + 1
+        self.cover, self.cover_left = cover, left
+        LAST_PLAN.clear()  # (diagnostic: the last chunk's plan)
+        LAST_PLAN.update(
+            regions={str(k): [(j, a, b) for j, a, b in v] for k, v in self.lplan.items()},
+            unplaced=list(self.unplaced),
+            cover={str(k): round(v, 3) for k, v in cover.items()},
+            packs={str(k): list(v) for k, v in self.pack_at.items() if v},
+        )
+
+    def _long_items(self) -> bool:
+        """An item whose history (an owner's rows) is more than one attention phase's cover gathers (its gather on the
+        gather column would outlast the phase it sits beside)."""
+        if not history_gather.bfp4_on():
+            return False
+        for s, r, ckv in self.items:
+            if not isinstance(getattr(ckv, "history_key", None), tuple):
+                continue
+            h = (int(r.start) // self.chunk) * (ckv.stripe // ckv.ratio)
+            if GATHER_FIXED_MS + int(ckv.owners) * h * history_gather.REC / GATHER_BYTES_MS > COVER_ATTN_MS:
+                return True
+        return False
+
+    def _pack(self, j: int):
+        """Item j packed into its own record buffer (once a chunk) and its prefetch marker set; returns its plan."""
+        if j in self.packs:
+            return self.packs[j]
+        s, r, ckv = self.items[j]
+        plan = history_gather.prefetch_prepare(ckv, r.start, self.chunk, loc=self._loc_item(ckv, j))
+        if plan is not None:
+            history_gather.prefetch_mark(plan)
+        self.packs[j] = plan
+        return plan
+
+    def _long_gathers(self, key) -> list:
+        """The planned pieces of region ``key`` as region gathers [(lane, fn(sub))], their items packed now."""
+        gathers = []
+        for j, a, b in self.lplan.pop(key, []):
+            if not self.left.get(j):
+                continue
+            plan = self._pack(j)
+            if plan is None:
+                continue
+
+            def g(sub, plan=plan, j=j, a=a, b=b):
+                history_gather.prefetch_gather_range(plan, a, b, sub)
+                self.left[j] -= 1
+
+            ms = GATHER_FIXED_MS + plan[4] * (b - a) * self._rec / GATHER_BYTES_MS
+            gathers.append((self.items[j][1].lane, g, ms))
+        STATS["prefetch"] += len(gathers)
+        return gathers
+
+    def _long_region(self, key, steps: list, section: str):
+        # (the packs after the region's own steps, passing its result through: the gathers are placed by the own
+        # steps' time, and the packs' DRAM-bound time covers the last of them)
+        packs = [lambda prev, j=j: (self._pack(j), prev)[1] for j in self.pack_at.pop(key, ())]
+        n = len(steps)
+        steps = list(steps) + packs
+        gathers = self._long_gathers(key)
+        if not gathers:
+            out = None
+            for step in steps:
+                out = step(out)
+            return out
+        return self.split.region(
+            gathers, steps, section, after_last=True, cover=self.cover.get(key, 0.0) - PACK_COVER_MS * len(packs), own=n
+        )
+
+    def _long_flush(self, s: int) -> None:
+        """Source s's pieces not gathered yet (a region of the plan did not run): serially, before its reader."""
+        rest = 0
+        for key in list(self.lplan):
+            keep = []
+            for j, a, b in self.lplan[key]:
+                if self.items[j][0] != s:
+                    keep.append((j, a, b))
+                    continue
+                plan = self._pack(j)
+                if plan is not None and self.left.get(j):
+                    history_gather.prefetch_gather_range(plan, a, b)
+                    self.left[j] -= 1
+                    rest += 1
+            self.lplan[key] = keep
+        keep = []
+        for j, a, b in self.unplaced:  # (pieces the plan did not place)
+            if self.items[j][0] != s:
+                keep.append((j, a, b))
+                continue
+            plan = self._pack(j)
+            if plan is not None and self.left.get(j):
+                history_gather.prefetch_gather_range(plan, a, b)
+                self.left[j] -= 1
+                rest += 1
+        self.unplaced = keep
+        STATS["flushed"] += rest
+
     def close(self) -> None:
         self.items = []
+        if self.long:
+            self.lplan, self.unplaced, self.pack_at = defaultdict(list), [], defaultdict(list)

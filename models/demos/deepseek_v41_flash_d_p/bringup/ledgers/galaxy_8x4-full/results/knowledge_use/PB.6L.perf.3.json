@@ -1,0 +1,43 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-64",
+   "answer": "done",
+   "evidence": "exited without touching code or the device: attempt-1 tree intact (git status: tt/gather_hide.py, history_gather.py, index_keys.py, packed_onecall.py, settings.py, high_bw_all_gather fork, results/PB.6L_packed_walls.md); BREADCRUMBS PPB.6L records gate PASS (1M exposed frac 0.163, 4x2k_p139264 75.0k, mixed 65.7k)"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no work this attempt (OV-64); attempt 1 answered it"
+  },
+  {
+   "id": "OV-58",
+   "answer": "n/a",
+   "evidence": "no work this attempt (OV-64); attempt 1 answered it"
+  },
+  {
+   "id": "OV-61",
+   "answer": "n/a",
+   "evidence": "no device runs this attempt (OV-64)"
+  }
+ ],
+ "cited_only": [
+  "DS41-336"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.6L",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T11:03:57",
+  "head": "3489e0935a2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.6L.perf.3.json"
+  ]
+ }
+}

@@ -104,12 +104,17 @@ def _span(cache, start: int) -> tuple[int, int]:
 # slots (5 a core, 3 kernels: ~250-340 us a call on 110 cores of 32 chips, PB.3K census); its device time is small
 # (a 192 B -> 128 B row map, ~4352 rows a chip at 139k). Each row decodes on its own: the same bytes on any cores.
 DECODE_GRID = (4, 2)
+# PACKED_LONG_HIDE=on (PB.6L): a decode of at least this many rows a chip runs on the whole compute grid (max_grid):
+# at 1M a history decode is 65,024 rows a chip, 3.95 ms on 4 x 2 cores vs ~0.8 on 11 x 10 (PB.6L bench); at 139k
+# (8,704 rows) the small rectangle's lower host cost wins
+DECODE_WIDE_ROWS = 16384
 
 
 def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     s = cache.served
     grid = max_grid()
-    if settings.get("PACKED_HOST_FAST") == "on":  # (every box's grid holds 4 x 4; None: the uncapped whole grid)
+    wide = settings.get("PACKED_LONG_HIDE") == "on" and hi - lo >= DECODE_WIDE_ROWS
+    if settings.get("PACKED_HOST_FAST") == "on" and not wide:  # (every box's grid holds 4 x 4; None: uncapped)
         gx, gy = (grid.x, grid.y) if grid is not None else DECODE_GRID
         grid = ttnn.CoreCoord(min(gx, DECODE_GRID[0]), min(gy, DECODE_GRID[1]))
     ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid)
