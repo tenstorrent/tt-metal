@@ -175,6 +175,26 @@ both in one process (the obvious "swap the prefill backend" integration) would c
 * `tests/prefill/test_d_p_bridge.py`: step 1 runs metal_2 on the 8x4 mesh and saves states; step 2 compares them
   with metal_1's own kv_only prefill states for the same prompt (per layer, per tensor PCC).
 
+### 6.1 First result (16384 tokens, galaxy 8x4)
+
+Step 1 passed. Step 2 fails: layer 0 matches, everything after it diverges.
+
+| layer | kv_tail | compressed_kv | idx_keys |
+|---|---|---|---|
+| 0 | 0.99998 | - | - |
+| 1 | 0.79 | - | - |
+| 2 | 0.73 | 0.71 | 0.89 |
+| 8 | 0.58 | 0.57 | 0.75 |
+| 14 | 0.50 | 0.47 | 0.65 |
+| 19 | 0.52 | - | - |
+| 20 | (not written) | 0.67 | 0.78 |
+
+The layer-0 match means token ids, embedding, `attn_norm`, `wkv`, RoPE and ring order agree between the two code
+bases, so the bridge's layout conventions are right. The break is in the layer-0 block output, or in layer 1's
+input path before `wkv`. Suspects, in order: Engram (layers 1 and 14; metal_1 hashes n-grams with its own
+tokenizer normalisation), layer 0's MoE routing (hash vs score), and the mHC residual mix. Neither side has been
+checked against a CPU reference at this length yet, so it is not known which one is wrong.
+
 ## 7. Next steps
 
 1. Validate the bridge on device (section 6 test): this checks value conventions (RoPE layout of compressed KV and
