@@ -973,7 +973,7 @@ class TestImportReportFreshDatabase:
         db_path = graph_report.import_report(report_path, output_dir)
         before = db_path.read_bytes()
 
-        def failing_import_metadata(cursor, metadata):
+        def failing_import_metadata(cursor, metadata, *args, **kwargs):
             assert cursor.execute("SELECT COUNT(*) FROM buffers").fetchone()[0] > 0
             raise RuntimeError("late failure")
 
@@ -1217,11 +1217,11 @@ class TestImportReportFreshDatabase:
         importing_modes = []
         real_import_metadata = graph_report.import_metadata
 
-        def recording_import_metadata(cursor, metadata):
+        def recording_import_metadata(cursor, metadata, *args, **kwargs):
             importing_modes.extend(
                 stat.S_IMODE(p.stat().st_mode) for p in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*")
             )
-            real_import_metadata(cursor, metadata)
+            real_import_metadata(cursor, metadata, *args, **kwargs)
 
         monkeypatch.setattr(graph_report, "import_metadata", recording_import_metadata)
         graph_report.import_report(report_dir, output_dir)
@@ -1402,11 +1402,11 @@ class TestImportReportFreshDatabase:
         self._write_run_with_yamls(report_dir, "second")
         real_import_metadata = graph_report.import_metadata
 
-        def import_metadata_after_the_db_was_removed(cursor, metadata):
+        def import_metadata_after_the_db_was_removed(cursor, metadata, *args, **kwargs):
             for path in output_dir.glob(f".db.sqlite{graph_report._IMPORTING_INFIX}*"):
                 if not path.name.endswith(graph_report._SQLITE_SIDECAR_SUFFIXES):
                     path.unlink()
-            real_import_metadata(cursor, metadata)
+            real_import_metadata(cursor, metadata, *args, **kwargs)
 
         monkeypatch.setattr(graph_report, "import_metadata", import_metadata_after_the_db_was_removed)
         with expect_error(RuntimeError, "was removed or replaced during the import"):
