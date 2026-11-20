@@ -551,6 +551,11 @@ class V41Prefill:
             streams, pre = blk.enable_trace_islands(streams, pre, self.chunk)
         self.islands = True
         logger.info(f"[v41 prefill] trace islands captured for {len(self.blocks)} blocks in {time.time() - t0:.1f} s")
+        # tt-blaze DS41F-0169 (V41_PREFILL_EAGER_CCL_POOL): every capture is done -> the eager CCL ops get their own semaphores
+        for blk in self.blocks:
+            ccl = getattr(blk.attn, "tt_ccl", None)
+            if ccl is not None and hasattr(ccl, "use_eager_pool"):
+                ccl.use_eager_pool()
 
     def _run_decoder(self, decoder, start: int) -> bool:
         """``_chunk``'s ``decoder`` -> run layers 20..39 on this chunk? None = every built layer (the default prefill: the

@@ -1335,6 +1335,8 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = Fa
     real_len = hidden_states.shape[2] * self.sp_factor if seq_len_actual is None else int(seq_len_actual)
     rate = self.compressor.compress_rate
     assert state.kv_actual % ttnn.TILE_SIZE == 0 and state.kv_actual + real_len <= state.max_seq_len
+    if KVONLY_SYNC:  # DS41F-0169 diagnostic: nothing in flight around layer 20's eager CCL ops
+        ttnn.synchronize_device(self.device)
     fwp = state.entry_count * rate
     cos, sin = self._rope_gather(self._slab_rope, self._rope_index(self._slab_index, state.kv_actual))
     sliding_kv = self._kv_stem(hidden_states, cos, sin)
@@ -1361,8 +1363,11 @@ def _kv_only(self, hidden_states, seq_len_actual=None, *, state, slab: bool = Fa
     state.entry_count += real_len // rate
     state.kv_actual += real_len
     self._update_in_place(state.sliding_carry, next_carry)
+    if KVONLY_SYNC:
+        ttnn.synchronize_device(self.device)
 
 
+KVONLY_SYNC = os.environ.get("V41_PREFILL_KVONLY_SYNC", "0") == "1"
 V41CSA.kv_only = _kv_only
 
 

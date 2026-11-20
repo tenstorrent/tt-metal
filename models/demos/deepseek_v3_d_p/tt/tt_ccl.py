@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -127,6 +128,26 @@ class TT_CCL:
                 self.rs_semaphore_handles[i].append(
                     [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
                 )
+
+        # tt-blaze DS41F-0169 (V41_PREFILL_EAGER_CCL_POOL=1): a SECOND, equally shaped semaphore set for the CCL ops issued
+        # eagerly after the trace islands are captured (use_eager_pool). A captured op keeps the handle that was current at
+        # capture; an eager op takes the next one at run time, so an eager op next to a replayed one could land on the same
+        # double-buffered handle (the pair alternates only within one stream of calls) and see the other op's late increments.
+        # Created here, before any capture (a global semaphore allocated after a capture could sit on a trace's memory).
+        self.eager_pool = False
+        self._eager_sets = None
+        if os.environ.get("V41_PREFILL_EAGER_CCL_POOL", "0") == "1":
+            e_barrier, e_ag, e_rs = [[], [], []], [[], [], []], [[], [], []]
+            for i in range(3):
+                for _ in range(2):
+                    e_barrier[i].append(ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0))
+                    e_ag[i].append(
+                        [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(2)]
+                    )
+                    e_rs[i].append(
+                        [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0) for _ in range(3)]
+                    )
+            self._eager_sets = (e_barrier, e_ag, e_rs)
 
         # Single, stable-address reduce_scatter INTERMEDIATE accumulator, shared by ALL layers'
         # shared experts. Giving the shared-expert reduce_scatter a persistent, fixed-address
@@ -489,6 +510,17 @@ class TT_CCL:
         tt_ccl (one instance for the whole model), NOT on the per-layer TtSharedExpert object — the
         latter would pin one RS input per layer for the model's lifetime, leaking DRAM every layer."""
         self.shared_rs_input_keepalive = input_tensor
+
+    def use_eager_pool(self) -> bool:
+        """DS41F-0169: from now on every get_and_cycle_* call (eager ops only: replays do not call them) takes the eager set.
+        Idempotent; a no-op (False) without V41_PREFILL_EAGER_CCL_POOL."""
+        if self._eager_sets is None or self.eager_pool:
+            return self.eager_pool
+        self.barrier_semaphore_handles, self.ag_semaphore_handles, self.rs_semaphore_handles = self._eager_sets
+        self.barrier_semaphore_idx, self.ag_semaphores_idx, self.rs_semaphores_idx = [0, 0, 0], [0, 0, 0], [0, 0, 0]
+        self.eager_pool = True
+        logger.info("[tt_ccl] DS41F-0169: eager CCL ops now use their own semaphore set (captured traces keep theirs)")
+        return True
 
     def get_and_cycle_barrier_semaphore_handle(self, cluster_axis=None):
         semaphore_index = 2 if cluster_axis is None else cluster_axis
