@@ -908,10 +908,10 @@ BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
 def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, dense_blocks=4):
     """A mask with very uneven row costs, for load balancing.
 
-      heavy_rows  make_mask, then `heavy_rows` random rows (heads from `heads`) keep `heavy` of the blocks
-      prefix      make_mask, then the first `dense_blocks` Q blocks of shard 0 are dense and every row keeps them
-      suffix      the same with the last `dense_blocks` Q blocks of shard S - 1
-      causal      Q block i keeps the K blocks j <= i in sequence order
+    heavy_rows  make_mask, then `heavy_rows` random rows (heads from `heads`) keep `heavy` of the blocks
+    prefix      make_mask, then the first `dense_blocks` Q blocks of shard 0 are dense and every row keeps them
+    suffix      the same with the last `dense_blocks` Q blocks of shard S - 1
+    causal      Q block i keeps the K blocks j <= i in sequence order
     """
     g = torch.Generator().manual_seed(seed)
     nb, nb_pad = geo.nb(), geo.nb_pad()
