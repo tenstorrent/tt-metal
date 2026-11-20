@@ -86,11 +86,17 @@ struct Routing2D {
     // `header_word` is the payload/send-type/source word the receiver has already loaded.
     static FORCE_INLINE uint32_t
     read(tt_l1_ptr PACKET_HEADER_TYPE* header, [[maybe_unused]] uint32_t header_word, const ChipCoordinates& my_chip) {
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
-        // Neighbour shortcut (#65575): the flag is bit 31 of a word already in a register, so the test is a sign
-        // branch. A flagged packet is delivered here: no action-byte loads, no landing, no exit check.
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
+        // Neighbour shortcut (#65575), encoding 1: the flag is bit 31 of a word already in a register, so the test is
+        // a sign branch. A flagged packet is delivered here: no action-byte loads, no landing, no exit check.
         static_assert(PACKET_HEADER_TYPE::WORD_NEIGHBOUR_ONLY == 0x80000000u);
         if (static_cast<int32_t>(header_word) < 0) {
+            return Routing2DCodec::ACTION_LOCAL_DELIVER;
+        }
+#elif FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE
+        // Encoding 2: the flag is bit 23 of the same word (noc_send_type bit 7): shift it to the sign and branch.
+        static_assert(PACKET_HEADER_TYPE::WORD_NEIGHBOUR_ONLY_SEND_TYPE == 0x00800000u);
+        if (static_cast<int32_t>(header_word << 8) < 0) {
             return Routing2DCodec::ACTION_LOCAL_DELIVER;
         }
 #endif

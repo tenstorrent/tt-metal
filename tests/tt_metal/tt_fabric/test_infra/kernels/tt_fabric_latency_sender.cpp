@@ -103,6 +103,12 @@ void kernel_main() {
     }
     // The warmup sends a plain semaphore increment in both modes.
     sem_inc_packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{dest_semaphore_noc_addr, 1});
+    if constexpr (is_2d_fabric) {
+        if (neighbour) {  // encoding 2 keeps the flag in noc_send_type, which the setters above just wrote
+            fabric_mark_neighbour_send((HybridMeshPacketHeader*)payload_packet_header);
+            fabric_mark_neighbour_send((HybridMeshPacketHeader*)sem_inc_packet_header);
+        }
+    }
 
     auto send_seminc_packet = [&fabric_connection, sem_inc_packet_header]() {
         fabric_connection.wait_for_empty_write_slot();

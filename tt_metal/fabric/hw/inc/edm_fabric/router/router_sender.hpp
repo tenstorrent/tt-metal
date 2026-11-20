@@ -546,7 +546,7 @@ FORCE_INLINE bool send(
     const uint32_t slot_addr = next_slot_addr;
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot_addr);
 
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
     // One word load gives the payload size and the producer's neighbour flag (src_ch_id bit 7), which the channel
     // id stamp below must keep: same load count as the halfword load it replaces.
     const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);

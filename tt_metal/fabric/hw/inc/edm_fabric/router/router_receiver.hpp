@@ -164,7 +164,7 @@ FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
     if constexpr (skip_src_ch_id_update) {
         return 0;
     } else {
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
         return header_src_ch_id & PACKET_HEADER_TYPE::SRC_CH_ID_MASK;  // bit 7 is the neighbour flag
 #else
         return header_src_ch_id;

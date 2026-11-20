@@ -1065,6 +1065,7 @@ struct SenderKernelTrafficConfig {
                 arg_idx, packet_header_address, packet_header);
         } else if (IS_2D_FABRIC && static_cast<uint32_t>(chip_send_type) == TEST_CHIP_SEND_TYPE_NEIGHBOUR) {
             NeighbourSendHandler::parse_and_setup(arg_idx, packet_header_address, packet_header);
+            neighbour_ = true;
         } else {
             ASSERT(false);
         }
@@ -1098,6 +1099,7 @@ struct SenderKernelTrafficConfig {
         ASSERT(noc_ops_.update_header != nullptr);
 
         noc_ops_.parse_and_setup(this, arg_idx);
+        mark_neighbour();
     }
 
     void setup_payload_buffer(uint32_t payload_buffer_address, uint32_t payload_buffer_size) {
@@ -1138,6 +1140,7 @@ struct SenderKernelTrafficConfig {
                 NocUnicastCommandHeader{
                     get_noc_addr_helper(f.write_fields.dst_noc_encoding, f.write_fields.dst_address)},
                 f.write_fields.payload_size_bytes);
+            mark_neighbour();
         }
 
         // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
@@ -1276,8 +1279,18 @@ private:
     void update_header_for_next_packet() {
         if (payload_buffer_) {
             noc_ops_.update_header(this);
+            mark_neighbour();
         }
     }
+    // ftype: neighbour under flag encoding 2: the NoC command setters rewrite noc_send_type, so re-mark after each.
+    void mark_neighbour() {
+#if defined(FABRIC_2D)
+        if (neighbour_) {
+            fabric_mark_neighbour_send((HybridMeshPacketHeader*)packet_header);
+        }
+#endif
+    }
+    bool neighbour_ = false;
 
 public:
     FabricConnectionArray<EdmSenderT>* connection_manager_;

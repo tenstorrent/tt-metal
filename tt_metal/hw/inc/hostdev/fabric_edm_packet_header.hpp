@@ -92,6 +92,20 @@ enum EDMStatus : uint32_t {
 };
 
 // 4 bits
+// Neighbour shortcut (#65575) prototype encodings, chosen by the value of FABRIC_2D_NEIGHBOUR_SHORTCUT (device builds):
+//   1: the flag is src_ch_id bit 7. Producers set it with the route; the sending router keeps it when it stamps its
+//      channel id (its payload-size load widens to the whole word, and the stamp then depends on that load).
+//   2: the flag is noc_send_type bit 7. Producers set it after the NoC command setter (which rewrites the byte); the
+//      sending router does not touch it. Receivers mask the send type to 7 bits.
+// Either way the flag is in the payload/send-type/source word the receiving router already loads.
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#define FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID (FABRIC_2D_NEIGHBOUR_SHORTCUT == 1)
+#define FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE (FABRIC_2D_NEIGHBOUR_SHORTCUT == 2)
+#else
+#define FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID 0
+#define FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE 0
+#endif
+
 enum NocSendType : uint8_t {
     NOC_UNICAST_WRITE = 0,
     NOC_UNICAST_INLINE_WRITE = 1,
@@ -427,6 +441,10 @@ public:
     static constexpr uint8_t SRC_CH_NEIGHBOUR_ONLY = 0x80;
     static constexpr uint8_t SRC_CH_ID_MASK = 0x7F;
     static constexpr uint32_t WORD_NEIGHBOUR_ONLY = static_cast<uint32_t>(SRC_CH_NEIGHBOUR_ONLY) << 24;
+    // Encoding 2: noc_send_type bit 7 (bit 23 of the word).
+    static constexpr uint8_t SEND_TYPE_NEIGHBOUR_ONLY = 0x80;
+    static constexpr uint32_t SEND_TYPE_MASK = FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE ? 0x7F : 0xFF;
+    static constexpr uint32_t WORD_NEIGHBOUR_ONLY_SEND_TYPE = static_cast<uint32_t>(SEND_TYPE_NEIGHBOUR_ONLY) << 16;
     // Used only by the EDM sender and receiver channels. Populated by EDM sender channel to
     // indicate to the receiver channel what channel was the source of this packet. Reserved
     // otherwise.
@@ -447,7 +465,7 @@ public:
                 reinterpret_cast<uintptr_t>(hdr) + offsetof(PacketHeaderBase, payload_size_bytes));
             PackedPayloadAndSendType result;
             result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
-            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & SEND_TYPE_MASK);
             return result;
         }
 
@@ -470,7 +488,7 @@ public:
             static_assert(offsetof(PacketHeaderBase, src_ch_id) == word_offset + 3);
             Unpacked result;
             result.payload_size_bytes = static_cast<uint16_t>(raw & 0xFFFF);
-            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & 0xFF);
+            result.noc_send_type = static_cast<NocSendType>((raw >> 16) & SEND_TYPE_MASK);
             result.src_ch_id = static_cast<uint8_t>(raw >> 24);
             return result;
         }

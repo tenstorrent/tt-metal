@@ -61,6 +61,10 @@ FORCE_INLINE void fabric_neighbour_send_noc_unicast_write(
         fabric_set_neighbour_route(packet_header, dst_dev_id, dst_mesh_id);
     }
     packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+#if FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE
+    packet_header->noc_send_type = static_cast<tt::tt_fabric::NocSendType>(
+        tt::tt_fabric::NOC_UNICAST_WRITE | PACKET_HEADER_TYPE::SEND_TYPE_NEIGHBOUR_ONLY);  // one byte store
+#endif
     client_interface->wait_for_empty_write_slot();
     client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));

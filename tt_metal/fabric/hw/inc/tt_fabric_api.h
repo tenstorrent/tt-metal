@@ -96,13 +96,26 @@ inline uint8_t get_router_direction(uint32_t eth_channel) {
 // route_buffer[0..Y) holds the Y map, route_buffer[Y..Y+X) the X map.
 
 // neighbour_send route: the destination is the chip at the far end of the link the packet is sent on.
-// No route map is built; src_ch_id bit 7 tells the receiving router to deliver without decoding. Only
+// No route map is built; a header flag tells the receiving router to deliver without decoding. Only
 // valid when the fabric's routers are built with FABRIC_2D_NEIGHBOUR_SHORTCUT (a router without it
-// would decode whatever map the header last held).
+// would decode whatever map the header last held). Encoding 1 sets the flag here (src_ch_id); encoding 2
+// keeps it in noc_send_type, which every NoC command setter rewrites, so the producer marks the header
+// with fabric_mark_neighbour_send after the setter (the neighbour_send write API does).
 inline void fabric_set_neighbour_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
     packet_header->src_ch_id = HybridMeshPacketHeader::SRC_CH_NEIGHBOUR_ONLY;
+#endif
+}
+
+// Encoding 2: set the flag in a header whose NoC command is already set (a byte store of the known type; this
+// read-modify-write form is for code that does not know the type statically). No-op for encoding 1.
+inline void fabric_mark_neighbour_send(volatile tt_l1_ptr HybridMeshPacketHeader* packet_header) {
+#if FABRIC_NEIGHBOUR_FLAG_IN_SEND_TYPE
+    packet_header->noc_send_type =
+        static_cast<NocSendType>(packet_header->noc_send_type | HybridMeshPacketHeader::SEND_TYPE_NEIGHBOUR_ONLY);
+#endif
 }
 
 // Unicast setup retains the final destination in packet metadata, then expands one destination-major
@@ -111,7 +124,7 @@ inline void fabric_set_neighbour_route(
 inline bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
     packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
 #endif
     const uint8_t mesh_y_size = routing_table->mesh_y_size;
@@ -160,7 +173,7 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                      ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
     packet_header->routing_fields.value = 0;
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
     packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
 #endif
 
@@ -333,7 +346,7 @@ inline void fabric_set_single_hop_unicast_route_from_direction(
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->mcast_params_64 = 0;
     packet_header->routing_fields.value = 0;
-#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+#if FABRIC_NEIGHBOUR_FLAG_IN_SRC_CH_ID
     packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
 #endif
 }

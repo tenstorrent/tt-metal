@@ -352,8 +352,10 @@ void JitBuildEnv::init(
     this->defines_ += "-DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 ";
     // Prototype gate for the 2D neighbour shortcut (#65575): routers and producers must agree, so one define reaches
     // every kernel. The define is part of every build's flags; use a separate TT_METAL_CACHE per setting anyway.
-    if (std::getenv("TT_FABRIC_NEIGHBOUR_SHORTCUT") != nullptr) {
-        this->defines_ += "-DFABRIC_2D_NEIGHBOUR_SHORTCUT ";
+    // Value selects the flag encoding (1: src_ch_id bit 7, 2: noc_send_type bit 7; see fabric_edm_packet_header.hpp).
+    if (const char* nb = std::getenv("TT_FABRIC_NEIGHBOUR_SHORTCUT"); nb != nullptr) {
+        const std::string v = nb[0] == '2' ? "2" : "1";
+        this->defines_ += "-DFABRIC_2D_NEIGHBOUR_SHORTCUT=" + v + " ";
     }
 
     if (rtoptions.get_profiler_enabled()) {
