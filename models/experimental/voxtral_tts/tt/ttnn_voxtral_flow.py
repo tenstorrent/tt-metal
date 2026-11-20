@@ -157,7 +157,13 @@ class TtVoxtralFlow:
         # sdpa handles GQA natively. scale=1.0 is mandatory: SCALE is already folded into wqkv's
         # q rows.
         a = ttnn.transformer.scaled_dot_product_attention(
-            qh, kh, vh, is_causal=False, scale=1.0, compute_kernel_config=COMPUTE_CONFIG
+            qh,
+            kh,
+            vh,
+            is_causal=False,
+            scale=1.0,
+            compute_kernel_config=COMPUTE_CONFIG,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         # back to folded rows so wo and the MLP get the single-weight-read layout too
         a = ttnn.reshape(ttnn.permute(a, (0, 2, 1, 3)), [1, B * 3, FM_N_HEADS * FM_HEAD_DIM])
