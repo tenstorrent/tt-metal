@@ -401,7 +401,7 @@ def test_eltwise_binary_sfpu_int_quasar(
 
 
 # ===========================================================================
-# Family 2 — float ops (add, sub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
+# Family 2 — float ops (add, sub, rsub, mul, div, atan2, copy_dest). Ported from test_sfpu_binary_float_quasar.py.
 # add/sub route the SFPU calculate_sfpu_binary ADD/SUB path (tenstorrent/tt-metal#49883).
 # Operand/result tile-index variants exercise result-over-operand aliasing.
 # ===========================================================================
@@ -441,7 +441,7 @@ def _prepare_float_inputs(src_A, data_format, src0_idx, src1_idx, mathop):
             flat[src0_idx * MAX_TILE_ELEMENTS + lane] = dividend
             flat[src1_idx * MAX_TILE_ELEMENTS + lane] = divisor
         return flat.reshape(scaled.shape)
-    # SfpuElwadd / SfpuElwsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
+    # SfpuElwadd / SfpuElwsub / SfpuElwrsub / SfpuElwmul / SfpuCopyDest — symmetric ±250 range.
     scaled = ((src_A.to(torch.float32) - 0.5) * 500.0).to(torch_format)
     return scaled.flatten().reshape(scaled.shape)
 
@@ -483,6 +483,7 @@ _FLOAT_VARIANTS = _get_valid_float_formats_dest_acc()
 _FLOAT_MATHOPS = [
     MathOperation.SfpuElwadd,
     MathOperation.SfpuElwsub,
+    MathOperation.SfpuElwrsub,
     MathOperation.SfpuElwmul,
     MathOperation.SfpuElwdiv,
     MathOperation.SfpuAtan2,
@@ -535,7 +536,7 @@ def test_eltwise_binary_sfpu_float_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU float ops (add, sub, mul, div, atan2, copy_dest)."""
+    """Binary SFPU float ops (add, sub, rsub, mul, div, atan2, copy_dest)."""
     format_variant = resolve_quasar_sfpu_variant(
         MathOperation.SfpuElwadd, formats, dest_acc
     )
@@ -794,6 +795,7 @@ def test_eltwise_binary_sfpu_bcast_quasar(
 _BF16_ADD_SUB_OPS = [
     ("ADD", MathOperation.SfpuElwadd),
     ("SUB", MathOperation.SfpuElwsub),
+    ("RSUB", MathOperation.SfpuElwrsub),
 ]
 
 BF16_RNE_SWEEP = dict(
@@ -815,7 +817,7 @@ def test_eltwise_binary_sfpu_bf16_rne_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    """Binary SFPU ADD/SUB with NearestEven rounding on bfloat16 inputs.
+    """Binary SFPU ADD/SUB/RSUB with NearestEven rounding on bfloat16 inputs.
 
     RNE narrowing only applies when DEST holds bf16 (fp32 dest accumulation
     disabled), so this test is scoped to Float16_b with DestAccumulation.No.

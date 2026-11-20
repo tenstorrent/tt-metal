@@ -614,6 +614,11 @@ const map<std::string, std::map<std::string, std::string>> sfpu_binary_op_to_op_
      {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "rsub_binary_tile_init();"},
       {"SFPU_OP_CHAIN_0", "rsub_binary_tile(0, 1, 0);"}}},
+    // The NearestEven form is the one binary_ng emits for bf16 ttnn.rsub.
+    {"rsub_binary_rne",
+     {{"SFPU_OP_BINARY_DIV_INCLUDE", "1"},
+      {"SFPU_OP_INIT_0", "rsub_binary_tile_init();"},
+      {"SFPU_OP_CHAIN_0", "rsub_binary_tile<ckernel::DstRoundingMode::NearestEven>(0, 1, 0);"}}},
     {"binary_max",
      {{"SFPU_OP_BINARY_MAX_MIN_INCLUDE", "1"},
       {"SFPU_OP_INIT_0", "binary_max_tile_init();"},
@@ -1825,7 +1830,7 @@ bfloat16 sfpu_binary_function(const std::string& op_name, const bfloat16& lhs_bf
     if (op_name == "mul_float") {
         return bfloat16(lhs * rhs);
     }
-    if (op_name == "rsub_binary") {
+    if (op_name == "rsub_binary" || op_name == "rsub_binary_rne") {
         return bfloat16(rhs - lhs);
     }
     if (op_name == "eq_binary") {
@@ -2289,7 +2294,7 @@ std::pair<vector<uint32_t>, vector<uint32_t>> generate_packed_sfpu_binary_inputs
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed),
             generate_packed_uniform_random_vector<uint32_t, bfloat16>(-5.0f, 5.0f, numel, seed + 1)};
     }
-    if (op_name == "binary_max" || op_name == "binary_min" || op_name == "copy_dest") {
+    if (op_name == "binary_max" || op_name == "binary_min" || op_name == "copy_dest" || op_name == "rsub_binary_rne") {
         auto lhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed);
         auto rhs = generate_packed_uniform_random_vector<uint32_t, bfloat16>(-4.0f, 4.0f, numel, seed + 1);
         return {lhs, rhs};
@@ -5022,6 +5027,7 @@ INSTANTIATE_TEST_SUITE_P(
         std::make_tuple(1, "le_binary"),
         std::make_tuple(1, "ge_binary"),
         std::make_tuple(1, "rsub_binary"),
+        std::make_tuple(1, "rsub_binary_rne"),
         std::make_tuple(1, "binary_max"),
         std::make_tuple(1, "binary_min"),
         std::make_tuple(1, "binary_max_int32"),
