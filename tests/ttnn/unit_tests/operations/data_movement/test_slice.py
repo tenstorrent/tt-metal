@@ -1749,6 +1749,101 @@ def test_issue_38841_regression(device):
     assert_equal(torch_expected, tt_output_torch)
 
 
+def _legacy_sharded_mc(layout, x1, y1, shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(x1, y1))})
+    return ttnn.MemoryConfig(
+        layout, ttnn.BufferType.L1, ttnn.ShardSpec(grid, list(shape), ttnn.ShardOrientation.ROW_MAJOR)
+    )
+
+
+@pytest.mark.parametrize(
+    "layout, input_shape, in_grid, in_shard, out_grid, out_shard, begins, ends, step, use_output_tensor",
+    [
+        # BLOCK_SHARDED, non-tile-aligned width begin: core corruption case.
+        ("B", (1, 1, 32, 32), (0, 0), (32, 32), (0, 0), (32, 32), [0, 0, 1, 16], [1, 1, 32, 32], [1, 1, 1, 1], False),
+        # BLOCK_SHARDED, strided on asymmetric 3x2 grid with preallocated output_tensor.
+        ("B", (1, 1, 33, 65), (2, 1), (32, 32), (0, 0), (32, 32), [0, 0, 0, 0], [1, 1, 32, 32], [1, 1, 1, 2], True),
+        # WIDTH_SHARDED strided slice.
+        ("W", (1, 1, 32, 128), (0, 3), (32, 32), (0, 0), (32, 32), [0, 0, 0, 0], [1, 1, 32, 64], [1, 1, 1, 2], False),
+        # HEIGHT_SHARDED non-tile-aligned H begin: shard_w == tensor_w → native path, no composite.
+        ("H", (1, 1, 32, 32), (0, 0), (32, 32), (0, 0), (32, 32), [0, 0, 1, 0], [1, 1, 32, 32], [1, 1, 1, 1], False),
+    ],
+)
+def test_tile_sharded_rm_only_slice_correctness(
+    layout, input_shape, in_grid, in_shard, out_grid, out_shard, begins, ends, step, use_output_tensor, device
+):
+    """TILE sharded strided / non-tile-begin slices must round-trip bit-exactly."""
+    torch.manual_seed(2026)
+    mem_layout = {
+        "B": ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        "W": ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        "H": ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+    }[layout]
+    in_mc = _legacy_sharded_mc(mem_layout, *in_grid, in_shard)
+    out_mc = _legacy_sharded_mc(mem_layout, *out_grid, out_shard)
+
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+    want = torch_input[
+        begins[0] : ends[0] : step[0],
+        begins[1] : ends[1] : step[1],
+        begins[2] : ends[2] : step[2],
+        begins[3] : ends[3] : step[3],
+    ]
+
+    if use_output_tensor:
+        out_buf = ttnn.from_torch(
+            torch.full(tuple(want.shape), 7.0, dtype=torch.bfloat16),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=out_mc,
+        )
+        tt_output = ttnn.slice(tt_input, begins, ends, step, output_tensor=out_buf)
+    else:
+        tt_output = ttnn.slice(tt_input, begins, ends, step, memory_config=out_mc)
+
+    assert_equal(want, ttnn.to_torch(tt_output).reshape(want.shape))
+
+
+def test_tile_sharded_dram_interleaved_input_skips_staging(device):
+    """DRAM-interleaved TILE input + BLOCK_SHARDED output must not pre-stage to L1."""
+    torch.manual_seed(2026)
+    out_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 0, (32, 32))
+
+    torch_input = torch.randn((1, 1, 32, 32), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    tt_output = ttnn.slice(tt_input, [0, 0, 1, 16], [1, 1, 32, 32], [1, 1, 1, 1], memory_config=out_mc)
+    assert_equal(torch_input[:, :, 1:32, 16:32], ttnn.to_torch(tt_output).reshape((1, 1, 31, 16)))
+
+
+def test_tile_sharded_inherited_shard_spec_tile_aligned(device):
+    """No explicit memory_config: composite must tile-align the rescaled inherited shard spec."""
+    torch.manual_seed(2026)
+    in_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 1, 1, (32, 32))
+
+    torch_input = torch.randn((1, 1, 64, 64), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=in_mc)
+
+    # Strided W: without tile-align the inherited rescaled shard would be {32, 16}.
+    tt_output = ttnn.slice(tt_input, [0, 0, 0, 1], [1, 1, 64, 64], [1, 1, 1, 2])
+    assert_equal(torch_input[:, :, :, 1:64:2], ttnn.to_torch(tt_output).reshape((1, 1, 64, 32)))
+
+
+def test_tile_sharded_zero_size_slice(device):
+    """Zero-size output must bypass the composite and fall to the empty branch."""
+    in_mc = _legacy_sharded_mc(ttnn.TensorMemoryLayout.BLOCK_SHARDED, 0, 0, (32, 32))
+    tt_input = ttnn.from_torch(
+        torch.zeros((1, 1, 32, 32), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=in_mc,
+    )
+    tt_output = ttnn.slice(tt_input, [0, 0, 0, 0], [1, 1, 32, 0], [1, 1, 1, 1])
+    assert list(tt_output.shape) == [1, 1, 32, 0]
+
+
 @pytest.mark.parametrize(
     "input_shape, begins, ends, step",
     [
