@@ -12,7 +12,7 @@ validation pending. Read "The blocker" before planning server work.
 | Parallelism | sequence-parallel (SP) over mesh rows (axis 0), tensor-parallel (TP) over mesh columns (axis 1); every chip works on every layer | pipeline over stages (five layers a stage), TP4 inside a stage; stages work on consecutive chunks |
 | Chunk | 5120 tokens (640 a mesh row) | 1024 tokens (`--prefill-trace-chunk`) |
 | Context | 1,044,480 deployed, 1M measured | `--prefill-max-len` (the context when unset); two-level select now written but not validated past 16384 |
-| Execution | eager per chunk, cached programs, no trace; host enqueue overlaps device | one trace per stage and position tier, D2D sockets between stages, H2D packet, D2H logits |
+| Execution | eager per chunk, cached programs, no trace; host enqueue overlaps device | one trace per stage (no position tiers: ops read the chunk start on device; plus a fresh-window trace for bounded replay), D2D sockets between stages, H2D packet, D2H logits |
 | Attention | `ttnn.bringup.sparse_sdpa` over the window + the indexer's top-512 entries; two-level candidate select at layer 20 | `deepseek_v4_prefill_sdpa` over window + selected entries; two-level select phase 1-2 written |
 | MoE | `MOE_BLOCK_V2` fused block, routed experts bfp4, expert-parallel over the whole mesh | `fused_experts_prefill`, routed experts shared in place with decode (bfp4) |
 | Engram | host n-gram hash + memory-mapped table (device path behind `DS41_ENGRAM_DEVICE`) | host `EngramHostLookup`, rows over one H2D socket a device |
