@@ -5,6 +5,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -38,6 +39,8 @@ public:
         ttsl::Span<const uint32_t> device_ids,
         ttsl::move_only_function<void(size_t)>&& fn,
         AfterFanOut after = AfterFanOut::Spin) = 0;
+    // The CPU the worker serving `device_id` is pinned to, if any.
+    virtual std::optional<uint32_t> worker_cpu(uint32_t /*device_id*/) const { return std::nullopt; }
 };
 
 // API accespting the number of threads to spawn in the pool. Will bind each thread to a CPU core, but the
@@ -49,11 +52,13 @@ std::shared_ptr<ThreadPool> create_device_bound_thread_pool(ContextId context_id
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id, const std::vector<tt::tt_metal::Device*>& physical_devices);
 // As above, with a spin window: after its last task or parallel_for call, each worker keeps polling for
-// `spin_window` before it parks, so that back-to-back fan-outs reach it without a wake.
+// `spin_window` before it parks, so that back-to-back fan-outs reach it without a wake. With `siblings_of`, each worker
+// takes the other hardware thread of the core that pool's worker for the same device runs on, when that thread is free.
 std::shared_ptr<ThreadPool> create_device_bound_thread_pool(
     ContextId context_id,
     const std::vector<tt::tt_metal::Device*>& physical_devices,
-    std::chrono::microseconds spin_window);
+    std::chrono::microseconds spin_window,
+    const ThreadPool* siblings_of = nullptr);
 std::shared_ptr<ThreadPool> create_passthrough_thread_pool(ContextId context_id);
 
 // Call before the pages are faulted.

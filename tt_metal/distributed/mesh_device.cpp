@@ -105,12 +105,13 @@ std::atomic<uint64_t> mesh_device_close_count{0};
 std::shared_ptr<ThreadPool> create_default_thread_pool(
     ContextId context_id,
     const std::vector<Device*>& physical_devices,
-    std::chrono::microseconds spin_window = std::chrono::microseconds(0)) {
+    std::chrono::microseconds spin_window = std::chrono::microseconds(0),
+    const ThreadPool* siblings_of = nullptr) {
     // Bind the thread-pool to the physical devices being used.
     if (tt::parse_env("TT_MESH_PASS_THROUGH_THREAD_POOL", false) || physical_devices.size() == 1) {
         return create_passthrough_thread_pool(context_id);
     }
-    return create_device_bound_thread_pool(context_id, physical_devices, spin_window);
+    return create_device_bound_thread_pool(context_id, physical_devices, spin_window, siblings_of);
 }
 
 // Covers the p90 host gap between fan-outs in GLM-5.2 and Kimi K2.7 prefill (144 us), so workers are still polling
@@ -387,7 +388,12 @@ MeshDeviceImpl::MeshDeviceImpl(
     parent_mesh_(std::move(parent_mesh)),
     dispatch_thread_pool_(
         create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()), DISPATCH_POOL_SPIN)),
-    reader_thread_pool_(create_default_thread_pool(context_id_, extract_locals(scoped_devices_->root_devices()))),
+    // A device's reader shares its dispatch worker's core: the pools take half as many cores.
+    reader_thread_pool_(create_default_thread_pool(
+        context_id_,
+        extract_locals(scoped_devices_->root_devices()),
+        std::chrono::microseconds(0),
+        dispatch_thread_pool_.get())),
     program_cache_(std::make_unique<program_cache::detail::ProgramCache>()) {
     local_devices_ = view_->impl().get_devices();
     const auto& mpi_context = metal_env().get_control_plane().get_distributed_context(view_->mesh_id());
