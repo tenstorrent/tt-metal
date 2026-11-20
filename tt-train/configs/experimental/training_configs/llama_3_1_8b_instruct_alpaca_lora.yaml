@@ -30,9 +30,9 @@ stopping_criteria:
 
 metrics:
   train:
-    steps_freq: 10
+    frequency: 10
   validation:
-    steps_freq: 50
+    frequency: 50
 
 checkpoint:
   save_strategy:
