@@ -1211,7 +1211,7 @@ fi # teardown-sanity-mpi
 ######################################
 if run_group "teardown-sanity-ttmetal"; then
 
-TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/tt_metal/distributed/multiprocess/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
+TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-sanity-ttmetal
 

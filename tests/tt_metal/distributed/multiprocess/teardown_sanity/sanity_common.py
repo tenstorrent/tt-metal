@@ -28,7 +28,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("TT_METAL_HOME", HERE.parents[4]))
-PROBE = HERE / "sanity_probe.py"
+PROBE: Path | None = None  # the Python rank program; set by the suite that owns it (test_teardown_sanity.py)
 # A mock Blackhole dual galaxy: two ranks, no device (CPU only). The suite targets Blackhole, so it uses a
 # blackhole mock everywhere; the same descriptor + mapping pairing is already validated by the BH dual-galaxy rows
 # of the fabric CPU-only lane. This is a mock topology for the control plane to parse — the teardown behaviour it

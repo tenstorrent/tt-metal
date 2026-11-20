@@ -24,7 +24,7 @@ done
 ROOT="${TT_METAL_HOME:-$(pwd)}"
 TTRUN="$(command -v tt-run || echo tt-run)"
 PY="${TT_SANITY_PYTHON:-python3}"
-PROBE="$ROOT/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_probe.py"
+PROBE="$ROOT/tests/ttnn/distributed/teardown_sanity/sanity_probe.py"
 BINDING="$ROOT/tests/tt_metal/distributed/config/dual_bh_galaxy_rank_binding.yaml"
 MAPPING="$ROOT/tt_metal/third_party/tt-cluster-descriptors/blackhole/dual_glx_2.5d_torus/dual_glx_2.5d_torus_cluster_desc_mapping.yaml"
 

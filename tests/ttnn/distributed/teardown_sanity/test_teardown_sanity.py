@@ -4,7 +4,8 @@
 
 CPU only, on the mock dual galaxy (two ranks of 8x4, no device), launched by tt-run like every real job. Every
 test is one fault with one assertion, taken from the teardown plan of tt-metal #56902 (tt-blaze
-tools/teardown_probe, lane L4): the rank program is ``sanity_probe.py`` next to this file. The faults are the
+tools/teardown_probe, lane L4): the rank program is ``sanity_probe.py`` next to this file; the harness is in
+tests/tt_metal/distributed/multiprocess/teardown_sanity. The faults are the
 two kinds a real job meets: the code failing on one rank (an exception, a shape the descriptor cannot hold, a
 descriptor that disagrees, a collective with a wrong or dead peer) and the user (a signal at tt-run).
 
@@ -16,7 +17,7 @@ plan's error id and fix: it fails, so the job is red until the fix lands, and it
 error; when the fix lands the row passes and the marker is dropped. Each row has a deadline; a job that is still running at the
 deadline is killed by its process group and counted as a hang.
 
-Run: pytest tests/tt_metal/distributed/multiprocess/teardown_sanity -v   (from the repository root, with a
+Run: pytest tests/ttnn/distributed/teardown_sanity -v   (from the repository root, with a
 built tree and the python environment; the fabric CPU lane runs it as group ``teardown-sanity`` of
 tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh).
 """
@@ -32,9 +33,11 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(
-    0, str(Path(__file__).resolve().parent)
-)  # sanity_common lives next to this file, whatever the import mode
+# The harness (sanity_common) is shared with the raw-MPI rows in tests/tt_metal/distributed/multiprocess/teardown_sanity.
+sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "tests/tt_metal/distributed/multiprocess/teardown_sanity"))
+import sanity_common  # noqa: E402
+
+sanity_common.PROBE = Path(__file__).resolve().parent / "sanity_probe.py"
 from sanity_common import (
     _session_dirs,
     CONFLICT_DESC,
