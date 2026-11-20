@@ -112,3 +112,32 @@ def test_pad_zero_volume_is_all_padding(device, layout, input_config, output_con
     out = ttnn.pad(x, [(0, 0), (0, 0), (0, 32), (0, 0)], 1.0, memory_config=output_config)
     assert out.is_sharded() == (output_config is None and input_config.is_sharded())
     assert torch.equal(ttnn.to_torch(out), torch.ones((1, 1, 32, 64), dtype=torch.bfloat16))
+
+
+# The zero-volume skip still runs each op's validation first.
+def test_embedding_zero_width_weight_still_validated(device, expect_error):
+    idx = ttnn.from_torch(torch.zeros(1, 32, dtype=torch.int32), dtype=ttnn.uint32, layout=RM, device=device)
+    weight = _to_device(device, _ints([8, 0]), RM)
+    with expect_error(RuntimeError, "Weight tensor must have 2 embeddings for BINARY Embeddings Type"):
+        ttnn.embedding(idx, weight, embeddings_type=ttnn.EmbeddingsType.BINARY, memory_config=DRAM)
+
+
+def test_sharded_to_interleaved_partial_zero_volume_still_validated(device, expect_error):
+    x = _to_device(device, _ints([1, 1, 0, 64]), TILE, HEIGHT_SHARDED)
+    cache = _to_device(device, torch.zeros((1, 1, 128, 64), dtype=torch.bfloat16))
+    with expect_error(RuntimeError, "Slice index and num_slices don't match"):
+        ttnn.sharded_to_interleaved_partial(x, cache, 2, 2, memory_config=DRAM)
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32768}], indirect=True)
+@pytest.mark.parametrize("layout", [TILE, RM], ids=["tile", "rm"])
+def test_pad_zero_volume_trace(device, layout):
+    # The padding must be written on device: trace capture rejects a host upload.
+    x = _to_device(device, _ints([1, 1, 0, 64]), layout)
+    ttnn.pad(x, [(0, 0), (0, 0), (0, 32), (0, 0)], 1.0)
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    out = ttnn.pad(x, [(0, 0), (0, 0), (0, 32), (0, 0)], 1.0)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=True)
+    ttnn.release_trace(device, trace_id)
+    assert torch.equal(ttnn.to_torch(out), torch.ones((1, 1, 32, 64), dtype=torch.bfloat16))

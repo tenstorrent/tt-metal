@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/fill_pad/device/fill_pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
@@ -11,6 +10,7 @@
 #include "ttnn/operations/data_movement/pad/codegen/pad_codegen_supported.hpp"
 #include "ttnn/operations/data_movement/pad/device/pad_device_operation.hpp"
 #include "ttnn/operations/data_movement/sharded/interleaved_to_sharded/interleaved_to_sharded.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operation.hpp"
@@ -667,13 +667,26 @@ ttnn::Tensor pad_with_route(
     if (input_tensor.storage_type() == StorageType::DEVICE && input_tensor.logical_volume() == 0) {
         const auto output_shape = compute_padded_logical_shape(input_tensor.logical_shape(), working_padding);
         const auto& requested_config = memory_config_arg.value_or(input_tensor.memory_config());
-        ttnn::Tensor output_tensor = ttnn::full(
+        // Allocated and filled on the device, keeping the input's mesh topology: a host upload fails inside trace
+        // capture.
+        const TensorSpec output_spec(
             output_shape,
-            value,
-            input_tensor.dtype(),
-            input_tensor.layout(),
-            *input_tensor.device(),
-            MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()});
+            TensorLayout(
+                input_tensor.dtype(),
+                PageConfig(input_tensor.layout(), input_tensor.tensor_spec().tile()),
+                MemoryConfig{TensorMemoryLayout::INTERLEAVED, requested_config.buffer_type()}));
+        ttnn::Tensor output_tensor =
+            create_device_tensor(output_spec, input_tensor.device(), input_tensor.tensor_topology());
+        if (output_shape.volume() == 0) {
+            return output_tensor;
+        }
+        if (input_tensor.dtype() == DataType::INT32) {
+            output_tensor = ttnn::fill(output_tensor, static_cast<int32_t>(value), std::nullopt, output_tensor);
+        } else if (input_tensor.dtype() == DataType::UINT32) {
+            output_tensor = ttnn::fill(output_tensor, static_cast<uint32_t>(value), std::nullopt, output_tensor);
+        } else {
+            output_tensor = ttnn::fill(output_tensor, value, std::nullopt, output_tensor);
+        }
         if (requested_config.is_sharded()) {
             // Without a memory_config, the output keeps the input's shard spec.
             return ttnn::to_memory_config(output_tensor, requested_config, std::nullopt);

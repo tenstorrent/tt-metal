@@ -26,8 +26,14 @@ struct ShardedToInterleavedPartialDeviceOperation {
     static Tensor create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     // An empty input has no slice to write into the cache tensor, and the program factory divides by its empty dims.
     static bool skip_launch(
-        const operation_attributes_t&, const tensor_args_t& tensor_args, const tensor_return_value_t&) {
-        return tensor_args.input_tensor.logical_shape().volume() == 0;
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        const tensor_return_value_t&) {
+        if (tensor_args.input_tensor.logical_shape().volume() != 0) {
+            return false;
+        }
+        validate_on_program_cache_miss(operation_attributes, tensor_args);
+        return true;
     }
 
     tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> create_op_performance_model(
