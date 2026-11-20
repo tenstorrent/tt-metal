@@ -37,8 +37,9 @@ results to the output tensor. The three kernels already exist in TT-NN. With ``t
    :end-before: [guide-example-end]
    :dedent: 4
 
-A ``WorkUnitSpec`` runs its kernels on each of its ``target_nodes``; a node is a core. A program can have several work
-units, each running some of the program's kernels on its own cores, and a kernel can be in more than one.
+A ``WorkUnitSpec`` runs its kernels on each of its ``target_nodes``. A node is a block of the chip's grid at an x, y
+coordinate, such as a Tensix core; like TT-NN's ``ttnn.CoreCoord``, this guide calls it a core. A program can have
+several work units, each running some of the program's kernels on its own cores, and a kernel can be in more than one.
 
 A kernel's ``source`` is the path of its source file: an absolute path, or one that Metal looks up in the current
 directory, then in ``TT_METAL_KERNEL_PATH``, the system kernel directory and the tt-metal root, where it finds the
@@ -53,48 +54,29 @@ spec only ties the binding to it. In the example, the reader reads tensor parame
 ``E.producer_of`` and ``E.consumer_of`` make a buffer binding from the buffer's ``unique_id`` and the accessor name; the
 example's buffers and their accessors share the names ``in`` and ``out``.
 
-.. list-table::
-   :header-rows: 1
+What a kernel needs, where you set it, and how the kernel reaches it:
 
-   * - What a kernel needs
-     - Where you set it
-     - How the kernel reads it
-   * - A value fixed at compile time
-     - ``KernelSpec.compile_time_args``
-     - ``get_arg(args::<name>)``
-   * - A value per core
-     - A name in ``RuntimeArgSchema.runtime_arg_names``, the values in ``KernelRunArgs.runtime_arg_values``
-     - ``get_arg(args::<name>)``
-   * - A value shared by all cores
-     - A name in ``RuntimeArgSchema.common_runtime_arg_names``, the value in ``KernelRunArgs.common_runtime_arg_values``
-     - ``get_arg(args::<name>)``
-   * - A list of values fixed at compile time
-     - ``KernelSpec.compile_time_array_args``
-     - ``get_arg(args::<name>)[i]``
-   * - A list of values per core
-     - An ``ArrayArgDecl`` (``name`` and ``size``) in ``RuntimeArgSchema.runtime_array_args``, the values in
-       ``KernelRunArgs.runtime_array_arg_values``
-     - ``get_arg(args::<name>)[i]``
-   * - A list of values shared by all cores
-     - An ``ArrayArgDecl`` in ``RuntimeArgSchema.common_runtime_array_args``, the values in
-       ``KernelRunArgs.common_runtime_array_arg_values``
-     - ``get_arg(args::<name>)[i]``
-   * - A tensor
-     - A ``TensorParameter`` and a ``TensorBinding``, the tensor in ``ProgramRunArgs.tensor_args``
-     - ``TensorAccessor(tensor::<accessor_name>)``, or ``LocalTensorAccessor<T>(tensor::<accessor_name>)`` for the
-       core's own shard in L1
-   * - A buffer between two kernels
-     - A ``DataflowBufferSpec``, with a producer and a consumer binding
-     - ``DataflowBuffer(dfb::<accessor_name>)``
-   * - A buffer on a sharded tensor's memory
-     - A ``DataflowBufferSpec`` whose ``borrowed_from`` names the ``TensorParameter``
-     - ``DataflowBuffer(dfb::<accessor_name>)``
-   * - A semaphore
-     - A ``SemaphoreSpec`` and a ``SemaphoreBinding``
-     - ``Semaphore(sem::<accessor_name>)``
-   * - Private scratch memory
-     - A ``ScratchpadSpec`` and a ``ScratchpadBinding``
-     - ``Scratchpad<T>(scratch::<accessor_name>)``
+- **A value fixed at compile time**: ``KernelSpec.compile_time_args``. In the kernel: ``get_arg(args::<name>)``.
+- **A value per core**: a name in ``RuntimeArgSchema.runtime_arg_names``, and the values in
+  ``KernelRunArgs.runtime_arg_values``. In the kernel: ``get_arg(args::<name>)``.
+- **A value shared by all cores**: a name in ``RuntimeArgSchema.common_runtime_arg_names``, and the value in
+  ``KernelRunArgs.common_runtime_arg_values``. In the kernel: ``get_arg(args::<name>)``.
+- **A list of values fixed at compile time**: ``KernelSpec.compile_time_array_args``. In the kernel:
+  ``get_arg(args::<name>)[i]``.
+- **A list of values per core**: an ``ArrayArgDecl`` (``name`` and ``size``) in ``RuntimeArgSchema.runtime_array_args``,
+  and the values in ``KernelRunArgs.runtime_array_arg_values``. In the kernel: ``get_arg(args::<name>)[i]``.
+- **A list of values shared by all cores**: an ``ArrayArgDecl`` in ``RuntimeArgSchema.common_runtime_array_args``, and
+  the values in ``KernelRunArgs.common_runtime_array_arg_values``. In the kernel: ``get_arg(args::<name>)[i]``.
+- **A tensor**: a ``TensorParameter`` and a ``TensorBinding``, and the tensor in ``ProgramRunArgs.tensor_args``. In the
+  kernel: ``TensorAccessor(tensor::<accessor_name>)``, or ``LocalTensorAccessor<T>(tensor::<accessor_name>)`` for the
+  core's own shard in L1.
+- **A buffer between two kernels**: a ``DataflowBufferSpec``, with a producer and a consumer binding. In the kernel:
+  ``DataflowBuffer(dfb::<accessor_name>)``.
+- **A buffer on a sharded tensor's memory**: a ``DataflowBufferSpec`` whose ``borrowed_from`` names the
+  ``TensorParameter``. In the kernel: ``DataflowBuffer(dfb::<accessor_name>)``.
+- **A semaphore**: a ``SemaphoreSpec`` and a ``SemaphoreBinding``. In the kernel: ``Semaphore(sem::<accessor_name>)``.
+- **Private scratch memory**: a ``ScratchpadSpec`` and a ``ScratchpadBinding``. In the kernel:
+  ``Scratchpad<T>(scratch::<accessor_name>)``.
 
 An array has the same length on every core, and ``get_arg(args::<name>).size()`` gives it. For a list whose length
 differs from core to core, such as a list of core coordinates, declare the longest length and pass each core's count
@@ -200,10 +182,13 @@ transfers smaller than a tile, such as row-major sticks, also passes ``disable_d
 ``create_reader_datamovement_config`` or ``create_writer_datamovement_config``: such transfers stall Quasar's implicit
 counting of buffer entries, and the flag leaves the counting to the kernel's own calls.
 
-.. _eltwise_sfpu.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
-.. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
-.. _reader_unary_interleaved_start_id.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
-.. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
+.. The links pin one tt-metal commit, so they keep showing the code this page describes as main moves on. Move the
+   pin when the page changes with the code.
+
+.. _eltwise_sfpu.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp
+.. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
+.. _reader_unary_interleaved_start_id.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
+.. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
 .. _generic_op.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/generic/generic_op.hpp
 .. _the workload headers: https://github.com/tenstorrent/tt-metal/tree/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/workload
 .. _advanced_options.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
