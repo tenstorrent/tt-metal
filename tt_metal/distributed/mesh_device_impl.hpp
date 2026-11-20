@@ -441,6 +441,8 @@ public:
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     static uint64_t close_count();  // MeshDevice closes so far.
+    /// Whether close_impl() has released this MeshDevice's devices, which it does by resetting scoped_devices_.
+    bool devices_released() const { return scoped_devices_ == nullptr; }
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;

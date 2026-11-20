@@ -448,7 +448,13 @@ void MeshBuffer::deallocate() {
     };
 
     auto mesh_device = mesh_device_.lock();
-    if (mesh_device) {
+    // A closed MeshDevice can outlive its close when something still references it, such as a tensor that a Python
+    // reference cycle keeps alive. Its devices are released by then, and their memory may belong to devices another
+    // MeshDevice has since opened on the same chips, so it is treated like one that is gone.
+    // Not is_initialized(): it is also false for a MeshDevice that was never initialized but whose devices are open,
+    // such as the parent create_unit_meshes() builds, and while the MeshDevice is open it queries every device and
+    // throws if they disagree, which must not happen in a destructor.
+    if (mesh_device && !mesh_device->impl().devices_released()) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
@@ -483,10 +489,20 @@ void MeshBuffer::deallocate() {
         return;
     }
 
-    // Special handling is required if MeshDevice is already deallocated
+    // Free nothing on the devices: every Buffer, including each device's own allocation of a per-core MeshBuffer, is
+    // only marked as deallocated, which its destructor then skips.
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
+    }
+    // A MeshBuffer that is already deallocated owns nothing: it was freed while its MeshDevice was open, or moved from,
+    // which leaves no MeshDevice and buffers_ in a moved-from state that must not be read.
+    if (!std::holds_alternative<DeallocatedState>(state_)) {
+        for (auto& [coord, device_buffer] : buffers_) {
+            if (device_buffer.is_local() && device_buffer.value() != nullptr) {
+                device_buffer.value()->impl().mark_as_deallocated();
+            }
+        }
     }
     set_deallocated_state();
 }

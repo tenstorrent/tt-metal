@@ -459,6 +459,31 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
     EXPECT_FALSE(buffer_view->is_allocated());
 }
 
+// Frees a MeshBuffer after its MeshDevice was closed and another MeshDevice opened the same chip. The free must not
+// reach the new MeshDevice's devices, where it would release an address that a buffer of the new MeshDevice holds.
+TEST(MeshBufferTest, DeallocationAfterMeshDeviceReopened) {
+    const MeshDeviceConfig config(MeshShape(1, 1));
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    const ReplicatedBufferConfig buffer_config{.size = 2048};
+
+    auto closed_mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto stale = MeshBuffer::create(buffer_config, device_local_config, closed_mesh_device.get());
+    closed_mesh_device->close();
+
+    auto mesh_device =
+        MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
+    auto held = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    stale.reset();
+    auto next = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    EXPECT_NE(next->address(), held->address());
+
+    next.reset();
+    held.reset();
+    mesh_device->close();
+}
+
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
     constexpr int iterations = 100;
 
