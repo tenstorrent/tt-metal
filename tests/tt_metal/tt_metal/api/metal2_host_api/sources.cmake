@@ -103,6 +103,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_connection_bindings.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_connection_constructors.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/dfb_placement.cpp
