@@ -71,9 +71,12 @@ class OutputNorm:
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
 
-# The output gate's working L1 per core (the K blocks of x and W in flight): K blocks of 8 tiles at Kimi-K3's 5 chunk rows
-# per core. Allocated right before the relay, it takes L1 the layer has freed by then (its q, k, v and projection).
+# The output gate's working L1 per core (the K blocks of x and W in flight, a pair's partial sums): with Kimi-K3's 5
+# chunk rows per core (4 cores a head), K blocks of 8 tiles for paired heads. Allocated right before the relay, it takes
+# L1 the layer has freed by then (its q, k, v and projection). With more rows a core and the terms in its L1, the terms
+# and the relay's own buffers leave less: it takes the K blocks its buffers fit (relay_chunk_scan_program_factory.cpp).
 KDA_GATE_WORKSPACE_BYTES_PER_CORE = 94 * 4096
+KDA_GATE_WORKSPACE_BYTES_PER_CORE_CROWDED = 64 * 4096
 
 # A core's share of the emitted FP32 terms (F(0) and F(I) of its chunks) that stays in its L1; beyond it they stream
 # from DRAM (Kimi-K3: 320 KiB per core at 1280 rows per chip).
@@ -226,13 +229,6 @@ class RelayChunkScan:
         # Two K x K states per head (the entry state, the final state) while reserved.
         self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
         self._landing = None
-        workspace_rows = KDA_GATE_WORKSPACE_BYTES_PER_CORE // (ttnn.TILE_SIZE * 4)
-        self._gate_workspace_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_set(gate_cores), (workspace_rows, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
-        )
-        self._gate_workspace_shape = ttnn.Shape([len(gate_cores) * workspace_rows, ttnn.TILE_SIZE])
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts; the output gate's
         # handshakes count across the program's cores.
         self.semaphores = persistent_semaphores(mesh_device, 6)
@@ -253,6 +249,15 @@ class RelayChunkScan:
                 ttnn.ShardSpec(core_set(correction), (2 * core_rows, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
             )
         )
+        crowded = not streamed and num_chunks // cores_per_head > 5
+        workspace_bytes = KDA_GATE_WORKSPACE_BYTES_PER_CORE_CROWDED if crowded else KDA_GATE_WORKSPACE_BYTES_PER_CORE
+        workspace_rows = workspace_bytes // (ttnn.TILE_SIZE * 4)
+        self._gate_workspace_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_set(gate_cores), (workspace_rows, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self._gate_workspace_shape = ttnn.Shape([len(gate_cores) * workspace_rows, ttnn.TILE_SIZE])
 
     def reserve(self):
         """Allocate the landing buffer for the next call, before the SP barrier that precedes the recurrence (a no-op
