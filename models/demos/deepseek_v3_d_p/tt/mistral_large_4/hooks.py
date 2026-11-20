@@ -241,7 +241,11 @@ def device_component(mesh, spec, layer, step):
         return fn
     if step == "attention":
         import ttnn
-        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import kvpe_cache_load, kvpe_rows_to_device, topk_to_device
+        from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import (
+            kvpe_cache_load,
+            kvpe_rows_to_device,
+            topk_to_device,
+        )
         from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
         mod = _attention(mesh, spec, layer)

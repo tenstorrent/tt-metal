@@ -26,7 +26,6 @@ silu * up / down -> insert per local expert, each over the most tokens an expert
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device, tp_gather
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
@@ -337,7 +336,9 @@ class TtExperts:
             p = ttnn.typecast(part, self.partial_dtype)
             ttnn.deallocate(part)
             part = p
-        y = ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=self.tp_topology)
+        y = ttnn.reduce_scatter(
+            part, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=self.tp_topology
+        )
         ttnn.deallocate(part)
         if y.dtype != ttnn.bfloat16 and not settings.get("RESIDUAL_FP32_IN"):
             yb = ttnn.typecast(y, ttnn.bfloat16)

@@ -15,7 +15,6 @@ Adapted from tt_ffn.py (TtFfn.forward). Per chip (SP row r of 8, TP column t of 
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import mm_configs, tp_gather
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings

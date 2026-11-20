@@ -13,7 +13,6 @@ import os
 from types import SimpleNamespace
 
 from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import fabric
 
 CHECKPOINT_DIR = "/mnt/models/mistralai/Mistral-Large-4-1T-A52B"

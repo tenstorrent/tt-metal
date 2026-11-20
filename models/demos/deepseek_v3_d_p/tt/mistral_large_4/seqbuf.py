@@ -21,7 +21,6 @@ import hashlib
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
 _SHARED: dict = {}  # (id(mesh), *key) -> object (ttnn.Tensor, IndexedTables, RowTables or a tuple of them)

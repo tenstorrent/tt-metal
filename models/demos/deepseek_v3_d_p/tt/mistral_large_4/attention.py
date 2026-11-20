@@ -39,13 +39,18 @@ pasted as on the owning layer (ATTN_CHUNK_KV).
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import mm_configs
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import mm_configs, seqbuf
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import seqbuf
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.rope import IndexedTables, block_cyclic_reorder, log_rows, log_split, rope_tables, select_split
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.rope import (
+    IndexedTables,
+    block_cyclic_reorder,
+    log_rows,
+    log_split,
+    rope_tables,
+    select_split,
+)
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 SENTINEL = -1  # a masked top-k slot; as uint32 it is sparse_sdpa's 0xFFFFFFFF
 
@@ -222,7 +227,9 @@ class TtAttention:
             for v in (s, b):
                 r = torch.zeros(1, 1, 1, self.tp * ttnn.TILE_SIZE)
                 for t in range(self.tp):
-                    r[..., t * ttnn.TILE_SIZE : t * ttnn.TILE_SIZE + self.heads] = v[t * self.heads : (t + 1) * self.heads]
+                    r[..., t * ttnn.TILE_SIZE : t * ttnn.TILE_SIZE + self.heads] = v[
+                        t * self.heads : (t + 1) * self.heads
+                    ]
                 dims = [None, None]
                 dims[TP_AXIS] = 3
                 rows_sb.append(
@@ -240,7 +247,9 @@ class TtAttention:
             f = s[None, :] * torch.arange(1, max_seq + 1).float().log()[:, None] + b[None, :]
             tab = torch.zeros(max_seq, self.tp * ttnn.TILE_SIZE)
             for t in range(self.tp):
-                tab[:, t * ttnn.TILE_SIZE : t * ttnn.TILE_SIZE + self.heads] = f[:, t * self.heads : (t + 1) * self.heads]
+                tab[:, t * ttnn.TILE_SIZE : t * ttnn.TILE_SIZE + self.heads] = f[
+                    :, t * self.heads : (t + 1) * self.heads
+                ]
             del f
             zero = seqbuf.get(
                 mesh,
@@ -348,7 +357,9 @@ class TtAttention:
     def write_kv(self, x_full, start: int, slot: int, end: int, meta=None):
         """kvpe rows of this chunk -> the cache rows [start, end) of (slot, cache_layer). Returns them in bf16.
         meta (chunk_meta.py): slot, start and end read on the device instead (trace-safe forms)."""
-        kv = self._linear(x_full, self.wkv_a, dtype=ttnn.bfloat16, name="wkv_a")  # [1, 1, 640, 576] ([1, 1, 640, 512] on NoPE layers)
+        kv = self._linear(
+            x_full, self.wkv_a, dtype=ttnn.bfloat16, name="wkv_a"
+        )  # [1, 1, 640, 576] ([1, 1, 640, 512] on NoPE layers)
         if self.rope_dim:
             lat = ttnn.slice(kv, [0, 0, 0, 0], [1, 1, self.rows, self.lora])
             rot = ttnn.slice(kv, [0, 0, 0, self.lora], [1, 1, self.rows, self.width])
@@ -393,7 +404,14 @@ class TtAttention:
             )
             if tiled:
                 ttnn.experimental.deepseek_prefill.zero_padded_kv_cache(
-                    self.cache, meta.slot, meta.end, layer, self.cache_layers, self.chunk, SP_AXIS, pad_align=ttnn.TILE_SIZE
+                    self.cache,
+                    meta.slot,
+                    meta.end,
+                    layer,
+                    self.cache_layers,
+                    self.chunk,
+                    SP_AXIS,
+                    pad_align=ttnn.TILE_SIZE,
                 )
             ttnn.deallocate(kc)
             return
@@ -457,9 +475,16 @@ class TtAttention:
         """[1, heads, 640, W] per chip (heads over TP) -> [1, Hq, 160, W] (query rows over TP)."""
         if settings.get("ATTN_RESHARD") == "all_to_all":
             return ttnn.experimental.all_to_all_async_generic(
-                t, in_dim=1, out_dim=2, num_links=settings.get("NUM_LINKS"), memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=TP_AXIS
+                t,
+                in_dim=1,
+                out_dim=2,
+                num_links=settings.get("NUM_LINKS"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=TP_AXIS,
             )
-        full = ttnn.all_gather(t, dim=1, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology())
+        full = ttnn.all_gather(
+            t, dim=1, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+        )
         out = ttnn.mesh_partition(full, dim=2, cluster_axis=TP_AXIS)
         ttnn.deallocate(full)
         return out
@@ -468,9 +493,16 @@ class TtAttention:
         """Inverse of _to_seq."""
         if settings.get("ATTN_RESHARD") == "all_to_all":
             return ttnn.experimental.all_to_all_async_generic(
-                t, in_dim=2, out_dim=1, num_links=settings.get("NUM_LINKS"), memory_config=ttnn.DRAM_MEMORY_CONFIG, cluster_axis=TP_AXIS
+                t,
+                in_dim=2,
+                out_dim=1,
+                num_links=settings.get("NUM_LINKS"),
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                cluster_axis=TP_AXIS,
             )
-        full = ttnn.all_gather(t, dim=2, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology())
+        full = ttnn.all_gather(
+            t, dim=2, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+        )
         out = ttnn.mesh_partition(full, dim=1, cluster_axis=TP_AXIS)
         ttnn.deallocate(full)
         return out
@@ -506,12 +538,19 @@ class TtAttention:
             # what is not self.kv_full, keep the persistent scratch
             return self.kv_full
         g = min(self.max_seq, -(-end // slab) * slab)
-        if meta is None and settings.get("ATTN_KV_ROWS") == "gathered" and g < self.max_seq and gathered.dtype == ttnn.bfloat8_b:
+        if (
+            meta is None
+            and settings.get("ATTN_KV_ROWS") == "gathered"
+            and g < self.max_seq
+            and gathered.dtype == ttnn.bfloat8_b
+        ):
             # only the gathered slabs (g / 8 rows of each rank's max_seq / 8) -> bf16 ROW_MAJOR [1, 1, g, 576], still
             # rank-major: sparse_sdpa's block-cyclic remap takes its per-rank stride from the kv rows (T / sp)
             v = ttnn.reshape(gathered, [1, self.sp, self.max_seq // self.sp, self.width])
             rm = ttnn.untilize_with_unpadding(
-                v, output_tensor_end=[0, self.sp - 1, g // self.sp - 1, self.width - 1], memory_config=ttnn.DRAM_MEMORY_CONFIG
+                v,
+                output_tensor_end=[0, self.sp - 1, g // self.sp - 1, self.width - 1],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             return ttnn.reshape(rm, [1, 1, g, self.width])
         if meta is not None and settings.get("ATTN_KV_ROWS") == "extent":
@@ -607,7 +646,9 @@ class TtAttention:
         # rank-major (block-cyclic physical) -> natural positions: [sp, blocks, rows] -> [blocks, sp, rows]
         n_kv = kv_rm.shape[2]  # max_seq, or the gathered rows only (ATTN_KV_ROWS)
         kv4 = ttnn.reshape(kv_rm, [self.sp, n_kv // (self.sp * self.rows), self.rows, self.width])
-        kv_nat = ttnn.reshape(ttnn.permute(kv4, (1, 0, 2, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG), [n_kv, self.width])
+        kv_nat = ttnn.reshape(
+            ttnn.permute(kv4, (1, 0, 2, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG), [n_kv, self.width]
+        )
         # sentinels: index 0, score -1e30 (a row with no valid key stays finite)
         t_tile = ttnn.to_layout(topk, ttnn.TILE_LAYOUT)
         tf = ttnn.typecast(t_tile, ttnn.float32)
@@ -711,7 +752,9 @@ class TtAttention:
         if x.shape[-1] == self.wq.shape[-1]:  # NORM_GATHER=input: attn_norm handed on the full row
             x_full = x
         else:
-            x_full = ttnn.all_gather(x, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology())
+            x_full = ttnn.all_gather(
+                x, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+            )
         if self.owns_kv:
             assert kvpe is None, "a layer that owns its KV writes its own kvpe rows"
             kvpe = self.write_kv(x_full, start, slot, end, meta=meta)
@@ -782,7 +825,9 @@ class TtAttention:
             memory_config=mm_configs.out_memory("wo"),
         )
         ttnn.deallocate(oc)
-        y = ttnn.reduce_scatter(part, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology())
+        y = ttnn.reduce_scatter(
+            part, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+        )
         ttnn.deallocate(part)
         if y.dtype != ttnn.bfloat16 and not settings.get("RESIDUAL_FP32_IN"):
             yb = ttnn.typecast(y, ttnn.bfloat16)

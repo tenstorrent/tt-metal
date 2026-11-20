@@ -35,12 +35,16 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.dram_zero_fill.op import DRAMZeroFill
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
 from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import Ctx, run_block
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import _stamp_sp_topology, kv_cache_storage
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS, residual_to_device, residual_to_host
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import (
+    SP_AXIS,
+    TP_AXIS,
+    residual_to_device,
+    residual_to_host,
+)
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 NUM_USERS = 2  # cache slots
 
@@ -322,6 +326,7 @@ class TtModel:
             "mlp_residual": lambda c, a, b: add(a, b),
         }
         fns["indexer" if cfg.is_full(i) else "topk_shared"] = indexer if cfg.is_full(i) else topk_shared
+
         def _router_ids():  # ROUTER_OUT=topk: the router's expert ids of this chunk (None: dense routing)
             return m["router"].take_indices() if cfg.is_moe(i) else None
 

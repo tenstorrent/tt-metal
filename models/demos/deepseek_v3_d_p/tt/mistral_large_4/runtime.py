@@ -29,9 +29,8 @@ import sys
 import time
 
 import ttnn
-
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import kv_table as KT
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device
 
 # the launcher records the H2D service the runner builds here, so the traced runtime can take a warm-up record through
 # it before the request loop (startup_capture)
@@ -219,7 +218,9 @@ class MistralLarge4PrefillRuntime:
         if r.returncode:
             logger.warning(f"[trace] warm-up record push failed (exit {r.returncode}); capturing on the first record")
             return
-        ids, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(H2D_SERVICES[-1], metadata_size_bytes=12)
+        ids, md = ttnn.experimental.deepseek_prefill.inbound_socket_service_sync(
+            H2D_SERVICES[-1], metadata_size_bytes=12
+        )
         words = ttnn.to_torch(ttnn.get_device_tensors(md)[0]).view(torch.int32).flatten().tolist()
         ttnn.deallocate(ids)
         ttnn.deallocate(md)
@@ -300,9 +301,17 @@ class MistralLarge4PrefillRuntime:
                 t_q = time.time()
                 ttnn.synchronize_device(self.mesh_device)
                 t_done = time.time()
-                self._timing(slot=int(slot_id), start=start, end=end, rid=request_id, acks="d2h" if d2h else "sink",
-                             t_in=round(t_in, 4), enqueue_ms=round((t_q - t_in) * 1e3, 2),
-                             device_ms=round((t_done - t_in) * 1e3, 2), t_done=round(t_done, 4))
+                self._timing(
+                    slot=int(slot_id),
+                    start=start,
+                    end=end,
+                    rid=request_id,
+                    acks="d2h" if d2h else "sink",
+                    t_in=round(t_in, 4),
+                    enqueue_ms=round((t_q - t_in) * 1e3, 2),
+                    device_ms=round((t_done - t_in) * 1e3, 2),
+                    t_done=round(t_done, 4),
+                )
             return None
         m, st = self.model, self.state
         st.slot = int(slot_id)

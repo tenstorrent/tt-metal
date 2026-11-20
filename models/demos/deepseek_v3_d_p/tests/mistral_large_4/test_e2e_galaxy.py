@@ -30,8 +30,8 @@ import torch
 
 ttnn = pytest.importorskip("ttnn")
 
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import CHECKPOINT_DIR
 
 CKPT = os.environ.get("ML4_CKPT") or os.environ.get("PREFILL_HF_MODEL") or CHECKPOINT_DIR
@@ -52,8 +52,8 @@ class _Spec:
         return self._v.get(key, default)
 
 
-
 REPLAY_ISSUE_MS: list = []  # host enqueue ms of every traced replay
+
 
 def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     a, b = a.double().flatten(), b.double().flatten()
@@ -167,7 +167,9 @@ def _kv_vs_golden(model, state, seq: int, layers) -> dict | None:
     if 39 in m.kv_region and 35 in layers and not m.cfg.owns_kv(39):
         kv = state._read(m.kvpe, len(m.kv_region), m.kv_region[39], seq)
         g = load_file(str(d / "layer_35.safetensors"))
-        out["L39.mirror_of_L35.kv_latent"] = _cmp(kv[:, : m.cfg.kv_lora].float(), g["kv_latent_cache_layer_35"][:seq].float())
+        out["L39.mirror_of_L35.kv_latent"] = _cmp(
+            kv[:, : m.cfg.kv_lora].float(), g["kv_latent_cache_layer_35"][:seq].float()
+        )
     return out
 
 
@@ -229,7 +231,8 @@ def _depth_fit(times):
 def _prefill_traced(model, tokens, seq: int, chunk: int, layers, repeats: int = 1):
     """Each chunk's layers and final norm captured as a ttnn trace, replayed (timed) and released before the next
     chunk; one trace at a time fits next to the weights. The embedding runs eagerly and is copied into the trace's
-    persistent input. Returns per-chunk replay seconds, capture seconds, trace MB of DRAM, and {chunk: final norm host}."""
+    persistent input. Returns per-chunk replay seconds, capture seconds, trace MB of DRAM, and {chunk: final norm host}.
+    """
     mesh = model.mesh
     state = model.new_state(seq)  # caches zeroed; each replay writes its chunk as an eager prefill does
     h_in = model.embed(tokens[:chunk], start=0)
@@ -594,7 +597,8 @@ def test_trace_soak(mesh_device):
     """Serving reliability: the traced forward (one capture of the metadata path) replayed ML4_SOAK_N times (default
     600), cycling the chunk start over the first ML4_SOAK_CHUNKS positions (default 11: a 56320-token prompt) and the
     slot over 2, as a serving engine drives it; one line per replay (time, slot, start, host enqueue
-    ms, replay ms). A hang shows as the dispatch timeout (TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE runs tt-triage)."""
+    ms, replay ms). A hang shows as the dispatch timeout (TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE runs tt-triage).
+    """
     _boot_check()
     max_seq, slots = int(os.environ.get("ML4_SOAK_MAX_SEQ", CAPACITY)), int(os.environ.get("ML4_SOAK_SLOTS", "2"))
     n_rep = int(os.environ.get("ML4_SOAK_N", "600"))
@@ -604,9 +608,14 @@ def test_trace_soak(mesh_device):
     layers = list(range(meta_g["layers"][0], meta_g["layers"][1] + 1))
     prompt = json.loads(Path(meta_g["prompt"]).read_text())["token_ids"]
     out_path = Path(os.environ.get("ML4_SOAK_OUT", str(OUT)))
-    res = {"node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(), "max_seq": max_seq, "slots": slots,
-           "replays": n_rep, "positions": n_pos, "settings": {k: v for k, v in os.environ.items()
-                                                              if k.startswith(("MISTRAL_LARGE_4_", "ML4_FABRIC"))}}
+    res = {
+        "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
+        "max_seq": max_seq,
+        "slots": slots,
+        "replays": n_rep,
+        "positions": n_pos,
+        "settings": {k: v for k, v in os.environ.items() if k.startswith(("MISTRAL_LARGE_4_", "ML4_FABRIC"))},
+    }
 
     def dump():
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -634,8 +643,11 @@ def test_trace_soak(mesh_device):
     finally:
         sub_device.end_capture(mesh, tid)
     res["trace_segments"] = sub_device.last_segments
-    print(f"{time.strftime('%H:%M:%S')} soak: built in {res['build_seconds']} s, {res['dram_free_mb']} MB free, "
-          f"{res['trace_segments']} trace segments", flush=True)
+    print(
+        f"{time.strftime('%H:%M:%S')} soak: built in {res['build_seconds']} s, {res['dram_free_mb']} MB free, "
+        f"{res['trace_segments']} trace segments",
+        flush=True,
+    )
     dump()
     ms, enq = [], []
     try:
@@ -651,8 +663,11 @@ def test_trace_soak(mesh_device):
             enq.append(round((time.time() - t) * 1e3, 2))
             ttnn.synchronize_device(mesh)
             ms.append(round((time.time() - t) * 1e3, 2))
-            print(f"{time.strftime('%H:%M:%S')} replay {k} slot {slot} start {start}: enqueue {enq[-1]} ms, "
-                  f"{ms[-1]} ms", flush=True)
+            print(
+                f"{time.strftime('%H:%M:%S')} replay {k} slot {slot} start {start}: enqueue {enq[-1]} ms, "
+                f"{ms[-1]} ms",
+                flush=True,
+            )
             if k % 50 == 0:
                 res["done"], res["ms"], res["enqueue_ms"] = k + 1, ms, enq
                 dump()
@@ -711,9 +726,13 @@ def test_ctx_sweep(mesh_device):
     res = {
         "commit": os.environ.get("ML4_COMMIT", ""),
         "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
-        "build": {"max_seq": max_seq, "slots": 1, "seq_buffers": os.environ["MISTRAL_LARGE_4_SEQ_BUFFERS"],
-                  "ssmax_table": os.environ["MISTRAL_LARGE_4_SSMAX_TABLE"],
-                  "trace_region_mb": int(os.environ.get("ML4_TRACE_REGION_MB", "0"))},
+        "build": {
+            "max_seq": max_seq,
+            "slots": 1,
+            "seq_buffers": os.environ["MISTRAL_LARGE_4_SEQ_BUFFERS"],
+            "ssmax_table": os.environ["MISTRAL_LARGE_4_SSMAX_TABLE"],
+            "trace_region_mb": int(os.environ.get("ML4_TRACE_REGION_MB", "0")),
+        },
         "points": [],
         "breakdown": [],
         "served": [],
@@ -766,7 +785,9 @@ def test_ctx_sweep(mesh_device):
             n = isl // chunk
             pt = {"isl": isl, "chunk_ms": [], "dram_free_mb": res["build"]["dram_free_mb"]}
             norms, finite = [], True
-            digest = hashlib.sha256()  # the bytes of every final norm read back + the last logits: run-to-run bit identity
+            digest = (
+                hashlib.sha256()
+            )  # the bytes of every final norm read back + the last logits: run-to-run bit identity
             every = os.environ.get("ML4_CTX_HASH") == "all"
             for c in range(n):
                 start = c * chunk
@@ -796,8 +817,10 @@ def test_ctx_sweep(mesh_device):
                     pt["next_token_rows"] = f"{int((lg.argmax(-1) == nxt).sum())}/{rows}"
                     if golden_chunk:
                         g = gold[c]
-                        gl = g["logits"].float() if "logits" in g else _golden_logits(
-                            head, g["final_norm"][chunk - rows : chunk], cfg.softcap
+                        gl = (
+                            g["logits"].float()
+                            if "logits" in g
+                            else _golden_logits(head, g["final_norm"][chunk - rows : chunk], cfg.softcap)
                         )
                         pt["logits_pcc"] = round(_pcc(lg, gl), 6)
                         pt["top1_rows"] = f"{int((lg.argmax(-1) == gl.argmax(-1)).sum())}/{rows}"
@@ -812,16 +835,21 @@ def test_ctx_sweep(mesh_device):
             pt["final_norm_pcc_min"] = round(min(norms), 6) if norms else None
             pt.setdefault("logits_pcc", None)
             pt.setdefault("top1_rows", None)
-            if isl <= gseq:  # the golden's own text: the top-1 rows vs the golden are the check; keep this for reference
+            if (
+                isl <= gseq
+            ):  # the golden's own text: the top-1 rows vs the golden are the check; keep this for reference
                 pt["next_token_rows_natural"] = pt.pop("next_token_rows", None)
                 pt["next_token_rows"] = None
             pt["finite"] = finite
             pt["out_sha256"] = digest.hexdigest()[:16]
             pt["hashed_chunks"] = "all" if every else "golden+every16+last"
             res["points"].append(pt)
-            print(f"ISL {isl}: {pt['prefill_s']} s, {pt['tok_s']} tok/s, a {pt['a_ms']} b {pt['b_ms']}, "
-                  f"norm {pt['final_norm_pcc_min']}, logits {pt['logits_pcc']} {pt['top1_rows']}, "
-                  f"next {pt['next_token_rows']}, finite {finite}", flush=True)
+            print(
+                f"ISL {isl}: {pt['prefill_s']} s, {pt['tok_s']} tok/s, a {pt['a_ms']} b {pt['b_ms']}, "
+                f"norm {pt['final_norm_pcc_min']}, logits {pt['logits_pcc']} {pt['top1_rows']}, "
+                f"next {pt['next_token_rows']}, finite {finite}",
+                flush=True,
+            )
             dump()
     finally:
         sub_device.release(mesh, tid)
@@ -856,9 +884,16 @@ def test_ndet(mesh_device):
     layers = list(range(meta_g["layers"][0], meta_g["layers"][1] + 1))
     prompt = torch.as_tensor(json.loads(Path(meta_g["prompt"]).read_text())["token_ids"][:gseq])
     out_path = Path(os.environ.get("ML4_NDET_OUT", str(OUT)))
-    res = {"node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(), "max_seq": max_seq, "reps": reps,
-           "chunks": n, "detail_from": detail_from, "payload": int(os.environ.get("ML4_FABRIC_PAYLOAD", "12288")),
-           "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")}, "passes": []}
+    res = {
+        "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
+        "max_seq": max_seq,
+        "reps": reps,
+        "chunks": n,
+        "detail_from": detail_from,
+        "payload": int(os.environ.get("ML4_FABRIC_PAYLOAD", "12288")),
+        "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")},
+        "passes": [],
+    }
 
     def dump():
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -919,8 +954,11 @@ def test_ndet(mesh_device):
                 rec_c["final"] = h8(fn)
                 model.free(fn)
                 p.append(rec_c)
-                print(f"{time.strftime('%H:%M:%S')} pass {r} chunk {c}: final {rec_c['final']} "
-                      f"({time.time() - t:.1f} s)", flush=True)
+                print(
+                    f"{time.strftime('%H:%M:%S')} pass {r} chunk {c}: final {rec_c['final']} "
+                    f"({time.time() - t:.1f} s)",
+                    flush=True,
+                )
             dump()
     finally:
         tm.run_block = run_block

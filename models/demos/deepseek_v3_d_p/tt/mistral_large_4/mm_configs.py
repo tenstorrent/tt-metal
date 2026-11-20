@@ -13,7 +13,6 @@ output subblock in the 4-tile fp32 DEST.
 import math
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
 MAX_IN0_BLOCK_W = 16
@@ -87,7 +86,8 @@ def get(name, x, w, transpose_b: bool = True, grid=None):
 
 def get_indexer(x, w):
     """INDEXER_MM=tuned: the indexer's projections, x [1, 1, M, K] @ w [K, N] (stored [K, N], no transpose),
-    M 640 (wk) or 160 (wq_b, wproj: the TP-partitioned query rows): the 2D rule with the grid's rows cut to M's tiles."""
+    M 640 (wk) or 160 (wq_b, wproj: the TP-partitioned query rows): the 2D rule with the grid's rows cut to M's tiles.
+    """
     if settings.get("INDEXER_MM") != "tuned":
         return None
     xs, ws = x.padded_shape, w.padded_shape

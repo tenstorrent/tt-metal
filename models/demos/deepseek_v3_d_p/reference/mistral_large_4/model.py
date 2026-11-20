@@ -69,8 +69,20 @@ from pathlib import Path
 import torch
 import torch.nn.functional as F
 
-from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import Ctx, Step, as_compute, noop, run_block, weight_dtype
-from models.demos.deepseek_v3_d_p.reference.mistral_large_4.weights import checkpoint, expert_store, keep_heap, load_dense
+from models.demos.deepseek_v3_d_p.reference.mistral_large_4._bringup_interface import (
+    Ctx,
+    Step,
+    as_compute,
+    noop,
+    run_block,
+    weight_dtype,
+)
+from models.demos.deepseek_v3_d_p.reference.mistral_large_4.weights import (
+    checkpoint,
+    expert_store,
+    keep_heap,
+    load_dense,
+)
 
 ROW_BLOCK = 64  # attention / indexer query rows per block, aligned to absolute positions
 EXPERT_ROW_BLOCK = 32  # per-expert GEMM rows are padded to a multiple of this (see experts_forward)

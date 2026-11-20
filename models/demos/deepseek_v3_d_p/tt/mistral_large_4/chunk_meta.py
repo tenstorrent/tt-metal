@@ -23,7 +23,6 @@ from __future__ import annotations
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS
 
 WORDS = 16  # slot, start, end, zero, paste[0..sp), padded to a 64-byte record

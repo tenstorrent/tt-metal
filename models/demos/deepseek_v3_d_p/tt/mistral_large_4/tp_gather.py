@@ -10,7 +10,6 @@ gather per module.
 """
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 

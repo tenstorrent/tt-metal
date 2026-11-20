@@ -17,7 +17,6 @@ The op computes x * cos + (x @ trans) * sin per row, so it serves two tables:
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import seqbuf
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS
 
@@ -153,7 +152,9 @@ def log_rows(mesh, max_seq: int, chunk: int, n: int, sub: int = 0) -> "RowTables
 def rope_tables(mesh, inv_freq: torch.Tensor, max_seq: int, chunk: int) -> IndexedTables:
     """SEQ_BUFFERS=shared: one copy per (max_seq, chunk, inverse frequencies), every RoPE layer's (seqbuf.py)."""
     return seqbuf.get(
-        mesh, ("rope", max_seq, chunk, seqbuf.tensor_key(inv_freq)), lambda: _rope_tables(mesh, inv_freq, max_seq, chunk)
+        mesh,
+        ("rope", max_seq, chunk, seqbuf.tensor_key(inv_freq)),
+        lambda: _rope_tables(mesh, inv_freq, max_seq, chunk),
     )
 
 

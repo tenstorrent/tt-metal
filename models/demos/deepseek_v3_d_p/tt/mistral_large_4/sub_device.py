@@ -17,7 +17,6 @@ for ttnn's trace calls everywhere the package captures; with MOE_OVERLAP off the
 from __future__ import annotations
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
 _overlaps = {}  # id(mesh) -> Overlap
@@ -37,7 +36,9 @@ class Overlap:
         grid = mesh.compute_with_storage_grid_size()
         gx, gy = grid.x, grid.y
         rows = 1
-        self.dispatch_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, rows - 1))})
+        self.dispatch_cores = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, rows - 1))}
+        )
         self.shared_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, rows), ttnn.CoreCoord(gx - 1, gy - 1))})
         self.shared_grid = ttnn.CoreCoord(gx, gy - rows)
         self.manager = mesh.create_sub_device_manager(

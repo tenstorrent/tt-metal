@@ -30,8 +30,8 @@ from __future__ import annotations
 
 import json
 import os
-import socket
 import re
+import socket
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -41,10 +41,10 @@ import torch
 
 ttnn = pytest.importorskip("ttnn")
 
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model  # noqa: E402
 from models.demos.deepseek_v3_d_p.reference.mistral_large_4 import _bringup_interface as iface  # noqa: E402
-from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import CHECKPOINT_DIR  # noqa: E402
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import sub_device  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.hooks import device_model  # noqa: E402
+from models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_large_4 import CHECKPOINT_DIR  # noqa: E402
 
 CKPT = os.environ.get("ML4_CKPT") or os.environ.get("PREFILL_HF_MODEL") or CHECKPOINT_DIR
 OUT = Path(os.environ.get("ML4_PERF_OUT", "generated/ml4_perf/result.json"))
@@ -500,8 +500,16 @@ def _breakdown(timer: Profiler, cfg) -> dict:
 
 # ops that move data between chips (fabric); everything else is local compute / data movement
 _CCL_OPS = {  # last dotted segment of the op name; rms_norm_post_all_gather etc. are local
-    "all_gather", "reduce_scatter", "all_reduce", "all_to_all_async_generic", "high_bw_all_gather",
-    "dispatch", "combine", "offset_cumsum", "all_gather_async", "reduce_scatter_minimal_async",
+    "all_gather",
+    "reduce_scatter",
+    "all_reduce",
+    "all_to_all_async_generic",
+    "high_bw_all_gather",
+    "dispatch",
+    "combine",
+    "offset_cumsum",
+    "all_gather_async",
+    "reduce_scatter_minimal_async",
 }
 
 
@@ -522,8 +530,12 @@ def _ccl_share(rows):
                 ccl += net
             else:
                 loc += net
-        out[lay] = {"ccl_ms": round(ccl, 2), "local_ms": round(loc, 2), "floor_ms": round(floor, 3),
-                    "ccl_pct": round(100 * ccl / (ccl + loc), 1) if ccl + loc else None}
+        out[lay] = {
+            "ccl_ms": round(ccl, 2),
+            "local_ms": round(loc, 2),
+            "floor_ms": round(floor, 3),
+            "ccl_pct": round(100 * ccl / (ccl + loc), 1) if ccl + loc else None,
+        }
     return out
 
 
@@ -812,9 +824,7 @@ def test_sweep(mesh_device):
         model.sync()
         rec["capture_ms"] = round((time.time() - t1) * 1e3, 1)
         rec["trace_dram_mb"] = round(_dram_mb(mesh_device) - dram0, 1)  # the trace buffer and the final norm output
-        rec["dram_free_mb"] = round(
-            _dram_free_mb(mesh_device), 1
-        )
+        rec["dram_free_mb"] = round(_dram_free_mb(mesh_device), 1)
         walls, issue = [], []
         for _ in range(3):
             t1 = time.time()
@@ -893,8 +903,10 @@ def test_sweep(mesh_device):
         as one trace and replayed once (the whole chunk would overflow the profiler's buffers in one replay); the
         kernels are the same, only host dispatch differs. Accuracy from one more eager run (the profiler's builds)."""
         if not os.environ.get("TT_METAL_PROFILER_CPP_POST_PROCESS"):
-            raise RuntimeError("device_profile needs TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 "
-                               "TT_METAL_PROFILER_CPP_POST_PROCESS=1")
+            raise RuntimeError(
+                "device_profile needs TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 "
+                "TT_METAL_PROFILER_CPP_POST_PROCESS=1"
+            )
         pl = sorted(set(v.get("profile_layers", [16, 17, 18])) & set(layers))
         prof = DeviceOps(mesh_device, pl, v.get("profile_devices"))
         t1 = time.time()
@@ -1003,8 +1015,11 @@ def test_sweep(mesh_device):
         if "device_profile" in rec:
             dp = rec["device_profile"]
             top = {f"{r['step']}:{r['op']}": r["ms_max"] for r in dp["ops"][:12]}
-            print(f"  {name} device ms {dp['ms_total_max']} (layers {dp['layers']}, {dp['programs']} programs, "
-                  f"{dp['programs_without_data']} without data): {json.dumps(top)}", flush=True)
+            print(
+                f"  {name} device ms {dp['ms_total_max']} (layers {dp['layers']}, {dp['programs']} programs, "
+                f"{dp['programs_without_data']} without data): {json.dumps(top)}",
+                flush=True,
+            )
         if "accuracy" in rec:
             a = rec["accuracy"]
             print(
@@ -1063,8 +1078,13 @@ def test_ctx_profile(mesh_device):
     pl = [int(x) for x in os.environ.get("ML4_CTX_PROFILE_LAYERS", "16,17,18").split(",")]
     layers = _layers()
     profiling = os.environ.get("TT_METAL_PROFILER_CPP_POST_PROCESS") == "1"
-    result = {"max_seq": max_seq, "profile_layers": pl, "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
-              "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")}, "positions": {}}
+    result = {
+        "max_seq": max_seq,
+        "profile_layers": pl,
+        "node": os.environ.get("SLURMD_NODENAME") or socket.gethostname(),
+        "settings": {k: v for k, v in os.environ.items() if k.startswith("MISTRAL_LARGE_4_")},
+        "positions": {},
+    }
 
     def dump():
         OUT.parent.mkdir(parents=True, exist_ok=True)
@@ -1122,7 +1142,10 @@ def test_ctx_profile(mesh_device):
             rec["error"] = f"{type(e).__name__}: {e}"[:1500]
             print(f"position {p} failed: {rec['error']}", flush=True)
         result["positions"][str(p)] = rec
-        print(f"position {p}: {json.dumps({k: rec.get(k) for k in ('warm_wall_ms', 'ms_per_layer', 'error')})} "
-              f"{json.dumps({k: v for k, v in rec.get('ops_ms', {}).items() if k.startswith('group:')})}", flush=True)
+        print(
+            f"position {p}: {json.dumps({k: rec.get(k) for k in ('warm_wall_ms', 'ms_per_layer', 'error')})} "
+            f"{json.dumps({k: v for k, v in rec.get('ops_ms', {}).items() if k.startswith('group:')})}",
+            flush=True,
+        )
         dump()
     assert any("ops_ms" in r for r in result["positions"].values()) or not profiling

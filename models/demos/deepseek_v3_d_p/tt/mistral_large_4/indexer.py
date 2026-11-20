@@ -29,14 +29,20 @@ The output stays split over TP and SP: chip (r, t) holds query rows 640 r + 160 
 import torch
 
 import ttnn
-from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
-
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import mm_configs
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import mm_configs, seqbuf
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.attention import _stamp_sp_topology, _write_cache_meta
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.layout import SP_AXIS, TP_AXIS
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import seqbuf
-from models.demos.deepseek_v3_d_p.tt.mistral_large_4.rope import RowTables, log_rows, log_split, rope_tables, scale_tables, select_split, split_tables
+from models.demos.deepseek_v3_d_p.tt.mistral_large_4.rope import (
+    RowTables,
+    log_rows,
+    log_split,
+    rope_tables,
+    scale_tables,
+    select_split,
+    split_tables,
+)
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import init_kvpe_cache
 
 NORM_EPS = 1e-6
 
@@ -246,7 +252,9 @@ class TtIndexer:
         # the score's persistent gather output (this column's whole key cache, one slot, rank-major)
         dt = self.cache.dtype
         self.k_full = seqbuf.get(
-            mesh, ("k_full", max_seq, self.head_dim, str(dt)), lambda: repl(torch.zeros(1, 1, max_seq, self.head_dim), dt)
+            mesh,
+            ("k_full", max_seq, self.head_dim, str(dt)),
+            lambda: repl(torch.zeros(1, 1, max_seq, self.head_dim), dt),
         )
         # the composed score's SP topology and mask, built for either INDEXER_SCORE path (read at run time)
         _stamp_sp_topology(self.cache, mesh)
@@ -263,7 +271,9 @@ class TtIndexer:
             elif self.w_dtype == ttnn.float32:
                 # rotary_embedding_indexed takes no fp32 input: the fp32 f of this chip's query rows, sliced per call
                 s, b = self._ssmax_sb
-                out["f_rows"] = RowTables(mesh, s[None, :] * (pos + 1).log() + b[None, :], chunk, self.q_rows, self.q_rows)
+                out["f_rows"] = RowTables(
+                    mesh, s[None, :] * (pos + 1).log() + b[None, :], chunk, self.q_rows, self.q_rows
+                )
             if rope_dim:
                 inv_freq = self._inv_freq
 
@@ -274,7 +284,10 @@ class TtIndexer:
                     cos = torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2)
                     sin = torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2)
                     return (
-                        (RowTables(mesh, cos, chunk, self.q_rows, self.q_rows), RowTables(mesh, sin, chunk, self.q_rows, self.q_rows)),
+                        (
+                            RowTables(mesh, cos, chunk, self.q_rows, self.q_rows),
+                            RowTables(mesh, sin, chunk, self.q_rows, self.q_rows),
+                        ),
                         (RowTables(mesh, cos, chunk, self.rows), RowTables(mesh, sin, chunk, self.rows)),
                     )
 
@@ -285,7 +298,9 @@ class TtIndexer:
             # a chunk whose start is not chunk-aligned (a follow-up turn) is rotated over the SP rows (RowTables): its
             # causal mask comes from the positions of this chip's query rows, compared with the chunk's key columns
             out["q_pos"] = seqbuf.get(
-                mesh, ("q_pos", max_seq, chunk, self.q_rows), lambda: RowTables(mesh, pos, chunk, self.q_rows, self.q_rows)
+                mesh,
+                ("q_pos", max_seq, chunk, self.q_rows),
+                lambda: RowTables(mesh, pos, chunk, self.q_rows, self.q_rows),
             )
             self._eager = out
         return self._eager
@@ -310,7 +325,16 @@ class TtIndexer:
         """Frees this layer's max_seq-sized tensors (a shared one stays: seqbuf.release; the split tables:
         rope.release_split); its own cache too."""
         e = self._eager or {}
-        for obj in (self.rope, self.ssmax, self.ssmax_sb, self.k_full, e.get("f_rows"), e.get("log_rows"), e.get("qk_rope"), e.get("q_pos")):
+        for obj in (
+            self.rope,
+            self.ssmax,
+            self.ssmax_sb,
+            self.k_full,
+            e.get("f_rows"),
+            e.get("log_rows"),
+            e.get("qk_rope"),
+            e.get("q_pos"),
+        ):
             seqbuf.free(obj)
         self.rope = self.ssmax = self.ssmax_sb = self.k_full = self._eager = self._split = None
         if self._own_cache and self.cache is not None:
@@ -374,8 +398,12 @@ class TtIndexer:
             out = {}
             if self.rope_dim:
                 freqs = pos * self._inv_freq[None, :].float()
-                out["cos"] = split_tables(self.mesh, torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2), self.chunk)
-                out["sin"] = split_tables(self.mesh, torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2), self.chunk)
+                out["cos"] = split_tables(
+                    self.mesh, torch.stack((freqs.cos(), freqs.cos()), dim=-1).flatten(-2), self.chunk
+                )
+                out["sin"] = split_tables(
+                    self.mesh, torch.stack((freqs.sin(), freqs.sin()), dim=-1).flatten(-2), self.chunk
+                )
             if self.ssmax_sb is None:
                 s, b = self._ssmax_sb
                 out["f"] = split_tables(self.mesh, s[None, :] * (pos + 1).log() + b[None, :], self.chunk)
@@ -419,7 +447,10 @@ class TtIndexer:
         own = None
         if self.own_bf16:
             own = self._natural(
-                ttnn.all_gather(kn, dim=2, cluster_axis=SP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()), start
+                ttnn.all_gather(
+                    kn, dim=2, cluster_axis=SP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+                ),
+                start,
             )
         kc = ttnn.typecast(kn, self.cache.dtype)
         ttnn.deallocate(kn)
@@ -457,7 +488,11 @@ class TtIndexer:
         if self.hadamard is None:
             return x
         out = ttnn.linear(
-            x, self.hadamard[x.dtype], dtype=x.dtype, compute_kernel_config=self.mm_cfg, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            x,
+            self.hadamard[x.dtype],
+            dtype=x.dtype,
+            compute_kernel_config=self.mm_cfg,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         ttnn.deallocate(x)
         return out
@@ -714,7 +749,9 @@ class TtIndexer:
         if x.shape[-1] == self.wk.shape[-2]:  # NORM_GATHER=input: attn_norm handed on the full row
             x_full = x
         else:
-            x_full = ttnn.all_gather(x, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology())
+            x_full = ttnn.all_gather(
+                x, dim=3, cluster_axis=TP_AXIS, num_links=settings.get("NUM_LINKS"), topology=_topology()
+            )
         own_k = self.write_k(x_full, start, slot, end, meta=meta)
 
         x_q = ttnn.mesh_partition(x_full, dim=2, cluster_axis=TP_AXIS)  # [1, 1, 160, H]
@@ -808,7 +845,11 @@ class TtIndexer:
             # min(start + chunk, ceil32(end)): end on a 32-aligned end; otherwise the extra columns are the pad keys
             # [end, ceil32(end)), -inf (future) to every real query row, so only pad rows' top-k can differ
             idx = ttnn.experimental.topk_large_indices(
-                logits, k=self.topk, valid_length_tensor=meta.start, valid_length_offset=self.chunk, valid_end_tensor=meta.end
+                logits,
+                k=self.topk,
+                valid_length_tensor=meta.start,
+                valid_length_offset=self.chunk,
+                valid_end_tensor=meta.end,
             )
         ttnn.deallocate(logits)
         return idx

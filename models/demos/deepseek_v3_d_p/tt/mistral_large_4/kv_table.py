@@ -207,9 +207,9 @@ def read_slot_kv_and_check_pcc(
     shared-KV layer's region is compared with its source's golden."""
     from loguru import logger
     from safetensors.torch import load_file
+    from tests.ttnn.utils_for_testing import comp_pcc
 
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
-    from tests.ttnn.utils_for_testing import comp_pcc
 
     D = ttnn.experimental.disaggregation
     cid = {table.config_name(c): c for c in range(table.num_configs())}
@@ -231,9 +231,7 @@ def read_slot_kv_and_check_pcc(
                 loc = table.lookup(k, pos, slot_id, cid[name])
                 fnids = table.get_device_group(loc.device_group_index).fabric_node_ids
                 uid = next(
-                    device_map[key]
-                    for key in ((int(f.mesh_id), int(f.chip_id)) for f in fnids)
-                    if key in device_map
+                    device_map[key] for key in ((int(f.mesh_id), int(f.chip_id)) for f in fnids) if key in device_map
                 )
                 recs.append(_decode_record(bytes(D.read_dram_umd(uid, loc.noc_addr, loc.size_bytes)), gold.shape[-1]))
             dev = torch.cat(recs)[:real_len]

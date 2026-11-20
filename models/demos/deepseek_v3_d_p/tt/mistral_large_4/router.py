@@ -20,7 +20,6 @@ computes the same rows (replicated over axis 1).
 import torch
 
 import ttnn
-
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4 import tp_gather
 from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
 
