@@ -380,6 +380,36 @@ TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddress) {
     }
 }
 
+TEST_F(MeshDeviceFixture, TensixTestCircularBufferBoundLater) {
+    for (auto& device : this->devices_) {
+        distributed::MeshWorkload workload;
+        auto zero_coord = distributed::MeshCoordinate(0, 0);
+        auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
+        workload.add_program(device_range, CreateProgram(*device));
+        auto& program_ = workload.get_programs().at(device_range);
+        CBConfig cb_config;
+        CoreCoord core0(0, 0);
+        CoreRangeSet cr_set({CoreRange(core0, core0)});
+        initialize_program(program_, cr_set);
+
+        CBDescriptor descriptor{
+            .total_size = cb_config.page_size,
+            .core_ranges = cr_set,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = 0, .data_format = cb_config.data_format, .page_size = cb_config.page_size}}},
+            .globally_allocated_bound_later = true,
+        };
+        auto cb = CreateCircularBuffer(program_, core0, CircularBufferConfig(descriptor));
+
+        auto l1_buffer = distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = cb_config.page_size},
+            {.page_size = cb_config.page_size, .buffer_type = tt::tt_metal::BufferType::L1},
+            device.get());
+        UpdateDynamicCircularBufferAddress(program_, cb, *l1_buffer->get_reference_buffer());
+        validate_cb_address(workload, device, cr_set, {{core0, {{0, l1_buffer->address()}}}});
+    }
+}
+
 TEST_F(MeshDeviceFixture, TensixTestUpdateCircularBufferAddressFromMeshTensor) {
     for (auto& mesh_device : this->devices_) {
         distributed::MeshWorkload workload;
