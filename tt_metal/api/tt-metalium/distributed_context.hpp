@@ -157,28 +157,6 @@ public:
     static void create(int argc, char** argv);
     /// Returns the sub-context communicator (after an optional MPI_Comm_split via TT_RUN_SUBCONTEXT_ID).
     static const ContextPtr& get_current_world();
-
-    /// A rank that is ending on a signal (the launcher's SIGTERM, a Ctrl-C at tt-run) marks itself terminating
-    /// before it unwinds, so the close of its devices does not fence on peers that are still in their own
-    /// collectives; the device close itself still runs. Sticky for the life of the process.
-    static void mark_terminating();
-    static bool is_terminating();
-    /// Installs the SIGTERM handler of a launched rank: it marks the process terminating and chains to the handler
-    /// that was there (Python's, which raises SystemExit at the next bytecode). The default disposition is not
-    /// re-raised: the context's waits watch the flag and throw, so the rank unwinds, closes its devices and leaves
-    /// through stop_job's exit. A SIGTERM that did not come from the launcher (kill or scancel of this one pid) is
-    /// sent on to every rank of the job. Re-installs over a handler set after it; a no-op under a simulator.
-    static void install_termination_handler();
-    /// Stops the whole job because of this rank: prints one "[tt-stop] rank R on HOST (pid P): <reason>; stopping
-    /// the job (exit CODE)" line (tt-run reads it to name the rank and return CODE), marks this rank terminating and
-    /// sends SIGTERM to every rank of the job through the launcher (PMIx job control), so they close their devices.
-    /// Only the first call acts. Returns false when there is no launcher to ask (no PMIx, or not launched).
-    static bool request_job_stop(int exit_code, const std::string& reason);
-    /// The exit of a rank whose job is stopping: waits (bounded by TT_METAL_STOP_TIMEOUT_S) until every rank has
-    /// reached this point, so no rank's exit makes the launcher kill a peer that is still closing, then ends the
-    /// process with the stop's exit code (the requested code, or 128 + SIGTERM on a rank that was told to stop).
-    /// MPI_Finalize is skipped: it is collective and the peers are not all in it.
-    [[noreturn]] static void leave_stopped_job();
     /// Returns the unsplit world communicator (MPI_COMM_WORLD). rank() and size() on this handle
     /// are global launcher ranks. Identical to get_current_world() when MPI is disabled or no split occurred.
     static ContextPtr get_world_context();

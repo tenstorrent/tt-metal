@@ -209,7 +209,7 @@ scaleout:
     cpu_medium: 10
     wh_n300_civ2: 10
   unit:
-    cpu_medium: 311
+    cpu_medium: 286
     wh_llmbox: 60
     wh_galaxy: 75
     wh_n300_civ2: 15
@@ -239,7 +239,7 @@ scaleout:
     wh_galaxy: 100
     bh_galaxy: 175
     bh_sc1: 20
-    bh_sc4: 215
+    bh_sc4: 200
     bh_sc16: 150
     bh_loudbox: 80
     bh_p300: 80

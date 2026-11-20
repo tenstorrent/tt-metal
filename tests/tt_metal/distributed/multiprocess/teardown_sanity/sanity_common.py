@@ -28,7 +28,7 @@ import pytest
 
 HERE = Path(__file__).resolve().parent
 ROOT = Path(os.environ.get("TT_METAL_HOME", HERE.parents[4]))
-PROBE: Path | None = None  # the Python rank program; set by the suite that owns it (test_teardown_sanity.py)
+PROBE = HERE / "sanity_probe.py"
 # A mock Blackhole dual galaxy: two ranks, no device (CPU only). The suite targets Blackhole, so it uses a
 # blackhole mock everywhere; the same descriptor + mapping pairing is already validated by the BH dual-galaxy rows
 # of the fabric CPU-only lane. This is a mock topology for the control plane to parse — the teardown behaviour it
@@ -86,25 +86,6 @@ def _shm() -> set:
     return {f for f in glob.glob("/dev/shm/sm_segment.*") if re.search(rf"\.{uid}\.", f)}
 
 
-def _session_dirs() -> set:
-    """Launcher and rank session directories of this user under the temp root. Open MPI 5 / PRRTE 3 names the
-    launcher's ``prterun.<host>.<pid>.<uid>`` (seen here: ``/tmp/prterun.sandbox-rsong-0.1565428.4010/hwloc.sm``);
-    older layouts use ``prte.<host>.<uid>/dvm.<pid>`` and ``ompi.<host>.<uid>/...``; the DistributedContext's
-    singleton redirect uses ``tt_mpi_singleton.*``. prterun removes its directory on its exit path; a launcher that
-    is killed never runs it (P25)."""
-    uid = os.getuid()
-    tmp = tempfile.gettempdir()
-    out = set()
-    for pat in (
-        f"{tmp}/prterun.*.{uid}",
-        f"{tmp}/prte.*.{uid}*/*",
-        f"{tmp}/ompi.*.{uid}*/*",
-        f"{tmp}/tt_mpi_singleton.*",
-    ):
-        out.update(glob.glob(pat))
-    return out
-
-
 def _shm_mapped() -> set:
     """Shared-memory segments that some live process still maps — never remove these: they belong to a running
     job (possibly a concurrent one), not to a job that has gone."""
@@ -130,7 +111,6 @@ class Result:
     alive_at_deadline: list
     leftovers: list  # processes still alive SETTLE_S after the launcher returned (or was killed)
     shm_leaked: list
-    session_leaked: list = field(default_factory=list)  # launcher session dirs left under /tmp (P25)
     reached: dict = field(default_factory=dict)  # rank -> last marker
     rcs: dict = field(default_factory=dict)  # rank -> [non-success rc lines]
     log: str = ""
@@ -151,8 +131,6 @@ class Result:
         bits.append("left: " + (", ".join(self.leftovers) if self.leftovers else "nothing"))
         if self.shm_leaked:
             bits.append("shm leaked: %d" % len(self.shm_leaked))
-        if self.session_leaked:
-            bits.append("session dirs left: %d" % len(self.session_leaked))
         return " | ".join(bits)
 
 
@@ -335,8 +313,6 @@ def run_case(
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
     mpi_prefix: str | None = None,  # the MPI install for this run (default: TT_SANITY_MPI_PREFIX)
-    kill_launcher: bool = False,  # SIGKILL the job's prterun once launcher_ready is reached: the launcher dies, not tt-run (P25)
-    second_launcher_signal_after: float | None = None,  # send launcher_signal again this long after the first
 ) -> Result:
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
@@ -349,7 +325,6 @@ def run_case(
         # compiled against one install and then run through another.
         env["PATH"] = f"{Path(prefix) / 'bin'}:{env.get('PATH', '')}"
     before_shm = _shm()
-    before_sessions = _session_dirs()
     t0 = time.time()
     proc = subprocess.Popen(
         cmd, env=env, cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True
@@ -396,12 +371,6 @@ def run_case(
                 time.sleep(signal_after)
                 os.kill(proc.pid, launcher_signal)
                 sent.append(f"{signal.Signals(launcher_signal).name} to tt-run {where}")
-                if second_launcher_signal_after is not None:
-                    time.sleep(second_launcher_signal_after)
-                    os.kill(proc.pid, launcher_signal)
-                    sent.append(
-                        f"{signal.Signals(launcher_signal).name} again {second_launcher_signal_after:.0f} s later"
-                    )
             if rank_signal is not None:
                 r, sig, after = rank_signal
                 pid = pid_of(r)
@@ -411,17 +380,6 @@ def run_case(
                 os.kill(pid, sig)
                 where = f"at {signal_on_marker}" if signal_on_marker else f"{after:.0f} s after it started"
                 sent.append(f"{signal.Signals(sig).name} to rank {r} (pid {pid}) {where}")
-            if kill_launcher:
-                if launcher_ready is not None:
-                    gr, gm = launcher_ready
-                    wait_marker(gr, gm)
-                time.sleep(signal_after)
-                launchers = [p for p, (c, a) in _procs(piddir).items() if c in ("prterun", "mpirun")]
-                if not launchers:
-                    sent.append("FAULT NOT DELIVERED: no prterun/mpirun of this job found")
-                    return
-                os.kill(launchers[0], signal.SIGKILL)
-                sent.append(f"SIGKILL to the launcher prterun (pid {launchers[0]})")
             if phase1_kill:
                 end = time.time() + deadline
                 while time.time() < end:
@@ -437,7 +395,7 @@ def run_case(
             # row cannot quietly "pass" (or xfail) without the fault it was supposed to inject (review: P9/P4 ack).
             sent.append(f"FAULT NOT DELIVERED: {e!r}")
 
-    if launcher_signal is not None or rank_signal is not None or phase1_kill or kill_launcher:
+    if launcher_signal is not None or rank_signal is not None or phase1_kill:
         threading.Thread(target=worker, daemon=True).start()
     timed_out, alive, out, rc = False, [], "", None
     try:
@@ -459,10 +417,6 @@ def run_case(
         left = [f"{c}({p})" for p, (c, a) in _procs(piddir).items()]
         mapped = _shm_mapped()
         shm = sorted(s for s in (_shm() - before_shm) if s not in mapped)  # our dead leftovers, not a live job's
-        sessions = sorted(_session_dirs() - before_sessions)  # launcher session dirs this job left (P25)
-        if sessions:  # a directory still being removed by its launcher's exit path is not a leak: look once more
-            time.sleep(SETTLE_S)
-            sessions = sorted(_session_dirs() - before_sessions)
     finally:
         # leave the host as we found it for the next row, whatever this one left — always, even on an assertion or
         # an error above. Scoped to this job (tag) and to unmapped segments (never a concurrent job's live memory).
@@ -477,7 +431,6 @@ def run_case(
     res = Result(
         name, " ".join(cmd), rc, wall, timed_out, "; ".join(sent), alive, left, shm, reached=reached, rcs=rcs, log=out
     )
-    res.session_leaked = sessions
     print(f"\n[sanity] {name}: {res}")
     return res
 
@@ -512,7 +465,6 @@ def ended(r: Result) -> None:
 def clean(r: Result) -> None:
     assert not r.leftovers, f"R3: left running after the launcher returned: {r.leftovers}"
     assert not r.shm_leaked, f"R3: /dev/shm segments leaked: {r.shm_leaked}"
-    assert not r.session_leaked, f"R3: launcher session directories left under /tmp: {r.session_leaked}"
 
 
 def nonzero(r: Result) -> None:

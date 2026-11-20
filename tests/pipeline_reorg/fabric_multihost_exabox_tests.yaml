@@ -515,30 +515,3 @@
   budget_type: e2e
   sp_config: sc4
   release_ready: false
-
-# ============================================================================
-# Teardown sanity, multi-host — how a job of tt-metal ranks stops when the
-# fault is on a remote host (plan tt-metal #56902): Ctrl-C / SIGTERM at tt-run,
-# SIGTERM to the remote rank, sys.exit / an exception / SIGKILL / a segfault on
-# it, a stuck rank, a collective hang. Needs more than one host; here on SC4.
-# ============================================================================
-- name: "Teardown sanity multihost — tt-metal job stop (remote rank)"
-  cmd: |
-    set -o pipefail
-    HOSTFILE=/etc/ttop/hostfile
-    RESOLVED_HOSTS=$(awk 'NF {print $1}' "${HOSTFILE}" 2>/dev/null | awk '!seen[$0]++' | paste -sd, -)
-    if [ -z "$RESOLVED_HOSTS" ]; then
-      echo "::error::could not resolve the hosts from ${HOSTFILE}"; exit 1
-    fi
-    echo "hosts: $RESOLVED_HOSTS"
-    export TEARDOWN_REMOTE_USER=user
-    ./tests/scripts/multihost/run_teardown_multihost_context_tests.sh --hosts "$RESOLVED_HOSTS" 2>&1 \
-      | tee "${PIPELINE_DIR}/teardown_multihost_context.log"
-  skus:
-    bh_sc4:
-      timeout: 15  # 10 cross-host cases of two ttnn ranks; ~5 min of work plus SC4 setup/network overhead
-  owner_id: U08RRAU5E15 # Ridvan Song
-  team: scaleout
-  budget_type: e2e
-  sp_config: sc4
-  release_ready: false

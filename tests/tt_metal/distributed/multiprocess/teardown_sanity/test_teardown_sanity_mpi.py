@@ -83,7 +83,10 @@ def test_ttrun_hang_timeout():
     ended(r)
     nonzero(r)
     assert r.exit == 241, f"expected PRRTE's timeout code 241, got {r.exit} — the wall clock was not what ended it: {r}"
-    assert 20 <= r.wall_s < 40, f"the job did not end at the ~20 s --timeout but at {r.wall_s:.0f} s: {r}"
+    # tt-run's own job time (launch to the end of the job), not the harness wall clock that also counts start-up
+    m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
+    assert m, r.log[-2000:]
+    assert 20 <= float(m.group(1)) < 40, f"the job did not end at the ~20 s --timeout but at {m.group(1)} s: {r}"
     assert "the job reached its --timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
     clean(r)
 
@@ -91,8 +94,7 @@ def test_ttrun_hang_timeout():
 @pytest.mark.xfail(
     reason="P1 for a raw MPI program: a rank that calls exit(1) runs its own atexit MPI_Finalize, which is collective "
     "and waits on the peers in their barrier, so the job rides the --timeout wall clock (241). Neither tt-run nor its "
-    "rank wrapper can end a rank that is still alive; tt-metal ranks stop the job from their exit instead "
-    "(test_teardown_sanity.py::test_exit1_stops_the_job).",
+    "rank wrapper can end a rank that is still alive; a tt-metal rank stops the job from its exit instead (#64546).",
     strict=True,
 )
 def test_ttrun_error_exit_fails_fast_not_hang():
