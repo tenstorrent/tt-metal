@@ -33,13 +33,13 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import (
 EMB_DIM = 7168
 HIDDEN_DIM = 18432
 
-# fuse_tp_collectives: the gathered gate|up matmul's blocking, swept on 8x4 at 640 rows per chip with bf8 weights. The
-# K block is the widest that divides the local K shard (a ring needs it); the M block is capped so more rows take more
-# blocks, not more L1; 24 mux buffers overflow L1 under K3.1's l1_small and are no faster than 8.
+# fuse_tp_collectives: the gathered gate|up matmul's blocking, swept on 8x4 at 640 rows per chip with bf8 weights for
+# Kimi-K3 and GLM-5.3. The K block is the widest that divides the local K shard (a ring needs it); the M block is capped
+# so more rows take more blocks, not more L1; the N block is a core's whole N span, or its widest divisor up to
+# MAX_N_BLOCK; 24 mux buffers overflow L1 under K3.1's l1_small and are no faster than 8.
 FUSED_GATE_UP_K_BLOCKS = (8, 4, 2, 1)
 FUSED_GATE_UP_M_BLOCK = 2
-FUSED_GATE_UP_N_BLOCK = 24
-FUSED_GATE_UP_SUBBLOCK = (1, 4)
+FUSED_GATE_UP_MAX_N_BLOCK = 24
 FUSED_GATE_UP_MAX_CORES = 110  # full-height columns, leaving one to the fabric workers
 FUSED_GATE_UP_MUX_BUFFERS = 8
 
@@ -119,6 +119,11 @@ class TtFfn(TtSharedExpert):
         if self.fuses_tp_collectives:
             local_k_tiles = emb_dim // tp // ttnn.TILE_SIZE
             self._fused_k_block = next(b for b in FUSED_GATE_UP_K_BLOCKS if local_k_tiles % b == 0)
+            core_n_tiles = -(-2 * hidden_dim // tp // ttnn.TILE_SIZE // fused_grid.x)
+            self._fused_n_block = next(
+                b for b in range(min(core_n_tiles, FUSED_GATE_UP_MAX_N_BLOCK), 0, -1) if core_n_tiles % b == 0
+            )
+            self._fused_subblock_w = next(w for w in (4, 3, 2, 1) if self._fused_n_block % w == 0)
             # One gate|up weight per chip; the gathered matmul splits its output back into the two (chunks=2).
             self.gate_up_proj = ttnn.concat([self.gate_proj, self.up_proj], dim=-1)
             ttnn.deallocate(self.gate_proj)
@@ -149,9 +154,9 @@ class TtFfn(TtSharedExpert):
                 config=ttnn.MinimalMatmulConfig(
                     M_block_size=min(FUSED_GATE_UP_M_BLOCK, -(-rows // ttnn.TILE_SIZE // grid.y)),
                     K_block_size=self._fused_k_block,
-                    N_block_size=FUSED_GATE_UP_N_BLOCK,
-                    subblock_h=FUSED_GATE_UP_SUBBLOCK[0],
-                    subblock_w=FUSED_GATE_UP_SUBBLOCK[1],
+                    N_block_size=self._fused_n_block,
+                    subblock_h=1,
+                    subblock_w=self._fused_subblock_w,
                     compute_with_storage_grid_size=grid,
                 ),
                 topology=self._fused_topology,
@@ -226,11 +231,10 @@ class TtFfn(TtSharedExpert):
             return situ_glu(gate_out, up_out, self.situ_beta, self.situ_linear_beta)
         if self.activation == ACTIVATION_CLAMPED_SILU_GLU:
             return clamped_silu_glu(gate_out, up_out, self.clamped_silu_glu_limit)
-        return ttnn.mul(
-            gate_out,
-            up_out,
-            input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
-        )
+        activated = ttnn.mul(gate_out, up_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
+        ttnn.deallocate(gate_out)
+        ttnn.deallocate(up_out)
+        return activated
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """

@@ -52,8 +52,16 @@ from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
         (PREFILL_CHUNK_TOKENS_PER_CHIP, EMB_DIM, HIDDEN_DIM, ACTIVATION_CLAMPED_SILU_GLU),
         # GLM-5.3's dense layers 0-2: 6144 -> 12288, SiLU-GLU.
         (PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
+        (4 * PREFILL_CHUNK_TOKENS_PER_CHIP, GLM53Config.EMB_SIZE, GLM53Config.INTERMEDIATE_SIZE, ACTIVATION_SILU),
     ],
-    ids=["isl_5k", "isl_5k-k3-33792-situ", "isl_20k-k3-33792-situ", "isl_5k-v4-18432-clamped", "isl_5k-glm-12288"],
+    ids=[
+        "isl_5k",
+        "isl_5k-k3-33792-situ",
+        "isl_20k-k3-33792-situ",
+        "isl_5k-v4-18432-clamped",
+        "isl_5k-glm-12288",
+        "isl_20k-glm-12288",
+    ],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, tp_axis",
@@ -140,8 +148,10 @@ def test_ffn_pcc(
     """
     if activation == ACTIVATION_SITU and not is_blackhole():
         pytest.skip("SiTU-GLU needs ttnn.softcap, which is Blackhole-only")
-    if fuse_tp_collectives and activation != ACTIVATION_SITU:
-        pytest.skip("the fused TP collectives run in production on Kimi-K3's dense layer only")
+    if fuse_tp_collectives and hidden_dim not in (KimiK3Config.INTERMEDIATE_SIZE, GLM53Config.INTERMEDIATE_SIZE):
+        pytest.skip("the fused TP collectives run in production on Kimi-K3 and GLM-5.3's dense layers only")
+    if fuse_tp_collectives and not is_blackhole():
+        pytest.skip("the fused TP collectives need a core column free of the matmul grid (Blackhole)")
 
     activations_dtype = ttnn.bfloat16
     weights_dtype = ttnn.bfloat8_b
