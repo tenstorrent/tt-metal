@@ -26,18 +26,18 @@ using ttnn::experimental::MSDAReferenceMode;
 // shared by validation, the output spec and the program factory. Keeping the
 // derivation in one place is what stops the three from drifting.
 struct MSDAShapes {
-    uint32_t batch = 0;             // B
-    uint32_t num_keys = 0;          // S = sum_l H_l * W_l
-    uint32_t num_heads = 0;         // H
-    uint32_t head_dim = 0;          // D
-    uint32_t num_queries = 0;       // Q
-    uint32_t num_levels = 0;        // L
-    uint32_t num_points = 0;        // P
-    uint32_t num_refs = 0;          // R (V2 only; 0 for V1)
-    bool locations_packed = false;  // sampling_locations/offsets given as (B, Q, H, L*P*2) or (B, Q, H*L*P*2)
+    uint32_t batch = 0;                   // B
+    uint32_t num_keys = 0;                // S = sum_l H_l * W_l
+    uint32_t num_heads = 0;               // H
+    uint32_t head_dim = 0;                // D
+    uint32_t num_queries = 0;             // Q
+    uint32_t num_levels = 0;              // L
+    uint32_t num_points = 0;              // P
+    uint32_t num_refs = 0;                // R (V2 only; 0 for V1)
+    bool locations_packed = false;        // sampling_locations/offsets given as (B, Q, H, L*P*2) or (B, Q, H*L*P*2)
     bool locations_heads_packed = false;  // sampling_locations/offsets given as (B, Q, H*L*P*2)
-    bool weights_packed = false;    // attention_weights given as (B, Q, H, L*P)
-    bool value_packed = false;      // value given as (B, S, H*D); heads recovered from attention_weights
+    bool weights_packed = false;          // attention_weights given as (B, Q, H, L*P)
+    bool value_packed = false;            // value given as (B, S, H*D); heads recovered from attention_weights
 };
 
 struct MSDACircularBufferSpec {
@@ -148,7 +148,6 @@ MSDACircularBufferPlan derive_circular_buffer_plan(
     const FusedMSDAOperation::tensor_args_t& args,
     const MSDAShapes& shapes,
     tt::tt_metal::BufferType value_buffer_type,
-    tt::tt_metal::BufferType output_buffer_type,
     DataType output_dtype);
 
 uint64_t circular_buffer_bytes_per_core(const MSDACircularBufferPlan& plan);

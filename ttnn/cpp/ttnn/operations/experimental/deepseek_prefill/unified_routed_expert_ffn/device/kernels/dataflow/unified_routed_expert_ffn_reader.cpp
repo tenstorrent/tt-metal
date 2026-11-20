@@ -33,6 +33,18 @@
 #include "../adaptive_chunk.hpp"
 #include "../weight_runs.hpp"
 
+// x_indexed: read nbytes of the x_row_index page (UINT32 x-row ids) at offset_bytes into l1. A template so the
+// accessor at kOffset (absent from the compile-time args when x_indexed is off) is only built when enabled.
+template <bool kEnabled, uint32_t kOffset>
+FORCE_INLINE void read_x_row_idx(Noc& noc, uint32_t idx_addr, uint32_t l1, uint32_t nbytes, uint32_t offset_bytes) {
+    if constexpr (kEnabled) {
+        constexpr auto args = TensorAccessorArgs<kOffset>();
+        const auto acc = TensorAccessor(args, idx_addr);
+        noc.async_read(acc, CoreLocalMem<uint32_t>(l1), nbytes, {.page_id = 0, .offset_bytes = offset_bytes}, {});
+        noc.async_read_barrier();
+    }
+}
+
 void kernel_main() {
     // -------------------------- runtime args ------------------------------
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
@@ -177,8 +189,13 @@ void kernel_main() {
     constexpr uint32_t D_SHARD_W = get_compile_time_arg_val(35);
     using GuRuns = unified_routed_expert_ffn::WeightRuns<GU_SHARD_W>;
     using DRuns = unified_routed_expert_ffn::WeightRuns<D_SHARD_W>;
+    // x_indexed: buffer row r of an expert region reads x row x_row_index[r] (x is the token-ordered input).
+    constexpr bool x_indexed = get_compile_time_arg_val(36) != 0;
+    constexpr uint32_t cb_x_row_idx = get_compile_time_arg_val(37);
+    constexpr uint32_t x_rows = get_compile_time_arg_val(38);
+    constexpr uint32_t x_row_index_len = get_compile_time_arg_val(39);  // entries in the x_row_index vector
 
-    constexpr uint32_t x_accessor_offset = 36;
+    constexpr uint32_t x_accessor_offset = 40;
     constexpr auto x_args = TensorAccessorArgs<x_accessor_offset>();
     const auto x_acc = TensorAccessor(x_args, x_addr, get_tile_size(cb_in0_x));
     // Row-major x accessor (x_is_row_major): x is a ROW_MAJOR bf16 buffer whose
@@ -241,7 +258,19 @@ void kernel_main() {
     CircularBuffer cb_gate_bias_obj(cb_gate_bias);
     CircularBuffer cb_up_bias_obj(cb_up_bias);
     CircularBuffer cb_down_bias_obj(cb_down_bias);
+    constexpr uint32_t idx_rows_accessor_offset = down_bias_args.next_compile_time_args_offset();
+    constexpr uint32_t COMMON_ROW_IDX = COMMON_BIAS + 3 * experts_per_chip;
+#else
+    constexpr uint32_t idx_rows_accessor_offset = start_args.next_compile_time_args_offset();
+    constexpr uint32_t COMMON_ROW_IDX = COMMON_WEIGHTS + 3 * experts_per_chip;
 #endif
+    // x_row_index (x_indexed): one ROW_MAJOR page of UINT32 x-row ids, read in per-chunk slices.
+    uint32_t row_idx_l1 = 0;
+    if constexpr (x_indexed) {
+        CircularBuffer cb_x_row_idx_obj(cb_x_row_idx);
+        cb_x_row_idx_obj.reserve_back(1);
+        row_idx_l1 = cb_x_row_idx_obj.get_write_ptr();
+    }
 
     // D2.0 NoC handles. `noc` uses default noc_index for mcasts/sem ops.
     // `noc_read` forces NoC 0 for DRAM weight/page reads — the kernel issues
@@ -328,39 +357,36 @@ void kernel_main() {
                 // multicasts on the same reserved path (as for the weight mcast).
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(counts_l1),
-                    MulticastEndpoint{},
+                    cb_counts_scratch_obj,
                     counts_page_size,
                     counts_num_receivers,
                     {.offset_bytes = 0},
                     {.noc_x_start = cb_nx_start,
                      .noc_y_start = cb_ny_start,
                      .noc_x_end = cb_nx_end,
-                     .noc_y_end = cb_ny_end,
-                     .addr = counts_l1},
+                     .noc_y_end = cb_ny_end},
                     /*linked=*/true);
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(idx_l1),
-                    MulticastEndpoint{},
+                    cb_idx_scratch_obj,
                     idx_page_size,
                     counts_num_receivers,
                     {.offset_bytes = 0},
                     {.noc_x_start = cb_nx_start,
                      .noc_y_start = cb_ny_start,
                      .noc_x_end = cb_nx_end,
-                     .noc_y_end = cb_ny_end,
-                     .addr = idx_l1},
+                     .noc_y_end = cb_ny_end},
                     /*linked=*/true);
                 noc.async_write_multicast(
                     CoreLocalMem<uint32_t>(start_l1),
-                    MulticastEndpoint{},
+                    cb_start_scratch_obj,
                     start_page_size,
                     counts_num_receivers,
                     {.offset_bytes = 0},
                     {.noc_x_start = cb_nx_start,
                      .noc_y_start = cb_ny_start,
                      .noc_x_end = cb_nx_end,
-                     .noc_y_end = cb_ny_end,
-                     .addr = start_l1},
+                     .noc_y_end = cb_ny_end},
                     /*linked=*/true);
                 noc.async_writes_flushed();
                 counts_valid_sem.set(1);
@@ -541,6 +567,30 @@ void kernel_main() {
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
         const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
 
+        // x_indexed: this M-row's x-row ids for the chunk, read once and reused by every gate/up K-block. x_indexed
+        // needs a ROW_MAJOR x (tilize_once), whose K-block owner rotates over the M-row's cores, so every core reads
+        // the M-row's slice. Only the expert's own tile rows are read: the tail chunk's last core may own fewer than
+        // per_core_M of them, and past the last expert's rows the index vector ends. The slice is also clipped to the
+        // vector's length: a region offset + count past it is a caller bug, and the rows it would cover keep stale
+        // ids (checked against x_rows below, and their output tiles fall outside the output).
+        if constexpr (x_indexed) {
+            const uint32_t first_entry = x_start_stick + this_core_first_row * TILE_HEIGHT;
+            if (this_core_first_row < count_tiles && first_entry < x_row_index_len) {
+                const uint32_t remaining_tile_rows = count_tiles - this_core_first_row;
+                const uint32_t index_tile_rows = remaining_tile_rows < per_core_M ? remaining_tile_rows : per_core_M;
+                const uint32_t wanted_entries = index_tile_rows * TILE_HEIGHT;
+                const uint32_t left_entries = x_row_index_len - first_entry;
+                ASSERT(wanted_entries <= left_entries);
+                const uint32_t entries = wanted_entries < left_entries ? wanted_entries : left_entries;
+                read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
+                    noc_read,
+                    get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
+                    row_idx_l1,
+                    entries * static_cast<uint32_t>(sizeof(uint32_t)),
+                    first_entry * static_cast<uint32_t>(sizeof(uint32_t)));
+            }
+        }
+
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
         //
         // Per-K-block restructure for parallelism:
@@ -583,12 +633,24 @@ void kernel_main() {
                 const uint32_t real_r =
                     (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
                 for (uint32_t r = 0; r < real_r; ++r) {
-                    noc_read.async_read(
-                        x_acc_rm,
-                        CoreLocalMem<uint32_t>(l1_x),
-                        rm_kblock_bytes,
-                        {.page_id = x_start_stick + row_base + r, .offset_bytes = col_off_bytes},
-                        {});
+                    // x_start_stick offsets into this expert's region of the shared row-major buffer (0 when x is
+                    // a standalone per-expert buffer). x_indexed: the row's x row comes from the chunk's index slice.
+                    uint32_t stick;
+                    if constexpr (x_indexed) {
+                        stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_idx_l1)[m * TILE_HEIGHT + r];
+                        // An index past x is a caller bug: leave the row stale rather than read past x.
+                        ASSERT(stick < x_rows);
+                    } else {
+                        stick = x_start_stick + row_base + r;
+                    }
+                    if (!x_indexed || stick < x_rows) {
+                        noc_read.async_read(
+                            x_acc_rm,
+                            CoreLocalMem<uint32_t>(l1_x),
+                            rm_kblock_bytes,
+                            {.page_id = stick, .offset_bytes = col_off_bytes},
+                            {});
+                    }
                     l1_x += rm_kblock_bytes;
                 }
                 l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
@@ -674,7 +736,6 @@ void kernel_main() {
                 in0_ready_sem.wait(GRID_X_NOC - 1);
                 in0_ready_sem.set(0);
                 const uint32_t src_l1 = cb_x_tilized_obj.get_read_ptr();
-                const uint32_t dst_l1 = x_stage_obj.get_write_ptr();
                 const uint32_t mcast_bytes = valid_tile_rows * in0_block_w_gu * x_tile_bytes;
                 // Loopback (INCL_SRC) delivers the owner's own cb_in0_x copy, so the
                 // reader stays its only producer. linked=true orders the valid-sem
@@ -682,15 +743,14 @@ void kernel_main() {
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         CoreLocalMem<uint32_t>(src_l1),
-                        MulticastEndpoint{},
+                        x_stage_obj,
                         mcast_bytes,
                         GRID_X_NOC,
                         {.offset_bytes = 0},
                         {.noc_x_start = in0_mcast_nx_start,
                          .noc_y_start = in0_mcast_ny_start,
                          .noc_x_end = in0_mcast_nx_end,
-                         .noc_y_end = in0_mcast_ny_end,
-                         .addr = dst_l1},
+                         .noc_y_end = in0_mcast_ny_end},
                         /*linked=*/true);
                 }
                 noc.async_writes_flushed();
@@ -745,15 +805,14 @@ void kernel_main() {
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(block_start),
-                        MulticastEndpoint{},
+                        x_stage_obj,
                         mcast_bytes,
                         in0_num_receivers,
                         {.offset_bytes = 0},
                         {.noc_x_start = in0_mcast_nx_start,
                          .noc_y_start = in0_mcast_ny_start,
                          .noc_x_end = in0_mcast_nx_end,
-                         .noc_y_end = in0_mcast_ny_end,
-                         .addr = block_start},
+                         .noc_y_end = in0_mcast_ny_end},
                         /*linked=*/true);
                 }
                 x_stage_obj.push_back(g_in0_block_tiles_max);
@@ -860,30 +919,28 @@ void kernel_main() {
                     // holds the path itself.
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(gate_block_start),
-                        MulticastEndpoint{},
+                        cb_in1_gate_obj,
                         gate_block_bytes,
                         in1_num_receivers,
                         {.offset_bytes = 0},
                         {.noc_x_start = in1_mcast_nx_start,
                          .noc_y_start = in1_mcast_ny_start,
                          .noc_x_end = in1_mcast_nx_end,
-                         .noc_y_end = in1_mcast_ny_end,
-                         .addr = gate_block_start},
+                         .noc_y_end = in1_mcast_ny_end},
                         /*linked=*/true);
 
                     if constexpr (reader_mcasts_up) {
                         const uint32_t up_block_bytes = g_in1_block_num_tiles * up_tile_bytes;
                         noc.async_write_multicast(
                             CoreLocalMem<uint32_t>(up_block_start),
-                            MulticastEndpoint{},
+                            cb_in1_up_obj,
                             up_block_bytes,
                             in1_num_receivers,
                             {.offset_bytes = 0},
                             {.noc_x_start = in1_mcast_nx_start,
                              .noc_y_start = in1_mcast_ny_start,
                              .noc_x_end = in1_mcast_nx_end,
-                             .noc_y_end = in1_mcast_ny_end,
-                             .addr = up_block_start},
+                             .noc_y_end = in1_mcast_ny_end},
                             /*linked=*/true);
                     }
                 }
@@ -1040,15 +1097,14 @@ void kernel_main() {
                     // mcast below for the full rationale).
                     noc.async_write_multicast(
                         CoreLocalMem<uint32_t>(in1_block_start),
-                        MulticastEndpoint{},
+                        cb_in1_down_obj,
                         block_bytes,
                         in1_num_receivers,
                         {.offset_bytes = 0},
                         {.noc_x_start = in1_mcast_nx_start,
                          .noc_y_start = in1_mcast_ny_start,
                          .noc_x_end = in1_mcast_nx_end,
-                         .noc_y_end = in1_mcast_ny_end,
-                         .addr = in1_block_start},
+                         .noc_y_end = in1_mcast_ny_end},
                         /*linked=*/true);
                     noc.async_writes_flushed();
 
@@ -1098,15 +1154,14 @@ void kernel_main() {
                 if (mcast_bytes > 0) {
                     noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
                         CoreLocalMem<uint32_t>(src_l1),
-                        MulticastEndpoint{},
+                        cb_in0_down_full_obj,
                         mcast_bytes,
                         GRID_X_NOC,
                         {.offset_bytes = 0},
                         {.noc_x_start = mrow_first_nx,
                          .noc_y_start = mrow_first_ny,
                          .noc_x_end = mrow_last_nx,
-                         .noc_y_end = mrow_last_ny,
-                         .addr = dst_l1},
+                         .noc_y_end = mrow_last_ny},
                         /*linked=*/true);
                 }
                 noc.async_writes_flushed();

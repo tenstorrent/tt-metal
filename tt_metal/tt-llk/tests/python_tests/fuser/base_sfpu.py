@@ -27,7 +27,7 @@ class Sfpu:
     The lifecycle called by the pipeline is:
         init() -> planned calls to calculate() -> uninit()
 
-    Entirely skipped during UNPACK_ISOLATE, PACK_ISOLATE, and L1_CONGESTION perf runs.
+    Entirely skipped during UNPACK_ISOLATE and PACK_ISOLATE perf runs.
 
     To create a new SFPU:
         1. Subclass Sfpu
