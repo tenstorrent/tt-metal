@@ -16,7 +16,7 @@ namespace ttnn::operations::moreh::moreh_linear {
 void bind_moreh_linear_operation(nb::module_& mod) {
     ttnn::bind_function<"moreh_linear">(
         mod,
-        "Moreh Linear Operation",
+        "Deprecated in favor of ttnn.linear. Will be removed after 2026-12-16.",
         &ttnn::moreh_linear,
         nb::arg("input"),
         nb::arg("weight"),

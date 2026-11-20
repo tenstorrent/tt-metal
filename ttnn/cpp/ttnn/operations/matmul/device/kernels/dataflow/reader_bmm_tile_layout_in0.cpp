@@ -10,6 +10,9 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
+#ifdef BATCH_BROADCAST
+#include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
+#endif
 
 void kernel_main() {
     // RUNTIME ARGS
@@ -85,6 +88,12 @@ void kernel_main() {
     const auto s0 = TensorAccessor(tensor::in0);
 
     uint32_t m_block = start_m_block;
+#ifdef BATCH_BROADCAST
+    uint32_t out_batch = get_arg(args::start_batch);
+    constexpr auto batch_dims = get_arg(args::batch_dims);
+    constexpr auto in0_batch_strides = get_arg(args::in0_batch_strides);
+    in0_tensor_start_tile_id += batch_broadcast_offset(out_batch, batch_dims, in0_batch_strides);
+#endif
     for (uint32_t b = 0; b < batch; ++b) {
         uint32_t in0_tensor_current_block_start_tile_id = in0_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -134,7 +143,11 @@ void kernel_main() {
         if (++m_block == m_blocks_per_batch) {
             // Next batch, first M block
             m_block = 0;
+#ifdef BATCH_BROADCAST
+            in0_tensor_start_tile_id = batch_broadcast_offset(++out_batch, batch_dims, in0_batch_strides);
+#else
             in0_tensor_start_tile_id += MtKt - (m_blocks_per_batch - 1) * in0_m_block_stride;
+#endif
         } else {
             in0_tensor_start_tile_id += in0_m_block_stride;
         }

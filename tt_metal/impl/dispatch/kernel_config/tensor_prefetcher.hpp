@@ -26,7 +26,9 @@ struct TensorPrefetcherKernelInfo {
 };
 
 // The Tensor prefetcher kernels in the order blocks flow through them. Kernel `k` retires request slots as
-// FIFO consumer `k` (tensor_prefetcher_fifo::fifo_rd_offset). Defined in tensor_prefetcher_kernels.cpp.
+// FIFO consumer `k` (tensor_prefetcher_fifo::fifo_rd_offset). The first kernel plans how many blocks of each
+// tensor flow, and the rest follow its plan (kernels/tensor_prefetcher_fifo_device.h). Defined in
+// tensor_prefetcher_kernels.cpp.
 std::span<const TensorPrefetcherKernelInfo> tensor_prefetcher_kernels();
 
 // The layout of the dispatch engine's Tensor prefetcher region on `cluster`: one lane per DRAM bank of its
@@ -38,6 +40,11 @@ tensor_prefetcher_fifo::RegionLayout tensor_prefetcher_region_layout(const Clust
 // the CQ zones, on devices with no more DRAM banks than a slot can name (tensor_prefetcher_fifo::kMaxLanes).
 bool dispatch_engine_hosts_tensor_prefetcher(
     const Cluster& cluster, CoreType dispatch_core_type, uint32_t num_hw_cqs, const DispatchMemMap& dispatch_mem_map);
+
+// The logical dispatch engine of device `device_id` that runs the Tensor prefetcher kernels: CQ 0's, which is
+// the first core of the pool fast dispatch assigns CQ 0's kernels from. Read from that pool, not assigned, so
+// device init can name it in the firmware's tables before fast dispatch assigns any core.
+CoreCoord tensor_prefetcher_dispatch_engine(dispatch_core_manager& dispatch_core_manager, ChipId device_id);
 
 // One of the kernels in tensor_prefetcher_kernels(). The topology chains their nodes in that order, so a
 // node's index is the number of nodes upstream of it. They serve a request FIFO the host writes into the L1

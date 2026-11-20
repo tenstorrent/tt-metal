@@ -520,17 +520,9 @@ def test_unary_log_operations_ttnn(
     torch.manual_seed(data_seed)
     in_data = torch.Tensor(size=input_shapes).uniform_(low_range, high_range).to(torch_dtype)
 
-    # Only use pad_value=1.0 for bfloat8_b to avoid log(0) issues with shared exponent flushing
-    tensor_kwargs = {
-        "dtype": ttnn_dtype,
-        "layout": ttnn.TILE_LAYOUT,
-        "device": device,
-        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-    }
-    if ttnn_dtype == ttnn.bfloat8_b:
-        tensor_kwargs["pad_value"] = 1.0
-
-    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     golden_function = ttnn.get_golden_function(log_function)

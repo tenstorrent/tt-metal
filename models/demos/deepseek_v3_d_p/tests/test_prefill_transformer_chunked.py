@@ -106,9 +106,9 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
 # GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
-# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
-# sync with the glm_5_3 runner adapter.
-GLM_L1_SMALL_SIZE = 1536
+# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs; 1664 for the
+# dense FFN's fused TP collectives (#66628). Keep in sync with the glm_5_3 runner adapter.
+GLM_L1_SMALL_SIZE = 1664
 GLM_TRACE_REGION_SIZE = 512 * 1024 * 1024
 
 
@@ -260,9 +260,10 @@ TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
 GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
-    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers.
-    # Cut on bh_sc1_high_power, CI run 42026848687 / job 127259026123.
-    (78, 11, 10): [0.358, 0.350, 0.352, 0.349, 0.353, 0.353, 0.349, 0.349, 0.355, 0.357, 0.364],
+    # Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push in the shared layers,
+    # split-K sparse_sdpa. Cut on bh_sc1_high_power: per-chunk mean of CI jobs 135059812486, 135088765704 and
+    # 135100701074 (runs 44375823809 and 44383551427).
+    (78, 11, 10): [0.346, 0.337, 0.340, 0.335, 0.339, 0.338, 0.334, 0.334, 0.340, 0.342, 0.348],
 }
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
@@ -1343,7 +1344,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores; GLM needs 1664, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=moe_fabric_payload(GLM53Config),
                 l1_small_size=GLM_L1_SMALL_SIZE,
