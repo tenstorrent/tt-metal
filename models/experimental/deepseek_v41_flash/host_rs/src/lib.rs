@@ -40,7 +40,8 @@ struct PyEngram {
 
 #[pymethods]
 impl PyEngram {
-    /// `tables` is `[(layer_id, weight_ptr, scale_ptr, rows)]`: the tables' memory, which the caller keeps alive.
+    /// `tables` is `[(layer_id, weight_ptr, scale_ptr, weight_stride, scale_stride, rows)]`: the tables' memory,
+    /// which the caller keeps alive.
     #[new]
     #[allow(clippy::too_many_arguments)]
     #[pyo3(signature = (token_map, vocab_size, pad_id, max_ngram, n_heads, head_dim, layout_layers, multipliers,
@@ -56,15 +57,24 @@ impl PyEngram {
         multipliers: Vec<Vec<i64>>,
         primes: Vec<Vec<i64>>,
         offsets: Vec<Vec<i64>>,
-        tables: Vec<(i64, usize, usize, usize)>,
+        tables: Vec<(i64, usize, usize, usize, usize, usize)>,
         batch: usize,
         max_seq: usize,
         sessions: usize,
     ) -> PyResult<Self> {
         let tables = tables
             .into_iter()
-            .map(|(layer, weight, scale, rows)| {
-                (layer, Table { weight: weight as *const u8, scale: scale as *const u8, rows })
+            .map(|(layer, weight, scale, weight_stride, scale_stride, rows)| {
+                (
+                    layer,
+                    Table {
+                        weight: weight as *const u8,
+                        scale: scale as *const u8,
+                        weight_stride,
+                        scale_stride,
+                        rows,
+                    },
+                )
             })
             .collect();
         let inner = Engram::new(EngramArgs {

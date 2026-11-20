@@ -8,6 +8,9 @@
 row 4 - j, the server's requester j: attention, Engram, norms, ``lm_head`` and drafter on the one TP4 row, every FFN
 on the server, one-row decode steps and 4-row verify blocks (and 4-row draft FFNs) mixed on its one launch.
 
+The instances load in parallel and share one Engram table mapping; trace capture stays one instance at a time,
+because a capture selects the shared server's request mode.
+
 Every user asks the same prompt (``DEEPSEEK_V4_SPEC_PROMPT``, default GSM8K's three problems) and decodes, greedy,
 ``DEEPSEEK_V4_SPEC_TOKENS`` tokens (default 300, capped to the block verify's dense range). Instance 0 alone gives the
 reference tokens of plain one-row decode and of DSpark (3 drafts + 1 in one 4-row step). Then for each user count
@@ -33,6 +36,7 @@ import os
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
@@ -53,6 +57,7 @@ from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt import spec as spec_module
 from models.experimental.deepseek_v41_flash.tt.config import CACHE_DIR, DEFAULT_MODEL_DIR, load_config
 from models.experimental.deepseek_v41_flash.tt.decode import persistent_moe as pmoe
+from models.experimental.deepseek_v41_flash.tt.model import load_engram_tables
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
     engram_ram_needed,
@@ -128,12 +133,26 @@ def test_instances_dspark(mesh_device, monkeypatch):
         )
         stack.callback(server.stop)  # last: after every model's shutdown
         logger.info(f"[test] server for {INSTANCES} instances up in {time.perf_counter() - t0:.0f}s")
-        models = []
-        for j in range(INSTANCES):
+        engram_ids = [i for i in config.engram_layer_ids if i < num_layers]
+        engram_tables = load_engram_tables(loader, engram_ids)
+        stack_lock = threading.Lock()
+
+        class _Locked:
+            def enter_context(self, cm):
+                with stack_lock:
+                    return stack.enter_context(cm)
+
+            def callback(self, callback, *args, **kwargs):
+                with stack_lock:
+                    return stack.callback(callback, *args, **kwargs)
+
+        locked = _Locked()
+
+        def load_instance(j: int):
             t0 = time.perf_counter()
             model, lm_head, _, _ = _construct_model(
                 mesh_device,
-                stack,
+                locked,
                 loader=loader,
                 config=config,
                 num_stages=1,
@@ -143,18 +162,29 @@ def test_instances_dspark(mesh_device, monkeypatch):
                 moe_requester=j,
                 drafter_on_stage=True,
             )
-            model.prepare_static_decode(rope, max_seq, lm_head=lm_head, device_sampling=True)
+            model.prepare_static_decode(
+                rope, max_seq, lm_head=lm_head, device_sampling=True, engram_tables=engram_tables
+            )
             model.device_sampler.set_sampling(0.0, 0)
             model.prepare_spec_decode(rope["main"])
             model.activate_session(model.open_session())
+            logger.info(
+                f"[test] instance {j} on mesh row {pmoe.INSTANCE_ROWS[j]} loaded in {time.perf_counter() - t0:.0f}s"
+            )
+            return model
+
+        logger.info(f"[test] loading {INSTANCES} instances in parallel, one Engram table mapping")
+        with ThreadPoolExecutor(max_workers=INSTANCES) as pool:
+            models = list(pool.map(load_instance, range(INSTANCES)))
+        for j, model in enumerate(models):
+            t0 = time.perf_counter()
             # One instance at a time: a capture picks the server's request mode, which the instances share.
             model.capture_spec_traces(prompts[j][0], 0)
             if host_rs.enabled():
                 model.start_host_runtime()
-            models.append(model)
             logger.info(
-                f"[test] instance {j} on mesh row {pmoe.INSTANCE_ROWS[j]}: built and captured in "
-                f"{time.perf_counter() - t0:.0f}s (host runtime {'on' if model.host_runtime_running else 'off'})"
+                f"[test] instance {j} captured in {time.perf_counter() - t0:.0f}s "
+                f"(host runtime {'on' if model.host_runtime_running else 'off'})"
             )
 
         def token_of(out) -> int:

@@ -15,12 +15,19 @@ pub const DEAD: i64 = -1;
 /// One E8M0 scale per this many consecutive values of a table row.
 pub const TABLE_BLOCK: usize = 32;
 
-/// One Engram layer's table in host memory, as stored: `weight` `[rows, head_dim]` fp8 E4M3 and `scale`
-/// `[rows, head_dim / 32]` E8M0. The memory belongs to Python (torch tensors it keeps alive).
+/// One Engram layer's table in host memory, as stored: `weight` `[rows, head_dim]` fp8 E4M3 (row stride
+/// `weight_stride` bytes) and `scale` `[rows, head_dim / 32]` E8M0 (row stride `scale_stride` bytes).
+/// Both split tables (`weight_stride == head_dim`, `scale_stride == head_dim / 32`) and row-packed
+/// `[weight | scale]` tables (`weight_stride == scale_stride == head_dim + head_dim / 32`, `scale == weight + head_dim`)
+/// use the same representation. The memory belongs to Python (torch tensors it keeps alive). It is read-only,
+/// so several `Engram` values (one decode host per model instance) may point at the same bytes. Session
+/// histories stay on the `Engram` and are not shared: two instances hashing slot 0 must not share one `Engram`.
 #[derive(Clone, Copy)]
 pub struct Table {
     pub weight: *const u8,
     pub scale: *const u8,
+    pub weight_stride: usize,
+    pub scale_stride: usize,
     pub rows: usize,
 }
 unsafe impl Send for Table {}
@@ -339,17 +346,17 @@ impl Engram {
             }
             let row = id as usize;
             unsafe {
-                let w = table.weight.add(row * hd);
+                let w = table.weight.add(row * table.weight_stride);
                 for line in (0..hd).step_by(64) {
                     prefetch(w.add(line));
                 }
-                prefetch(table.scale.add(row * blocks));
+                prefetch(table.scale.add(row * table.scale_stride));
             }
         }
         for (j, &id) in ids.iter().enumerate() {
             let row = id as usize;
-            let weight = unsafe { std::slice::from_raw_parts(table.weight.add(row * hd), hd) };
-            let scale = unsafe { std::slice::from_raw_parts(table.scale.add(row * blocks), blocks) };
+            let weight = unsafe { std::slice::from_raw_parts(table.weight.add(row * table.weight_stride), hd) };
+            let scale = unsafe { std::slice::from_raw_parts(table.scale.add(row * table.scale_stride), blocks) };
             let dst = &mut out[j * hd..(j + 1) * hd];
             for (blk, (&s, w)) in scale.iter().zip(weight.chunks_exact(TABLE_BLOCK)).enumerate() {
                 let s = e8m0(s);
@@ -446,5 +453,67 @@ mod tests {
         assert_eq!(bf16(f32::from_bits(0x3F81_8000)), 0x3F82); // tie, odd rounds up
         assert_eq!(bf16(f32::from_bits(0x3F80_8001)), 0x3F81);
         assert_eq!(bf16(f32::from_bits(0x7FF0_0000)), 0xFFFF);
+    }
+
+    #[test]
+    fn packed_and_split_gather_match() {
+        let rows = 8;
+        let hd = 64;
+        let blocks = hd / TABLE_BLOCK;
+        let row_bytes = hd + blocks;
+        let mut split_w = vec![0u8; rows * hd];
+        let mut split_s = vec![0u8; rows * blocks];
+        let mut packed = vec![0u8; rows * row_bytes];
+        for r in 0..rows {
+            for c in 0..hd {
+                let v = ((r * 37 + c * 13) & 0xFF) as u8;
+                split_w[r * hd + c] = v;
+                packed[r * row_bytes + c] = v;
+            }
+            for b in 0..blocks {
+                let s = (120 + ((r + b) % 16)) as u8;
+                split_s[r * blocks + b] = s;
+                packed[r * row_bytes + hd + b] = s;
+            }
+        }
+        let make = |table: Table| {
+            Engram::new(EngramArgs {
+                token_map: vec![0, 1],
+                vocab_size: 2,
+                pad_id: 0,
+                max_ngram: 2,
+                n_heads: 1,
+                head_dim: hd,
+                layout_layers: vec![1],
+                multipliers: vec![vec![1, 3]],
+                primes: vec![vec![rows as i64]],
+                offsets: vec![vec![0]],
+                tables: vec![(1, table)],
+                batch: 1,
+                max_seq: 4,
+                sessions: 1,
+            })
+            .unwrap()
+        };
+        let split_engram = make(Table {
+            weight: split_w.as_ptr(),
+            scale: split_s.as_ptr(),
+            weight_stride: hd,
+            scale_stride: blocks,
+            rows,
+        });
+        let packed_engram = make(Table {
+            weight: packed.as_ptr(),
+            scale: unsafe { packed.as_ptr().add(hd) },
+            weight_stride: row_bytes,
+            scale_stride: row_bytes,
+            rows,
+        });
+        let ids = [0i64, 3, 7, 1];
+        let mut out_split = vec![0u16; ids.len() * hd];
+        let mut out_packed = vec![0u16; ids.len() * hd];
+        split_engram.gather(0, &ids, &mut out_split).unwrap();
+        packed_engram.gather(0, &ids, &mut out_packed).unwrap();
+        assert_eq!(out_split, out_packed);
     }
 }

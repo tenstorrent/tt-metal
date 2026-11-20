@@ -45,11 +45,16 @@ pytestmark = [
 ]
 
 
-def _sparse_table(rows: int, head_dim: int) -> tuple[torch.Tensor, torch.Tensor]:
+def _sparse_table(rows: int, head_dim: int, packed: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     """``(weight, scale)`` shaped like a real table, backed by untouched (zero, unallocated) anonymous pages."""
+    flags = mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS | getattr(mmap, "MAP_NORESERVE", 0x4000)  # Linux's value
+    if packed:
+        row_bytes = head_dim + head_dim // TABLE_BLOCK
+        memory = mmap.mmap(-1, rows * row_bytes, flags=flags)
+        buf = torch.frombuffer(memory, dtype=torch.uint8).reshape(rows, row_bytes)
+        return buf[:, :head_dim].view(torch.float8_e4m3fn), buf[:, head_dim:].view(torch.float8_e8m0fnu)
     tensors = []
     for width, dtype in ((head_dim, torch.float8_e4m3fn), (head_dim // TABLE_BLOCK, torch.float8_e8m0fnu)):
-        flags = mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS | getattr(mmap, "MAP_NORESERVE", 0x4000)  # Linux's value
         memory = mmap.mmap(-1, rows * width, flags=flags)
         tensors.append(torch.frombuffer(memory, dtype=torch.uint8).view(dtype).reshape(rows, width))
     return tuple(tensors)
@@ -70,14 +75,15 @@ def _bits(t: torch.Tensor) -> torch.Tensor:
     return t.contiguous().view(torch.int16)
 
 
-def test_rust_engram_matches_python():
+@pytest.mark.parametrize("packed", (False, True), ids=("split", "packed"))
+def test_rust_engram_matches_python(packed):
     from transformers import AutoTokenizer
 
     snapshot = _snapshot()
     config = load_config(snapshot)
     tokenizer = AutoTokenizer.from_pretrained(snapshot)
     tables = {
-        layer_id: _sparse_table(rows, config.engram_head_dim)
+        layer_id: _sparse_table(rows, config.engram_head_dim, packed=packed)
         for layer_id, rows in zip(config.engram_layer_ids, config.engram_num_embeddings)
     }
     python = EngramHostLookup(config, snapshot, tables, 1, MAX_SEQ, tokenizer, sessions=SESSIONS)

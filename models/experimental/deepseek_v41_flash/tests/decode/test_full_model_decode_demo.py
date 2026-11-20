@@ -88,9 +88,11 @@ from models.experimental.deepseek_v41_flash.tt.config import (
     load_config,
     pipeline_stage_count,
 )
+from models.experimental.deepseek_v41_flash.tt import host_rs
 from models.experimental.deepseek_v41_flash.tt.decode.decode_prefetch import FUSED_KV_RING, FUSED_Q_A_RING, WIDE_RING
 from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     ENGRAM_RAM_MARGIN,
+    STAGE_DIR,
     engram_ram_needed,
     stage_engram_tables,
 )
@@ -295,6 +297,35 @@ def _assert_decode_parallelism(
     assert model.num_submeshes == num_stages
     assert model.pipeline_devices == model.num_submeshes * tp_size
     assert all(layer.self_attn.tp_size == tp_size for layer in model.layers)
+    for layer_idx, engram in model._engram_layers:
+        assert engram.local_kin == engram.kin // tp_size
+        assert engram.page_bytes == engram.local_kin * 2
+        assert all(
+            s.get_page_size() == engram.page_bytes for s in engram.sockets
+        ), f"Engram layer {layer_idx} sockets must carry local_kin ({engram.page_bytes} B/page)"
+        assert engram.rows.shape[-1] == engram.local_kin
+    if model._engram_lookup is not None:
+        packed_layers = []
+        for layer_idx, (w, s) in model._engram_lookup.tables.items():
+            row_bytes = w.shape[1] + s.shape[1]
+            is_packed = (
+                w.stride() == (row_bytes, 1)
+                and s.stride() == (row_bytes, 1)
+                and s.data_ptr() - w.data_ptr() == w.shape[1]
+            )
+            if is_packed:
+                packed_layers.append(layer_idx)
+            else:
+                logger.warning(
+                    f"Engram layer {layer_idx} is using legacy split tables; run "
+                    f"'python models/experimental/deepseek_v41_flash/tools/stage_engram_tables.py --remove' "
+                    f"to clear old files in {STAGE_DIR} and stage row-packed tables"
+                )
+        if packed_layers:
+            logger.info(
+                f"Engram: layers {packed_layers} row-packed [weight|scale], "
+                f"sharded 1/TP{tp_size} H2D ({model._engram_layers[0][1].page_bytes} B/rank)"
+            )
     if persistent_moe:
         server = model.moe_server
         assert server is not None, "persistent_moe must launch the TP12 MoE server"
@@ -701,6 +732,9 @@ def test_full_model_decode_demo(
             # Grow past the whole generation before any replay: the traces read fixed
             # buffers, and a later ensure must not race a step already in flight.
             model.ensure_session_capacity(gen_positions[-1])
+        if host_rs.enabled() and not model.host_runtime_running:
+            model.start_host_runtime()
+        logger.info(f"host runtime: {'Rust' if model.host_runtime_running else 'Python'}")
 
         # Traces are posted in a bounded window rather than for the whole generation
         # (the CLI's ``_DECODE_REPLAY_AHEAD``). A posted ``execute_trace`` has to be
@@ -796,6 +830,9 @@ def test_full_model_decode_demo(
                 retire_replay()
             finally:
                 interrupt.restore()
+        host_stats = model.host_runtime_stats()
+        if host_stats is not None:
+            logger.info(f"host runtime stats: {host_stats}")
 
     if decode_tokens:
         logger.info(

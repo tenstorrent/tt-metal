@@ -165,6 +165,38 @@ def test_monitor_rates_totals_and_history(tmp_path):
     assert len(mon.series) == 1 and not mon.history and not mon.log and not mon.images_done
 
 
+def test_monitor_sums_instance_counters(tmp_path):
+    """Several instances each write ``<prefix>.<j>.counters``; the monitor sums steps and timings."""
+    prefix = str(tmp_path / "feed")
+    mon = monitor.Monitor(prefix, keep_seconds=3600)
+    turn = {**_turn(1, "alice", 0, "decode", 50, 50, 10), "instance": 0}
+    snap = {**_snapshot(100.0, [turn]), "instances": 2}
+    _counters(monitor.counters_path(prefix, 0), outputs_read=0, dispatch_count=10, dispatch_ns=10_000)
+    _counters(
+        monitor.counters_path(prefix, 1),
+        outputs_read=0,
+        dispatch_count=4,
+        dispatch_ns=20_000,
+        closed=1,
+    )
+    _write(monitor.snapshot_path(prefix), snap, 1)
+    mon.poll()
+    assert mon.state["counters"]["outputs_read"] == 0
+    assert mon.state["counters"]["closed"] == 0  # one runtime still open
+
+    _counters(monitor.counters_path(prefix, 0), outputs_read=10, dispatch_count=20, dispatch_ns=30_000)
+    _counters(monitor.counters_path(prefix, 1), outputs_read=5, dispatch_count=8, dispatch_ns=40_000)
+    later = {**_turn(1, "alice", 0, "decode", 50, 50, 20), "instance": 0}
+    _write(monitor.snapshot_path(prefix), {**_snapshot(101.0, [later]), "instances": 2}, 2)
+    mon.poll()
+    assert mon.state["counters"]["outputs_read"] == 15
+    assert mon.state["counters"]["dispatch_count"] == 28
+    # (20_000 + 20_000) ns over (10 + 4) new calls
+    assert mon.series[-1]["timers"]["dispatch"] == pytest.approx(40_000 / 14 / 1e3)
+    assert mon.series[-1]["steps"] > 0
+    assert mon.series[-1]["users"] == {"alice · i0": pytest.approx(10.0)}
+
+
 def test_feed_writes_snapshots_and_the_page_serves(tmp_path):
     prefix = str(tmp_path / "feed")
     feed = monitor.MonitorFeed(lambda: _snapshot(100.0, []), monitor.snapshot_path(prefix), period=0.01)

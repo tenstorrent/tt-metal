@@ -42,7 +42,7 @@ pub struct EngramSockets {
     pub table: usize,
     /// One H2D socket per device of the layer's stage, in TP-rank order.
     pub ranks: Vec<H2D>,
-    /// `kin / tp`: rank `r` gets each row rolled left by `r * local_kin` (`torch.roll(rows, -r * local_kin)`).
+    /// `kin / tp`: rank `r` receives only its slice `[r * local_kin .. (r + 1) * local_kin]` of each row.
     pub local_kin: usize,
 }
 
@@ -57,6 +57,8 @@ pub struct DecodeConfig {
     /// The DSpark drafter's ring depth per session slot: a step's row goes to ring row
     /// `slot * drafter_ring_rows + pos % drafter_ring_rows`; 0: no drafter.
     pub drafter_ring_rows: i64,
+    /// This host's lookup. Table bytes may be the same mapping another host reads (see `engram::Table`); the
+    /// `Engram` itself is this host's, because its session histories are.
     pub engram: Option<Arc<Engram>>,
     pub engram_sockets: Vec<EngramSockets>,
     pub output: D2H,
@@ -64,6 +66,7 @@ pub struct DecodeConfig {
     /// CPUs to pin the threads to, in creation order (output, packet, Engram layers, stages); empty: no pinning.
     pub cpus: Vec<usize>,
     /// File the counters are kept in, for a monitor process to map (see [`crate::counters`]); `None`: private.
+    /// One file per host: several instances on one server each pass their own path, and the monitor sums them.
     pub counters_path: Option<String>,
 }
 
@@ -164,9 +167,16 @@ impl DecodeHost {
                 return Err(format!("the Engram lookup is batch {}, decode batch {}", engram.batch(), config.batch));
             }
             for layer in &config.engram_sockets {
-                let page = engram.kin() * 2;
+                if layer.local_kin == 0 || engram.kin() % layer.local_kin != 0 {
+                    return Err(format!(
+                        "Engram local_kin {} does not divide kin {}",
+                        layer.local_kin,
+                        engram.kin()
+                    ));
+                }
+                let page = layer.local_kin * 2;
                 if layer.ranks.iter().any(|s| s.page_size() != page) {
-                    return Err(format!("an Engram socket's page is not one {page} B row"));
+                    return Err(format!("an Engram socket's page is not one {page} B local row"));
                 }
             }
         }
@@ -267,20 +277,18 @@ impl DecodeHost {
                 format!("dsv41-engram-{}", engram.table_layers()[layer.table]),
                 Box::new(move || {
                     let kin = engram.kin();
+                    let local_kin = layer.local_kin;
                     let per_token = engram.n_layout_layers() * engram.n_cols();
                     let ranks = layer.ranks.len();
                     let mut rows = vec![0u16; batch * kin];
-                    // Each rank's copy of the rows, rolled left by rank * local_kin.
-                    let mut ranked = vec![vec![0u16; batch * kin]; ranks];
+                    // Each rank's slice [rank * local_kin .. (rank + 1) * local_kin] for multi-row steps (n > 1).
+                    let mut ranked = vec![vec![0u16; batch * local_kin]; ranks];
                     while let Ok(Some(step)) = rx.recv() {
                         let t0 = Instant::now();
                         // A block's tokens are several rows each: as many rows as tokens, in their order.
                         let n = step.tokens.len();
                         if rows.len() != n * kin {
                             rows.resize(n * kin, 0);
-                            for r in ranked.iter_mut() {
-                                r.resize(n * kin, 0);
-                            }
                         }
                         for b in 0..n {
                             let hashes = &step.hashes[b * per_token..(b + 1) * per_token];
@@ -290,22 +298,39 @@ impl DecodeHost {
                                 return shared.fail("Engram rows", e);
                             }
                         }
-                        for (rank, dst_rows) in ranked.iter_mut().enumerate() {
-                            let shift = (rank * layer.local_kin) % kin;
-                            for b in 0..n {
-                                let (src, dst) = (&rows[b * kin..(b + 1) * kin], &mut dst_rows[b * kin..(b + 1) * kin]);
-                                dst[..kin - shift].copy_from_slice(&src[shift..]);
-                                dst[kin - shift..].copy_from_slice(&src[..shift]);
-                            }
-                        }
-                        // ENGRAM_WRITE_CHUNK rows at a time to every rank in turn, each write at most a FIFO's pages and
-                        // waiting for space (as engram.py's write_rows): a verify block's rows can outnumber a socket's
-                        // pages, and a rank's step drains its FIFO only once every rank has its first rows.
-                        for start in (0..n).step_by(ENGRAM_WRITE_CHUNK) {
-                            let end = (start + ENGRAM_WRITE_CHUNK).min(n);
-                            for (socket, data) in layer.ranks.iter().zip(&ranked) {
-                                if let Err(e) = socket.write(as_bytes(&data[start * kin..end * kin])) {
+                        if n == 1 {
+                            // Single-row decode: each rank's slice is already contiguous in `rows` (zero copy).
+                            for (rank, socket) in layer.ranks.iter().enumerate() {
+                                let start_col = (rank * local_kin) % kin;
+                                if let Err(e) = socket.write(as_bytes(&rows[start_col..start_col + local_kin])) {
                                     return shared.fail("Engram socket write", e);
+                                }
+                            }
+                        } else {
+                            if ranked[0].len() != n * local_kin {
+                                for r in ranked.iter_mut() {
+                                    r.resize(n * local_kin, 0);
+                                }
+                            }
+                            for (rank, dst_rows) in ranked.iter_mut().enumerate() {
+                                let start_col = (rank * local_kin) % kin;
+                                for b in 0..n {
+                                    let src = &rows[b * kin + start_col..b * kin + start_col + local_kin];
+                                    dst_rows[b * local_kin..(b + 1) * local_kin].copy_from_slice(src);
+                                }
+                            }
+                            // ENGRAM_WRITE_CHUNK rows at a time to every rank in turn, each write at most a FIFO's
+                            // pages and waiting for space (as engram.py's write_rows): a verify block's rows can
+                            // outnumber a socket's pages, and a rank's step drains its FIFO only once every rank has
+                            // its first rows.
+                            for start in (0..n).step_by(ENGRAM_WRITE_CHUNK) {
+                                let end = (start + ENGRAM_WRITE_CHUNK).min(n);
+                                for (socket, data) in layer.ranks.iter().zip(&ranked) {
+                                    if let Err(e) =
+                                        socket.write(as_bytes(&data[start * local_kin..end * local_kin]))
+                                    {
+                                        return shared.fail("Engram socket write", e);
+                                    }
                                 }
                             }
                         }

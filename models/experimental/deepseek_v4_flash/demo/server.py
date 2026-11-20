@@ -1373,6 +1373,9 @@ class _Turn:
         self.replay_ids: list[int] = []
         self.resumed_from = 0  # ... the position it rewound to (0: not resumed)
         self.prefix_donor: int | None = None  # ... the slot whose cached prefix it started from (see _share_prefix)
+        self.from_prefix_cache = False  # ... the prefix came from _PrefixCache (prefill replayed through decode)
+        self.prefix_cuts: set[int] = set()  # absolute positions to snapshot while the prompt is replayed
+        self.capture_at: int | None = None  # snapshot the session once it is idle at this position
         self.rebuilt = False  # a continued conversation rewound and re-prefilled whole, since that was faster
         self.t_replay = 0.0  # when this turn's prompt tokens started going through decode
         self.next_id: int | None = None  # produced but not yet fed back
@@ -1629,6 +1632,77 @@ class _OutputReader:
             self.results.put((ticket, out, t_read, token, time.perf_counter()))
 
 
+class _PrefixEntry:
+    """One token prefix and the decode-ready snapshot that resumes from it."""
+
+    __slots__ = ("tokens", "snapshot", "used")
+
+    def __init__(self, tokens: tuple[int, ...], snapshot, used: float):
+        self.tokens = tokens
+        self.snapshot = snapshot
+        self.used = used
+
+
+class _PrefixCache:
+    """Decode-ready prefixes, keyed by the token ids themselves.
+
+    A prompt replayed through decode (no traced prefill model) cannot share another slot's compressed-KV blocks:
+    that leaves the sliding-window ring stale, and the next decode step reads the ring. What it can load is a
+    :class:`~models.experimental.deepseek_v41_flash.tt.model.SessionSnapshot` taken at the prefix
+    (``export_session`` / ``import_session``), which restores the rings, compressor windows, compressed KV and
+    Engram history. The snapshot lives in host RAM, so any session of any instance can import it: the match does
+    not depend on which user or slot produced the prefix.
+
+    Entries stay within ``max_bytes``; the least recently used go first. One snapshot larger than the budget is
+    not kept.
+    """
+
+    def __init__(self, max_bytes: int):
+        self.max_bytes = max_bytes
+        self._lock = threading.Lock()
+        self._entries: list[_PrefixEntry] = []
+
+    def lookup(self, ids: list[int], vocab: int) -> tuple[int, object] | None:
+        """The longest stored prefix of ``ids`` that stops before an image token and leaves one token to decode.
+
+        Returns ``(length, snapshot)`` or ``None``. ``vocab`` and above are image-span ids, which name embedding
+        rows another image may take later, so a prefix ends before the first of them.
+        """
+        if vocab <= 0:
+            return None
+        limit = min(next((i for i, token in enumerate(ids) if token >= vocab), len(ids)), len(ids) - 1)
+        if limit <= 0:
+            return None
+        best: tuple[int, object] | None = None
+        with self._lock:
+            now = time.perf_counter()
+            for entry in self._entries:
+                n = len(entry.tokens)
+                if n > limit or n <= (0 if best is None else best[0]):
+                    continue
+                if entry.snapshot.pos != n or tuple(ids[:n]) != entry.tokens:
+                    continue
+                entry.used = now
+                best = (n, entry.snapshot)
+        return best
+
+    def store(self, tokens: list[int], snapshot) -> bool:
+        """Remember ``tokens`` (length ``snapshot.pos``) as a prefix. Returns whether it was kept."""
+        if not tokens or snapshot.pos != len(tokens) or snapshot.nbytes > self.max_bytes:
+            return False
+        key = tuple(tokens)
+        with self._lock:
+            self._entries = [entry for entry in self._entries if entry.tokens != key]
+            self._entries.append(_PrefixEntry(key, snapshot, time.perf_counter()))
+            while self._entries and sum(entry.snapshot.nbytes for entry in self._entries) > self.max_bytes:
+                oldest = min(self._entries, key=lambda entry: entry.used)
+                self._entries.remove(oldest)
+            return any(entry.tokens == key for entry in self._entries)
+
+    def __len__(self) -> int:
+        return len(self._entries)
+
+
 class _Scheduler:
     """The one thread that drives the device, generating for every active turn at once.
 
@@ -1874,8 +1948,10 @@ class _Scheduler:
                     user.messages = user.messages + [turn.message]
                     user._next_render = 0
                     turn.ids = self.server._render_ids(user, include_assistant=True)
-                if continuing or not self._share_prefix(user, turn):
-                    self._choose_feed(user, turn, continuing)
+            if continuing or not self._share_prefix(user, turn):
+                self._choose_feed(user, turn, continuing)
+            if self.server.prefiller is None:
+                self._remember_prefix(user, turn)
             self._make_room(len(turn.ids), turn.slot)
             self._check_capacity(user, turn.ids)
         except Exception as e:  # noqa: BLE001 - reported to the client, the server stays up
@@ -1900,7 +1976,9 @@ class _Scheduler:
             omit_ids=frozenset({self.engine.eos_id}) if turn.ignore_eos else frozenset(),
         )
         self._active.append(turn)
-        if turn.prefix_donor is not None:
+        if turn.from_prefix_cache:
+            how = f"started from a cached {turn.resumed_from}-token prefix"
+        elif turn.prefix_donor is not None:
             how = f"started from slot {turn.prefix_donor}'s cached {turn.resumed_from}-token prefix"
         elif turn.resumed_from:
             how = f"resumed from the cache at {turn.resumed_from}"
@@ -2062,19 +2140,26 @@ class _Scheduler:
         return True
 
     def _share_prefix(self, user: UserSession, turn: _Turn) -> bool:
-        """Start ``user``, empty, from the longest prefix of ``turn.ids`` another slot's cache holds (running or
-        parked) instead of from position 0; returns whether it did.
+        """Start ``user``, empty, from the longest cached prefix of ``turn.ids`` instead of from position 0.
 
-        The two slots then share that prefix's compressed KV blocks (``attach_session_prefix``), which neither
-        writes again, and the prefill model rebuilds ``user``'s sliding window by replaying the ``replay_window``
-        tokens before the prefix's end (SWA bounded replay), as :meth:`_resume` does within one slot. The prefix
-        is matched against the tokens the other slot was fed, ends on a multiple of the model's
-        ``prefix_alignment`` before that slot's position, stops at the first image token (an image's span ids name
-        embedding rows another image may take later), and leaves at least ``replay_window`` prompt tokens. Only
-        when that beats prefilling the prompt whole.
+        With a traced prefill model the prefix is another slot's cache (running or parked). The two slots then
+        share that prefix's compressed KV blocks (``attach_session_prefix``), which neither writes again, and the
+        prefill model rebuilds ``user``'s sliding window by replaying the ``replay_window`` tokens before the
+        prefix's end (SWA bounded replay), as :meth:`_resume` does within one slot. The prefix is matched against
+        the tokens the other slot was fed, ends on a multiple of the model's ``prefix_alignment`` before that
+        slot's position, stops at the first image token (an image's span ids name embedding rows another image
+        may take later), and leaves at least ``replay_window`` prompt tokens. Only when that beats prefilling the
+        prompt whole.
+
+        With no prefill model the prompt is replayed through decode, and the prefix comes from :class:`_PrefixCache`
+        (:meth:`_share_decoded_prefix`): a decode-ready snapshot any instance stored, loaded with ``import_session``.
         """
         model, prefiller = self.engine.model, self.server.prefiller
-        if user.pos or prefiller is None or not hasattr(model, "attach_session_prefix"):
+        if user.pos:
+            return False
+        if prefiller is None:
+            return self._share_decoded_prefix(user, turn)
+        if not hasattr(model, "attach_session_prefix"):
             return False
         window, step, rate = prefiller.replay_window, prefiller.continue_alignment, self.replay_rate
         if not window or not step:
@@ -2123,6 +2208,130 @@ class _Scheduler:
         turn.device_prefill = n
         turn.prefill_from = 0
         return True
+
+    def _share_decoded_prefix(self, user: UserSession, turn: _Turn) -> bool:
+        """Start ``user`` from the longest prefix of ``turn.ids`` in :attr:`GenerationServer.prefix_cache`.
+
+        ``import_session`` restores the rings along with the compressed KV, so the tail of the prompt is replayed
+        through decode. The last prompt token stays in ``turn.ids``: its step is what produces the first token's
+        logits. A snapshot that does not fit the pools is dropped and the prompt replays from position 0.
+        """
+        cache = getattr(self.server, "prefix_cache", None)
+        model = self.engine.model
+        if cache is None or not hasattr(model, "import_session"):
+            return False
+        vocab = getattr(getattr(model, "config", None), "vocab_size", 0) or 0
+        hit = cache.lookup(turn.ids, vocab)
+        if hit is None:
+            return False
+        pos, snapshot = hit
+        try:
+            model.import_session(user.sid, snapshot)
+        except Exception as e:  # noqa: BLE001 - the prompt replays from 0
+            logger.warning(f"user {turn.user_key!r}: cached {pos}-token prefix did not load: {type(e).__name__}: {e}")
+            with contextlib.suppress(Exception):
+                model.reset_session(user.sid)
+            return False
+        full = list(turn.ids)
+        turn.from_prefix_cache = True
+        turn.resumed_from = pos
+        user.pos = pos
+        user.tokens = full[:pos]
+        turn.ids = full[pos:]
+        logger.info(
+            f"user {turn.user_key!r}: starting from a cached {pos}-token prefix of the {len(full)}-token prompt; "
+            f"replaying the last {len(turn.ids)} through decode"
+        )
+        return True
+
+    def _remember_prefix(self, user: UserSession, turn: _Turn) -> None:
+        """Note the positions this prompt should snapshot as it is replayed through decode.
+
+        The snapshot at ``len(prompt) - 1`` makes an identical prompt a hit that still replays its last token.
+        The snapshot at the end of every message but the new one makes a shared system prompt, or a forked
+        history, a hit. Positions already in the cache, and anything at or past an image token, are skipped.
+        """
+        if getattr(self.server, "prefix_cache", None) is None:
+            return
+        full = user.tokens[: user.pos] + list(turn.ids)
+        end = len(full)
+        cuts = {end - 1} if end - 1 > user.pos else set()
+        history = self._history_prefix_len(user, turn, full)
+        if user.pos < history < end:
+            cuts.add(history)
+        vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
+        if vocab > 0:
+            image = next((i for i, token in enumerate(full) if token >= vocab), end)
+            cuts = {cut for cut in cuts if cut < image}
+        turn.prefix_cuts = cuts
+
+    def _history_prefix_len(self, user: UserSession, turn: _Turn, full: list[int]) -> int:
+        """Token length of ``turn``'s messages except the new one, when that render is a prefix of ``full``."""
+        messages = turn.body.get("messages") or []
+        if len(messages) < 2:
+            return 0
+        stored = (user.messages, user._next_render, user.pending_id)
+        try:
+            user.messages = list(messages[:-1])
+            user._next_render = 0
+            user.pending_id = None
+            rendered = self.server._render_ids(user, include_assistant=True, closing=False)
+        except Exception as e:  # noqa: BLE001 - a prefix cut is optional
+            logger.debug(f"user {turn.user_key!r}: no history prefix to cache: {type(e).__name__}: {e}")
+            return 0
+        finally:
+            user.messages, user._next_render, user.pending_id = stored
+        if rendered and full[: len(rendered)] == rendered:
+            return len(rendered)
+        return 0
+
+    def _capture_due(self, turn: _Turn, user: UserSession) -> bool:
+        """Store a prefix the turn has reached. True when the turn waits because a step is still in flight."""
+        due = user.pos in turn.prefix_cuts or turn.capture_at == user.pos
+        if not due:
+            return False
+        if self._inflight or self._posted:
+            return True
+        self._capture_prefix(user)
+        turn.prefix_cuts.discard(user.pos)
+        if turn.capture_at == user.pos:
+            turn.capture_at = None
+        return False
+
+    def _prefix_batch(self, turn: _Turn, user: UserSession, n: int) -> int:
+        """Shorten a decode replay batch so it ends on the next prefix to snapshot."""
+        cuts = turn.prefix_cuts
+        if not cuts or n <= 0 or getattr(self.server, "prefix_cache", None) is None:
+            return n
+        stop = min((cut - user.pos for cut in cuts if cut > user.pos), default=0)
+        if stop <= 0:
+            return n
+        return min(n, stop)
+
+    def _capture_prefix(self, user: UserSession) -> None:
+        """Store ``user``'s token prefix when nothing is in flight on its model."""
+        cache = getattr(self.server, "prefix_cache", None)
+        if (
+            cache is None
+            or not user.pos
+            or len(user.tokens) != user.pos
+            or self._posted
+            or self._inflight
+            or not hasattr(self.engine.model, "export_session")
+        ):
+            return
+        vocab = getattr(getattr(self.engine.model, "config", None), "vocab_size", 0) or 0
+        tokens = user.tokens[: user.pos]
+        if vocab <= 0 or any(token >= vocab for token in tokens):
+            return
+        try:
+            snapshot = self.engine.model.export_session(user.sid)
+        except Exception as e:  # noqa: BLE001 - the next prompt replays this prefix
+            logger.warning(f"user {user.index}: prefix of {user.pos} tokens was not cached: {type(e).__name__}: {e}")
+            return
+        if snapshot.pos != user.pos or not cache.store(tokens, snapshot):
+            return
+        logger.info(f"prefix cache: {user.pos} tokens ({snapshot.nbytes / 2**30:.2f} GiB, {len(cache)} stored)")
 
     # -- KV pool reporting ------------------------------------------------------- #
     def pool_usage(self) -> dict:
@@ -2430,6 +2639,9 @@ class _Scheduler:
             f"user {turn.user_key!r}: prefill of {len(turn.ids)} tokens done in "
             f"{seconds:.2f}s ({rate} tok/s), cache at {self.engine.users[turn.slot].pos} tokens"
         )
+        if self.server.prefiller is None:
+            # The next _plan stores it once nothing is in flight. The snapshot is the prompt, before generation.
+            turn.capture_at = self.engine.users[turn.slot].pos
 
     def _prefill_on_device(self, turn: _Turn, drain_seconds: float = 0.0, drained: int = 0) -> None:
         """Run the turn's aligned prompt prefix through the traced prefill model.
@@ -2483,6 +2695,8 @@ class _Scheduler:
         """
         engine = self.engine
         user = engine.users[turn.slot]
+        if self._capture_due(turn, user):
+            return []
         if turn.phase == _Turn.PREFILL:
             if turn.cancelled.is_set():
                 if not turn.pending:
@@ -2500,7 +2714,7 @@ class _Scheduler:
                     f"user {turn.user_key!r}: replaying {left} prompt tokens through decode "
                     f"from pos {user.pos}, up to {self.prefill_chunk} in flight"
                 )
-            n = min(room, left)
+            n = self._prefix_batch(turn, user, min(room, left))
             return [(int(turn.ids[turn.fed + i]), user.pos + i, turn.fed + i + 1 == len(turn.ids)) for i in range(n)]
         if turn.pending:
             return []
@@ -2736,7 +2950,9 @@ class _Scheduler:
             how = "all through decode"
         if turn.rebuilt:
             how += ", whole conversation re-prefilled"
-        if turn.prefix_donor is not None:
+        if turn.from_prefix_cache:
+            how += f", started from a cached {turn.resumed_from}-token prefix"
+        elif turn.prefix_donor is not None:
             how += f", started from slot {turn.prefix_donor}'s cached {turn.resumed_from}-token prefix"
         elif turn.resumed_from:
             how += f", resumed from the cache at {turn.resumed_from}"
@@ -2881,6 +3097,7 @@ class GenerationServer:
         slot_idle_timeout: float = 0.0,
         think: bool = False,
         reasoning_effort: str | None = None,
+        prefix_cache: _PrefixCache | None = None,
     ):
         self.engine = engine
         self.model_id = model_id
@@ -2891,6 +3108,11 @@ class GenerationServer:
         self.reasoning_effort = reasoning_effort
         self.max_body_bytes = max_body_bytes
         self.prefiller = prefiller
+        # Prompts replayed through decode hit _PrefixCache. Several instances pass one shared table; a single
+        # server builds its own. The budget is the host-cache size, or 32 GiB when that tier is off.
+        self.prefix_cache = prefix_cache
+        if self.prefix_cache is None and prefiller is None and hasattr(engine.model, "import_session"):
+            self.prefix_cache = _PrefixCache(host_bytes if host_bytes > 0 else 32 << 30)
         if host_users and not hasattr(engine.model, "export_session"):
             logger.info(f"{type(engine.model).__name__} cannot copy a session to host RAM: host KV tier off")
             host_users = 0

@@ -7,7 +7,9 @@
 It runs as a process of its own, so watching the server costs the server nothing beyond what it publishes:
 
 * the Rust host runtime keeps its counters (steps posted and read back, per-thread timings) in a small shared
-  file, ``<prefix>.counters``, which its threads update anyway and this process maps read-only;
+  file, which its threads update anyway and this process maps read-only. One runtime writes ``<prefix>.counters``.
+  Several model instances (one user each, on the persistent MoE) each write ``<prefix>.<j>.counters``; this process
+  sums them, so steps/s and the per-call timings cover every instance;
 * the server writes a raw snapshot, ``<prefix>.json``, once a second (:class:`MonitorFeed`): the slots and who
   holds them, the active turns' token counts, the KV page pool, totals and the turns that ended, with ``--dspark``
   the drafts per verify round (the server's and each speculating turn's), and a log tail.
@@ -77,8 +79,12 @@ def snapshot_path(prefix: str) -> str:
     return f"{prefix}.json"
 
 
-def counters_path(prefix: str) -> str:
-    return f"{prefix}.counters"
+def counters_path(prefix: str, instance: int | None = None) -> str:
+    """The runtime's counters file. One runtime uses ``<prefix>.counters``; instance ``j`` of several uses
+    ``<prefix>.<j>.counters``, which :class:`Monitor` sums."""
+    if instance is None:
+        return f"{prefix}.counters"
+    return f"{prefix}.{instance}.counters"
 
 
 class MonitorFeed:
@@ -155,6 +161,27 @@ class _Counters:
         return values
 
 
+def _merge_counters(parts: list[dict]) -> dict | None:
+    """Sum several instances' counter files. Timings stay a count and a total, so the mean across instances is
+    ``nanos / count``. ``closed`` is set only once every instance has closed. ``pid`` is kept when they agree
+    (one process); a mix resets the rate window."""
+    if not parts:
+        return None
+    merged = dict(parts[0])
+    for other in parts[1:]:
+        for key in ("posted", "queued", "packets_written", "outputs_read"):
+            merged[key] += other[key]
+        merged["last_output_ns"] = max(merged["last_output_ns"], other["last_output_ns"])
+        merged["started_ns"] = min(merged["started_ns"], other["started_ns"])
+        if merged["pid"] != other["pid"]:
+            merged["pid"] = 0
+        for timer in TIMERS:
+            merged[f"{timer}_count"] += other[f"{timer}_count"]
+            merged[f"{timer}_ns"] += other[f"{timer}_ns"]
+    merged["closed"] = 1 if all(part["closed"] for part in parts) else 0
+    return merged
+
+
 def _rate(points: deque, now: float) -> float:
     """Units per second over ``points`` (``(t, cumulative)``), dropping those older than the rate window."""
     while len(points) > 2 and now - points[1][0] >= _RATE_WINDOW:
@@ -170,7 +197,9 @@ class Monitor:
 
     def __init__(self, prefix: str, keep_seconds: float):
         self.snapshot_path = snapshot_path(prefix)
+        self.prefix = prefix
         self.counters = _Counters(counters_path(prefix))
+        self._instance_counters: dict[int, _Counters] = {}
         self.keep_seconds = keep_seconds
         self.lock = threading.Lock()
         self._reset(None)
@@ -188,6 +217,21 @@ class Monitor:
         self._log_seq = 0
         self._mtime = None
 
+    def _read_counters(self, instances: int) -> dict | None:
+        """One runtime's file, or the sum of ``<prefix>.<j>.counters`` for ``j`` in ``0 .. instances``."""
+        if instances <= 1:
+            return self.counters.read()
+        parts = []
+        for j in range(instances):
+            reader = self._instance_counters.get(j)
+            if reader is None:
+                reader = _Counters(counters_path(self.prefix, j))
+                self._instance_counters[j] = reader
+            part = reader.read()
+            if part is not None:
+                parts.append(part)
+        return _merge_counters(parts)
+
     # -- sampling --------------------------------------------------------------- #
     def poll(self) -> None:
         try:
@@ -202,7 +246,7 @@ class Monitor:
                 snap = json.load(f)
         except (OSError, ValueError):
             return  # replaced while being opened: the next poll reads the new one
-        counters = self.counters.read()
+        counters = self._read_counters(int(snap.get("instances") or 1))
         with self.lock:
             if snap.get("started") != self.started:
                 self._reset(snap.get("started"))
@@ -277,6 +321,8 @@ class Monitor:
                             continue
                         now_generated = current["generated"]
                     label = old["user"] or f"slot {old['slot']}"
+                    if prev.get("instances", 1) > 1 and old.get("instance") is not None:
+                        label = f"{label} · i{old['instance']}"
                     rate = max(now_generated - old["generated"], 0) / dt
                     point["users"][label] = point["users"].get(label, 0.0) + rate
             if counters is not None and prev_counters is not None and counters["pid"] == prev_counters["pid"]:

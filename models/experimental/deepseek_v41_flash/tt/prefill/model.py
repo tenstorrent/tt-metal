@@ -858,7 +858,14 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         rate_of = {src: config.compress_ratios[src] for src in self._kv_sources}
         rows_in = {src: group_rows(src, t // rate_of[src]) for src in stage.carried_in}
         mirrors = {src: group_rows(src, self._entry_capacity[ratio_layer_type(rate_of[src])]) for src in stage.mirrored}
-        engram_rows = {li: zeros((1, 1, t, model.layers[li].engram.kin)) for li in stage.engram_layers}
+
+        def engram_rows_buf(li: int) -> ttnn.Tensor:
+            kin = model.layers[li].engram.kin
+            sockets = model.shared_engram_sockets.get(li)
+            cols = sockets[0].get_page_size() // 2 if sockets is not None else kin
+            return zeros((1, 1, t * (kin // cols), cols))
+
+        engram_rows = {li: engram_rows_buf(li) for li in stage.engram_layers}
 
         def ids(width: int) -> ttnn.Tensor:
             return zeros((1, 1, t, width), dtype=ttnn.uint32, value=torch.zeros(1, 1, t, width, dtype=torch.int32))
@@ -970,12 +977,15 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
         if found is None and chunk_ids is not None:
             found = self.model.engram_lookup(chunk_ids.reshape(1, -1), start)
         for li, queues in self._engram_queues.items():
-            rows = torch.zeros(c, self.model.layers[li].engram.kin, dtype=torch.bfloat16)
+            kin = self.model.layers[li].engram.kin
+            sockets = self.model.shared_engram_sockets.get(li)
+            cols = sockets[0].get_page_size() // 2 if sockets is not None else kin
+            rows = torch.zeros(c, kin, dtype=torch.bfloat16)
             if found is not None:
                 t = chunk_ids.numel()
                 rows[:t] = found[li].reshape(t, -1)
             # The socket copies raw bytes; an integer view keeps bf16 out of the DLPack dtype check.
-            rows = rows.view(torch.int16)
+            rows = rows.view(torch.int16).reshape(-1, cols)
             for rows_queue in queues:
                 rows_queue.put(rows)
 
@@ -1084,7 +1094,12 @@ class DeepSeekV41TracedPrefill(TracedPrefill):
             shared.keep_rows = li in stage.carried_out
             engram_rows = None
             if li in io.engram_rows:
-                engram_rows = ttnn.to_layout(io.engram_rows[li], ttnn.TILE_LAYOUT)
+                rows_rm = io.engram_rows[li]
+                if rows_rm.shape[-1] != layer.engram.kin:
+                    rows_rm = ttnn.reshape(rows_rm, [1, 1, c, layer.engram.kin])
+                engram_rows = ttnn.to_layout(rows_rm, ttnn.TILE_LAYOUT)
+                if rows_rm is not io.engram_rows[li]:
+                    ttnn.deallocate(rows_rm)
             out, out_pre = layer.forward_static(streams, pre_mix, self.buffers[li], step, shared, engram_rows)
             if engram_rows is not None:
                 ttnn.deallocate(engram_rows)

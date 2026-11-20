@@ -32,7 +32,8 @@ from models.experimental.deepseek_v41_flash.tt.engram_lookup import (
     STAGE_DIR,
     engram_shards,
     stage_engram_tables,
-    staged_copy,
+    staged_packed_copy,
+    staged_packed_path,
 )
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader
 
@@ -49,6 +50,11 @@ def main():
     shards = engram_shards(loader, config.engram_layer_ids)
 
     if args.remove:
+        for i in config.engram_layer_ids:
+            packed = staged_packed_path(loader, i)
+            if packed.exists():
+                packed.unlink()
+                logger.info(f"removed {packed}")
         for shard in shards:
             copy = STAGE_DIR / shard.name
             if copy.exists():
@@ -56,13 +62,15 @@ def main():
                 logger.info(f"removed {copy}")
         return
 
-    staged = sum(staged_copy(shard) is not None for shard in shards)
-    logger.info(f"Engram layers {config.engram_layer_ids}: {staged} of {len(shards)} files staged")
+    staged = sum(staged_packed_copy(loader, i) is not None for i in config.engram_layer_ids)
+    logger.info(
+        f"Engram layers {config.engram_layer_ids}: {staged} of {len(config.engram_layer_ids)} packed files staged"
+    )
     # A build leaves the staging to its own flag; this tool stages whenever it is asked to.
     os.environ["DEEPSEEK_V41_ENGRAM_STAGE"] = "1"
     _, copied = stage_engram_tables(loader, config.engram_layer_ids, threads=args.threads)
     if not copied:
-        logger.info(f"nothing to copy: the tables are already in {STAGE_DIR}")
+        logger.info(f"nothing to pack: the tables are already in {STAGE_DIR}")
 
 
 if __name__ == "__main__":

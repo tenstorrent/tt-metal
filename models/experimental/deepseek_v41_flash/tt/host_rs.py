@@ -101,8 +101,8 @@ class RustEngramLookup(EngramHostLookup):
         super().__init__(config, snapshot_dir, tables, batch, max_seq, tokenizer, sessions=1)
         state, layout = self.hash, self.layout
         for layer_id, (weight, scale) in tables.items():
-            if not (weight.is_contiguous() and scale.is_contiguous()):
-                raise ValueError(f"layer {layer_id}'s Engram table must be contiguous")
+            if not (weight.ndim == 2 and scale.ndim == 2 and weight.stride(1) == 1 and scale.stride(1) == 1):
+                raise ValueError(f"layer {layer_id}'s Engram table rows must be contiguous")
         self.batch = batch
         self.rust = module().Engram(
             token_map=state.token_map.tolist(),
@@ -115,7 +115,10 @@ class RustEngramLookup(EngramHostLookup):
             multipliers=state.multipliers.tolist(),
             primes=state.primes.reshape(len(layout.layer_ids), -1).tolist(),
             offsets=state.offsets.tolist(),
-            tables=[(layer_id, w.data_ptr(), s.data_ptr(), w.shape[0]) for layer_id, (w, s) in tables.items()],
+            tables=[
+                (layer_id, w.data_ptr(), s.data_ptr(), w.stride(0), s.stride(0), w.shape[0])
+                for layer_id, (w, s) in tables.items()
+            ],
             batch=batch,
             max_seq=max_seq,
             sessions=sessions,
