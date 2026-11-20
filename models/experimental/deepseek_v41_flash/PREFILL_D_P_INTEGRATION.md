@@ -29,6 +29,9 @@ Measured (metal_2, 8x4 Galaxy, warm request, `test_full_prefill.py`, 200 chunks 
 | 256,000 | 4.13 s | 62.0k tok/s |
 | 1,024,000 | 17.49 s | 58.6k tok/s (device busy 15.36 s; 0 of 200 chunks host-bound) |
 
+metal_1 for reference (recorded in commit messages, not re-measured here): ~9k tok/s KV-only prefill with
+`--prefill-all-stages` (`63e87a32f0c`), which was ~1.3x the stages-0-4 placement (`d466b32ec4c`).
+
 ## 2. How metal_2's prefill works
 
 ### 2.1 Layout
@@ -195,25 +198,43 @@ input path before `wkv`. Suspects, in order: Engram (layers 1 and 14; metal_1 ha
 tokenizer normalisation), layer 0's MoE routing (hash vs score), and the mHC residual mix. Neither side has been
 checked against a CPU reference at this length yet, so it is not known which one is wrong.
 
-### 6.2 Disaggregated prefill worker (option 1, prefill side)
+### 6.2 Disaggregated prefill server (option 1, prefill side)
 
 Deployment: prefill on host 40 (`DC16-2-BG-0202-u20-40`, 10.82.97.40), decode on host 41 (`...-u13-41`,
 10.82.97.41). `/etc/hosts` maps both names to the dead 10.81.14.0/24 subnet; use the 10.82.97.x addresses.
 `/big_home` is local to each host.
 
-* `demo/d_p_prefill_worker.py`: opens the 8x4 mesh with metal_2's spec (`open_mesh`), builds `DPPrefill`, warms
+* `demo/prefill_server.py`: opens the 8x4 mesh with metal_2's spec (`open_mesh`), builds `DPPrefill`, warms
   `--max-seq` tokens of random ids (constant ids leave most MoE programs cold: the first request then took 70 s),
-  and serves prompts over TCP one at a time.
-* `tt/prefill/d_p_wire.py`: the protocol (length-prefixed JSON header + raw blobs; ids as int32, states as bf16
-  per layer/field) and `PrefillClient`, the decode server's end.
-* `tests/prefill/test_d_p_bridge.py::test_d_p_worker`: sends the saved 16k prompt to a running worker
-  (`D_P_WORKER=host:port`) and checks the returned states against the saved run.
+  and serves decode servers over TCP. One thread per connection; prefills run one at a time under a device lock.
+  Prompts must be a positive multiple of 128 tokens up to `max_seq`, ids inside the vocabulary; bad requests get an
+  error reply and the connection stays usable. A client that hangs up mid-prefill does not abort the device work.
+* `tt/prefill/d_p_wire.py`: the protocol (length-prefixed JSON header + raw blobs) and `PrefillClient`, the
+  decode server's end. Ops: `ping`, `info` (version, max_seq, chunk, align, layers, kv_sources with ratios,
+  window, vocab, mesh), `prefill` (int32 ids in; per-chunk progress messages, then one bf16 blob per layer/field:
+  `kv_tail` `[128, 512]` for layers 0-20, `compressed_kv` `[T/ratio, 512]` and `idx_keys` `[T/ratio, 128]` for
+  KV sources 2, 8, 14 (ratio 2) and 20 (ratio 1)).
+* `demo/prefill_client.py`: test client, torch only (runs on the decode host). Random, saved-ids or text prompts;
+  `--repeat`, `--clients` (concurrent connections), `--compare` (PCC against a saved host-states file), `--save`,
+  `--check-errors`. Checks every reply against the server's announced contract (layers, fields, row counts,
+  finiteness) and that identical prompts give identical entries.
+* `tests/prefill/test_d_p_bridge.py::test_prefill_server`: the same comparison as a pytest
+  (`D_P_SERVER=host:port`).
 
-Result on host 40, 16384 tokens: worker prefill 0.64 s (25.7k tok/s), client round trip 1.01 s (readback of
-layers 0-20 plus transfer), states identical to the saved run. 41 reaches 40:9041.
+Results (server on 40, client on 41):
+
+| Run | Result |
+| --- | --- |
+| saved 16k prompt x3, `--compare` | PASS; server prefill 0.55-0.60 s (27-30k tok/s), round trip 0.98-1.02 s, 55.2 MB back |
+| 8192 random tokens, 4 clients x 2 | PASS; prefill 0.32 s each, queueing works (waits 0.65 / 1.32 / 2.00 s), 12.6k tok/s overall |
+| error paths | unaligned, too long, out-of-vocab ids rejected; ping works after |
+
+Per 8192-token request on the server: prefill 0.32 s, readback of layers 0-20 to host 0.30 s (inside the device
+lock), TCP send 0.04 s (~7 Gb/s). The readback, not the network, is the next cost to cut (fewer, larger
+device-to-host reads, or overlap it with the next request's prefill).
 
 Not done yet (decode side, on 41): a `--prefill-backend d_p` prefiller in the v4.1 server that sends ids,
-commits the states with `to_prefill_states` + `commit_prefill_state`, and seeds the session's Engram history with
+commits the entries with `to_prefill_states` + `commit_prefill_state`, and seeds the session's Engram history with
 `hash_session(slot, ids, 0)`. Ideally asynchronous, so other users keep decoding during a remote prefill.
 
 ## 7. Next steps
