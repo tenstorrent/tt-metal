@@ -1601,8 +1601,9 @@ const RuntimeScalarDefines* get_runtime_scalar_defines_cached(
     }
     auto& entry = cache[next];
     next = (next + 1) % kEntries;
-    entry.key = key;
+    // Publish the key only after the value is generated: if generation throws, the entry keeps no stale pairing.
     entry.value = get_runtime_scalar_defines(op_chain, input_dtype);
+    entry.key = key;
     return entry.value.has_value() ? &*entry.value : nullptr;
 }
 

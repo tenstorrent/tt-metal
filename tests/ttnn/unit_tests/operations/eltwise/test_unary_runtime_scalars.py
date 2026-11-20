@@ -61,7 +61,11 @@ def test_new_scalar_value_reuses_program(device, isolate_program_cache, name, tt
 
     for value in VALUES[1:] + VALUES[:1]:
         result = ttnn.to_torch(ttnn_op(tt_x, value))
-        assert_with_pcc(torch_op(torch_x.float(), value), result.float(), 0.999)
+        expected = torch_op(torch_x.float(), value)
+        assert_with_pcc(expected, result.float(), 0.999)
+        if name == "rdiv":
+            # PCC cannot see a stale numerator (c / x correlates with any other c' / x), so check the magnitude too.
+            assert torch.allclose(result.float(), expected, rtol=0.02, atol=1e-3), f"rdiv with {value}"
 
     ttnn.synchronize_device(device)
     assert device.num_program_cache_entries() == entries
