@@ -94,6 +94,8 @@ _MGD_DIR = os.path.join(_TTML_ROOT, "configs", "mgd")
 _BUNDLED_MGD = {
     ("blackhole", (1, 2)): "bh_1_2_line_line.textproto",
     ("blackhole", (2, 2)): "bh_2_2_line_line.textproto",
+    # A ring in X: the (1, 4) fabric the 4-chip QuietBox runs a reduce-scatter on.
+    ("blackhole", (1, 4)): "bh_1_4_line_ring.textproto",
     # The galaxy fabric is a torus in X; a LINE/LINE descriptor faults with SIGBUS.
     ("blackhole", (8, 4)): "bh_galaxy_8_4_torus_x.textproto",
 }
@@ -259,6 +261,13 @@ def fsdp_mesh(fresh_device_mesh):
         yield mesh
 
 
+@pytest.fixture(scope="module")
+def dp_tp_mesh(fresh_device_mesh):
+    """A ``[2, 2]`` mesh with axes ``("dp", "tp")``, per requesting module; it needs the bundled 2x2 descriptor."""
+    with fresh_device_mesh((2, 2), ("dp", "tp"), what="dp x tp", require_mgd=True) as mesh:
+        yield mesh
+
+
 # ---------------------------------------------------------------------------
 # Strict CCL topology
 # ---------------------------------------------------------------------------
@@ -275,3 +284,17 @@ def strict_ccl_topology():
         yield
     finally:
         ttnn.CONFIG.strict_ccl_topology = previous
+
+
+# ---------------------------------------------------------------------------
+# Gradient sync default
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def gradient_reduce_default():
+    """Sets the context's gradient sync default (what ``create_optimizer`` stores from ``precision.reduce_dtype``) for
+    one test, and clears it afterwards."""
+    context = ttml.autograd.AutoContext.get_instance()
+    yield context.set_gradient_reduce_dtype
+    context.set_gradient_reduce_dtype(None)

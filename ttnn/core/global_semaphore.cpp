@@ -17,7 +17,7 @@ GlobalSemaphore create_global_semaphore(
     MeshDevice* mesh_device, const CoreRangeSet& cores, uint32_t initial_value, BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_semaphore");
     return GlobalSemaphore(
-        mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()),
+        ttnn::core::current_mesh_command_queue(*mesh_device),
         cores,
         initial_value,
         buffer_type);
@@ -31,7 +31,7 @@ void reset_global_semaphore_value(const GlobalSemaphore& global_semaphore, uint3
     auto* mesh_device = dynamic_cast<tt::tt_metal::distributed::MeshDevice*>(global_semaphore.device());
     TT_FATAL(mesh_device != nullptr, "Global semaphore does not belong to a MeshDevice");
     global_semaphore.reset_semaphore_value(
-        reset_value, mesh_device->mesh_command_queue(ttnn::core::get_current_command_queue_id_for_thread().get()));
+        reset_value, ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace ttnn::global_semaphore

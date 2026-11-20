@@ -21,7 +21,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_core_common.hpp"
 #include "dispatch_s.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "prefetch.hpp"
 #include "context/context_descriptor.hpp"
 #include "debug/inspector/inspector.hpp"

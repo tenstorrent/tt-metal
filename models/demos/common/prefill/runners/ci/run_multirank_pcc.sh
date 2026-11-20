@@ -76,6 +76,8 @@ VARIANT_MAX_SEQ_LEN=""
 MTP=0
 # The manifest that holds a 4x4 run's stage layout when it is not the run's own (GLM-5.3's MTP variants).
 LAYOUT_MANIFEST=""
+# 1 when the model's golden is a tail window of a longer request, which rejects a PREFILL_PCC_GOLDEN_LEN cap.
+TAIL_GOLDEN=0
 DFLASH=0
 # sc1 runs a single galaxy, so both of these exist to shrink the sc4 model down to what one fits.
 SC1_MAX_SEQ_LEN=""
@@ -115,6 +117,7 @@ case "${MODEL}" in
     PCC_THRESHOLD=0.82
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
+    TAIL_GOLDEN=1
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
@@ -124,6 +127,11 @@ case "${MODEL}" in
       MTP_TRACE="${PREFILL_MTP_TRACE_DIR:-/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/mtp-tail-1M-last5120}"
       PRODUCER_ENV+=" export PREFILL_MTP_TRACE_DIR='${MTP_TRACE}'; export PREFILL_MTP_PCC=${MTP_PCC_THRESHOLD};"
       [ "${SCALE}" = sc1 ] && TABLE_WAIT_DEFAULT=5400
+    elif [ "${VARIANT}" = _packed ] || [ "${VARIANT}" = _packed4 ]; then
+      # Packed forwards, traced with D2H acks, every chunk's indexer indices crossing ranks: the producer packs the
+      # same golden request. 8x4: two 5,120-token chunks (glm53_packed.json). 4x4 (below): two (_packed) or four
+      # (_packed4) 2,560-token chunks. Same golden and PCC gate: packing moves the MoE output by rounding only.
+      MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
     fi
     case "${CONFIG}" in
       *_4x4)
@@ -134,7 +142,9 @@ case "${MODEL}" in
         # The trunk runs that manifest; the MTP variants export its layout over their own, keeping their
         # slot counts.
         LAYOUT_MANIFEST="${MANIFEST_DIR}/glm53_4x4.json"
-        if [ "${MTP}" -eq 0 ]; then
+        if [ "${MTP}" -eq 0 ] && [ -n "${VARIANT}" ]; then
+          MANIFEST="${MANIFEST_DIR}/glm53_4x4${VARIANT}.json"  # glm53_4x4_packed.json: the layout, packed
+        elif [ "${MTP}" -eq 0 ]; then
           MANIFEST="${LAYOUT_MANIFEST}"
         else
           LAYOUT_4X4=""
@@ -215,6 +225,20 @@ case "${MODEL}" in
     # sc1 opens sc4's slots.
     SC1_NUM_USERS=${PREFILL_NUM_USERS:-$(manifest_env PREFILL_NUM_USERS)}
     ;;
+  kimi_k3_1)
+    # Kimi-K3 with its 24 MLA layers changed to DSA: kimi_k3's depths and gate, on one 8x4 stage per galaxy
+    # (kimi_k3's *_8x4 layout: SP=8 on axis 0, 5120-token chunks) with kimi_k3_1.json's slots.
+    # The adapter's defaults already name the K3.1 weights, cache and golden, so no path is exported.
+    export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/kimi_k3_1_prefill_runner_kv}"
+    MANIFEST="${MANIFEST_DIR}/kimi_k3_1.json"
+    SC1_NUM_LAYERS=24
+    SC1_NUM_USERS=$(manifest_env PREFILL_NUM_USERS)
+    RUNNER_ENV="export TT_METAL_SHM_TRACKING_DISABLED=1; export LOGURU_LEVEL=ERROR;"
+    # The golden is the 8192-token prompt of a vLLM capture, and its span bounds the compare, so no
+    # length cap is needed: as for kimi_k3, the span is PCC'd and the tail is timed. Two chunks, so the
+    # gate reads one chunk's KV from the next.
+    REQUEST_LEN=$((2 * CHUNK_SIZE))
+    ;;
   mistral4)
     export PIPELINE_DIR="${PREFILL_SUMMARIES/prefill_summaries/mistral4_pp4_kv}"
     MANIFEST="${MANIFEST_DIR}/mistral4.json"
@@ -241,11 +265,13 @@ case "${MODEL}" in
 esac
 
 if [ -n "${VARIANT}" ]; then
-  [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
+  [ "${MANIFEST##*/}" = "${RUN_NAME}.json" ] || [ "${MANIFEST##*/}" = "${MODEL}_4x4${VARIANT}.json" ] ||
+    { echo "${MODEL} has no ${VARIANT#_} variant" >&2; exit 2; }
   [ -f "${MANIFEST}" ] || { echo "no manifest for ${RUN_NAME} at ${MANIFEST}" >&2; exit 2; }
   export PIPELINE_DIR="${PIPELINE_DIR}${VARIANT}"
-  # A windowed (tail) golden rejects a length cap, so MTP, which compares the 1M tail, takes none.
-  [ "${MTP}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
+  # A windowed (tail) golden rejects a length cap, so a model whose golden is the 1M tail (GLM-5.3, every variant)
+  # takes none.
+  [ "${TAIL_GOLDEN}" = 1 ] || PRODUCER_ENV+=" export PREFILL_PCC_GOLDEN_LEN=${GOLDEN_LEN};"
   PRODUCER_ENV+=" export PREFILL_PRODUCER_MAX_REQUESTS=1; export PREFILL_PRODUCER_MULTI_TURN_PROB=0;"
   PERF_BASELINES=""
   REQUIRE_TPS=0
