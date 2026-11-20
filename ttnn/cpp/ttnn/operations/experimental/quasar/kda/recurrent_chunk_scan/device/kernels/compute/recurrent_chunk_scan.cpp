@@ -1,0 +1,529 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-License-Identifier: Apache-2.0
+
+#include "ttnn/cpp/ttnn/operations/experimental/quasar/kda/device/kernels/chronology.hpp"
+//
+// Phase B (scan) compute kernel: the sequential-over-chunk recurrence for one
+// head.
+
+#include <cstdint>
+
+#include "api/compute/bcast.h"
+#include "api/compute/common.h"
+#include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/matmul.h"
+#include "api/compute/reconfig_data_format.h"
+#include "api/compute/tile_move_copy.h"
+#include "api/dataflow/dataflow_buffer.h"
+#include "experimental/kernel_args.h"
+#include "ttnn/cpp/ttnn/operations/experimental/quasar/kda/device/kernels/compute/copy_exact.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/quasar/kda/device/kernels/compute/identity_complement.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/quasar/kda/device/kernels/compute/matmul_subblock.hpp"
+
+enum class ElementwiseOperation { ADD, SUBTRACT };
+
+template <uint32_t Mt, uint32_t Kt, uint32_t Nt, typename DFBA, typename DFBB, typename DFBOut>
+FORCE_INLINE void matrix_multiply(DFBA& a, DFBB& b, DFBOut& output) {
+    constexpr uint32_t subblock_columns = kda::MatmulSubblock<Mt, Nt>::columns;
+    constexpr uint32_t subblock_rows = kda::MatmulSubblock<Mt, Nt>::rows;
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t output_id = output.get_id();
+
+    output.reserve_back(Mt * Nt);
+    reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
+    matmul_block_init(a_id, b_id, false, subblock_columns, subblock_rows, Kt);
+    for (uint32_t row_start = 0; row_start < Mt; row_start += subblock_rows) {
+        for (uint32_t column_start = 0; column_start < Nt; column_start += subblock_columns) {
+            tile_regs_acquire();
+            for (uint32_t k = 0; k < Kt; ++k) {
+                const uint32_t b_index = k * Nt + column_start;
+                matmul_block(a_id, b_id, row_start * Kt + k, b_index, 0, false, subblock_columns, subblock_rows, Kt);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t row = 0; row < subblock_rows; ++row) {
+                for (uint32_t column = 0; column < subblock_columns; ++column) {
+                    pack_tile(
+                        row * subblock_columns + column, output_id, (row_start + row) * Nt + column_start + column);
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    output.push_back(Mt * Nt);
+}
+
+// output = operand OP (a @ b), with the product kept in DST: each row group's matmul accumulates into DST and the
+// destination-reuse binary op takes it from there, so the product never round-trips through a buffer. The operand
+// takes source A and the product source B, as in the two-operand op on a packed product.
+// The operand's tile for output tile t is t % OperandTiles (the summary's two paths share one value row).
+template <
+    uint32_t Mt,
+    uint32_t Kt,
+    uint32_t Nt,
+    uint32_t OperandTiles,
+    EltwiseBinaryType Op = EltwiseBinaryType::ELWSUB,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOperand,
+    typename DFBOut>
+FORCE_INLINE void combine_matrix_product(DFBA& a, DFBB& b, DFBOperand& operand, DFBOut& output) {
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    // Whole output rows per destination acquire when they fit, else column groups of one row (the summary's
+    // two-path rows are twice the state width). Both divide their dimension.
+    constexpr uint32_t group_columns = kda::largest_divisor_at_most(Nt, dst_tiles);
+    constexpr uint32_t group_rows = group_columns == Nt ? kda::largest_divisor_at_most(Mt, dst_tiles / Nt) : 1;
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t operand_id = operand.get_id();
+    const uint32_t output_id = output.get_id();
+
+    output.reserve_back(Mt * Nt);
+    for (uint32_t first_row = 0; first_row < Mt; first_row += group_rows) {
+        for (uint32_t first_column = 0; first_column < Nt; first_column += group_columns) {
+            reconfig_data_format<SrcOrder::Reverse>(a_id, b_id);
+            matmul_block_init(a_id, b_id, false, group_columns, 1, Kt);
+            tile_regs_acquire();
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t k = 0; k < Kt; ++k) {
+                    matmul_block(
+                        a_id,
+                        b_id,
+                        (first_row + row) * Kt + k,
+                        k * Nt + first_column,
+                        row * group_columns,
+                        false,
+                        group_columns,
+                        1,
+                        Kt);
+                }
+            }
+            // The operand unpacks to srcA; any BF16 output mask leaves it in a different format than the state. The
+            // product moves from DST to srcB in srcB's format, kept FP32 (state_ring's, under every mask) so a BF16
+            // matmul input does not round it.
+            reconfig_data_format_srca(operand_id);
+            reconfig_data_format_srcb(dfb::state_ring);
+            if constexpr (Op == EltwiseBinaryType::ELWADD) {
+                add_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
+            } else {
+                sub_reuse_dest_init<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id);
+            }
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t column = 0; column < group_columns; ++column) {
+                    const uint32_t tile = row * group_columns + column;
+                    const uint32_t operand_tile = ((first_row + row) * Nt + first_column + column) % OperandTiles;
+                    if constexpr (Op == EltwiseBinaryType::ELWADD) {
+                        add_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id, operand_tile, tile);
+                    } else {
+                        sub_reuse_dest_tiles<EltwiseBinaryReuseDestType::DEST_TO_SRCB>(operand_id, operand_tile, tile);
+                    }
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t row = 0; row < group_rows; ++row) {
+                for (uint32_t column = 0; column < group_columns; ++column) {
+                    pack_tile(row * group_columns + column, output_id, (first_row + row) * Nt + first_column + column);
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    output.push_back(Mt * Nt);
+}
+
+// Inputs remain resident; PacketTiles specifies output publication granularity.
+template <
+    ElementwiseOperation Operation,
+    uint32_t Count,
+    uint32_t PacketTiles,
+    typename DFBA,
+    typename DFBB,
+    typename DFBOut>
+FORCE_INLINE void elementwise(DFBA& a, DFBB& b, DFBOut& output) {
+    static_assert(PacketTiles > 0 && Count % PacketTiles == 0);
+    constexpr uint32_t dst_tiles =
+        ckernel::get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, ckernel::DstTileShape::Tile32x32>();
+    const uint32_t a_id = a.get_id();
+    const uint32_t b_id = b.get_id();
+    const uint32_t output_id = output.get_id();
+    reconfig_data_format(a_id, b_id);
+    if constexpr (Operation == ElementwiseOperation::ADD) {
+        add_init(a_id, b_id);
+    } else {
+        sub_init(a_id, b_id);
+    }
+    for (uint32_t packet = 0; packet < Count; packet += PacketTiles) {
+        output.reserve_back(PacketTiles);
+        for (uint32_t first = 0; first < PacketTiles; first += dst_tiles) {
+            const uint32_t count = first + dst_tiles <= PacketTiles ? dst_tiles : PacketTiles - first;
+            const uint32_t input_start = packet + first;
+            tile_regs_acquire();
+            if constexpr (Operation == ElementwiseOperation::ADD) {
+                add_block(a_id, b_id, input_start, input_start, 0, count);
+            } else {
+                sub_block(a_id, b_id, input_start, input_start, 0, count);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t tile = 0; tile < count; ++tile) {
+                pack_tile(tile, output_id, first + tile);
+            }
+            tile_regs_release();
+        }
+        output.push_back(PacketTiles);
+    }
+}
+
+// The summary carries the zero-seeded state B and the identity-seeded state A + B side by side: a [Kt, 2 * Vt]
+// state whose first Vt columns hold B. Publish the complement form E = (A + B) - B - I, or copy B, PacketRows tile
+// rows per packet, from the FP32 carry (UnpackToDest) with SFPU subtractions, so E is formed in FP32 with no TF32
+// truncation (before its single BF16 rounding, in the packed summary). I is subtracted on the global diagonal tiles,
+// where this value block's column v meets key tile row value_block * Vt + v (summaries require K == V).
+template <
+    bool Difference,
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t PacketRows,
+    typename DFBCarry,
+    typename DFBOut,
+    typename DFBIdentity>
+FORCE_INLINE void extract_paths(DFBCarry& carry, DFBOut& output, DFBIdentity& identity, uint32_t value_block) {
+    static_assert(Kt % PacketRows == 0);
+    const uint32_t carry_id = carry.get_id();
+    const uint32_t output_id = output.get_id();
+    reconfig_data_format_srca(carry_id);
+    for (uint32_t first_row = 0; first_row < Kt; first_row += PacketRows) {
+        output.reserve_back(PacketRows * Vt);
+        for (uint32_t row = 0; row < PacketRows; ++row) {
+            for (uint32_t value = 0; value < Vt; ++value) {
+                const uint32_t b_tile = (first_row + row) * 2 * Vt + value;
+                tile_regs_acquire();
+                copy_init(carry_id);
+                if constexpr (Difference) {
+                    copy_tile(carry_id, b_tile + Vt, 0);
+                    copy_tile(carry_id, b_tile, 1);
+                    sub_binary_tile_init();
+                    sub_binary_tile(0, 1, 0);
+                    if (first_row + row == value_block * Vt + value) {
+                        kda::a_to_complement(identity, carry_id, 0, 2, 0);
+                    }
+                } else {
+                    copy_tile(carry_id, b_tile, 0);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile(0, output_id, row * Vt + value);
+                tile_regs_release();
+            }
+        }
+        output.push_back(PacketRows * Vt);
+    }
+}
+
+// Replace the one state held by the ring and the carry with an exact copy of seed.
+template <uint32_t Tiles, typename DFBSeed, typename DFBRing, typename DFBCarry>
+FORCE_INLINE void reseed_state(DFBSeed& seed, DFBRing& ring, DFBCarry& carry) {
+    ring.wait_front(Tiles);
+    carry.wait_front(Tiles);
+    ring.pop_front(Tiles);
+    carry.pop_front(Tiles);
+    kda::copy_exact<Tiles>(seed, ring, carry);
+}
+
+// S_{n+1} = S_n + (final_decay * S_n + k_dec_t @ U_n) with final_decay = expm1(G_last) (complement form). Only the
+// change final_decay * S_n + k_dec_t @ U_n is formed in DST, from source-register operands (S_n is read through source
+// A for the decay term, truncated toward zero), and the packer adds it onto the FP32 state in L1, in place in both the
+// ring (the matmul view of the state) and the carry (its UnpackToDest view), so S_n is carried to S_{n+1} without
+// rounding and only the change carries source-register error.
+// Both buffers hold exactly one state: popping it returns the write pointer to the same tiles, which every earlier
+// read of this chunk's state is done with, and each block reads only its own tiles before they are packed. The caller
+// waits for and releases k_dec_t, final_decay and U.
+template <
+    uint32_t Ct,
+    uint32_t Kt,
+    uint32_t Columns,
+    typename DFBState,
+    typename DFBCarry,
+    typename DFBKDecayT,
+    typename DFBFinalDecay,
+    typename DFBCorrected>
+FORCE_INLINE void update_state(
+    DFBState& state,
+    DFBCarry& carry,
+    DFBKDecayT& k_decay_transposed,
+    DFBFinalDecay& final_decay,
+    DFBCorrected& corrected_value) {
+    // A DST block is `rows` key rows of `columns` state columns. Each tile's change reads only that tile of the state,
+    // so any block can be accumulated in place. A block narrower than the state is not contiguous in it, so the packer
+    // writes each tile at its index.
+    constexpr uint32_t columns = kda::MatmulSubblock<Kt, Columns>::columns;
+    constexpr uint32_t rows = kda::MatmulSubblock<Kt, Columns>::rows;
+    constexpr uint32_t key_state_tiles = Kt * Columns;
+
+    state.wait_front(key_state_tiles);
+    carry.wait_front(key_state_tiles);
+    // Release and re-reserve the same tiles: the packer accumulates the change onto them in place.
+    state.pop_front(key_state_tiles);
+    carry.pop_front(key_state_tiles);
+    state.reserve_back(key_state_tiles);
+    carry.reserve_back(key_state_tiles);
+
+    const uint32_t state_id = state.get_id();
+    const uint32_t carry_id = carry.get_id();
+    const uint32_t decay_id = final_decay.get_id();
+    const uint32_t k_decay_id = k_decay_transposed.get_id();
+    const uint32_t value_id = corrected_value.get_id();
+    pack_reconfig_data_format(state_id);
+    pack_reconfig_l1_acc(1);
+    for (uint32_t first_key = 0; first_key < Kt; first_key += rows) {
+        for (uint32_t first_column = 0; first_column < Columns; first_column += columns) {
+            tile_regs_acquire();
+            reconfig_data_format(state_id, decay_id);
+            mul_bcast_cols_init(state_id, decay_id);
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t column = 0; column < columns; ++column) {
+                    const uint32_t key = first_key + row;
+                    mul_tiles_bcast_cols(
+                        state_id, decay_id, key * Columns + first_column + column, key, row * columns + column);
+                }
+            }  // f * S
+            reconfig_data_format<SrcOrder::Reverse>(k_decay_id, value_id);
+            matmul_block_init(k_decay_id, value_id, false, columns, rows, Ct);
+            for (uint32_t chunk_tile = 0; chunk_tile < Ct; ++chunk_tile) {
+                matmul_block(
+                    k_decay_id,
+                    value_id,
+                    first_key * Ct + chunk_tile,
+                    chunk_tile * Columns + first_column,
+                    0,
+                    false,
+                    columns,
+                    rows,
+                    Ct);  // += k_dec_t @ U
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t row = 0; row < rows; ++row) {
+                for (uint32_t column = 0; column < columns; ++column) {
+                    const uint32_t tile = (first_key + row) * Columns + first_column + column;
+                    pack_tile<true>(row * columns + column, state_id, tile);
+                    pack_tile<true>(row * columns + column, carry_id, tile);
+                }
+            }
+            tile_regs_release();
+        }
+    }
+    pack_reconfig_l1_acc(0);
+    state.push_back(key_state_tiles);
+    carry.push_back(key_state_tiles);
+}
+
+// The zero-seeded B and identity-seeded A + B recurrences advance together as one [Kt, 2 * Vt] state, so every
+// operation covers both; each tile's arithmetic is the same as advancing them apart.
+// With EmitOutputs each chunk's output is evaluated on both paths too, q_decay S + intra v_new, and published in
+// FP32 as F(0) (base) and F(I) (whose difference with F(0) is the sensitivity to the segment's entry state); the last
+// segment's E and B also leave in FP32.
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, bool EmitOutputs>
+FORCE_INLINE void compute_summary(uint32_t num_chunks, uint32_t split_chunk, uint32_t value_block) {
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer t_inv(dfb::t_inv);
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer kd(dfb::kd);
+    DataflowBuffer state_ring(dfb::state_ring);
+    DataflowBuffer value_new(dfb::value_new);
+    DataflowBuffer final_decay(dfb::final_decay);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer summary_head_output(dfb::summary_head_output);
+    DataflowBuffer summary_head_state(dfb::summary_head_state);
+    DataflowBuffer transport_state(dfb::transport_state);
+    DataflowBuffer state_carry(dfb::state_carry);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer query_projection(dfb::query_projection);
+    DataflowBuffer chunk_base(dfb::chunk_base);
+    DataflowBuffer identity(dfb::identity);
+
+    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    constexpr uint32_t pair_columns = 2 * Vt;
+    constexpr uint32_t chunk_pair_tiles = Ct * pair_columns;
+    constexpr uint32_t key_pair_tiles = Kt * pair_columns;
+    constexpr uint32_t key_chunk_tiles = Kt * Ct;
+
+    identity.wait_front(1);
+    kda::copy_exact<key_pair_tiles>(state, state_ring, state_carry);
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        kd.wait_front(chunk_key_tiles);
+        v_beta.wait_front(chunk_value_tiles);
+        t_inv.wait_front(chunk_chunk_tiles);
+        k_decay_transposed.wait_front(key_chunk_tiles);
+        final_decay.wait_front(Kt);
+        state_ring.wait_front(key_pair_tiles);
+        combine_matrix_product<Ct, Kt, pair_columns, Vt>(kd, state_ring, v_beta, value_new);  // v_beta - kd S
+        if constexpr (EmitOutputs) {
+            // Reads the incoming state, so before the in-place update below.
+            q_decay.wait_front(chunk_key_tiles);
+            matrix_multiply<Ct, Kt, pair_columns>(q_decay, state_ring, query_projection);  // q_decay S
+        }
+        value_new.wait_front(Ct * pair_columns);
+        matrix_multiply<Ct, Ct, pair_columns>(t_inv, value_new, scratch);  // v_new
+        scratch.wait_front(Ct * pair_columns);
+        value_new.pop_front(Ct * pair_columns);
+        update_state<Ct, Kt, pair_columns>(
+            state_ring, state_carry, k_decay_transposed, final_decay, scratch);  // S += dl S + k_dec_t v_new
+        if constexpr (EmitOutputs) {
+            // q_decay S + intra v_new on both paths, [F(0) | F(I)], straight to the writer in FP32.
+            intra.wait_front(chunk_chunk_tiles);
+            query_projection.wait_front(chunk_pair_tiles);
+            combine_matrix_product<Ct, Ct, pair_columns, chunk_pair_tiles, EltwiseBinaryType::ELWADD>(
+                intra, scratch, query_projection, chunk_base);
+            query_projection.pop_front(chunk_pair_tiles);
+            intra.pop_front(chunk_chunk_tiles);
+            q_decay.pop_front(chunk_key_tiles);
+        }
+        scratch.pop_front(Ct * pair_columns);
+        if (split_chunk != 0 && chunk + 1 == split_chunk) {
+            state_carry.wait_front(key_pair_tiles);
+            pack_reconfig_data_format(summary_head_output.get_id());
+            extract_paths<true, Kt, Vt, 1>(state_carry, summary_head_output, identity, value_block);
+            extract_paths<false, Kt, Vt, 1>(state_carry, summary_head_state, identity, value_block);
+            // Restart from zero and identity so the tail summary is independent
+            // of the head transition just saved above.
+            reseed_state<key_pair_tiles>(state, state_ring, state_carry);
+        }
+        kd.pop_front(chunk_key_tiles);
+        v_beta.pop_front(chunk_value_tiles);
+        t_inv.pop_front(chunk_chunk_tiles);
+        k_decay_transposed.pop_front(key_chunk_tiles);
+        final_decay.pop_front(Kt);
+    }
+    state_ring.wait_front(key_pair_tiles);
+    state_carry.wait_front(key_pair_tiles);
+    pack_reconfig_data_format(output.get_id());
+    extract_paths<true, Kt, Vt, Kt>(state_carry, output, identity, value_block);
+    extract_paths<false, Kt, Vt, Kt>(state_carry, transport_state, identity, value_block);
+    if constexpr (EmitOutputs) {
+        DataflowBuffer final_e(dfb::final_e);
+        DataflowBuffer final_b(dfb::final_b);
+        pack_reconfig_data_format(final_e.get_id());
+        extract_paths<true, Kt, Vt, Kt>(state_carry, final_e, identity, value_block);
+        extract_paths<false, Kt, Vt, Kt>(state_carry, final_b, identity, value_block);
+    }
+    state_ring.pop_front(key_pair_tiles);
+    state_carry.pop_front(key_pair_tiles);
+}
+
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt>
+FORCE_INLINE void compute_recurrent(uint32_t num_chunks, uint32_t reset_chunk) {
+    DataflowBuffer state(dfb::state);
+    DataflowBuffer t_inv(dfb::t_inv);
+    DataflowBuffer v_beta(dfb::v_beta);
+    DataflowBuffer kd(dfb::kd);
+    DataflowBuffer q_decay(dfb::q_decay);
+    DataflowBuffer intra(dfb::intra);
+    DataflowBuffer state_ring(dfb::state_ring);
+    DataflowBuffer value_new(dfb::value_new);
+    DataflowBuffer final_decay(dfb::final_decay);
+    DataflowBuffer output(dfb::output);
+    DataflowBuffer output_intermediate(dfb::output_intermediate);
+    DataflowBuffer query_projection(dfb::query_projection);
+    DataflowBuffer k_decay_transposed(dfb::k_decay_transposed);
+    DataflowBuffer final_state(dfb::final_state);
+    DataflowBuffer scratch(dfb::scratch);
+    DataflowBuffer tail_entry_states(dfb::tail_entry_states);
+    DataflowBuffer state_carry(dfb::state_carry);
+
+    constexpr uint32_t chunk_chunk_tiles = Ct * Ct;
+    constexpr uint32_t chunk_key_tiles = Ct * Kt;
+    constexpr uint32_t chunk_value_tiles = Ct * Vt;
+    constexpr uint32_t key_value_tiles = Kt * Vt;
+    constexpr uint32_t key_chunk_tiles = Kt * Ct;
+
+    kda::copy_exact<key_value_tiles>(state, state_ring, state_carry);
+    for (uint32_t chunk = 0; chunk < num_chunks; chunk++) {
+        // A chronological split restarts the causal stream mid-group. The recurrence is affine in
+        // the state, so no per-chunk term changes -- only where the carry comes
+        // from. reset_chunk 0 means never, which is exact rather than a sentinel:
+        // r == 0 means no group straddles, and chunk 0's seed from `state` is copied before the loop.
+        if (reset_chunk != 0 && chunk == reset_chunk) {
+            reseed_state<key_value_tiles>(tail_entry_states, state_ring, state_carry);
+        }
+
+        // Each stage waits for the previous one's packed result. Every stage that reads only the incoming state
+        // runs first, and each dependent stage is issued after independent work, so the math thread rarely waits on
+        // a pack. The operations and their operand order are those of the straight-line recurrence.
+        state_ring.wait_front(key_value_tiles);
+        kd.wait_front(chunk_key_tiles);
+        v_beta.wait_front(chunk_value_tiles);
+        combine_matrix_product<Ct, Kt, Vt, chunk_value_tiles>(
+            kd, state_ring, v_beta, output_intermediate);  // v_beta - kd S
+        q_decay.wait_front(chunk_key_tiles);
+        matrix_multiply<Ct, Kt, Vt>(q_decay, state_ring, query_projection);  // q_decay S
+        kd.pop_front(chunk_key_tiles);
+        q_decay.pop_front(chunk_key_tiles);
+
+        // v_new = T_inv (v_beta - kd S).
+        output_intermediate.wait_front(chunk_value_tiles);
+        v_beta.pop_front(chunk_value_tiles);
+        t_inv.wait_front(chunk_chunk_tiles);
+        matrix_multiply<Ct, Ct, Vt>(t_inv, output_intermediate, value_new);
+        value_new.wait_front(chunk_value_tiles);
+        t_inv.pop_front(chunk_chunk_tiles);
+        output_intermediate.pop_front(chunk_value_tiles);
+
+        // The state update and the output's intra-chunk term both read v_new. The update overwrites the state in
+        // place, after both reads of it above.
+        k_decay_transposed.wait_front(key_chunk_tiles);
+        final_decay.wait_front(Kt);
+        update_state<Ct, Kt, Vt>(
+            state_ring, state_carry, k_decay_transposed, final_decay, value_new);  // S += dl S + k_dec_t v_new
+        intra.wait_front(chunk_chunk_tiles);
+        matrix_multiply<Ct, Ct, Vt>(intra, value_new, scratch);  // intra v_new
+        k_decay_transposed.pop_front(key_chunk_tiles);
+        final_decay.pop_front(Kt);
+        intra.pop_front(chunk_chunk_tiles);
+        value_new.pop_front(chunk_value_tiles);
+
+        // The chunk output, issued after the next state so the next chunk's first stage never waits on it.
+        scratch.wait_front(chunk_value_tiles);
+        query_projection.wait_front(chunk_value_tiles);
+        pack_reconfig_data_format(output.get_id());
+        elementwise<ElementwiseOperation::ADD, chunk_value_tiles, chunk_value_tiles>(query_projection, scratch, output);
+        query_projection.pop_front(chunk_value_tiles);
+        scratch.pop_front(chunk_value_tiles);
+        pack_reconfig_data_format(dfb::scratch);
+    }
+    // The final state leaves exactly: copied from the FP32 carry straight into DST.
+    state_ring.wait_front(key_value_tiles);
+    state_ring.pop_front(key_value_tiles);
+    kda::copy_exact<key_value_tiles>(state_carry, final_state);
+}
+
+template <uint32_t Ct, uint32_t Kt, uint32_t Vt, uint32_t summary, uint32_t emit_outputs>
+TT_KERNEL void compute(uint32_t num_chunks, uint32_t group, uint32_t value_block) {
+    compute_kernel_hw_startup<SrcOrder::Reverse>(dfb::kd, dfb::v_beta, dfb::output);
+
+    kda_chronology::Topology topology{};
+    {
+        DataflowBuffer chronology(dfb::chronology_compute);
+        topology = kda_chronology::receive(chronology);
+    }
+    const uint32_t groups = topology.local_rows / tt::constants::TILE_HEIGHT / num_chunks;
+    const uint32_t reset_chunk = topology.reset_chunk(group, groups);
+    const uint32_t valid_chunks = topology.valid_chunks(group, groups);
+    if (valid_chunks == 0) {
+        return;
+    }
+    if constexpr (summary) {
+        compute_summary<Ct, Kt, Vt, emit_outputs != 0>(valid_chunks, reset_chunk, value_block);
+    } else {
+        compute_recurrent<Ct, Kt, Vt>(valid_chunks, reset_chunk);
+    }
+}

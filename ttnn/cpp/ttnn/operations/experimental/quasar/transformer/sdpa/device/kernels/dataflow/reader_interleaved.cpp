@@ -384,6 +384,14 @@ void kernel_main() {
                     noc.async_read(
                         page_table_reader, page_table_scratch, page_table_stick_size, {.page_id = decoded.nb}, {});
                     noc.async_read_barrier();
+#if defined(ARCH_QUASAR) && defined(COMPILE_FOR_DM)
+                    // The NoC wrote the page table to L1 behind the DM caches. Drop any lines left in L2 by an
+                    // earlier read of another batch's page table (or by an earlier program) so the CPU reads
+                    // below see the new one (as fill_cache does).
+                    invalidate_l2_cache_range(
+                        local_mem::detail::AddressAccess::address(page_table_scratch.local_mem()),
+                        page_table_stick_size);
+#endif
                     page_table_ptr = &page_table_scratch[0];
                 }
 #endif

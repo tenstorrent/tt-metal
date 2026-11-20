@@ -13,7 +13,7 @@ from models.demos.vision.segmentation.ufld_v2.blackhole.ttnn.ttnn_ufld_v2 import
 from models.demos.vision.segmentation.ufld_v2.common.common import UFLD_V2_L1_SMALL_SIZE
 from models.demos.vision.segmentation.ufld_v2.common.reference.ufld_v2_model import BasicBlock, TuSimple34
 from models.demos.vision.segmentation.ufld_v2.common.ttnn.ttnn_basic_block import TtnnBasicBlock
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def get_mesh_mappers(device):

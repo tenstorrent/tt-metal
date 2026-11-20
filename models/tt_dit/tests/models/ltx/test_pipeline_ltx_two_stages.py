@@ -11,6 +11,8 @@ from loguru import logger
 import ttnn
 from models.tt_dit.pipelines.ltx.pipeline_ltx_two_stages import LTXTwoStagesPipeline
 from models.tt_dit.utils.ltx import (
+    DEFAULT_LTX_I2V_IMAGE,
+    DEFAULT_LTX_I2V_PROMPT,
     DEFAULT_LTX_PROMPT,
     default_ltx_checkpoint,
     default_ltx_gemma,
@@ -159,12 +161,12 @@ def test_pipeline_two_stages_i2v_smoke(
     """End-to-end I2V smoke: generate(images=[(img, 0, 1.0)]) produces a non-empty MP4 whose
     first frame correlates with the conditioning image.
 
-    Gated behind LTX_I2V_IMAGE (path to a conditioning image); skips otherwise so it never runs
-    in the default CI sweep without an input image / checkpoint present.
+    Conditions on DEFAULT_LTX_I2V_IMAGE unless LTX_I2V_IMAGE names another image; skips if the
+    image is missing.
     """
-    image_path = os.environ.get("LTX_I2V_IMAGE")
+    image_path = os.environ.get("LTX_I2V_IMAGE", DEFAULT_LTX_I2V_IMAGE)
     if not image_path or not os.path.exists(image_path):
-        pytest.skip("set LTX_I2V_IMAGE to a conditioning image path to run the I2V smoke test")
+        pytest.skip(f"conditioning image not found: {image_path!r} (set LTX_I2V_IMAGE)")
 
     skip_if_unsupported_num_links(mesh_device, num_links)
 
@@ -204,7 +206,7 @@ def test_pipeline_two_stages_i2v_smoke(
         return
 
     output_filename = os.environ.get("OUTPUT_PATH", f"ltx_i2v_two_stages_{width}x{height}.mp4")
-    prompt = os.environ.get("PROMPT", DEFAULT_LTX_PROMPT)
+    prompt = os.environ.get("PROMPT", DEFAULT_LTX_I2V_PROMPT)
     pipeline.generate(
         prompt,
         output_path=output_filename,

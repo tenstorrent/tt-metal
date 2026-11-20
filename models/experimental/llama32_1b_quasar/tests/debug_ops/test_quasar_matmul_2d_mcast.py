@@ -37,7 +37,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_allclose
+from tt_py_test_utils_common.utils_for_testing import assert_allclose
 
 # llama-3.2-1B prefill QKV matmul dims (the e2e case that auto-picked the 2D-mcast factory)
 M, K, N = 1024, 2048, 3072

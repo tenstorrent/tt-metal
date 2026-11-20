@@ -67,7 +67,7 @@
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
       --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 1 \
+      --splits 3 --group 1 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-1.xml .
   skus:
@@ -88,7 +88,7 @@
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
       --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 2 \
+      --splits 3 --group 2 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-2.xml .
   skus:
@@ -109,7 +109,7 @@
     cd tests/python_tests
     pytest -q --override-ini=log_cli=false -n auto -x \
       --dist=worksteal -m "$PYTEST_MARKERS" \
-      --splits 3 --group 3 \
+      --splits 3 --group 3 --splitting-algorithm least_duration \
       --timeout=60 \
       --junitxml=pytest-report-blackhole-3.xml .
   skus:
@@ -128,7 +128,7 @@
   cmd: |
     set -euo pipefail
     cd tests
-    ./run_ttsim_regression.sh -a quasar -n 32 -t 5 --no-html -- --splits 2 --group 1
+    ./run_ttsim_regression.sh -a quasar -n 40 -t 10 --no-html -- --splits 2 --group 1
   skus:
     sim_quasar_xl:
       timeout: 15
@@ -145,7 +145,7 @@
   cmd: |
     set -euo pipefail
     cd tests
-    ./run_ttsim_regression.sh -a quasar -n 32 -t 5 --no-html -- --splits 2 --group 2
+    ./run_ttsim_regression.sh -a quasar -n 40 -t 10 --no-html -- --splits 2 --group 2
   skus:
     sim_quasar_xl:
       timeout: 15

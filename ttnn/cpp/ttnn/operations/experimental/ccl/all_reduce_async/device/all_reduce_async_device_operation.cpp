@@ -13,6 +13,8 @@
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"  // for roofline calculation
 
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
 
 namespace ttnn::experimental::prim {
@@ -20,23 +22,24 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     const auto& buffer_tensor = tensor_args.buffer_tensor;
-    const auto& page_size = input_tensor.buffer()->page_size();
+    const auto& page_size = input_tensor.mesh_buffer().page_size();
 
     TT_FATAL(
         (input_tensor.device()->arch() != tt::ARCH::BLACKHOLE) ||
             (input_tensor.memory_config().buffer_type() != BufferType::DRAM),
         "This kernel does not support blackhole dram as it does not use an accessor to get the noc address as needed "
         "by the fabric api");
-    TT_FATAL(page_size % input_tensor.buffer()->alignment() == 0, "AllReduceAsync currently requires aligned pages");
+    TT_FATAL(
+        page_size % input_tensor.mesh_buffer().alignment() == 0, "AllReduceAsync currently requires aligned pages");
     TT_FATAL(
         args.ring_size % 2 == 0,
         "AllReduceAsync currently only supports even number of blocks in the reduction kernel.");
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(buffer_tensor.storage_type() == StorageType::DEVICE, "Operands to all_reduce need to be on device!");
-    TT_FATAL(buffer_tensor.buffer() != nullptr, "Operands to all_reduce need to be allocated in buffers on device!");
+    TT_FATAL(buffer_tensor.is_allocated(), "Operands to all_reduce need to be allocated in buffers on device!");
 
     TT_FATAL(args.num_links > 0, "Error, num_links should be more than 0 but has {}", args.num_links);
     TT_FATAL(
@@ -71,6 +74,83 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         "has {}",
         output_shard_shape_volume * args.ring_size,
         buffer_shard_shape_volume);
+
+    if (args.one_shot) {
+        TT_FATAL(
+            tt::tt_fabric::is_1d_fabric_config(tt::tt_fabric::GetFabricConfig(*input_tensor.device())),
+            "all_reduce_async one_shot routes by hop count and needs a 1D (line or ring) fabric");
+        TT_FATAL(args.ring_size >= 2, "all_reduce_async one_shot needs at least 2 devices, got {}", args.ring_size);
+        TT_FATAL(!args.use_noc1_only, "all_reduce_async one_shot does not support use_noc1_only");
+        const auto& in_spec = input_tensor.memory_config().shard_spec();
+        const auto& out_spec = args.output_mem_config.shard_spec();
+        TT_FATAL(
+            in_spec.has_value() && out_spec.has_value() && in_spec->orientation == ShardOrientation::ROW_MAJOR &&
+                out_spec->orientation == ShardOrientation::ROW_MAJOR,
+            "all_reduce_async one_shot needs ROW_MAJOR input and output shard specs");
+        TT_FATAL(
+            in_spec->shape[0] == tt::constants::TILE_HEIGHT && out_spec->shape[0] == tt::constants::TILE_HEIGHT &&
+                input_tensor.padded_shape().volume() / input_tensor.padded_shape()[-1] == tt::constants::TILE_HEIGHT,
+            "all_reduce_async one_shot needs a single 32-row tile row (shard height {} / {}, padded shape {})",
+            in_spec->shape[0],
+            out_spec->shape[0],
+            input_tensor.padded_shape());
+        TT_FATAL(
+            input_tensor.layout() == Layout::TILE &&
+                input_tensor.tensor_spec().tile().get_height() == tt::constants::TILE_HEIGHT &&
+                input_tensor.tensor_spec().tile().get_width() == tt::constants::TILE_WIDTH,
+            "all_reduce_async one_shot needs a TILE input with 32x32 tiles, got {}x{}",
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width());
+        const uint32_t num_out_cores = out_spec->grid.num_cores();
+        TT_FATAL(
+            num_out_cores % args.ring_size == 0,
+            "all_reduce_async one_shot splits the output cores into {} equal slices; {} output cores do not divide",
+            args.ring_size,
+            num_out_cores);
+        TT_FATAL(
+            num_out_cores * out_spec->shape[1] == input_tensor.padded_shape()[-1],
+            "all_reduce_async one_shot needs every output core to hold data ({} cores x {} != width {})",
+            num_out_cores,
+            out_spec->shape[1],
+            input_tensor.padded_shape()[-1]);
+    }
+
+    if (tensor_args.residual_tensor.has_value()) {
+        const auto& residual = tensor_args.residual_tensor.value();
+        TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Fused residual of all_reduce needs to be on device!");
+        TT_FATAL(residual.buffer() != nullptr, "Fused residual of all_reduce needs to be allocated on device!");
+        TT_FATAL(
+            residual.device() == input_tensor.device(),
+            "Fused residual of all_reduce must be on the input tensor's mesh device");
+        TT_FATAL(residual.layout() == Layout::TILE, "Fused residual of all_reduce must be in TILE layout");
+        TT_FATAL(
+            residual.tensor_spec().tile() == input_tensor.tensor_spec().tile(),
+            "Fused residual tile {}x{} must match the input tile {}x{} (its CB pages are counted in input tiles)",
+            residual.tensor_spec().tile().get_height(),
+            residual.tensor_spec().tile().get_width(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width());
+        TT_FATAL(
+            residual.dtype() == input_tensor.dtype(),
+            "Fused residual dtype {} must match the input dtype {} (it is unpacked with the reduction CB format)",
+            residual.dtype(),
+            input_tensor.dtype());
+        TT_FATAL(
+            residual.padded_shape() == input_tensor.padded_shape(),
+            "Fused residual padded shape {} must match the input padded shape {}",
+            residual.padded_shape(),
+            input_tensor.padded_shape());
+        TT_FATAL(
+            residual.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                residual.memory_config().buffer_type() == BufferType::L1,
+            "Fused residual must be L1 WIDTH_SHARDED, got {}",
+            residual.memory_config());
+        TT_FATAL(
+            residual.memory_config().shard_spec() == args.output_mem_config.shard_spec(),
+            "Fused residual memory config {} must have the output's shard spec {} (read in place on the output cores)",
+            residual.memory_config(),
+            args.output_mem_config);
+    }
 }
 
 AllReduceAsyncDeviceOperation::spec_return_value_t AllReduceAsyncDeviceOperation::compute_output_specs(
@@ -130,9 +210,11 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // --- Data sizes ---
@@ -174,7 +256,6 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     }
     // AllReduce = ReduceScatter + AllGather: two sequential fabric phases, so their
     // bandwidths sum and their fills sum (the totals compete in the final max() below).
-    const auto fabric_config = tt::tt_fabric::GetFabricConfig();
     const auto [rs_bw_cycles, rs_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
         arch, fabric_config, clock_rate_mhz, rs_bottleneck_bytes, num_links, num_hops);
     const auto [ag_bw_cycles, ag_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
@@ -193,10 +274,10 @@ AllReduceAsyncDeviceOperation::create_op_performance_model(
     // Read and write can overlap (different NOC channels), so we take
     // max(read_bw, write_bw) rather than summing.
     // =========================================================================
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensors.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensors.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensors.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensors.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;
@@ -265,7 +346,9 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc) {
+    bool fp32_dest_acc,
+    const std::optional<Tensor>& residual_tensor,
+    bool one_shot) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -284,8 +367,10 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         use_optimal_ccl_for_llama,
         cluster_axis,
         &mesh_device,
-        fp32_dest_acc);
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
+        fp32_dest_acc,
+        one_shot);
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .residual_tensor = residual_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

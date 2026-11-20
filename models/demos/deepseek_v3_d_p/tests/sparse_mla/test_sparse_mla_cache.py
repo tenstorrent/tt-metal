@@ -24,15 +24,18 @@ from ttnn.device import is_blackhole
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import random_mla_weights
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config, glm_5_3_hf_config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import kimi_k3_1_hf_config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     IndexerSelectionState,
     ReuseIndexer,
     TtIndexer,
+    index_keys_hadamard_rotated,
     indexer_layer_is_reused,
     normalized_hadamard_matrix,
     resolve_has_indexer,
+    rotate_index_keys,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config, get_max_payload_size
@@ -47,7 +50,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     init_mla_kv_cache,
 )
 from models.demos.deepseek_v3_d_p.utils.test_utils import WH_WORKER_L1_SIZE
-from tests.ttnn.utils_for_testing import comp_pcc
+from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
 CACHE_DIR = Path("/tmp/DS_PREFILL_sparse_mla")
 SEQ_LEN = 256
@@ -72,6 +75,22 @@ def test_normalized_hadamard_preserves_indexer_scores():
 def test_normalized_hadamard_rejects_non_power_of_two(expect_error):
     with expect_error(AssertionError, "power of two"):
         normalized_hadamard_matrix(96)
+
+
+# The index cache's key basis is a model fact: GLM / DS-V3.2 decode store keys
+# Hadamard-rotated (absent field -> rotated), Kimi-K3.1's reference and decode do not.
+def test_index_key_basis_follows_the_model_config():
+    assert index_keys_hadamard_rotated(glm_5_3_hf_config())
+    assert index_keys_hadamard_rotated(SimpleNamespace())  # a DS-V3.2 HF config carries no index_hadamard
+    k31 = kimi_k3_1_hf_config()
+    assert not index_keys_hadamard_rotated(k31)
+
+    # H4 = [[1, 1, 1, 1], [1, -1, 1, -1], [1, 1, -1, -1], [1, -1, -1, 1]] / 2.
+    keys = torch.tensor([[1.0, 0.0, 0.0, 0.0], [2.0, 2.0, 2.0, 2.0]])
+    torch.testing.assert_close(rotate_index_keys(k31, keys), keys)
+    rotated = rotate_index_keys(glm_5_3_hf_config(), keys)
+    torch.testing.assert_close(rotated, torch.tensor([[0.5, 0.5, 0.5, 0.5], [4.0, 0.0, 0.0, 0.0]]))
+    torch.testing.assert_close(rotate_index_keys(glm_5_3_hf_config(), rotated), keys)  # its own inverse
 
 
 # NOTE: test_sp1_kvpe_slice_materializes_only_multi_slot_cache used to live here. It asserted that
@@ -284,6 +303,8 @@ def test_indexer_selection_stages_thread_runtime_metadata(monkeypatch, use_metad
         ),
         "subdevice_id": subdevice_id,
         "sub_core_grids": core_grid,
+        # Unset here; the overlap region is what passes NOC_0.
+        "dram_read_noc": None,
     }
     assert indexer.finalize_distribution(selected, state) is local_indices
 
@@ -342,6 +363,7 @@ def _bare_tt_ccl(mesh):
     ccl = object.__new__(TT_CCL)
     ccl.mesh_device = mesh
     ccl.sparse_mla_overlap_resources = None
+    ccl.sparse_mla_overlap_semaphores = {}
     return ccl
 
 
@@ -396,6 +418,15 @@ def test_sparse_mla_overlap_qb2_profile_resources_and_teardown(monkeypatch):
         ("sync", mesh),
     ]
 
+    # The next model on the mesh registers a new manager over the same, reset pair: cached gather programs still hold
+    # the pair, so a new one would pin a second pair in L1_SMALL.
+    created = sum(event[0] == "create_sem" for event in events)
+    again = ccl.get_sparse_mla_overlap_resources("qb2_rows1")
+    assert again is not resources
+    assert (again.ready_semaphore, again.data_valid_semaphore) == ("ready", "valid")
+    assert sum(event[0] == "create_sem" for event in events) == created
+    assert sum(call[0] == "create" for call in mesh.calls if isinstance(call, tuple)) == 2
+
 
 @pytest.mark.parametrize(
     "profile,grid",
@@ -405,6 +436,45 @@ def test_sparse_mla_overlap_profiles_fail_closed(profile, grid, expect_error):
     ccl = _bare_tt_ccl(_FakeOverlapMesh(*grid))
     with expect_error(ValueError, "requires a"):
         ccl.get_sparse_mla_overlap_resources(profile)
+
+
+@pytest.mark.parametrize(
+    "profile,grid,gather_rows",
+    [
+        ("auto", (12, 10), 1),
+        ("auto", (11, 10), 1),
+        ("loudbox_rows1", (12, 10), 1),
+        ("loudbox_rows2", (12, 10), 2),
+        ("galaxy_rows1", (12, 10), 1),
+        ("qb2_rows2", (11, 10), 2),
+    ],
+)
+def test_sparse_mla_overlap_profile_row_split(monkeypatch, profile, grid, gather_rows):
+    """The gather takes the top gather_rows worker rows at full width and top-k takes the rest.
+
+    auto is what GLM 5.3 selects and must resolve to the one-row split. Full width matters on row 0: it is what
+    keeps a core under every Ethernet core, so the fabric CCL senders stay one NoC hop from their links.
+    """
+    width, height = grid
+    ccl = _bare_tt_ccl(_FakeOverlapMesh(width, height))
+    monkeypatch.setattr(ttnn, "get_memory_view", lambda *_: SimpleNamespace(total_bytes_per_bank=2048))
+    monkeypatch.setattr(ttnn, "create_global_semaphore", lambda *_: object())
+    monkeypatch.setattr(ttnn, "synchronize_device", lambda *_: None)
+
+    resources = ccl.get_sparse_mla_overlap_resources(profile)
+
+    def cells(core_range_set):
+        return {
+            (x, y)
+            for cr in core_range_set.ranges()
+            for y in range(cr.start.y, cr.end.y + 1)
+            for x in range(cr.start.x, cr.end.x + 1)
+        }
+
+    gather, topk = cells(resources.gather_core_grid), cells(resources.topk_core_grid)
+    assert gather == {(x, y) for x in range(width) for y in range(gather_rows)}
+    assert topk == {(x, y) for x in range(width) for y in range(gather_rows, height)}
+    assert gather | topk == {(x, y) for x in range(width) for y in range(height)}
 
 
 def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
@@ -441,7 +511,7 @@ def test_sparse_mla_overlap_region_orders_join_before_distribution(monkeypatch):
         def select_local(self, actual_state, **kwargs):
             assert mla.mesh_device.loaded
             assert actual_state is state
-            assert kwargs == {"subdevice_id": "topk_sd", "sub_core_grids": "topk_grid"}
+            assert kwargs == {"subdevice_id": "topk_sd", "sub_core_grids": "topk_grid", "dram_read_noc": ttnn.NOC.NOC_0}
             events.append("topk")
             return local_indices
 
@@ -533,7 +603,10 @@ def test_sparse_mla_overlap_full_mesh_tp_gather_threads_external_resources(monke
     mla.sp_axis = 0
     mla.tp_axis = 1
     monkeypatch.setattr(mla, "_declared_seq_shard_factor", lambda _: 4)
-    monkeypatch.setattr(ttnn, "get_fabric_config", lambda: fabric)
+    mla.mesh_device = object()
+    monkeypatch.setattr(
+        ttnn, "get_fabric_config", lambda mesh_device: fabric if mesh_device is mla.mesh_device else None
+    )
     mla.sp_factor = 2
     mla.tp_factor = 2
     mla.ccl_num_links = 2
