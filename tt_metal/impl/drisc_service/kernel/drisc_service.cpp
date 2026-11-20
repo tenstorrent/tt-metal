@@ -7,6 +7,7 @@
 #include <cstdint>
 
 #include "bounce_arena.hpp"
+#include "drain_job.hpp"
 #include "hostdev/drisc_service/abi.hpp"
 #include "kernel_utils.hpp"
 #include "l1_layout.hpp"
@@ -416,6 +417,38 @@ FORCE_INLINE void issue_writes(TransactionRing& txn_ring, DmaInFlight& dma, uint
     }
 }
 
+// The drain job's owner slot, or NO_DRAIN_OWNER. A job runs at most once per owner: a finished one stays with its
+// owner until the owner detaches.
+constexpr uint32_t NO_DRAIN_OWNER = abi::MAX_CLIENTS;
+uint32_t drain_owner = NO_DRAIN_OWNER;
+uint32_t drain_ticks;  // kernel ticks since the last hold
+bool drain_handover;   // stop accepting; hold once the transactions in flight retire
+
+// Starts the drain job when the job block's owner word names an attached client.
+void try_start_drain() {
+    const uint32_t owner = drain::job_block()->owner;
+    if (abi::slot_word_type(owner) != abi::SLOT_ATTACH) {
+        return;
+    }
+    for (uint32_t s = 0; s < abi::MAX_CLIENTS; s++) {
+        if (clients[s].state == SLOT_ATTACHED && owner == abi::slot_word(abi::SLOT_ATTACH, clients[s].gen)) {
+            drain::start(&command_block->slots[s].exit_mailbox, abi::slot_word(abi::SLOT_DETACH, clients[s].gen));
+            drain_owner = s;
+            drain_ticks = 0;
+            drain_handover = false;
+            return;
+        }
+    }
+}
+
+// After a hold: the drain job used every command buffer on this NoC (and noc_init also resets the other NoC's,
+// which the job programs again at its next hold), and its traffic moved the NIU's counters.
+void rearm_after_hold() {
+    noc_init(l1::SCRATCH);
+    noc_write_init_state<write_cmd_buf, CQ_NOC_mkp>(noc_index, NOC_UNICAST_WRITE_VC);
+    noc_local_state_init(noc_index);
+}
+
 // Attach slot s if its request is an ATTACH the kernel has not answered yet.
 // The host zeroed the doorbell and filled the control page before writing the
 // request.
@@ -455,6 +488,11 @@ bool scan_slots() {
         if (client.state == SLOT_ATTACHED && slot.exit_mailbox == abi::slot_word(abi::SLOT_DETACH, client.gen)) {
             client.state = SLOT_DETACHING;
             attached_mask &= ~(1u << s);
+            if (s == drain_owner) {
+                drain::abort();
+                drain_owner = NO_DRAIN_OWNER;
+                drain_handover = false;
+            }
             if (s == turn_slot) {
                 turn_bytes = l1::CHUNK_SIZE;
             }
@@ -479,6 +517,9 @@ bool scan_slots() {
             publish_control_page(client);
         }
         any_client |= client.state != SLOT_IDLE;
+    }
+    if (drain_owner == NO_DRAIN_OWNER) {
+        try_start_drain();
     }
     if (any_client) {
         return true;
@@ -521,9 +562,25 @@ int main() {
         if (spins % abi::SLOT_SCAN_TICK_INTERVAL == 0 && !scan_slots()) {
             break;
         }
+        if (drain::running() && ++drain_ticks >= drain::hold_ticks) {
+            drain_handover = true;
+        }
         const uint32_t done_changed = retire_transactions(txn_ring, bounce_arena, dma);
-        accept_transactions(txn_ring, bounce_arena, dma);
+        if (!drain_handover) {
+            accept_transactions(txn_ring, bounce_arena, dma);
+        }
         issue_writes(txn_ring, dma, done_changed);
+        // The drain job's staging overlays the arena and its reads reuse the transactions' IDs, so it holds the seat
+        // only once every transaction has retired. Batch-window pulls use IDs and L1 it never touches. A publish must
+        // be acked too: both sides resync the NoC's write counters from the NIU at a handover, and an ack landing
+        // after that would leave the acked count one past the issued count, so a flush check waits forever.
+        if (drain_handover && !txn_ring.has_reading() && !txn_ring.has_writing() &&
+            ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, PUBLISH_TRID)) {
+            drain::hold();
+            rearm_after_hold();
+            drain_handover = false;
+            drain_ticks = 0;
+        }
     }
 
     // No client is left, so every transaction retired and every carve is idle.

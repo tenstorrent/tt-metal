@@ -272,7 +272,7 @@ void D2HSocket::write_socket_metadata(
             config_data.data(),
             total_config_bytes,
             tt_cxy_pair(device_id, sender_virtual_core(*mesh_device, device_id)),
-            config_buffer_address_ + env.get_hal().get_l1_noc_offset(sender_core_type_));
+            config_buffer_address_ + sender_l1_noc_offset(env.get_hal()));
     } else {
         IDevice* device = internal::get_device(*mesh_device, sender_core_.device_coord);
         tt::tt_metal::detail::WriteToDeviceL1(
@@ -336,7 +336,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         sender_core_window_ = cluster.get_driver()->create_io_window(
             sender_device_id,
             cluster.get_soc_desc(sender_device_id).get_coord_at(sender_virtual_core_coord, tt::CoordSystem::TRANSLATED),
-            /*addr=*/env.get_hal().get_l1_noc_offset(sender_core_type_));
+            /*addr=*/sender_l1_noc_offset(env.get_hal()));
         pcie_writer_ = [this](void* data, uint32_t num_bytes, uint64_t device_addr) {
             sender_core_window_->write_block(device_addr, data, num_bytes);
         };
@@ -344,7 +344,7 @@ void D2HSocket::init_sender_tlb(const std::shared_ptr<MeshDevice>& mesh_device) 
         // Wormhole B0 may require the driver to reconfigure a window for each write,
         // since the device address space is not mapped this way. A DRISC sender's L1 is
         // addressed at the DRAM core's L1 NOC offset (0 for Tensix).
-        const uint64_t l1_noc_offset = env.get_hal().get_l1_noc_offset(sender_core_type_);
+        const uint64_t l1_noc_offset = sender_l1_noc_offset(env.get_hal());
         pcie_writer_ = [&cluster, sender_device_id, sender_virtual_core_coord, l1_noc_offset](
                            void* data, uint32_t num_bytes, uint64_t device_addr) {
             cluster.write_core(
@@ -453,7 +453,12 @@ D2HSocket::D2HSocket(
         l1_alignment);
     config_buffer_address_ = external_config.address;
     sender_core_type_ = external_config.sender_core_type;
+    l1_noc_offset_ = external_config.l1_noc_offset;
     init_common(mesh_device);
+}
+
+uint64_t D2HSocket::sender_l1_noc_offset(const Hal& hal) const {
+    return l1_noc_offset_.has_value() ? *l1_noc_offset_ : hal.get_l1_noc_offset(sender_core_type_);
 }
 
 D2HSocket::D2HSocket(

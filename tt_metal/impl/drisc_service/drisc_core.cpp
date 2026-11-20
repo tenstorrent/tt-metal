@@ -18,9 +18,6 @@ namespace tt::tt_metal::drisc_service {
 
 namespace {
 
-// The low 8 GB of a DRAM tile's NIU space is GDDR, so the DRISC's L1 sits behind a tag.
-constexpr uint64_t drisc_l1_noc_offset = 0x2000000000ull;
-
 constexpr uint64_t niu_cfg_0_addr(size_t niu) { return NOC_CFG(NIU_CFG_0) + niu * NOC_INSTANCE_OFFSET; }
 
 }  // namespace

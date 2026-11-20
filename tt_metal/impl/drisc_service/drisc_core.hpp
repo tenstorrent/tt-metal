@@ -27,6 +27,9 @@ class ElfFile;
 
 namespace tt::tt_metal::drisc_service {
 
+// The low 8 GB of a DRAM tile's NIU space is GDDR, so the DRISC's L1 sits behind a tag.
+inline constexpr uint64_t drisc_l1_noc_offset = 0x2000000000ull;
+
 // One DRISC. Holds no lock and no state of the core: every method acts on the hardware directly. Copyable.
 class DriscCore {
 public:

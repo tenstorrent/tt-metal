@@ -14,7 +14,7 @@
 namespace tt::tt_metal::drisc_service::abi {
 
 // Bump on any change to this file that the kernel and the host must agree on.
-inline constexpr uint32_t ABI_VERSION = 9;
+inline constexpr uint32_t ABI_VERSION = 10;
 inline constexpr size_t CONTROL_PAGE_SIZE = 4096;
 
 // The kernel's build. Its ELF carries one in section BUILD_BLOCK_SECTION, which the host checks before loading it,
@@ -219,6 +219,43 @@ struct ControlPage {
 };
 static_assert(offsetof(ControlPage, heartbeat) == offsetof(ControlPage, done_count) + sizeof(uint32_t));
 static_assert(sizeof(ControlPage) <= CONTROL_PAGE_SIZE);
+
+// Drain job: the streaming profiler's drainer, which the kernel runs in holds between its own work. A hold takes the
+// seat for `hold_sweeps` drain sweeps after every `hold_ticks` kernel ticks; the kernel first lets its transactions
+// retire, and the drain job leaves the NoCs and its staging idle before it hands the seat back. Its staging overlays
+// the bounce arena; what must survive between holds lives here, at the top of L1 above the arena.
+inline constexpr uint32_t DRAIN_MAX_CORES = 18;      // worker cores one drain job drains (140 cores over 8 banks x 2)
+inline constexpr uint32_t DRAIN_RECORD_BYTES = 128;  // per-core record the job keeps; kRelayCoreRecordBytes
+inline constexpr uint32_t DRAIN_CTRL_BYTES = 64;     // kernel_profiler::ResidentCtrl: stop, done, heartbeat
+inline constexpr uint32_t DRAIN_SOCKET_CONFIG_BYTES = 192;  // the job's D2H socket config, written by the host
+
+// Host, before arming: the job's parameters. `owner` is set last and names the attached client the job belongs to
+// (slot_word(SLOT_ATTACH, gen)); the kernel starts the job once, and drops it when that client detaches.
+struct DrainJobBlock {
+    uint32_t owner;
+    uint32_t num_cores;
+    uint32_t cv_src;      // worker L1 address of the profiler control block
+    uint32_t write_vc;    // static VC of the job's host writes
+    uint32_t spool_base;  // GDDR spool, as an offset in the seat's bank; 0 bytes is refused
+    uint32_t spool_bytes;
+    uint32_t hold_ticks;                // N: kernel ticks between holds
+    uint32_t hold_sweeps;               // M: drain sweeps per hold
+    uint32_t core_xy[DRAIN_MAX_CORES];  // kernel_profiler::NocXy words of the drained cores
+};
+
+struct DrainLayout {
+    // The 3 KB the kernel takes off its bounce arena plus the 512 B of L1 above the arena.
+    static constexpr uint32_t records_addr = MEM_DRISC_L1_SIZE - 3 * 1024 - 512;
+    static constexpr uint32_t ctrl_addr = records_addr + DRAIN_MAX_CORES * DRAIN_RECORD_BYTES;
+    static constexpr uint32_t socket_config_addr = ctrl_addr + DRAIN_CTRL_BYTES;
+    static constexpr uint32_t job_addr = socket_config_addr + DRAIN_SOCKET_CONFIG_BYTES;
+    static constexpr uint32_t owner_addr = job_addr + offsetof(DrainJobBlock, owner);
+    static constexpr uint32_t base_addr = records_addr;
+    static constexpr uint32_t end_addr = MEM_DRISC_L1_SIZE;
+};
+static_assert(DrainLayout::records_addr % 64 == 0 && DrainLayout::ctrl_addr % 64 == 0);
+static_assert(DrainLayout::socket_config_addr % 64 == 0 && DrainLayout::job_addr % 64 == 0);
+static_assert(DrainLayout::job_addr + sizeof(DrainJobBlock) <= DrainLayout::end_addr);
 
 // Kernel wall-clock ticks (AICLK cycles) between heartbeat publishes to the control pages: 6.2 ms at 1.35 GHz, 10.5 ms
 // at 800 MHz.

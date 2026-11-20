@@ -27,6 +27,10 @@ namespace tt::tt_metal::experimental::detail {
 struct D2HSocketTryReadAccess;
 }  // namespace tt::tt_metal::experimental::detail
 
+namespace tt::tt_metal {
+class Hal;
+}  // namespace tt::tt_metal
+
 namespace tt::tt_metal::distributed {
 
 class NamedShm;
@@ -134,6 +138,9 @@ public:
     struct ExternalConfigBuffer {
         uint32_t address;  // L1 address on the sender core
         HalProgrammableCoreType sender_core_type = HalProgrammableCoreType::TENSIX;
+        // The sender's L1 NOC offset, for a sender whose core type this process's HAL does not program (a DRISC run
+        // by the DRISC service). Unset: the HAL's offset for sender_core_type.
+        std::optional<uint64_t> l1_noc_offset;
     };
 
     /**
@@ -439,6 +446,8 @@ private:
     uint32_t fifo_curr_size_ = 0;
     uint32_t config_buffer_address_ = 0;
     HalProgrammableCoreType sender_core_type_ = HalProgrammableCoreType::TENSIX;
+    std::optional<uint64_t> l1_noc_offset_;  // ExternalConfigBuffer::l1_noc_offset
+    uint64_t sender_l1_noc_offset(const Hal& hal) const;
     uint32_t pcie_alignment_ = 0;
     uint32_t bytes_acked_device_offset_ = 0;
     std::unique_ptr<tt::umd::IoWindow> sender_core_window_;

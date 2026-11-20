@@ -48,9 +48,9 @@
 #include "internal/ethernet/erisc.h"
 
 // PROFILE_KERNEL is a global JIT define, so dispatch kernels get it too; no relay serves a dispatch core, so a
-// producer there would fill its ring and wedge the next relay bring-up. The relay kernel is excluded as well:
-// this producer is ~1 KB it has no code room for (its self-profiling is its own staging-slot markers, see
-// impl/streaming_profiler/kernels/drisc_relay.cpp).
+// producer there would fill its ring and wedge the next relay bring-up. A kernel that defines
+// STREAMING_PROFILER_RELAY_KERNEL is excluded as well. (The DRISC drainers no longer build here: they run in the DRISC
+// service, impl/drisc_service/kernel/drain_job.hpp.)
 #if defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && !defined(STREAMING_PROFILER_RELAY_KERNEL)
 
 #if defined(KERNEL_BUILD) && !defined(COMPILE_FOR_ERISC)

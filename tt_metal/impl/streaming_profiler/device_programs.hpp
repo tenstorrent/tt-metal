@@ -115,6 +115,7 @@ private:
         std::optional<L1Range> stale_l1;
         uint32_t socket_index = 0;
         uint32_t socket_count = 0;
+        bool drain_job = false;  // runs in the DRISC service rather than as a metal program
     };
     struct Producer : CoreCoords {
         CoreType type = CoreType::WORKER;
@@ -142,8 +143,10 @@ private:
         // cores the eth relay drains.
         std::vector<Producer> producers;
         std::vector<ResidentCore> relays;
-        // The DRAM view each relay drains from, in relay order.
+        // The DRAM view and the DRISC service seat's NoC of each drain job, in relay order, and the views once each.
         std::vector<uint32_t> relay_banks;
+        std::vector<uint32_t> relay_nocs;
+        std::vector<uint32_t> service_banks;
         // This process's attachment to the DRISC service on the relay banks; reset at quiesce, which detaches.
         std::unique_ptr<drisc_service::Client> service;
         ResidentCore wall_clock;
@@ -183,13 +186,13 @@ private:
     void choose_relay_cores(DeviceCtx& ctx);
     // Attaches to the DRISC service on both seats of each relay bank, launching its kernels where none runs.
     void attach_service(DeviceCtx& ctx);
+    void start_drain(DeviceCtx& ctx, uint32_t relay_index, uint32_t fifo_bytes);
     void start_resident(
         DeviceCtx& ctx,
         ResidentCore& resident,
         HalProgrammableCoreType core_type,
         const std::vector<SocketSpec>& specs,
         std::unique_ptr<Program> program);
-    std::unique_ptr<Program> relay_program(const DeviceCtx& ctx, uint32_t relay_index);
     std::unique_ptr<Program> wall_clock_program(const DeviceCtx& ctx);
     std::unique_ptr<Program> check_program(const DeviceCtx& ctx);
     std::unique_ptr<Program> eth_relay_program(const DeviceCtx& ctx);
@@ -208,6 +211,8 @@ private:
     uint64_t control_vector_l1_ = 0;
     MetalContext* mc_ = nullptr;
     DriscL1 drisc_l1_;
+    uint32_t drain_hold_ticks_ = 2;
+    uint32_t drain_hold_sweeps_ = 1;
     EthL1 eth_l1_;
     std::vector<DeviceCtx> devices_;
     CaptureContext capture_;

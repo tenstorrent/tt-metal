@@ -28,7 +28,9 @@ constexpr uint32_t BATCH_WINDOWS_START = (MEM_DRISC_MAP_END - BATCH_WINDOWS_SIZE
 // sized extents (one per in-flight transaction), each capped at CHUNK_SIZE.
 constexpr uint32_t BOUNCE_BUFFER_START = (MEM_DRISC_BANK_TO_NOC_SCRATCH + 63) & ~63u;
 constexpr uint32_t CHUNK_SIZE = 24 * 1024;
-constexpr uint32_t BOUNCE_BUFFER_SIZE = 4 * CHUNK_SIZE;
+// Four chunks less the 3 KB the drain job keeps above the arena (abi::DrainLayout).
+constexpr uint32_t BOUNCE_BUFFER_SIZE = 4 * CHUNK_SIZE - 3 * 1024;
+static_assert(BOUNCE_BUFFER_START + BOUNCE_BUFFER_SIZE == tt::tt_metal::drisc_service::abi::DrainLayout::base_addr);
 
 static_assert(SCRATCH % 64 == 0);
 static_assert(SCRATCH + SCRATCH_SIZE <= MEM_DRISC_FIRMWARE_BASE);

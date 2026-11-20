@@ -269,7 +269,6 @@ set(JITAPI_FILES
     soc_descriptors/blackhole_140_arch.yaml
     soc_descriptors/wormhole_b0_80_arch.yaml
     tools/profiler/cpp_device_analyses.json
-    impl/streaming_profiler/kernels/drisc_relay.cpp
     impl/streaming_profiler/kernels/eth_clock.hpp
     impl/streaming_profiler/kernels/eth_clock_check.cpp
     impl/streaming_profiler/kernels/eth_clock_model.cpp

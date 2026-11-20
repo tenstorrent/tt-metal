@@ -60,15 +60,9 @@ uint32_t packed_xy(const CoreCoord& core) {
         kernel_profiler::NocXy{.x = static_cast<uint32_t>(core.x), .y = static_cast<uint32_t>(core.y)});
 }
 
-// The DRAM view each relay runs on, in relay order. A relay's position in this order picks its band of the worker grid
-// and its write VC.
+// The DRAM views the drain jobs run on, in order; each view has two, one per DRISC service seat. A drain job's position
+// picks its band of the worker grid and its write VC.
 constexpr std::array<uint32_t, 8> kRelayBankRoster = {5u, 6u, 4u, 1u, 0u, 3u, 7u, 2u};
-// Two pairs of staging slots, so one pair can gather a frame while the other is sent, plus three that spool mode splits
-// into two bounce buffers.
-constexpr uint32_t kStageSlots = 7;
-// The most cores one relay drains. A relay keeps one record per core, and 72 lets two relays split a 140-core grid.
-constexpr uint32_t kMaxRelayCores = 72;
-constexpr uint32_t kCoreRecordsBytes = kMaxRelayCores * kernel_profiler::kRelayCoreRecordBytes;
 constexpr uint32_t kPageBytes = kernel_profiler::SPSC_SPAN_PAGE_WORDS * 4;
 constexpr uint32_t kLanesPerTile = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 // The smallest host FIFO the eth relay's sync socket gets, large enough to ride out multi-second page-fault stalls on
@@ -188,23 +182,14 @@ void DevicePrograms::carve_l1() {
     const uint32_t cfg_bytes =
         tt::align(distributed::D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)), kCtrlBytes);
     const uint32_t slot_bytes = kernel_profiler::spsc_span_slot_words(kLanesPerTile) * sizeof(uint32_t);
-    // The DRISCs run the DRISC service under the streaming profiler, so metal's HAL has no DRAM core type and the
-    // relay's L1 is laid out by the service instead (step 2b).
-    if (hal.has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
-        const uint32_t base = hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-        const uint32_t region = hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::UNRESERVED);
-        drisc_l1_.stage_base = base;
-        drisc_l1_.core_records = drisc_l1_.stage_base + kStageSlots * slot_bytes;
-        drisc_l1_.ctrl = drisc_l1_.core_records + kCoreRecordsBytes;
-        drisc_l1_.cfg = base + region - cfg_bytes;
-        drisc_l1_.host_ctrl = drisc_l1_.ctrl + hal.get_l1_noc_offset(HalProgrammableCoreType::DRAM);
-        TT_FATAL(
-            drisc_l1_.ctrl + kCtrlBytes <= drisc_l1_.cfg,
-            "streaming profiler: DRISC L1 ({} B unreserved) cannot hold a relay's {} staging slots, core records and "
-            "socket config",
-            region,
-            kStageSlots);
-    }
+    // The drain jobs run in the DRISC service, which lays out their L1 (drisc_service::abi::DrainLayout).
+    drisc_l1_.ctrl = drisc_service::abi::DrainLayout::ctrl_addr;
+    drisc_l1_.cfg = drisc_service::abi::DrainLayout::socket_config_addr;
+    drisc_l1_.host_ctrl = drisc_l1_.ctrl + drisc_service::drisc_l1_noc_offset;
+    TT_FATAL(
+        distributed::D2HSocket::required_config_buffer_size(hal.get_alignment(HalMemType::L1)) <=
+            drisc_service::abi::DRAIN_SOCKET_CONFIG_BYTES,
+        "streaming profiler: a D2H socket config no longer fits the drain job's slot");
 
     const uint32_t eth_base = hal.get_dev_addr(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
     const uint32_t eth_size = hal.get_dev_size(HalProgrammableCoreType::IDLE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -223,11 +208,18 @@ void DevicePrograms::carve_l1() {
         eth_size,
         eth_base + eth_size - eth_l1_.sync_ring);
 
+    // Each bank's spool is split between the bank's two drain jobs, which need one.
     const uint32_t spool_mb = mc_->rtoptions().get_streaming_profiler_spool_mb();
-    if (spool_mb != 0) {
-        drisc_l1_.spool_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
-        drisc_l1_.spool_bytes = spool_mb << 20;
-    }
+    TT_FATAL(spool_mb >= 2, "streaming profiler: the DRISC service drain jobs need a GDDR spool of at least 2 MiB");
+    drisc_l1_.spool_addr = static_cast<uint32_t>(hal.get_dev_addr(HalDramMemAddrType::PROFILER));
+    drisc_l1_.spool_bytes = spool_mb << 20;
+    // N (kernel ticks between holds) and M (drain sweeps per hold); for tuning, until they are measured.
+    const auto env_u32 = [](const char* name, uint32_t fallback) {
+        const char* value = std::getenv(name);
+        return value != nullptr ? static_cast<uint32_t>(std::strtoul(value, nullptr, 10)) : fallback;
+    };
+    drain_hold_ticks_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TICKS", 2u), 2u);
+    drain_hold_sweeps_ = std::max(env_u32("TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_SWEEPS", 1u), 1u);
 }
 
 bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
@@ -291,6 +283,9 @@ bool DevicePrograms::boot(const std::shared_ptr<distributed::MeshDevice>& mesh_d
     const auto start_device = [&](DeviceCtx& ctx) {
         // First, so the service's host pages are pinned before the sockets' FIFOs (it needs IOVAs below 4 GiB).
         attach_service(ctx);
+        for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
+            start_drain(ctx, relay_index, relay_fifo_bytes);
+        }
         if (capture_.devices[ctx.index].fallback_wall_clock_core) {
             write_producers_armed(ctx, 1);
             return;
@@ -435,130 +430,164 @@ void DevicePrograms::choose_relay_cores(DeviceCtx& ctx) {
     const uint32_t chip = ctx.chip_id;
     const auto& soc = cluster.get_soc_desc(chip);
     const uint32_t view_count = static_cast<uint32_t>(soc.get_num_dram_views());
-    std::vector<uint32_t> banks;
-    std::ranges::copy_if(kRelayBankRoster, std::back_inserter(banks), [&](uint32_t bank) { return bank < view_count; });
-    ctx.relays.resize(banks.size());
-    for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
-        ctx.relays[relay_index].core = locate_core(
-            cluster,
+    ctx.service_banks.clear();
+    std::ranges::copy_if(
+        kRelayBankRoster, std::back_inserter(ctx.service_banks), [&](uint32_t bank) { return bank < view_count; });
+    // Two drainers per bank, one on each of the bank's DRISC service seats: the free DRISC (the NoC1 seat) and the
+    // bank's NoC1-endpoint DRISC (the NoC0 seat), as dram_sender_logical_cores names them.
+    ctx.relays.clear();
+    ctx.relay_banks.clear();
+    ctx.relay_nocs.clear();
+    for (const uint32_t bank : ctx.service_banks) {
+        const std::vector<CoreCoord> senders = ctx.mesh->impl().dram_sender_logical_cores(ctx.device, bank);
+        TT_FATAL(
+            senders.size() == 2,
+            "streaming profiler: device {} DRAM view {} has {} DRISC service seats, not 2",
             chip,
-            ctx.mesh->impl().pick_unused_dram_logical_core(ctx.device, banks[relay_index]),
-            CoreType::DRAM);
+            bank,
+            senders.size());
+        for (const uint32_t noc : {1u, 0u}) {
+            ResidentCore& relay = ctx.relays.emplace_back();
+            relay.core = locate_core(cluster, chip, senders.at(1 - noc), CoreType::DRAM);
+            relay.name = fmt::format("drain job {} (DRAM view {}, NoC{} seat)", ctx.relays.size() - 1, bank, noc);
+            relay.ctrl = drisc_l1_.host_ctrl;
+            relay.drain_job = true;
+            ctx.relay_banks.push_back(bank);
+            ctx.relay_nocs.push_back(noc);
+            // The seat drives its own NoC and writes to the host on NoC0, so neither NIU may be in NOC2AXI mode.
+            const uint8_t noc2axi_mask =
+                soc.get_dram_endpoint_noc_mask(soc.get_physical_dram_core_from_logical(relay.core.logical));
+            TT_FATAL(
+                (noc2axi_mask & ((1u << noc) | 1u)) == 0,
+                "streaming profiler: device {} {} is on DRISC ({},{}), whose NOC2AXI mask {:#x} keeps an NIU it needs",
+                chip,
+                relay.name,
+                relay.core.virt.x,
+                relay.core.virt.y,
+                noc2axi_mask);
+        }
     }
-    // pick_unused_dram_logical_core() can't see two views resolving to one physical port, and two relays on one L1
-    // would overlap.
     for (uint32_t a = 0; a < ctx.relays.size(); a++) {
         for (uint32_t b = a + 1; b < ctx.relays.size(); b++) {
             TT_FATAL(
                 ctx.relays[a].core.virt != ctx.relays[b].core.virt,
-                "streaming profiler: DRISC {} (DRAM view {}) and DRISC {} (DRAM view {}) both resolve to DRAM core {}. "
-                "Two resident relay kernels cannot share a core.",
-                a,
-                banks[a],
-                b,
-                banks[b],
+                "streaming profiler: device {} {} and {} both resolve to DRAM core {}",
+                chip,
+                ctx.relays[a].name,
+                ctx.relays[b].name,
                 ctx.relays[a].core.virt.str());
         }
     }
-    // A DRAM channel split into several views has its own set of preferred endpoints for each view, so a subchannel
-    // that is free in one view can be a preferred endpoint of another.
-    for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
-        ResidentCore& relay = ctx.relays[relay_index];
-        const uint8_t noc2axi_mask =
-            soc.get_dram_endpoint_noc_mask(soc.get_physical_dram_core_from_logical(relay.core.logical));
-        TT_FATAL(
-            noc2axi_mask == 0,
-            "streaming profiler: device {} relay {}'s DRISC ({},{}) is a DRAM view's preferred endpoint on NOC mask "
-            "{:#x}, so firmware holds those NIUs in NOC2AXI mode and the relay cannot initiate NoC traffic on them",
-            chip,
-            relay_index,
-            relay.core.virt.x,
-            relay.core.virt.y,
-            noc2axi_mask);
-        relay.name = fmt::format("relay {}", relay_index);
-        relay.ctrl = drisc_l1_.host_ctrl;
-    }
-    ctx.relay_banks = std::move(banks);
 }
 
 void DevicePrograms::attach_service(DeviceCtx& ctx) {
-    if (ctx.relay_banks.empty()) {
+    if (ctx.service_banks.empty()) {
         return;
     }
     auto& cluster = mc_->get_cluster();
     ctx.service = std::make_unique<drisc_service::Client>(
-        *cluster.get_driver(), static_cast<ChipId>(ctx.chip_id), ctx.relay_banks);
-    // The drainer runs on each bank's free DRISC, which the service names as the bank's NoC1 seat.
+        *cluster.get_driver(), static_cast<ChipId>(ctx.chip_id), ctx.service_banks);
     for (uint32_t relay_index = 0; relay_index < ctx.relays.size(); relay_index++) {
-        const drisc_service::SeatClient& seat = ctx.service->seat(ctx.relay_banks[relay_index], 1);
+        const drisc_service::SeatClient& seat =
+            ctx.service->seat(ctx.relay_banks[relay_index], ctx.relay_nocs[relay_index]);
         const CoreCoord& relay_core = ctx.relays[relay_index].core.virt;
         TT_FATAL(
             seat.seat().translated.x == relay_core.x && seat.seat().translated.y == relay_core.y,
-            "streaming profiler: device {} relay {} (DRAM view {}) is on DRISC {}, but the DRISC service's NoC1 seat "
-            "of "
-            "that bank is {}",
+            "streaming profiler: device {} {} is on DRISC {}, but the DRISC service seat is {}",
             ctx.chip_id,
-            relay_index,
-            ctx.relay_banks[relay_index],
+            ctx.relays[relay_index].name,
             relay_core.str(),
             seat.seat().translated.str());
-        log_info(
-            tt::LogMetal,
-            "[streaming profiler] device {} relay {}: attached to the DRISC service on {} (slot {}, {})",
-            ctx.chip_id,
-            relay_index,
-            relay_core.str(),
-            seat.slot(),
-            seat.launched() ? "launched it" : "joined it");
     }
 }
 
-std::unique_ptr<Program> DevicePrograms::relay_program(const DeviceCtx& ctx, uint32_t relay_index) {
-    const ResidentCore& relay = ctx.relays[relay_index];
+// Starts drain job relay_index in the DRISC service its seat runs: the D2H socket, a zeroed control block, the job
+// block, and last the owner word, which the kernel's next slot scan picks up.
+void DevicePrograms::start_drain(DeviceCtx& ctx, uint32_t relay_index, uint32_t fifo_bytes) {
+    namespace abi = drisc_service::abi;
+    auto& cluster = mc_->get_cluster();
+    ResidentCore& relay = ctx.relays[relay_index];
     const uint32_t num_cores = ctx.worker_count;
     const uint32_t lo = static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * relay_index) / ctx.relays.size());
     const uint32_t hi =
         static_cast<uint32_t>((static_cast<uint64_t>(num_cores) * (relay_index + 1)) / ctx.relays.size());
     const uint32_t my_cores = hi - lo;
     TT_FATAL(
-        my_cores <= kMaxRelayCores,
-        "streaming profiler: device {} relay {} would own {} cores but a relay holds at most {}; this {}-core grid "
-        "needs {} relays and the part has {}",
+        my_cores <= abi::DRAIN_MAX_CORES,
+        "streaming profiler: device {} {} would drain {} cores but a drain job holds at most {}",
         ctx.chip_id,
-        relay_index,
+        relay.name,
         my_cores,
-        kMaxRelayCores,
-        num_cores,
-        tt::div_up(num_cores, kMaxRelayCores),
-        ctx.relays.size());
-    auto program = std::make_unique<Program>(CreateProgram(*ctx.mesh));
-    const KernelHandle kernel = CreateKernel(
-        *program,
-        "tt_metal/impl/streaming_profiler/kernels/drisc_relay.cpp",
-        relay.core.logical,
-        // Writes take about twice as long on NOC 1, so a relay there would cause nearly every producer stall.
-        DramConfig{
-            .noc = NOC::NOC_0,
-            .defines = {{"STREAMING_PROFILER_RELAY_KERNEL", "1"}},
-            .named_compile_args = {
-                {"stage_base", drisc_l1_.stage_base},
-                {"n_stage", kStageSlots},
-                {"core_records", drisc_l1_.core_records},
-                {"ctrl", drisc_l1_.ctrl},
-                {"socket_config_addr", drisc_l1_.cfg},
-                {"max_cores", kMaxRelayCores},
-                // Bit 1 of the relay index splits the relays' pushes between two of the four unicast request VCs.
-                {"write_vc", (relay_index & 2u) ? 0u : 1u},
-                {"spool_base", drisc_l1_.spool_addr},
-                {"spool_bytes", drisc_l1_.spool_bytes}}});
-    std::vector<uint32_t> runtime_args = {my_cores, static_cast<uint32_t>(control_vector_l1_)};
+        abi::DRAIN_MAX_CORES);
+
+    relay.socket_index = static_cast<uint32_t>(ctx.sockets.size());
+    relay.socket_count = 1;
+    const auto& socket = ctx.sockets.emplace_back(std::make_unique<distributed::D2HSocket>(
+        ctx.mesh->shared_from_this(),
+        distributed::MeshCoreCoord{ctx.coord, relay.core.phys},
+        fifo_bytes,
+        distributed::D2HSocket::ExternalConfigBuffer{
+            .address = drisc_l1_.cfg,
+            .sender_core_type = HalProgrammableCoreType::DRAM,
+            .l1_noc_offset = drisc_service::drisc_l1_noc_offset},
+        distributed::D2HSocket::ProcessScope::InProcess));
+    socket->set_page_size(kPageBytes);
+    ctx.captured.push_back(CapturedSocket{
+        .socket = socket.get(),
+        .device_index = ctx.index,
+        .socket_index = static_cast<uint32_t>(ctx.sockets.size() - 1),
+        .numa_node = ctx.numa_node});
+
+    // A previous capture's done, heartbeat and stop words would otherwise be read as this capture's.
+    zero_l1(cluster, ctx.chip_id, relay.core.virt, relay.ctrl, kCtrlBytes);
+
+    // The bank's spool is split between its two drain jobs, the NoC1 seat's first.
+    const uint32_t spool_half = drisc_l1_.spool_bytes / 2u;
+    abi::DrainJobBlock job{};
+    job.owner = 0;
+    job.num_cores = my_cores;
+    job.cv_src = static_cast<uint32_t>(control_vector_l1_);
+    // Bit 1 of the drain job's index splits its host writes between two of the four unicast request VCs.
+    job.write_vc = (relay_index & 2u) ? 0u : 1u;
+    job.spool_base = drisc_l1_.spool_addr + (ctx.relay_nocs[relay_index] == 1 ? 0u : spool_half);
+    job.spool_bytes = spool_half;
+    job.hold_ticks = drain_hold_ticks_;
+    job.hold_sweeps = drain_hold_sweeps_;
     // Reversed so the last-launched cores get the first-serviced slots.
-    std::ranges::copy(
-        std::span(ctx.producers).subspan(lo, my_cores) | std::views::reverse |
-            std::views::transform([](const Producer& producer) { return packed_xy(producer.virt); }),
-        std::back_inserter(runtime_args));
-    SetRuntimeArgs(*program, kernel, relay.core.logical, runtime_args);
-    return program;
+    uint32_t i = 0;
+    for (const Producer& producer : std::span(ctx.producers).subspan(lo, my_cores) | std::views::reverse) {
+        job.core_xy[i++] = packed_xy(producer.virt);
+    }
+    const uint64_t job_addr = abi::DrainLayout::job_addr + drisc_service::drisc_l1_noc_offset;
+    cluster.write_core(&job, sizeof(job), tt_cxy_pair(ctx.chip_id, relay.core.virt), job_addr);
+    const drisc_service::SeatClient& seat =
+        ctx.service->seat(ctx.relay_banks[relay_index], ctx.relay_nocs[relay_index]);
+    write_u32(
+        cluster,
+        ctx.chip_id,
+        relay.core.virt,
+        abi::DrainLayout::owner_addr + drisc_service::drisc_l1_noc_offset,
+        abi::slot_word(abi::SLOT_ATTACH, seat.gen()));
+
+    // The kernel starts the job at its next slot scan and runs its first sweep at the next hold; two heartbeats show
+    // that its holds are running.
+    uint32_t heartbeat = 0;
+    const bool started = poll_word(
+        cluster,
+        tt_cxy_pair(ctx.chip_id, relay.core.virt),
+        relay.ctrl + offsetof(kernel_profiler::ResidentCtrl, heartbeat),
+        kHeartbeatTimeout,
+        [&](uint32_t word) {
+            heartbeat = word;
+            return word >= 2;
+        });
+    TT_FATAL(
+        started,
+        "streaming profiler: device {} {} did not start (heartbeat {}): {}",
+        ctx.chip_id,
+        relay.name,
+        heartbeat,
+        seat.describe_state());
 }
 
 void DevicePrograms::enumerate_eth_cores(DeviceCtx& ctx) {
@@ -701,10 +730,7 @@ std::unique_ptr<Program> DevicePrograms::eth_relay_program(const DeviceCtx& ctx)
 
 void DevicePrograms::write_producers_armed(const DeviceCtx& ctx, uint32_t armed) {
     auto& cluster = mc_->get_cluster();
-    // Until the drainer runs as a job of the DRISC service (step 2b), nothing drains the worker cores, so they stay
-    // unarmed and never block on a full ring.
-    const size_t first = armed != 0 ? ctx.worker_count : 0;
-    for (const Producer& producer : std::span(ctx.producers).subspan(first)) {
+    for (const Producer& producer : ctx.producers) {
         write_u32(cluster, ctx.chip_id, producer.virt, producer.control_vector_l1 + kArmedOffset, armed);
     }
 }
@@ -946,7 +972,7 @@ void DevicePrograms::quiesce(const RelayStateFn& on_state) {
     std::array<std::vector<std::pair<const DeviceCtx*, const ResidentCore*>>, StageCount> stages;
     for (const DeviceCtx& ctx : devices_) {
         const auto add = [&](Stage stage, const ResidentCore& resident) {
-            if (resident.program != nullptr) {
+            if (resident.program != nullptr || resident.drain_job) {
                 stages[stage].emplace_back(&ctx, &resident);
             }
         };
