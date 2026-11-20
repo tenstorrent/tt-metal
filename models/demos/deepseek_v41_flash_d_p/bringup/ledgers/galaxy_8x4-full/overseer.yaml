@@ -706,6 +706,25 @@ notes:
     lane maps, served-write indices) is derived ON THE DEVICE from the descriptor by prepared programs. No per-descriptor
     host caches standing in for this. Measure it: glued_new_layout_ms (host ms a new layout costs over a repeated one) <=
     ~1 ms, reported per path; fresh-layout walls only.'
+- id: OV-68
+  tasks:
+  - PB.9F*
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:49:49'
+  text: 'Overseer audit 2026-11-20 (single-request 5120 path, HEAD code, read-only): programs BUILT in serving: adapter.compile()
+    warms only a full chunk at start 0 (runners/adapter.py:347-356). ttnn.slice hashes slice_start/end: (1) rope.py:439
+    RoPE cos/sin slice begin=start (via attention.py:1541, kv.py:80, indexer.py:344); (2) compressor.py:169 compressed-row
+    RoPE begin=start//r; (3) served.py:210/215 DeviceScalars.at slices k=start//32 and ceil(end/32) of a last chunk (ARBITRARY)
+    and slot (via compressor.py:718-720); (4) history_gather.py:323 -> served.py:155 slab.slice_rows begin [slot x layers
+    + row, start-derived] (slots x source layers x starts) and history_gather.py:355 ttnn.slice(rec,[0,0,h,0]); (5) compressor.py:1278-1280
+    replay offsets (write_start-start)/r (arbitrary); bounded: SnapshotSend owner patterns at last-chunk caps (snapshot_send.py:399-412,
+    ~160), unpack_fp8_rows ncores (fp8_rows.py, ~22), partial-chunk masks (attention.py:401-411, compressor.py:1170-1190:
+    first partial chunk), srv_row (attention.py:477-490), ring carry / pin slices. Already runtime (no build): update_padded_kv_cache,
+    ring_indexer_score_dsa start / kv_len, topk_large_indices valid_length, high_bw_all_gather. PB.9F / F5: measure these
+    (fresh starts AND fresh slots AND real partial last chunks AND a replay). PB.9X: make every one of them a runtime value
+    (prepared-program values / page copies / runtime-arg slices), and warm-up must be a finite enumerable set (no build
+    in serving).'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
