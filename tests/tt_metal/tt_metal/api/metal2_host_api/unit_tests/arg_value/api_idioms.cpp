@@ -18,7 +18,7 @@
 #include <string>
 #include <vector>
 
-#include <tt-metalium/command_list.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 #include <tt-metalium/workload/specification/kernel_spec.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 

@@ -13,7 +13,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include <tt-metalium/command_list.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 
 #include "ttnn/command_list_params.hpp"
 #include "ttnn/common/guard.hpp"

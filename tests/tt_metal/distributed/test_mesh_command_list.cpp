@@ -23,7 +23,7 @@
 #include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/allocator.hpp>
-#include <tt-metalium/command_list.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>

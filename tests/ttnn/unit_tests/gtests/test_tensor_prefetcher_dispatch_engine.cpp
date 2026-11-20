@@ -20,9 +20,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/command_list.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
 #include <tt-metalium/mesh_device.hpp>

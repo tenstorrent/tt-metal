@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/command_list.hpp>
+#include <tt-metalium/execution/command_list.hpp>
 
 #include <algorithm>
 #include <bit>
