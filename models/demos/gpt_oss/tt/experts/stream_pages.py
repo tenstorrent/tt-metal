@@ -75,6 +75,18 @@ class SplitStreamLayout:
             return self.segs_per_bank * (self.seg_bytes - self.part_bytes) + i * self.part_bytes
         return i * self.seg_bytes + self.seg_bytes - self.part_bytes
 
+    def exact_offset(self, expert, seg):
+        """Byte offset in its bank of the exact BFP4 part (weight tile k = 0) of segment `seg` of `expert` (a full
+        segment: its exact part is the bfloat4_b tiles at this offset plus the BFP2 tiles exact_lo_delta after it)."""
+        assert self.kind == STREAM_FULL, f"a {self.kind} stream holds no exact parts"
+        assert 0 <= expert < self.num_experts and 0 <= seg < self.segs_per_expert, (expert, seg)
+        return (expert * self.segs_per_expert + seg) * self.seg_bytes
+
+    @property
+    def exact_lo_delta(self):
+        """Bytes from a full segment's exact BFP4 tile 0 to its BFP2 tile 0 (the k_tiles BFP4 tiles + the bias tile)."""
+        return self.part_bytes
+
     def physical_bank(self, logical):
         """DRAM bank holding logical bank `logical` (bank b holds (b + rot) % banks)."""
         return (logical - self.rot) % self.banks
@@ -94,32 +106,37 @@ def split_stream_layout(stream, kind, num_experts, hidden, inter_pad, banks, rot
     return SplitStreamLayout(kind, num_experts, banks, rot, cols, inter_pad // TILE)
 
 
-def gate_up_entry(layout, expert, n, up):
-    """(bank, offset) of gate (up=False) or up (up=True) tile column n of `expert` in a gate|up stream."""
+def gate_up_entry(layout, expert, n, up, exact=False):
+    """(bank, offset) of gate (up=False) or up (up=True) tile column n of `expert` in a gate|up stream: its rounded
+    part, or with exact its exact BFP4 part (full segments)."""
     P = layout.segs_per_expert // 2
     L, r = divmod(n, P)
     assert L < layout.banks, (n, P, layout.banks)
-    return layout.physical_bank(L), layout.part_offset(expert, 2 * r + int(up))
+    offset = layout.exact_offset if exact else layout.part_offset
+    return layout.physical_bank(L), offset(expert, 2 * r + int(up))
 
 
-def down_entry(layout, expert, n):
-    """(bank, offset) of output tile column n of `expert` in a down stream."""
+def down_entry(layout, expert, n, exact=False):
+    """(bank, offset) of output tile column n of `expert` in a down stream (rounded part, or exact BFP4 part)."""
     L, c = divmod(n, layout.segs_per_expert)
     assert L < layout.banks, (n, layout.segs_per_expert, layout.banks)
-    return layout.physical_bank(L), layout.part_offset(expert, c)
+    offset = layout.exact_offset if exact else layout.part_offset
+    return layout.physical_bank(L), offset(expert, c)
 
 
-def stream_page_table(gate_up, down, n_gate_up, n_down):
+def stream_page_table(gate_up, down, n_gate_up, n_down, exact=False):
     """[E, 2 * (2 * n_gate_up + n_down)] int64 page table of the decode streams (layouts gate_up and down): per expert
-    the gate, up and down blocks of (bank, offset) entries (module docstring). k strides: BFP4_BYTES for both."""
+    the gate, up and down blocks of (bank, offset) entries (module docstring). k strides: BFP4_BYTES for both. exact
+    (full segments only): the entries address the exact BFP4 parts, whose BFP2 parts sit exact_lo_delta further at a
+    BFP2_BYTES k stride (unified_routed_expert_moe weights_lo_k_stride); else the rounded parts."""
     assert gate_up.num_experts == down.num_experts
     assert n_gate_up <= gate_up.segs_per_expert // 2 * gate_up.banks, n_gate_up
     assert n_down <= down.segs_per_expert * down.banks, n_down
     rows = []
     for e in range(gate_up.num_experts):
-        row = [gate_up_entry(gate_up, e, n, False) for n in range(n_gate_up)]
-        row += [gate_up_entry(gate_up, e, n, True) for n in range(n_gate_up)]
-        row += [down_entry(down, e, n) for n in range(n_down)]
+        row = [gate_up_entry(gate_up, e, n, False, exact) for n in range(n_gate_up)]
+        row += [gate_up_entry(gate_up, e, n, True, exact) for n in range(n_gate_up)]
+        row += [down_entry(down, e, n, exact) for n in range(n_down)]
         rows.append([v for entry in row for v in entry])
     return torch.tensor(rows, dtype=torch.int64)
 
@@ -184,7 +201,7 @@ def read_tiles(bank_bytes, entries, k, k_stride, tile_bytes):
 
 
 def stream_column_biases(bank_bytes, entries, k_tiles, unpack_bfp):
-    """The bias decode adds to every column of entries [..., 2]: its bias tile (tile k_tiles of the rounded part)
+    """The bias decode adds to every column of entries [..., 2]: its bias tile (tile k_tiles of the part addressed)
     unpacked with mxfp4_split.unpack_bfp, row n's terms at K 0 and 16 summed. Returns [..., 32] float32 (column n of the
     tile column at index n)."""
     raw = read_tiles(bank_bytes, entries, k_tiles, BFP4_BYTES, BFP4_BYTES)

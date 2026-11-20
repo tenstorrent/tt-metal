@@ -200,15 +200,17 @@ def decode_stream_kinds(layer_idx):
 
 def routed_tp_stream_supported(layer_idx, decode_weights):
     """Whether a layer's routed prefill experts read the decode streams (TP mode): the fused decode's expert streams
-    exist (decode_weights), the prefill reads the K-GPTQ experts (GPT_OSS_PREFILL_KGPTQ, the decode streams' rounded
-    part) in bfloat4_b on this layer, and both streams carry a rounded part (decode_stream_kinds)."""
-    return (
-        decode_weights is not None
-        and prefill_kgptq_enabled()
-        and layer_idx is not None
-        and routed_weights_dtype(layer_idx) == ttnn.bfloat4_b
-        and decode_stream_kinds(layer_idx) is not None
-    )
+    exist (decode_weights), the prefill reads the decode experts' values (GPT_OSS_PREFILL_KGPTQ), and both streams carry
+    a part it can read (decode_stream_kinds): the exact MXFP4 split (full segments, read exactly, whatever
+    ROUTED_PREFILL_BF8_LAYERS says: exact is finer than bf8), or else the K-GPTQ rounding on a bfloat4_b layer."""
+    from .stream_pages import STREAM_FULL
+
+    if decode_weights is None or not prefill_kgptq_enabled() or layer_idx is None:
+        return False
+    kinds = decode_stream_kinds(layer_idx)
+    if kinds is None:
+        return False
+    return all(k == STREAM_FULL for k in kinds) or routed_weights_dtype(layer_idx) == ttnn.bfloat4_b
 
 
 def routed_tp_dense_supported(dense_weights):
@@ -704,7 +706,10 @@ class RoutedPrefillExperts:
         )
 
     def _init_tp_stream(self, decode_weights, kinds, tensor_cache_path):
-        """TP mode: the page table over the decode streams' rounded parts (stream_pages.py) and the bf16 biases."""
+        """TP mode: the page table over the decode streams (stream_pages.py) and the bf16 biases. Streams that hold the
+        exact MXFP4 split (full segments: the layers with an exact top-k in decode, GPT_OSS_DECODE_SPLIT_RANKS) are read
+        exactly, bfloat4_b + BFP2 parts for every expert (unified_routed_expert_moe weights_lo_k_stride); round-only
+        streams through their K-GPTQ rounding."""
         from ..fused_decode.stream import EXPERT_BANK_ROT
         from . import stream_pages as sp
 
@@ -724,7 +729,11 @@ class RoutedPrefillExperts:
                 f"has {layouts[s].bank_bytes}"
             )
         n_gu, n_dn = inter_pad // tile, H // tile
-        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn)  # [E, 2 * (2 n_gu + n_dn)]
+        self.tp_exact = all(layouts[s].kind == sp.STREAM_FULL for s in layouts)
+        # [E, 2 * (2 n_gu + n_dn)]
+        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn, exact=self.tp_exact)
+        # (exact: a full segment is [BFP4 part + bias tile][BFP2 part][rounded part], so the BFP2 tiles of a column the
+        # check below places inside its bank lie inside it too)
         sp.check_page_table(
             table,
             n_gu,
@@ -748,7 +757,7 @@ class RoutedPrefillExperts:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         self.weights_dtype = ttnn.bfloat4_b
-        self.weights_tile_transposed = True  # the rounded parts' tiles are stored transposed
+        self.weights_tile_transposed = True  # the streams' tiles (rounded and exact parts) are stored transposed
         self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
         self._table_kwargs = dict(
             weight_pages=self.weight_pages,
@@ -762,6 +771,16 @@ class RoutedPrefillExperts:
             weights_k_down=layouts["down"].k_tiles,
             weights_dtype=ttnn.bfloat4_b,
         )
+        if self.tp_exact:
+            assert (
+                layouts["gate_up"].exact_lo_delta % sp.DRAM_ALIGN == 0
+                and layouts["down"].exact_lo_delta % sp.DRAM_ALIGN == 0
+            )
+            self._table_kwargs.update(
+                weights_lo_k_stride=sp.BFP2_BYTES,
+                gate_up_lo_delta=layouts["gate_up"].exact_lo_delta,
+                down_lo_delta=layouts["down"].exact_lo_delta,
+            )
         self.cache_dir = None
         if tensor_cache_path is not None:
             rows, cols = self.mesh_device.shape
@@ -879,7 +898,10 @@ class RoutedPrefillExperts:
         rows, cols = self.mesh_device.shape
         projs = ("gate", "up", "down")
         # The values depend on the checkpoint biases (the cache directory), the neuron orders and the padding.
-        key = "|".join([str(n_gu), str(n_dn), str(layouts["gate_up"].banks)])
+        key = "|".join(
+            [str(n_gu), str(n_dn), str(layouts["gate_up"].banks)]
+            + (["exact"] if getattr(self, "tp_exact", False) else [])
+        )
         prefix = f"routed_tp_v{ROUTED_TP_FILES_VERSION}_" + hashlib.sha1(key.encode()).hexdigest()[:10]
         names = None
         if self.cache_dir is not None:

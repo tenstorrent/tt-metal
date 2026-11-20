@@ -415,3 +415,148 @@ def test_weight_pages_32_local_experts(mesh_device, device_params):
     prefill call's x_row_index input and ROW_MAJOR output."""
     counts = [(37 * e) % 161 for e in range(32)]  # 0 .. 160 tokens, expert 0 empty
     _run_weight_pages(mesh_device, "bf4", True, counts=counts, max_tokens=160, indexed=True)
+
+
+# ------------------------------------------------------------------------------------- two-part weights (bf4 + BFP2)
+
+
+def _two_part_streams(hi, lo, banks, gen):
+    """hi / lo: per expert {gate, up, down} stored [K, N] on the bfloat4_b / BFP2 grids -> (gate/up bank bytes, down
+    bank bytes, table, gate/up lo delta, down lo delta). Each column is one blob, its K bfloat4_b tiles back to back,
+    then its K BFP2 tiles back to back (the gpt-oss decode streams' exact part, without the bias tile); the table
+    entry is the blob start."""
+    E = len(hi)
+    tb4 = tile_bytes(3)
+
+    def blobs(roles):
+        out = []
+        for e in range(E):
+            for r in roles:
+                h, l = column_tile_bytes(hi[e][r], 3), column_tile_bytes(lo[e][r], 1)  # [N/32, K/32, tb]
+                out.append(torch.cat([h.reshape(h.shape[0], -1), l.reshape(l.shape[0], -1)], -1))
+        return torch.cat(out).unsqueeze(1)  # [C, 1, K * (tb4 + tb2)]
+
+    gu, dn = blobs(("gate", "up")), blobs(("down",))
+    gu_bytes, gu_entries = scatter_columns(gu, (gu.shape[-1] + 63) // 64 * 64, banks, gen)
+    d_bytes, d_entries = scatter_columns(dn, (dn.shape[-1] + 63) // 64 * 64, banks, gen)
+    n_gu = hi[0]["gate"].shape[1] // TILE
+    n_d = hi[0]["down"].shape[1] // TILE
+    gu_entries = gu_entries.reshape(E, 2, n_gu, 2)
+    table = page_table(gu_entries[:, 0], gu_entries[:, 1], d_entries.reshape(E, n_d, 2))
+    k_gu, k_d = hi[0]["gate"].shape[0] // TILE, hi[0]["down"].shape[0] // TILE
+    return gu_bytes, d_bytes, table, k_gu * tb4, k_d * tb4
+
+
+@pytest.mark.skipif(ttnn is None or not is_blackhole(), reason="unified_routed_expert op is Blackhole-only")
+@pytest.mark.parametrize(
+    "mesh_device, device_params", SINGLE_CHIP_MESH_PARAMS, indirect=["mesh_device", "device_params"]
+)
+@pytest.mark.parametrize("experts, max_tokens", [(4, 256), (32, 160)], ids=["4-experts", "32-experts"])
+def test_weight_pages_two_part(mesh_device, device_params, experts, max_tokens):
+    """weights_lo_k_stride: every weight is its bfloat4_b tile plus a BFP2 tile (gpt-oss: MXFP4 held exactly), both
+    tile-transposed, read through one table. The output must match an fp32 torch reference of hi + lo much more closely
+    than the bfloat4_b part alone, which the same op computes with weights_lo_k_stride = 0."""
+    E = experts
+    banks = mesh_device.dram_grid_size().x
+    gen = torch.Generator().manual_seed(23)
+    counts = [128, 45, 0, 256] if E == 4 else [(37 * e) % 161 for e in range(E)]
+
+    def w(k, n, s, bits):
+        return on_bfp_grid(torch.randn(k * TILE, n * TILE, generator=gen) * s, bits)
+
+    shapes = {"gate": (K_GU, N_GU, 0.08), "up": (K_GU, N_GU, 0.08), "down": (N_GU, N_D, 0.05)}
+    hi = [{r: w(k, n, s, 3) for r, (k, n, s) in shapes.items()} for _ in range(E)]
+    lo = [{r: w(k, n, s, 1) for r, (k, n, s) in shapes.items()} for _ in range(E)]
+    logical = [{r: tile_transpose(hi[e][r] + lo[e][r]) for r in shapes} for e in range(E)]
+    logical_hi = [{r: tile_transpose(hi[e][r]) for r in shapes} for e in range(E)]
+    biases = [
+        {r: (torch.randn(n * TILE, generator=gen) * 0.5).bfloat16().float() for r, (_, n, _) in shapes.items()}
+        for _ in range(E)
+    ]
+    x = torch.randn(E * max_tokens, EMB, generator=gen).bfloat16().float()
+
+    dram = ttnn.DRAM_MEMORY_CONFIG
+
+    def dev(t, dtype, layout):
+        return ttnn.from_torch(t, dtype=dtype, layout=layout, device=mesh_device, memory_config=dram)
+
+    def idx(values):
+        return dev(torch.tensor(values, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+
+    def stream(bank_bytes):
+        rows = width_sharded_rows(bank_bytes)
+        mem = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(banks - 1, 0))}),
+                (rows.shape[0], 64),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+        return ttnn.from_torch(
+            rows, dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, memory_config=mem
+        )
+
+    gu_bytes, d_bytes, table, gu_lo_delta, d_lo_delta = _two_part_streams(hi, lo, banks, gen)
+    gu_src, d_src = stream(gu_bytes), stream(d_bytes)
+    tt_table = dev(table.to(torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    tt_x = dev(x, ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT)
+    offsets, tt_counts, global_idx = idx([e * max_tokens for e in range(E)]), idx(counts), idx(list(range(E)))
+    bias_lists = {
+        r: [dev(biases[e][r].reshape(1, -1), ttnn.bfloat16, ttnn.TILE_LAYOUT) for e in range(E)] for r in shapes
+    }
+
+    def run(two_part):
+        lo_kwargs = (
+            dict(weights_lo_k_stride=tile_bytes(1), gate_up_lo_delta=gu_lo_delta, down_lo_delta=d_lo_delta)
+            if two_part
+            else {}
+        )
+        out = ttnn.experimental.deepseek_prefill.unified_routed_expert_moe(
+            tt_x,
+            offsets,
+            tt_counts,
+            global_idx,
+            [],
+            [],
+            [],
+            max_dispatched_tokens_per_expert=max_tokens,
+            activation=ttnn.RoutedExpertActivation.SwiGluOai,
+            gate_biases=bias_lists["gate"],
+            up_biases=bias_lists["up"],
+            down_biases=bias_lists["down"],
+            weights_tile_transposed=True,
+            weight_pages=tt_table,
+            gate_up_weight_source=gu_src,
+            down_weight_source=d_src,
+            gate_up_k_stride=tile_bytes(3),
+            down_k_stride=tile_bytes(3),
+            weights_n_gate_up=N_GU,
+            weights_n_down=N_D,
+            weights_k_gate_up=K_GU,
+            weights_k_down=N_GU,
+            weights_dtype=ttnn.bfloat4_b,
+            **lo_kwargs,
+        )
+        return ttnn.to_torch(out).float().reshape(-1, EMB)
+
+    out_two, out_hi = run(True), run(False)
+    for e, c in enumerate(counts):
+        if c == 0:
+            continue
+        rows = slice(e * max_tokens, e * max_tokens + c)
+        with torch.no_grad():
+            ref = _swigluoai_ffn(x[rows], logical[e], biases[e])
+            ref_hi = _swigluoai_ffn(x[rows], logical_hi[e], biases[e])
+        assert torch.isfinite(out_two[rows]).all(), f"expert {e}: NaN / Inf"
+        _, pcc = comp_pcc(ref, out_two[rows], 0.98)
+        _, pcc_hi_part = comp_pcc(ref, out_hi[rows], 0.0)
+        _, pcc_hi_self = comp_pcc(ref_hi, out_hi[rows], 0.0)
+        logger.info(
+            f"two-part expert {e} ({c} tokens): PCC {pcc:.6f} vs hi + lo; bf4 part alone {pcc_hi_part:.6f} "
+            f"(vs its own reference {pcc_hi_self:.6f})"
+        )
+        assert pcc >= 0.98, f"expert {e}: PCC {pcc}"
+        assert pcc >= pcc_hi_self - 0.002, f"expert {e}: the two-part matmul is less exact than one part"
+        assert pcc_hi_part < pcc - 0.01, f"expert {e}: the BFP2 part did not contribute"

@@ -44,9 +44,11 @@ RELEASE_DEFAULTS_20B = {
     "GPT_OSS_PREFILL_RESIDUAL_BF16": "1",
     # fused QKV + RoPE loads y / cos / sin exactly (the cheaper variant)
     "GPT_OSS_QKV_ROPE_EXACT": "2",
-    # decode experts: the exact MXFP4 split, exact top-1 expert on the listed layers, K-GPTQ rounding elsewhere
+    # decode experts: the exact MXFP4 split, exact top-1 expert on the listed layers (0, 1, 15, 17, 19, 20, 22, 23),
+    # K-GPTQ rounding elsewhere. Prefill reads the same streams: every expert exactly on those layers, the K-GPTQ
+    # rounding on the others (experts/prefill_routed.py, TP mode), so no layer keeps a prefill copy of its experts.
     "GPT_OSS_DECODE_EXPERTS_SPLIT": "1",
-    "GPT_OSS_DECODE_SPLIT_RANKS": "0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,1,1,0,1,1",
+    "GPT_OSS_DECODE_SPLIT_RANKS": "1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,1,0,1,1,0,1,1",
     "GPT_OSS_DECODE_SPLIT_ROUND_DIR": f"{_KGPTQ}/kgptq_experts",
     "GPT_OSS_DECODE_SPLIT_ROUND_ONLY": "1",
     "GPT_OSS_DECODE_SPLIT_NATIVE": "1",

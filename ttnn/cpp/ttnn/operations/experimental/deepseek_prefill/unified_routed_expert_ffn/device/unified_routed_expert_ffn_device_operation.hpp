@@ -68,6 +68,9 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down = 0,
     uint32_t weights_k_gate_up = 0,
     uint32_t weights_k_down = 0,
-    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT8_B);
+    tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT8_B,
+    uint32_t weights_lo_k_stride = 0,
+    uint32_t gate_up_lo_delta = 0,
+    uint32_t down_lo_delta = 0);
 
 }  // namespace ttnn::prim

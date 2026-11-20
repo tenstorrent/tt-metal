@@ -43,7 +43,7 @@ def _mxfp4(E, K, N, gen):
 
 def _pack_device(w, b, wr, kind, banks, rot, gate_up):
     """One device's bank byte streams, as experts/weights.py builds them (pack -> slot order -> bank rotation -> cut)."""
-    p4, p2, r4 = ms.pack_columns(w, b, True, wr, None)
+    p4, p2, r4 = ms.pack_columns(w, b, True, wr)
     cols = torch.cat([p4, p2, r4], -1)  # [E, n_tiles, segment bytes]
     if gate_up:
         half = cols.shape[1] // 2
@@ -93,7 +93,7 @@ def weights():
     )
 
 
-@pytest.mark.parametrize("kind", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY, sp.STREAM_SEPARATE])
+@pytest.mark.parametrize("kind", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY])
 @pytest.mark.parametrize("kind_dn", [sp.STREAM_FULL, sp.STREAM_ROUND_ONLY])
 def test_stream_page_table_reads_rounded_tiles(weights, kind, kind_dn):
     gu_banks = _pack_device(*weights["gu"], kind, BANKS, ROT, gate_up=True)
@@ -131,6 +131,47 @@ def test_stream_page_table_reads_rounded_tiles(weights, kind, kind_dn):
     assert torch.allclose(gate_b, gu_bias[:, :I_PAD], atol=0, rtol=1 / 32)
     down_b = sp.stream_column_biases(dn_banks, down_e, I_PAD // TILE, ms.unpack_bfp).reshape(E, -1)
     assert torch.equal(down_b, ms.bias_tiles_t(weights["dn_bias"].reshape(E, -1, TILE)).sum(-1).reshape(E, -1))
+
+
+def test_stream_page_table_reads_exact_tiles(weights):
+    """exact=True (full segments): tile k of every column read through the table is the exact BFP4 part's tile k,
+    and exact_lo_delta + k * BFP2_BYTES further its BFP2 tile k; their values sum to the MXFP4 weights, the bias
+    tile is the same as the rounded part's (what unified_routed_expert_moe weights_lo_k_stride reads)."""
+    gu_banks = _pack_device(*weights["gu"], sp.STREAM_FULL, BANKS, ROT, gate_up=True)
+    dn_banks = _pack_device(*weights["dn"], sp.STREAM_FULL, BANKS, ROT, gate_up=False)
+    gu_l = sp.split_stream_layout("gate_up", sp.STREAM_FULL, E, H, I_PAD, BANKS, ROT)
+    dn_l = sp.split_stream_layout("down", sp.STREAM_FULL, E, H, I_PAD, BANKS, ROT)
+    n_gu, n_dn = I_PAD // TILE, H // TILE
+    table = sp.stream_page_table(gu_l, dn_l, n_gu, n_dn, exact=True)
+    sp.check_page_table(
+        table, n_gu, n_dn, BANKS, H // TILE, I_PAD // TILE, *([sp.BFP4_BYTES] * 3), gu_l.bank_bytes, dn_l.bank_bytes
+    )
+    gate_e, up_e, down_e = sp.table_entries(table, n_gu, n_dn)
+
+    def exact_values(banks, entries, k, lay):
+        hi = sp.read_tiles(banks, entries, k, sp.BFP4_BYTES, sp.BFP4_BYTES).reshape(-1, sp.BFP4_BYTES)
+        lo_entries = entries.clone()
+        lo_entries[..., 1] += lay.exact_lo_delta
+        lo = sp.read_tiles(banks, lo_entries, k, sp.BFP2_BYTES, sp.BFP2_BYTES).reshape(-1, sp.BFP2_BYTES)
+        v = ms.unpack_bfp(hi, 3) + ms.unpack_bfp(lo, 1)  # stored (transposed) tiles
+        return v.reshape(*entries.shape[:-1], TILE, TILE).transpose(-1, -2)
+
+    gu_tiles = _expected_tiles(weights["gu"][0])  # the exact MXFP4 values
+    dn_tiles = _expected_tiles(weights["dn"][0])
+    for k in range(H // TILE):
+        assert torch.equal(exact_values(gu_banks, gate_e, k, gu_l), gu_tiles[:, :n_gu, k].float())
+        assert torch.equal(exact_values(gu_banks, up_e, k, gu_l), gu_tiles[:, n_gu:, k].float())
+    for k in range(I_PAD // TILE):
+        assert torch.equal(exact_values(dn_banks, down_e, k, dn_l), dn_tiles[:, :n_dn, k].float())
+    rounded = sp.stream_page_table(gu_l, dn_l, n_gu, n_dn)
+    for t_exact, t_round, banks, kt in (
+        (gate_e, sp.table_entries(rounded, n_gu, n_dn)[0], gu_banks, H // TILE),
+        (down_e, sp.table_entries(rounded, n_gu, n_dn)[2], dn_banks, I_PAD // TILE),
+    ):
+        assert torch.equal(
+            sp.stream_column_biases(banks, t_exact, kt, ms.unpack_bfp),
+            sp.stream_column_biases(banks, t_round, kt, ms.unpack_bfp),
+        )
 
 
 def test_bank_rotation_and_slots():
