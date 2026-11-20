@@ -9,7 +9,7 @@ from models.experimental.uniad.reference.runtime_tracker_base import RuntimeTrac
 from models.experimental.uniad.tt.ttnn_runtime_tracker_base import TtRuntimeTrackerBase
 from models.experimental.uniad.reference.utils import Instances
 from models.experimental.uniad.tt.ttnn_utils import Instances as TtInstances
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)

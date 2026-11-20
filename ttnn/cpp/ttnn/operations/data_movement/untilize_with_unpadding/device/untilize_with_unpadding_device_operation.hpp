@@ -52,4 +52,10 @@ Tensor untilize_with_unpadding(
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
+// The data format to declare on a DFB of this op that holds elements of `dtype` on a device of `arch`.
+// Quasar rejects UInt16 as a DFB format, so there a UInt16 element is declared as Int16, which has the
+// same 2-byte tile layout. The compute kernels of this op unpack and pack each tile without computing on
+// the values, so the 16-bit values pass through unchanged.
+tt::DataFormat get_untilize_with_unpadding_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch);
+
 }  // namespace ttnn::prim

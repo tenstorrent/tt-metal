@@ -168,10 +168,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
 
     for (std::size_t i = 1; i < input_tensors.size(); i++) {
         TT_FATAL(
-            input_tensors.at(i).buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            input_tensors.at(i).memory_config().buffer_type() == tt::tt_metal::BufferType::DRAM,
             "Input tensor {} buffer type must be DRAM but got {}",
             i,
-            input_tensors.at(i).buffer()->buffer_type());
+            input_tensors.at(i).memory_config().buffer_type());
     }
     // Output memconfig must be height sharded or DRAM
     if (operation_attributes.output_mem_config.is_sharded()) {
@@ -613,6 +613,9 @@ tt::tt_metal::TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
+        // Output specs are computed before validate_on_program_cache_miss runs.
+        TT_FATAL(max_cores > 0, "max_cores_per_head_batch must be > 0");
+        TT_FATAL(B > 0, "SDPA decode batch size must be > 0");
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         const uint32_t q_heads_parallel_factor = num_groups / B;

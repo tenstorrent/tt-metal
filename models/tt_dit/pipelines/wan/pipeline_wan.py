@@ -24,6 +24,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.pipelines.events import DenoiseStep, PipelineEventCallback, SectionEnd, SectionStart, null_callback
 from models.tt_dit.pipelines.pipeline_api import PipelineAPIMixin
 from models.tt_dit.pipelines.wan.dbcache import ExpertCacheRunner, WanDBCacheConfig
+from models.tt_dit.pipelines.wan.policy import served_resolutions
 from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
 from models.tt_dit.solvers import solver_for_scheduler
 from models.tt_dit.utils import tensor
@@ -43,16 +44,10 @@ _UNSET = object()  # sentinel for "use config default" in WanPipelineConfig.defa
 
 _DEFAULT_CHECKPOINT = "Wan-AI/Wan2.2-T2V-A14B-Diffusers"
 
-# The supported video sizes, (width, height): Wan 2.2's 480p and 720p sizes in 16:9 and 9:16.
-_RESOLUTIONS_480P = ((832, 480), (480, 832))
-_RESOLUTIONS_720P = ((1280, 720), (720, 1280))
-
 # The spatial lengths the transformer runs at, in tokens per latent frame: those of the 480p and
 # 720p sizes. Each size is padded to the smallest that fits it, so sizes with the same token count
 # share traces and buffers.
 _SPATIAL_BUCKETS_PER_FRAME = (1560, 3600)
-
-_DEFAULT_RESOLUTION = (832, 480)
 
 _PRESETS_WH: dict[tuple[int, ...], dict] = {
     (2, 4): {
@@ -89,8 +84,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "dynamic_load": False,
         "topology": ttnn.Topology.Linear,
         "is_fsdp": True,
-        # 720p runs out of DRAM in the VAE decoder.
-        "resolutions": _RESOLUTIONS_480P,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
     },
     (2, 4): {
@@ -110,7 +103,6 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,  # full-T
-        "resolutions": _RESOLUTIONS_720P + _RESOLUTIONS_480P,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
     },
     (4, 32): {
@@ -121,6 +113,7 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
         "vae_t_chunk_size": None,
+        "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
         "sdpa_t_fracture_w_only": True,
     },
 }
@@ -192,8 +185,8 @@ class WanPipelineConfig:
         """The preset for ``mesh_shape``.
 
         ``height`` and ``width`` configure that single size, and ``resolutions`` a list of
-        (width, height); otherwise the preset's sizes apply, by default 832x480. The spatial
-        buckets default to the preset's when its sizes apply, and to none otherwise.
+        (width, height); otherwise the sizes `policy.served_resolutions` gives for the mesh apply.
+        The spatial buckets default to the preset's when those sizes apply, and to none otherwise.
         """
         preset_dict = _PRESETS_BH if ttnn.device.is_blackhole() else _PRESETS_WH
         preset = preset_dict.get(tuple(mesh_shape), {})
@@ -207,7 +200,7 @@ class WanPipelineConfig:
         if height is not None and width is not None:
             resolutions = ((width, height),)
         if resolutions is None:
-            resolutions = preset.get("resolutions", (_DEFAULT_RESOLUTION,))
+            resolutions = served_resolutions(mesh_shape)
             if spatial_buckets_per_frame is None:
                 spatial_buckets_per_frame = preset.get("spatial_buckets_per_frame", ())
         if spatial_buckets_per_frame is None:

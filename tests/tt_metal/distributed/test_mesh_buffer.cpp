@@ -13,7 +13,6 @@
 #include <tt-metalium/distributed.hpp>
 #include <array>
 #include <cstddef>
-#include <iomanip>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -33,7 +32,6 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/circular_buffer_config.hpp>
-#include <tt-metalium/circular_buffer_constants.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -54,7 +52,6 @@
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/runtime_args_data.hpp>
 #include <tt-metalium/shape2d.hpp>
 #include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/memory_pin.hpp>
@@ -463,11 +460,7 @@ TEST_F(MeshBufferTest2x4, Deallocation) {
 }
 
 TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
@@ -484,11 +477,7 @@ TEST(MeshBufferTest, DeallocationWithoutMeshDevice) {
 }
 
 TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
-    // Repeated device init takes very long on TG. Lower the number of iterations.
-    int iterations = 100;
-    if (tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
-        iterations = 10;
-    }
+    constexpr int iterations = 100;
 
     for (int i = 0; i < iterations; i++) {
         MeshDeviceConfig config(MeshShape(1, 1));
@@ -502,6 +491,47 @@ TEST(MeshBufferTest, DeallocationWithMeshDeviceClosed) {
 
         mesh_device->close();
     }
+}
+
+TEST(MeshBufferTest, GetDeviceBufferWithoutMeshDevice) {
+    // A device buffer fetched before its MeshDevice is destroyed is not returned after it: its Device is gone.
+    auto mesh_device = MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 1)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buffer = MeshBuffer::create(ReplicatedBufferConfig{.size = 2048}, device_local_config, mesh_device.get());
+    const MeshCoordinate coord(0, 0);
+    EXPECT_NE(buffer->get_device_buffer(coord), nullptr);
+
+    mesh_device.reset();
+    EXPECT_ANY_THROW(buffer->get_device_buffer(coord));
+}
+
+TEST(MeshBufferTest, GetDeviceBufferAfterCloseWithTwoDevices) {
+    // Fetching another entry after the close does not make the one fetched before it trusted again.
+    if (tt::tt_metal::GetNumAvailableDevices() < 2) {
+        GTEST_SKIP() << "Needs two devices";
+    }
+    auto mesh_device = MeshDevice::create(
+        MeshDeviceConfig(MeshShape(1, 2)),
+        DEFAULT_L1_SMALL_SIZE,
+        DEFAULT_TRACE_REGION_SIZE,
+        1,
+        DispatchCoreType::WORKER);
+    const DeviceLocalBufferConfig device_local_config{
+        .page_size = 2048, .buffer_type = BufferType::DRAM, .bottom_up = false};
+    auto buffer = MeshBuffer::create(ReplicatedBufferConfig{.size = 2048}, device_local_config, mesh_device.get());
+    const MeshCoordinate fetched(0, 1);
+    const MeshCoordinate other(0, 0);
+    EXPECT_NE(buffer->get_device_buffer(fetched), nullptr);
+
+    mesh_device.reset();
+    EXPECT_ANY_THROW(buffer->get_device_buffer(other));
+    EXPECT_ANY_THROW(buffer->get_device_buffer(fetched));
 }
 
 TEST_F(MeshBufferTest2x4, GetDeviceBuffer) {
