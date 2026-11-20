@@ -7,23 +7,9 @@
 #include "api/compute/tilize.h"
 #include "api/compute/reduce.h"
 #include "api/compute/pack_untilize.h"
-#include "internal/circular_buffer_interface.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
-
-// Push 1 stick or partial stick to a cb (a (partial) stick consists of num_pages pages, in our case, size of a page is
-// the width of a tile (setup in program factory))
-inline void llk_push_pages_bilinear(const std::int32_t operand, const std::int32_t num_pages) {
-    std::uint32_t output = operand;
-    std::uint32_t num_words = num_pages * get_local_cb_interface(operand).fifo_page_size;
-
-    get_local_cb_interface(output).fifo_wr_ptr += num_words;
-    get_local_cb_interface(output).fifo_wr_tile_ptr = 0;
-
-    if (get_local_cb_interface(output).fifo_wr_ptr >= get_local_cb_interface(output).fifo_limit) {
-        get_local_cb_interface(output).fifo_wr_ptr -= get_local_cb_interface(output).fifo_size;
-    }
-}
+#include "experimental/kernel_args.h"
 
 template <uint32_t tiles_per_reduction>
 inline void reduce_h_fused(DataflowBuffer in_dfb, DataflowBuffer scalar_dfb, DataflowBuffer out_dfb) {
@@ -56,25 +42,23 @@ inline void reduce_h_fused(DataflowBuffer in_dfb, DataflowBuffer scalar_dfb, Dat
     pack_untilize_dest<tiles_per_reduction>(out_cb_id); /* face geometry comes from out_cb metadata */
     tile_regs_release();
 
-    PACK(llk_push_pages_bilinear(out_cb_id, tiles_per_reduction));
+    // [Quasar bring-up: bilinear upsample Metal-2.0 port]
+    // was a hand-rolled advance of the legacy `cb_interface` write pointer
+    // (llk_push_pages_bilinear). That global does not exist on Gen2: the trisc2 link fails
+    // with "undefined reference to `cb_interface`". The DFB entry size IS out_cb_pagesize
+    // (TILE_WIDTH * element_size), so pushing tiles_per_reduction entries advances the
+    // write pointer by exactly the same number of bytes.
+    PACK(out_dfb.push_back(tiles_per_reduction));
 }
 
 void kernel_main() {
     // Runtime argument - work count for this core
-    uint32_t nsticks_per_core_by_nblocks = get_arg_val<uint32_t>(0);
+    uint32_t nsticks_per_core_by_nblocks = get_arg(args::nsticks_per_core_by_nblocks);
 
-    constexpr uint32_t tilize_reduce_cb_0 = get_compile_time_arg_val(0);
-    constexpr uint32_t tilize_reduce_cb_1 = get_compile_time_arg_val(1);
-    constexpr uint32_t in_scalar_cb_id1 = get_compile_time_arg_val(2);
-    constexpr uint32_t in_scalar_cb_id2 = get_compile_time_arg_val(3);
-    constexpr uint32_t out_cb_id = get_compile_time_arg_val(4);
-
-    constexpr uint32_t in_ntiles_c = get_compile_time_arg_val(5);
-    constexpr uint32_t in_ntiles_hwc = get_compile_time_arg_val(6);
-    constexpr uint32_t window_size_hw = get_compile_time_arg_val(7);
-    constexpr uint32_t out_ntiles_c = get_compile_time_arg_val(8);
-    constexpr uint32_t blocks = get_compile_time_arg_val(9);
-    constexpr uint32_t input_block_size_bytes = get_compile_time_arg_val(10);
+    constexpr uint32_t in_ntiles_c = get_arg(args::in_ntiles_c);
+    constexpr uint32_t out_ntiles_c = get_arg(args::out_ntiles_c);
+    constexpr uint32_t blocks = get_arg(args::blocks);
+    constexpr uint32_t input_block_size_bytes = get_arg(args::input_block_size_bytes);
 
     constexpr uint32_t MAX_TILES_PER_REDUCTION = 8;
 
@@ -88,15 +72,16 @@ void kernel_main() {
     constexpr bool use_neginf_srcA = false;  // Don't use negative infinity for source A
     constexpr bool zero_srcA_reduce = true;  // Zero source A for reduce operation
 
-    DataflowBuffer tilize_reduce_dfb0(tilize_reduce_cb_0);
-    DataflowBuffer tilize_reduce_dfb1(tilize_reduce_cb_1);
-    DataflowBuffer scalar_dfb_1(in_scalar_cb_id1);
-    DataflowBuffer scalar_dfb_2(in_scalar_cb_id2);
-    DataflowBuffer out_dfb(out_cb_id);
+    DataflowBuffer tilize_reduce_dfb0(dfb::tilize_reduce_cb_0);
+    DataflowBuffer tilize_reduce_dfb1(dfb::tilize_reduce_cb_1);
+    DataflowBuffer scalar_dfb_1(dfb::in_scalar_cb_1);
+    DataflowBuffer scalar_dfb_2(dfb::in_scalar_cb_2);
+    DataflowBuffer out_dfb(dfb::out_cb);
 
-    compute_kernel_hw_startup(tilize_reduce_cb_0, in_scalar_cb_id1, out_cb_id);
-    tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(tilize_reduce_cb_0, in_scalar_cb_id1, max_tiles_per_iter);
-    pack_untilize_dest_init<max_tiles_per_iter>(out_cb_id); /* face geometry comes from out_cb metadata */
+    compute_kernel_hw_startup(dfb::tilize_reduce_cb_0, dfb::in_scalar_cb_1, dfb::out_cb);
+    tilizeA_B_reduce_init<use_neginf_srcA, zero_srcA_reduce>(
+        dfb::tilize_reduce_cb_0, dfb::in_scalar_cb_1, max_tiles_per_iter);
+    pack_untilize_dest_init<max_tiles_per_iter>(dfb::out_cb); /* face geometry comes from out_cb metadata */
     for (uint32_t i = 0; i < nsticks_per_core_by_nblocks; i++) {
         DataflowBuffer cur_in_dfb = (i % 2 == 0) ? tilize_reduce_dfb0 : tilize_reduce_dfb1;
         DataflowBuffer cur_scalar_dfb = (i % 2 == 0) ? scalar_dfb_1 : scalar_dfb_2;

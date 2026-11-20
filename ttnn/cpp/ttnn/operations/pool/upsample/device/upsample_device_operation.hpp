@@ -23,8 +23,16 @@
 namespace ttnn::prim {
 
 struct UpsampleBilinearProgramFactory {
-    static tt::tt_metal::ProgramDescriptor create_descriptor(
+    // [Quasar bring-up: bilinear upsample Metal-2.0 port] was create_descriptor() returning a
+    // ProgramDescriptor, whose Reader/WriterConfigDescriptor aborted on Quasar at kernel.hpp:451.
+    static ttnn::device_operation::ProgramArtifacts create_program_artifacts(
         const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor);
+
+    static tt::tt_metal::experimental::ProgramRunArgs override_runtime_arguments(
+        const UpsampleParams& operation_attributes,
+        const Tensor& input_tensor,
+        Tensor& output_tensor,
+        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 };
 
 struct UpsampleMultiCoreInterleavedProgramFactory {

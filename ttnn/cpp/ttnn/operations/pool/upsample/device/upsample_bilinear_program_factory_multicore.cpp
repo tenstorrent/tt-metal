@@ -2,17 +2,57 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+// [Quasar bring-up: bilinear upsample Metal-2.0 port]
+//
+// This factory was the one legacy ProgramDescriptor holdout in the upsample family: its three
+// siblings (nearest_float, multicore_interleaved, multicore_sharded) are already Metal 2.0, and
+// select_program_factory returns THIS factory for every mode=="bilinear" call. On Quasar a
+// ProgramDescriptor's ReaderConfigDescriptor/WriterConfigDescriptor reaches CreateDataMovementKernel
+// and aborts at kernel.hpp:451 ("DataMovementKernel is not supported on Quasar").
+//
+// Ported in place (not forked behind an arch gate) because the two kernels this factory binds have no
+// other consumer, so their Metal-2.0 named-binding vocabulary can replace the positional one outright.
+// The only architecture-conditional piece is the compute hardware config, which must be a
+// ComputeGen2Config on Quasar and a ComputeGen1Config elsewhere -- ttnn::to_compute_hardware_config
+// picks the right alternative from the arch, the same idiom tilize_multi_core_sharded uses.
+//
+// DFB-vs-Scratchpad (the one bespoke decision, per QUASAR_DM_PORT_SCOPE §4):
+//   halo            carries data BETWEEN kernels? No -- it is the borrowed sharded INPUT shard, read
+//                   (never written) by both DM kernels through get_read_ptr(). It is not scratch
+//                   either: it is a view of a tensor, so it must be a borrowed DFB, with its
+//                   producer/consumer pair present only to satisfy the Gen2 single-producer /
+//                   single-consumer census. The reader takes the producer face, the writer the
+//                   consumer face (exactly as upsample_program_factory_multicore_sharded does for its
+//                   own borrowed input shard). No credit traffic flows on it.
+//   tilize_reduce_0 filled by the reader DM kernel, drained by the compute kernel -> a true DFB.
+//   tilize_reduce_1 filled by the writer DM kernel, drained by the compute kernel -> a true DFB.
+//   in_scalar_0/1   filled by the reader/writer DM kernel (the four bilinear weights), drained by the
+//                   compute kernel -> true DFBs. NOT scratchpads: the producing and consuming kernels
+//                   differ, so a ScratchpadSpec (single-kernel scratch) would be the wrong shape and
+//                   would lose the handshake the compute kernel's pop_front relies on.
+//   out             borrowed from the sharded OUTPUT and produced by the compute kernel alone. It is
+//                   sized to the whole output shard, so the producer never wraps and nothing has to
+//                   drain it; the compute kernel self-loops as PRODUCER + CONSUMER to complete the
+//                   census, the same way the Quasar pool_generic factory handles its own borrowed
+//                   output.
+// No buffer here is single-kernel scratch, so no ScratchpadSpec appears.
+
 #include "ttnn/operations/pool/upsample/device/upsample_device_operation.hpp"
 
 #include <cmath>
+#include <cstdint>
 #include <map>
 #include <string>
 #include <utility>
+#include <vector>
 
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/host_api.hpp>
-#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
@@ -20,14 +60,39 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
+namespace metal2 = tt::tt_metal::experimental;
+
+namespace {
 
 using FixedPoint = int32_t;
 constexpr int32_t FIXED_POINT_SHIFT = 16;
 constexpr int32_t FIXED_ONE = 1 << FIXED_POINT_SHIFT;
 
-static FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
+FixedPoint float_to_fixed(float value) { return static_cast<FixedPoint>(value * FIXED_ONE); }
 
-ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
+// Metal 2.0 resource names. Shared by create_program_artifacts and override_runtime_arguments.
+const metal2::KernelSpecName READER{"bilinear_reader"};
+const metal2::KernelSpecName WRITER{"bilinear_writer"};
+const metal2::KernelSpecName COMPUTE{"bilinear_compute"};
+
+const metal2::DFBSpecName DFB_HALO{"halo_cb"};
+const metal2::DFBSpecName DFB_TILIZE_REDUCE_0{"tilize_reduce_cb_0"};
+const metal2::DFBSpecName DFB_TILIZE_REDUCE_1{"tilize_reduce_cb_1"};
+const metal2::DFBSpecName DFB_IN_SCALAR_0{"in_scalar_cb_0"};
+const metal2::DFBSpecName DFB_IN_SCALAR_1{"in_scalar_cb_1"};
+const metal2::DFBSpecName DFB_OUT{"out_cb"};
+
+const metal2::TensorParamName INPUT{"input"};
+const metal2::TensorParamName OUTPUT{"output"};
+
+constexpr const char* DM_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp";
+constexpr const char* COMPUTE_KERNEL_PATH =
+    "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp";
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts UpsampleBilinearProgramFactory::create_program_artifacts(
     const UpsampleParams& operation_attributes, const Tensor& input_tensor, Tensor& output_tensor) {
     const ttnn::Tensor& input = input_tensor;
     const ttnn::Tensor& output = output_tensor;
@@ -70,8 +135,10 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     const uint32_t output_stick_nbytes = output_shape[-1] * output.element_size();
     TT_FATAL(input_stick_nbytes == output_stick_nbytes, "Input and output sticks should have same size");
 
+    auto* const device = input.device();
+
     const std::tuple<MathFidelity, bool, bool, bool, bool> compute_config_tuple =
-        get_compute_kernel_config_args(input.device()->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
     const MathFidelity math_fidelity = std::get<0>(compute_config_tuple);
     const bool math_approx_mode = std::get<1>(compute_config_tuple);
     const bool fp32_dest_acc_en = std::get<2>(compute_config_tuple);
@@ -91,101 +158,77 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     const std::vector<uint32_t> op_trace_metadata =
         ttnn::operations::sliding_window::generate_op_trace_metadata_bilinear(sliding_window_config);
 
-    ProgramDescriptor desc;
-
-    uint32_t next_cb_index = tt::CBIndex::c_0;
     constexpr uint32_t buffering_factor = 2;
 
-    // input data is in a sharded CB
+    // ---------------------------------------------------------------------------------------
+    // Dataflow buffers (was: CBDescriptor list). Sizes are carried over byte for byte.
+    // ---------------------------------------------------------------------------------------
+
+    // input data is in a sharded CB -- borrowed view of the haloed input shard
     const uint32_t in_cb_pagesize = input_stick_nbytes;
     const uint32_t in_cb_npages = halo_shard_shape[0];
     const uint32_t in_ntiles_c = tt::div_up(in_channels, tt::constants::TILE_WIDTH);
 
-    const uint32_t halo_cb_id = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * in_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(halo_cb_id),
-            .data_format = input_cb_data_format,
-            .page_size = in_cb_pagesize,
-        }}},
-        .buffer = halo_in.buffer(),
-    });
+    metal2::DataflowBufferSpec halo_dfb{
+        .unique_id = DFB_HALO,
+        .entry_size = in_cb_pagesize,
+        .num_entries = in_cb_npages,
+        .data_format_metadata = input_cb_data_format,
+        .borrowed_from = INPUT,
+    };
 
-    // first intermediate CB (4 pixels per page are needed for intermediate tensor)
+    // first intermediate DFB (4 pixels per entry are needed for the intermediate tensor)
     const uint32_t in1_cb_pagesize =
         std::min(tt::constants::TILE_WIDTH * input.element_size() * MAX_TILES_PER_REDUCTION, input_stick_nbytes);
-    const uint32_t tilize_reduce_cb_0 = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in1_cb_pagesize * 4 * buffering_factor,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_0),
-            .data_format = input_cb_data_format,
-            .page_size = in1_cb_pagesize,
-            .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
-        }}},
-    });
+    metal2::DataflowBufferSpec tilize_reduce_dfb_0{
+        .unique_id = DFB_TILIZE_REDUCE_0,
+        .entry_size = in1_cb_pagesize,
+        .num_entries = 4 * buffering_factor,
+        .data_format_metadata = input_cb_data_format,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
+    };
 
-    // second intermediate CB
-    const uint32_t tilize_reduce_cb_1 = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_cb_pagesize * 4 * buffering_factor,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tilize_reduce_cb_1),
-            .data_format = input_cb_data_format,
-            .page_size = in_cb_pagesize,
-            .face_geometry = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
-        }}},
-    });
+    // second intermediate DFB
+    metal2::DataflowBufferSpec tilize_reduce_dfb_1{
+        .unique_id = DFB_TILIZE_REDUCE_1,
+        .entry_size = in_cb_pagesize,
+        .num_entries = 4 * buffering_factor,
+        .data_format_metadata = input_cb_data_format,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 4, .num_faces = 2},
+    };
 
-    // scalar intermediate CBs
+    // scalar (bilinear weight) DFBs, one per data-movement kernel
     const uint32_t in_scalar_cb_pagesize = tt::tile_size(input_cb_data_format);
     const uint32_t in_scalar_cb_npages = 1 * buffering_factor;
 
-    const uint32_t in_scalar_cb_id1 = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_scalar_cb_pagesize * in_scalar_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in_scalar_cb_id1),
-            .data_format = input_cb_data_format,
-            .page_size = in_scalar_cb_pagesize,
-        }}},
-    });
+    metal2::DataflowBufferSpec in_scalar_dfb_0{
+        .unique_id = DFB_IN_SCALAR_0,
+        .entry_size = in_scalar_cb_pagesize,
+        .num_entries = in_scalar_cb_npages,
+        .data_format_metadata = input_cb_data_format,
+    };
+    metal2::DataflowBufferSpec in_scalar_dfb_1{
+        .unique_id = DFB_IN_SCALAR_1,
+        .entry_size = in_scalar_cb_pagesize,
+        .num_entries = in_scalar_cb_npages,
+        .data_format_metadata = input_cb_data_format,
+    };
 
-    const uint32_t in_scalar_cb_id2 = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = in_scalar_cb_pagesize * in_scalar_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(in_scalar_cb_id2),
-            .data_format = input_cb_data_format,
-            .page_size = in_scalar_cb_pagesize,
-        }}},
-    });
-
-    // output sharded CB with upsampled data
+    // output sharded DFB with upsampled data -- borrowed view of the output shard
     const uint32_t out_cb_pagesize = tt::constants::TILE_WIDTH * output.element_size();
     const uint32_t out_cb_npages = output.shard_spec().value().shape[0] * in_ntiles_c;
 
-    const uint32_t out_cb_id = next_cb_index++;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_cb_pagesize * out_cb_npages,
-        .core_ranges = all_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(out_cb_id),
-            .data_format = output_cb_data_format,
-            .page_size = out_cb_pagesize,
-            .face_geometry = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
-        }}},
-        .buffer = output.buffer(),
-    });
+    metal2::DataflowBufferSpec out_dfb{
+        .unique_id = DFB_OUT,
+        .entry_size = out_cb_pagesize,
+        .num_entries = out_cb_npages,
+        .data_format_metadata = output_cb_data_format,
+        .unpack_face_geometry_metadata = FaceGeometry{.face_r_dim = 1, .num_faces = 2},
+        .borrowed_from = OUTPUT,
+    };
 
-    log_debug(tt::LogOp, "input_cb: {}, npages: {}, pagesize: {}", halo_cb_id, in_cb_npages, in_cb_pagesize);
-    log_debug(tt::LogOp, "output_cb: {}, npages: {}, pagesize: {}", out_cb_id, out_cb_npages, out_cb_pagesize);
+    log_debug(tt::LogOp, "halo_dfb npages: {}, pagesize: {}", in_cb_npages, in_cb_pagesize);
+    log_debug(tt::LogOp, "out_dfb npages: {}, pagesize: {}", out_cb_npages, out_cb_pagesize);
     log_debug(tt::LogOp, "input_stick_nbytes: {}, output_stick_nbytes: {}", input_stick_nbytes, output_stick_nbytes);
     log_debug(tt::LogOp, "ncores: {}", ncores);
 
@@ -203,101 +246,157 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     const uint32_t num_input_width_blocks = static_cast<uint32_t>(
         std::ceil(static_cast<float>(in_channels) / (MAX_TILES_PER_REDUCTION * tt::constants::TILE_WIDTH)));
 
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {
-        input_stick_nbytes,                            // [0] stick_nbytes
-        scale_factor_h,                                // [1] scale_h
-        scale_factor_w,                                // [2] scale_w
-        in_w,                                          // [3] in_w (from sliding_window_config)
-        out_w,                                         // [4] out_w
-        in_h,                                          // [5] in_h (from sliding_window_config)
-        halo_cb_id,                                    // [6] halo_cb_id
-        tilize_reduce_cb_0,                            // [7] tilize_reduce_cb_0
-        in_scalar_cb_id1,                              // [8] in_scalar_cb_id
-        static_cast<uint32_t>(scale_h_inv_fixed),      // [9] scale_h_inv_comp
-        static_cast<uint32_t>(scale_w_inv_fixed),      // [10] scale_w_inv_comp
-        static_cast<uint32_t>(y_index_fixed),          // [11] y_starting_coordinate_u32
-        static_cast<uint32_t>(x_index_compute_fixed),  // [12] x_starting_coordinate_u32
-        1,                                             // [13] is_reader
-        num_input_width_blocks,                        // [14] blocks
-        input_block_size_bytes,                        // [15] input_block_size_bytes
+    // ---------------------------------------------------------------------------------------
+    // Kernels. The "writer" runs the same source as the reader; the is_reader named CTA selects
+    // which half of the output sticks it produces (as it did in the legacy positional form).
+    // ---------------------------------------------------------------------------------------
+    auto dm_compile_time_args = [&](uint32_t is_reader) {
+        return metal2::KernelSpec::CompileTimeArgs{
+            {"stick_nbytes", input_stick_nbytes},
+            {"scale_h", scale_factor_h},
+            {"scale_w", scale_factor_w},
+            {"in_w", in_w},
+            {"out_w", out_w},
+            {"in_h", in_h},
+            {"scale_h_inv_comp", static_cast<uint32_t>(scale_h_inv_fixed)},
+            {"scale_w_inv_comp", static_cast<uint32_t>(scale_w_inv_fixed)},
+            {"y_starting_coordinate_u32", static_cast<uint32_t>(y_index_fixed)},
+            {"x_starting_coordinate_u32", static_cast<uint32_t>(x_index_compute_fixed)},
+            {"is_reader", is_reader},
+            {"blocks", num_input_width_blocks},
+            {"input_block_size_bytes", input_block_size_bytes},
+        };
     };
 
-    KernelDescriptor::CompileTimeArgs writer_compile_time_args = {
-        input_stick_nbytes,
-        scale_factor_h,
-        scale_factor_w,
-        in_w,
-        out_w,
-        in_h,
-        halo_cb_id,
-        tilize_reduce_cb_1,
-        in_scalar_cb_id2,
-        static_cast<uint32_t>(scale_h_inv_fixed),
-        static_cast<uint32_t>(scale_w_inv_fixed),
-        static_cast<uint32_t>(y_index_fixed),
-        static_cast<uint32_t>(x_index_compute_fixed),
-        0,  // is_reader (0 for writer)
-        num_input_width_blocks,
-        input_block_size_bytes,
+    const metal2::KernelSpec::RuntimeArgSchema dm_rta_schema{
+        .runtime_arg_names = {"start_output_idx", "min_input_offset", "output_shard_height"}};
+
+    // The DM kernels issue many sub-stick NOC reads and keep their own reserve_back/push_back
+    // accounting; Gen2 implicit-sync credit tracking stalls on that pattern, so opt out (ignored
+    // on Gen1).
+    metal2::KernelSpec reader{
+        .unique_id = READER,
+        .source = std::filesystem::path{DM_KERNEL_PATH},
+        .dfb_bindings =
+            {// Borrowed input shard: producer face, census only (no credit traffic).
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_HALO,
+                 .accessor_name = "halo_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_TILIZE_REDUCE_0,
+                 .accessor_name = "tilize_reduce_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_IN_SCALAR_0,
+                 .accessor_name = "in_scalar_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
+        .compile_time_args = dm_compile_time_args(/*is_reader=*/1),
+        .runtime_arg_schema = dm_rta_schema,
+        .hw_config =
+            ttnn::create_reader_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
 
-    const std::string reader_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp";
-    // Yes, the writer also runs reader_bilinear_multi_core_sharded.cpp — the kernel branches on the is_reader CT arg.
-    const std::string writer_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/dataflow/reader_bilinear_multi_core_sharded.cpp";
-    const std::string compute_kernel_fname =
-        "ttnn/cpp/ttnn/operations/pool/upsample/device/kernels/compute/bilinear.cpp";
-
-    KernelDescriptor::CompileTimeArgs compute_compile_time_args = {
-        tilize_reduce_cb_0,
-        tilize_reduce_cb_1,
-        in_scalar_cb_id1,
-        in_scalar_cb_id2,
-        out_cb_id,
-        in_ntiles_c,
-        1 * in_ntiles_c,
-        4,
-        tt::div_up(in_channels, tt::constants::TILE_WIDTH),
-        num_input_width_blocks,
-        input_block_size_bytes,
+    metal2::KernelSpec writer{
+        .unique_id = WRITER,
+        .source = std::filesystem::path{DM_KERNEL_PATH},
+        .dfb_bindings =
+            {// Borrowed input shard: consumer face, census only (no credit traffic).
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_HALO,
+                 .accessor_name = "halo_cb",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_TILIZE_REDUCE_1,
+                 .accessor_name = "tilize_reduce_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_IN_SCALAR_1,
+                 .accessor_name = "in_scalar_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER}},
+        .compile_time_args = dm_compile_time_args(/*is_reader=*/0),
+        .runtime_arg_schema = dm_rta_schema,
+        .hw_config =
+            ttnn::create_writer_datamovement_config(device->arch(), /*disable_dfb_implicit_sync_for_all=*/true),
     };
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source = reader_kernel_fname;
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source = writer_kernel_fname;
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
 
     TT_FATAL(fp32_dest_acc_en == false, "fp32_dest_acc_en as true not supported for upsample bilinear");
 
     constexpr ReduceOpMath reduce_op = ReduceOpMath::SUM;
     constexpr ReduceOpDim reduce_dim = ReduceOpDim::H;
-
     const std::map<std::string, std::string> reduce_defines_map = reduce_op_utils::get_defines(reduce_op, reduce_dim);
-    KernelDescriptor::Defines compute_defines(reduce_defines_map.begin(), reduce_defines_map.end());
+    metal2::KernelSpec::CompilerOptions::Defines compute_defines(reduce_defines_map);
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source = compute_kernel_fname;
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_cores;
-    compute_desc.compile_time_args = std::move(compute_compile_time_args);
-    compute_desc.defines = std::move(compute_defines);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .math_approx_mode = math_approx_mode,
+    // Quasar is Gen2 and rejects a ComputeGen1Config at program build; the knobs are the same
+    // either way, and to_compute_hardware_config picks the alternative that matches the arch.
+    const metal2::ComputeHardwareConfig compute_hw_config = ttnn::to_compute_hardware_config(
+        device->arch(),
+        ttnn::ComputeKernelConfig{
+            .math_fidelity = math_fidelity,
+            .math_approx_mode = math_approx_mode,
+            .fp32_dest_acc_en = fp32_dest_acc_en,
+            .dst_full_sync_en = false});
+
+    metal2::KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source = std::filesystem::path{COMPUTE_KERNEL_PATH},
+        .dfb_bindings =
+            {metal2::DFBBinding{
+                 .dfb_spec_name = DFB_TILIZE_REDUCE_0,
+                 .accessor_name = "tilize_reduce_cb_0",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_TILIZE_REDUCE_1,
+                 .accessor_name = "tilize_reduce_cb_1",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_IN_SCALAR_0,
+                 .accessor_name = "in_scalar_cb_1",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_IN_SCALAR_1,
+                 .accessor_name = "in_scalar_cb_2",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER},
+             // Borrowed output shard, sized to the whole shard: the compute kernel packs straight
+             // into the resident output and nothing drains it, so it self-loops to complete the
+             // single-producer/single-consumer census. No kernel-side pop is needed.
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_OUT,
+                 .accessor_name = "out_cb",
+                 .endpoint_type = metal2::DFBEndpointType::PRODUCER},
+             metal2::DFBBinding{
+                 .dfb_spec_name = DFB_OUT,
+                 .accessor_name = "out_cb",
+                 .endpoint_type = metal2::DFBEndpointType::CONSUMER}},
+        .compile_time_args =
+            {
+                {"in_ntiles_c", in_ntiles_c},
+                {"out_ntiles_c", tt::div_up(in_channels, tt::constants::TILE_WIDTH)},
+                {"blocks", num_input_width_blocks},
+                {"input_block_size_bytes", input_block_size_bytes},
+            },
+        .runtime_arg_schema = {.runtime_arg_names = {"nsticks_per_core_by_nblocks"}},
+        .hw_config = compute_hw_config,
+    };
+    compute.compiler_options.defines = std::move(compute_defines);
+
+    metal2::ProgramSpec spec{
+        .name = "upsample_bilinear_multicore",
+        .kernels = {reader, writer, compute},
+        .dataflow_buffers =
+            {halo_dfb, tilize_reduce_dfb_0, tilize_reduce_dfb_1, in_scalar_dfb_0, in_scalar_dfb_1, out_dfb},
+        .tensor_parameters =
+            {
+                {.unique_id = INPUT, .spec = input.tensor_spec()},
+                {.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units = {metal2::WorkUnitSpec{
+            .name = "bilinear", .kernels = {READER, WRITER, COMPUTE}, .target_nodes = all_cores}},
     };
 
-    // Calculate work distribution based on output sticks
+    // ---------------------------------------------------------------------------------------
+    // Runtime args: work distribution based on output sticks (unchanged from the legacy loop).
+    // ---------------------------------------------------------------------------------------
     const uint32_t total_output_sticks = in_batch_size * output.logical_shape()[1] * output.logical_shape()[2];
     const uint32_t max_out_sticks_per_core = tt::div_up(total_output_sticks, ncores_nhw);
 
@@ -310,6 +409,11 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
     const std::vector<CoreCoord> logical_cores = corerange_to_cores(
         shard_spec.grid, shard_spec.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 
+    metal2::ProgramRunArgs run_args;
+    metal2::KernelRunArgs reader_run_args{.kernel = READER};
+    metal2::KernelRunArgs writer_run_args{.kernel = WRITER};
+    metal2::KernelRunArgs compute_run_args{.kernel = COMPUTE};
+
     uint32_t start_output_idx = 0;
     uint32_t total_sticks_processed = 0;
 
@@ -320,10 +424,16 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
 
         if (out_sticks_this_core == 0) {
             // No work for this core
-            const KernelDescriptor::CoreRuntimeArgs no_work_args = {start_output_idx, 0, 0};
-            reader_desc.runtime_args.emplace_back(core_coord, no_work_args);
-            writer_desc.runtime_args.emplace_back(core_coord, no_work_args);
-            compute_desc.runtime_args.emplace_back(core_coord, KernelDescriptor::CoreRuntimeArgs{0});
+            metal2::AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core_coord,
+                {{"start_output_idx", start_output_idx}, {"min_input_offset", 0}, {"output_shard_height", 0}});
+            metal2::AddRuntimeArgsForNode(
+                writer_run_args.runtime_arg_values,
+                core_coord,
+                {{"start_output_idx", start_output_idx}, {"min_input_offset", 0}, {"output_shard_height", 0}});
+            metal2::AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core_coord, {{"nsticks_per_core_by_nblocks", 0}});
             continue;
         }
 
@@ -339,21 +449,52 @@ ProgramDescriptor UpsampleBilinearProgramFactory::create_descriptor(
         const uint32_t min_trace_idx = minmax_indices.first;
         const uint32_t min_input_offset = op_trace_metadata[min_trace_idx];
 
-        const KernelDescriptor::CoreRuntimeArgs rw_args = {start_output_idx, min_input_offset, out_sticks_this_core};
-        reader_desc.runtime_args.emplace_back(core_coord, rw_args);
-        writer_desc.runtime_args.emplace_back(core_coord, rw_args);
-        compute_desc.runtime_args.emplace_back(core_coord, KernelDescriptor::CoreRuntimeArgs{out_sticks_this_core});
+        metal2::AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
+            core_coord,
+            {{"start_output_idx", start_output_idx},
+             {"min_input_offset", min_input_offset},
+             {"output_shard_height", out_sticks_this_core}});
+        metal2::AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core_coord,
+            {{"start_output_idx", start_output_idx},
+             {"min_input_offset", min_input_offset},
+             {"output_shard_height", out_sticks_this_core}});
+        metal2::AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
+            core_coord,
+            {{"nsticks_per_core_by_nblocks", out_sticks_this_core}});
 
         // Next core starts where this core ends
         start_output_idx += out_sticks_this_core;
         total_sticks_processed += out_sticks_this_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    run_args.kernel_run_args = {
+        std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args = {
+        {INPUT, metal2::TensorArgument{input.mesh_tensor()}},
+        {OUTPUT, metal2::TensorArgument{output.mesh_tensor()}},
+    };
 
-    return desc;
+    return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+tt::tt_metal::experimental::ProgramRunArgs UpsampleBilinearProgramFactory::override_runtime_arguments(
+    const UpsampleParams& /*operation_attributes*/,
+    const Tensor& input_tensor,
+    Tensor& output_tensor,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
+    // Both borrowed DFBs (the haloed input shard and the output shard) re-resolve their backing
+    // address from the tensor args on every cache hit; the per-core runtime args depend only on
+    // shapes, which are part of the program cache key, so they do not need re-deriving.
+    metal2::ProgramRunArgs params;
+    params.tensor_args = {
+        {INPUT, metal2::TensorArgument{input_tensor.mesh_tensor()}},
+        {OUTPUT, metal2::TensorArgument{output_tensor.mesh_tensor()}},
+    };
+    return params;
 }
 
 }  // namespace ttnn::prim

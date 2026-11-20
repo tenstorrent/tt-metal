@@ -12,6 +12,7 @@
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/operations/sliding_window/sliding_window.hpp"
 #include "ttnn/operations/sliding_window/halo/halo.hpp"
+#include "ttnn/operations/experimental/quasar/halo/halo.hpp"
 #include <tt-metalium/hal.hpp>
 
 namespace ttnn::operations::upsample {
@@ -50,14 +51,30 @@ static std::pair<Tensor, sliding_window::SlidingWindowConfig> apply_bilinear_hal
     const tt::tt_metal::Shape new_shape({1, 1, input_shape[0] * input_shape[1] * input_shape[2], input_shape[3]});
     ttnn::Tensor input_tensor_reshaped = ttnn::reshape(input_tensor, new_shape);
 
-    ttnn::Tensor haloed_tensor = ttnn::halo(
-        input_tensor_reshaped,
-        sliding_window_config,
-        compute_kernel_config,
-        0,       // pad_val
-        false,   // remote_read
-        false,   // transpose_mcast
-        false);  // is_out_tiled
+    // [Quasar bring-up: bilinear upsample Metal-2.0 port]
+    // The mainline halo op is still a legacy ProgramDescriptor program (its two readers carry a
+    // DataMovementConfigDescriptor), so on Quasar it aborts at kernel.hpp:451 BEFORE the bilinear
+    // upsample factory is ever reached -- halo is the first blocker on this path, not the second.
+    // The Metal-2.0 Quasar sibling is a drop-in with the same signature; conv2d, fold and
+    // pool_generic already route to it the same way.
+    const bool is_quasar = input_tensor.device() != nullptr && input_tensor.device()->arch() == tt::ARCH::QUASAR;
+    ttnn::Tensor haloed_tensor =
+        is_quasar ? ttnn::operations::experimental::quasar::halo(
+                        input_tensor_reshaped,
+                        sliding_window_config,
+                        compute_kernel_config,
+                        0,      // pad_val
+                        false,  // remote_read
+                        false,  // transpose_mcast
+                        false)  // is_out_tiled
+                  : ttnn::halo(
+                        input_tensor_reshaped,
+                        sliding_window_config,
+                        compute_kernel_config,
+                        0,       // pad_val
+                        false,   // remote_read
+                        false,   // transpose_mcast
+                        false);  // is_out_tiled
 
     return {haloed_tensor, sliding_window_config};
 }
