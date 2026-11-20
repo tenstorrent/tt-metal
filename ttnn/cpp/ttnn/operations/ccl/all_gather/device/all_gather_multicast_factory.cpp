@@ -62,6 +62,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
     std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
     uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
+    uint32_t num_active_axes = 0;
+    bool balanceable_ring = false;  // an even ring of 4 or more devices
 
     for (uint32_t axis = 0; axis < 2; ++axis) {
         const uint32_t axis_size = operation_attributes.axis_num_devices[axis];
@@ -69,6 +71,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         if (!is_axis_active) {
             continue;
         }
+        ++num_active_axes;
         // A true 2D collective cannot fall back to unicast, so factory selection cannot save us
         // here. No mesh view bends a true 2D axis today, so this only guards a future one.
         TT_FATAL(
@@ -78,9 +81,10 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
         const auto axis_topology = operation_attributes.axis_topology[axis];
         const uint32_t axis_index = sender_device_coord[axis];
-        // An even ring's antipode is reached on the forward route.
+        // An even ring's antipode is reached on the forward route (route 0; the alternate route reaches it backward).
         auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             axis_size, axis_index, axis_topology, /*static_alternate=*/false);
+        balanceable_ring = tt::tt_fabric::is_ring_or_torus(axis_topology) && axis_size % 2 == 0 && axis_size >= 4;
         auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, sender_device_coord, 1, axis_topology, axis);
         auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -101,6 +105,12 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     TT_FATAL(
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
+    // An even ring's forward route reaches N/2 devices and its backward route N/2-1, so one link direction carries
+    // more. The writer then alternates packets with a route that swaps the two hop counts. Only on one ring axis of 4
+    // or more devices: at 2 the swapped backward route has no hop, and two axes' 4 connections would need more packet
+    // headers than the writer's RISC has.
+    const bool alternate_routes = balanceable_ring && num_active_axes == 1;
+    const uint32_t num_routes = alternate_routes ? 2 : 1;
 
     // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -228,6 +238,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         cb0_id,
         slot_bytes,
         num_connections,
+        static_cast<uint32_t>(alternate_routes),
     };
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -263,11 +274,13 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         // Set runtime args
         const auto [slice_start, slice_count] = walk_slice(num_elements, min_num_links, link);
 
-        // Every other chip sends each worker one init and one done credit:
+        // Every route reaches every other chip once:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
         //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
-        // Both equal num_devices - 1.
+        // Both equal num_devices - 1. Each other chip sends each worker one init credit (route 0) and one done credit
+        // per route.
         const uint32_t num_peers = num_devices - 1;
+        const uint32_t num_done_credits = num_routes * num_peers;
 
         // Slots 0 and 1 are tensor addresses. They are placeholders here; emplace replaces them with Buffer*.
         std::vector<uint32_t> reader_rt_args = {
@@ -277,7 +290,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
             slice_count,         // this worker's slice length (elements)
             device_idx,          // this device's index (its stripe)
             done_sem.address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            num_peers,           // done credits to wait for
+            num_done_credits,    // done credits to wait for
         };
         emplace_runtime_args_with_leading_buffers(
             desc.kernels[reader_kernel_id], core, {input_tensor.buffer(), output_tensor.buffer()}, reader_rt_args);

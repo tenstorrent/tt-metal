@@ -42,7 +42,7 @@ void kernel_main() {
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t device_idx = get_arg_val<uint32_t>(arg_idx++);
     const address_t done_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t num_done_credits = get_arg_val<uint32_t>(arg_idx++);  // one from every other device
+    const uint32_t num_done_credits = get_arg_val<uint32_t>(arg_idx++);  // one per route from every other device
 
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
     const auto output_tensor_accessor = TensorAccessor(output_tensor_args, output_tensor_address);
