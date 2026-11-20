@@ -1407,6 +1407,41 @@ constexpr bool matmul_fe_unkeyed() {
 }
 
 #if defined(UCK_CHLKC_MATH)
+// The CBs of the kernel in a block-float format
+template <bool = true>
+constexpr std::uint64_t matmul_fe_bfp_cbs() {
+    std::uint64_t cbs = 0;
+    static_assert(sizeof(unpack_src_format) <= 64);
+    for (std::uint32_t cb = 0; cb < sizeof(unpack_src_format); cb++) {
+        if (unpack_src_format[cb] == to_underlying(DataFormat::Bfp8_b) || unpack_src_format[cb] == to_underlying(DataFormat::Bfp4_b)) {
+            cbs |= std::uint64_t{1} << cb;
+        }
+    }
+    return cbs;
+}
+
+// A call site with run-time cbs and block (sdpa's matmul_blocks): one row of eight or more tiles over a transposed block-float in1 (Q x K^T
+// of a one-tile q chunk) reads 0.2-0.6 % slower in the run-time row form, so its init leaves main's tile MOP; calls follow the live form.
+// A block of 8 tiles needs a 16-bit DEST at half sync; LoFi blocks keep the row form (not measured slower)
+template <std::uint32_t in1_cb, std::uint32_t ct>
+constexpr bool matmul_fe_runtime_tile_form_on() {
+    return in1_cb == 0xFFu && ct == 0xFFu && matmul_fe_bfp_cbs() != 0 && MM_THROTTLE == 0 && !LLK_SIZE_MODE &&
+           !(DST_SYNC_MODE == DstSync::SyncHalf && DST_ACCUM_MODE) && MATH_FIDELITY != MathFidelity::LoFi;
+}
+
+template <std::uint32_t in1_cb, std::uint32_t ct>
+ALWI void matmul_fe_runtime_tile_form(
+    const std::uint32_t in0_cb_id,
+    const std::uint32_t in1_cb_id,
+    const std::uint32_t transpose,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim) {
+    constexpr std::uint64_t bfp_cbs = matmul_fe_bfp_cbs();
+    if (transpose != 0 && rt_dim == 1 && ct_dim >= 8 && ((bfp_cbs >> in1_cb_id) & 1)) {
+        llk_math_matmul_init<MATH_FIDELITY, 0, false, true>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+    }
+}
+
 // The phase count of a math init in a kernel that may drop fidelity phases (llk_math_matmul_phases.h), from its cbs' formats
 template <std::uint32_t in0_cb, std::uint32_t in1_cb>
 ALWI void matmul_fe_phase_init(
@@ -1468,6 +1503,9 @@ ALWI void matmul_block_init_fe(
         0,
         matmul_fe_out_key<fkey>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
 #if defined(UCK_CHLKC_MATH)
+    if constexpr (matmul_fe_runtime_tile_form_on<in1_cb, ct>()) {
+        matmul_fe_runtime_tile_form<in1_cb, ct>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim);
+    }
     matmul_fe_phase_init<in0_cb, in1_cb>(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
 #endif
 }
