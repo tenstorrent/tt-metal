@@ -63,11 +63,11 @@ GTEST_ENV_KEYS = tuple(dict.fromkeys(k for spec in TESTS.values() for k in spec.
 # 1000 workload iterations with a determinism check every 50 (20 checks) —
 # catches droop-induced non-determinism the short deployment gtests don't.
 # Both bf16_HiFi2 and bf8b_LoFi run: the LoFi variant draws the most power per
-# core, and a weak power stage can pass the HiFi2 one. Measured 545 s for the
-# bf16_HiFi2 variant alone in-suite on a BH galaxy:
-# iterations ~69 ms each, each determinism check ~13 s (reads the full
-# 16k x 16k output back from all 32 chips), plus ~3.5 min cold 32-chip
-# bring-up/compile; the two variants take about 2x that. Check density is the dominant cost: the same test at 5000 iterations
+# core, and a weak power stage can pass the HiFi2 one. Measured in-suite on a
+# BH galaxy: bf16_HiFi2 284 s, bf8b_LoFi 399 s, 698 s for the whole step with
+# 32-chip bring-up and compile. Each determinism check reads the full
+# 16k x 16k output back from all 32 chips, so check density is the dominant
+# cost: the same test at 5000 iterations
 # across all four dtype variants (-k galaxy) measures ~2 h. Note a longer
 # soak catches more: a marginal chip on the bench unit failed 2/10 checks at
 # 5000 iterations but passed shorter runs — bump iterations for deep triage.
@@ -83,7 +83,7 @@ PYTESTS = {
             "50",
             "-s",
             # pytest.ini sets a repo-wide 300s pytest-timeout; each variant always
-            # exceeds it (~545s measured), and the timeout is per test. 1200s keeps >2x headroom while still
+            # exceeds it (up to ~400s measured), and the timeout is per test. 1200s keeps >2x headroom while still
             # bounding a standalone deploy run if a device test wedges (the
             # test-infrastructure wrapper adds its own wall-clock timeout, but
             # run_diag.sh / container entrypoints invoke this script directly).
