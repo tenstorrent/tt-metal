@@ -279,7 +279,7 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
 }
 
 // Stage 3's output for one of this core's rows: candidate positions in rank order, mapped through the table to key
-// indices. Out of line: it has a call site per split-row schedule.
+// indices. Out of line: it has a call site per schedule.
 template <uint32_t source_slices_per_row, uint32_t output_slices_per_row, uint32_t slice_bytes, typename IndicesT>
 __attribute__((noinline)) void two_level_output(
     const Noc& noc,
