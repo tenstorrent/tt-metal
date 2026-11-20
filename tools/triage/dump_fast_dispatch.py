@@ -338,7 +338,9 @@ def run(args, context: Context):
             continue
 
         device = run_checks.get_device_by_unique_id(chip_unique_id)
-        assert device is not None, f"No device found for unique_id {chip_unique_id}"
+        # No device: it is unhealthy, or --dev didn't select it
+        if device is None:
+            continue
         # Create OnChipCoordinate for this dispatcher core location
         location = OnChipCoordinate(x, y, "translated", device)
 

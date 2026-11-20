@@ -38,7 +38,6 @@ template <
     uint32_t exchange,
     uint32_t token_paged,
     uint32_t page_channels,
-    uint32_t sp_rank,
     uint32_t sp_size,
     uint32_t local_rows,
     uint32_t exchange_core_x,
@@ -48,7 +47,7 @@ template <
     uint32_t slab_scale,
     uint32_t slab_offset,
     uint32_t entry_pages>
-TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
+TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
     const auto input = TensorAccessor(tensor::input);
     const auto history = TensorAccessor(tensor::history);
     const auto predecessor = TensorAccessor(tensor::predecessor_carry);
@@ -80,7 +79,7 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count) {
     };
     const auto offset_of = [&](uint32_t address) { return address - scratch_base; };
 
-    const auto topology = read_chronology<false, sp_rank, sp_size, local_rows>(noc, rows);
+    const auto topology = read_chronology<false, sp_size, local_rows>(noc, rows, sp_rank);
     const uint32_t local_split_row = topology.local_split ? topology.head_rows : 0;
     const bool initial_from_predecessor = topology.rank != topology.first_rank;
     const auto carry = initial_from_predecessor

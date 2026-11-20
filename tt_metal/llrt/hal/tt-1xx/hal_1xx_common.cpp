@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "hal_1xx_common.hpp"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "rtoptions.hpp"
 
 #include <enchantum/enchantum.hpp>

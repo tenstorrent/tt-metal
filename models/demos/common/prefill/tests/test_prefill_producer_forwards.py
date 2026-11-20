@@ -191,6 +191,10 @@ def test_packed_payload(env):
     assert mtp is None
     assert rows.shape == (sp, 1, forward_chunks * C // sp)
     chunks = decode_forward_metadata(list(struct.unpack(f"<{len(metadata) // 4}i", metadata)), forward_chunks)
+    # Runs ending in a partial chunk go last, whole, so its pad rows fall past the MoE dispatch loop's bound and each
+    # slot's chunks stay one run.
+    pushes = [pushes[2], pushes[0], pushes[1]]
+    validate_chunks(chunks, chunk_size=C, forward_chunks=forward_chunks, num_users=2, max_seq_len=MAX_SEQ_LEN)
     assert chunks == [PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes] + [EMPTY_CHUNK]
     s = C // sp
     for k, p in enumerate(pushes):
@@ -370,3 +374,45 @@ def test_resolve_slot_prompts_keeps_slot_lengths(env, monkeypatch, expect_error)
     monkeypatch.setenv("PREFILL_PRODUCER_SLOT_TRACES", "/no/such/trace")
     with expect_error(ValueError, "PREFILL_PRODUCER_SLOT_TRACES"):
         producer._resolve_slot_prompts(cfg)
+
+
+@pytest.mark.parametrize("forward_chunks", [1, 2, 4])
+def test_packed_forward_mtp_blocks(env, monkeypatch, forward_chunks):
+    """With MTP a forward's lookahead is one num_mtp_tokens block per chunk position after every chunk's ids: block k
+    is what a one-chunk forward of chunk k sends, an empty position's is all pad, and one chunk per forward sends
+    exactly today's block."""
+    env(forward_chunks=forward_chunks)
+    levels = 2
+    monkeypatch.setattr(producer, "MTP_LEVELS", levels)
+    sp, n_mtp = 8, producer.num_mtp_tokens(levels)
+    pools = {s: list(range(1000 * (s + 1), 1000 * (s + 1) + MAX_SEQ_LEN)) for s in range(3)}
+    # A full chunk whose prompt continues, a full chunk that ends its prompt one token later, a partial one.
+    pushes = [
+        producer.ChunkPush(0, 0, 0, C, 3 * C),
+        producer.ChunkPush(1, 1, C, 2 * C, 2 * C + 1),
+        producer.ChunkPush(2, 0, 0, 700, 700),
+    ][:forward_chunks]
+    rows, mtp, _ = producer._forward_payload(pushes, pools.get)
+    assert rows.shape == (sp, 1, forward_chunks * C // sp)
+    assert mtp.shape == (sp, 1, forward_chunks * n_mtp) and mtp.dtype == np.uint32
+    ordered = producer._partial_runs_last(pushes)
+    for k in range(forward_chunks):
+        block = mtp[:, :, k * n_mtp : (k + 1) * n_mtp]
+        if k < len(ordered):
+            p = ordered[k]
+            expected = producer._mtp_rows(pools[p.slot_id], p.actual_start, p.actual_isl, actual_end=p.actual_end)
+            np.testing.assert_array_equal(block, expected)
+        else:
+            assert (block == producer.MTP_PAD_TOKEN_ID).all()
+    if forward_chunks == 1:
+        p = pushes[0]
+        np.testing.assert_array_equal(
+            mtp, producer._mtp_rows(pools[p.slot_id], p.actual_start, p.actual_isl, actual_end=p.actual_end)
+        )
+
+
+def test_packed_shutdown_payload_has_every_mtp_block(env, monkeypatch):
+    env(forward_chunks=4)
+    monkeypatch.setattr(producer, "MTP_LEVELS", 1)
+    rows, mtp, _ = producer._shutdown_payload()
+    assert mtp.shape == (8, 1, 4 * producer.num_mtp_tokens(1))

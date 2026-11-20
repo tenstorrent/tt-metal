@@ -10,6 +10,7 @@
 #include "ckernel.h"
 #include "llk_assert.h"
 #include "utils/helpers.h"
+#include "utils/validate.h"
 
 namespace hal::sync
 {
@@ -140,26 +141,6 @@ inline constexpr SemaphoreCondition operator&(const SemaphoreCondition lhs, cons
 
 namespace detail
 {
-inline __attribute__((always_inline)) void assert_operand(const bool valid, [[maybe_unused]] const char* message)
-{
-    LLK_ASSERT(valid, message);
-}
-
-constexpr void require_valid_operand(const bool valid, const char* message)
-{
-    if (__builtin_is_constant_evaluated())
-    {
-        if (!valid)
-        {
-            __builtin_trap();
-        }
-    }
-    else
-    {
-        assert_operand(valid, message);
-    }
-}
-
 constexpr bool is_valid(const Access access)
 {
     return access == Access::MMIO || access == Access::Tensix;
@@ -204,7 +185,7 @@ public:
     constexpr SemaphoreSet(const Semaphore first, const Others... others) : mask_(0)
     {
         static_assert((std::is_same_v<Others, Semaphore> && ...), "Semaphore selections must contain only Semaphore values");
-        require_valid_operand(is_valid(first) && (is_valid(others) && ...), "Semaphore index must be in [0, 7]");
+        hal::detail::require(is_valid(first) && (is_valid(others) && ...), "Semaphore index must be in [0, 7]");
         mask_ = semaphore_bit(first) | (0u | ... | semaphore_bit(others));
     }
 
@@ -265,7 +246,7 @@ inline constexpr std::uint32_t acquire_operation()
 /** @brief Encode a runtime-selected ATGETM without issuing it. */
 inline constexpr __attribute__((always_inline)) std::uint32_t acquire_operation(const Mutex mutex)
 {
-    detail::require_valid_operand(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
+    hal::detail::require(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
     return TT_OP_ATGETM(hal::to_underlying(mutex));
 }
 
@@ -294,7 +275,7 @@ inline constexpr std::uint32_t release_operation()
 /** @brief Encode a runtime-selected ATRELM without issuing it. */
 inline constexpr __attribute__((always_inline)) std::uint32_t release_operation(const Mutex mutex)
 {
-    detail::require_valid_operand(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
+    hal::detail::require(detail::is_valid(mutex), "Blackhole mutex index must be 0 or in [2, 4]");
     return TT_OP_ATRELM(hal::to_underlying(mutex));
 }
 
@@ -331,9 +312,9 @@ inline constexpr std::uint32_t init_operation()
 inline constexpr __attribute__((always_inline)) std::uint32_t init_operation(
     const detail::SemaphoreSet semaphores, const std::uint32_t initial, const std::uint32_t maximum)
 {
-    detail::require_valid_operand(initial < 16u, "SEMINIT initial value must fit in four bits");
-    detail::require_valid_operand(maximum < 16u, "SEMINIT maximum value must fit in four bits");
-    detail::require_valid_operand(initial <= maximum, "SEMINIT initial value must not exceed the maximum");
+    hal::detail::require(initial < 16u, "SEMINIT initial value must fit in four bits");
+    hal::detail::require(maximum < 16u, "SEMINIT maximum value must fit in four bits");
+    hal::detail::require(initial <= maximum, "SEMINIT initial value must not exceed the maximum");
     return TT_OP_SEMINIT(maximum, initial, semaphores.mask());
 }
 
@@ -503,8 +484,8 @@ inline constexpr std::uint32_t stall_operation()
 /** @brief Encode a runtime-selected STALLWAIT without issuing it. */
 inline constexpr __attribute__((always_inline)) std::uint32_t stall_operation(const StallTarget targets, const StallCondition conditions)
 {
-    detail::require_valid_operand(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
-    detail::require_valid_operand(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
+    hal::detail::require(detail::is_valid(targets), "STALLWAIT target mask must fit in nine bits");
+    hal::detail::require(detail::is_valid(conditions), "Blackhole STALLWAIT condition mask must fit in 13 bits");
     return TT_OP_STALLWAIT(hal::to_underlying(targets), hal::to_underlying(conditions));
 }
 
@@ -536,8 +517,8 @@ inline constexpr std::uint32_t semaphore_operation()
 inline constexpr __attribute__((always_inline)) std::uint32_t semaphore_operation(
     const StallTarget targets, const detail::SemaphoreSet semaphores, const SemaphoreCondition conditions)
 {
-    detail::require_valid_operand(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
-    detail::require_valid_operand(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
+    hal::detail::require(detail::is_valid(targets), "SEMWAIT target mask must fit in nine bits");
+    hal::detail::require(detail::is_valid(conditions), "SEMWAIT requires WhileZero, WhileMaximum, or both");
     return TT_OP_SEMWAIT(hal::to_underlying(targets), semaphores.mask(), hal::to_underlying(conditions));
 }
 

@@ -282,9 +282,14 @@ def test_kimi_kv_cache_mock(
 @pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [2], ids=["2layers"])
+# A traced packed forward allocates one scratch slot after the users (kv_cache_slots); the table must not count
+# it as layers or publish it.
+@pytest.mark.parametrize("scratch_slots", [0, 1], ids=["no-scratch", "scratch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
-def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers, device_params, monkeypatch):
+def test_kimi_runner_kv_cache_table(
+    mesh_device, seq_len, num_users, num_layers, scratch_slots, device_params, monkeypatch
+):
     from types import SimpleNamespace
 
     from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
@@ -295,7 +300,8 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
     sp, tp = mesh_shape
     hf_config = SimpleNamespace(kv_lora_rank=512, qk_rope_head_dim=64)  # Kimi-K2.7 / DeepSeek MLA geometry
     kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
-    num_slots = num_users * num_layers
+    cache_num_users = num_users + scratch_slots
+    num_slots = cache_num_users * num_layers
 
     kvpe_cache = allocate_mla_kvpe_cache(
         mesh_device=mesh_device,
@@ -304,7 +310,7 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_layers=num_layers,
-        num_users=num_users,
+        num_users=cache_num_users,
         tp_axis=tp_axis,
     )
     assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape)
@@ -350,10 +356,12 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_users=num_users,
+        cache_num_users=cache_num_users,
         chunk_size_global=PREFILL_CHUNK_TOKENS,
         path="unused",
     )
     lookup_table = built["table"]
+    assert lookup_table.config(0).num_layers == num_layers
 
     reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
         torch.bfloat16
@@ -377,15 +385,34 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
 # sp x tp -- Kimi-K3 / K3.1 merged KV chunk table, published as the runner publishes it and read back by config kind.
 _K3_STAGE_LAYERS = 8  # layers 0-7: full-attention layers 3 and 7 (MLA on K3, Gated DSA on K3.1), KDA on the other six
 _K3_STAGE_USERS = 2
-_K3_STAGE_SEQ_LEN = 40_960  # the K3.1 cache constraints: a multiple of the 8192-token bank stripe and the 5120 chunk
+# The K3.1 cache constraints: a multiple of the 8192-token bank stripe and of both chunks (5120 on 8x4, 2560 on 4x4).
+_K3_STAGE_SEQ_LEN = 40_960
 
 
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-@pytest.mark.parametrize("device_params", [torus_xy_device_params()], ids=["torus-xy"], indirect=True)
-@pytest.mark.parametrize("model", ["kimi_k3", "kimi_k3_1"])
+@pytest.mark.parametrize(
+    "mesh_device, device_params, sp_axis, chunk, model",
+    [
+        *(
+            pytest.param((8, 4), torus_xy_device_params(), 0, 5120, model, id=f"torus-xy-8x4-{model}")
+            for model in ("kimi_k3", "kimi_k3_1")
+        ),
+        # K3.1's manifest layout: one 4x4 stage (a Galaxy tray half, run_4x4_stage_tests.sh), SP on the axis-1
+        # ring, 2560-token chunks, KV TP-deduped over its 16 chips.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(),
+            1,
+            2560,
+            "kimi_k3_1",
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1-kimi_k3_1",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi-K3 requires Blackhole")
 @pytest.mark.timeout(0)
-def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, monkeypatch):
+def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, model, tmp_path, monkeypatch):
     """Every chunk of every config of the published table holds the bytes of the cache it names.
 
     The caches come from the adapter's allocator for a 0-7 stage, are filled with values distinct per slot, slab,
@@ -411,9 +438,9 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import kda_position, kda_segments_per_layer
     from models.demos.deepseek_v3_d_p.utils.test_utils import gather_cache_natural, unrotate_cache_layer
 
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     mesh_shape = tuple(mesh_device.shape)
-    sp, tp = mesh_shape
+    sp, tp = mesh_shape[sp_axis], mesh_shape[tp_axis]
     adapter = get_adapter(model)
     hf_config = adapter.load_hf_config()
     params = SimpleNamespace(
@@ -426,9 +453,15 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
         tp_axis=tp_axis,
         tp_shard_kv=True,
         sparse_kv_cache_format=None,  # the adapter's default: scaled FP8 on K3.1, none (bf8 TILE) on K3
-        chunk_size=PREFILL_CHUNK_TOKENS,
+        chunk_size=chunk,
         dflash_enabled=False,
+        # Untraced, one chunk per forward: kv_cache_slots allocates exactly num_users slots (no packed-forward
+        # scratch slot), which is what the table publishes.
+        use_trace=False,
+        forward_chunks=1,
     )
+    # The runtime below reads params as its config, whose cache_num_users the allocation sizes the caches by.
+    params.cache_num_users = adapter.kv_cache_slots(params)
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     token_caches = {"kvpe": caches.kvpe.storage}
     if caches.index is not None:
@@ -439,7 +472,9 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
 
     # Token caches: random logical rows written through the cache's own encoding.
     torch.manual_seed(0)
-    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=(2, 1))  # sp -> seq, tp -> dim 1
+    shard_dims = [None, None]
+    shard_dims[sp_axis], shard_dims[tp_axis] = 2, 1  # sp -> seq, tp -> dim 1
+    shard = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_shape, dims=tuple(shard_dims))
 
     def _on_device(host, dtype=ttnn.bfloat16):
         return ttnn.from_torch(
@@ -516,12 +551,13 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
     config_of = {kind: config_id for config_id, kind in enumerate(kinds)}
 
     # Token configs: each 32-token chunk decodes (as the migration driver and producer decode it) to the cache's rows.
-    natural_positions = blockcyclic_positions(sp * tp, PREFILL_CHUNK_TOKENS, _K3_STAGE_SEQ_LEN)
+    natural_positions = blockcyclic_positions(sp * tp, chunk, _K3_STAGE_SEQ_LEN)
     for kind in token_kinds:
         config_id = config_of[kind]
         cache = caches.kvpe if kind == "kvpe" else caches.index  # gather_cache_natural decodes an MlaKvCache
         head_dim = adapter.cache_head_dim(config_id)
-        shard_major, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True)  # [slot * slabs + slab, seq, D]
+        # [slot * slabs + slab, seq, D]
+        shard_major, _ = gather_cache_natural(cache, mesh_device, tp_shard_kv=True, sp_axis=sp_axis)
         layers = sorted(adapter.cache_layer_rows(config_id, params.num_layers))
         assert layers == [3, 7], kind
         for slot in range(params.num_users):
