@@ -21,7 +21,7 @@ sdpa_custom_mm is the SDPA QK^T / PV matmul. operand0 (in0) -> SrcB (lhs), opera
 with the custom_mm layout limits:
     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}
     in1 (SrcA) tile shape [32, 32]
-    ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
+    ct_dim = N/32 in [1,16], kt_dim = K/32 even, >= 2
 
 The math LLK zeroes DEST (mask_chunk=false path) then accumulates the full kt walk, so the
 result is a plain LoFi tiled matmul. The FPU->SFPU semaphore posts (signal_granularity
@@ -45,18 +45,20 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
 from helpers.pack import pack_bfp16
 from helpers.param_config import parametrize
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     CRK_TILE_DIMM,
     IN_FACE_DIMS,
     NUM_FACES,
     SDPA_CUSTOM_MM_FLAGS,
+    TILE_COUNT,
     TemplateParameter,
 )
 from helpers.tile_constants import (
@@ -64,7 +66,7 @@ from helpers.tile_constants import (
     DEFAULT_TILE_R_DIM,
     FACE_C_DIM,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from ttexalens.tt_exalens_lib import write_to_device
 
@@ -137,7 +139,8 @@ class _SdpaCustomMMStimuli(StimuliConfig):
             tile_count_A=len(packed_in1) // 2048 + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
-            tile_count_B=kt,
+            # in0 is packed densely; reserve only its bytes
+            tile_count_B=max(1, -(-len(packed_in0) // 2048)),
             stimuli_res_format=DataFormat.Float16_b,
             tile_count_res=ct * (2 if mask is not None else 1),
         )
@@ -183,10 +186,10 @@ def _pack_in1(
                 k * DEFAULT_TILE_R_DIM : (k + 1) * DEFAULT_TILE_R_DIM,
                 c * DEFAULT_TILE_C_DIM : (c + 1) * DEFAULT_TILE_C_DIM,
             ]
-            faces = tilize(
-                blk.reshape(-1),
-                tile_dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
-            )
+            faces = tilize_block(
+                blk,
+                dimensions=[DEFAULT_TILE_R_DIM, DEFAULT_TILE_C_DIM],
+            ).flatten()
             tiles[(k, c)] = pack_bfp16(faces)
 
     # Finite nonzero poison makes using kt instead of the physical row stride, or
@@ -219,6 +222,11 @@ def _run(
     input_tile_offset=0,
     preserve_zero_flag=False,
     operands=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     """Run sdpa_custom_mm and check it against the golden; return the (M, N) result.
 
@@ -254,39 +262,49 @@ def _run(
         input_B_format=DataFormat.Float16_b,
     ).reshape(M, N)
 
-    configuration = TestConfig(
-        "sources/sdpa_custom_mm_test.cpp",
-        InputOutputFormat(
-            input_format=DataFormat.Float16_b,
-            output_format=DataFormat.Float16_b,
-        ),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=signal_granularity,
-                read_transposed=read_transposed,
-                mm_transpose=mm_transpose,
-                sdpa_row_stride=row_stride,
-                sdpa_input_tile_offset=input_tile_offset,
-                preserve_src_zero_flag=preserve_zero_flag,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_custom_mm_test.cpp",
+            formats=InputOutputFormat(
+                input_format=DataFormat.Float16_b,
+                output_format=DataFormat.Float16_b,
             ),
-        ],
-        runtimes=[
-            # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
-            # rows; result tile is [M,32] -> 2 faces. in1_face_r_dim stays at the 16 default.
-            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=_SdpaCustomMMStimuli(
-            kt,
-            ct,
-            _pack_in1(torch_b, kt, ct, read_transposed, row_stride, input_tile_offset),
-            _pack_in0(torch_a, kt),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                SDPA_CUSTOM_MM_FLAGS(
+                    signal_granularity=signal_granularity,
+                    read_transposed=read_transposed,
+                    mm_transpose=mm_transpose,
+                    sdpa_row_stride=row_stride,
+                    sdpa_input_tile_offset=input_tile_offset,
+                    preserve_src_zero_flag=preserve_zero_flag,
+                ),
+            ],
+            runtimes=[
+                # in1 (SrcA) = [32,32] -> 4 faces of 16 rows; in0 (SrcB) = [M,32] -> 2 faces of M
+                # rows; result tile is [M,32] -> 2 faces. in1_face_r_dim stays at the 16 default.
+                NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+                TILE_COUNT(ct),
+            ],
+            variant_stimuli=_SdpaCustomMMStimuli(
+                kt,
+                ct,
+                _pack_in1(
+                    torch_b, kt, ct, read_transposed, row_stride, input_tile_offset
+                ),
+                _pack_in0(torch_a, kt),
+            ),
+            dest_acc=DestAccumulation.No,
         ),
-        dest_acc=DestAccumulation.No,
     )
-
-    res = configuration.run().result
+    if is_perf:
+        return None
+    res = outcome.result
 
     # Device packs ct = N//32 result tiles; within each tile the two 16-col faces
     # (M x FACE_C_DIM, row-major) are contiguous, then padded to a full 32-row tile.
@@ -342,6 +360,27 @@ def test_sdpa_custom_mm(request, shape):
     _run(M, K, N, signal_granularity=1, read_transposed=False, mm_transpose=False)
 
 
+def test_sdpa_custom_mm_face_walk_exact(request):
+    """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
+    _skip_on_simulator(request)
+    M, kt, ct = 8, 256, 1
+    torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
+    res = _run(
+        M,
+        kt * DEFAULT_TILE_R_DIM,
+        ct * DEFAULT_TILE_C_DIM,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        operands=(torch_a, torch_b),
+    )
+    golden = (torch_a.float() @ torch_b.float()).to(res.dtype)
+    assert torch.equal(res, golden), (
+        f"sdpa_custom_mm kt={kt}: {(res != golden).sum().item()} of {res.numel()} "
+        "outputs differ from the exact golden"
+    )
+
+
 @parametrize(
     shape=SHAPES,
 )
@@ -355,17 +394,10 @@ def test_sdpa_custom_mm_read_transposed(request, shape):
     """
     _skip_on_simulator(request)
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
-    # read_transposed on a single output c-tile is a semantic no-op (nothing to reorder),
-    # and this experimental LLK's ct_dim==1 MOP fast path is written for the canonical
-    # contiguous read (block_increment == inner_increment); read_transposed makes
-    # block_increment = kt*tile, which that fast path is not shaped for. The LLK is correct
-    # for its real (model-level) usage -- ct_dim==1 + read_transposed simply isn't a
-    # combination the standalone unit test can drive, so skip it; ct>=2 shapes give the
-    # real read_transposed coverage.
+    # ct>=2 shapes provide the intended transposed-read coverage.
     if N // DEFAULT_TILE_C_DIM == 1:
         pytest.skip(
-            "read_transposed is a no-op for ct_dim==1 and the LLK's ct==1 fast path is "
-            "shaped for the canonical contiguous read; not drivable standalone"
+            "read_transposed with ct_dim==1 selects the wrong input tile (#60119)"
         )
     _run(M, K, N, signal_granularity=1, read_transposed=True, mm_transpose=False)
 
@@ -461,33 +493,35 @@ def test_sdpa_custom_mm_mask_extent_restore(
     # Distinct nonzero face patterns reveal a truncated mask extent. Dyadic
     # inputs keep both the mask-seeded and zero-seeded sums exactly representable.
     mask = ((torch.arange(N) % 4 - 1) * 2).to(torch.bfloat16)
-    config = TestConfig(
-        "sources/sdpa_custom_mm_test.cpp",
-        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
-        templates=[
-            CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
-            SDPA_CUSTOM_MM_FLAGS(
-                signal_granularity=ct,
-                read_transposed=read_transposed,
-                sdpa_row_stride=row_stride,
-                sdpa_input_tile_offset=input_tile_offset,
+    outcome = execute_llk(
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_custom_mm_test.cpp",
+            formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+            templates=[
+                CRK_TILE_DIMM(c_dimm=ct, r_dimm=1, k_dimm=kt),
+                SDPA_CUSTOM_MM_FLAGS(
+                    signal_granularity=ct,
+                    read_transposed=read_transposed,
+                    sdpa_row_stride=row_stride,
+                    sdpa_input_tile_offset=input_tile_offset,
+                ),
+                SDPA_MASK_REENTRY(),
+            ],
+            runtimes=[
+                NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
+                IN_FACE_DIMS(in0_face_r_dim=M),
+            ],
+            variant_stimuli=_SdpaCustomMMStimuli(
+                kt,
+                ct,
+                _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
+                _pack_in0(lhs, kt),
+                mask=mask,
             ),
-            SDPA_MASK_REENTRY(),
-        ],
-        runtimes=[
-            NUM_FACES(num_faces=2, num_faces_A=4, num_faces_B=2),
-            IN_FACE_DIMS(in0_face_r_dim=M),
-        ],
-        variant_stimuli=_SdpaCustomMMStimuli(
-            kt,
-            ct,
-            _pack_in1(rhs, kt, ct, read_transposed, row_stride, input_tile_offset),
-            _pack_in0(lhs, kt),
-            mask=mask,
-        ),
-        dest_acc=DestAccumulation.No,
+            dest_acc=DestAccumulation.No,
+        )
     )
-    packed = torch.as_tensor(config.run().result).reshape(2, ct, -1)
+    packed = torch.as_tensor(outcome.result).reshape(2, ct, -1)
     result = (
         packed[:, :, : M * 32]
         .reshape(2, ct, 2, M, 16)

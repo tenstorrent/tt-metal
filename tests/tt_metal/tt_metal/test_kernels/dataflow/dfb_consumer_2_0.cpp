@@ -10,6 +10,14 @@
 #include "api/kernel_thread_globals.h"
 #include "experimental/kernel_args.h"
 
+#if defined(ARCH_QUASAR) && defined(DFB_TEST_TEMPORARIES)
+// Takes the DFB by value: the copy's writes must count toward the same DFB as the caller's.
+template <typename Dfb, typename Accessor>
+void write_through_copy(Dfb copy, const Noc& noc, const Accessor& accessor, uint32_t page_id) {
+    noc.async_write<NocOptions::TXN_ID>(copy, accessor, {}, {.page_id = page_id});
+}
+#endif
+
 void kernel_main() {
     constexpr uint32_t num_entries_per_consumer = get_arg(args::num_entries_per_consumer);
     constexpr uint32_t blocked_consumer = get_arg(args::blocked_consumer);
@@ -36,7 +44,18 @@ void kernel_main() {
             if (page_id >= chunk_offset + entries_per_core) {
                 break;
             }
-            noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
+#ifdef DFB_TEST_TEMPORARIES
+            // Rotate through a temporary, a copy and the main object.
+            if (tile_id % 3 == 0) {
+                DataflowBuffer temporary(dfb::in);
+                noc.async_write<NocOptions::TXN_ID>(temporary, tensor_accessor, {}, {.page_id = page_id});
+            } else if (tile_id % 3 == 1) {
+                write_through_copy(dfb, noc, tensor_accessor, page_id);
+            } else
+#endif
+            {
+                noc.async_write<NocOptions::TXN_ID>(dfb, tensor_accessor, {}, {.page_id = page_id});
+            }
         }
 #endif
     } else {

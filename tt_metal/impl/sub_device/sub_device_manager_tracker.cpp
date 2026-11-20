@@ -10,22 +10,19 @@
 #include <sub_device_types.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
-#include <array>
 #include <cstdint>
-#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
-#include <tuple>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "dispatch/dispatch_query_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/sub_device/sub_device_impl.hpp"
 #include "mesh_device.hpp"

@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <variant>
+
 #include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
 #include "dit_fused_distributed_rmsnorm_program_factory.hpp"
 
@@ -28,9 +30,9 @@ struct DitFusedDistributedRmsnormDeviceOperation {
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
     using program_factory_t = std::variant<DitFusedDistributedRmsnormMeshWorkloadFactory>;
-    using shared_variables_t = DitFusedDistributedRmsnormMeshWorkloadFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
 
@@ -67,6 +69,7 @@ Tensor dit_fused_distributed_rmsnorm(
     const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config,
     ttnn::experimental::DitFusedNormType norm_type = ttnn::experimental::DitFusedNormType::RMS,
     const std::optional<const Tensor>& reciprocals = std::nullopt,
-    const std::optional<const Tensor>& affine_tile_row_map = std::nullopt);
+    const std::optional<const Tensor>& affine_tile_row_map = std::nullopt,
+    std::optional<uint32_t> row_capacity = std::nullopt);
 
 }  // namespace ttnn::prim

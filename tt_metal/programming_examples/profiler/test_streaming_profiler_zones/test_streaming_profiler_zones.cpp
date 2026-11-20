@@ -105,7 +105,7 @@ int main(int argc, char** argv) {
         mesh_device = distributed::MeshDevice::create_unit_mesh(
             device_id, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, /*num_command_queues=*/1);
     }
-    Program program = CreateProgram();
+    Program program = CreateProgram(*mesh_device);
 
     // --gx 0 / --gy 0, or an over-large value, means the full grid; a CoreRange past the grid would throw.
     CoreCoord grid = mesh_device->compute_with_storage_grid_size();
