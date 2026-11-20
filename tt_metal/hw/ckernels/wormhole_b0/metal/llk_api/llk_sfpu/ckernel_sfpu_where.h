@@ -31,7 +31,6 @@ inline void _calculate_where_(
     constexpr InstrModLoadStore mod0 =
         data_format == DataFormat::Float16_b ? InstrModLoadStore::LO16 : InstrModLoadStore::INT32;
 
-    // Only Float32 is unpacked directly to Dest (unpack_to_dest=true), preserving IEEE-754 -0.0 (0x80000000).
     // Int32/UInt32 have no signed zero; Float32 clears bit 31 (<< 1), Float16_b (LO16 zero-extended) clears bit 15 (<< 17).
     constexpr bool is_fp = (data_format == DataFormat::Float32) || (data_format == DataFormat::Float16_b);
     constexpr int sign_clear_shift = (data_format == DataFormat::Float16_b) ? 17 : 1;
@@ -69,6 +68,19 @@ inline void _calculate_where_(
         // (next SFPLOAD L0)       |                                   | SFPSTORE Dst[offset0]=L0
 
         constexpr int replay_len = is_fp ? 4 : 3;
+
+        if constexpr (is_fp) {
+            // Macro 3: Float32/Float16_b where(a, b, c, a) with +1 delay for the sign-bit clearing SFPSHFT step.
+            constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
+            constexpr std::uint32_t mad_bits = 0;
+            constexpr std::uint32_t round_bits = 0;
+            constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
+
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+            TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+            TTI_SFPCONFIG(0, 4 + 3, 0);
+            TTI_SFPNOP;
+        }
 
         lltt::record(0, replay_len);
         if constexpr (is_fp) {
@@ -133,7 +145,7 @@ inline void _init_where_() {
     // InstructionTemplate[1]
     TTI_SFPENCC(0, 0, 13, 0);
 
-    // Macro 0: special case handling for where(a, b, c, a), i.e. write the output to the first input (non-Float32).
+    // Macro 0: special case handling for where(a, b, c, a), i.e. write the output to the first input (Int32/UInt32).
     {
         constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (0 << 3) | 4;
         constexpr std::uint32_t mad_bits = 0;
@@ -161,19 +173,7 @@ inline void _init_where_() {
         TTI_SFPCONFIG((mad_bits << 8) | simple_bits, 4 + 2, 1);
     }
 
-    // Macro 3: Float32 handling for where(a, b, c, a) with +1 delay for the sign-bit clearing SFPSHFT step.
-    {
-        constexpr std::uint32_t simple_bits = 0x00 | 0x00 | (1 << 3) | 4;
-        constexpr std::uint32_t mad_bits = 0;
-        constexpr std::uint32_t round_bits = 0;
-        constexpr std::uint32_t store_bits = 0x00 | 0x00 | (3 << 3) | 3;
-
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
-        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
-        TTI_SFPCONFIG(0, 4 + 3, 0);
-    }
-
-    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all 4 macros.
+    // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for all 4 macros (Macro 3 configured on demand for FP).
     TTI_SFPCONFIG(0xFF0, 8, 1);
 #endif
 }
