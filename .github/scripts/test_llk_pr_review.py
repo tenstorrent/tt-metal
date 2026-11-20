@@ -128,6 +128,43 @@ def test_links_out_of_the_repository_become_plain_text():
     assert len(re.findall(r"https?://", found)) == 1
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        "![x](HTTPS://outside.example/p.png)",  # the scheme in capitals
+        "![x](//outside.example/p.png)",  # no scheme at all
+        "![x](<//outside.example/p.png>)",
+        "[ref]: //outside.example/p.png\n\n![x][ref]",
+        "![x](https:\\\\outside.example\\p.png)",  # backslashes for slashes
+        '<img src="https&#58;//outside.example/p.png">',  # an encoded colon
+        '<IMG SRC = "https&colon;&sol;&sol;outside.example/p.png">',
+        '<picture><source srcset="//outside.example/p.png"></picture>',
+        '<a href="hTtP://outside.example/">x</a>',
+        "![x](https&#x3A;//outside.example/p.png)",
+    ],
+)
+def test_no_spelling_of_an_outside_address_stays_loadable(text):
+    found = review.checked_findings({"findings": [_finding(body=f"See {text} here.")]}, REPO)[0]["body"]
+
+    # No URL is left with a scheme, no tag is left that loads one, and no
+    # destination starts at a host.
+    assert not re.search(r"(?i)\b(?:https?|ftp|wss?):[/\\\\]{2}", found), found
+    assert not re.search(r"(?i)<\s*[a-z][^<>]*\b(?:src|srcset|href)\s*=", found), found
+    assert not re.search(r"(?m)(?:\]\(\s*<?|^\[[^\]]+\]:\s*<?)\s*[/\\\\]{2}", found), found
+    assert not re.search(r"(?i)&(?:#0*58|#x0*3a|colon|#0*47|#x0*2f|sol)\b", found.replace("&amp;", "")), found
+
+
+def test_code_in_a_finding_is_left_as_it_is():
+    body = "Use `std::vector<int> v; // note` and `a << 2`:\n```suggestion\n    return a < b ? a : b;  // x\n```"
+    assert review.checked_findings({"findings": [_finding(body=body)]}, REPO)[0]["body"] == body
+
+
+@pytest.mark.parametrize("path", ["src/a.h`\n![x](https://outside.example/p.png)\n`", "src/a`b.h", "src/a\nb.h"])
+def test_a_path_that_could_break_out_of_its_code_span_is_refused(path):
+    with pytest.raises(review.ReviewError):
+        review.checked_findings({"findings": [_finding(path=path)]}, REPO)
+
+
 def test_a_finding_cannot_carry_the_reviewers_signature_or_a_one_line_range():
     body = f"Text.\n\n{review.MARKER}\n{review.SIGNATURE}"
     found = review.checked_findings({"findings": [_finding(body=body, start_line=11)]}, REPO)[0]
@@ -200,6 +237,14 @@ def test_a_finding_without_a_valid_anchor_keeps_its_location_in_an_issue_comment
 
     assert failed == 0 and posts[0][0] == f"repos/{REPO}/issues/7/comments"
     assert posts[0][1]["body"].startswith("`src/a.h:20`\n\nThis overflows.")
+
+
+def test_the_whole_fallback_comment_goes_through_the_link_filter(monkeypatch):
+    # post_review is also given findings that did not come through checked_findings.
+    finding = _finding(line=20, path="src/x ![x](https://outside.example/p.png)")
+    _failed, _poster, posts = _post(monkeypatch, [finding], FakeGitHub([HEAD]))
+
+    assert "https://" not in posts[0][1]["body"] and "https[:]//outside.example" in posts[0][1]["body"]
 
 
 def test_an_inline_comment_github_rejects_falls_back_to_an_issue_comment(monkeypatch):
@@ -355,27 +400,51 @@ def test_the_command_line_refuses_short_commits_and_an_empty_review(repo, monkey
 
 
 # ── a session that did not review ─────────────────────────────────────────────
-def _execution(tmp_path, agents, nested=0):
+def _execution(tmp_path, agents, nested=0, failed=0, background=0, unanswered=0):
+    """A session record: ``agents`` lead-session agents that came back, and others that do not count."""
     events = [{"type": "system", "subtype": "init"}]
-    for index in range(agents):
+
+    def call(number, *, result=None, **fields):
+        call_id = f"toolu_{number}"
         events.append(
             {
                 "type": "assistant",
-                "parent_tool_use_id": None,
-                "message": {
-                    "content": [
-                        {"type": "text", "text": "launching"},
-                        {"type": "tool_use", "name": "Agent" if index % 2 else "Task", "input": {}},
-                    ]
-                },
+                "message": {"content": [{"type": "tool_use", "id": call_id, "name": "Agent", "input": fields}]},
             }
         )
+        if result is not None:
+            events.append(
+                {
+                    "type": "user",
+                    "message": {"content": [{"type": "tool_result", "tool_use_id": call_id, "is_error": result}]},
+                }
+            )
+
+    number = 0
+    for kind, count in (("ok", agents), ("failed", failed), ("background", background), ("unanswered", unanswered)):
+        for _ in range(count):
+            number += 1
+            if kind == "ok":
+                call(number, result=False)
+            elif kind == "failed":
+                call(number, result=True)
+            elif kind == "background":
+                call(number, result=False, run_in_background=True)
+            else:
+                call(number)
     for _ in range(nested):  # a subagent's own calls do not count
         events.append(
             {
                 "type": "assistant",
                 "parent_tool_use_id": "toolu_1",
-                "message": {"content": [{"type": "tool_use", "name": "Agent", "input": {}}]},
+                "message": {"content": [{"type": "tool_use", "id": "toolu_n", "name": "Agent", "input": {}}]},
+            }
+        )
+        events.append(
+            {
+                "type": "user",
+                "parent_tool_use_id": "toolu_1",
+                "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_n", "is_error": False}]},
             }
         )
     events.append({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "Read", "input": {}}]}})
@@ -384,24 +453,64 @@ def _execution(tmp_path, agents, nested=0):
     return path
 
 
-def test_the_agents_a_session_launched_are_counted_from_its_record(tmp_path):
-    assert review.agent_calls(_execution(tmp_path, 7, nested=3)) == 7
+def test_only_agents_that_came_back_without_an_error_are_counted(tmp_path):
+    record = _execution(tmp_path, 7, nested=3, failed=4, background=2, unanswered=5)
+    assert review.agent_calls(record) == 7
 
 
-@pytest.mark.parametrize("agents, posted", [(review.MIN_AGENT_CALLS, True), (2, False)])
-def test_a_session_that_skipped_the_procedure_is_not_posted(tmp_path, monkeypatch, capsys, agents, posted):
-    github = FakeGitHub([HEAD])
-    monkeypatch.setattr(review, "_run", github)
+def _inputs(tmp_path):
     inputs = tmp_path / "in"
-    (inputs / "diff").mkdir(parents=True)
+    (inputs / "diff").mkdir(parents=True, exist_ok=True)
     (inputs / "diff" / "full.diff").write_text(DIFF)
     (inputs / "pr.json").write_text(json.dumps({"repository": REPO, "number": 7, "reviewed_head_sha": HEAD}))
+    return inputs
+
+
+@pytest.mark.parametrize("agents, failed, posted", [(review.MIN_AGENT_CALLS, 0, True), (2, 0, False), (2, 9, False)])
+def test_a_session_that_skipped_the_procedure_is_not_posted(tmp_path, monkeypatch, capsys, agents, failed, posted):
+    github = FakeGitHub([HEAD])
+    monkeypatch.setattr(review, "_run", github)
     monkeypatch.setenv("LLK_REVIEW_FINDINGS", json.dumps({"findings": []}))
-    code = review.main(["post", "--input", str(inputs), "--execution-file", str(_execution(tmp_path, agents))])
+    record = _execution(tmp_path, agents, failed=failed)
+    code = review.main(["post", "--input", str(_inputs(tmp_path)), "--execution-file", str(record)])
 
     assert (code == 0) is posted and bool(github.posts) is posted
     if not posted:
-        assert "launched 2 agent(s)" in capsys.readouterr().out
+        assert "completed 2 agent(s)" in capsys.readouterr().out
+
+
+def test_check_writes_the_checked_findings_for_the_posting_job_and_posts_nothing(tmp_path, monkeypatch):
+    github = FakeGitHub([HEAD])
+    monkeypatch.setattr(review, "_run", github)
+    body = "Bad: ![x](HTTPS://evil.example/p.png)"
+    monkeypatch.setenv("LLK_REVIEW_FINDINGS", json.dumps({"findings": [_finding(body=body)]}))
+    out = tmp_path / "post" / "findings.json"
+    argv = ["check", "--input", str(_inputs(tmp_path)), "--out", str(out)]
+
+    assert review.main([*argv, "--execution-file", str(_execution(tmp_path, review.MIN_AGENT_CALLS))]) == 0
+    handed = json.loads(out.read_text())["findings"]
+    assert handed[0]["body"] == "Bad: ![x](HTTPS[:]//evil.example/p.png)" and not github.calls
+    # The posting job checks them again and posts them as they are.
+    assert review.main(["post", "--input", str(_inputs(tmp_path)), "--findings", str(out)]) == 0
+    assert github.posts[0][1]["body"].startswith("Bad: ![x](HTTPS[:]//evil.example/p.png)")
+
+    # A session that skipped the procedure, or output with a credential, hands nothing over.
+    out.unlink()
+    assert review.main([*argv, "--execution-file", str(_execution(tmp_path, 1))]) == 1 and not out.exists()
+    monkeypatch.setenv("LLK_REVIEW_FINDINGS", json.dumps({"findings": [_finding(body="ghp_" + "a" * 36)]}))
+    assert review.main([*argv, "--execution-file", str(_execution(tmp_path, 9))]) == 1 and not out.exists()
+
+
+def test_post_refuses_inputs_for_another_pull_request(tmp_path, monkeypatch, capsys):
+    github = FakeGitHub([HEAD])
+    monkeypatch.setattr(review, "_run", github)
+    monkeypatch.setenv("LLK_REVIEW_FINDINGS", json.dumps({"findings": [_finding()]}))
+    monkeypatch.setenv("GITHUB_REPOSITORY", REPO)
+    monkeypatch.setenv("PR_NUMBER", "8")  # the run was started for another one
+    assert review.main(["post", "--input", str(_inputs(tmp_path))]) == 1 and not github.calls
+    assert "another pull request" in capsys.readouterr().out
+    monkeypatch.setenv("PR_NUMBER", "7")
+    assert review.main(["post", "--input", str(_inputs(tmp_path))]) == 0 and github.posts
 
 
 def test_file_history_stops_where_a_shallow_fetch_cut_it(repo):

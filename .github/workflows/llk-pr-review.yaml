@@ -45,11 +45,15 @@ jobs:
     timeout-minutes: 150         # measured full reviews can exceed 85 minutes
     # OSPO Vault gives the knowledge token only to this environment, on main.
     environment: llk-review
+    # This job runs the AI on text anyone can write, so its GitHub token can only
+    # read. The action hands that token to the AI's process; nothing here can
+    # write to the repository with it. The job `post` below does the writing.
     permissions:
       contents: read             # read the checkout
-      pull-requests: write       # the posting step: inline review comments
-      issues: write              # the posting step: summary comments
+      pull-requests: read        # the inputs step reads the pull request and its discussion
       id-token: write            # OIDC: tailnet join and Vault login
+    outputs:
+      state: ${{ steps.inputs.outputs.state }}
     env:
       PR_NUMBER: ${{ inputs.pr_number }}
     steps:
@@ -296,7 +300,8 @@ jobs:
 
       # 6. Run the repository-local LLK review. The AI gets file-reading tools
       #    only, confined to the workspace, and returns its findings as JSON.
-      #    It gets no GitHub token to use and no MCP servers.
+      #    It gets no MCP servers, and the only GitHub token in its process is
+      #    this job's read-only one.
       - name: Run LLK code review
         id: llk_code_review
         if: steps.inputs.outputs.state == 'open'
@@ -357,28 +362,84 @@ jobs:
                  | group_by(.) | .[] | "\(.[0]): \(length)"' \
             "$CLAUDE_EXECUTION_FILE" || echo "::warning::Could not read the permission denials"
 
-      # 7. Post the findings. This fixed step is the only writer: review comments
-      #    on this pull request, or the no-findings summary. It refuses output
-      #    that looks like it holds a credential, and a session that ended
-      #    without running the review procedure.
-      - name: Post the review
+      # 7. Check the findings and hand them to the posting job. A session that
+      #    ended without running the review procedure, and output that looks like
+      #    it holds a credential, stop here: nothing is handed over.
+      - name: Check the findings
+        id: check
         if: steps.inputs.outputs.state == 'open' && steps.llk_code_review.outcome == 'success'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           LLK_REVIEW_FINDINGS: ${{ steps.llk_code_review.outputs.structured_output }}
           CLAUDE_EXECUTION_FILE: ${{ steps.llk_code_review.outputs.execution_file }}
         run: |
-          python3 .github/scripts/llk_pr_review.py post \
+          python3 .github/scripts/llk_pr_review.py check \
             --input "${GITHUB_WORKSPACE}/.llk-review-input" \
-            --execution-file "$CLAUDE_EXECUTION_FILE"
+            --execution-file "$CLAUDE_EXECUTION_FILE" \
+            --out "${RUNNER_TEMP}/llk-review-post/findings.json"
 
-      - name: Note that the pull request is closed
-        if: steps.inputs.outcome == 'success' && steps.inputs.outputs.state != 'open'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 .github/scripts/llk_pr_review.py post --closed --input "${GITHUB_WORKSPACE}/.llk-review-input"
+      # What the posting job needs, and nothing else: the pull request's public
+      # metadata and diff, and the checked findings. The session record and the
+      # review knowledge stay in this job.
+      - name: Collect what the posting job needs
+        if: steps.inputs.outcome == 'success' && (steps.inputs.outputs.state != 'open' || steps.check.outcome == 'success')
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/llk-review-post/diff"
+          cp .llk-review-input/pr.json "${RUNNER_TEMP}/llk-review-post/"
+          cp .llk-review-input/diff/full.diff "${RUNNER_TEMP}/llk-review-post/diff/"
+
+      - name: Hand it to the posting job
+        if: steps.inputs.outcome == 'success' && (steps.inputs.outputs.state != 'open' || steps.check.outcome == 'success')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: llk-review-post
+          path: ${{ runner.temp }}/llk-review-post
+          if-no-files-found: error
+          retention-days: 1
 
       # 8. Remove the ephemeral tailnet node immediately, even on failure.
       - name: Tailscale cleanup
         if: always() && steps.tailscale.outcome == 'success'
         run: sudo tailscale logout
+
+  # The only job that can write to the pull request. It never runs the AI and
+  # never sees the review knowledge or the Vault: it gets the checked findings and
+  # the pull request's public data, checks the findings again, and posts them.
+  post:
+    needs: review
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read             # read the posting script
+      pull-requests: write       # inline review comments
+      issues: write              # summary comments
+    env:
+      PR_NUMBER: ${{ inputs.pr_number }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Checkout the posting script
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+          sparse-checkout-cone-mode: false
+
+      - name: Get what the review job handed over
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: llk-review-post
+          path: ${{ runner.temp }}/llk-review-post
+
+      # Review comments on this pull request, or the no-findings summary. The
+      # script refuses findings for another pull request, and output that looks
+      # like it holds a credential.
+      - name: Post the review
+        if: needs.review.outputs.state == 'open'
+        run: |
+          python3 .github/scripts/llk_pr_review.py post \
+            --input "${RUNNER_TEMP}/llk-review-post" \
+            --findings "${RUNNER_TEMP}/llk-review-post/findings.json"
+
+      - name: Note that the pull request is closed
+        if: needs.review.outputs.state != 'open'
+        run: python3 .github/scripts/llk_pr_review.py post --closed --input "${RUNNER_TEMP}/llk-review-post"

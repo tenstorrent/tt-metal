@@ -76,7 +76,18 @@ CREDENTIAL_PATTERNS = {
     "JSON web token": re.compile(r"eyJ[A-Za-z0-9_-]{30,}"),
     "private key": re.compile(r"-----BEGIN"),
 }
-_URL = re.compile(r"https?://[^\s<>()\[\]\"'`]+")
+# A URL in any spelling a renderer accepts: the scheme in either case, and a
+# backslash for a slash.
+_URL = re.compile(r"(?i)\b(?:https?|ftp|wss?):[/\\]{2}[^\s<>()\[\]\"'`]+")
+# A character reference that decodes to ":" or "/", which a renderer decodes
+# inside a link or image destination.
+_URL_ENTITY = re.compile(r"(?i)&(?=(?:#0*58|#x0*3a|colon|#0*47|#x0*2f|sol)\b)")
+# A link or image destination that starts at the host ("//host/..."): after "](",
+# and after the label of a reference definition.
+_HOST_ONLY = re.compile(r"(?m)(\]\(\s*<?\s*|^ {0,3}\[[^\]\n]+\]:\s*<?\s*)[/\\]{2}")
+# An HTML tag with an attribute that names a resource to load or to go to.
+_HTML_LOADER = re.compile(r"(?is)<(?=\s*[a-z][a-z0-9:-]*\b[^<>]*\b(?:src|srcset|href|poster|data|action)\s*=)")
+_UNSAFE_IN_PATH = re.compile(r"[`\x00-\x1f\x7f]")
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 _SHA = re.compile(r"^[0-9a-f]{40}$")
 _REPO = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
@@ -276,8 +287,13 @@ def defang_links(text: str, repo: str) -> str:
 
     def fix(match: re.Match) -> str:
         url = match.group(0)
-        return url if url.startswith(own) else url.replace("://", "[:]//", 1)
+        return url if url.startswith(own) else url.replace(":", "[:]", 1)
 
+    # The spellings that would hide a URL from the pattern go first: an encoded
+    # ":" or "/", a destination without a scheme, and an HTML tag that loads one.
+    text = _URL_ENTITY.sub("&amp;", text)
+    text = _HOST_ONLY.sub(lambda match: match.group(1) + "[//]", text)
+    text = _HTML_LOADER.sub("&lt;", text)
     return _URL.sub(fix, text)
 
 
@@ -298,6 +314,7 @@ def checked_findings(document, repo: str) -> list[dict]:
             or not path
             or path.startswith("/")
             or ".." in path.split("/")
+            or _UNSAFE_IN_PATH.search(path)  # it is shown in a code span it must not close
             or not isinstance(line, int)
             or isinstance(line, bool)
             or line < 1
@@ -327,18 +344,32 @@ def checked_findings(document, repo: str) -> list[dict]:
 
 
 def agent_calls(execution_file: Path) -> int:
-    """How many agents the lead session of a review launched, from its record."""
+    """How many agents the lead session of a review ran to completion, from its record.
+
+    A call counts when its result came back without an error. One that was only
+    attempted (refused, failed, or left in the background) does not.
+    """
     events = json.loads(execution_file.read_text(encoding="utf-8"))
     if not isinstance(events, list):  # one JSON object per line
         raise ValueError("the execution file is not a list of events")
-    count = 0
+    calls, completed = set(), set()
     for event in events:
-        if not isinstance(event, dict) or event.get("type") != "assistant" or event.get("parent_tool_use_id"):
+        if not isinstance(event, dict) or event.get("parent_tool_use_id"):
             continue
         for block in (event.get("message") or {}).get("content") or []:
-            if isinstance(block, dict) and block.get("type") == "tool_use" and block.get("name") in ("Agent", "Task"):
-                count += 1
-    return count
+            if not isinstance(block, dict):
+                continue
+            if event.get("type") == "assistant" and block.get("type") == "tool_use":
+                if (
+                    block.get("name") in ("Agent", "Task")
+                    and block.get("id")
+                    and not (block.get("input") or {}).get("run_in_background")
+                ):
+                    calls.add(block["id"])
+            elif event.get("type") == "user" and block.get("type") == "tool_result":
+                if block.get("tool_use_id") and not block.get("is_error"):
+                    completed.add(block["tool_use_id"])
+    return len(calls & completed)
 
 
 class Poster:
@@ -455,7 +486,7 @@ def post_review(meta: dict, findings: list[dict], hunks_by_file: dict, poster: P
             if url is None:
                 # The location is kept in the text when it cannot be an inline anchor.
                 where = f"`{_location(finding)}`" + (f" at `{short}`" if moved else "")
-                failed += poster.issue_comment(f"{where}\n\n{body}") is None
+                failed += poster.issue_comment(defang_links(f"{where}\n\n{body}", poster.repo)) is None
     if not moved and not poster.dry_run:
         latest = poster.head_sha()
         if latest != reviewed:
@@ -480,6 +511,11 @@ def main(argv: list[str] | None = None) -> int:
     inputs.add_argument("--head-sha", required=True)
     inputs.add_argument("--base-tip-sha", required=True)
     inputs.add_argument("--out", required=True, type=Path)
+    check = commands.add_parser("check", help="check the AI step's session and findings, and write them out")
+    check.add_argument("--input", required=True, type=Path, help="the directory `inputs` wrote")
+    check.add_argument("--findings", type=Path, help="file with the AI step's output (default: $LLK_REVIEW_FINDINGS)")
+    check.add_argument("--execution-file", required=True, type=Path, help="the AI step's record")
+    check.add_argument("--out", required=True, type=Path, help="where the checked findings go")
     post = commands.add_parser("post", help="publish the AI step's findings on the pull request")
     post.add_argument("--input", required=True, type=Path, help="the directory `inputs` wrote")
     post.add_argument("--findings", type=Path, help="file with the AI step's output (default: $LLK_REVIEW_FINDINGS)")
@@ -509,16 +545,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
         meta = json.loads((args.input / "pr.json").read_text(encoding="utf-8"))
-        poster = Poster(meta["repository"], int(meta["number"]), dry_run=args.dry_run)
-        if args.closed:
-            failed = poster.issue_comment("## Code review\n\nSkipped: the pull request is closed.") is None
-        else:
-            if args.execution_file:
-                launched = agent_calls(args.execution_file)
-                print(f"The review session launched {launched} agent(s)")
-                if launched < MIN_AGENT_CALLS:
+        # In a workflow run the pull request is the one the run was started for,
+        # whatever the files say.
+        named = (os.environ.get("GITHUB_REPOSITORY"), os.environ.get("PR_NUMBER"))
+        if all(named) and named != (meta["repository"], str(meta["number"])):
+            raise ReviewError("the review inputs are for another pull request; nothing was posted")
+
+        def findings_of() -> list[dict]:
+            if getattr(args, "execution_file", None):
+                completed = agent_calls(args.execution_file)
+                print(f"The review session completed {completed} agent(s)")
+                if completed < MIN_AGENT_CALLS:
                     raise ReviewError(
-                        f"the review session launched {launched} agent(s); the procedure "
+                        f"the review session completed {completed} agent(s); the procedure "
                         f"needs at least {MIN_AGENT_CALLS}. Nothing was posted"
                     )
             text = (
@@ -532,7 +571,19 @@ def main(argv: list[str] | None = None) -> int:
                 document = json.loads(text)
             except ValueError as exc:
                 raise ReviewError(f"the AI step's output is not JSON: {exc}") from exc
-            findings = checked_findings(document, meta["repository"])
+            return checked_findings(document, meta["repository"])
+
+        if args.command == "check":
+            findings = findings_of()
+            args.out.parent.mkdir(parents=True, exist_ok=True)
+            args.out.write_text(json.dumps({"findings": findings}, indent=1) + "\n", encoding="utf-8")
+            print(f"{len(findings)} finding(s) checked")
+            return 0
+        poster = Poster(meta["repository"], int(meta["number"]), dry_run=args.dry_run)
+        if args.closed:
+            failed = poster.issue_comment("## Code review\n\nSkipped: the pull request is closed.") is None
+        else:
+            findings = findings_of()
             hunks = right_side_lines((args.input / "diff" / "full.diff").read_text(encoding="utf-8"))
             failed = post_review(meta, findings, hunks, poster)
             print(f"{len(findings)} finding(s)")
