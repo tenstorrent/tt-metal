@@ -357,7 +357,18 @@ WEIGHT_SERVER_CHUNKS = 3
 # -1.7%, sem dec res3 fc1 -1.1%, the other kw-fold layers flat. Not off kw-fold: there the first matmul waits for the
 # tilize, round 0 is hidden, and the partner's NoC0 multicast only slows the reader's NoC0 fill (res3.0, stride 2:
 # fill 3.62 -> 3.93 us, +2.0% to +2.7% over 3 options x 3 runs).
+# Round 0 gates compute's first subblock. Each partner's writer reads the partner's part of round 0 itself, on NoC0 at
+# kernel start, while its reader reads the later rounds on NoC1, and the first server takes WEIGHT_SERVER_R0_SHARE of
+# round 0's slot rows (rounded, the extra rows to the earliest chunks; later rounds keep the halves)
+# (conv2d_3x3_weight_server_writer.cpp). The partner is round 0's late half otherwise: its kernel starts ~0.3-0.45 us
+# after the first server's (the last kernel group's launch message lands last), and on the 103-core layers its NoC1
+# responses run west along row 11 through the 4-core rectangle, under that rectangle's own NoC1 multicast (inst res2
+# fc1, zoned: first server done ~2.2 us, partner ~2.9-3.5, round 0 complete ~3.0-3.5 -> 2.54 us). The NoC0 read and
+# the share go together: on the 86-core layers either alone slowed the fill (res3.x NoC0 read +2.9%, share +0.5% to
+# +1.4%), both flat (-0.7%). Measured (unzoned, LoFi bf8_b, bit-identical): inst res2 fc1 -1.6%, inst dec res2 fc0
+# -2.0% (pooled medians), the other kw-fold layers flat.
 WEIGHT_SERVER_PARTNERS = True
+WEIGHT_SERVER_R0_SHARE = (7, 12)
 # Blackhole NoC grid (x, y), the torus of the partner placement's hop metric.
 _NOC_GRID = (17, 12)
 # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
@@ -3758,13 +3769,26 @@ def create_program_descriptor(
         slot_row = max(1, bn // 3) if kwf else bn
         chunk_rows = chunk_tiles // slot_row if chunk_tiles % slot_row == 0 else 0
         split = (chunk_rows // 2) * slot_row if chunk_rows >= 2 else chunk_tiles // 2
+        # Round 0's split with a partner: the first server's slot tiles of every chunk, one byte per chunk (see
+        # WEIGHT_SERVER_R0_SHARE); 0 (one server): every round takes the args' part.
+        r0_share = [split] * num_chunks
+        if chunk_rows >= 2:
+            num, den = WEIGHT_SERVER_R0_SHARE
+            rows = (2 * num * num_chunks * chunk_rows + den) // (2 * den)
+            r0_share = [
+                (rows // num_chunks + (1 if c < rows % num_chunks else 0)) * slot_row for c in range(num_chunks)
+            ]
         for rect, server, partner in weight_servers:
             lo = device.worker_core_from_logical_core(rect.start)
             hi = device.worker_core_from_logical_core(rect.end)
             n_receivers = rect.grid_size().x * rect.grid_size().y
             end = split if partner is not None else chunk_tiles
             ahead = num_chunks if partner is not None else 1
-            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, 0, end, ahead]
+            r0_split = 0
+            if partner is not None:
+                assert num_chunks <= 4 and chunk_tiles <= 0xFF and all(0 < t <= chunk_tiles for t in r0_share)
+                r0_split = sum(t << (8 * c) for c, t in enumerate(r0_share))
+            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, 0, end, ahead, r0_split]
             # NoC1 multicast: from the rectangle's high corner to its low corner.
             fwd = 0
             if partner is not None:
@@ -3782,9 +3806,17 @@ def create_program_descriptor(
                 end,
                 1 if partner is not None else 0,
                 fwd,
+                r0_split,
             ]
             if partner is not None:
-                partner_reader_rt[partner.x][partner.y] = [weight_addr, num_rounds, split, chunk_tiles, ahead]
+                partner_reader_rt[partner.x][partner.y] = [
+                    weight_addr,
+                    num_rounds,
+                    split,
+                    chunk_tiles,
+                    ahead,
+                    r0_split,
+                ]
                 # NoC0 multicast: from the low corner to the high corner.
                 partner_writer_rt[partner.x][partner.y] = [
                     num_rounds,
@@ -3798,18 +3830,21 @@ def create_program_descriptor(
                     chunk_tiles,
                     2,
                     0,
+                    r0_split,
+                    weight_addr,
                 ]
         server_cores = _core_range_set(servers)
-        server_reader_ct = [
-            CB_WEIGHTS,
+        # The page-run parameters (conv2d_3x3_server_pages.hpp) and the weight accessor: the server reader's, and the
+        # partner writer's for its part of round 0.
+        server_pages_ct = [
             bk,
             bn,
             b.num_k_blocks,
-            num_chunks,
             (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
             g.tensor_n_tiles,
             *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
         ] + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
+        server_reader_ct = [CB_WEIGHTS, *server_pages_ct[:3], num_chunks, *server_pages_ct[3:]]
         server_kernels = [
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
@@ -3843,7 +3878,8 @@ def create_program_descriptor(
         ]
         if partners:
             # The partners run the same two kernels with their NoCs swapped (reads on NoC1, multicast on NoC0) and no
-            # bias; their ack semaphore counts the first server's forwarded clearances.
+            # bias; their ack semaphore counts the first server's forwarded clearances. A partner's writer reads its
+            # part of round 0 itself, on NoC0 (SERVER_R0_SELF_READ; see WEIGHT_SERVER_R0_SHARE).
             partner_cores = _core_range_set(partners)
             server_kernels += [
                 ttnn.KernelDescriptor(
@@ -3851,6 +3887,7 @@ def create_program_descriptor(
                     core_ranges=partner_cores,
                     compile_time_args=server_reader_ct,
                     runtime_args=partner_reader_rt,
+                    defines=[("SERVER_R0_SELF_READ", "1")],
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
                     ),
@@ -3859,9 +3896,10 @@ def create_program_descriptor(
                     kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
                     core_ranges=partner_cores,
                     compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks, 0, CB_BIAS, 0]
-                    + list(ttnn.TensorAccessorArgs().get_compile_time_args()),
+                    + list(ttnn.TensorAccessorArgs().get_compile_time_args())
+                    + server_pages_ct,
                     runtime_args=partner_writer_rt,
-                    defines=_round0_defines + [("SERVER_FWD_ACKS", "1")],
+                    defines=_round0_defines + [("SERVER_FWD_ACKS", "1"), ("SERVER_R0_SELF_READ", "1")],
                     config=ttnn.DataMovementConfigDescriptor(
                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
                     ),

@@ -32,6 +32,13 @@
 // the receivers ack this server only; it forwards each round's clearance to the partner (arg fwd: its NoC (x | y << 8)
 // + 1), whose ack semaphore counts the forwarded rounds (SERVER_FWD_ACKS). res3.x (unzoned, medians of 3) 9.82 ->
 // 8.94 us.
+// Round 0 gates compute's first subblock: a partner's writer reads the partner's part of it itself, on NoC0 at kernel
+// start (SERVER_R0_SELF_READ; chunk c under transaction id 1 + c), while its reader reads the later rounds on NoC1, and
+// round 0 has its own split (arg r0_split, byte c: the first server's slot tiles [0, split_c) of chunk c, the partner
+// the rest; 0 with one server). The partner is round 0's late half otherwise: its kernel starts ~0.3-0.45 us after
+// the first server's (the last kernel group's launch message lands last), and its NoC1 responses can run west through
+// the receivers on its row, under their own rectangle's NoC1 multicast (inst res2 fc1, zoned: round 0 complete
+// ~3.0-3.5 -> 2.54 us). Measured: see the descriptor's WEIGHT_SERVER_R0_SHARE.
 //
 // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
 // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
@@ -45,6 +52,10 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+#ifdef SERVER_R0_SELF_READ
+#include "conv2d_3x3_gather_dataflow.hpp"
+#include "conv2d_3x3_server_pages.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -83,6 +94,8 @@ void kernel_main() {
     const uint32_t part_hi = get_arg_val<uint32_t>(8);
     const uint32_t lane = get_arg_val<uint32_t>(9);
     const uint32_t fwd = get_arg_val<uint32_t>(10);
+    // Round 0's split (see the file comment); part_lo 0 is the first (or only) server.
+    const uint32_t r0_split = get_arg_val<uint32_t>(11);
     const uint32_t lane_off = lane == 2 ? 1 : 0;
     const uint64_t fwd_ack_noc =
         fwd != 0 ? get_noc_addr((fwd - 1) & 0xFF, ((fwd - 1) >> 8) & 0xFF, get_semaphore(ack_sem_id)) : 0;
@@ -95,6 +108,39 @@ void kernel_main() {
         }
     };
     const uint32_t tile_bytes = get_tile_size(cb_weights);
+#ifdef SERVER_R0_SELF_READ
+    // The partner's part of round 0, read here at kernel start into round 0's slot (slot 0: the CB is fresh), chunk c
+    // under transaction id 1 + c; the server reader's compile-time args follow the bias accessor's (page runs:
+    // conv2d_3x3_server_pages.hpp).
+    constexpr uint32_t sr_args = bias_args.next_compile_time_args_offset();
+    using Pages = conv2d_3x3::ServerPages<
+        get_compile_time_arg_val(sr_args),
+        get_compile_time_arg_val(sr_args + 1),
+        get_compile_time_arg_val(sr_args + 2),
+        get_compile_time_arg_val(sr_args + 3),
+        get_compile_time_arg_val(sr_args + 4),
+        get_compile_time_arg_val(sr_args + 5),
+        get_compile_time_arg_val(sr_args + 6)>;
+    constexpr auto weight_args = TensorAccessorArgs<sr_args + 7>();
+    {
+        const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(12), tile_bytes);
+        conv2d_3x3::TaggedReads<false> r0_reads;
+        const uint32_t l1 = get_read_ptr(cb_weights);
+        for (uint32_t c = 0; c < num_chunks; ++c) {
+            r0_reads.begin(1 + c);
+            Pages::read(
+                r0_reads,
+                weights,
+                tile_bytes,
+                0,
+                l1,
+                c * chunk_tiles + ((r0_split >> (8 * c)) & 0xFF),
+                (c + 1) * chunk_tiles);
+        }
+        dataflow_kernel_lib::set_read_trid(r0_reads.noc, 0);
+    }
+    auto r0_read = [&](uint32_t c) -> bool { return ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + c); };
+#endif
     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
     // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
     // no ack, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot, round 1 would wait
@@ -156,12 +202,21 @@ void kernel_main() {
         const uint64_t flag_mcast = get_noc_multicast_addr(sx, sy, ex, ey, flag);
         const uint32_t base = get_read_ptr(cb_weights);
         auto landed = [&](uint32_t c) -> bool {
+#ifdef SERVER_R0_SELF_READ
+            if (r == 0 && !r0_read(c)) {
+                return false;
+            }
+#endif
             return cb_pages_available_at_front(cb_weights, (c + 1) * chunk_tiles);
         };
         for (uint32_t c = 0; c < num_chunks;) {
             {
                 MaybeDeviceZoneScope("server_wait_read");
                 cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
+#ifdef SERVER_R0_SELF_READ
+                while (r == 0 && !r0_read(c)) {
+                }
+#endif
             }
             MaybeDeviceZoneScope("server_send");
             uint32_t n = 1;
@@ -177,15 +232,25 @@ void kernel_main() {
                     num_receivers,
                     true);
             } else {
-                // This server's part of each landed chunk, one multicast per chunk in the same linked chain.
+                // This server's part of each landed chunk, one multicast per chunk in the same linked chain (an empty
+                // part of round 0 sends nothing: only the flag lane below).
                 for (uint32_t i = c; i < c + n; ++i) {
-                    const uint32_t src = base + (i * chunk_tiles + part_lo) * tile_bytes;
-                    noc_async_write_multicast(
-                        src,
-                        get_noc_multicast_addr(sx, sy, ex, ey, src),
-                        (part_hi - part_lo) * tile_bytes,
-                        num_receivers,
-                        true);
+                    uint32_t lo = part_lo;
+                    uint32_t hi = part_hi;
+                    if (r == 0 && r0_split != 0) {
+                        const uint32_t split = (r0_split >> (8 * i)) & 0xFF;
+                        lo = part_lo == 0 ? 0 : split;
+                        hi = part_lo == 0 ? split : chunk_tiles;
+                    }
+                    if (hi > lo) {
+                        const uint32_t src = base + (i * chunk_tiles + lo) * tile_bytes;
+                        noc_async_write_multicast(
+                            src,
+                            get_noc_multicast_addr(sx, sy, ex, ey, src),
+                            (hi - lo) * tile_bytes,
+                            num_receivers,
+                            true);
+                    }
                 }
             }
             c += n;
