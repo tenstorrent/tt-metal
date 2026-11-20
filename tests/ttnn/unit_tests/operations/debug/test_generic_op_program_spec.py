@@ -1146,6 +1146,19 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         result = E.generic_op([first_input, first_output], spec, run_args)
         assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
 
+    # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
+    # device's program too, although both devices hold the same data. The tensor itself holds both devices and passes.
+    replicated = ttnn.from_torch(torch_input[:1], layout=ttnn.TILE_LAYOUT, device=mesh_device)
+    replicated_output = ttnn.allocate_tensor_on_device(replicated.spec, mesh_device)
+    first_replica, second_replica = ttnn.get_device_tensors(replicated)
+    first_replicated_output = ttnn.get_device_tensors(replicated_output)[0]
+    spec, run_args = exp_program(second_replica, first_replicated_output)
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    spec, run_args = exp_program(replicated, first_replicated_output)
+    result = E.generic_op([first_replica, first_replicated_output], spec, run_args)
+    assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
+
     # Each device's program may name that device's views while io_tensors lists the whole tensors.
     first_spec, first_run_args = exp_program(first_input, first_output)
     second_spec, second_run_args = exp_program(second_input, second_output)
