@@ -11,6 +11,7 @@
 #include "api/compute/matmul_fe_mark.h"
 #ifdef ARCH_BLACKHOLE
 #include "llk_size_mode.h"
+#include "llk_math_matmul_phases.h"
 #endif
 #include "llk_assert.h"
 #include "sanitizer/api.h"
@@ -413,6 +414,16 @@ ALWI void matmul_block_math_dynamic_throttle(
             }
             MATH((llk_math_matmul_init_switch<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, row_mop, tile_mop, in1_order, reuse_dir, row_end_fold, half_end_fold, key_ct, key_rt>(
                 in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim)));
+            if constexpr (
+                matmul_kernel_phase_elidable() && MM_THROTTLE == 0 &&
+                is_high_fidelity(matmul_elided_fidelity<in0_format, in1_format, out_format>())) {
+                MATH((matmul_cb_phases(
+                    to_underlying(matmul_elided_fidelity<in0_format, in1_format, out_format>()),
+                    in0_cb_id,
+                    in1_cb_id,
+                    ct_dim,
+                    rt_dim)));
+            }
             throttled_mop_status = 0;
         }
         MATH((llk_math_matmul<matmul_elided_fidelity<in0_format, in1_format, out_format>(), MM_THROTTLE, /*num_faces=*/4, row_mop, tile_mop, reuse_dir, row_end_fold>(idst, ct_dim, rt_dim, held_a)));
@@ -1394,6 +1405,39 @@ constexpr bool matmul_fe_unkeyed() {
     return false;
 }
 
+#if defined(UCK_CHLKC_MATH)
+// The phase count of a math init in a kernel that may drop fidelity phases (llk_math_matmul_phases.h), from its cbs' formats
+template <std::uint32_t in0_cb, std::uint32_t in1_cb>
+ALWI void matmul_fe_phase_init(
+    const std::uint32_t in0_cb_id, const std::uint32_t in1_cb_id, const std::uint32_t ct_dim, const std::uint32_t rt_dim) {
+    if constexpr (matmul_kernel_phase_elidable() && MM_THROTTLE == 0) {
+        if constexpr (in0_cb < sizeof(unpack_src_format) && in1_cb < sizeof(unpack_src_format)) {
+            constexpr DataFormat f = matmul_fe_phase_format<in0_cb, in1_cb>();
+            constexpr MathFidelity form = matmul_elided_fidelity<f, f, DataFormat::Invalid>();
+            if constexpr (is_high_fidelity(form)) {
+                constexpr auto in0 = static_cast<DataFormat>(unpack_src_format[in0_cb]);
+                constexpr auto in1 = static_cast<DataFormat>(unpack_src_format[in1_cb]);
+                constexpr std::uint32_t p = matmul_needed_phases(to_underlying(MATH_FIDELITY), in0, in1);
+                if constexpr (p != to_underlying(form)) {
+                    if constexpr (matmul_phases_one_tile_keep(
+                                      in0 == DataFormat::Bfp8_b || in0 == DataFormat::Bfp4_b,
+                                      in1 == DataFormat::Bfp8_b || in1 == DataFormat::Bfp4_b)) {
+                        if (ct_dim != 1 || rt_dim != 1) {
+                            matmul_set_mop_phases(p);
+                        }
+                    } else {
+                        matmul_set_mop_phases(p);
+                    }
+                }
+            }
+        } else {
+            // a run-time pair keeps the requested form (matmul_fe_phase_format), so it is high fidelity
+            matmul_cb_phases(to_underlying(MATH_FIDELITY), in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+        }
+    }
+}
+#endif
+
 // mark: MATMUL_FE_MARK() from the unpack and pack macros; fkey: the kernel's forms key decision (MATMUL_FE_KDEC)
 template <std::uint32_t in0_cb, std::uint32_t in1_cb, std::uint32_t ct, std::uint32_t rt, std::size_t mark = 0, bool fkey = false>
 ALWI void matmul_block_init_fe(
@@ -1422,6 +1466,9 @@ ALWI void matmul_block_init_fe(
         matmul_fe_key<ct, rt>(ct),
         0,
         matmul_fe_out_key<fkey>()>(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim, call_line);
+#if defined(UCK_CHLKC_MATH)
+    matmul_fe_phase_init<in0_cb, in1_cb>(in0_cb_id, in1_cb_id, ct_dim, rt_dim);
+#endif
 }
 
 template <
