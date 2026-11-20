@@ -423,6 +423,10 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- No minimum-gain line (owner, 2026-11-20): a perf pick that passes its gate, keeps every accuracy limit (or is
+  bit-identical) and wins on the device profile is accepted whatever its size; never reject a verified device win
+  against a "keep only at >= N ms" bar (DeepSeek-V4.1 PB.8: a bit-identical -0.6 ms mhc_post win was rejected against
+  ">= ~1 ms" and had to be re-applied). Walls alone (noisy) never decide.
 - Procedural limits never stall progress (owner, 2026-11-19): an attempt cap, the abort cap (MAX_ABORTS), a retry or
   escalation rule that trips on failures that are not the agent's (a framework false violation, an overseer abort, a
   bogus check; anything but the hardware) is overridden at once (`orchestrator resume --attempts <n>`, a fresh
