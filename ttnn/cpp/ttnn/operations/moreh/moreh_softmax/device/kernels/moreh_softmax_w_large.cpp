@@ -73,7 +73,7 @@ ALWI void find_shift(
     if constexpr (!UseMinShift) {
         // find max
         if (Wt == 1) {
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -86,7 +86,7 @@ ALWI void find_shift(
             // exp-sum below), and combine the partial maxima into dfb::max, as the min-shift path below does.
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::in0, dfb::max_scaler, dfb::add>(
                 dfb_in0_obj, dfb_max_scaler_obj, dfb_add_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::exps>(
                 dfb_tmp_obj, dfb_max_scaler_obj, dfb_exps_obj, compute_kernel_lib::ReduceInputBlockShape::single());
@@ -104,7 +104,7 @@ ALWI void find_shift(
                 dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             // Phase 2: mask the last tile and continue reducing into dfb::max via Accumulate.
-            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+            mask_neginf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
                 dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 dfb_tmp_obj,

@@ -452,6 +452,41 @@ ALWI void mask_posinf_tile_to_dfb(
     }
 }
 
+// Same contract as mask_tile_to_dfb, but the masked lanes are written as -inf instead of 0. A MAX
+// pool must treat padding as -inf, otherwise a zeroed pad wins whenever every real lane of the row
+// is negative (see the softmax/logsoftmax max shift in moreh_softmax_{h,w}(_large).cpp). There is
+// no -inf mask LLK, so negate, mask to +inf, and negate back: real lanes come out as x, padded
+// lanes as -inf. Same trick as the MINUS_INF path of the moreh_norm ord_other kernels.
+template <const auto& DfbIn, const auto& DfbMask, const auto& DfbOut>
+ALWI void mask_neginf_tile_to_dfb(
+    moreh_dfb_t<DfbIn>& dfb_in,
+    moreh_dfb_t<DfbMask>& dfb_mask,
+    moreh_dfb_t<DfbOut>& dfb_out,
+    uint32_t itile = 0,
+    uint32_t mtile = 0,
+    uint32_t pop = 1,
+    uint32_t popm = 1) {
+    dfb_in.wait_front(itile + 1);
+    dfb_mask.wait_front(mtile + 1);
+
+    moreh_retarget_packer(dfb_out.get_id());
+    ckl::eltwise_chain(
+        ckl::IterationShape::one_tile(),
+        ckl::CopyTile<moreh_input<DfbIn>>{dfb_in, itile},
+        ckl::CopyTile<moreh_input<DfbMask>, ckl::Dst::D1>{dfb_mask, mtile},
+        ckl::Negative<ckl::Dst::D0>{},
+        ckl::MaskPosInf<>{},
+        ckl::Negative<ckl::Dst::D0>{},
+        ckl::PackTile<moreh_output<DfbOut>>{dfb_out});
+
+    if (pop) {
+        dfb_in.pop_front(pop);
+    }
+    if (popm) {
+        dfb_mask.pop_front(popm);
+    }
+}
+
 template <ckl::BroadcastDim Bcast, const auto& Dfb0, const auto& Dfb1, const auto& DfbOut>
 ALWI void sub_tiles_bcast_to_dfb(
     moreh_dfb_t<Dfb0>& dfb0,
