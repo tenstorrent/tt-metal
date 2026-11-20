@@ -1,0 +1,65 @@
+{
+ "used": [
+  {
+   "id": "DS41-201",
+   "how": "the cut_err_* metrics take their limit from e2e_limits.err_limit directly (own check(), as test_decoder_skip), not the ladder's prefix-based check",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md is at the 500 KB limit: the P.33 section went to known_issues_detail.md, the pointer line edited in place (same length)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-72",
+   "how": "ids past the cut in the partial chunk are the engine's PAD_ID 0xFFFFFFFF (embed clamps; never reach a cache: 0 compressed-KV rows past the cut)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "where the golden keeps window KV rows other than the final ring (only rings at snapshots; kv step dumps only for step-dump layers): now DS41-209"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "test only; no kernel, fork or weight touched, nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched (no model or fork change)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run; only the new test via gate P.33 --check and the brief's measure"
+  }
+ ],
+ "cited_only": [
+  "DS41-209"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.33",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-05T20:16:43",
+  "head": "f8a2cdb0118",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.33.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.33.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_decoder_cut.py"
+  ]
+ }
+}

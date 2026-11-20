@@ -16,13 +16,7 @@ using namespace tt::test_utils;
 
 namespace unit_tests::dm::quasar_idma {
 
-bool should_skip_test() {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch != tt::ARCH::QUASAR) {
-        return true;
-    }
-    return std::getenv("TT_METAL_SIMULATOR") == nullptr;
-}
+bool should_skip_test() { return tt::get_arch_from_string(tt::test_utils::get_umd_arch_name()) != tt::ARCH::QUASAR; }
 
 constexpr auto kIdmaBasic =
     "tests/tt_metal/tt_metal/data_movement/quasar_examples/quasar_idma/kernels/idma_basic_example.cpp";
@@ -32,33 +26,33 @@ constexpr auto kIdma1DStrided =
 void run_kernel(
     distributed::MeshDevice& mesh_device,
     const std::string& kernel_path,
-    experimental::KernelSpec::CompileTimeArgs compile_time_args) {
-    const experimental::KernelSpecName DM_KERNEL{"idma"};
-    const experimental::NodeCoord node{0, 0};
+    KernelSpec::CompileTimeArgs compile_time_args) {
+    const KernelSpecName DM_KERNEL{"idma"};
+    const NodeCoord node{0, 0};
 
-    experimental::KernelSpec dm_kernel_spec{
+    KernelSpec dm_kernel_spec{
         .unique_id = DM_KERNEL,
         .source = kernel_path,
         .num_threads = 1,
         .compile_time_args = std::move(compile_time_args),
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     };
 
-    experimental::WorkUnitSpec main_wu{
+    WorkUnitSpec main_wu{
         .name = "main",
         .kernels = {DM_KERNEL},
         .target_nodes = node,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "idma",
         .kernels = {dm_kernel_spec},
         .work_units = {main_wu},
     };
     Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
 
-    experimental::ProgramRunArgs params;
-    params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{.kernel = DM_KERNEL}};
     experimental::SetProgramRunArgs(program, params);
 
     distributed::MeshWorkload workload;
@@ -188,7 +182,7 @@ class QuasarIdmaOps : public QuasarMeshDeviceSingleCardFixture {};
 
 TEST_F(QuasarIdmaOps, IDMA_Basic) {
     if (unit_tests::dm::quasar_idma::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Host writes pattern to src, kernel copies 16*8=128 B to dst, host verifies dst==src
     EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_basic_test(this->device()));
@@ -196,7 +190,7 @@ TEST_F(QuasarIdmaOps, IDMA_Basic) {
 
 TEST_F(QuasarIdmaOps, IDMA_1D_Strided) {
     if (unit_tests::dm::quasar_idma::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
+        GTEST_SKIP() << "Test requires Quasar";
     }
     // Host writes pattern to src, kernel copies 10 elements with src_stride=16 B to dst linearly
     EXPECT_TRUE(unit_tests::dm::quasar_idma::run_idma_1d_strided_test(this->device()));

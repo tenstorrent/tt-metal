@@ -1,0 +1,70 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "embed frees the reshape view and then its source only if still allocated; the block's freeing checks is_allocated and protects shared buffers (tt/model.py _free, embed)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-3",
+   "how": "the device block boundary DevH carries the streams and the pending pre separately; attn_collapse uses the pending pre, ffn_collapse attn_hc's, ffn_residual returns ffn_hc's pre",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-28",
+   "how": "the all-device block runs every step of every layer on the device module, not only the steps hooks DEVICE_STEPS lists",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-72",
+   "how": "embed clamps the ids (PAD_ID past actual_end) into the vocabulary before ttnn.embedding",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-26",
+   "how": "begin_chunk hashes through TtEngramRows, which skips pad ids past actual_end, so the engram tail stays the last real ids",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run gate's metrics from generated/bringup_adhoc/M.1.json",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-24",
+   "how": "explains model_load_s 288 s: the bfp8 expert conversion at load, ~34 s per layer, now for all 8 layers",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the assembled model needs every index source's device top-k (and the candidate pool) kept per chunk start for the ladder's whole-sequence state check (state.to_torch topk_idx / candidates over [0, length)), not only for this chunk's readers"
+ ],
+ "overseer": [],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "M.1",
+  "role": "assemble",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-17T18:31:54",
+  "head": "42aa628687b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/M.1.assemble.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

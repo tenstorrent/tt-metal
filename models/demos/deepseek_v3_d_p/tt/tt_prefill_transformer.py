@@ -196,6 +196,7 @@ class TtPrefillTransformer(LightweightModule):
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        moe_impl: Optional[str] = None,
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
@@ -226,8 +227,9 @@ class TtPrefillTransformer(LightweightModule):
         self.indexer_types = getattr(config, "indexer_types", None)
         self.last_indexer_indices = None
 
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
-        sp_topology = topology[0] if isinstance(topology, tuple) else topology
+        # A tuple is per mesh axis (tt_ccl.per_axis_topology), so index it by the TP / SP axis.
+        tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        sp_topology = topology[sp_axis] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -301,6 +303,7 @@ class TtPrefillTransformer(LightweightModule):
                 tp_shard_kv=tp_shard_kv,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                moe_impl=moe_impl,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
@@ -331,6 +334,8 @@ class TtPrefillTransformer(LightweightModule):
         self.lm_head = (
             TtLMHead(
                 mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
                 emb_dim=config.hidden_size,
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),
@@ -460,9 +465,11 @@ class TtPrefillTransformer(LightweightModule):
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        # Sequence concatenates over the SP axis and the embedding over the TP axis.
+        dims = (-2, -1) if self.sp_axis == 0 else (-1, -2)
         host = ttnn.to_torch(
             tt_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
         ).to(torch.bfloat16)
         if len(tt_tensor.shape) == 4:
             host = host.squeeze(0)

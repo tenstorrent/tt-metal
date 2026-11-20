@@ -487,7 +487,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
             continue;
         }
         const auto peer_node = fabric_node_ids.at(p);
-        const auto direction = tt::tt_fabric::get_eth_forwarding_direction(src_fabric_node_id, peer_node);
+        const auto direction = tt::tt_fabric::get_eth_forwarding_direction(*mesh_device, src_fabric_node_id, peer_node);
         TT_FATAL(
             direction.has_value(),
             "No 2D fabric forwarding direction from attn_res_gather_softmax source {} to peer {}",

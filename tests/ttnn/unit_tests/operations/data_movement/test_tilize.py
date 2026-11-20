@@ -554,10 +554,6 @@ def test_tilize_width_sharded_dram_input_45331(device, shard_shape):
 
 
 def test_tilize_width_sharded_dram_input_to_l1_sharded_output_49107(device):
-    # RuntimeError: No core coordinate found at location: (8, 0, TENSIX, LOGICAL)
-    # DRAM grid x-size (9 on BH) exceeds the valid Tensix logical core range on this board.
-    # Tracked in: https://github.com/tenstorrent/tt-metal/issues/50689
-    pytest.skip("Skipping: DRAM grid x-size maps outside valid Tensix logical cores — #50689")
     torch.manual_seed(0)
     num_cores = device.dram_grid_size().x
     shard_shape = (32, 64)

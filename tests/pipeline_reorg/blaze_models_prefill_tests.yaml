@@ -299,7 +299,7 @@
 
 # ===== Kimi-K3-2.8T ====================================================================================
 
-- name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k"
+- name: "(Kimi-K3-2.8T) contract gates, KDA 5k, MLA chunked 10k@5k and 55k@5k + K3.1 sparse MLA 5k"
   # Four legs folded into one. Each ran well under the ~5.5 min "Setup multihost job" cost, so four
   # galaxy allocations were spending ~22 min of setup to run ~7 min of tests. Measured test-step
   # times on run 36717057668: 77 / 150 / 114 / 92 s.
@@ -359,7 +359,8 @@
 
     k3_mla() (
 
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # 2.5 min at most in CI (incl. the pip install); 7 min bound.
+      timeout -k 2m 7m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -370,29 +371,46 @@
     k3_mla_trace() (
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
 
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      # 1.4 min at most in CI (incl. the pip install); 7 min bound.
+      timeout -k 2m 7m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_prefill -k "k3 and production-50k+5k and trace and torus-xy-8x4 and scalar and no_determinism" -vvv --tb=short
       '
     )
 
-    echo "===== [1/4] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
+    k31_sparse_mla() (
+      # Random weights vs the CPU reference, computed on the fly and cached under /tmp (about 25 s). 7 cases, about
+      # 40 s with a warm kernel cache on one open mesh. Then determinism at production shapes (warm and long cache,
+      # scaled-FP8, 10 eager runs and 10 replays, identical, compared on device): 2 cases, about 22 s warm, on 8x4
+      # and on one 4x4 stage (top tray half, 2.5k chunks).
+      timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        export DS_PREFILL_REUSE_MODEL=1  # one mesh open for all cases
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "kimi_k3_1 and shape-8x4" -vvv --tb=short &&
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short &&
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k kimi_k3_1 -vvv --tb=short
+      '
+    )
+
+    echo "===== [1/5] (Kimi-K3-2.8T) golden-contract, layer-schedule, cache and KV-ack gates ====="
     k3_contracts || exit $?
-    echo "===== [2/4] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
+    echo "===== [2/5] (Kimi-K3-2.8T) KDA accuracy, determinism 5k SP8xTP4 + SP ops + layer-1 real weights ====="
     k3_kda || exit $?
-    echo "===== [3/4] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
+    echo "===== [3/5] (Kimi-K3-2.8T) MLA chunked accuracy 10k@5k + determinism 5k@5k ====="
     k3_mla || exit $?
-    echo "===== [4/4] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
+    echo "===== [4/5] (Kimi-K3-2.8T) MLA chunked accuracy 55k@5k vs golden trace ====="
     k3_mla_trace || exit $?
-    echo "===== all 4 sections passed ====="
+    echo "===== [5/5] (Kimi-K3.1) sparse MLA accuracy, chunked, pad-overflow 5k, determinism at production shapes ====="
+    k31_sparse_mla || exit $?
+    echo "===== all 5 sections passed ====="
   test_type: k3_accuracy_suite
   # Per-section tokens retained: `-f test-type=<old token>` still selects this job.
-  test_tags: [kimi_k3, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace]
+  test_tags: [kimi_k3, kda, mla, determinism, k3_contracts, k3_kda, k3_mla, k3_mla_trace, sparse_mla, k31_sparse_mla]
   test_group: module
   skus:
     bh_sc1:
-      # Exactly the sum of the per-section bounds (12 + 18 + 12 + 12).
+      # Exactly the sum of the per-section bounds (12 + 18 + 7 + 7 + 10).
       timeout: 54
       tier: 2
       release_ready: false
@@ -401,7 +419,7 @@
   budget_type: demo
   sp_config: sc1
 
-- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k + AttnRes layer perf 5k"
+- name: "(Kimi-K3-2.8T) KDA perf 5k + MLA chunked perf 55k@5k + AttnRes layer perf 5k + K3.1 sparse MLA perf warm/long"
   fabric_profile: torus_xy
   cmd: |
     export TT_METAL_SHM_TRACKING_DISABLED=1
@@ -411,6 +429,11 @@
       set -e
       export OMP_NUM_THREADS=$(nproc)
       uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+      # K3.1 sparse MLA host-time gate: warm and long, each untraced (fastest of 10 after 10 warm-up) and traced (one replay). Runs first,
+      # as in the GLM job, so a perf miss in the other tests (this block stops at the first failure) cannot hide it.
+      # 8x4, then one 4x4 stage (top tray half, 2.5k chunks).
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
+      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k kimi_k3_1 -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/perf/test_layer_perf.py::test_synthetic_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/kda/components/test_relay_affine_prefix.py::test_relay_affine_prefix_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_entry_correction.py::test_entry_correction_kimi_k3_perf models/demos/deepseek_v3_d_p/tests/kda/components/test_select_final_carry.py::test_select_final_carry_kimi_k3_perf -k "SP8xTP4" -vvv --tb=short
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_mla.py::test_mla_chunked_perf_check -k "k3 and torus-xy-8x4" -vvv --tb=short
@@ -418,11 +441,11 @@
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/attn_res/perf/test_attn_res_op_perf.py::test_attn_res_op_perf -k "SP8xTP4" -vvv --tb=short
     '
   test_type: k3_mla_perf
-  test_tags: [kimi_k3, kda, mla, k3_kda_perf]
+  test_tags: [kimi_k3, kda, mla, k3_kda_perf, sparse_mla, k31_sparse_mla_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
-      timeout: 10
+      timeout: 12
       tier: 2
       release_ready: false
   owner_id: U07N3CUUN05  # Iva Potkonjak
@@ -436,8 +459,10 @@
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
       export OMP_NUM_THREADS=$(nproc)
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "torus-xy-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
+      python3 -m pytest models/demos/moe_block/tests/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager" -vvv --tb=short
     '
   test_type: kimi_k3_moe
   test_tags: [kimi_k3, moe]
@@ -459,8 +484,10 @@
   # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
   # 479 / 725 / 368 s.
   #
-  # No fabric_profile, as before: the fabric comes from each test's own device_params, and adding
-  # the key here would swap the mesh descriptor and change nothing else.
+  # fabric_profile torus_xy: K3's MoE is the MoE block (tt/moe_impl.py), which runs on the XY torus
+  # (on the 2D mesh fabric its first call hangs) - the certified TorusXY allocation, and each section
+  # exports the torus-XY descriptor (k3_moe_block_device_params opens the mesh FABRIC_2D_TORUS_XY).
+  fabric_profile: torus_xy
   #
   # [3/3] is the only K3 PCC gate on the captured-trace path rather than eager, and its
   # TT_KIMI_K3_PREFILL_TTNN_CACHE export is load-bearing: conftest's `weight_cache_path` fixture
@@ -485,7 +512,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py -k "L24" -vvv --tb=short
@@ -499,7 +526,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       timeout -k 2m 90m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_chunked_prefill.py -k "L24" -vvv --tb=short
@@ -513,7 +540,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       timeout -k 2m 45m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and iters1 and no_determinism" -vvv --tb=short
@@ -572,7 +599,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
       timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -598,6 +625,31 @@
   budget_type: demo
   sp_config: sc1
 
+- name: "(Kimi-K3-2.8T) MoonViT-V2 vision attention and block accuracy 64k, synthetic weights"
+  # Sampled rows from each of the 4 ring chips vs an fp32 CPU golden; no full-image reference.
+  fabric_profile: torus_xy
+  cmd: |
+    timeout -k 2m 8m mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
+      export OMP_NUM_THREADS=$(nproc)
+      python3 -m pytest \
+        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
+        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_block.py \
+        -m synthetic -k real_rows_from_each_chip -vvv --tb=short
+    '
+  test_type: kimi_k3_moonvit
+  test_tags: [kimi_k3, accuracy]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 10
+      tier: 2
+      release_ready: false
+  owner_id: U08NCAT9V9N
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
 # ===== GLM-5.3-744B ====================================================================================
 
 - name: "(GLM-5.3-744B) sparse MLA, prefill block, MTP and MoE accuracy 5k"
@@ -605,16 +657,19 @@
   cmd: |
     glm_dsa_mla() (
       export MESH_DEVICE=TG
-      export GLM52_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
+      # GLM-5.3 reuses the GLM-5.2 MLACPU reference cache: same architecture, random weights, and the cache
+      # file names don't carry the variant.
+      export GLM53_MLA_REF_CACHE=/mnt/models/deepseek-prefill-cache/glm_5_2_mla_ref_cache
       export DS_SPARSE_FABRIC=fabric2d
-      # Still GLM-5.2, not GLM-5.3: this compares against a cached MLACPU reference and only GLM-5.2 has a
-      # populated one. Same architecture and random weights, so it covers the GLM-5.3 sparse path too.
-      # GLM-5.2 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_2 variant sweep at the
-      # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_2-only),
-      # so no separate -k clause is needed. Random weights + on-the-fly CPU truth -> no staged weights.
+      # GLM-5.3 sparse MLA (indexer + sparse SDPA) vs the MLACPU reference. The glm_5_3 variant sweep at the
+      # 8x4 anchor already includes the indexer-reuse equivalence case (SPARSE_REUSE_CASES is glm_5_3-only),
+      # so no separate -k clause is needed. Random weights, no staged weights.
       timeout -k 2m 32m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_2 and shape-8x4 and not kv_only" -vvv --tb=short
+        export DS_PREFILL_REUSE_MODEL=1  # one mesh open for all cases
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py -k "glm_5_3 and shape-8x4 and not kv_only" -vvv --tb=short &&
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k glm_5_3 -vvv --tb=short &&
+        models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_determinism.py -k glm_5_3 -vvv --tb=short  # one 4x4 stage, 2.5k chunks
       '
     )
 
@@ -664,10 +719,12 @@
       timeout -k 2m 40m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_glm_moe -k "torus-xy-8x4" -vvv --tb=short
+        # The MoE block (GLM-5.3's default MoE in the model): the same check on its C++ ops, random weights.
+        python3 -m pytest models/demos/moe_block/tests/test_moe_block_models.py -k "glm53-8x4-5120 and not eager" -vvv --tb=short
       '
     )
 
-    echo "===== [1/5] (GLM-5.2-744B) sparse MLA accuracy + determinism, incl. chunked 5k@1k ====="
+    echo "===== [1/5] (GLM-5.3-744B) sparse MLA accuracy, incl. chunked 5k@1k, and production-shape determinism ====="
     glm_dsa_mla || exit $?
     echo "===== [2/5] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
     glm_sparse_kv_push || exit $?
@@ -727,7 +784,7 @@
 # comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
 # replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
 # time than its untraced twin.
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced"
+- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -738,11 +795,16 @@
     export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k
     mpirun --bind-to none --pernode --tag-output bash -lc '
       export OMP_NUM_THREADS=$(nproc)
+      # GLM-5.3 sparse MLA host-time gate, full-indexer and shared (no indexer) layers: warm and long, each untraced
+      # (fastest of 10 after 10 warm-up) and traced (one replay), on 8x4 and on one 4x4 stage (top tray half, 2.5k
+      # chunks). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
   test_type: glm_chunked_perf_suite
-  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf]
+  test_tags: [glm_5_3, transformer, glm_chunked, glm_chunked_untraced_perf, sparse_mla, glm_sparse_mla_perf]
   test_group: module
   skus:
     bh_sc1_high_power:
@@ -2071,10 +2133,11 @@
   sp_config: sc4
 
 
-# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher. Traced at 1M with 34 slots, the ceiling the
-# drafter's K/V leaves on the last rank. Slot 0 is PCC'd on 55k, where the drafter golden stops; the request is
-# timed to 1M.
-- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, traced 34 users, 55k@5k + perf 1M@5k, SC4"
+# Kimi-K3 with RadixArk's DSpark drafter, through the same launcher and the same 8 stages of [4,4]. Traced at 1M
+# with 24 slots: the drafter's K/V on the last stage leaves room for 26 (it fails at 27 in the per-stage
+# capacity probe, PR #61481), and 24 keeps two of margin as the trunk leg does. Slot 0 is PCC'd on 55k, where
+# the drafter golden stops; the request is timed to 1M.
+- name: "(Kimi-K3-2.8T) DSpark drafter KV accuracy, traced 24 users, 55k@2.5k + perf 1M@2.5k, 8x[4,4] SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2088,7 +2151,10 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      timeout: 20
+      # The test step takes about 14 min warm on TtMoe (run 41911365787). 35: on the MoE block (K3's default MoE) each
+      # rank's weight load runs ~50 s an MoE layer (84 bfp4 tensorbins read from the TTNN cache, NFS-bound, + the
+      # checkpoint's gate / shared / latent).
+      timeout: 35
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2139,6 +2205,31 @@
   skus:
     bh_sc1_high_power:
       timeout: 80
+  owner_id: U0AC4LTJH1P # Jaksa Jovicic
+  team: shield
+  budget_type: demo
+  sp_config: sc1
+
+
+# The SC1 trunk leg on 4x4 stages: all 78 layers as two [4,4] stages, one per tray half, SP on mesh axis 1,
+# bound by tt-run discovery on the intragalaxy descriptor, at one slot (glm53_4x4.json's layout, 2560-token
+# chunks). It tracks the 4x4 layout against the 8x4 SC1 leg above until 4x4 runs in production; there is
+# no SC4 4x4 leg. run_multirank_pcc.sh checks the 4x4 weight cache (glm_5_3_bh_16dev/4x4_sp1) first.
+- name: "(GLM-5.3-744B) disaggregated prefill 2x[4,4] KV accuracy 1M tail@2.5k + perf 1M@2.5k, SC1"
+  cmd: |
+    set -euo pipefail
+    export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
+    if [ ! -f "${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py" ]; then
+      cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
+    fi
+    cd "${TT_METAL_HOME}"
+    exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh glm53 sc1_4x4
+  test_type: prefill_runner_kv_pcc
+  test_tags: [glm_5_3, runner, kv_cache, glm53_trace]
+  test_group: disagg_prefill
+  skus:
+    bh_sc1_high_power:
+      timeout: 40
   owner_id: U0AC4LTJH1P # Jaksa Jovicic
   team: shield
   budget_type: demo
@@ -2196,21 +2287,9 @@
 # Uses real-time device program records, so it runs on the plain build without ENABLE_TRACY.
 # sp/tp are auto-selected by MeshConfig.detect() on Galaxy (sp=8, tp=4).
 
-# 4-galaxy (SC4) disaggregated prefill for Kimi-K3: all 93 layers as 24/24/24/21. Four ranks, not
-# two: ~717 MiB/chip/layer against 31.85 GiB/chip OOMs during weight load at 46/47 per rank, and
-# MLA's static CBs become unplaceable past ~36 layers on a rank (#54876). Every boundary is a
-# multiple of ATTN_RES_BLOCK_SIZE=12, or a rank inherits a partial sealed set and its local layer 0
-# seals a block that is not there; the adapter's layer_split_boundaries snaps the even split there,
-# so PREFILL_PP_LAYER_COUNTS is deliberately not pinned here.
-# Fabric comes from the manifest and the descriptor from run_multirank_pcc.sh, so this leg carries
-# no fabric_profile -- same as the Kimi-K2.7 and GLM-5.3 disagg legs beside it.
-# 100 slots (manifest), traced: the KDA layers select their slot on device (#60496). The request runs
-# to 1M like GLM-5.3's: only the 55k the golden spans is PCC'd, the tail is timed. Its throughput lands
-# on the run page through the "(Kimi-K3-2.8T) disaggregated prefill SC4 perf" summary job.
-# Own test_type per rung, unlike the Kimi-K2.7 and GLM-5.3 pairs that share prefill_runner_kv_pcc:
-# four galaxies is the scarcest resource in the pool, so this leg has to be dispatchable without
-# also claiming a single-galaxy one. The `runner` and `kv_cache` tags still select both rungs.
-- name: "(Kimi-K3-2.8T) disaggregated prefill KV accuracy 55k@5k + perf 1M@5k, SC4"
+# SC4 Kimi-K3: 93 layers as 8 stages of [4,4], two per galaxy; stage shape, chunk, KV dedup and slots come from
+# the kimi_k3 manifest. Own test_type, so the scarce 4-galaxy leg is dispatchable without a single-galaxy one.
+- name: "(Kimi-K3-2.8T) disaggregated prefill 8x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC4"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2224,17 +2303,9 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # Weight load dominates and it is NFS-bandwidth-bound, not compute-bound: the TTNN cache is
-      # 1.5 TB of tensorbins on the models share and all four ranks stream their slice of it at once,
-      # so the phase runs at roughly line rate and its cost swings with whatever else is on the mount.
-      # Two measurements, both from test-step start to all four ranks serving: 42.6 min on run
-      # 34648535999, 65.9 min on run 34659612357 (rank 0 alone spent 54.2 min loading its 24 layers).
-      # After that comes the producer connect, 11 chunks of 5120, the KV read-back and a ~7 min mesh
-      # unwind. 45 min cut this off mid-bringup and 70 min cut it off six minutes after bringup.
-      # 100 was still too tight: run 34831600450 was killed at 106 min with the leg live. Doubled,
-      # matching the 2x pass #56135 applied to the rest of this pipeline. shield/demo bh_sc4
-      # is a SUM over the team's legs on that SKU, not a per-leg cap: 40 (Kimi-K2.7) + 60 (GLM-5.3) + 60 (DFlash) + 200.
-      timeout: 200
+      # The job takes about 19 min warm; 90 leaves room for a cold Weka cache of the 1.5 TB of weights.
+      # shield/demo bh_sc4 is a SUM over the team's legs on that SKU: 60 (GLM-5.3) + 25 (DSpark) + 90 of 380.
+      timeout: 90
       tier: 1
       release_ready: false
   owner_id: U0ACLAM77PS  # Kosta Grujcic
@@ -2243,12 +2314,14 @@
   sp_config: sc4
 
 
-# Single-galaxy rung of the same launcher. 93 layers do not fit one galaxy, so the sc1 arm overrides
-# the manifest depth to 24 -- which ends on an MLA layer and is the deepest depth the golden's
-# decoder-output stream covers, making this a real accuracy gate rather than a smaller copy of sc4.
-# sc4's 100 slots, traced like sc4, and timed to sc4's 1M request; 24 layers are no baseline for 93,
-# so its numbers are gated and reported in this job's summary but kept out of the sc4 summary.
-- name: "(Kimi-K3-2.8T) disaggregated prefill L24 KV accuracy 55k@5k + perf 1M@5k, SC1"
+# Single-galaxy rung of the same launcher: sc4's first two stages, one per tray half, 12 layers each.
+# 93 layers do not fit one galaxy, so the sc1 arm overrides the manifest depth to 24 -- which ends on an
+# MLA layer and is the deepest depth the golden's decoder-output stream covers, making this a real
+# accuracy gate rather than a smaller copy of sc4. sc4's 127 slots, traced like sc4, and timed to sc4's
+# 1M request (the capacity probe ran exactly this: stages 0+1 on one Galaxy, 129 traced); 24 layers are
+# no baseline for 93, so its numbers are gated against their own kimi_k3 sc1 baseline and reported in
+# this job's summary, kept out of the sc4 summary.
+- name: "(Kimi-K3-2.8T) disaggregated prefill L24 2x[4,4] KV accuracy 55k@2.5k + perf 1M@2.5k, SC1"
   cmd: |
     set -euo pipefail
     export TT_METAL_HOME="${TT_METAL_HOME:-/home/user/tt-metal}"
@@ -2329,6 +2402,9 @@
   # The fabric suite runs a smoke subset (32-rank snake ring: bf16 gathers, slot select, multi-packet
   # pages; traced metadata and the GLM sub-device path) to stay inside this bucket's 20 min budget.
   # The full matrix (~100 cases on this torus, 4+ min) is not run here.
+  #
+  # The 4x4 cylinder (a 4x4 submesh: axis 1 keeps its wrap, axis 0 is a line) runs the 16-rank gather over three
+  # Hamiltonian cycles: time and bandwidth, plus a bf16 accuracy smoke.
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -2344,6 +2420,8 @@
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_ci_perf_traced -q || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and full_mesh and ((test_gather and bf16) or test_slot_select_partial_extent or test_pages_larger_than_payload)" || rc=1
       python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "torus_xy_6k and (test_metadata_traced or test_subdevice_external_semaphores)" || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py::test_high_bw_all_gather_galaxy_cylinder_4x4_perf -q || rc=1
+      python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather_fabric.py -q -s -k "test_cylinder_4x4 and interleaved and tile" || rc=1
       python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_glm_perf -q -s || rc=1
       exit $rc
     '

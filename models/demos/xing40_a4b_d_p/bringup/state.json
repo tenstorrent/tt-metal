@@ -1,0 +1,5303 @@
+{
+ "B.1": {
+  "attempts": 0,
+  "duration_s": 13.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:06:10"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:31:28"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:31:41"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:32:44"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:32:58"
+   }
+  ],
+  "last_run": "2026-09-30T05:32:58",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/B.1.log",
+  "metrics": {
+   "all_gather_maxabs": 0.0,
+   "all_reduce_rel_err_axis0": 0.004725898150354624,
+   "all_reduce_rel_err_axis1": 0.0026666666381061077,
+   "chips": 8,
+   "mesh_cols": 2,
+   "mesh_rows": 4
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T05:32:44",
+  "status": "PASS"
+ },
+ "C.dense.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "02481dd1-f2e7-451e-a1f3-3d6163785410"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attention.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attention.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 1795.3,
+    "session_id": "02481dd1-f2e7-451e-a1f3-3d6163785410",
+    "t": "2026-09-30T07:08:17"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "duration_s": 36.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T06:22:16"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T06:37:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T06:38:21"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T07:08:59"
+   }
+  ],
+  "last_run": "2026-09-30T07:08:59",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.attention.log",
+  "metrics": {
+   "auto_attention_L00_big_bias": -0.0005379319190979004,
+   "auto_attention_L00_big_ratio_max": 1.0039194822311401,
+   "auto_attention_L00_big_ratio_min": 0.9945507049560547,
+   "auto_attention_L00_big_rel": 0.008130894973874092,
+   "auto_attention_L00_big_rel_limit": 0.03,
+   "auto_attention_L00_big_row": 0.03500433638691902,
+   "auto_attention_L00_chunk0_bias": -0.0002442598342895508,
+   "auto_attention_L00_chunk0_ratio_max": 1.0026602745056152,
+   "auto_attention_L00_chunk0_ratio_min": 0.9970970749855042,
+   "auto_attention_L00_chunk0_rel": 0.0029526022262871265,
+   "auto_attention_L00_chunk0_rel_limit": 0.03,
+   "auto_attention_L00_chunk0_row": 0.006725000217556953,
+   "auto_attention_L00_layer39_bias": 0.00026404857635498047,
+   "auto_attention_L00_layer39_ratio_max": 1.0031906366348267,
+   "auto_attention_L00_layer39_ratio_min": 0.997947633266449,
+   "auto_attention_L00_layer39_rel": 0.0027347966097295284,
+   "auto_attention_L00_layer39_rel_limit": 0.03,
+   "auto_attention_L00_layer39_row": 0.0060714371502399445,
+   "auto_attention_L00_mixed_bias": -6.890296936035156e-05,
+   "auto_attention_L00_mixed_ratio_max": 1.0021023750305176,
+   "auto_attention_L00_mixed_ratio_min": 0.9976282119750977,
+   "auto_attention_L00_mixed_rel": 0.0017932647606357932,
+   "auto_attention_L00_mixed_rel_limit": 0.03,
+   "auto_attention_L00_mixed_row": 0.0031258573289960623,
+   "auto_attention_L00_small_bias": -0.0031702518463134766,
+   "auto_attention_L00_small_ratio_max": 1.0027384757995605,
+   "auto_attention_L00_small_ratio_min": 0.9899768233299255,
+   "auto_attention_L00_small_rel": 0.004575356375426054,
+   "auto_attention_L00_small_rel_limit": 0.03,
+   "auto_attention_L00_small_row": 0.01061398908495903,
+   "auto_attention_L00_vs_cpu_bias": 0.00013053417205810547,
+   "auto_attention_L00_vs_cpu_ratio_max": 1.0023475885391235,
+   "auto_attention_L00_vs_cpu_ratio_min": 0.998089611530304,
+   "auto_attention_L00_vs_cpu_rel": 0.0031441000755876303,
+   "auto_attention_L00_vs_cpu_rel_limit": 0.005550997331738472,
+   "auto_attention_L00_vs_cpu_row": 0.007655902300029993,
+   "auto_attention_L00_vs_golden_bias": 0.00017893314361572266,
+   "auto_attention_L00_vs_golden_ratio_max": 1.0023794174194336,
+   "auto_attention_L00_vs_golden_ratio_min": 0.9980234503746033,
+   "auto_attention_L00_vs_golden_rel": 0.0036257219035178423,
+   "auto_attention_L00_vs_golden_rel_limit": 0.007275078794918954,
+   "auto_attention_L00_vs_golden_row": 0.007838786579668522,
+   "pcc_attention_L00": 0.999993422237961
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T07:08:22",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.attn_collapse": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "1c1d5cce-87a4-4f77-b79a-142fb1c3ae2f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attn_collapse.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attn_collapse.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 142.8,
+    "session_id": "1c1d5cce-87a4-4f77-b79a-142fb1c3ae2f",
+    "t": "2026-09-30T06:07:25"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 18.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T06:05:02"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:07:49"
+   }
+  ],
+  "last_run": "2026-09-30T06:07:49",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.attn_collapse.log",
+  "metrics": {
+   "auto_attn_collapse_L00_big_bias": 0.0,
+   "auto_attn_collapse_L00_big_ratio_max": 1.0,
+   "auto_attn_collapse_L00_big_ratio_min": 1.0,
+   "auto_attn_collapse_L00_big_rel": 0.0,
+   "auto_attn_collapse_L00_big_rel_limit": 0.03,
+   "auto_attn_collapse_L00_big_row": 0.0,
+   "auto_attn_collapse_L00_layer39_bias": 0.0,
+   "auto_attn_collapse_L00_layer39_ratio_max": 1.0,
+   "auto_attn_collapse_L00_layer39_ratio_min": 1.0,
+   "auto_attn_collapse_L00_layer39_rel": 0.0,
+   "auto_attn_collapse_L00_layer39_rel_limit": 0.03,
+   "auto_attn_collapse_L00_layer39_row": 0.0,
+   "auto_attn_collapse_L00_mixed_bias": 0.0,
+   "auto_attn_collapse_L00_mixed_ratio_max": 1.0,
+   "auto_attn_collapse_L00_mixed_ratio_min": 1.0,
+   "auto_attn_collapse_L00_mixed_rel": 0.0,
+   "auto_attn_collapse_L00_mixed_rel_limit": 0.03,
+   "auto_attn_collapse_L00_mixed_row": 0.0,
+   "auto_attn_collapse_L00_small_bias": 0.0,
+   "auto_attn_collapse_L00_small_ratio_max": 1.0,
+   "auto_attn_collapse_L00_small_ratio_min": 1.0,
+   "auto_attn_collapse_L00_small_rel": 0.0,
+   "auto_attn_collapse_L00_small_rel_limit": 0.03,
+   "auto_attn_collapse_L00_small_row": 0.0,
+   "auto_attn_collapse_L00_vs_cpu_bias": 0.0,
+   "auto_attn_collapse_L00_vs_cpu_ratio_max": 1.0,
+   "auto_attn_collapse_L00_vs_cpu_ratio_min": 1.0,
+   "auto_attn_collapse_L00_vs_cpu_rel": 0.0,
+   "auto_attn_collapse_L00_vs_cpu_rel_limit": 0.004186195321381092,
+   "auto_attn_collapse_L00_vs_cpu_row": 0.0,
+   "auto_attn_collapse_L00_vs_golden_bias": -4.3272972106933594e-05,
+   "auto_attn_collapse_L00_vs_golden_ratio_max": 1.0025718212127686,
+   "auto_attn_collapse_L00_vs_golden_ratio_min": 0.9970706105232239,
+   "auto_attn_collapse_L00_vs_golden_rel": 0.0018055501859635115,
+   "auto_attn_collapse_L00_vs_golden_rel_limit": 0.0059917455073446035,
+   "auto_attn_collapse_L00_vs_golden_row": 0.00308479112572968,
+   "pcc_attn_collapse_L00": 0.9999983703771977
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T06:07:30",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.attn_hc": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "4bc7e28c-c487-4a37-abfb-e38a65946bc6"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attn_hc.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attn_hc.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 322.0,
+    "session_id": "b212fb6a-243c-4268-b6ae-0d7e05cfcbb9",
+    "t": "2026-09-30T05:54:32"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attn_hc.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attn_hc.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 392.9,
+    "session_id": "4bc7e28c-c487-4a37-abfb-e38a65946bc6",
+    "t": "2026-09-30T06:02:08"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 22.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:55:35"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:02:34"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:08:42"
+   }
+  ],
+  "last_run": "2026-09-30T06:08:42",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.attn_hc.log",
+  "metrics": {
+   "auto_attn_hc_L00_big_bias": 0.0004951953887939453,
+   "auto_attn_hc_L00_big_col": 0.011541048064827919,
+   "auto_attn_hc_L00_big_ratio_max": 1.0010042190551758,
+   "auto_attn_hc_L00_big_ratio_min": 1.0000996589660645,
+   "auto_attn_hc_L00_big_rel": 0.0008725604275241494,
+   "auto_attn_hc_L00_big_rel_limit": 0.03,
+   "auto_attn_hc_L00_big_row": 0.001851745299063623,
+   "auto_attn_hc_L00_layer39_bias": 0.00028717517852783203,
+   "auto_attn_hc_L00_layer39_col": 0.001045637996867299,
+   "auto_attn_hc_L00_layer39_ratio_max": 1.0006283521652222,
+   "auto_attn_hc_L00_layer39_ratio_min": 0.9999089241027832,
+   "auto_attn_hc_L00_layer39_rel": 0.0004926401888951659,
+   "auto_attn_hc_L00_layer39_rel_limit": 0.03,
+   "auto_attn_hc_L00_layer39_row": 0.0009375792578794062,
+   "auto_attn_hc_L00_mixed_bias": 0.00027239322662353516,
+   "auto_attn_hc_L00_mixed_col": 0.0011368776904419065,
+   "auto_attn_hc_L00_mixed_ratio_max": 1.0005813837051392,
+   "auto_attn_hc_L00_mixed_ratio_min": 0.9999432563781738,
+   "auto_attn_hc_L00_mixed_rel": 0.00048081454588100314,
+   "auto_attn_hc_L00_mixed_rel_limit": 0.03,
+   "auto_attn_hc_L00_mixed_row": 0.000873821321874857,
+   "auto_attn_hc_L00_small_bias": 0.0005536079406738281,
+   "auto_attn_hc_L00_small_col": 0.003091866383329034,
+   "auto_attn_hc_L00_small_ratio_max": 1.0009299516677856,
+   "auto_attn_hc_L00_small_ratio_min": 1.0001428127288818,
+   "auto_attn_hc_L00_small_rel": 0.0007258736295625567,
+   "auto_attn_hc_L00_small_rel_limit": 0.03,
+   "auto_attn_hc_L00_small_row": 0.0011302229249849916,
+   "auto_attn_hc_L00_vs_cpu_bias": 0.0005601644515991211,
+   "auto_attn_hc_L00_vs_cpu_col": 0.009952280670404434,
+   "auto_attn_hc_L00_vs_cpu_ratio_max": 1.0009053945541382,
+   "auto_attn_hc_L00_vs_cpu_ratio_min": 1.0001075267791748,
+   "auto_attn_hc_L00_vs_cpu_rel": 0.0008346617687493563,
+   "auto_attn_hc_L00_vs_cpu_rel_limit": 0.014834180474281311,
+   "auto_attn_hc_L00_vs_cpu_row": 0.0016994973411783576,
+   "auto_attn_hc_L00_vs_golden_bias": 0.0005340576171875,
+   "auto_attn_hc_L00_vs_golden_col": 0.011087180115282536,
+   "auto_attn_hc_L00_vs_golden_ratio_max": 1.002022624015808,
+   "auto_attn_hc_L00_vs_golden_ratio_min": 0.9989763498306274,
+   "auto_attn_hc_L00_vs_golden_rel": 0.0016475592274218798,
+   "auto_attn_hc_L00_vs_golden_rel_limit": 0.01624750066548586,
+   "auto_attn_hc_L00_vs_golden_row": 0.0028507064562290907,
+   "comb_col_sum_err_attn_hc_L00": 0.0016374588012695312,
+   "pcc_attn_hc_L00": 0.9999982201638034,
+   "rel_attn_hc_comb_vs_cpu_L00": 0.0008723027422092855,
+   "rel_attn_hc_comb_vs_golden_L00": 0.001665494404733181,
+   "rel_attn_hc_post_vs_cpu_L00": 0.0006508754449896514,
+   "rel_attn_hc_post_vs_golden_L00": 0.0018098510336130857,
+   "rel_attn_hc_pre_vs_cpu_L00": 0.00014594879758078605,
+   "rel_attn_hc_pre_vs_golden_L00": 0.0014411575393751264
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T06:08:20",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.attn_norm": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "52824e63-a032-4ff2-b5a5-3d6fdee3ac49"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attn_norm.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attn_norm.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 109.9,
+    "session_id": "52824e63-a032-4ff2-b5a5-3d6fdee3ac49",
+    "t": "2026-09-30T06:13:22"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 16.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T06:11:32"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:13:43"
+   }
+  ],
+  "last_run": "2026-09-30T06:13:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.attn_norm.log",
+  "metrics": {
+   "auto_attn_norm_L00_big_bias": -0.000492393970489502,
+   "auto_attn_norm_L00_big_ratio_max": 1.0004290342330933,
+   "auto_attn_norm_L00_big_ratio_min": 0.9985805153846741,
+   "auto_attn_norm_L00_big_rel": 0.0018235145835205913,
+   "auto_attn_norm_L00_big_rel_limit": 0.03,
+   "auto_attn_norm_L00_big_row": 0.0022343923337757587,
+   "auto_attn_norm_L00_layer39_bias": -0.000546574592590332,
+   "auto_attn_norm_L00_layer39_ratio_max": 1.00153648853302,
+   "auto_attn_norm_L00_layer39_ratio_min": 0.9977543354034424,
+   "auto_attn_norm_L00_layer39_rel": 0.0017938948003575206,
+   "auto_attn_norm_L00_layer39_rel_limit": 0.03,
+   "auto_attn_norm_L00_layer39_row": 0.003237698692828417,
+   "auto_attn_norm_L00_mixed_bias": -0.0004735589027404785,
+   "auto_attn_norm_L00_mixed_ratio_max": 1.000272274017334,
+   "auto_attn_norm_L00_mixed_ratio_min": 0.9986488223075867,
+   "auto_attn_norm_L00_mixed_rel": 0.0018099336884915829,
+   "auto_attn_norm_L00_mixed_rel_limit": 0.03,
+   "auto_attn_norm_L00_mixed_row": 0.002210653852671385,
+   "auto_attn_norm_L00_small_bias": -0.0002238154411315918,
+   "auto_attn_norm_L00_small_ratio_max": 1.0003739595413208,
+   "auto_attn_norm_L00_small_ratio_min": 0.9989407658576965,
+   "auto_attn_norm_L00_small_rel": 0.001783005311153829,
+   "auto_attn_norm_L00_small_rel_limit": 0.03,
+   "auto_attn_norm_L00_small_row": 0.002048579975962639,
+   "auto_attn_norm_L00_vs_cpu_bias": -0.0005530714988708496,
+   "auto_attn_norm_L00_vs_cpu_ratio_max": 1.0002684593200684,
+   "auto_attn_norm_L00_vs_cpu_ratio_min": 0.9986821413040161,
+   "auto_attn_norm_L00_vs_cpu_rel": 0.0018188516842201352,
+   "auto_attn_norm_L00_vs_cpu_rel_limit": 0.006194812245666981,
+   "auto_attn_norm_L00_vs_cpu_row": 0.002179726492613554,
+   "auto_attn_norm_L00_vs_golden_bias": -0.000531613826751709,
+   "auto_attn_norm_L00_vs_golden_ratio_max": 1.0003056526184082,
+   "auto_attn_norm_L00_vs_golden_ratio_min": 0.9986163973808289,
+   "auto_attn_norm_L00_vs_golden_rel": 0.0029180829878896475,
+   "auto_attn_norm_L00_vs_golden_rel_limit": 0.008540834300220013,
+   "auto_attn_norm_L00_vs_golden_row": 0.0036488582845777273,
+   "pcc_attn_norm_L00": 0.9999958777964875
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T06:13:27",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.attn_residual": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "0d98745c-2630-4053-b3d4-163c891c367e"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.attn_residual.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.attn_residual.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 390.3,
+    "session_id": "0d98745c-2630-4053-b3d4-163c891c367e",
+    "t": "2026-09-30T14:09:38"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 25.8,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T14:03:07"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:10:08"
+   }
+  ],
+  "last_run": "2026-09-30T14:10:08",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.attn_residual.log",
+  "metrics": {
+   "auto_attn_residual_L00_big_bias": 0.0,
+   "auto_attn_residual_L00_big_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L00_big_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L00_big_rel": 3.6948883064269467e-08,
+   "auto_attn_residual_L00_big_rel_limit": 0.03,
+   "auto_attn_residual_L00_big_row": 7.453663641854291e-08,
+   "auto_attn_residual_L00_layer39_bias": 0.0,
+   "auto_attn_residual_L00_layer39_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L00_layer39_ratio_min": 0.9999998807907104,
+   "auto_attn_residual_L00_layer39_rel": 5.684479109646645e-09,
+   "auto_attn_residual_L00_layer39_rel_limit": 0.03,
+   "auto_attn_residual_L00_layer39_row": 6.800277674301469e-08,
+   "auto_attn_residual_L00_mixed_bias": 0.0,
+   "auto_attn_residual_L00_mixed_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L00_mixed_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L00_mixed_rel": 4.751152715698481e-08,
+   "auto_attn_residual_L00_mixed_rel_limit": 0.03,
+   "auto_attn_residual_L00_mixed_row": 6.212842151853692e-08,
+   "auto_attn_residual_L00_small_bias": 0.0,
+   "auto_attn_residual_L00_small_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L00_small_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L00_small_rel": 3.715291541084298e-08,
+   "auto_attn_residual_L00_small_rel_limit": 0.03,
+   "auto_attn_residual_L00_small_row": 7.35961194209267e-08,
+   "auto_attn_residual_L00_vs_cpu_bias": 0.0,
+   "auto_attn_residual_L00_vs_cpu_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L00_vs_cpu_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L00_vs_cpu_rel": 3.6948883064269467e-08,
+   "auto_attn_residual_L00_vs_cpu_rel_limit": 0.0044403900392353535,
+   "auto_attn_residual_L00_vs_cpu_row": 7.453663641854291e-08,
+   "auto_attn_residual_L00_vs_golden_bias": -3.6716461181640625e-05,
+   "auto_attn_residual_L00_vs_golden_ratio_max": 1.003005862236023,
+   "auto_attn_residual_L00_vs_golden_ratio_min": 0.9970448613166809,
+   "auto_attn_residual_L00_vs_golden_rel": 0.0024867907632142305,
+   "auto_attn_residual_L00_vs_golden_rel_limit": 0.006927181035280228,
+   "auto_attn_residual_L00_vs_golden_row": 0.003919508308172226,
+   "pcc_attn_residual_L00": 0.9999969096585258
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T14:09:43",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.ffn_collapse": {
+  "attempts": 0,
+  "duration_s": 18.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:23:03"
+   }
+  ],
+  "last_run": "2026-09-30T14:23:03",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.ffn_collapse.log",
+  "metrics": {
+   "auto_ffn_collapse_L00_big_bias": 0.0,
+   "auto_ffn_collapse_L00_big_ratio_max": 1.0,
+   "auto_ffn_collapse_L00_big_ratio_min": 1.0,
+   "auto_ffn_collapse_L00_big_rel": 0.0,
+   "auto_ffn_collapse_L00_big_rel_limit": 0.03,
+   "auto_ffn_collapse_L00_big_row": 0.0,
+   "auto_ffn_collapse_L00_layer39_bias": 0.0,
+   "auto_ffn_collapse_L00_layer39_ratio_max": 1.0,
+   "auto_ffn_collapse_L00_layer39_ratio_min": 1.0,
+   "auto_ffn_collapse_L00_layer39_rel": 0.0,
+   "auto_ffn_collapse_L00_layer39_rel_limit": 0.03,
+   "auto_ffn_collapse_L00_layer39_row": 0.0,
+   "auto_ffn_collapse_L00_mixed_bias": 0.0,
+   "auto_ffn_collapse_L00_mixed_ratio_max": 1.0,
+   "auto_ffn_collapse_L00_mixed_ratio_min": 1.0,
+   "auto_ffn_collapse_L00_mixed_rel": 0.0,
+   "auto_ffn_collapse_L00_mixed_rel_limit": 0.03,
+   "auto_ffn_collapse_L00_mixed_row": 0.0,
+   "auto_ffn_collapse_L00_small_bias": 0.0,
+   "auto_ffn_collapse_L00_small_ratio_max": 1.0,
+   "auto_ffn_collapse_L00_small_ratio_min": 1.0,
+   "auto_ffn_collapse_L00_small_rel": 0.0,
+   "auto_ffn_collapse_L00_small_rel_limit": 0.03,
+   "auto_ffn_collapse_L00_small_row": 0.0,
+   "auto_ffn_collapse_L00_vs_cpu_bias": 0.0,
+   "auto_ffn_collapse_L00_vs_cpu_ratio_max": 1.0,
+   "auto_ffn_collapse_L00_vs_cpu_ratio_min": 1.0,
+   "auto_ffn_collapse_L00_vs_cpu_rel": 0.0,
+   "auto_ffn_collapse_L00_vs_cpu_rel_limit": 0.0043458836153149605,
+   "auto_ffn_collapse_L00_vs_cpu_row": 0.0,
+   "auto_ffn_collapse_L00_vs_golden_bias": -0.0001296401023864746,
+   "auto_ffn_collapse_L00_vs_golden_ratio_max": 1.0034501552581787,
+   "auto_ffn_collapse_L00_vs_golden_ratio_min": 0.9965711832046509,
+   "auto_ffn_collapse_L00_vs_golden_rel": 0.0026124538853764534,
+   "auto_ffn_collapse_L00_vs_golden_rel_limit": 0.006958337500691414,
+   "auto_ffn_collapse_L00_vs_golden_row": 0.004135278984904289,
+   "pcc_ffn_collapse_L00": 0.9999965865753742
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:22:45",
+  "status": "PASS"
+ },
+ "C.dense.ffn_hc": {
+  "attempts": 0,
+  "duration_s": 20.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:20:22"
+   }
+  ],
+  "last_run": "2026-09-30T14:20:22",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.ffn_hc.log",
+  "metrics": {
+   "auto_ffn_hc_L00_big_bias": 0.0005431175231933594,
+   "auto_ffn_hc_L00_big_col": 0.002873433055356145,
+   "auto_ffn_hc_L00_big_ratio_max": 1.0011827945709229,
+   "auto_ffn_hc_L00_big_ratio_min": 1.0000399351119995,
+   "auto_ffn_hc_L00_big_rel": 0.0007933490560390055,
+   "auto_ffn_hc_L00_big_rel_limit": 0.03,
+   "auto_ffn_hc_L00_big_row": 0.0017284734640270472,
+   "auto_ffn_hc_L00_layer39_bias": 0.00015056133270263672,
+   "auto_ffn_hc_L00_layer39_col": 0.0013250329066067934,
+   "auto_ffn_hc_L00_layer39_ratio_max": 1.0003446340560913,
+   "auto_ffn_hc_L00_layer39_ratio_min": 0.9999575614929199,
+   "auto_ffn_hc_L00_layer39_rel": 0.00037119269836694,
+   "auto_ffn_hc_L00_layer39_rel_limit": 0.03,
+   "auto_ffn_hc_L00_layer39_row": 0.000576837919652462,
+   "auto_ffn_hc_L00_mixed_bias": 0.00017118453979492188,
+   "auto_ffn_hc_L00_mixed_col": 0.0008599116699770093,
+   "auto_ffn_hc_L00_mixed_ratio_max": 1.000342845916748,
+   "auto_ffn_hc_L00_mixed_ratio_min": 1.0000542402267456,
+   "auto_ffn_hc_L00_mixed_rel": 0.0003822172584477812,
+   "auto_ffn_hc_L00_mixed_rel_limit": 0.03,
+   "auto_ffn_hc_L00_mixed_row": 0.0005763099179603159,
+   "auto_ffn_hc_L00_small_bias": 0.000560760498046875,
+   "auto_ffn_hc_L00_small_col": 0.00410747155547142,
+   "auto_ffn_hc_L00_small_ratio_max": 1.0010576248168945,
+   "auto_ffn_hc_L00_small_ratio_min": 1.0000306367874146,
+   "auto_ffn_hc_L00_small_rel": 0.0007666860474273562,
+   "auto_ffn_hc_L00_small_rel_limit": 0.03,
+   "auto_ffn_hc_L00_small_row": 0.0014507833402603865,
+   "auto_ffn_hc_L00_vs_cpu_bias": 0.0005459785461425781,
+   "auto_ffn_hc_L00_vs_cpu_col": 0.0028890003450214863,
+   "auto_ffn_hc_L00_vs_cpu_ratio_max": 1.0011268854141235,
+   "auto_ffn_hc_L00_vs_cpu_ratio_min": 0.999981164932251,
+   "auto_ffn_hc_L00_vs_cpu_rel": 0.0007973663159646094,
+   "auto_ffn_hc_L00_vs_cpu_rel_limit": 0.014210856519639492,
+   "auto_ffn_hc_L00_vs_cpu_row": 0.00173265824560076,
+   "auto_ffn_hc_L00_vs_golden_bias": 0.0005606412887573242,
+   "auto_ffn_hc_L00_vs_golden_col": 0.003302983706817031,
+   "auto_ffn_hc_L00_vs_golden_ratio_max": 1.0023568868637085,
+   "auto_ffn_hc_L00_vs_golden_ratio_min": 0.9985788464546204,
+   "auto_ffn_hc_L00_vs_golden_rel": 0.0017116249073296785,
+   "auto_ffn_hc_L00_vs_golden_rel_limit": 0.015724563389085233,
+   "auto_ffn_hc_L00_vs_golden_row": 0.003048488637432456,
+   "pcc_ffn_hc_L00": 0.9999979981110964
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:20:02",
+  "status": "PASS"
+ },
+ "C.dense.ffn_norm": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ebbef607-75df-4c01-a67c-110194a3a7b5"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.ffn_norm.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.ffn_norm.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 94.2,
+    "session_id": "ebbef607-75df-4c01-a67c-110194a3a7b5",
+    "t": "2026-09-30T14:27:42"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 16.7,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T14:26:08"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:28:09"
+   }
+  ],
+  "last_run": "2026-09-30T14:28:09",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.ffn_norm.log",
+  "metrics": {
+   "auto_ffn_norm_L00_big_bias": -0.0005012154579162598,
+   "auto_ffn_norm_L00_big_ratio_max": 1.0002809762954712,
+   "auto_ffn_norm_L00_big_ratio_min": 0.9986799359321594,
+   "auto_ffn_norm_L00_big_rel": 0.0018167681992053986,
+   "auto_ffn_norm_L00_big_rel_limit": 0.03,
+   "auto_ffn_norm_L00_big_row": 0.0021912597585469484,
+   "auto_ffn_norm_L00_layer39_bias": -0.0005794167518615723,
+   "auto_ffn_norm_L00_layer39_ratio_max": 1.001863956451416,
+   "auto_ffn_norm_L00_layer39_ratio_min": 0.9974363446235657,
+   "auto_ffn_norm_L00_layer39_rel": 0.0018178238533437252,
+   "auto_ffn_norm_L00_layer39_rel_limit": 0.03,
+   "auto_ffn_norm_L00_layer39_row": 0.003661776427179575,
+   "auto_ffn_norm_L00_mixed_bias": -0.0005645155906677246,
+   "auto_ffn_norm_L00_mixed_ratio_max": 1.0006234645843506,
+   "auto_ffn_norm_L00_mixed_ratio_min": 0.9985008239746094,
+   "auto_ffn_norm_L00_mixed_rel": 0.0018378269160166383,
+   "auto_ffn_norm_L00_mixed_rel_limit": 0.03,
+   "auto_ffn_norm_L00_mixed_row": 0.0023467049468308687,
+   "auto_ffn_norm_L00_small_bias": -0.0004156827926635742,
+   "auto_ffn_norm_L00_small_ratio_max": 1.0002440214157104,
+   "auto_ffn_norm_L00_small_ratio_min": 0.9987917542457581,
+   "auto_ffn_norm_L00_small_rel": 0.0017922568367794156,
+   "auto_ffn_norm_L00_small_rel_limit": 0.03,
+   "auto_ffn_norm_L00_small_row": 0.002143431454896927,
+   "auto_ffn_norm_L00_vs_cpu_bias": -0.0005524754524230957,
+   "auto_ffn_norm_L00_vs_cpu_ratio_max": 1.0003578662872314,
+   "auto_ffn_norm_L00_vs_cpu_ratio_min": 0.9985479712486267,
+   "auto_ffn_norm_L00_vs_cpu_rel": 0.001840681303292513,
+   "auto_ffn_norm_L00_vs_cpu_rel_limit": 0.0062147886492311954,
+   "auto_ffn_norm_L00_vs_cpu_row": 0.0022717281244695187,
+   "auto_ffn_norm_L00_vs_golden_bias": -0.0005588531494140625,
+   "auto_ffn_norm_L00_vs_golden_ratio_max": 1.000411033630371,
+   "auto_ffn_norm_L00_vs_golden_ratio_min": 0.9985203742980957,
+   "auto_ffn_norm_L00_vs_golden_rel": 0.0029387471731752157,
+   "auto_ffn_norm_L00_vs_golden_rel_limit": 0.008561335504055023,
+   "auto_ffn_norm_L00_vs_golden_row": 0.003335390007123351,
+   "pcc_ffn_norm_L00": 0.9999958429783541
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T14:27:52",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.ffn_residual": {
+  "attempts": 0,
+  "duration_s": 24.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:36:43"
+   }
+  ],
+  "last_run": "2026-09-30T14:36:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.ffn_residual.log",
+  "metrics": {
+   "auto_ffn_residual_L00_big_bias": 0.0,
+   "auto_ffn_residual_L00_big_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_big_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_big_rel": 3.129952830249749e-08,
+   "auto_ffn_residual_L00_big_rel_limit": 0.03,
+   "auto_ffn_residual_L00_big_row": 5.934478508606844e-08,
+   "auto_ffn_residual_L00_layer39_bias": 0.0,
+   "auto_ffn_residual_L00_layer39_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_layer39_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_layer39_rel": 3.0584417221035665e-09,
+   "auto_ffn_residual_L00_layer39_rel_limit": 0.03,
+   "auto_ffn_residual_L00_layer39_row": 6.778700623044642e-08,
+   "auto_ffn_residual_L00_mixed_bias": 0.0,
+   "auto_ffn_residual_L00_mixed_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_mixed_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L00_mixed_rel": 5.5523482700436944e-08,
+   "auto_ffn_residual_L00_mixed_rel_limit": 0.03,
+   "auto_ffn_residual_L00_mixed_row": 6.093092963510571e-08,
+   "auto_ffn_residual_L00_small_bias": 0.0,
+   "auto_ffn_residual_L00_small_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_small_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L00_small_rel": 4.1581103005228215e-08,
+   "auto_ffn_residual_L00_small_rel_limit": 0.03,
+   "auto_ffn_residual_L00_small_row": 5.8434693528397474e-08,
+   "auto_ffn_residual_L00_vs_cpu_bias": 0.0,
+   "auto_ffn_residual_L00_vs_cpu_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L00_vs_cpu_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L00_vs_cpu_rel": 3.129952830249749e-08,
+   "auto_ffn_residual_L00_vs_cpu_rel_limit": 0.004441119730472565,
+   "auto_ffn_residual_L00_vs_cpu_row": 5.934478508606844e-08,
+   "auto_ffn_residual_L00_vs_golden_bias": 1.430511474609375e-06,
+   "auto_ffn_residual_L00_vs_golden_ratio_max": 1.0034431219100952,
+   "auto_ffn_residual_L00_vs_golden_ratio_min": 0.9967988729476929,
+   "auto_ffn_residual_L00_vs_golden_rel": 0.0026148692704737186,
+   "auto_ffn_residual_L00_vs_golden_rel_limit": 0.00705598876811564,
+   "auto_ffn_residual_L00_vs_golden_row": 0.004345205146819353,
+   "pcc_ffn_residual_L00": 0.9999965804073918
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:36:18",
+  "status": "PASS"
+ },
+ "C.dense.mlp": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "3af73175-078a-467e-82df-3cdc0e0b704f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.mlp.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.mlp.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 103.1,
+    "session_id": "3af73175-078a-467e-82df-3cdc0e0b704f",
+    "t": "2026-09-30T14:33:01"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 21.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T14:31:17"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:33:28"
+   }
+  ],
+  "last_run": "2026-09-30T14:33:28",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.mlp.log",
+  "metrics": {
+   "auto_mlp_L00_big_bias": -0.0005219578742980957,
+   "auto_mlp_L00_big_ratio_max": 0.9995538592338562,
+   "auto_mlp_L00_big_ratio_min": 0.9993860721588135,
+   "auto_mlp_L00_big_rel": 0.0006297379150055349,
+   "auto_mlp_L00_big_rel_limit": 0.03,
+   "auto_mlp_L00_big_row": 0.0007609051535837352,
+   "auto_mlp_L00_layer39_bias": -0.0005434751510620117,
+   "auto_mlp_L00_layer39_ratio_max": 0.9995614886283875,
+   "auto_mlp_L00_layer39_ratio_min": 0.9993529319763184,
+   "auto_mlp_L00_layer39_rel": 0.0007052914588712156,
+   "auto_mlp_L00_layer39_rel_limit": 0.03,
+   "auto_mlp_L00_layer39_row": 0.0008011911995708942,
+   "auto_mlp_L00_mixed_bias": -0.0005376338958740234,
+   "auto_mlp_L00_mixed_ratio_max": 0.9996135830879211,
+   "auto_mlp_L00_mixed_ratio_min": 0.9992529153823853,
+   "auto_mlp_L00_mixed_rel": 0.000714280060492456,
+   "auto_mlp_L00_mixed_rel_limit": 0.03,
+   "auto_mlp_L00_mixed_row": 0.0008763149962760508,
+   "auto_mlp_L00_small_bias": -0.000552833080291748,
+   "auto_mlp_L00_small_ratio_max": 0.9996474385261536,
+   "auto_mlp_L00_small_ratio_min": 0.999168872833252,
+   "auto_mlp_L00_small_rel": 0.000655985320918262,
+   "auto_mlp_L00_small_rel_limit": 0.03,
+   "auto_mlp_L00_small_row": 0.0009193832520395517,
+   "auto_mlp_L00_vs_cpu_bias": -0.0005181431770324707,
+   "auto_mlp_L00_vs_cpu_ratio_max": 0.9995559453964233,
+   "auto_mlp_L00_vs_cpu_ratio_min": 0.9993724226951599,
+   "auto_mlp_L00_vs_cpu_rel": 0.0006295714993029833,
+   "auto_mlp_L00_vs_cpu_rel_limit": 0.004845841322094202,
+   "auto_mlp_L00_vs_cpu_row": 0.0007717718253843486,
+   "auto_mlp_L00_vs_golden_bias": -0.0005162358283996582,
+   "auto_mlp_L00_vs_golden_ratio_max": 1.0000056028366089,
+   "auto_mlp_L00_vs_golden_ratio_min": 0.9988105297088623,
+   "auto_mlp_L00_vs_golden_rel": 0.002479724120348692,
+   "auto_mlp_L00_vs_golden_rel_limit": 0.007249131798744202,
+   "auto_mlp_L00_vs_golden_row": 0.0030953586101531982,
+   "pcc_mlp_L00": 0.9999970471316628
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T14:33:06",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.dense.q_a": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "a6877846-3885-4bf6-b55d-213063b2f3f0"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.dense.q_a.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.dense.q_a.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 94.5,
+    "session_id": "a6877846-3885-4bf6-b55d-213063b2f3f0",
+    "t": "2026-09-30T06:17:52"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 15.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T06:16:17"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:18:12"
+   }
+  ],
+  "last_run": "2026-09-30T06:18:12",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.dense.q_a.log",
+  "metrics": {
+   "auto_q_a_L00_big_bias": -0.00021570920944213867,
+   "auto_q_a_L00_big_ratio_max": 1.0005812644958496,
+   "auto_q_a_L00_big_ratio_min": 0.9989539980888367,
+   "auto_q_a_L00_big_rel": 0.0017530726036056876,
+   "auto_q_a_L00_big_rel_limit": 0.03,
+   "auto_q_a_L00_big_row": 0.0019932202994823456,
+   "auto_q_a_L00_layer39_bias": -0.00020438432693481445,
+   "auto_q_a_L00_layer39_ratio_max": 1.0005652904510498,
+   "auto_q_a_L00_layer39_ratio_min": 0.9991269707679749,
+   "auto_q_a_L00_layer39_rel": 0.0017836512997746468,
+   "auto_q_a_L00_layer39_rel_limit": 0.03,
+   "auto_q_a_L00_layer39_row": 0.0020723326597362757,
+   "auto_q_a_L00_mixed_bias": -0.00015473365783691406,
+   "auto_q_a_L00_mixed_ratio_max": 1.000402569770813,
+   "auto_q_a_L00_mixed_ratio_min": 0.9991949796676636,
+   "auto_q_a_L00_mixed_rel": 0.0017727630911394954,
+   "auto_q_a_L00_mixed_rel_limit": 0.03,
+   "auto_q_a_L00_mixed_row": 0.0020095277577638626,
+   "auto_q_a_L00_small_bias": -0.00036013126373291016,
+   "auto_q_a_L00_small_ratio_max": 1.0002573728561401,
+   "auto_q_a_L00_small_ratio_min": 0.9990043044090271,
+   "auto_q_a_L00_small_rel": 0.0017787653487175703,
+   "auto_q_a_L00_small_rel_limit": 0.03,
+   "auto_q_a_L00_small_row": 0.0020604105666279793,
+   "auto_q_a_L00_vs_cpu_bias": -0.00021564960479736328,
+   "auto_q_a_L00_vs_cpu_ratio_max": 1.0005812644958496,
+   "auto_q_a_L00_vs_cpu_ratio_min": 0.9989541172981262,
+   "auto_q_a_L00_vs_cpu_rel": 0.0017530616605654359,
+   "auto_q_a_L00_vs_cpu_rel_limit": 0.00660887872800231,
+   "auto_q_a_L00_vs_cpu_row": 0.0019932202994823456,
+   "auto_q_a_L00_vs_golden_bias": -0.00022679567337036133,
+   "auto_q_a_L00_vs_golden_ratio_max": 1.0005253553390503,
+   "auto_q_a_L00_vs_golden_ratio_min": 0.9990749955177307,
+   "auto_q_a_L00_vs_golden_rel": 0.00215154979377985,
+   "auto_q_a_L00_vs_golden_rel_limit": 0.00852652930188924,
+   "auto_q_a_L00_vs_golden_row": 0.002724727848544717,
+   "pcc_q_a_L00": 0.999997705381117
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T06:17:57",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.moe.attention": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "34a68521-50ae-4926-bf15-05913375dee3"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.attention.test.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.attention.test.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "test",
+    "seconds": 810.7,
+    "session_id": "34a68521-50ae-4926-bf15-05913375dee3",
+    "t": "2026-09-30T15:04:06"
+   }
+  ],
+  "attempts": 0,
+  "duration_s": 52.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:06:54"
+   }
+  ],
+  "last_run": "2026-09-30T15:06:54",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.attention.log",
+  "metrics": {
+   "auto_attention_L02_big_bias": -0.001666724681854248,
+   "auto_attention_L02_big_ratio_max": 1.0065566301345825,
+   "auto_attention_L02_big_ratio_min": 0.9875177145004272,
+   "auto_attention_L02_big_rel": 0.01745353825390339,
+   "auto_attention_L02_big_rel_limit": 0.03,
+   "auto_attention_L02_big_row": 0.042433544993400574,
+   "auto_attention_L02_chunk0_bias": -0.0024933218955993652,
+   "auto_attention_L02_chunk0_ratio_max": 1.0027438402175903,
+   "auto_attention_L02_chunk0_ratio_min": 0.9909838438034058,
+   "auto_attention_L02_chunk0_rel": 0.010393736883997917,
+   "auto_attention_L02_chunk0_rel_limit": 0.03,
+   "auto_attention_L02_chunk0_row": 0.022774625569581985,
+   "auto_attention_L02_layer39_bias": -0.00014889240264892578,
+   "auto_attention_L02_layer39_ratio_max": 1.0031620264053345,
+   "auto_attention_L02_layer39_ratio_min": 0.9916551113128662,
+   "auto_attention_L02_layer39_rel": 0.008508134633302689,
+   "auto_attention_L02_layer39_rel_limit": 0.03,
+   "auto_attention_L02_layer39_row": 0.019857779145240784,
+   "auto_attention_L02_mixed_bias": 0.0003762245178222656,
+   "auto_attention_L02_mixed_ratio_max": 1.0031917095184326,
+   "auto_attention_L02_mixed_ratio_min": 0.9980191588401794,
+   "auto_attention_L02_mixed_rel": 0.006623160094022751,
+   "auto_attention_L02_mixed_rel_limit": 0.03,
+   "auto_attention_L02_mixed_row": 0.011500092223286629,
+   "auto_attention_L02_small_bias": -0.004618525505065918,
+   "auto_attention_L02_small_ratio_max": 1.0076196193695068,
+   "auto_attention_L02_small_ratio_min": 0.9868779182434082,
+   "auto_attention_L02_small_rel": 0.0069182622246444225,
+   "auto_attention_L02_small_rel_limit": 0.03,
+   "auto_attention_L02_small_row": 0.013751477003097534,
+   "auto_attention_L02_vs_cpu_bias": -0.0026418566703796387,
+   "auto_attention_L02_vs_cpu_ratio_max": 1.0016473531723022,
+   "auto_attention_L02_vs_cpu_ratio_min": 0.9903078675270081,
+   "auto_attention_L02_vs_cpu_rel": 0.010841349139809608,
+   "auto_attention_L02_vs_cpu_rel_limit": 0.013542771339416504,
+   "auto_attention_L02_vs_cpu_row": 0.022240133956074715,
+   "auto_attention_L02_vs_golden_bias": -0.0025175809860229492,
+   "auto_attention_L02_vs_golden_ratio_max": 1.0018337965011597,
+   "auto_attention_L02_vs_golden_ratio_min": 0.9902108907699585,
+   "auto_attention_L02_vs_golden_rel": 0.011062022298574448,
+   "auto_attention_L02_vs_golden_rel_limit": 0.016058515990152955,
+   "auto_attention_L02_vs_golden_row": 0.022622311487793922,
+   "off_subspace_rel_attention_chunk0_L02": 0.002734565641731024,
+   "off_subspace_rel_attention_golden_L02": 0.002673164941370487,
+   "off_subspace_rel_attention_layer39_L02": 0.00236280495300889,
+   "pcc_attention_L02": 0.9999419896648031
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:06:02",
+  "status": "PASS"
+ },
+ "C.moe.attn_collapse": {
+  "attempts": 0,
+  "duration_s": 18.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:42:21"
+   }
+  ],
+  "last_run": "2026-09-30T14:42:21",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.attn_collapse.log",
+  "metrics": {
+   "auto_attn_collapse_L02_big_bias": 0.0,
+   "auto_attn_collapse_L02_big_ratio_max": 1.0,
+   "auto_attn_collapse_L02_big_ratio_min": 1.0,
+   "auto_attn_collapse_L02_big_rel": 0.0,
+   "auto_attn_collapse_L02_big_rel_limit": 0.03,
+   "auto_attn_collapse_L02_big_row": 0.0,
+   "auto_attn_collapse_L02_layer39_bias": 0.0,
+   "auto_attn_collapse_L02_layer39_ratio_max": 1.0,
+   "auto_attn_collapse_L02_layer39_ratio_min": 1.0,
+   "auto_attn_collapse_L02_layer39_rel": 0.0,
+   "auto_attn_collapse_L02_layer39_rel_limit": 0.03,
+   "auto_attn_collapse_L02_layer39_row": 0.0,
+   "auto_attn_collapse_L02_mixed_bias": 0.0,
+   "auto_attn_collapse_L02_mixed_ratio_max": 1.0,
+   "auto_attn_collapse_L02_mixed_ratio_min": 1.0,
+   "auto_attn_collapse_L02_mixed_rel": 0.0,
+   "auto_attn_collapse_L02_mixed_rel_limit": 0.03,
+   "auto_attn_collapse_L02_mixed_row": 0.0,
+   "auto_attn_collapse_L02_small_bias": 0.0,
+   "auto_attn_collapse_L02_small_ratio_max": 1.0,
+   "auto_attn_collapse_L02_small_ratio_min": 1.0,
+   "auto_attn_collapse_L02_small_rel": 0.0,
+   "auto_attn_collapse_L02_small_rel_limit": 0.03,
+   "auto_attn_collapse_L02_small_row": 0.0,
+   "auto_attn_collapse_L02_vs_cpu_bias": 0.0,
+   "auto_attn_collapse_L02_vs_cpu_ratio_max": 1.0,
+   "auto_attn_collapse_L02_vs_cpu_ratio_min": 1.0,
+   "auto_attn_collapse_L02_vs_cpu_rel": 0.0,
+   "auto_attn_collapse_L02_vs_cpu_rel_limit": 0.004662426188588142,
+   "auto_attn_collapse_L02_vs_cpu_row": 0.0,
+   "auto_attn_collapse_L02_vs_golden_bias": -6.729364395141602e-05,
+   "auto_attn_collapse_L02_vs_golden_ratio_max": 1.0023857355117798,
+   "auto_attn_collapse_L02_vs_golden_ratio_min": 0.9976333379745483,
+   "auto_attn_collapse_L02_vs_golden_rel": 0.0026610763743519783,
+   "auto_attn_collapse_L02_vs_golden_rel_limit": 0.007323502562940121,
+   "auto_attn_collapse_L02_vs_golden_row": 0.0033511335495859385,
+   "pcc_attn_collapse_L02": 0.9999964568431107
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:42:03",
+  "status": "PASS"
+ },
+ "C.moe.attn_hc": {
+  "attempts": 0,
+  "duration_s": 21.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:39:45"
+   }
+  ],
+  "last_run": "2026-09-30T14:39:45",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.attn_hc.log",
+  "metrics": {
+   "auto_attn_hc_L02_big_bias": 0.0003459453582763672,
+   "auto_attn_hc_L02_big_col": 0.0069608744233846664,
+   "auto_attn_hc_L02_big_ratio_max": 1.0007143020629883,
+   "auto_attn_hc_L02_big_ratio_min": 0.9999552369117737,
+   "auto_attn_hc_L02_big_rel": 0.0004942956147715449,
+   "auto_attn_hc_L02_big_rel_limit": 0.03,
+   "auto_attn_hc_L02_big_row": 0.0008447594591416419,
+   "auto_attn_hc_L02_layer39_bias": 0.00014984607696533203,
+   "auto_attn_hc_L02_layer39_col": 0.0010615229839459062,
+   "auto_attn_hc_L02_layer39_ratio_max": 1.0002907514572144,
+   "auto_attn_hc_L02_layer39_ratio_min": 1.0000475645065308,
+   "auto_attn_hc_L02_layer39_rel": 0.0003589416737668216,
+   "auto_attn_hc_L02_layer39_rel_limit": 0.03,
+   "auto_attn_hc_L02_layer39_row": 0.0005367739940993488,
+   "auto_attn_hc_L02_mixed_bias": 0.00014066696166992188,
+   "auto_attn_hc_L02_mixed_col": 0.0009639466879889369,
+   "auto_attn_hc_L02_mixed_ratio_max": 1.000283122062683,
+   "auto_attn_hc_L02_mixed_ratio_min": 1.0000460147857666,
+   "auto_attn_hc_L02_mixed_rel": 0.00034523490467108786,
+   "auto_attn_hc_L02_mixed_rel_limit": 0.03,
+   "auto_attn_hc_L02_mixed_row": 0.0004999691154807806,
+   "auto_attn_hc_L02_small_bias": 0.0003222227096557617,
+   "auto_attn_hc_L02_small_col": 0.005255694966763258,
+   "auto_attn_hc_L02_small_ratio_max": 1.0006871223449707,
+   "auto_attn_hc_L02_small_ratio_min": 0.9999314546585083,
+   "auto_attn_hc_L02_small_rel": 0.00049283989937976,
+   "auto_attn_hc_L02_small_rel_limit": 0.03,
+   "auto_attn_hc_L02_small_row": 0.0008917265222407877,
+   "auto_attn_hc_L02_vs_cpu_bias": 0.0003483295440673828,
+   "auto_attn_hc_L02_vs_cpu_col": 0.007000631652772427,
+   "auto_attn_hc_L02_vs_cpu_ratio_max": 1.0007092952728271,
+   "auto_attn_hc_L02_vs_cpu_ratio_min": 0.9999232292175293,
+   "auto_attn_hc_L02_vs_cpu_rel": 0.0004942627274431288,
+   "auto_attn_hc_L02_vs_cpu_rel_limit": 0.005296127405017614,
+   "auto_attn_hc_L02_vs_cpu_row": 0.0008919314714148641,
+   "auto_attn_hc_L02_vs_golden_bias": 0.0003304481506347656,
+   "auto_attn_hc_L02_vs_golden_col": 0.00723762484267354,
+   "auto_attn_hc_L02_vs_golden_ratio_max": 1.0019198656082153,
+   "auto_attn_hc_L02_vs_golden_ratio_min": 0.9982874989509583,
+   "auto_attn_hc_L02_vs_golden_rel": 0.0013205495197325945,
+   "auto_attn_hc_L02_vs_golden_rel_limit": 0.006522145704366267,
+   "auto_attn_hc_L02_vs_golden_row": 0.0023794828448444605,
+   "pcc_attn_hc_L02": 0.9999988925539215
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:39:24",
+  "status": "PASS"
+ },
+ "C.moe.attn_norm": {
+  "attempts": 0,
+  "duration_s": 17.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:44:49"
+   }
+  ],
+  "last_run": "2026-09-30T14:44:49",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.attn_norm.log",
+  "metrics": {
+   "auto_attn_norm_L02_big_bias": -0.0004850625991821289,
+   "auto_attn_norm_L02_big_ratio_max": 1.000545620918274,
+   "auto_attn_norm_L02_big_ratio_min": 0.9984775185585022,
+   "auto_attn_norm_L02_big_rel": 0.0018096293788403273,
+   "auto_attn_norm_L02_big_rel_limit": 0.03,
+   "auto_attn_norm_L02_big_row": 0.002358758356422186,
+   "auto_attn_norm_L02_layer39_bias": -0.000517427921295166,
+   "auto_attn_norm_L02_layer39_ratio_max": 1.0011274814605713,
+   "auto_attn_norm_L02_layer39_ratio_min": 0.9977779388427734,
+   "auto_attn_norm_L02_layer39_rel": 0.0017866111593320966,
+   "auto_attn_norm_L02_layer39_rel_limit": 0.03,
+   "auto_attn_norm_L02_layer39_row": 0.0031949607655406,
+   "auto_attn_norm_L02_mixed_bias": -0.0005421638488769531,
+   "auto_attn_norm_L02_mixed_ratio_max": 1.0003658533096313,
+   "auto_attn_norm_L02_mixed_ratio_min": 0.9985383749008179,
+   "auto_attn_norm_L02_mixed_rel": 0.0018306024139747024,
+   "auto_attn_norm_L02_mixed_rel_limit": 0.03,
+   "auto_attn_norm_L02_mixed_row": 0.0022605855483561754,
+   "auto_attn_norm_L02_small_bias": -0.0002808570861816406,
+   "auto_attn_norm_L02_small_ratio_max": 1.0006077289581299,
+   "auto_attn_norm_L02_small_ratio_min": 0.9986173510551453,
+   "auto_attn_norm_L02_small_rel": 0.0017849497962743044,
+   "auto_attn_norm_L02_small_rel_limit": 0.03,
+   "auto_attn_norm_L02_small_row": 0.002121067838743329,
+   "auto_attn_norm_L02_vs_cpu_bias": -0.000554502010345459,
+   "auto_attn_norm_L02_vs_cpu_ratio_max": 1.000333547592163,
+   "auto_attn_norm_L02_vs_cpu_ratio_min": 0.9985106587409973,
+   "auto_attn_norm_L02_vs_cpu_rel": 0.001831344678066671,
+   "auto_attn_norm_L02_vs_cpu_rel_limit": 0.006024225149303675,
+   "auto_attn_norm_L02_vs_cpu_row": 0.0022429556120187044,
+   "auto_attn_norm_L02_vs_golden_bias": -0.0005546808242797852,
+   "auto_attn_norm_L02_vs_golden_ratio_max": 1.0002470016479492,
+   "auto_attn_norm_L02_vs_golden_ratio_min": 0.9985360503196716,
+   "auto_attn_norm_L02_vs_golden_rel": 0.0029293743427842855,
+   "auto_attn_norm_L02_vs_golden_rel_limit": 0.008366463473066688,
+   "auto_attn_norm_L02_vs_golden_row": 0.0033180699683725834,
+   "pcc_attn_norm_L02": 0.9999958648428795
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:44:32",
+  "status": "PASS"
+ },
+ "C.moe.attn_residual": {
+  "attempts": 0,
+  "duration_s": 25.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:10:02"
+   }
+  ],
+  "last_run": "2026-09-30T15:10:02",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.attn_residual.log",
+  "metrics": {
+   "auto_attn_residual_L02_big_bias": 0.0,
+   "auto_attn_residual_L02_big_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L02_big_ratio_min": 0.9999998807907104,
+   "auto_attn_residual_L02_big_rel": 2.0826982805033367e-08,
+   "auto_attn_residual_L02_big_rel_limit": 0.03,
+   "auto_attn_residual_L02_big_row": 4.905986727976597e-08,
+   "auto_attn_residual_L02_layer39_bias": 0.0,
+   "auto_attn_residual_L02_layer39_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L02_layer39_ratio_min": 0.9999998807907104,
+   "auto_attn_residual_L02_layer39_rel": 5.684479109646645e-09,
+   "auto_attn_residual_L02_layer39_rel_limit": 0.03,
+   "auto_attn_residual_L02_layer39_row": 6.800277674301469e-08,
+   "auto_attn_residual_L02_mixed_bias": 0.0,
+   "auto_attn_residual_L02_mixed_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L02_mixed_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L02_mixed_rel": 4.525719887737978e-08,
+   "auto_attn_residual_L02_mixed_rel_limit": 0.03,
+   "auto_attn_residual_L02_mixed_row": 5.968101390863012e-08,
+   "auto_attn_residual_L02_small_bias": 0.0,
+   "auto_attn_residual_L02_small_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L02_small_ratio_min": 0.9999998211860657,
+   "auto_attn_residual_L02_small_rel": 2.7165336646817195e-08,
+   "auto_attn_residual_L02_small_rel_limit": 0.03,
+   "auto_attn_residual_L02_small_row": 4.950896936861682e-08,
+   "auto_attn_residual_L02_vs_cpu_bias": 0.0,
+   "auto_attn_residual_L02_vs_cpu_ratio_max": 1.0000001192092896,
+   "auto_attn_residual_L02_vs_cpu_ratio_min": 0.9999998807907104,
+   "auto_attn_residual_L02_vs_cpu_rel": 2.0826982805033367e-08,
+   "auto_attn_residual_L02_vs_cpu_rel_limit": 0.004539788700640202,
+   "auto_attn_residual_L02_vs_cpu_row": 4.905986727976597e-08,
+   "auto_attn_residual_L02_vs_golden_bias": -5.781650543212891e-06,
+   "auto_attn_residual_L02_vs_golden_ratio_max": 1.0027521848678589,
+   "auto_attn_residual_L02_vs_golden_ratio_min": 0.997137725353241,
+   "auto_attn_residual_L02_vs_golden_rel": 0.0026985311415046453,
+   "auto_attn_residual_L02_vs_golden_rel_limit": 0.00723831937648356,
+   "auto_attn_residual_L02_vs_golden_row": 0.00380483060143888,
+   "pcc_attn_residual_L02": 0.9999963575442278
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:09:36",
+  "status": "PASS"
+ },
+ "C.moe.experts": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "e7d478e3-509b-4fb6-8f45-d0523f8fb1f1"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.experts.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.experts.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 324.2,
+    "session_id": "e7d478e3-509b-4fb6-8f45-d0523f8fb1f1",
+    "t": "2026-09-30T15:34:15"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 24.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:28:50"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:34:44"
+   }
+  ],
+  "last_run": "2026-09-30T15:34:44",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.experts.log",
+  "metrics": {
+   "auto_experts_L02_big_bias": 4.315376281738281e-05,
+   "auto_experts_L02_big_ratio_max": 1.0078269243240356,
+   "auto_experts_L02_big_ratio_min": 0.9949147701263428,
+   "auto_experts_L02_big_rel": 0.008673597127199173,
+   "auto_experts_L02_big_rel_limit": 0.03,
+   "auto_experts_L02_big_row": 0.0250337403267622,
+   "auto_experts_L02_layer39_bias": 0.00026428699493408203,
+   "auto_experts_L02_layer39_ratio_max": 1.0035802125930786,
+   "auto_experts_L02_layer39_ratio_min": 0.9974105358123779,
+   "auto_experts_L02_layer39_rel": 0.013216863386332989,
+   "auto_experts_L02_layer39_rel_limit": 0.03,
+   "auto_experts_L02_layer39_row": 0.014909325167536736,
+   "auto_experts_L02_mixed_bias": 0.0001277923583984375,
+   "auto_experts_L02_mixed_ratio_max": 1.004589557647705,
+   "auto_experts_L02_mixed_ratio_min": 0.9968289136886597,
+   "auto_experts_L02_mixed_rel": 0.012787560932338238,
+   "auto_experts_L02_mixed_rel_limit": 0.03,
+   "auto_experts_L02_mixed_row": 0.0153804374858737,
+   "auto_experts_L02_small_bias": 0.00010859966278076172,
+   "auto_experts_L02_small_ratio_max": 1.0050524473190308,
+   "auto_experts_L02_small_ratio_min": 0.996235728263855,
+   "auto_experts_L02_small_rel": 0.008207359351217747,
+   "auto_experts_L02_small_rel_limit": 0.03,
+   "auto_experts_L02_small_row": 0.011781360022723675,
+   "auto_experts_L02_vs_cpu_bias": -1.1742115020751953e-05,
+   "auto_experts_L02_vs_cpu_ratio_max": 1.005200982093811,
+   "auto_experts_L02_vs_cpu_ratio_min": 0.9954182505607605,
+   "auto_experts_L02_vs_cpu_rel": 0.008626166731119156,
+   "auto_experts_L02_vs_cpu_rel_limit": 0.013667529099620879,
+   "auto_experts_L02_vs_cpu_row": 0.01551608182489872,
+   "auto_experts_L02_vs_golden_bias": 8.726119995117188e-05,
+   "auto_experts_L02_vs_golden_ratio_max": 1.0071204900741577,
+   "auto_experts_L02_vs_golden_ratio_min": 0.9936259984970093,
+   "auto_experts_L02_vs_golden_rel": 0.008986190892755985,
+   "auto_experts_L02_vs_golden_rel_limit": 0.016167539753951132,
+   "auto_experts_L02_vs_golden_row": 0.015800049528479576,
+   "pcc_experts_L02": 0.9999595796964853
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:34:20",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.moe.ffn_collapse": {
+  "attempts": 0,
+  "duration_s": 18.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:16:25"
+   }
+  ],
+  "last_run": "2026-09-30T15:16:25",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.ffn_collapse.log",
+  "metrics": {
+   "auto_ffn_collapse_L02_big_bias": 0.0,
+   "auto_ffn_collapse_L02_big_ratio_max": 1.0,
+   "auto_ffn_collapse_L02_big_ratio_min": 1.0,
+   "auto_ffn_collapse_L02_big_rel": 0.0,
+   "auto_ffn_collapse_L02_big_rel_limit": 0.03,
+   "auto_ffn_collapse_L02_big_row": 0.0,
+   "auto_ffn_collapse_L02_layer39_bias": 0.0,
+   "auto_ffn_collapse_L02_layer39_ratio_max": 1.0,
+   "auto_ffn_collapse_L02_layer39_ratio_min": 1.0,
+   "auto_ffn_collapse_L02_layer39_rel": 0.0,
+   "auto_ffn_collapse_L02_layer39_rel_limit": 0.03,
+   "auto_ffn_collapse_L02_layer39_row": 0.0,
+   "auto_ffn_collapse_L02_mixed_bias": 0.0,
+   "auto_ffn_collapse_L02_mixed_ratio_max": 1.0,
+   "auto_ffn_collapse_L02_mixed_ratio_min": 1.0,
+   "auto_ffn_collapse_L02_mixed_rel": 0.0,
+   "auto_ffn_collapse_L02_mixed_rel_limit": 0.03,
+   "auto_ffn_collapse_L02_mixed_row": 0.0,
+   "auto_ffn_collapse_L02_small_bias": 0.0,
+   "auto_ffn_collapse_L02_small_ratio_max": 1.0,
+   "auto_ffn_collapse_L02_small_ratio_min": 1.0,
+   "auto_ffn_collapse_L02_small_rel": 0.0,
+   "auto_ffn_collapse_L02_small_rel_limit": 0.03,
+   "auto_ffn_collapse_L02_small_row": 0.0,
+   "auto_ffn_collapse_L02_vs_cpu_bias": 0.0,
+   "auto_ffn_collapse_L02_vs_cpu_ratio_max": 1.0,
+   "auto_ffn_collapse_L02_vs_cpu_ratio_min": 1.0,
+   "auto_ffn_collapse_L02_vs_cpu_rel": 0.0,
+   "auto_ffn_collapse_L02_vs_cpu_rel_limit": 0.0044378782622516155,
+   "auto_ffn_collapse_L02_vs_cpu_row": 0.0,
+   "auto_ffn_collapse_L02_vs_golden_bias": 7.152557373046875e-06,
+   "auto_ffn_collapse_L02_vs_golden_ratio_max": 1.0031049251556396,
+   "auto_ffn_collapse_L02_vs_golden_ratio_min": 0.9967854022979736,
+   "auto_ffn_collapse_L02_vs_golden_rel": 0.002614017343148589,
+   "auto_ffn_collapse_L02_vs_golden_rel_limit": 0.007051895605400205,
+   "auto_ffn_collapse_L02_vs_golden_row": 0.0038542698603123426,
+   "pcc_ffn_collapse_L02": 0.9999965790415503
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:16:06",
+  "status": "PASS"
+ },
+ "C.moe.ffn_hc": {
+  "attempts": 0,
+  "duration_s": 50.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:13:35"
+   }
+  ],
+  "last_run": "2026-09-30T15:13:35",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.ffn_hc.log",
+  "metrics": {
+   "auto_ffn_hc_L02_big_bias": 0.0003682374954223633,
+   "auto_ffn_hc_L02_big_col": 0.006812626495957375,
+   "auto_ffn_hc_L02_big_ratio_max": 1.0008317232131958,
+   "auto_ffn_hc_L02_big_ratio_min": 0.9999492764472961,
+   "auto_ffn_hc_L02_big_rel": 0.0005457591032609344,
+   "auto_ffn_hc_L02_big_rel_limit": 0.03,
+   "auto_ffn_hc_L02_big_row": 0.0009936607675626874,
+   "auto_ffn_hc_L02_layer39_bias": 0.00013935565948486328,
+   "auto_ffn_hc_L02_layer39_col": 0.0009993301937356591,
+   "auto_ffn_hc_L02_layer39_ratio_max": 1.000360131263733,
+   "auto_ffn_hc_L02_layer39_ratio_min": 0.9999549388885498,
+   "auto_ffn_hc_L02_layer39_rel": 0.00036029002512805164,
+   "auto_ffn_hc_L02_layer39_rel_limit": 0.03,
+   "auto_ffn_hc_L02_layer39_row": 0.0006518466980196536,
+   "auto_ffn_hc_L02_mixed_bias": 0.00014925003051757812,
+   "auto_ffn_hc_L02_mixed_col": 0.0008711076225154102,
+   "auto_ffn_hc_L02_mixed_ratio_max": 1.00032639503479,
+   "auto_ffn_hc_L02_mixed_ratio_min": 0.9999847412109375,
+   "auto_ffn_hc_L02_mixed_rel": 0.0003671383310575038,
+   "auto_ffn_hc_L02_mixed_rel_limit": 0.03,
+   "auto_ffn_hc_L02_mixed_row": 0.0005717888125218451,
+   "auto_ffn_hc_L02_small_bias": 0.0003540515899658203,
+   "auto_ffn_hc_L02_small_col": 0.004830125719308853,
+   "auto_ffn_hc_L02_small_ratio_max": 1.0008329153060913,
+   "auto_ffn_hc_L02_small_ratio_min": 0.9999328255653381,
+   "auto_ffn_hc_L02_small_rel": 0.0005323184886947274,
+   "auto_ffn_hc_L02_small_rel_limit": 0.03,
+   "auto_ffn_hc_L02_small_row": 0.0010107489069923759,
+   "auto_ffn_hc_L02_vs_cpu_bias": 0.0003682374954223633,
+   "auto_ffn_hc_L02_vs_cpu_col": 0.006815385073423386,
+   "auto_ffn_hc_L02_vs_cpu_ratio_max": 1.0008600950241089,
+   "auto_ffn_hc_L02_vs_cpu_ratio_min": 0.9999240636825562,
+   "auto_ffn_hc_L02_vs_cpu_rel": 0.0005418213550001383,
+   "auto_ffn_hc_L02_vs_cpu_rel_limit": 0.009497451595962048,
+   "auto_ffn_hc_L02_vs_cpu_row": 0.0009930925443768501,
+   "auto_ffn_hc_L02_vs_golden_bias": 0.0003572702407836914,
+   "auto_ffn_hc_L02_vs_golden_col": 0.007214673329144716,
+   "auto_ffn_hc_L02_vs_golden_ratio_max": 1.0021772384643555,
+   "auto_ffn_hc_L02_vs_golden_ratio_min": 0.9986922144889832,
+   "auto_ffn_hc_L02_vs_golden_rel": 0.0015289622824639082,
+   "auto_ffn_hc_L02_vs_golden_rel_limit": 0.010929238866083324,
+   "auto_ffn_hc_L02_vs_golden_row": 0.0025538881309330463,
+   "pcc_ffn_hc_L02": 0.9999984028194947
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:12:45",
+  "status": "PASS"
+ },
+ "C.moe.ffn_norm": {
+  "attempts": 0,
+  "duration_s": 18.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:19:13"
+   }
+  ],
+  "last_run": "2026-09-30T15:19:13",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.ffn_norm.log",
+  "metrics": {
+   "auto_ffn_norm_L02_big_bias": -0.0004839897155761719,
+   "auto_ffn_norm_L02_big_ratio_max": 1.0003939867019653,
+   "auto_ffn_norm_L02_big_ratio_min": 0.9985882639884949,
+   "auto_ffn_norm_L02_big_rel": 0.0018088985234498978,
+   "auto_ffn_norm_L02_big_rel_limit": 0.03,
+   "auto_ffn_norm_L02_big_row": 0.0022333702072501183,
+   "auto_ffn_norm_L02_layer39_bias": -0.0005719661712646484,
+   "auto_ffn_norm_L02_layer39_ratio_max": 1.0013762712478638,
+   "auto_ffn_norm_L02_layer39_ratio_min": 0.9974782466888428,
+   "auto_ffn_norm_L02_layer39_rel": 0.0018425444141030312,
+   "auto_ffn_norm_L02_layer39_rel_limit": 0.03,
+   "auto_ffn_norm_L02_layer39_row": 0.0036958823911845684,
+   "auto_ffn_norm_L02_mixed_bias": -0.0005732178688049316,
+   "auto_ffn_norm_L02_mixed_ratio_max": 1.000308871269226,
+   "auto_ffn_norm_L02_mixed_ratio_min": 0.9984411001205444,
+   "auto_ffn_norm_L02_mixed_rel": 0.001834940630942583,
+   "auto_ffn_norm_L02_mixed_rel_limit": 0.03,
+   "auto_ffn_norm_L02_mixed_row": 0.002340909093618393,
+   "auto_ffn_norm_L02_small_bias": -0.0003371238708496094,
+   "auto_ffn_norm_L02_small_ratio_max": 1.000614047050476,
+   "auto_ffn_norm_L02_small_ratio_min": 0.9988946914672852,
+   "auto_ffn_norm_L02_small_rel": 0.001775392796844244,
+   "auto_ffn_norm_L02_small_rel_limit": 0.03,
+   "auto_ffn_norm_L02_small_row": 0.0020587220788002014,
+   "auto_ffn_norm_L02_vs_cpu_bias": -0.0005794167518615723,
+   "auto_ffn_norm_L02_vs_cpu_ratio_max": 1.0004515647888184,
+   "auto_ffn_norm_L02_vs_cpu_ratio_min": 0.9984678626060486,
+   "auto_ffn_norm_L02_vs_cpu_rel": 0.0018344871932640672,
+   "auto_ffn_norm_L02_vs_cpu_rel_limit": 0.006295042112469673,
+   "auto_ffn_norm_L02_vs_cpu_row": 0.002309598959982395,
+   "auto_ffn_norm_L02_vs_golden_bias": -0.0005824565887451172,
+   "auto_ffn_norm_L02_vs_golden_ratio_max": 1.000472903251648,
+   "auto_ffn_norm_L02_vs_golden_ratio_min": 0.9984660148620605,
+   "auto_ffn_norm_L02_vs_golden_rel": 0.0029276239220052958,
+   "auto_ffn_norm_L02_vs_golden_rel_limit": 0.00863645994104445,
+   "auto_ffn_norm_L02_vs_golden_row": 0.003352212021127343,
+   "pcc_ffn_norm_L02": 0.9999958735217831
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:18:55",
+  "status": "PASS"
+ },
+ "C.moe.ffn_residual": {
+  "attempts": 0,
+  "duration_s": 27.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:46:54"
+   }
+  ],
+  "last_run": "2026-09-30T15:46:54",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.ffn_residual.log",
+  "metrics": {
+   "auto_ffn_residual_L02_big_bias": 0.0,
+   "auto_ffn_residual_L02_big_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L02_big_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L02_big_rel": 2.164221690748036e-08,
+   "auto_ffn_residual_L02_big_rel_limit": 0.03,
+   "auto_ffn_residual_L02_big_row": 5.560909954738236e-08,
+   "auto_ffn_residual_L02_layer39_bias": 0.0,
+   "auto_ffn_residual_L02_layer39_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L02_layer39_ratio_min": 0.9999998807907104,
+   "auto_ffn_residual_L02_layer39_rel": 3.0584417221035665e-09,
+   "auto_ffn_residual_L02_layer39_rel_limit": 0.03,
+   "auto_ffn_residual_L02_layer39_row": 6.778700623044642e-08,
+   "auto_ffn_residual_L02_mixed_bias": 0.0,
+   "auto_ffn_residual_L02_mixed_ratio_max": 1.000000238418579,
+   "auto_ffn_residual_L02_mixed_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L02_mixed_rel": 5.2616023538121226e-08,
+   "auto_ffn_residual_L02_mixed_rel_limit": 0.03,
+   "auto_ffn_residual_L02_mixed_row": 6.102797556195583e-08,
+   "auto_ffn_residual_L02_small_bias": 0.0,
+   "auto_ffn_residual_L02_small_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L02_small_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L02_small_rel": 3.174227458657697e-08,
+   "auto_ffn_residual_L02_small_rel_limit": 0.03,
+   "auto_ffn_residual_L02_small_row": 5.149510684532288e-08,
+   "auto_ffn_residual_L02_vs_cpu_bias": 0.0,
+   "auto_ffn_residual_L02_vs_cpu_ratio_max": 1.0000001192092896,
+   "auto_ffn_residual_L02_vs_cpu_ratio_min": 0.9999998211860657,
+   "auto_ffn_residual_L02_vs_cpu_rel": 2.164221690748036e-08,
+   "auto_ffn_residual_L02_vs_cpu_rel_limit": 0.00450188759714365,
+   "auto_ffn_residual_L02_vs_cpu_row": 5.560909954738236e-08,
+   "auto_ffn_residual_L02_vs_golden_bias": -1.3887882232666016e-05,
+   "auto_ffn_residual_L02_vs_golden_ratio_max": 1.0037026405334473,
+   "auto_ffn_residual_L02_vs_golden_ratio_min": 0.9964178204536438,
+   "auto_ffn_residual_L02_vs_golden_rel": 0.002573529025539756,
+   "auto_ffn_residual_L02_vs_golden_rel_limit": 0.007075416157022119,
+   "auto_ffn_residual_L02_vs_golden_row": 0.004370975773781538,
+   "pcc_ffn_residual_L02": 0.9999966893617405
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:46:26",
+  "status": "PASS"
+ },
+ "C.moe.moe_add": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "86d52394-07ce-4246-abfc-b34312ce292f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.moe_add.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.moe_add.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 57.6,
+    "session_id": "86d52394-07ce-4246-abfc-b34312ce292f",
+    "t": "2026-09-30T15:42:54"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 18.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:41:56"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:43:18"
+   }
+  ],
+  "last_run": "2026-09-30T15:43:18",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.moe_add.log",
+  "metrics": {
+   "auto_moe_add_L02_big_bias": 0.0,
+   "auto_moe_add_L02_big_ratio_max": 1.0,
+   "auto_moe_add_L02_big_ratio_min": 1.0,
+   "auto_moe_add_L02_big_rel": 0.0,
+   "auto_moe_add_L02_big_rel_limit": 0.03,
+   "auto_moe_add_L02_big_row": 0.0,
+   "auto_moe_add_L02_layer39_bias": 0.0,
+   "auto_moe_add_L02_layer39_ratio_max": 1.0,
+   "auto_moe_add_L02_layer39_ratio_min": 1.0,
+   "auto_moe_add_L02_layer39_rel": 0.0,
+   "auto_moe_add_L02_layer39_rel_limit": 0.03,
+   "auto_moe_add_L02_layer39_row": 0.0,
+   "auto_moe_add_L02_mixed_bias": 0.0,
+   "auto_moe_add_L02_mixed_ratio_max": 1.0,
+   "auto_moe_add_L02_mixed_ratio_min": 1.0,
+   "auto_moe_add_L02_mixed_rel": 0.0,
+   "auto_moe_add_L02_mixed_rel_limit": 0.03,
+   "auto_moe_add_L02_mixed_row": 0.0,
+   "auto_moe_add_L02_small_bias": 0.0,
+   "auto_moe_add_L02_small_ratio_max": 1.0,
+   "auto_moe_add_L02_small_ratio_min": 1.0,
+   "auto_moe_add_L02_small_rel": 0.0,
+   "auto_moe_add_L02_small_rel_limit": 0.03,
+   "auto_moe_add_L02_small_row": 0.0,
+   "auto_moe_add_L02_vs_cpu_bias": 0.0,
+   "auto_moe_add_L02_vs_cpu_ratio_max": 1.0,
+   "auto_moe_add_L02_vs_cpu_ratio_min": 1.0,
+   "auto_moe_add_L02_vs_cpu_rel": 0.0,
+   "auto_moe_add_L02_vs_cpu_rel_limit": 0.0035026504192501307,
+   "auto_moe_add_L02_vs_cpu_row": 0.0,
+   "auto_moe_add_L02_vs_golden_bias": 5.960464477539062e-07,
+   "auto_moe_add_L02_vs_golden_ratio_max": 1.0002336502075195,
+   "auto_moe_add_L02_vs_golden_ratio_min": 0.9997951984405518,
+   "auto_moe_add_L02_vs_golden_rel": 0.002247074618935585,
+   "auto_moe_add_L02_vs_golden_rel_limit": 0.005749725038185716,
+   "auto_moe_add_L02_vs_golden_row": 0.002449400955811143,
+   "pcc_moe_add_L02": 0.9999974729541582
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:43:00",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.moe.q_a": {
+  "attempts": 0,
+  "duration_s": 15.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:47:18"
+   }
+  ],
+  "last_run": "2026-09-30T14:47:18",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.q_a.log",
+  "metrics": {
+   "auto_q_a_L02_big_bias": -0.00018298625946044922,
+   "auto_q_a_L02_big_ratio_max": 1.0004371404647827,
+   "auto_q_a_L02_big_ratio_min": 0.9990082383155823,
+   "auto_q_a_L02_big_rel": 0.0017534330254420638,
+   "auto_q_a_L02_big_rel_limit": 0.03,
+   "auto_q_a_L02_big_row": 0.0020759415347129107,
+   "auto_q_a_L02_layer39_bias": -0.00025856494903564453,
+   "auto_q_a_L02_layer39_ratio_max": 1.0004563331604004,
+   "auto_q_a_L02_layer39_ratio_min": 0.9990507960319519,
+   "auto_q_a_L02_layer39_rel": 0.0017880948726087809,
+   "auto_q_a_L02_layer39_rel_limit": 0.03,
+   "auto_q_a_L02_layer39_row": 0.0020864177495241165,
+   "auto_q_a_L02_mixed_bias": -0.0002913475036621094,
+   "auto_q_a_L02_mixed_ratio_max": 1.000440239906311,
+   "auto_q_a_L02_mixed_ratio_min": 0.9989465475082397,
+   "auto_q_a_L02_mixed_rel": 0.0017864465480670333,
+   "auto_q_a_L02_mixed_rel_limit": 0.03,
+   "auto_q_a_L02_mixed_row": 0.002080667531117797,
+   "auto_q_a_L02_small_bias": -0.00031942129135131836,
+   "auto_q_a_L02_small_ratio_max": 1.0004286766052246,
+   "auto_q_a_L02_small_ratio_min": 0.9989039897918701,
+   "auto_q_a_L02_small_rel": 0.0017701227916404605,
+   "auto_q_a_L02_small_rel_limit": 0.03,
+   "auto_q_a_L02_small_row": 0.002068432979285717,
+   "auto_q_a_L02_vs_cpu_bias": -0.00018298625946044922,
+   "auto_q_a_L02_vs_cpu_ratio_max": 1.0004371404647827,
+   "auto_q_a_L02_vs_cpu_ratio_min": 0.9990083575248718,
+   "auto_q_a_L02_vs_cpu_rel": 0.0017534272046759725,
+   "auto_q_a_L02_vs_cpu_rel_limit": 0.006842824164777994,
+   "auto_q_a_L02_vs_cpu_row": 0.0020758924074470997,
+   "auto_q_a_L02_vs_golden_bias": -0.0001887679100036621,
+   "auto_q_a_L02_vs_golden_ratio_max": 1.00053870677948,
+   "auto_q_a_L02_vs_golden_ratio_min": 0.9988296627998352,
+   "auto_q_a_L02_vs_golden_rel": 0.0020906366407871246,
+   "auto_q_a_L02_vs_golden_rel_limit": 0.008730844710953534,
+   "auto_q_a_L02_vs_golden_row": 0.0027886638417840004,
+   "pcc_q_a_L02": 0.9999978337702032
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:47:02",
+  "status": "PASS"
+ },
+ "C.moe.router": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "d4004cca-884b-448e-8f6e-5185a5f53781"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.router.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.router.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 194.8,
+    "session_id": "d4004cca-884b-448e-8f6e-5185a5f53781",
+    "t": "2026-09-30T15:25:06"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 15.3,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:21:51"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:25:26"
+   }
+  ],
+  "last_run": "2026-09-30T15:25:26",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.router.log",
+  "metrics": {
+   "auto_router_L02_layer39_matched": 0.99853515625,
+   "auto_router_L02_layer39_overlap": 0.9996337890625,
+   "auto_router_L02_layer39_rel": 4.301935769035481e-05,
+   "auto_router_L02_layer39_rowsum": 2.384185791015625e-07,
+   "auto_router_L02_mixed_matched": 0.9990234375,
+   "auto_router_L02_mixed_overlap": 0.999755859375,
+   "auto_router_L02_mixed_rel": 3.5044795367866755e-05,
+   "auto_router_L02_mixed_rowsum": 2.384185791015625e-07,
+   "auto_router_L02_vs_cpu_matched": 0.99755859375,
+   "auto_router_L02_vs_cpu_overlap": 0.9993896484375,
+   "auto_router_L02_vs_cpu_rel": 0.00011599136632867157,
+   "auto_router_L02_vs_cpu_rowsum": 2.384185791015625e-07,
+   "auto_router_L02_vs_golden_matched": 0.99365234375,
+   "auto_router_L02_vs_golden_overlap": 0.9984130859375,
+   "auto_router_L02_vs_golden_rel": 0.001772003946825862,
+   "auto_router_L02_vs_golden_rowsum": 0.0029211044311523438,
+   "pcc_router_L02": 0.9994964916844641
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:25:11",
+  "status": "PASS",
+  "waiting": null
+ },
+ "C.moe.shared_expert": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "fc47544a-eadb-4954-8246-4b571dc8b3d4"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/C.moe.shared_expert.implement.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/C.moe.shared_expert.implement.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "implement",
+    "seconds": 63.7,
+    "session_id": "fc47544a-eadb-4954-8246-4b571dc8b3d4",
+    "t": "2026-09-30T15:38:38"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 17.6,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:37:34"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:39:00"
+   }
+  ],
+  "last_run": "2026-09-30T15:39:00",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/C.moe.shared_expert.log",
+  "metrics": {
+   "auto_shared_expert_L02_big_bias": -0.0005491971969604492,
+   "auto_shared_expert_L02_big_ratio_max": 0.9996184706687927,
+   "auto_shared_expert_L02_big_ratio_min": 0.9992607831954956,
+   "auto_shared_expert_L02_big_rel": 0.0006416618707589805,
+   "auto_shared_expert_L02_big_rel_limit": 0.03,
+   "auto_shared_expert_L02_big_row": 0.0008257339359261096,
+   "auto_shared_expert_L02_layer39_bias": -0.0005444884300231934,
+   "auto_shared_expert_L02_layer39_ratio_max": 0.9997309446334839,
+   "auto_shared_expert_L02_layer39_ratio_min": 0.9991964101791382,
+   "auto_shared_expert_L02_layer39_rel": 0.0007714987732470036,
+   "auto_shared_expert_L02_layer39_rel_limit": 0.03,
+   "auto_shared_expert_L02_layer39_row": 0.001091357902623713,
+   "auto_shared_expert_L02_mixed_bias": -0.0005500912666320801,
+   "auto_shared_expert_L02_mixed_ratio_max": 0.9997873306274414,
+   "auto_shared_expert_L02_mixed_ratio_min": 0.9990148544311523,
+   "auto_shared_expert_L02_mixed_rel": 0.0007756718550808728,
+   "auto_shared_expert_L02_mixed_rel_limit": 0.03,
+   "auto_shared_expert_L02_mixed_row": 0.0012595511507242918,
+   "auto_shared_expert_L02_small_bias": -0.0005514025688171387,
+   "auto_shared_expert_L02_small_ratio_max": 0.9997131824493408,
+   "auto_shared_expert_L02_small_ratio_min": 0.9991950988769531,
+   "auto_shared_expert_L02_small_rel": 0.0006819498958066106,
+   "auto_shared_expert_L02_small_rel_limit": 0.03,
+   "auto_shared_expert_L02_small_row": 0.0009489203221164644,
+   "auto_shared_expert_L02_vs_cpu_bias": -0.000546872615814209,
+   "auto_shared_expert_L02_vs_cpu_ratio_max": 0.9996265769004822,
+   "auto_shared_expert_L02_vs_cpu_ratio_min": 0.999241054058075,
+   "auto_shared_expert_L02_vs_cpu_rel": 0.0006419540150091052,
+   "auto_shared_expert_L02_vs_cpu_rel_limit": 0.00464806891977787,
+   "auto_shared_expert_L02_vs_cpu_row": 0.0008314884616993368,
+   "auto_shared_expert_L02_vs_golden_bias": -0.0005601644515991211,
+   "auto_shared_expert_L02_vs_golden_ratio_max": 1.0001367330551147,
+   "auto_shared_expert_L02_vs_golden_ratio_min": 0.9989154934883118,
+   "auto_shared_expert_L02_vs_golden_rel": 0.0018027318874374032,
+   "auto_shared_expert_L02_vs_golden_rel_limit": 0.006330357515253127,
+   "auto_shared_expert_L02_vs_golden_row": 0.002097504213452339,
+   "pcc_shared_expert_L02": 0.9999985278822068
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "implement",
+  "started": "2026-09-30T15:38:43",
+  "status": "PASS",
+  "waiting": null
+ },
+ "G.s16384": {
+  "attempts": 0,
+  "duration_s": 623.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:43:49"
+   }
+  ],
+  "last_run": "2026-09-30T03:43:49",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/G.s16384.log",
+  "metrics": {
+   "cpu_seconds": 610.3,
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 40,
+   "text_top5_acc_last_chunk": 0.7276278734207153
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:33:25",
+  "status": "PASS"
+ },
+ "G.s4096": {
+  "attempts": 0,
+  "duration_s": 118.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:33:22"
+   }
+  ],
+  "last_run": "2026-09-30T03:33:22",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/G.s4096.log",
+  "metrics": {
+   "cpu_seconds": 107.1,
+   "golden_chunks": 2,
+   "golden_hash_ok": 1,
+   "golden_layers": 40,
+   "text_top5_acc_last_chunk": 0.782608687877655
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:31:24",
+  "status": "PASS"
+ },
+ "G.s56320": {
+  "attempts": 0,
+  "duration_s": 4915.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:05:48"
+   }
+  ],
+  "last_run": "2026-09-30T05:05:48",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/G.s56320.log",
+  "metrics": {
+   "cpu_seconds": 4903.1,
+   "golden_chunks": 11,
+   "golden_hash_ok": 1,
+   "golden_layers": 40,
+   "text_top5_acc_last_chunk": 0.7130298614501953
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:43:52",
+  "status": "PASS"
+ },
+ "K.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "dd692e01-54db-46bb-85fc-952289cb6939"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/K.1.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/K.1.contract.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 361.1,
+    "session_id": "dd692e01-54db-46bb-85fc-952289cb6939",
+    "t": "2026-09-30T17:35:28"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 35.5,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T17:29:27"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:36:09"
+   }
+  ],
+  "last_run": "2026-09-30T17:36:09",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.1.log",
+  "metrics": {
+   "ack_blocks_checked": 160,
+   "acks_early": 0,
+   "contract_checks_failed": 0,
+   "pcc_producer_kv_kv_latent": 0.9976123383880163
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "contract",
+  "started": "2026-09-30T17:35:34",
+  "status": "PASS",
+  "waiting": null
+ },
+ "K.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "8a59855f76a84460d29323aaf9750b1ae1c20e15",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "9a4e1a24-b838-488a-8a8f-e1c0c5327872"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/K.2.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "8a59855f76a84460d29323aaf9750b1ae1c20e15",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/K.2.contract.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 1211.8,
+    "session_id": "9a4e1a24-b838-488a-8a8f-e1c0c5327872",
+    "t": "2026-10-01T09:06:54"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 430.5,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T08:46:42"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T09:14:15"
+   }
+  ],
+  "last_run": "2026-10-01T09:14:15",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.2.log",
+  "metrics": {
+   "contract_checks_failed": 0,
+   "contract_tests_failed": 0,
+   "contract_tests_run": 4,
+   "pcc_final_hidden": 0.9984073433228765,
+   "pcc_layer_L00": 0.9999882654831568,
+   "pcc_layer_L01": 0.999979086756004,
+   "pcc_layer_L02": 0.9999644429906385,
+   "pcc_layer_L03": 0.9999474731132828,
+   "pcc_layer_L04": 0.9999304033236518,
+   "pcc_layer_L05": 0.9999048606533544,
+   "pcc_layer_L06": 0.9998800023208548,
+   "pcc_layer_L07": 0.9998287133191971,
+   "pcc_layer_L08": 0.9997515819684591,
+   "pcc_layer_L09": 0.9997709858730005,
+   "pcc_layer_L10": 0.9998010870828877,
+   "pcc_layer_L11": 0.9997869467589497,
+   "pcc_layer_L12": 0.9997477268629331,
+   "pcc_layer_L13": 0.9997157535719429,
+   "pcc_layer_L14": 0.9996711429651449,
+   "pcc_layer_L15": 0.9995624461253935,
+   "pcc_layer_L16": 0.9994635475323372,
+   "pcc_layer_L17": 0.9992865715573506,
+   "pcc_layer_L18": 0.9990024825102383,
+   "pcc_layer_L19": 0.998089597223824,
+   "pcc_layer_L20": 0.9972715217595023,
+   "pcc_layer_L21": 0.996192061513801,
+   "pcc_layer_L22": 0.9956474215956912,
+   "pcc_layer_L23": 0.9942980136095391,
+   "pcc_layer_L24": 0.9935639402287363,
+   "pcc_layer_L25": 0.992332627764283,
+   "pcc_layer_L26": 0.9920468959481173,
+   "pcc_layer_L27": 0.9938583200374483,
+   "pcc_layer_L28": 0.9954587078368968,
+   "pcc_layer_L29": 0.9958992227296412,
+   "pcc_layer_L30": 0.9966657449237027,
+   "pcc_layer_L31": 0.9968552812291724,
+   "pcc_layer_L32": 0.997087766181562,
+   "pcc_layer_L33": 0.997459636151039,
+   "pcc_layer_L34": 0.9979171426422225,
+   "pcc_layer_L35": 0.9979472655068127,
+   "pcc_layer_L36": 0.99789485725362,
+   "pcc_layer_L37": 0.9979894895399292,
+   "pcc_layer_L38": 0.998343646020092,
+   "pcc_layer_L39": 0.9989801751660424,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "contract",
+  "started": "2026-10-01T09:07:05",
+  "status": "PASS",
+  "waiting": null
+ },
+ "K.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "795f35ab46b316b21eed14ee8a622f8a0b09f7e0",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "08754f09-dca6-4b7b-a02c-ba482141a9da"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/K.3.contract.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "795f35ab46b316b21eed14ee8a622f8a0b09f7e0",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/K.3.contract.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "contract",
+    "seconds": 524.4,
+    "session_id": "08754f09-dca6-4b7b-a02c-ba482141a9da",
+    "t": "2026-10-01T09:47:54"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "duration_s": 398.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T09:22:33"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-10-01T09:24:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T09:32:07"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T09:39:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T09:54:43"
+   }
+  ],
+  "last_run": "2026-10-01T09:54:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.3.log",
+  "metrics": {
+   "contract_tests_failed": 0,
+   "contract_tests_run": 4,
+   "pcc_final_hidden": 0.9981927787857136,
+   "pcc_layer_L00": 0.9999885731961017,
+   "pcc_layer_L01": 0.9999783393797849,
+   "pcc_layer_L02": 0.999957518512864,
+   "pcc_layer_L03": 0.9999325137391155,
+   "pcc_layer_L04": 0.9999070394841791,
+   "pcc_layer_L05": 0.9998776777651713,
+   "pcc_layer_L06": 0.9998493139896719,
+   "pcc_layer_L07": 0.9997831975167549,
+   "pcc_layer_L08": 0.999666145188989,
+   "pcc_layer_L09": 0.9997074426599861,
+   "pcc_layer_L10": 0.9997561372647571,
+   "pcc_layer_L11": 0.9997315821704136,
+   "pcc_layer_L12": 0.9996706907282885,
+   "pcc_layer_L13": 0.9996243223679689,
+   "pcc_layer_L14": 0.9995652326395243,
+   "pcc_layer_L15": 0.9994252601231458,
+   "pcc_layer_L16": 0.9992900475698968,
+   "pcc_layer_L17": 0.9990552270218226,
+   "pcc_layer_L18": 0.9987670206450169,
+   "pcc_layer_L19": 0.997793832837807,
+   "pcc_layer_L20": 0.9968357935879214,
+   "pcc_layer_L21": 0.9957017623093973,
+   "pcc_layer_L22": 0.9952242028900768,
+   "pcc_layer_L23": 0.9937689298765717,
+   "pcc_layer_L24": 0.9930102672702247,
+   "pcc_layer_L25": 0.9912956809553828,
+   "pcc_layer_L26": 0.9910553724282204,
+   "pcc_layer_L27": 0.9930509829528859,
+   "pcc_layer_L28": 0.994776067532585,
+   "pcc_layer_L29": 0.9952986184948918,
+   "pcc_layer_L30": 0.9961270497811013,
+   "pcc_layer_L31": 0.9963518153616719,
+   "pcc_layer_L32": 0.996625405207114,
+   "pcc_layer_L33": 0.9970461099888288,
+   "pcc_layer_L34": 0.9975655272337183,
+   "pcc_layer_L35": 0.997608758551001,
+   "pcc_layer_L36": 0.9975432780464496,
+   "pcc_layer_L37": 0.9976527553906606,
+   "pcc_layer_L38": 0.9980886318209722,
+   "pcc_layer_L39": 0.9988280613183586,
+   "state_bits_kv_latent": 8,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "contract",
+  "started": "2026-10-01T09:48:05",
+  "status": "PASS",
+  "waiting": null
+ },
+ "K.4": {
+  "attempts": 0,
+  "duration_s": 101.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-02T00:01:43"
+   }
+  ],
+  "last_run": "2026-10-02T00:01:43",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/K.4.log",
+  "metrics": {
+   "smoke_runner_ok": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-02T00:00:02",
+  "status": "PASS"
+ },
+ "L.last": {
+  "attempts": 0,
+  "duration_s": 167.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:22:26"
+   }
+  ],
+  "last_run": "2026-09-30T17:22:26",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/L.last.log",
+  "metrics": {
+   "pcc_final_hidden": 0.9985403982695388,
+   "pcc_layer_L00": 0.999992198605883,
+   "pcc_layer_L01": 0.999983626965632,
+   "pcc_layer_L02": 0.9999736278603446,
+   "pcc_layer_L03": 0.999959057676098,
+   "pcc_layer_L04": 0.9999437371494261,
+   "pcc_layer_L05": 0.999921462913346,
+   "pcc_layer_L06": 0.9998991882507815,
+   "pcc_layer_L07": 0.9998564211110675,
+   "pcc_layer_L08": 0.9997784858945152,
+   "pcc_layer_L09": 0.9997923790312944,
+   "pcc_layer_L10": 0.9998256839167687,
+   "pcc_layer_L11": 0.9998126325763809,
+   "pcc_layer_L12": 0.9997768503145484,
+   "pcc_layer_L13": 0.9997423838514411,
+   "pcc_layer_L14": 0.9997040409850259,
+   "pcc_layer_L15": 0.9995940305472629,
+   "pcc_layer_L16": 0.9994890531303098,
+   "pcc_layer_L17": 0.9993296356415039,
+   "pcc_layer_L18": 0.9991350848375279,
+   "pcc_layer_L19": 0.998408446508465,
+   "pcc_layer_L20": 0.9976221743800391,
+   "pcc_layer_L21": 0.9967857570038712,
+   "pcc_layer_L22": 0.9963996220336709,
+   "pcc_layer_L23": 0.9952896243405411,
+   "pcc_layer_L24": 0.9947950781787392,
+   "pcc_layer_L25": 0.9933525715583876,
+   "pcc_layer_L26": 0.9929975360367796,
+   "pcc_layer_L27": 0.9945516139391316,
+   "pcc_layer_L28": 0.9959664754859388,
+   "pcc_layer_L29": 0.9963336672361787,
+   "pcc_layer_L30": 0.9969588441220254,
+   "pcc_layer_L31": 0.9971441376147179,
+   "pcc_layer_L32": 0.9973388609053235,
+   "pcc_layer_L33": 0.9976706622669835,
+   "pcc_layer_L34": 0.9980810280315757,
+   "pcc_layer_L35": 0.9981032103044623,
+   "pcc_layer_L36": 0.9980556918818894,
+   "pcc_layer_L37": 0.9981272723856162,
+   "pcc_layer_L38": 0.9984596466370999,
+   "pcc_layer_L39": 0.9990691410845041,
+   "pcc_state_min": 0.9997393655002248,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T17:19:38",
+  "status": "PASS"
+ },
+ "L.s16384": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "68faeaa3-ccac-46a6-b439-b5637fe7fc86"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/L.s16384.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/L.s16384.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 784.1,
+    "session_id": "68faeaa3-ccac-46a6-b439-b5637fe7fc86",
+    "t": "2026-09-30T17:16:52"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 152.0,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T17:03:48"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:19:30"
+   }
+  ],
+  "last_run": "2026-09-30T17:19:30",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/L.s16384.log",
+  "metrics": {
+   "host_transfers_per_layer": 0,
+   "pcc_final_hidden": 0.9985045861683584,
+   "pcc_layer_L00": 0.9999952843347423,
+   "pcc_layer_L01": 0.9999883496811354,
+   "pcc_layer_L02": 0.9999752500991211,
+   "pcc_layer_L03": 0.9999576489557092,
+   "pcc_layer_L04": 0.9999415783923092,
+   "pcc_layer_L05": 0.9999236320434947,
+   "pcc_layer_L06": 0.9998975039509018,
+   "pcc_layer_L07": 0.9998545916653931,
+   "pcc_layer_L08": 0.9997676028738924,
+   "pcc_layer_L09": 0.9997668635690852,
+   "pcc_layer_L10": 0.9998097929746876,
+   "pcc_layer_L11": 0.9998065118764125,
+   "pcc_layer_L12": 0.9997643488113374,
+   "pcc_layer_L13": 0.9997328089377899,
+   "pcc_layer_L14": 0.9996878685528214,
+   "pcc_layer_L15": 0.9995844969832525,
+   "pcc_layer_L16": 0.9994835928813194,
+   "pcc_layer_L17": 0.9993098410175018,
+   "pcc_layer_L18": 0.9991345856535749,
+   "pcc_layer_L19": 0.9984183790047676,
+   "pcc_layer_L20": 0.9977362591243885,
+   "pcc_layer_L21": 0.996875440180616,
+   "pcc_layer_L22": 0.9964769310102569,
+   "pcc_layer_L23": 0.9954328476248152,
+   "pcc_layer_L24": 0.9949200176356372,
+   "pcc_layer_L25": 0.9936988965058554,
+   "pcc_layer_L26": 0.993437936230426,
+   "pcc_layer_L27": 0.9947326409120048,
+   "pcc_layer_L28": 0.9959960182544234,
+   "pcc_layer_L29": 0.996290618188093,
+   "pcc_layer_L30": 0.9969467114754486,
+   "pcc_layer_L31": 0.9970772631005604,
+   "pcc_layer_L32": 0.9972968844356854,
+   "pcc_layer_L33": 0.9975468546578662,
+   "pcc_layer_L34": 0.9979445519335336,
+   "pcc_layer_L35": 0.9979643040861522,
+   "pcc_layer_L36": 0.9979033474311709,
+   "pcc_layer_L37": 0.9979777399398967,
+   "pcc_layer_L38": 0.998361055393131,
+   "pcc_layer_L39": 0.9990204822548432,
+   "pcc_state_min": 0.9972901939230359,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "started": "2026-09-30T17:16:58",
+  "status": "PASS",
+  "waiting": null
+ },
+ "L.s4096": {
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 112.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T16:51:32"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T17:00:11"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:02:14"
+   }
+  ],
+  "last_run": "2026-09-30T17:02:14",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/L.s4096.log",
+  "metrics": {
+   "host_transfers_per_layer": 0,
+   "pcc_final_hidden": 0.9976552883543534,
+   "pcc_layer_L00": 0.9999961026592195,
+   "pcc_layer_L01": 0.9999922118761689,
+   "pcc_layer_L02": 0.9999794501347913,
+   "pcc_layer_L03": 0.9999646344228097,
+   "pcc_layer_L04": 0.9999512935265811,
+   "pcc_layer_L05": 0.9999331784714204,
+   "pcc_layer_L06": 0.999907042416924,
+   "pcc_layer_L07": 0.9998556655716462,
+   "pcc_layer_L08": 0.9997688212242103,
+   "pcc_layer_L09": 0.9997747937605559,
+   "pcc_layer_L10": 0.9998154743266215,
+   "pcc_layer_L11": 0.9998163768267623,
+   "pcc_layer_L12": 0.9997902275543806,
+   "pcc_layer_L13": 0.9997442066301296,
+   "pcc_layer_L14": 0.9997130782298945,
+   "pcc_layer_L15": 0.99963055548107,
+   "pcc_layer_L16": 0.9995482647707626,
+   "pcc_layer_L17": 0.9993997102545963,
+   "pcc_layer_L18": 0.9992298327904212,
+   "pcc_layer_L19": 0.9987844795939821,
+   "pcc_layer_L20": 0.9984260460930809,
+   "pcc_layer_L21": 0.9979901073078344,
+   "pcc_layer_L22": 0.9975527549411854,
+   "pcc_layer_L23": 0.9968243021917045,
+   "pcc_layer_L24": 0.9966370281560758,
+   "pcc_layer_L25": 0.9956366654740989,
+   "pcc_layer_L26": 0.9953824132998337,
+   "pcc_layer_L27": 0.9960977420805749,
+   "pcc_layer_L28": 0.9967444586864398,
+   "pcc_layer_L29": 0.9967314442170588,
+   "pcc_layer_L30": 0.9970458894130972,
+   "pcc_layer_L31": 0.9970577669746333,
+   "pcc_layer_L32": 0.9970278261054586,
+   "pcc_layer_L33": 0.9971262622850823,
+   "pcc_layer_L34": 0.9974142299556413,
+   "pcc_layer_L35": 0.9973540927207528,
+   "pcc_layer_L36": 0.997241623991588,
+   "pcc_layer_L37": 0.9972745592601815,
+   "pcc_layer_L38": 0.9977559190588947,
+   "pcc_layer_L39": 0.9986639892488032,
+   "pcc_state_min": 0.9976174320154718,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "started": "2026-09-30T17:00:21",
+  "status": "PASS",
+  "waiting": null
+ },
+ "L.s56320": {
+  "attempts": 0,
+  "duration_s": 207.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:29:08"
+   }
+  ],
+  "last_run": "2026-09-30T17:29:08",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/L.s56320.log",
+  "metrics": {
+   "host_transfers_per_layer": 0,
+   "pcc_final_hidden": 0.9984562090111371,
+   "pcc_layer_L00": 0.9999921143531314,
+   "pcc_layer_L01": 0.9999835591746673,
+   "pcc_layer_L02": 0.9999726784187853,
+   "pcc_layer_L03": 0.9999576026410328,
+   "pcc_layer_L04": 0.9999419678992115,
+   "pcc_layer_L05": 0.9999191264616072,
+   "pcc_layer_L06": 0.9998967292540455,
+   "pcc_layer_L07": 0.9998530862220292,
+   "pcc_layer_L08": 0.999767216192283,
+   "pcc_layer_L09": 0.9997904528148199,
+   "pcc_layer_L10": 0.9998217623683521,
+   "pcc_layer_L11": 0.9998108378434649,
+   "pcc_layer_L12": 0.9997751788075822,
+   "pcc_layer_L13": 0.999743184876757,
+   "pcc_layer_L14": 0.9996963932512036,
+   "pcc_layer_L15": 0.9995943743355973,
+   "pcc_layer_L16": 0.9995004941745946,
+   "pcc_layer_L17": 0.9993301224606537,
+   "pcc_layer_L18": 0.9991061454248631,
+   "pcc_layer_L19": 0.9982776930755854,
+   "pcc_layer_L20": 0.9973978462722285,
+   "pcc_layer_L21": 0.9963161443936227,
+   "pcc_layer_L22": 0.9958388205054552,
+   "pcc_layer_L23": 0.9945711862762121,
+   "pcc_layer_L24": 0.9939768676911367,
+   "pcc_layer_L25": 0.9926369074837477,
+   "pcc_layer_L26": 0.992295166845617,
+   "pcc_layer_L27": 0.9940058880169398,
+   "pcc_layer_L28": 0.9955373500939324,
+   "pcc_layer_L29": 0.9959540758826769,
+   "pcc_layer_L30": 0.9966865649461188,
+   "pcc_layer_L31": 0.9968851579074196,
+   "pcc_layer_L32": 0.9970997458694988,
+   "pcc_layer_L33": 0.9974714561431295,
+   "pcc_layer_L34": 0.9979246796635739,
+   "pcc_layer_L35": 0.997945073343975,
+   "pcc_layer_L36": 0.9978891597732914,
+   "pcc_layer_L37": 0.9979761948352984,
+   "pcc_layer_L38": 0.9983412709553519,
+   "pcc_layer_L39": 0.9990005845285054,
+   "pcc_state_min": 0.996916291646898,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T17:25:41",
+  "status": "PASS"
+ },
+ "L.smoke": {
+  "attempts": 0,
+  "duration_s": 28.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T23:59:53"
+   }
+  ],
+  "last_run": "2026-10-01T23:59:53",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/L.smoke.log",
+  "metrics": {
+   "smoke_device_ok": 1,
+   "smoke_device_tokens": 1
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-10-01T23:59:25",
+  "status": "PASS"
+ },
+ "M.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "788d4dfe-d347-4d57-b31a-79ffac08aff2"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/M.1.assemble.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/M.1.assemble.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "assemble",
+    "seconds": 875.4,
+    "session_id": "788d4dfe-d347-4d57-b31a-79ffac08aff2",
+    "t": "2026-09-30T16:09:37"
+   }
+  ],
+  "attempt": 2,
+  "attempts": 2,
+  "duration_s": 68.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T15:55:01"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T16:36:54"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T16:49:18"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T16:50:32"
+   }
+  ],
+  "last_run": "2026-09-30T16:50:32",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/M.1.log",
+  "metrics": {
+   "host_transfers_per_layer": 0,
+   "pcc_layer_L00": 0.9999961026592195,
+   "pcc_layer_L01": 0.9999922118761689,
+   "pcc_layer_L02": 0.9999794501347913,
+   "pcc_layer_L03": 0.9999646344228097,
+   "pcc_layer_L04": 0.9999512935265811,
+   "pcc_layer_L05": 0.9999331784714204,
+   "pcc_layer_L06": 0.999907042416924,
+   "pcc_layer_L07": 0.9998556655716462,
+   "pcc_layer_L08": 0.9997688212242103,
+   "pcc_layer_L09": 0.9997747937605559,
+   "pcc_layer_L10": 0.9998154743266215,
+   "pcc_layer_L11": 0.9998163768267623,
+   "pcc_layer_L12": 0.9997902275543806,
+   "pcc_layer_L13": 0.9997442066301296,
+   "pcc_layer_L14": 0.9997130782298945,
+   "pcc_layer_L15": 0.99963055548107,
+   "pcc_layer_L16": 0.9995482647707626,
+   "pcc_layer_L17": 0.9993997102545963,
+   "pcc_layer_L18": 0.9992298327904212,
+   "pcc_layer_L19": 0.9987844795939821,
+   "pcc_layer_L20": 0.9984260460930809,
+   "pcc_layer_L21": 0.9979901073078344,
+   "pcc_layer_L22": 0.9975527549411854,
+   "pcc_layer_L23": 0.9968243021917045,
+   "pcc_layer_L24": 0.9966370281560758,
+   "pcc_layer_L25": 0.9956366654740989,
+   "pcc_layer_L26": 0.9953824132998337,
+   "pcc_layer_L27": 0.9960977420805749,
+   "pcc_layer_L28": 0.9967444586864398,
+   "pcc_layer_L29": 0.9967314442170588,
+   "pcc_layer_L30": 0.9970458894130972,
+   "pcc_layer_L31": 0.9970577669746333,
+   "pcc_layer_L32": 0.9970278261054586,
+   "pcc_layer_L33": 0.9971262622850823,
+   "pcc_layer_L34": 0.9974142299556413,
+   "pcc_layer_L35": 0.9973540927207528,
+   "pcc_layer_L36": 0.997241623991588,
+   "pcc_layer_L37": 0.9972745592601815,
+   "pcc_layer_L38": 0.9977559190588947,
+   "pcc_layer_L39": 0.9986639892488032,
+   "pcc_state_min": 0.9976174320154718
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "assemble",
+  "started": "2026-09-30T16:49:23",
+  "status": "PASS",
+  "waiting": null
+ },
+ "O.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "bca065e4-ad8e-44ef-81c6-4ecb48203e54"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/O.1.optests.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/O.1.optests.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "optests",
+    "seconds": 1812.0,
+    "session_id": "bca065e4-ad8e-44ef-81c6-4ecb48203e54",
+    "t": "2026-10-01T07:56:06"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 358.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T07:25:54"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T08:02:36"
+   }
+  ],
+  "last_run": "2026-10-01T08:02:36",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/O.1.log",
+  "metrics": {
+   "fork_calls_uncovered": 0,
+   "fork_tests_failed": 0,
+   "forks_used": 8
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "optests",
+  "started": "2026-10-01T07:56:38",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.1": {
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 626.7,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T18:18:45"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T18:50:47"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T19:01:30"
+   }
+  ],
+  "last_run": "2026-09-30T19:01:30",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.1.log",
+  "metrics": {
+   "device_ms_attention": 782.63,
+   "device_ms_total": 1413.38,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9990345662046523
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-30T18:51:03",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "d7c05bfd-03b1-4ba9-9a6d-d6fc1f5ebe02"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.2.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.2.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 1545.0,
+    "session_id": "d7c05bfd-03b1-4ba9-9a6d-d6fc1f5ebe02",
+    "t": "2026-09-30T19:45:56"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 768.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T19:20:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T19:59:02"
+   }
+  ],
+  "last_run": "2026-09-30T19:59:02",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.2.log",
+  "metrics": {
+   "device_ms_attn_residual": 10.93,
+   "device_ms_ffn_residual": 10.94,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9990345662046523
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-30T19:46:14",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.2b": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "585f3f41-03b9-4116-982a-06874aaa752f"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.2b.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.2b.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 3163.9,
+    "session_id": "585f3f41-03b9-4116-982a-06874aaa752f",
+    "t": "2026-09-30T21:05:22"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 598.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T20:12:38"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T21:15:53"
+   }
+  ],
+  "last_run": "2026-09-30T21:15:53",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.2b.log",
+  "metrics": {
+   "device_ms_attn_hc": 14.18,
+   "device_ms_ffn_hc": 14.17,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.999063832993988
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "perf",
+  "started": "2026-09-30T21:05:54",
+  "status": "PASS",
+  "waiting": null
+ },
+ "P.3": {
+  "ab": {
+   "at": "2026-09-30T23:04:10",
+   "by": "dnijemcevic",
+   "changed": [
+    "models/demos/xing40_a4b_d_p/bringup/hooks.py",
+    "models/demos/xing40_a4b_d_p/tt/experts.py"
+   ],
+   "decided": "2026-09-30T23:27:12",
+   "decision": "reject",
+   "env": {
+    "XING_EXPERTS_FIDELITY": "hifi4"
+   },
+   "gate_on": {
+    "failing": [
+     "test_c_moe_experts: exit code 1",
+     "test_swap_moe_11_experts: exit code 1",
+     "test_swap_moe_14_ffn_residual: exit code 1",
+     "FAIL     device_ms_experts = 242.85 (need < 235)"
+    ],
+    "ok": false
+   },
+   "key": "26d4aecf63f2f31d",
+   "ladder": {
+    "last": {
+     "new": {
+      "final hidden PCC": 0.9983904010380418,
+      "logits PCC (tail)": 0.9987596435057785,
+      "min layer": "L26",
+      "min layer PCC": 0.9923011193653307,
+      "rc": 0,
+      "top1": 0.9742857217788696,
+      "top5": 1.0
+     },
+     "old": {
+      "final hidden PCC": 0.9985236609769742,
+      "logits PCC (tail)": 0.9988397761519138,
+      "min layer": "L26",
+      "min layer PCC": 0.9928128074786391,
+      "rc": 0,
+      "top1": 0.977142870426178,
+      "top5": 1.0
+     }
+    },
+    "s56320": {
+     "new": {
+      "final hidden PCC": 0.9983019113720182,
+      "logits PCC (tail)": 0.9989206230606832,
+      "min layer": "L26",
+      "min layer PCC": 0.9915380886751423,
+      "rc": 0,
+      "top1": 0.9685714244842529,
+      "top5": 1.0
+     },
+     "old": {
+      "final hidden PCC": 0.9984073433228765,
+      "logits PCC (tail)": 0.9987879508099647,
+      "min layer": "L26",
+      "min layer PCC": 0.9920468959481173,
+      "rc": 0,
+      "top1": 0.9714285731315613,
+      "top5": 1.0
+     }
+    }
+   },
+   "note": "owner 23:30: -1.2% e2e for -0.3pt top1 and a -1.36% bias",
+   "on": {
+    "XING_EXPERTS_FIDELITY": "hifi2"
+   },
+   "profile": {
+    "new": {
+     "device_ms_experts": 242.85,
+     "device_ms_total": 1158.01,
+     "pcc_chunk_out": 0.9989733830166256,
+     "rc": 0
+    },
+    "old": {
+     "device_ms_experts": 256.62,
+     "device_ms_total": 1171.93,
+     "pcc_chunk_out": 0.999063832993988,
+     "rc": 0
+    }
+   },
+   "rungs": [
+    "last",
+    "s56320"
+   ],
+   "table": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md",
+   "tests": {
+    "test_c_moe_experts": {
+     "new": {
+      "checks": [
+       "FAIL pcc_experts_L02: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL auto_experts_L02_vs_cpu: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0136675 (rel 1.00000 > 0.01367; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0161675 (rel 1.00000 > 0.01617; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_layer39: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_mixed: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_small: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_big: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_vs_cpu: rel=0.0167674 row=0.0253368 ratio_min=0.977155 ratio_max=0.994691 bias=-0.0136182 rel_limit=0.0136675 (rel 0.01677 > 0.01367; row norm ratio [0.97716, 0.99469] outside 1 +- 0.0150; median row norm ratio off by -0.01362 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=0.0169449 row=0.0267309 ratio_min=0.975406 ratio_max=0.994536 bias=-0.0134388 rel_limit=0.0161675 (rel 0.01694 > 0.01617; row norm ratio [0.97541, 0.99454] outside 1 +- 0.0150; median row norm ratio off by -0.01344 (limit 0.0040))",
+       "FAIL auto_experts_L02_small: rel=0.0162137 row=0.0285502 ratio_min=0.973308 ratio_max=0.993443 bias=-0.0134467 rel_limit=0.03 (row norm ratio [0.97331, 0.99344] outside 1 +- 0.0225)"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_experts_L02: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL auto_experts_L02_vs_cpu: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0136675 (rel 1.00000 > 0.01367; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_vs_golden: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.0161675 (rel 1.00000 > 0.01617; worst row 1.00000 > 0.0300; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0150; median row norm ratio off by -1.00000 (limit 0.0040))",
+       "FAIL auto_experts_L02_layer39: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_mixed: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_small: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)",
+       "FAIL auto_experts_L02_big: rel=1 row=1 ratio_min=0 ratio_max=0 bias=-1 rel_limit=0.03 (rel 1.00000 > 0.03000; worst row 1.00000 > 0.0450; row norm ratio [0.00000, 0.00000] outside 1 +- 0.0225)"
+      ],
+      "rc": 0
+     }
+    },
+    "test_swap_moe_11_experts": {
+     "new": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 0
+     }
+    },
+    "test_swap_moe_14_ffn_residual": {
+     "new": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 1
+     },
+     "old": {
+      "checks": [
+       "FAIL pcc_swap_out: pcc=0.000000 (>= 0.98) shape (8192, 3584)",
+       "FAIL swap_attn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_attn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00149) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))",
+       "FAIL swap_attn_collapse_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_norm_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_q_a_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 768)",
+       "FAIL swap_attention_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 3584)",
+       "FAIL swap_attn_residual_vs_golden: pcc=0.000000 (>= 0.99) shape (8192, 3584)",
+       "FAIL swap_ffn_hc_vs_cpu: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc_vs_golden: pcc=0.000000 (>= 0.99) shape (2048, 24)",
+       "FAIL swap_ffn_hc vs the CPU step on the same inputs: rel=1.000000 (<= 0.00500, component error 0.00179) row=1.000000 ratio=[0.00000, 0.00000] bias=-1.000000 (rel 1.00000 > 0.00500; worst row 1.00000 > 0.05; row norm ratio [0.00000, 0.00000] outside 1 +- 0.02; median row norm ratio off by -1.00000 (limit 0.01))"
+      ],
+      "rc": 0
+     }
+    }
+   },
+   "why": "apply P.3 or not? A/B table at /localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/ab/P.3/table.md; the gate with the change on would FAIL; then: python -m models.demos.common.bringup.orchestrator decide --task P.3 --accept|--reject --spec /localdev/dnijemcevic/tt-metal/models/demos/xing40_a4b_d_p/bringup/spec.yaml, and resume"
+  },
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "66d7554101eee57c65eac0abf53763be7a5a1b4a",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "5a78b481-ea56-4ff3-a2a7-00264ff8ee83"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "perf",
+    "seconds": 2787.2,
+    "session_id": "af1582b8-6015-4664-b72d-987d933ab847",
+    "t": "2026-09-30T22:11:12"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "e8b24f612750d71730fd0f1c55fc6cf2332cfe22",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "perf",
+    "seconds": 65.2,
+    "session_id": "8201873f-ecb4-4ec8-86ca-a5bc2d452dfa",
+    "t": "2026-09-30T22:17:14"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/P.3.perf.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "66d7554101eee57c65eac0abf53763be7a5a1b4a",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/P.3.perf.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "perf",
+    "seconds": 172.0,
+    "session_id": "5a78b481-ea56-4ff3-a2a7-00264ff8ee83",
+    "t": "2026-09-30T22:42:07"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "commit": "5703be51bd9",
+  "duration_s": 22.9,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T21:24:44"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T22:13:55"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T22:15:10"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T22:16:08"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T22:39:14"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T23:04:09"
+   },
+   {
+    "status": "REJECTED",
+    "t": "2026-09-30T23:27:12"
+   },
+   {
+    "by": "owner decision (5703be51bd9)",
+    "status": "PASS",
+    "t": "2026-10-01T15:09:12"
+   }
+  ],
+  "last_run": "2026-09-30T22:16:08",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/P.3.log",
+  "metrics": {
+   "auto_experts_L02_big_bias": -0.013473331928253174,
+   "auto_experts_L02_big_ratio_max": 0.9957666397094727,
+   "auto_experts_L02_big_ratio_min": 0.9781865477561951,
+   "auto_experts_L02_big_rel": 0.016627760604023933,
+   "auto_experts_L02_big_rel_limit": 0.03,
+   "auto_experts_L02_big_row": 0.029645221307873726,
+   "auto_experts_L02_layer39_bias": -0.013698995113372803,
+   "auto_experts_L02_layer39_ratio_max": 0.990509569644928,
+   "auto_experts_L02_layer39_ratio_min": 0.9825817346572876,
+   "auto_experts_L02_layer39_rel": 0.019893087446689606,
+   "auto_experts_L02_layer39_rel_limit": 0.03,
+   "auto_experts_L02_layer39_row": 0.022482289001345634,
+   "auto_experts_L02_mixed_bias": -0.013825178146362305,
+   "auto_experts_L02_mixed_ratio_max": 0.9936501383781433,
+   "auto_experts_L02_mixed_ratio_min": 0.9818549156188965,
+   "auto_experts_L02_mixed_rel": 0.01962699554860592,
+   "auto_experts_L02_mixed_rel_limit": 0.03,
+   "auto_experts_L02_mixed_row": 0.02328389696776867,
+   "auto_experts_L02_small_bias": -0.013446688652038574,
+   "auto_experts_L02_small_ratio_max": 0.9934426546096802,
+   "auto_experts_L02_small_ratio_min": 0.9733082056045532,
+   "auto_experts_L02_small_rel": 0.016213709488511086,
+   "auto_experts_L02_small_rel_limit": 0.03,
+   "auto_experts_L02_small_row": 0.028550153598189354,
+   "auto_experts_L02_vs_cpu_bias": -0.013618171215057373,
+   "auto_experts_L02_vs_cpu_ratio_max": 0.9946907758712769,
+   "auto_experts_L02_vs_cpu_ratio_min": 0.9771551489830017,
+   "auto_experts_L02_vs_cpu_rel": 0.016767436638474464,
+   "auto_experts_L02_vs_cpu_rel_limit": 0.013667529099620879,
+   "auto_experts_L02_vs_cpu_row": 0.025336764752864838,
+   "auto_experts_L02_vs_golden_bias": -0.013438820838928223,
+   "auto_experts_L02_vs_golden_ratio_max": 0.9945361018180847,
+   "auto_experts_L02_vs_golden_ratio_min": 0.9754064083099365,
+   "auto_experts_L02_vs_golden_rel": 0.01694491319358349,
+   "auto_experts_L02_vs_golden_rel_limit": 0.016167539753951132,
+   "auto_experts_L02_vs_golden_row": 0.026730896905064583,
+   "pcc_experts_L02": 0.9999500499735821
+  },
+  "rc": 1,
+  "reason": [
+   "owner decision 2026-10-01: HiFi2 routed experts accepted with the bfp8 KV cache (overrides the earlier rejection); s56320 top5 1.0, final hidden 0.99803, experts 242.4 ms"
+  ],
+  "role": "perf",
+  "started": "2026-09-30T22:15:45",
+  "status": "PASS",
+  "waiting": null
+ },
+ "PL.0": {
+  "attempts": 0,
+  "duration_s": 3.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:06:21"
+   }
+  ],
+  "last_run": "2026-09-30T05:06:21",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/PL.0.log",
+  "metrics": {
+   "ledger_errors": 0,
+   "ledger_tasks": 69,
+   "ledger_tasks_added": 61
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T05:06:17",
+  "status": "PASS"
+ },
+ "PL.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "73104559-d9d6-4a0d-b833-c84627abf269"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/PL.1.plan.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/PL.1.plan.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "plan",
+    "seconds": 641.9,
+    "session_id": "5f256676-42b2-4859-a10a-bbf994cc0a67",
+    "t": "2026-09-30T05:17:14"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/PL.1.plan.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/PL.1.plan.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "plan",
+    "seconds": 673.1,
+    "session_id": "73104559-d9d6-4a0d-b833-c84627abf269",
+    "t": "2026-09-30T05:45:13"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 2,
+  "duration_s": 4.1,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:06:31"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:31:28"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:31:44"
+   },
+   {
+    "status": "RESET",
+    "t": "2026-09-30T05:32:44"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:33:01"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T05:33:59"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-09-30T05:48:07"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T05:48:16"
+   }
+  ],
+  "last_run": "2026-09-30T05:48:16",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/PL.1.log",
+  "metrics": {
+   "component_errors": 0,
+   "ledger_errors": 0,
+   "per_chip_budget_gb": 27.2,
+   "per_chip_total_gb": 9.63,
+   "plan_approved": 1,
+   "plan_errors": 0,
+   "plan_fits": 1,
+   "unplaced_tensors": 0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "plan",
+  "started": "2026-09-30T05:48:12",
+  "status": "PASS",
+  "waiting": null
+ },
+ "R.1": {
+  "attempts": 0,
+  "duration_s": 51.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:15:05"
+   }
+  ],
+  "last_run": "2026-09-30T03:15:05",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/R.1.log",
+  "metrics": {
+   "checkpoint_tensors": 8307,
+   "config_mismatches": 0,
+   "count_mismatches": 0,
+   "intake_approved": 1,
+   "missing_tensors": 0,
+   "prompt_hash_ok": 1,
+   "prompt_tokens": 56320,
+   "revision_ok": 1,
+   "revision_pinned": 1,
+   "shape_mismatches": 0,
+   "smoke_ok": 1,
+   "text_top1_acc": 0.748900830745697
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:14:13",
+  "status": "PASS"
+ },
+ "R.2": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "ef6917af-3507-4b69-9259-57c5d7604494"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/R.2.reference.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "7f3555b9d2c3280f1c0c99836457f16dfa85c2a4",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/R.2.reference.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "reference",
+    "seconds": 496.5,
+    "session_id": "ef6917af-3507-4b69-9259-57c5d7604494",
+    "t": "2026-09-30T03:24:27"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 1,
+  "duration_s": 234.2,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-09-30T03:16:10"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:28:26"
+   }
+  ],
+  "last_run": "2026-09-30T03:28:26",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/R.2.log",
+  "metrics": {
+   "parity_layers": 40,
+   "pcc_hidden_L00": 1.0000000000000213,
+   "pcc_hidden_L01": 0.9999999999999012,
+   "pcc_hidden_L02": 0.9999999999998352,
+   "pcc_hidden_L03": 0.9999999999997519,
+   "pcc_hidden_L04": 0.9999999999997179,
+   "pcc_hidden_L05": 0.9999999999996482,
+   "pcc_hidden_L06": 0.999999999999586,
+   "pcc_hidden_L07": 0.9999999999995218,
+   "pcc_hidden_L08": 0.9999999999994811,
+   "pcc_hidden_L09": 1.0000000000000044,
+   "pcc_hidden_L10": 0.9999999999999046,
+   "pcc_hidden_L11": 0.9999999999997317,
+   "pcc_hidden_L12": 0.9999999999997973,
+   "pcc_hidden_L13": 0.9999999999997381,
+   "pcc_hidden_L14": 0.9999999999996092,
+   "pcc_hidden_L15": 1.0000000000000415,
+   "pcc_hidden_L16": 1.000000000000049,
+   "pcc_hidden_L17": 1.0,
+   "pcc_hidden_L18": 0.999999999999963,
+   "pcc_hidden_L19": 0.9999999999998989,
+   "pcc_hidden_L20": 0.9999999999998036,
+   "pcc_hidden_L21": 0.9999999999997569,
+   "pcc_hidden_L22": 0.9999999999996907,
+   "pcc_hidden_L23": 0.9999999999992919,
+   "pcc_hidden_L24": 0.9999999999998498,
+   "pcc_hidden_L25": 0.9999999999997471,
+   "pcc_hidden_L26": 0.999999999999593,
+   "pcc_hidden_L27": 0.9999999999996773,
+   "pcc_hidden_L28": 0.9999999999995942,
+   "pcc_hidden_L29": 0.9999999999994981,
+   "pcc_hidden_L30": 0.9999999999994124,
+   "pcc_hidden_L31": 0.9999999999993169,
+   "pcc_hidden_L32": 0.9999999999990745,
+   "pcc_hidden_L33": 0.999999999998968,
+   "pcc_hidden_L34": 0.9999999999987388,
+   "pcc_hidden_L35": 0.9999999999986385,
+   "pcc_hidden_L36": 0.9999999999984102,
+   "pcc_hidden_L37": 0.9999999999983238,
+   "pcc_hidden_L38": 0.9999999999982574,
+   "pcc_hidden_L39": 0.9999999999982846,
+   "pcc_logits": 0.9999999999977935,
+   "text_next_token_acc": 0.7459697127342224,
+   "top1_match_frac": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "reference",
+  "started": "2026-09-30T03:24:32",
+  "status": "PASS",
+  "waiting": null
+ },
+ "R.3": {
+  "attempts": 0,
+  "duration_s": 165.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T03:31:21"
+   }
+  ],
+  "last_run": "2026-09-30T03:31:21",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/R.3.log",
+  "metrics": {
+   "boundaries_missing": 0,
+   "graph_errors": 0,
+   "graph_replay_maxabs": 0.0,
+   "maxabs_hidden": 0.0,
+   "pcc_hidden": 1.0000000000000238,
+   "pcc_state_min": 0.999999999999972
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T03:28:36",
+  "status": "PASS"
+ },
+ "S.dense.01": {
+  "attempts": 0,
+  "duration_s": 19.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:03:49"
+   }
+  ],
+  "last_run": "2026-09-30T06:03:49",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.01.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999982201638034,
+   "pcc_swap_attn_in": 0.9999986179041029,
+   "pcc_swap_attn_norm": 0.9999986206594128,
+   "pcc_swap_attn_out": 0.9999985286764475,
+   "pcc_swap_ffn_hc": 0.9999981650576933,
+   "pcc_swap_ffn_in": 0.9999984849736708,
+   "pcc_swap_ffn_norm": 0.9999985326808521,
+   "pcc_swap_h_mid": 0.9999984942677932,
+   "pcc_swap_mlp_out": 0.9999983667216188,
+   "pcc_swap_out": 0.9999984747871603,
+   "pcc_swap_q_resid": 0.9999986324410465,
+   "swap_attn_hc_bias": 0.0005601644515991211,
+   "swap_attn_hc_component_err": 0.0018867094088104884,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_out_rel": 0.0006865687319077551,
+   "swap_attn_hc_out_row": 0.001858808915130794,
+   "swap_attn_hc_ratio_max": 1.0009053945541382,
+   "swap_attn_hc_ratio_min": 1.0001075267791748,
+   "swap_attn_hc_rel": 0.0008346617687493563,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0016994973411783576,
+   "swap_attn_hc_vs_cpu": 0.9999997123265866,
+   "swap_attn_hc_vs_golden": 0.9999982201638034
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T06:03:29",
+  "status": "PASS"
+ },
+ "S.dense.02": {
+  "attempts": 0,
+  "duration_s": 21.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:10:19"
+   }
+  ],
+  "last_run": "2026-09-30T06:10:19",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.02.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999982201638034,
+   "pcc_swap_attn_in": 0.999998617904473,
+   "pcc_swap_attn_norm": 0.9999986206594965,
+   "pcc_swap_attn_out": 0.9999985286755858,
+   "pcc_swap_ffn_hc": 0.9999981650578411,
+   "pcc_swap_ffn_in": 0.9999984849737243,
+   "pcc_swap_ffn_norm": 0.9999985326802427,
+   "pcc_swap_h_mid": 0.9999984942677669,
+   "pcc_swap_mlp_out": 0.9999983667202051,
+   "pcc_swap_out": 0.9999984747863763,
+   "pcc_swap_q_resid": 0.9999986324415786,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.001805338085931387,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_out_rel": 2.39995131323667e-07,
+   "swap_attn_collapse_out_row": 2.1404439394245856e-06,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.866327429908779e-08,
+   "swap_attn_collapse_rel_limit": 0.005,
+   "swap_attn_collapse_row": 6.150409603833396e-08,
+   "swap_attn_collapse_vs_cpu": 1.000000000000165,
+   "swap_attn_collapse_vs_golden": 0.999998617904473,
+   "swap_attn_hc_bias": 0.0005601644515991211,
+   "swap_attn_hc_component_err": 0.0018867094088104884,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0009053945541382,
+   "swap_attn_hc_ratio_min": 1.0001075267791748,
+   "swap_attn_hc_rel": 0.0008346617687493563,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0016994973411783576,
+   "swap_attn_hc_vs_cpu": 0.9999997123265866,
+   "swap_attn_hc_vs_golden": 0.9999982201638034
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T06:09:58",
+  "status": "PASS"
+ },
+ "S.dense.03": {
+  "attempts": 0,
+  "duration_s": 23.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:15:06"
+   }
+  ],
+  "last_run": "2026-09-30T06:15:06",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.03.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999982201638034,
+   "pcc_swap_attn_in": 0.999998617904473,
+   "pcc_swap_attn_norm": 0.9999972797351182,
+   "pcc_swap_attn_out": 0.9999984943126197,
+   "pcc_swap_ffn_hc": 0.9999981647697277,
+   "pcc_swap_ffn_in": 0.9999984597215092,
+   "pcc_swap_ffn_norm": 0.9999985145731847,
+   "pcc_swap_h_mid": 0.9999984762410985,
+   "pcc_swap_mlp_out": 0.9999983406714509,
+   "pcc_swap_out": 0.9999984572778238,
+   "pcc_swap_q_resid": 0.9999980996049654,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.001805338085931387,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.866327429908779e-08,
+   "swap_attn_collapse_rel_limit": 0.005,
+   "swap_attn_collapse_row": 6.150409603833396e-08,
+   "swap_attn_collapse_vs_cpu": 1.000000000000165,
+   "swap_attn_collapse_vs_golden": 0.999998617904473,
+   "swap_attn_hc_bias": 0.0005601644515991211,
+   "swap_attn_hc_component_err": 0.0018867094088104884,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0009053945541382,
+   "swap_attn_hc_ratio_min": 1.0001075267791748,
+   "swap_attn_hc_rel": 0.0008346617687493563,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0016994973411783576,
+   "swap_attn_hc_vs_cpu": 0.9999997123265866,
+   "swap_attn_hc_vs_golden": 0.9999982201638034,
+   "swap_attn_norm_bias": -0.0012093186378479004,
+   "swap_attn_norm_component_err": 0.002871307546235843,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_out_rel": 0.00019640708342194557,
+   "swap_attn_norm_out_row": 0.0005095668020658195,
+   "swap_attn_norm_ratio_max": 0.999478280544281,
+   "swap_attn_norm_ratio_min": 0.9979442358016968,
+   "swap_attn_norm_rel": 0.0021834808867424726,
+   "swap_attn_norm_rel_limit": 0.005742615092471686,
+   "swap_attn_norm_row": 0.0026930058375000954,
+   "swap_attn_norm_vs_cpu": 0.9999983958958288,
+   "swap_attn_norm_vs_golden": 0.9999972797351182
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T06:14:43",
+  "status": "PASS"
+ },
+ "S.dense.04": {
+  "attempts": 0,
+  "duration_s": 24.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T06:19:33"
+   }
+  ],
+  "last_run": "2026-09-30T06:19:33",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.04.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999982201638034,
+   "pcc_swap_attn_in": 0.999998617904473,
+   "pcc_swap_attn_norm": 0.9999972797351182,
+   "pcc_swap_attn_out": 0.9999984678653376,
+   "pcc_swap_ffn_hc": 0.9999981614575408,
+   "pcc_swap_ffn_in": 0.9999984400826223,
+   "pcc_swap_ffn_norm": 0.9999984996271987,
+   "pcc_swap_h_mid": 0.9999984610362372,
+   "pcc_swap_mlp_out": 0.9999983090357125,
+   "pcc_swap_out": 0.9999984422281053,
+   "pcc_swap_q_resid": 0.9999976314988656,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.001805338085931387,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.866327429908779e-08,
+   "swap_attn_collapse_rel_limit": 0.005,
+   "swap_attn_collapse_row": 6.150409603833396e-08,
+   "swap_attn_collapse_vs_cpu": 1.000000000000165,
+   "swap_attn_collapse_vs_golden": 0.999998617904473,
+   "swap_attn_hc_bias": 0.0005601644515991211,
+   "swap_attn_hc_component_err": 0.0018867094088104884,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0009053945541382,
+   "swap_attn_hc_ratio_min": 1.0001075267791748,
+   "swap_attn_hc_rel": 0.0008346617687493563,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0016994973411783576,
+   "swap_attn_hc_vs_cpu": 0.9999997123265866,
+   "swap_attn_hc_vs_golden": 0.9999982201638034,
+   "swap_attn_norm_bias": -0.0012093186378479004,
+   "swap_attn_norm_component_err": 0.002871307546235843,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_ratio_max": 0.999478280544281,
+   "swap_attn_norm_ratio_min": 0.9979442358016968,
+   "swap_attn_norm_rel": 0.0021834808867424726,
+   "swap_attn_norm_rel_limit": 0.005742615092471686,
+   "swap_attn_norm_row": 0.0026930058375000954,
+   "swap_attn_norm_vs_cpu": 0.9999983958958288,
+   "swap_attn_norm_vs_golden": 0.9999972797351182,
+   "swap_q_a_bias": -0.0001500844955444336,
+   "swap_q_a_component_err": 0.0021422506310019786,
+   "swap_q_a_finite": 1,
+   "swap_q_a_out_rel": 0.00011272947449469939,
+   "swap_q_a_out_row": 0.00038118805969133973,
+   "swap_q_a_ratio_max": 1.0005199909210205,
+   "swap_q_a_ratio_min": 0.9988688230514526,
+   "swap_q_a_rel": 0.0017470064340159297,
+   "swap_q_a_rel_limit": 0.005,
+   "swap_q_a_row": 0.0020501725375652313,
+   "swap_q_a_vs_cpu": 0.9999984909832484,
+   "swap_q_a_vs_golden": 0.9999976314988656
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T06:19:09",
+  "status": "PASS"
+ },
+ "S.dense.05": {
+  "attempts": 0,
+  "duration_s": 32.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:01:28"
+   }
+  ],
+  "last_run": "2026-09-30T14:01:28",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.05.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999982201638034,
+   "pcc_swap_attn_in": 0.999998617904473,
+   "pcc_swap_attn_norm": 0.9999972797351182,
+   "pcc_swap_attn_out": 0.9999929399354854,
+   "pcc_swap_ffn_hc": 0.9999973506564712,
+   "pcc_swap_ffn_in": 0.9999955803559567,
+   "pcc_swap_ffn_norm": 0.9999960494903247,
+   "pcc_swap_h_mid": 0.9999961988933986,
+   "pcc_swap_mlp_out": 0.9999939408803958,
+   "pcc_swap_out": 0.999996298009208,
+   "pcc_swap_q_resid": 0.9999976314988656,
+   "swap_attention_bias": 5.4955482482910156e-05,
+   "swap_attention_component_err": 0.0036270544630734682,
+   "swap_attention_finite": 1,
+   "swap_attention_out_rel": 0.0019887208472937346,
+   "swap_attention_out_row": 0.005372632760554552,
+   "swap_attention_ratio_max": 1.0025135278701782,
+   "swap_attention_ratio_min": 0.9976611733436584,
+   "swap_attention_rel": 0.00320957088842988,
+   "swap_attention_rel_limit": 0.0072541089261469365,
+   "swap_attention_row": 0.007514751981943846,
+   "swap_attention_vs_cpu": 0.9999948503593512,
+   "swap_attention_vs_golden": 0.9999929399354854,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.001805338085931387,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.866327429908779e-08,
+   "swap_attn_collapse_rel_limit": 0.005,
+   "swap_attn_collapse_row": 6.150409603833396e-08,
+   "swap_attn_collapse_vs_cpu": 1.000000000000165,
+   "swap_attn_collapse_vs_golden": 0.999998617904473,
+   "swap_attn_hc_bias": 0.0005601644515991211,
+   "swap_attn_hc_component_err": 0.0018867094088104884,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0009053945541382,
+   "swap_attn_hc_ratio_min": 1.0001075267791748,
+   "swap_attn_hc_rel": 0.0008346617687493563,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0016994973411783576,
+   "swap_attn_hc_vs_cpu": 0.9999997123265866,
+   "swap_attn_hc_vs_golden": 0.9999982201638034,
+   "swap_attn_norm_bias": -0.0012093186378479004,
+   "swap_attn_norm_component_err": 0.002871307546235843,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_ratio_max": 0.999478280544281,
+   "swap_attn_norm_ratio_min": 0.9979442358016968,
+   "swap_attn_norm_rel": 0.0021834808867424726,
+   "swap_attn_norm_rel_limit": 0.005742615092471686,
+   "swap_attn_norm_row": 0.0026930058375000954,
+   "swap_attn_norm_vs_cpu": 0.9999983958958288,
+   "swap_attn_norm_vs_golden": 0.9999972797351182,
+   "swap_q_a_bias": -0.0001500844955444336,
+   "swap_q_a_component_err": 0.0021422506310019786,
+   "swap_q_a_finite": 1,
+   "swap_q_a_ratio_max": 1.0005199909210205,
+   "swap_q_a_ratio_min": 0.9988688230514526,
+   "swap_q_a_rel": 0.0017470064340159297,
+   "swap_q_a_rel_limit": 0.005,
+   "swap_q_a_row": 0.0020501725375652313,
+   "swap_q_a_vs_cpu": 0.9999984909832484,
+   "swap_q_a_vs_golden": 0.9999976314988656
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:00:56",
+  "status": "PASS"
+ },
+ "S.dense.06": {
+  "attempts": 0,
+  "duration_s": 29.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:11:36"
+   }
+  ],
+  "last_run": "2026-09-30T14:11:36",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.06.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999962980102433
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:11:07",
+  "status": "PASS"
+ },
+ "S.dense.07": {
+  "attempts": 0,
+  "duration_s": 30.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:21:48"
+   }
+  ],
+  "last_run": "2026-09-30T14:21:48",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.07.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999959904501133
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:21:18",
+  "status": "PASS"
+ },
+ "S.dense.08": {
+  "attempts": 0,
+  "duration_s": 30.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:25:00"
+   }
+  ],
+  "last_run": "2026-09-30T14:25:00",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.08.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999959904504628
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:24:29",
+  "status": "PASS"
+ },
+ "S.dense.09": {
+  "attempts": 0,
+  "duration_s": 32.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:29:42"
+   }
+  ],
+  "last_run": "2026-09-30T14:29:42",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.09.log",
+  "metrics": {
+   "pcc_swap_out": 0.99999605963454
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:29:09",
+  "status": "PASS"
+ },
+ "S.dense.10": {
+  "attempts": 0,
+  "duration_s": 31.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:35:02"
+   }
+  ],
+  "last_run": "2026-09-30T14:35:02",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.10.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999960467960625
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:34:30",
+  "status": "PASS"
+ },
+ "S.dense.11": {
+  "attempts": 0,
+  "duration_s": 35.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:38:21"
+   }
+  ],
+  "last_run": "2026-09-30T14:38:21",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.dense.11.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999960467958521
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:37:45",
+  "status": "PASS"
+ },
+ "S.moe.01": {
+  "attempts": 0,
+  "duration_s": 20.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:41:01"
+   }
+  ],
+  "last_run": "2026-09-30T14:41:01",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.01.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999988925539215,
+   "pcc_swap_attn_in": 0.9999972745382023,
+   "pcc_swap_attn_norm": 0.999997287083184,
+   "pcc_swap_attn_out": 0.9999970681288529,
+   "pcc_swap_experts_out": 0.9999944124352687,
+   "pcc_swap_ffn_hc": 0.9999984844066437,
+   "pcc_swap_ffn_in": 0.9999970761458159,
+   "pcc_swap_ffn_norm": 0.9999970756135236,
+   "pcc_swap_h_mid": 0.9999972072584781,
+   "pcc_swap_mlp_out": 0.9999980371438045,
+   "pcc_swap_out": 0.9999977986287016,
+   "pcc_swap_q_resid": 0.9999982214389787,
+   "pcc_swap_router": 0.9995563497217219,
+   "pcc_swap_shared_out": 0.9999985572325972,
+   "swap_attn_hc_bias": 0.0003483295440673828,
+   "swap_attn_hc_component_err": 0.0014882513756134456,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_out_rel": 0.0010536874178797007,
+   "swap_attn_hc_out_row": 0.029085570946335793,
+   "swap_attn_hc_ratio_max": 1.0007092952728271,
+   "swap_attn_hc_ratio_min": 0.9999232292175293,
+   "swap_attn_hc_rel": 0.0004942627274431288,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0008919314714148641,
+   "swap_attn_hc_vs_cpu": 0.9999999177815148,
+   "swap_attn_hc_vs_golden": 0.9999988925539215
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:40:41",
+  "status": "PASS"
+ },
+ "S.moe.02": {
+  "attempts": 0,
+  "duration_s": 21.9,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:43:37"
+   }
+  ],
+  "last_run": "2026-09-30T14:43:37",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.02.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999988925539215,
+   "pcc_swap_attn_in": 0.9999972745381891,
+   "pcc_swap_attn_norm": 0.9999972870830787,
+   "pcc_swap_attn_out": 0.9999970681277837,
+   "pcc_swap_experts_out": 0.9999944124362548,
+   "pcc_swap_ffn_hc": 0.9999984844076688,
+   "pcc_swap_ffn_in": 0.9999970761485674,
+   "pcc_swap_ffn_norm": 0.9999970756141531,
+   "pcc_swap_h_mid": 0.9999972072585817,
+   "pcc_swap_mlp_out": 0.9999980371434719,
+   "pcc_swap_out": 0.999997798627024,
+   "pcc_swap_q_resid": 0.999998221439284,
+   "pcc_swap_router": 0.9995563497246397,
+   "pcc_swap_shared_out": 0.9999985572329742,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.0026620131064025968,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_out_rel": 3.61090428668831e-07,
+   "swap_attn_collapse_out_row": 2.424738795525627e-06,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.342577497595812e-08,
+   "swap_attn_collapse_rel_limit": 0.0053240262128051935,
+   "swap_attn_collapse_row": 4.9539750079929945e-08,
+   "swap_attn_collapse_vs_cpu": 1.0000000000000142,
+   "swap_attn_collapse_vs_golden": 0.9999972745381891,
+   "swap_attn_hc_bias": 0.0003483295440673828,
+   "swap_attn_hc_component_err": 0.0014882513756134456,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0007092952728271,
+   "swap_attn_hc_ratio_min": 0.9999232292175293,
+   "swap_attn_hc_rel": 0.0004942627274431288,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0008919314714148641,
+   "swap_attn_hc_vs_cpu": 0.9999999177815148,
+   "swap_attn_hc_vs_golden": 0.9999988925539215
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:43:15",
+  "status": "PASS"
+ },
+ "S.moe.03": {
+  "attempts": 0,
+  "duration_s": 24.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:46:07"
+   }
+  ],
+  "last_run": "2026-09-30T14:46:07",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.03.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999988925539215,
+   "pcc_swap_attn_in": 0.9999972745381891,
+   "pcc_swap_attn_norm": 0.9999957503414825,
+   "pcc_swap_attn_out": 0.9999951941820975,
+   "pcc_swap_experts_out": 0.9999842857153742,
+   "pcc_swap_ffn_hc": 0.999998475325,
+   "pcc_swap_ffn_in": 0.9999963526767238,
+   "pcc_swap_ffn_norm": 0.9999965184695147,
+   "pcc_swap_h_mid": 0.999997063598228,
+   "pcc_swap_mlp_out": 0.999996721634559,
+   "pcc_swap_out": 0.999996425152614,
+   "pcc_swap_q_resid": 0.9999977343562684,
+   "pcc_swap_router": 0.9993065818089758,
+   "pcc_swap_shared_out": 0.9999985247821416,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.0026620131064025968,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.342577497595812e-08,
+   "swap_attn_collapse_rel_limit": 0.0053240262128051935,
+   "swap_attn_collapse_row": 4.9539750079929945e-08,
+   "swap_attn_collapse_vs_cpu": 1.0000000000000142,
+   "swap_attn_collapse_vs_golden": 0.9999972745381891,
+   "swap_attn_hc_bias": 0.0003483295440673828,
+   "swap_attn_hc_component_err": 0.0014882513756134456,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0007092952728271,
+   "swap_attn_hc_ratio_min": 0.9999232292175293,
+   "swap_attn_hc_rel": 0.0004942627274431288,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0008919314714148641,
+   "swap_attn_hc_vs_cpu": 0.9999999177815148,
+   "swap_attn_hc_vs_golden": 0.9999988925539215,
+   "swap_attn_norm_bias": -0.0012664794921875,
+   "swap_attn_norm_component_err": 0.0028758154045416405,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_out_rel": 0.0016534468159079552,
+   "swap_attn_norm_out_row": 0.04398869350552559,
+   "swap_attn_norm_ratio_max": 0.9994726181030273,
+   "swap_attn_norm_ratio_min": 0.997789204120636,
+   "swap_attn_norm_rel": 0.002205128315836191,
+   "swap_attn_norm_rel_limit": 0.005751630809083281,
+   "swap_attn_norm_row": 0.002822668757289648,
+   "swap_attn_norm_vs_cpu": 0.9999983836626563,
+   "swap_attn_norm_vs_golden": 0.9999957503414825
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:45:43",
+  "status": "PASS"
+ },
+ "S.moe.04": {
+  "attempts": 0,
+  "duration_s": 26.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T14:48:38"
+   }
+  ],
+  "last_run": "2026-09-30T14:48:38",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.04.log",
+  "metrics": {
+   "pcc_swap_attn_hc": 0.9999988925539215,
+   "pcc_swap_attn_in": 0.9999972745381891,
+   "pcc_swap_attn_norm": 0.9999957503414825,
+   "pcc_swap_attn_out": 0.999994726660813,
+   "pcc_swap_experts_out": 0.9999871169722812,
+   "pcc_swap_ffn_hc": 0.9999984723773039,
+   "pcc_swap_ffn_in": 0.9999962070544608,
+   "pcc_swap_ffn_norm": 0.9999963883458376,
+   "pcc_swap_h_mid": 0.9999970354371818,
+   "pcc_swap_mlp_out": 0.9999970724644737,
+   "pcc_swap_out": 0.9999963462156792,
+   "pcc_swap_q_resid": 0.999997095521165,
+   "pcc_swap_router": 0.9993271615066572,
+   "pcc_swap_shared_out": 0.9999985122195247,
+   "swap_attn_collapse_bias": 0.0,
+   "swap_attn_collapse_component_err": 0.0026620131064025968,
+   "swap_attn_collapse_finite": 1,
+   "swap_attn_collapse_ratio_max": 1.0000001192092896,
+   "swap_attn_collapse_ratio_min": 0.9999998807907104,
+   "swap_attn_collapse_rel": 4.342577497595812e-08,
+   "swap_attn_collapse_rel_limit": 0.0053240262128051935,
+   "swap_attn_collapse_row": 4.9539750079929945e-08,
+   "swap_attn_collapse_vs_cpu": 1.0000000000000142,
+   "swap_attn_collapse_vs_golden": 0.9999972745381891,
+   "swap_attn_hc_bias": 0.0003483295440673828,
+   "swap_attn_hc_component_err": 0.0014882513756134456,
+   "swap_attn_hc_finite": 1,
+   "swap_attn_hc_ratio_max": 1.0007092952728271,
+   "swap_attn_hc_ratio_min": 0.9999232292175293,
+   "swap_attn_hc_rel": 0.0004942627274431288,
+   "swap_attn_hc_rel_limit": 0.005,
+   "swap_attn_hc_row": 0.0008919314714148641,
+   "swap_attn_hc_vs_cpu": 0.9999999177815148,
+   "swap_attn_hc_vs_golden": 0.9999988925539215,
+   "swap_attn_norm_bias": -0.0012664794921875,
+   "swap_attn_norm_component_err": 0.0028758154045416405,
+   "swap_attn_norm_finite": 1,
+   "swap_attn_norm_ratio_max": 0.9994726181030273,
+   "swap_attn_norm_ratio_min": 0.997789204120636,
+   "swap_attn_norm_rel": 0.002205128315836191,
+   "swap_attn_norm_rel_limit": 0.005751630809083281,
+   "swap_attn_norm_row": 0.002822668757289648,
+   "swap_attn_norm_vs_cpu": 0.9999983836626563,
+   "swap_attn_norm_vs_golden": 0.9999957503414825,
+   "swap_q_a_bias": -0.00020194053649902344,
+   "swap_q_a_component_err": 0.002081456123372694,
+   "swap_q_a_finite": 1,
+   "swap_q_a_out_rel": 0.0014498339733108878,
+   "swap_q_a_out_row": 0.03933718055486679,
+   "swap_q_a_ratio_max": 1.0005429983139038,
+   "swap_q_a_ratio_min": 0.9990429878234863,
+   "swap_q_a_rel": 0.0017555132508277893,
+   "swap_q_a_rel_limit": 0.005,
+   "swap_q_a_row": 0.0020755429286509752,
+   "swap_q_a_vs_cpu": 0.9999984792554525,
+   "swap_q_a_vs_golden": 0.999997095521165
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T14:48:12",
+  "status": "PASS"
+ },
+ "S.moe.05": {
+  "attempts": 0,
+  "duration_s": 26.6,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:08:17"
+   }
+  ],
+  "last_run": "2026-09-30T15:08:17",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.05.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999891362600043
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:07:50",
+  "status": "PASS"
+ },
+ "S.moe.06": {
+  "attempts": 0,
+  "duration_s": 30.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:11:31"
+   }
+  ],
+  "last_run": "2026-09-30T15:11:31",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.06.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999891362684384
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:11:01",
+  "status": "PASS"
+ },
+ "S.moe.07": {
+  "attempts": 0,
+  "duration_s": 29.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:15:05"
+   }
+  ],
+  "last_run": "2026-09-30T15:15:05",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.07.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999887331721745
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:14:35",
+  "status": "PASS"
+ },
+ "S.moe.08": {
+  "attempts": 0,
+  "duration_s": 30.4,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:17:57"
+   }
+  ],
+  "last_run": "2026-09-30T15:17:57",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.08.log",
+  "metrics": {
+   "pcc_swap_out": 0.99998873317154
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:17:27",
+  "status": "PASS"
+ },
+ "S.moe.09": {
+  "attempts": 0,
+  "duration_s": 32.1,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:20:47"
+   }
+  ],
+  "last_run": "2026-09-30T15:20:47",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.09.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999879365061737
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:20:15",
+  "status": "PASS"
+ },
+ "S.moe.10": {
+  "attempts": 0,
+  "duration_s": 33.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:27:04"
+   }
+  ],
+  "last_run": "2026-09-30T15:27:04",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.10.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999879400856266
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:26:30",
+  "status": "PASS"
+ },
+ "S.moe.11": {
+  "attempts": 0,
+  "duration_s": 35.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:36:23"
+   }
+  ],
+  "last_run": "2026-09-30T15:36:23",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.11.log",
+  "metrics": {
+   "pcc_swap_out": 0.999983892426881
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:35:47",
+  "status": "PASS"
+ },
+ "S.moe.12": {
+  "attempts": 0,
+  "duration_s": 36.8,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:40:42"
+   }
+  ],
+  "last_run": "2026-09-30T15:40:42",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.12.log",
+  "metrics": {
+   "pcc_swap_out": 0.999983825873046
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:40:05",
+  "status": "PASS"
+ },
+ "S.moe.13": {
+  "attempts": 0,
+  "duration_s": 37.5,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:45:01"
+   }
+  ],
+  "last_run": "2026-09-30T15:45:01",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.13.log",
+  "metrics": {
+   "pcc_swap_out": 0.999983825873046
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:44:23",
+  "status": "PASS"
+ },
+ "S.moe.14": {
+  "attempts": 0,
+  "duration_s": 39.3,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T15:48:39"
+   }
+  ],
+  "last_run": "2026-09-30T15:48:39",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/S.moe.14.log",
+  "metrics": {
+   "pcc_swap_out": 0.9999838258729162
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T15:48:00",
+  "status": "PASS"
+ },
+ "SC.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "8a59855f76a84460d29323aaf9750b1ae1c20e15",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "f333a601-bc8a-42cb-a34f-d501e4e022b7"
+  },
+  "agent_runs": [
+   {
+    "agent": "serving-contract",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/SC.1.serving.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "8a59855f76a84460d29323aaf9750b1ae1c20e15",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "b8790cb560cd9ad661a5b2c925c338d77365b97d",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/SC.1.serving.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "serving",
+    "seconds": 2427.6,
+    "session_id": "f333a601-bc8a-42cb-a34f-d501e4e022b7",
+    "t": "2026-10-01T08:45:32"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 2.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T08:45:35"
+   }
+  ],
+  "last_run": "2026-10-01T08:45:35",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/SC.1.log",
+  "metrics": {
+   "serving_contract_errors": 0,
+   "serving_contract_tests": 4
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "serving",
+  "started": "2026-10-01T08:45:32",
+  "status": "PASS",
+  "waiting": null
+ },
+ "X.1": {
+  "attempts": 0,
+  "duration_s": 476.2,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:44:11"
+   }
+  ],
+  "last_run": "2026-09-30T17:44:11",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/X.1.log",
+  "metrics": {
+   "chunk_len": 5120,
+   "chunk_start": 51200,
+   "chunk_wall_ms": 1937.6,
+   "deferred_cpu_ms": 0.0,
+   "deferred_cpu_steps": 0,
+   "device_model_hybrid": 0,
+   "device_ms_attention": 1104.22,
+   "device_ms_attn_collapse": 22.08,
+   "device_ms_attn_hc": 39.19,
+   "device_ms_attn_norm": 5.21,
+   "device_ms_attn_residual": 90.01,
+   "device_ms_chip0": 1730.66,
+   "device_ms_chip1": 1732.04,
+   "device_ms_chip2": 1730.4,
+   "device_ms_chip3": 1731.91,
+   "device_ms_chip4": 1730.42,
+   "device_ms_chip5": 1731.84,
+   "device_ms_chip6": 1730.42,
+   "device_ms_chip7": 1732.04,
+   "device_ms_experts": 256.05,
+   "device_ms_ffn_collapse": 22.08,
+   "device_ms_ffn_hc": 39.15,
+   "device_ms_ffn_norm": 10.09,
+   "device_ms_ffn_residual": 90.53,
+   "device_ms_mlp": 3.53,
+   "device_ms_moe_add": 2.83,
+   "device_ms_q_a": 12.83,
+   "device_ms_router": 12.48,
+   "device_ms_shared_expert": 24.81,
+   "device_ms_total": 1735.09,
+   "host_overhead_ms": 202.5,
+   "host_transfers_per_layer": 0,
+   "pcc_chunk_out": 0.9990691410845041,
+   "profiled_programs": 159824
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T17:36:15",
+  "status": "PASS"
+ },
+ "X.2": {
+  "attempts": 0,
+  "duration_s": 2.7,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-09-30T17:56:02"
+   }
+  ],
+  "last_run": "2026-09-30T17:56:02",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/X.2.log",
+  "metrics": {
+   "opportunities_listed": 12
+  },
+  "rc": 0,
+  "reason": [],
+  "started": "2026-09-30T17:56:00",
+  "status": "PASS",
+  "waiting": "pick opportunities in models/demos/xing40_a4b_d_p/bringup/opportunities.md; each pick becomes a perf task in tasks.yaml"
+ },
+ "X.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "0e965aa7-5540-4d77-8dca-04a458c2ece8"
+  },
+  "agent_runs": [
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 2679.9,
+    "session_id": "89fe015b-aede-4112-8390-e8a02026a09e",
+    "t": "2026-10-01T06:06:12"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 2,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/X.3.fix.2.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/X.3.fix.2.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [
+     "agent exited rc=143 is_error=None"
+    ],
+    "rc": 143,
+    "role": "fix",
+    "seconds": 34.3,
+    "session_id": "f59e5cf2-080b-45d9-a7ee-9687f802c040",
+    "t": "2026-10-01T06:15:51"
+   },
+   {
+    "agent": "bringup-engineer",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/X.3.fix.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "4b5f087aaa3b0b229e35d25e3e1fa159e5caca1a",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "af9d32b4c7051cdae0b0aac84191d271c5c68e17",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "16be7e2bb61ab2ff6b9dd0ea654d43c19784ff48",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/X.3.fix.1.jsonl",
+    "model": "claude-opus-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "fix",
+    "seconds": 2221.4,
+    "session_id": "0e965aa7-5540-4d77-8dca-04a458c2ece8",
+    "t": "2026-10-01T07:12:43"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 3,
+  "duration_s": 638.4,
+  "history": [
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T05:21:31"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T06:15:16"
+   },
+   {
+    "status": "RESUMED",
+    "t": "2026-10-01T06:17:53"
+   },
+   {
+    "status": "FAIL",
+    "t": "2026-10-01T06:35:41"
+   },
+   {
+    "status": "PASS",
+    "t": "2026-10-01T07:23:27"
+   }
+  ],
+  "last_run": "2026-10-01T07:23:27",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/X.3.log",
+  "metrics": {
+   "op_rows": 129,
+   "pcc_final_hidden": 0.9984073433228765,
+   "pcc_layer_L00": 0.9999882654831568,
+   "pcc_layer_L01": 0.999979086756004,
+   "pcc_layer_L02": 0.9999644429906385,
+   "pcc_layer_L03": 0.9999474731132828,
+   "pcc_layer_L04": 0.9999304033236518,
+   "pcc_layer_L05": 0.9999048606533544,
+   "pcc_layer_L06": 0.9998800023208548,
+   "pcc_layer_L07": 0.9998287133191971,
+   "pcc_layer_L08": 0.9997515819684591,
+   "pcc_layer_L09": 0.9997709858730005,
+   "pcc_layer_L10": 0.9998010870828877,
+   "pcc_layer_L11": 0.9997869467589497,
+   "pcc_layer_L12": 0.9997477268629331,
+   "pcc_layer_L13": 0.9997157535719429,
+   "pcc_layer_L14": 0.9996711429651449,
+   "pcc_layer_L15": 0.9995624461253935,
+   "pcc_layer_L16": 0.9994635475323372,
+   "pcc_layer_L17": 0.9992865715573506,
+   "pcc_layer_L18": 0.9990024825102383,
+   "pcc_layer_L19": 0.998089597223824,
+   "pcc_layer_L20": 0.9972715217595023,
+   "pcc_layer_L21": 0.996192061513801,
+   "pcc_layer_L22": 0.9956474215956912,
+   "pcc_layer_L23": 0.9942980136095391,
+   "pcc_layer_L24": 0.9935639402287363,
+   "pcc_layer_L25": 0.992332627764283,
+   "pcc_layer_L26": 0.9920468959481173,
+   "pcc_layer_L27": 0.9938583200374483,
+   "pcc_layer_L28": 0.9954587078368968,
+   "pcc_layer_L29": 0.9958992227296412,
+   "pcc_layer_L30": 0.9966657449237027,
+   "pcc_layer_L31": 0.9968552812291724,
+   "pcc_layer_L32": 0.997087766181562,
+   "pcc_layer_L33": 0.997459636151039,
+   "pcc_layer_L34": 0.9979171426422225,
+   "pcc_layer_L35": 0.9979472655068127,
+   "pcc_layer_L36": 0.99789485725362,
+   "pcc_layer_L37": 0.9979894895399292,
+   "pcc_layer_L38": 0.998343646020092,
+   "pcc_layer_L39": 0.9989801751660424,
+   "pcc_state_min": 0.9967603903554169,
+   "pos_chunk": 5120,
+   "prefill_ms_full": 9792.2,
+   "timeline_ok": 1,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "fix",
+  "started": "2026-10-01T07:12:49",
+  "status": "PASS",
+  "waiting": null
+ },
+ "Z.1": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "a90136396ae25d0754b43d3c31798ff5ef192e33",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "8ff05e2c75d110b5217ca96b7ab3ac389c0eba4b",
+     "dirty": false
+    }
+   },
+   "model": "claude-sonnet-5-5",
+   "session_id": "a53d2f23-fe13-43fd-b3f6-980d09949349"
+  },
+  "agent_runs": [
+   {
+    "agent": "settings-audit",
+    "attempt": 1,
+    "brief": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/briefs/Z.1.settings.1.md",
+    "defs": {
+     "models/demos/common/bringup/agents/bringup-engineer.md": {
+      "blob": "a90136396ae25d0754b43d3c31798ff5ef192e33",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/brief.md": {
+      "blob": "603df4142161e80778bf1835433dc362bbbaaba7",
+      "dirty": false
+     },
+     "models/demos/common/bringup/briefs/roles.yaml": {
+      "blob": "8ff05e2c75d110b5217ca96b7ab3ac389c0eba4b",
+      "dirty": false
+     }
+    },
+    "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/agents/Z.1.settings.1.jsonl",
+    "model": "claude-sonnet-5-5",
+    "problems": [],
+    "rc": 0,
+    "role": "settings",
+    "seconds": 507.1,
+    "session_id": "a53d2f23-fe13-43fd-b3f6-980d09949349",
+    "t": "2026-10-01T16:21:34"
+   }
+  ],
+  "attempt": 1,
+  "attempts": 0,
+  "duration_s": 400.0,
+  "history": [
+   {
+    "status": "PASS",
+    "t": "2026-10-01T16:28:14"
+   }
+  ],
+  "last_run": "2026-10-01T16:28:14",
+  "log": "/localdev/dnijemcevic/bringup/xing40_a4b_d_p/runs/run1/logs/Z.1.log",
+  "metrics": {
+   "contract_tests_failed": 0,
+   "pcc_layer_L00": 0.9999880538393454,
+   "pcc_layer_L01": 0.9999779499369215,
+   "pcc_layer_L02": 0.999949949224265,
+   "pcc_layer_L03": 0.9999220343294308,
+   "pcc_layer_L04": 0.9998924179349493,
+   "pcc_layer_L05": 0.9998597026495037,
+   "pcc_layer_L06": 0.9998210431311904,
+   "pcc_layer_L07": 0.9997393453471426,
+   "pcc_layer_L08": 0.9996084256661327,
+   "pcc_layer_L09": 0.9996620374280432,
+   "pcc_layer_L10": 0.9997246685239884,
+   "pcc_layer_L11": 0.9997013639731451,
+   "pcc_layer_L12": 0.9996361598900543,
+   "pcc_layer_L13": 0.9995893322063719,
+   "pcc_layer_L14": 0.9995303118866137,
+   "pcc_layer_L15": 0.9993726792756525,
+   "pcc_layer_L16": 0.9992283272144298,
+   "pcc_layer_L17": 0.9989764332028094,
+   "pcc_layer_L18": 0.9987584244524996,
+   "pcc_layer_L19": 0.9978254041074416,
+   "pcc_layer_L20": 0.9968815428650821,
+   "pcc_layer_L21": 0.9958316096413259,
+   "pcc_layer_L22": 0.9953410962767475,
+   "pcc_layer_L23": 0.9939246432647958,
+   "pcc_layer_L24": 0.9933088121663037,
+   "pcc_layer_L25": 0.9915728401328985,
+   "pcc_layer_L26": 0.9913447710947104,
+   "pcc_layer_L27": 0.9932521714248086,
+   "pcc_layer_L28": 0.994966753958013,
+   "pcc_layer_L29": 0.9954225142572019,
+   "pcc_layer_L30": 0.9962014714562432,
+   "pcc_layer_L31": 0.9964123790501753,
+   "pcc_layer_L32": 0.9966542639496919,
+   "pcc_layer_L33": 0.9970619785900132,
+   "pcc_layer_L34": 0.9975767638078288,
+   "pcc_layer_L35": 0.997622102528734,
+   "pcc_layer_L36": 0.9975531745548561,
+   "pcc_layer_L37": 0.9976421770930479,
+   "pcc_layer_L38": 0.9980452029484679,
+   "pcc_layer_L39": 0.9988203391503029,
+   "pcc_state_min": 0.9996377822106892,
+   "settings_violations": 0,
+   "state_bits_kv_latent": 8,
+   "top5_overlap": 1.0
+  },
+  "rc": 0,
+  "reason": [],
+  "role": "settings",
+  "started": "2026-10-01T16:21:34",
+  "status": "PASS",
+  "waiting": null
+ },
+ "_run": {
+  "branch": "dnijemcevic/ernie45_prefill",
+  "created": "2026-09-30T03:05:24",
+  "name": "run1",
+  "repo": "/localdev/dnijemcevic/tt-metal"
+ }
+}

@@ -51,6 +51,7 @@ from helpers.test_variant_parameters import (
     ENABLE_DIRECT_INDEXING,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATH_OP,
     NUM_FACES,
     SFPU_IMPL,
     TILE_COUNT,
@@ -293,6 +294,7 @@ def test_sfpu_exp_parallel_matmul_quasar(
             UNPACK_TRANS_FACES(Transpose.No),
             SFPU_IMPL(sfpu_impl),
             APPROX_MODE(approx_mode),
+            MATH_OP(mathop=MathOperation.Exp),
         ],
         "runtimes": [
             CRK_TILE_DIMM(matmul_dims.ct_dim, matmul_dims.rt_dim, matmul_dims.kt_dim),

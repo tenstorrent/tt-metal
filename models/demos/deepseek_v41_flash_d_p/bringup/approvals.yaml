@@ -1,0 +1,15 @@
+intake:
+  by: dnijemcevic
+  at: '2026-10-28T13:48:33'
+  files:
+    models/demos/deepseek_v41_flash_d_p/bringup/spec.yaml: eeed202ea42b0ab35548fb8fc8aec6f84f8af49922ed31b954dabfd3f171dc19
+  note: ''
+plan:
+  by: dnijemcevic
+  at: '2026-10-21T14:54:02'
+  files:
+    models/demos/deepseek_v41_flash_d_p/bringup/plan.yaml: d14f97080020eb21633212f60a1c9155323686fee61ee09475626dd2e9cfbd5b
+    models/demos/deepseek_v41_flash_d_p/bringup/plan.md: b92b4487dbb48f9a4902c58fde561b7e9fac782a654d11f8883c2713166a6b23
+    models/demos/deepseek_v41_flash_d_p/bringup/components.yaml: 55b8a786e03feca60404e7f6c2235232ad50bc41f4c094ecabdf27edd9d4bd4f
+  note: ''
+  ledger: 874affd1601879857a1f85138d17b8bb920442c27819b6a614456852b689fab4

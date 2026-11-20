@@ -1,0 +1,65 @@
+{
+ "used": [
+  {
+   "id": "K-1",
+   "how": "persistent gather outputs only for gathers over > 1 chip and not in _gather_add: a full-range ttnn.slice of a 1-chip gather would be a wrapper over the persistent buffer and get freed",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-100",
+   "how": "address-keyed program caches miss when buffer addresses move: led to the fused tail's TailA2A cache as the cause of the 612 vs 426 ms on/off wall, fixed by ccl.settle (DS41-146)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "moe_block/tt/tail_a2a.py TailA2A keys its prepared programs by (y, se, out) buffer addresses in one 16-entry FIFO shared by all 40 layers: any change in the model's allocation layout can turn into program rebuilds (now DS41-146)",
+  "perf_proposals.md CCL_PERSISTENT_OUT predates P.8-P.10 and the fused MoE: 0 reduce-scatters and 212 (not 342 / 262) in-step all_gathers remain on the Python path"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: same programs and shapes, only the output buffers are reused"
+  },
+  {
+   "id": "OV-17",
+   "answer": "n/a",
+   "evidence": "the hold was until the precision fixes landed (FIX.7, FIX.8, FIX.14 are in the tree); this attempt measured on that model"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only op touched is ttnn.bringup.fabric_all_gather, a C++ device op (not Python-built). Reported: moe_block/tt/tail_a2a.py TailA2A is prepared but keyed by buffer addresses (no patching), 16-entry FIFO for 40 layers; it is the cause of DS41-146 and outside this step's paths"
+  }
+ ],
+ "cited_only": [
+  "DS41-146"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.4",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T23:07:30",
+  "head": "351d4355952",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.4.perf.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_ccl_persistent.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

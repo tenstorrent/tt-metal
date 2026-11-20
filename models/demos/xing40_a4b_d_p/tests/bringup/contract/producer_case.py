@@ -1,0 +1,200 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""The runner test's producer process: tt-metal's prefill_producer.main, made to send what tt-d-gen sends.
+
+    python -m models.demos.xing40_a4b_d_p.tests.bringup.contract.producer_case <out_dir>
+
+prefill_producer differs from the server in four ways; each is replaced here, the rest (H2D connect, push, layer-ack
+channel, shutdown sentinel) is the producer's own code:
+  - schedule: the server's chunk plan and round-robin slot interleave (server_rules.interleave) instead of run_schedule
+    (whose follow-up turns start at a 32-aligned end and whose last chunk is never pulled back)
+  - payload: PAD_ID past actual_end and ring_sdpa_reshuffle by actual_start (server_rules.server_payload) instead of
+    the producer's own padding and rotation (its _h2d_rows is made to hand over the natural-order tokens, so the
+    server's payload is built from the prompt slice alone)
+  - acks: the producer's own completion-ring drain consumes them; counted here off its span-summed total, 40
+    per chunk (layers_per_chunk), and waited for before each snapshot
+  - verify: off here (the parent test reads the dumps with the server's own comparer)
+
+Turns: server_rules.SCENARIOS "producer" for the serving geometry (chunk 2048 / max_seq 4096: slot 0 1000, then 4000
+from resident 960; slot 1 1500, then 3500).
+Snapshots, read through the exported table over UMD right after the chunk's acks (what the KV Manager ships then):
+  snap_s0_t0     slot 0 [0, turn 1) every layer, after its first turn
+  snap_overlap   slot 0 [max_seq - chunk, end of the chunk before the last) every layer, after that chunk, before the
+                 pulled-back last chunk (2048 / 4096: [2048, 3008) after (960, 3008))
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import signal
+import struct
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as _R
+
+# slot -> prompt lengths of its turns; XING_CONTRACT_TURNS (JSON {"slot": [len, ...]}) replaces them (the runner smoke)
+TURNS = (
+    {int(k): [int(n) for n in v] for k, v in json.loads(os.environ["XING_CONTRACT_TURNS"]).items()}
+    if os.environ.get("XING_CONTRACT_TURNS")
+    else _R.scenario()["producer"]
+)
+_T1 = _R.scenario()["producer"][0][0]
+_BEFORE = _R.follow_up(*_R.scenario()["producer"][0])[1][-2]  # slot 0's chunk before its pulled-back last one
+SNAPSHOTS = {
+    "snap_s0_t0": {"after": (0, 0, _T1), "slot": 0, "lo": 0, "hi": _T1},
+    "snap_overlap": {"after": (0, *_BEFORE), "slot": 0, "lo": _R.MAX_SEQ - _R.CHUNK, "hi": _BEFORE[1]},
+}
+# A chunk of 40 layers takes seconds; no ack within this (env XING_CONTRACT_ACK_TIMEOUT_S) means the runtime sends none,
+# and every later wait is skipped so the run ends with that error instead of a timeout.
+ACK_TIMEOUT_S = float(os.environ.get("XING_CONTRACT_ACK_TIMEOUT_S", "300"))
+
+
+def main(out: str) -> int:
+    out = Path(out)
+    import ttnn
+    from models.demos.common.prefill.runners import prefill_producer as P
+    from models.demos.common.prefill.runners.migration import migration_table_path
+    from models.demos.xing40_a4b_d_p.tests.bringup.contract import engine as E
+    from models.demos.xing40_a4b_d_p.tests.bringup.contract import server_rules as R
+
+    plan = R.interleave(TURNS)
+    rec = {"plan": [vars(p) for p in plan], "acks_drained": 0, "errors": [], "snapshots": {}}
+    st = {"ch": None, "drain": None, "drained": 0, "dead": False}
+
+    class Service:
+        """H2D service whose chunk payload is the server's (PAD_ID tail, ring_sdpa_reshuffle)."""
+
+        def __init__(self, real):
+            self.real = real
+
+        def __getattr__(self, n):
+            return getattr(self.real, n)
+
+        def forward_to_tensor_bytes(self, chunk, metadata=None):
+            slot, start, end = struct.unpack("<III", metadata)
+            if (slot, start, end) != (0xFFFFFFFF,) * 3:  # the shutdown sentinel passes as is
+                chunk = np.ascontiguousarray(R.server_payload(np.asarray(chunk).reshape(-1), start, end))
+            return self.real.forward_to_tensor_bytes(chunk, metadata=metadata)
+
+    class TT:
+        def __getattr__(self, n):
+            return getattr(ttnn, n)
+
+        class H2DStreamService:
+            @staticmethod
+            def connect(*a, **k):
+                return Service(ttnn.H2DStreamService.connect(*a, **k))
+
+    P.ttnn = TT()
+
+    def natural_rows(tokens, actual_start=0):  # the producer's rotation is replaced by the server's in Service
+        assert len(tokens) == R.CHUNK, f"expected {R.CHUNK} tokens, got {len(tokens)}"
+        return np.asarray(tokens, dtype=np.int64).astype(np.uint32).reshape(R.SP, 1, R.W)
+
+    P._h2d_rows = natural_rows
+
+    # The completion ring is bounded: the producer's own drain thread (started before the first push) consumes it;
+    # the waits here read its span-summed count.
+    connect, start_drain = P.connect_layer_completion_channel, P.start_layer_completion_drain
+
+    def connect_acks(timeout_s):
+        st["ch"] = connect(timeout_s)
+        return st["ch"]
+
+    def start_acks(completion_channel, *, num_layers, chunk_layers):
+        st["drain"] = start_drain(completion_channel, num_layers=num_layers, chunk_layers=chunk_layers)
+        return st["drain"]
+
+    P.connect_layer_completion_channel = connect_acks
+    P.start_layer_completion_drain = start_acks
+    os.environ["PREFILL_PRODUCER_WARMUP_CHUNKS"] = "0"  # the server sends no warm-up chunks
+
+    def wait_acks(n: int) -> bool:
+        if st["dead"]:
+            return False
+        drain = st.get("drain")
+        if drain is None:
+            rec["errors"].append("no layer-ack channel")
+            st["dead"] = True
+            return False
+        try:
+            st["drained"] = drain.wait_for(n, timeout_s=ACK_TIMEOUT_S)
+            return True
+        except TimeoutError:
+            st["drained"] = drain.reader.total_layers
+            rec["errors"].append(f"layer acks: {st['drained']} < {n} after {ACK_TIMEOUT_S:.0f} s (40 per chunk)")
+        except Exception as e:  # a span out of bounds / overlapping, or the drain thread died
+            st["drained"] = drain.reader.total_layers
+            rec["errors"].append(f"layer acks: {type(e).__name__}: {e}")
+        st["dead"] = True
+        return False
+
+    def drain_final(drain, expected_layers, *, timeout_s=600.0):  # the server's count (layers_per_chunk x chunks)
+        wait_acks(R.NUM_LAYERS * len(plan))
+        rec["acks_drained"] = st["drained"]
+        return st["drained"]
+
+    P.wait_for_layer_completions = drain_final
+    P._verify_resident_slots = lambda *a, **k: True
+
+    def server_schedule(cfg, *, push_fn, now_fn=time.perf_counter, sleep_fn=time.sleep, rng=None):
+        t0 = now_fn()
+        reader = None
+        push_ms, ends = [], {}
+        for k, p in enumerate(plan):
+            # actual_isl: the request's whole prompt length (prefill_producer.py _Slot.actual_isl = prefix + new tokens);
+            # the producer pads its token slice past it. The server payload pads past actual_end, the same place on a
+            # last chunk and nothing on the others.
+            push_ms.append(push_fn(p.slot, p.chunk_idx, p.start, p.end, TURNS[p.slot][p.turn]))
+            ends[p.slot] = p.end
+            for name, sn in SNAPSHOTS.items():
+                if sn["after"] != (p.slot, p.start, p.end):
+                    continue
+                ok = wait_acks(R.NUM_LAYERS * (k + 1))
+                if reader is None:
+                    reader = E.TableReader(migration_table_path(), P._read_device_map(60))
+                if ok:
+                    reader.dump(out / name, sn["slot"], range(R.NUM_LAYERS), sn["lo"], sn["hi"])
+                rec["snapshots"][name] = {
+                    "after_push": k,
+                    "taken": ok,
+                    "slot": sn["slot"],
+                    "lo": sn["lo"],
+                    "hi": sn["hi"],
+                }
+        if reader is not None:
+            rec["replica_mismatch"] = reader.replica_mismatch[:16]
+        rec["ends"] = ends
+        return P.RunStats(
+            resident={s: P._SlotFill(real_len=e) for s, e in ends.items()},
+            total_pushes=len(plan),
+            push_ms=push_ms,
+            completed=sum(len(t) for t in TURNS.values()),
+            wall_s=now_fn() - t0,
+        )
+
+    P.run_schedule = server_schedule
+    sys.argv = sys.argv[:1]  # prefill_producer.main parses argv (--manifest only)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))  # the runner stops us on a rejected chunk: keep the record
+    try:
+        P.main()
+    except SystemExit as e:
+        if e.code == 143:
+            rec["errors"].append("stopped by the runner (its request loop failed)")
+        elif e.code not in (0, None):
+            rec["errors"].append(f"prefill_producer exited {e.code}")
+    finally:
+        rec["acks_expected"] = R.NUM_LAYERS * len(plan)
+        rec["acks_drained"] = st["drained"]
+        (out / "producer.json").write_text(json.dumps(rec, indent=1))
+    return 1 if rec["errors"] else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1]))

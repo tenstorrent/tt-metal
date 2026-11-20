@@ -1,0 +1,76 @@
+{
+ "used": [
+  {
+   "id": "DS41-183",
+   "how": "every device run (bfp8 DRAM measure 78 min cold, the bfp4 test_dram gate unit, ladder rung last, both contract tests, the final measure) started with devjob start / wait --timeout, never under a tool timeout, never killed",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-194",
+   "how": "BREADCRUMBS.md had 9 bytes left under the 512000-byte hook limit: only a '## P.27' heading appended (511999 B); the P.27 detail and both sides' DRAM tables went to known_issues_detail.md",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-55",
+   "how": "pre-commit run on every changed file before the measures and the gate unit, so no formatter rewrote a file after a recorded pass",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-10",
+   "how": "bfp8 routed experts measured at x 1088 / 576 of bfp4 in DRAM (8.899 -> 16.809 GiB a chip), as the bfp8 [N, K] layout predicts",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-196",
+   "how": "the task's premise; confirmed on the ladder: rung last err_final_hidden 0.101 with bfp8 (limit 0.242; bfp4 ~0.19, DS41-195)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "DS41DeviceState holds a back-reference to the model (tt/model.py:208 self.model): a generic walk of the state's tensors reaches every weight (test_dram attempt 1 counted 7.23 GiB of weights as state); fixed by skipping the model in that walk",
+  "BREADCRUMBS.md is full (DS41-194): attempt 2 could append only a heading; the overseer should archive old sections",
+  "bringup/hooks.py:devfmt_component and reference/ds41_ref.py's experts_w site are outside a perf step's paths, so the CPU emulation cannot follow EXPERTS_IMPL there yet (tt/experts.py:expert_weight_round is ready for them)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: bfp8_down4 is a fork option (down_weights_bf4) with bfp4-sized down regions; bfp4_mse values pack losslessly at bfp4 size; DRAM measured at the real sizes (16.809 GiB bfp8 experts)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no Python-built op added or touched; the flat op change is in its C++ device op; the block's K3 exchange builds as before"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "attempt 2 ran no fork test at all; only test_dram (both sides), the ladder rung last and the two contract tests through measure, and the final measure"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.27",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-03T12:24:04",
+  "head": "fb522fabb13",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.27.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.27_dram.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.27.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_dram.py"
+  ]
+ }
+}

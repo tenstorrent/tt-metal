@@ -1,0 +1,442 @@
+# Dashboard metadata (F181): per-stage parallel split (quietbox_2x2, scaled model) and one line per TTNN op.
+# op_notes: first rule whose section, op and (optional) shape substring match.
+profile_sections:
+  attn_hc:
+    what: 'mHC mixes. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip projects its 2560 of 5120 hidden columns of the 4 streams; the 25-wide partial mixes are all-gathered over the 2 columns,
+      Sinkhorn fp32.'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_hc:
+    what: 'mHC mixes. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip projects its 2560 of 5120 hidden columns of the 4 streams; the 25-wide partial mixes are all-gathered over the 2 columns,
+      Sinkhorn fp32.'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_collapse:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_collapse:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_residual:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_residual:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  moe_add:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  engram_add:
+    what: 'Local per chip. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 hidden columns (x 4 streams for the residuals).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  attn_norm:
+    what: 'RMSNorm. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 columns, the sum of squares all-gathered over the 2 columns (ffn_norm then all-gathers the output to full 5120 for
+      the router and experts).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  ffn_norm:
+    what: 'RMSNorm. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: 2560 of 5120 columns, the sum of squares all-gathered over the 2 columns (ffn_norm then all-gathers the output to full 5120 for
+      the router and experts).'
+    cells:
+    - - tok 0–1023
+      - cols 0–2559
+    - - tok 0–1023
+      - cols 2560–5119
+    - - tok 1024–2047
+      - cols 0–2559
+    - - tok 1024–2047
+      - cols 2560–5119
+  q_a:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  kv:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  compressor:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  engram_kv:
+    what: 'Projections, K-split. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows); TP: each chip multiplies its 2560 of 5120 input columns; partial sums all-gathered and added over the 2 columns (q_a
+      -> 1280, kv -> 512).'
+    cells:
+    - - tok 0–1023
+      - K 0–2559
+    - - tok 0–1023
+      - K 2560–5119
+    - - tok 1024–2047
+      - K 0–2559
+    - - tok 1024–2047
+      - K 2560–5119
+  attention:
+    what: 'Attention. wq_b / RoPE: TP over heads, 16 of 32 heads per chip x 1024 tokens (SP row). head->seq all-to-all over the columns: sparse_sdpa then runs all 32 heads on 512 tokens per chip; back,
+      wo_a: 2 of 4 groups of 8 heads per chip, wo_b K-split, reduce-scatter over the columns.'
+    cells:
+    - - heads 0–15
+      - sdpa tok 0–511
+    - - heads 16–31
+      - sdpa tok 512–1023
+    - - heads 0–15
+      - sdpa tok 1024–1535
+    - - heads 16–31
+      - sdpa tok 1536–2047
+  indexer:
+    what: 'Indexer. Queries split over SP x TP: 512 query rows per chip, all 32 index heads (score summed over heads); keys: the whole compressed history, ring over the SP rows; top-k per query row.'
+    cells:
+    - - q 0–511
+      - 32 idx heads
+    - - q 512–1023
+      - 32 idx heads
+    - - q 1024–1535
+      - 32 idx heads
+    - - q 1536–2047
+      - 32 idx heads
+  router:
+    what: 'Router (fused moe_grouped_topk). Replicated over each mesh row: 1024 tokens x full 5120 hidden x 96 expert logits, top 6.'
+    cells:
+    - - tok 0–1023
+      - 96 logits
+    - - tok 0–1023
+      - 96 logits
+    - - tok 1024–2047
+      - 96 logits
+    - - tok 1024–2047
+      - 96 logits
+  experts:
+    what: 'Routed experts. EP over all 4 chips: 24 of 96 experts per chip; tokens dispatched to the chips owning their top-6 experts: ~3072 token x expert pairs per chip (2048 tokens x 6 / 4). bfp4 weights.'
+    cells:
+    - - experts 0–23
+      - ~3072 tok×exp
+    - - experts 24–47
+      - ~3072 tok×exp
+    - - experts 48–71
+      - ~3072 tok×exp
+    - - experts 72–95
+      - ~3072 tok×exp
+  shared_expert:
+    what: 'Shared expert. SP: 1024 tokens per mesh row (chunk 2048 / 2 rows) (full 5120 input after the ffn_norm gather); TP by intermediate: 1152 of 2304 columns (w1/w3 column-, w2 row-parallel), summed
+      with the experts'' reduce-scatter.'
+    cells:
+    - - tok 0–1023
+      - inter 0–1151
+    - - tok 0–1023
+      - inter 1152–2303
+    - - tok 1024–2047
+      - inter 0–1151
+    - - tok 1024–2047
+      - inter 1152–2303
+op_notes:
+- section: attention
+  op: linear
+  shape: 1280x8192
+  what: wq_b, the query up-projection (q_lora 1280 -> this chip's 16 heads x 512)
+- section: attention
+  op: linear
+  shape: 2048x5120
+  what: wo_b, the output projection (2 wo_a groups x 1024 -> hidden 5120), K-split partials
+- section: attention
+  op: matmul
+  what: 'wo_a, grouped output projection (per group of 8 heads: 4096 -> o_lora 1024)'
+- section: attention
+  op: experimental.nlp_create_q_heads_split
+  what: split the q projection into per-head tensors
+- section: attention
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the 64-dim rotary tail of each head (applied to q, then undone on the output)
+- section: attention
+  op: experimental.all_to_all_async_generic
+  what: head <-> sequence reshard over the mesh columns (sparse attention needs 32 heads per chip)
+- section: attention
+  op: transformer.sparse_sdpa
+  what: 'sparse attention: each query over its window + top-k selected compressed keys (+ sink)'
+- section: attention
+  op: experimental.nlp_concat_heads
+  what: merge the per-head attention outputs back into rows
+- section: attention
+  op: bringup.fabric_reduce_scatter
+  what: sum wo_b's partial outputs over the columns, each chip keeps its hidden slice
+- section: attention
+  op: experimental.high_bw_all_gather
+  what: gather window KV rows from the other mesh row (the chunk's other half)
+- section: attention
+  op: experimental.slice_write
+  what: append this chunk's KV rows to the persistent attention table (P.21)
+- section: attention
+  op: experimental.deepseek_prefill.update_padded_kv_cache
+  what: write the window KV into the served cache (serving contract)
+- section: attention
+  op: embedding
+  what: gather KV rows by index (served-cache order)
+- section: attention
+  op: multiply
+  what: scale q_resid before the head split
+- section: attention
+  op: mesh_partition
+  what: take this chip's part of the index list
+- section: q_a
+  op: linear
+  what: 'fused wq_a | wkv: hidden -> q_lora 1280 + kv 512, K-split over the columns'
+- section: q_a
+  op: bringup.fabric_reduce_scatter
+  what: sum the K-split partials over the columns
+- section: q_a
+  op: experimental.high_bw_all_gather
+  what: gather the summed projection rows back to every chip of the row
+- section: q_a
+  op: bringup.rms_norm
+  what: q_norm, read in place from the fused projection (input_window)
+- section: kv
+  op: bringup.rms_norm
+  what: kv_norm, read in place from the fused projection (input_window)
+- section: kv
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the KV's 64-dim rotary tail
+- section: attn_norm
+  op: bringup.rms_norm
+  shape: 1024x128
+  what: 'attention RMSNorm: partial sum of squares, then normalize with the gathered total'
+- section: attn_norm
+  op: bringup.rms_norm
+  what: 'attention RMSNorm: this chip''s partial sum of squares (stats_out)'
+- section: ffn_norm
+  op: bringup.rms_norm
+  shape: 1024x128
+  what: 'FFN RMSNorm: partial sum of squares, then normalize with the gathered total'
+- section: ffn_norm
+  op: bringup.rms_norm
+  what: 'FFN RMSNorm: this chip''s partial sum of squares (stats_out)'
+- section: attn_norm
+  op: experimental.high_bw_all_gather
+  what: gather the norm's partial sums over the columns
+- section: ffn_norm
+  op: experimental.high_bw_all_gather
+  shape: '5120'
+  what: gather the normalized rows to full hidden 5120 (router and experts read whole rows)
+- section: ffn_norm
+  op: experimental.high_bw_all_gather
+  what: gather the norm's partial sums over the columns
+- section: attn_hc
+  op: matmul
+  what: 'mHC projection: 4 streams x hidden -> 24 mix logits (fp32)'
+- section: attn_hc
+  op: bringup.mhc_pre_xing_pack
+  what: 'mHC: pack this chip''s partial mixes'
+- section: attn_hc
+  op: bringup.mhc_pre_xing
+  what: 'mHC: sum the partial mixes, fp32 Sinkhorn, collapse the 4 streams into the layer input'
+- section: ffn_hc
+  op: bringup.mhc_pre_xing
+  what: 'mHC: sum the partial mixes, fp32 Sinkhorn, collapse the 4 streams into the FFN input'
+- section: attn_hc
+  op: experimental.high_bw_all_gather
+  what: gather the partial mixes over the columns (exact fp32)
+- section: ffn_hc
+  op: experimental.high_bw_all_gather
+  what: gather the partial mixes over the columns (exact fp32)
+- section: attn_residual
+  op: bringup.mhc_post
+  what: 'mHC post: residual update of the 4 streams with the attention output'
+- section: ffn_residual
+  op: bringup.mhc_post
+  what: 'mHC post: residual update of the 4 streams with the MoE output'
+- section: ffn_residual
+  op: from_torch
+  what: per-chunk host input upload
+- section: router
+  op: linear
+  what: 'gate logits: x @ gate^T (bf16 weights, fp32 accumulation)'
+- section: router
+  op: experimental.deepseek_prefill.moe_grouped_topk
+  what: 'fused routing: sqrt(softplus), selection bias, top-6, renormalize, route scale (Marko''s op, stock, fp32 selection)'
+- section: experts
+  op: bringup.flat_routed_expert_with_program
+  what: 'routed experts: dispatch, this chip''s 24 experts (bfp4 SwiGLU), weighted combine'
+- section: experts
+  op: generic_op
+  what: dispatch / combine planning programs (routing tables, offsets)
+- section: experts
+  op: experimental.high_bw_all_gather
+  what: gather the token rows of the mesh row for dispatch
+- section: experts
+  op: all_gather
+  what: gather the top-k ids and weights over the row
+- section: experts
+  op: to_layout
+  what: tile -> row-major for dispatch
+- section: experts
+  op: typecast
+  what: expert ids to uint16
+- section: shared_expert
+  op: bringup.flat_routed_expert
+  what: 'shared expert: SwiGLU on this chip''s 1152 of 2304 intermediate columns'
+- section: moe_add
+  op: bringup.fabric_reduce_scatter
+  what: sum routed + shared outputs over the columns, each chip keeps its hidden slice
+- section: moe_add
+  op: add
+  what: add the shared expert's output to the routed experts'
+- section: indexer
+  op: linear
+  shape: 2560x32
+  what: 'indexer weights_proj: per-head score weights'
+- section: indexer
+  op: linear
+  shape: 1280x4096
+  what: 'indexer wq_b: q_lora -> 32 index heads x 128'
+- section: indexer
+  op: bringup.ring_indexer_score_dsa
+  what: 'index scores: queries x every compressed key (ring over the mesh rows), summed over 32 heads'
+- section: indexer
+  op: experimental.topk_large_indices
+  what: top-k compressed keys per query (the sparse attention's selection)
+- section: indexer
+  op: scatter
+  what: 're-indexer bias: boost the candidate pool''s keys'
+- section: indexer
+  op: experimental.nlp_create_q_heads_split
+  what: split the index query into its 32 heads
+- section: indexer
+  op: experimental.deepseek_prefill.rotary_embedding_indexed
+  what: RoPE on the index query's rotary tail
+- section: indexer
+  op: mesh_partition
+  what: take this chip's query rows (TP sub-shard)
+- section: indexer
+  op: bringup.fabric_reduce_scatter
+  what: sum the weights_proj partials over the columns
+- section: indexer
+  op: experimental.high_bw_all_gather
+  what: gather the selected key ids over the columns
+- section: compressor
+  op: linear
+  shape: 2560x
+  what: 'compressor projection: hidden -> compressed latent (and gate), K-split'
+- section: compressor
+  op: linear
+  shape: x128
+  what: index key projection (wk) from the compressed latent
+- section: compressor
+  op: bringup.rms_norm
+  what: norm of the compressed latent / index key
+- section: compressor
+  op: bringup.fabric_reduce_scatter
+  what: sum the compressor's K-split partials over the columns
+- section: compressor
+  op: experimental.deepseek_prefill.update_padded_kv_cache
+  what: write compressed KV / index keys into the served caches
+- section: compressor
+  op: experimental.slice_write
+  what: append compressed rows to the persistent attention table (P.21)
+- section: compressor
+  op: exp
+  what: pair softmax over the pooled pairs
+- section: compressor
+  op: embedding
+  what: gather rows by index (served-cache order)
+- section: engram_kv
+  op: linear
+  what: 'engram wkv: the looked-up n-gram embeddings (6144) -> 5 x hidden slices'
+- section: engram_add
+  op: bringup.mhc_pre_xing_pack
+  what: 'engram gate: pack the partial dot products'
+- section: engram_add
+  op: bringup.mhc_post
+  what: 'engram: add the gated n-gram value into the streams'
+- section: engram_add
+  op: sigmoid
+  what: engram gate (sqrt-sigmoid of the q.k score)

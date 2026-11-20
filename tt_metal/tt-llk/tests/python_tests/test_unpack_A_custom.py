@@ -25,7 +25,7 @@ from helpers.golden_generators import (
     DataCopyGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync
+from helpers.llk_params import DestAccumulation, DestSync, PerfRunType
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
@@ -35,9 +35,11 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    LOOP_FACTOR,
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
+    PERF_RUN_TYPE,
     TILE_COUNT,
 )
 from helpers.utils import passed_test, result_tensor
@@ -95,7 +97,9 @@ def test_unpack_A_custom(
     configuration = TestConfig(
         "sources/eltwise_unary_datacopy_custom_test.cpp",
         formats,
+        templates=[PERF_RUN_TYPE(PerfRunType.L1_TO_L1)],
         runtimes=[
+            LOOP_FACTOR(1),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
             NUM_BLOCKS(num_blocks),

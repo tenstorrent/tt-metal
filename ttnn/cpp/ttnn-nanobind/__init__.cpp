@@ -27,12 +27,14 @@
 #include "ttnn-nanobind/layer_ack_service.hpp"
 #include "ttnn-nanobind/mesh_socket.hpp"
 #include "ttnn-nanobind/bfp_utils.hpp"
+#include "ttnn-nanobind/ccl_host.hpp"
 #include "ttnn-nanobind/operations/copy.hpp"
 #include "ttnn-nanobind/operations/core.hpp"
 #include "ttnn-nanobind/operations/trace.hpp"
 #include "ttnn-nanobind/operations/command_list.hpp"
 #include "ttnn-nanobind/profiler.hpp"
 #include "ttnn-nanobind/program_descriptors.hpp"
+#include "ttnn-nanobind/program_spec.hpp"
 #include "ttnn-nanobind/tensor_accessor_args.hpp"
 #include "ttnn-nanobind/mcast_host.hpp"
 #include "ttnn-nanobind/reports.hpp"
@@ -65,6 +67,7 @@
 #include "ttnn/operations/full/full_nanobind.hpp"
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
+#include "ttnn/operations/generic/freeze_program_hashes_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
 #include "ttnn/operations/loss/loss_nanobind.hpp"
@@ -86,6 +89,11 @@
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
+
+namespace ttnn::bringup {
+// Derived ops of model bring-ups (ttnn/ttnn/bringup/bringup_nanobind.cpp), exposed as ttnn.bringup.
+void py_module(nb::module_& mod);
+}  // namespace ttnn::bringup
 
 namespace ttnn::operations {
 
@@ -197,6 +205,9 @@ void py_module(nb::module_& mod) {
     auto m_experimental = mod.def_submodule("experimental", "experimental operations");
     experimental::py_module(m_experimental);
 
+    auto m_bringup = mod.def_submodule("bringup", "derived ops of model bring-ups (ttnn/ttnn/bringup)");
+    ttnn::bringup::py_module(m_bringup);
+
     auto m_disaggregation =
         m_experimental.def_submodule("disaggregation", "Disaggregation APIs for KV cache management");
     disaggregation::bind_disaggregation_api(m_disaggregation);
@@ -218,6 +229,7 @@ void py_module(nb::module_& mod) {
 
     auto m_generic = mod.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+    generic::bind_freeze_program_hashes(m_generic);
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
@@ -273,7 +285,10 @@ NB_MODULE(_ttnn, mod) {
     auto m_operations = mod.def_submodule("operations", "ttnn Operations");
     auto m_fabric = mod.def_submodule("fabric", "Fabric instantiation APIs");
     auto m_program_descriptors = mod.def_submodule("program_descriptor", "Program descriptors types");
+    auto m_program_spec = mod.def_submodule("program_spec", "Metal 2.0 ProgramSpec and ProgramRunArgs (experimental)");
     auto m_tensor_accessor_args = mod.def_submodule("tensor_accessor_args", "Tensor accessor args types");
+    auto m_ccl_host =
+        mod.def_submodule("ccl_host", "Host-side CCL helpers (counterpart of kernel_lib/ccl dataflow helpers)");
     auto m_mcast_host =
         mod.def_submodule("mcast_host", "Host-side mcast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe)");
 
@@ -303,6 +318,7 @@ NB_MODULE(_ttnn, mod) {
     ttnn::reports::py_module_types(m_reports);
     ttnn::program_descriptors::py_module_types(m_program_descriptors);
     ttnn::tensor_accessor_args::py_module_types(m_tensor_accessor_args);
+    ttnn::ccl_host::py_module_types(m_ccl_host);
     ttnn::mcast_host::py_module_types(m_mcast_host);
 
     // FUNCTIONS / OPERATIONS
@@ -352,7 +368,12 @@ NB_MODULE(_ttnn, mod) {
     // because ttnn defines additional type bindings.
     // TODO: pull them out of the ttnn::operations::py_module.
     ttnn::operations::py_module(m_operations);
+    ttnn::ccl_host::py_module(m_ccl_host);
     // tt::operations::primary::py_module(m_primary_ops);
+
+    // After the operations: KernelSpec.CompilerOptions defaults to a KernelBuildOptLevel, which the fabric mux
+    // operation binds.
+    ttnn::program_spec::py_module_types(m_program_spec);
 
     // CONFIG is a shared mutable global: Python code reads and writes properties
     // via setattr (e.g. manage_config context manager).  We must bind by reference

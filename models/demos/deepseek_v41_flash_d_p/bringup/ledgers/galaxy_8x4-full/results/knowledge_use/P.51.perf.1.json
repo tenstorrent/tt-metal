@@ -1,0 +1,102 @@
+{
+ "used": [
+  {
+   "id": "DS41-185",
+   "how": "the test switches DECODER_SKIP in-process through model.use_decoder_skip (a model attribute the adapter reads), not through settings, since settings freeze at load",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-238",
+   "how": "test_contract judges the cap path at cap via the FIX.26 handoff golden; no new handoff point was needed: the prefix-hit checks use rows the s10240 golden already holds",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-219",
+   "how": "decode's stop P is computed with KV_BLOCK_SIZE as tt-d-gen will; PREFILL_END=cap then gives run_end == P for every P (multiple of 64)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-215",
+   "how": "the shifted write at global_write_start goes through TtServedRows' any-start path (_region for the bfp8 key copy), whose re-rounding of old rows is an identity",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-148",
+   "how": "the gated write never takes the P.11 pack path (start % S == 0 only); it uses the gathered path, the same bytes",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "AttnTable.rows_copy asserts a partial slice (a full-range slice would alias the table buffer it then restores into)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run over ~9 min started through devjob, waited in short calls",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-218",
+   "how": "the new test reads snapshot configs through TableReader.records (its 4 records) and compares them after the request, as tt-d-gen ships them",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "How update_padded_kv_cache's valid_global bounds the write (ceil32 of the valid end, granularity 32 page rows): needed to know that rows past ceil32(end) in a shifted input are never written",
+  "That the window ring (snapshot128) is the model's working memory, not a served history cache: the brief cited attention.py cache.write as a history write"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the replay write shifts the chunk's own rows (slice + concat, masked) and writes [global_write_start, end) only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the new ops are stock slice / concat / to_layout / lt / multiply and the existing ttnn.bringup slice_write / update_padded_kv_cache / ckv_bfp4 paths"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new model test and the gate's model-level units"
+  }
+ ],
+ "cited_only": [
+  "DS41-240"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.51",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T22:37:56",
+  "head": "68b277b0edf",
+  "touched": [
+   "models/demos/common/bringup/knowledge/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.51.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.51.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

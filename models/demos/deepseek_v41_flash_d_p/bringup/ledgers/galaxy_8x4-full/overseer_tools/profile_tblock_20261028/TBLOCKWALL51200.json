@@ -1,0 +1,89 @@
+{
+ "metrics": {
+  "chunk_wall_cache_hits_only": {
+   "t": "2026-10-28T06:16:10",
+   "value": 1
+  },
+  "chunk_wall_cache_warm_runs": {
+   "t": "2026-10-28T06:16:04",
+   "value": 1
+  },
+  "chunk_wall_clean": {
+   "t": "2026-10-28T06:16:11",
+   "value": 1
+  },
+  "chunk_wall_gap_ms": {
+   "t": "2026-10-28T06:16:10",
+   "value": 0.0
+  },
+  "chunk_wall_loadavg": {
+   "t": "2026-10-28T06:16:04",
+   "value": 15.05
+  },
+  "chunk_wall_ms": {
+   "t": "2026-10-28T06:16:10",
+   "value": 640.8
+  },
+  "chunk_wall_ms_runs": {
+   "t": "2026-10-28T06:16:10",
+   "value": [
+    636.9,
+    629.0,
+    681.7,
+    640.8,
+    641.2,
+    633.2,
+    646.4,
+    663.1,
+    635.0,
+    629.3
+   ]
+  },
+  "chunk_wall_ms_spread": {
+   "t": "2026-10-28T06:16:10",
+   "value": 52.7
+  },
+  "chunk_wall_settled": {
+   "t": "2026-10-28T06:16:04",
+   "value": 1
+  },
+  "chunk_wall_warm_ms": {
+   "t": "2026-10-28T06:16:04",
+   "value": [
+    864.5,
+    731.2,
+    713.2,
+    655.6,
+    649.3,
+    642.0,
+    666.3,
+    630.0,
+    642.9,
+    643.3,
+    638.5,
+    666.3,
+    636.6
+   ]
+  },
+  "chunk_wall_warm_runs": {
+   "t": "2026-10-28T06:16:04",
+   "value": 13
+  },
+  "program_cache_entries": {
+   "t": "2026-10-28T06:16:04",
+   "value": 256
+  },
+  "program_cache_entries_runs": {
+   "t": "2026-10-28T06:16:04",
+   "value": [
+    256,
+    256
+   ]
+  },
+  "scaled_run": {
+   "t": "2026-10-28T06:10:48",
+   "value": 0
+  }
+ },
+ "task": "TBLOCKWALL51200"
+}

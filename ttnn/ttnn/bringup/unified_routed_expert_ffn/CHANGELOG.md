@@ -1,0 +1,160 @@
+# unified_routed_expert_ffn (fork)
+
+- Source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn`
+- Source SHA: `67ca5f3af4860c04e7ce31e345107f51cb22aa9b`
+- Python: `ttnn.bringup.*` (was `ttnn.experimental.deepseek_prefill.*`)
+- Forked for: gemma4_a4b_d_p C.sliding.experts
+- Used by: gemma4_a4b_d_p, mimo_v2_6_d_p
+
+Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMake target `ttnn_op_bringup_unified_routed_expert_ffn`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
+
+## Changes
+
+### GeluTanh activation, with the requested fidelity and fp32 dest
+- What: `RoutedExpertActivation.GeluTanh = 4` (`ROUTED_GELU_TANH` define in the compute kernel):
+  down(gelu_tanh(gate) * up). For this variant the factory honours `compute_kernel_config`'s math_fidelity and
+  fp32_dest_acc_en (in the program-cache key); the other variants keep the source's LoFi and bf16 dest.
+- Why: Gemma-4 experts are GeGLU and the op had no GeLU choice; the forced LoFi / bf16 dest put per-token norms out
+  of range (ratio 0.96 at LoFi; HiFi2 + fp32 dest gives 1.011).
+- Needed by: gemma4_a4b_d_p C.sliding.experts (originally commit ce75b1f0d7f)
+- Files: `device/kernels/compute/fused_swiglu.cpp`, `device/unified_routed_expert_ffn_program_factory.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`, `unified_routed_expert_ffn_nanobind.cpp`
+
+### Opt-in `high_precision` (every activation)
+- What: `unified_routed_expert_moe(..., high_precision=True)` (default False = previous behaviour). It honours
+  `compute_kernel_config`'s math_fidelity and fp32_dest_acc_en for every activation, and keeps x, the
+  intermediates and the output in bf16 (ROW_MAJOR x only; the returned buffer is TILE bf16 instead of bf8_b). The
+  flag is in the program-cache key.
+- Why: MiMo's Silu experts failed the per-token norm-ratio check at the forced LoFi / bf16 dest, and layer 5's
+  outlier channels fail with the bf8 activations the op packs internally.
+- Needed by: mimo_v2_6_d_p P.1 (originally commit e3150c04460)
+- Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
+  `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`, `device/unified_routed_expert_ffn_program_factory.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`
+
+### Tests: fork test suite with a first model case
+- What: `tests/` (cases.py, reference.py, test file) with a random-input case for the call mimo_v2_6_d_p makes
+  (bringup-fork-tests skill). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: mimo_v2_6_d_p O.1
+- Files: `tests/__init__.py`, `tests/cases.py`, `tests/reference.py`, `tests/test_*.py`
+
+### Tests: gemma4_a4b_d_p case
+- What: appended the random-input case for the call gemma4_a4b_d_p makes (1x4 mesh, S 5120, H 2816, 128 experts
+  top-8, 32 per chip). No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: gemma4_a4b_d_p O.1
+- Files: `tests/cases.py`
+
+### Tests: hy4_preview_d_p case (ClampedSiluGlu)
+- What: appended the random-input case for the call hy4_preview_d_p makes (2x2 mesh, H 6144, I 2048, 64 experts per
+  chip, bfp8 weights, ClampedSiluGlu, high_precision, HiFi4 + fp32 dest). The reference gains the ClampedSiluGlu
+  activation (silu(min(gate, 10)) * clamp(up, -10, 10), `GLU` in tests/reference.py) and the test an optional
+  per-case `x_scale` (default 1, so the other cases keep their inputs) that widens x until the clamps are reached.
+  No op change.
+- Why: task O.1, every call a model makes to a fork gets a case.
+- Needed by: hy4_preview_d_p O.1
+- Files: `tests/cases.py`, `tests/reference.py`, `tests/test_unified_routed_expert_ffn.py`
+
+### Upstream sync to source @ `bdc576fa652` (2026-10-12): ProgramDescriptor port, alias removal
+- What: a 3-way merge (base = fork_op.py's mechanical copy of the source @ `73027b6e6ff`, theirs = the same copy of
+  the source @ `bdc576fa652`, ours = this fork) of two source commits:
+  - #57539: the program factory describes the program as a ProgramDescriptor (KernelDescriptor /
+    ComputeConfigDescriptor, `add_semaphore()`, defines as a list of pairs) instead of building a Program;
+  - #59097: the deprecated global `MathFidelity` / `UnpackToDestMode` aliases are gone (required to build).
+  Three conflicts in `device/unified_routed_expert_ffn_program_factory.cpp`, each the fork's change re-applied on the
+  descriptor API: the GeluTanh `ROUTED_GELU_TANH` define, the caller's math fidelity for GeluTanh / high_precision
+  (`compute_fidelity`), and the `DS_NO_WRITER_MCAST` diagnostic comment.
+- Default behaviour: the fork's own changes are kept; the kernels, their arguments and the CBs are the source's.
+- Needed by: rebase onto origin/llk_helper_library @ `bdc576fa652` (2026-10-12)
+- Files: `device/unified_routed_expert_ffn_program_factory.{cpp,hpp}`
+
+### Tests: model cases on DRAM ND-sharded expert weights
+- What: every model case's expert weights are now DRAM ND-sharded, the placement the models pass since #57850
+  (`TtRoutedExpert` defaults `weights_dram_nd_sharded` to True on Blackhole): one tile-row tall, `per_core_N` =
+  ceil(N tiles / UNIFIED_ROUTED_EXPERT_CORE_GRID.x) tiles wide, round-robin over every DRAM bank. Each case carries
+  the shard widths literally (`weights.memory`, `weights.shard_width`); the test builds the placement and checks the
+  widths are the op's per_core_N. Signatures re-keyed (the weights' memory layout is part of them), as is each model's
+  `results/fork_calls.json`; mimo_v2_6_d_p, mimo_v2_6_d_p_2x2, hy4_preview_d_p, glm53_flash_d_p and gemma4_a4b_d_p
+  checked against a fresh capture (identical apart from the weights' layout), xing40_a4b_d_p derived the same way
+  (not capturable on a 4-card box). Interleaved weights stay covered by the carried source tests
+  (`test_single_routed_expert_isl_sweep`, w_interleaved / w_ndshard).
+- Why: the cases still built interleaved weights, so no model's actual call had a case (fork_calls_uncovered 1 per
+  model since the 2026-10-01 rebase).
+- Needed by: every model using the fork (task O.1)
+- Files: `tests/cases.py`, `tests/test_unified_routed_expert_ffn.py`
+
+### Opt-in DeepSeek-V4.1 expert numerics: `routing_weights`, `fp8_act_quant`, `weights_transposed`
+- What: three keyword arguments of `unified_routed_expert_moe`, each default off (None / False) = the previous program
+  (no define, no CT / runtime arg, CB or unpack mode changes; only the program-cache key grows three fields):
+  - `routing_weights` (FLOAT32 ROW_MAJOR [rows of the dispatched buffer, C >= experts_per_chip]; row i column le =
+    dispatched row i's routing weight for local expert le): the activation is multiplied by its row's weight (fp32,
+    SFPU) before the down projection, `down(r * act(gate, up))`. The reader stages each tile-row's sticks and builds
+    one Float32 tile per tile-row (the weight in every column of faces 0 / 2, CB c_20, staging c_21); compute copies
+    it into DEST slot 2 (define `ROUTED_ROW_WEIGHT`).
+  - `fp8_act_quant`: fp8 e4m3 quantize-dequantize of that activation per 32 hidden values (one tile row) with a
+    power-of-two scale 2^ceil(log2(fp32(max(amax, 1e-4) * fp32(1/448)))), round to nearest even, before the down
+    projection: DeepSeek's `act_quant(h, 32, 'ue8m0')` + its dequantizing GEMM. A custom SFPU function on the fp32
+    DEST tile (`calculate_routed_h`: row amax by a compare tree + SUBVEC_SHFLROR1 butterfly over the 8 lanes of a
+    row, the scale from the exponent bits, e4m3 rounding on the integer bits, subnormals by the 2^14 add; s and 1/s
+    parked in the consumed up slot to stay within the 8 LREGs). Define `FP8_ACT_QUANT`.
+  - `weights_transposed`: gate / up / down given as stored by nn.Linear, [N, K]; the reader / writer read each tile
+    at page n * K_tiles + k (`WeightRuns<0, K_TILES>`, tile by tile; ND shard widths ignored) and every matmul
+    transposes its in1 tile (`IN1_TRANSPOSE`), as ttnn.matmul's transpose_b. A bfp8 [N, K] weight keeps its exponent
+    groups along K (DeepSeek-V4.1's fp4 experts are exact in bfp8 only that way, DS41-35). Define `WEIGHTS_NK`.
+  - With routing_weights or fp8_act_quant the gate / up accumulators (and the routing-weight tile and the down
+    accumulator) unpack straight into the fp32 DEST (UnpackToDestFp32). Through SrcA (the high_precision default) a
+    Float32 partial is read at TF32: the activation's inputs lose 13 mantissa bits, truncated.
+  - Refused (validation): the h options without high_precision, without fp32_dest_acc_en, with a non-fused
+    activation (Silu, GeluTanh) or with expert biases; routing_weights not FLOAT32 / ROW_MAJOR / DRAM interleaved,
+    with another row count than the buffer, or narrower than experts_per_chip; weight shapes that do not fit x in the
+    claimed orientation.
+- Why: DeepSeek-V4.1's routed expert multiplies h by the token's routing weight BEFORE the fp8 act quant of h
+  (q(r h) != r q(h)) and w2 reads the quantized h; the op had neither, so the model ran a per-expert ttnn.linear loop
+  (2522 of 3025 ms device per 2048-token chunk on 2x2). With the options: experts section 176.8 ms (bfp8) / 173.7 ms
+  (bfp4) per chunk, device total 679.6 ms; frozen expert component / swap tests pass at bfp8.
+- Tests: `tests/unit/test_ds41_h_options.py` (8 cases on the 2x2 FABRIC_2D mesh): exact quant + weight against the
+  torch reference on selection weights (0 differences over 1528 rows x 1024; negative controls on corrupted copies;
+  by hand a kernel scale floor and a reader weight column off by one both failed), weight-only row scales, [N, K] vs
+  [K, N] bit-identical (bf16, and bfp8 e2m1 x 2^e vs bf16), DeepSeek-V4.1 shapes (emb 5120, hidden 2304) vs the
+  float reference (rel 0.0030-0.0058), refusals. `tests/reference.py` gains `fp8_act_qdq`, `fp8_act_scale`,
+  `pow2_ceil`, `routed_h`.
+- Regression (options off): fork_source 75 tests, 0 regressions vs the baseline; every model case passes (mimo 1x4,
+  gemma4 1x4, mimo 2x2, glm53 2x2, hy4 2x2; xing40's 4x2 case skips on this 4-chip box).
+- Needed by: deepseek_v41_flash_d_p P.2
+- Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`, `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`,
+  `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/weight_runs.hpp`,
+  `device/kernels/dataflow/unified_routed_expert_ffn_{reader,writer}.cpp`, `device/kernels/compute/fused_swiglu.cpp`,
+  `tests/reference.py`, `tests/unit/{__init__,test_ds41_h_options}.py`
+
+### Removed: the DeepSeek-V4.1 h options `routing_weights`, `fp8_act_quant` (`weights_transposed` stays)
+- What: the two keyword arguments of `unified_routed_expert_moe` added in P.2 and everything only they used: the
+  `fuse_routing_weight` / `fp8_act_quant` attributes (and their program-cache key fields), the `routing_weights`
+  input and its validation, CBs c_20 / c_21 and the reader's routing-weight staging (`ROUTED_ROW_WEIGHT`), the compute
+  kernel's `calculate_routed_h` SFPU function (`FP8_ACT_QUANT`, `ROUTED_H_OPTS`, one output tile per acquire), the
+  UnpackToDestFp32 modes the h options set, and `tests/reference.py`'s `fp8_act_qdq` / `fp8_act_scale` /
+  `pow2_ceil` / `routed_h`. The program factory, reader and compute kernel are again the pre-P.2 code plus
+  `weights_transposed` (`git diff 1adb95000b3^` shows only WEIGHTS_NK / k_dim / n_dim lines).
+- Why: deepseek_v41_flash_d_p FIX.9 (overseer, precision_debt_report.md J2): the options existed only for
+  DeepSeek's official arithmetic (q(r h) before w2), which the model no longer emulates (agent rule 17, F137), and the
+  model's EXPERTS_KERNEL=unified path that called them is deleted. No other model calls them (grep of every model's
+  code and the forks' tests/cases.py, 2026-10-22). Option-off behaviour unchanged: every removed line was behind
+  `op.fuse_routing_weight` / `op.fp8_act_quant` / `h_opts` or the two defines.
+- Tests: `tests/unit/test_ds41_h_options.py` deleted; its `weights_transposed` check moved to
+  `tests/unit/test_weights_transposed.py` (bit-identical [N, K] vs [K, N], bf16 and bfp8 e2m1; [K, N] passed as
+  [N, K] refused).
+- Regression (options off, 2026-10-22, after the build, 2x2 QuietBox): `fork_source --fork unified_routed_expert_ffn`
+  73 of the 75 baseline tests run and pass ("regressions vs baseline 0"); the 2 of
+  `models/demos/deepseek_v3_d_p/tests/cache/test_routed_expert_cache.py` are not collected: that directory's conftest
+  imports xing40_a4b_d_p's adapter, whose tt/settings.py still passes the `max_precision=` F137 removed (TypeError at
+  import; not this change). Model cases (`tests/test_unified_routed_expert_ffn.py`): 5 passed, 1 skipped (xing40's 4x2
+  case on a 4-chip box), as recorded. `tests/unit/test_weights_transposed.py`: 3 passed.
+- Needed by: deepseek_v41_flash_d_p FIX.9
+- Files: `unified_routed_expert_ffn.{hpp,cpp}`, `unified_routed_expert_ffn_nanobind.cpp`,
+  `device/unified_routed_expert_ffn_types.hpp`, `device/unified_routed_expert_ffn_device_operation.{hpp,cpp}`,
+  `device/unified_routed_expert_ffn_program_factory.cpp`, `device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp`,
+  `device/kernels/compute/fused_swiglu.cpp`, `tests/reference.py`, `tests/unit/test_weights_transposed.py`
+
+### Upstream sync to source @ 6b80daf43e3 (rebase onto llk_helper_library, owner: full sync, 2026-10-27)
+- Taken: the kernel include change (#60172) and a comment. Clean merge, no behaviour change.

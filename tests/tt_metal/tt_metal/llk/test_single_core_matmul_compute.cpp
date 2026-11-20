@@ -698,87 +698,87 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
 
     // Metal 2.0: one dataflow-buffer + kernel-spec path for every architecture. Only the hardware
     // config differs (Gen1 = Wormhole/Blackhole, Gen2 = Quasar)
-    const experimental::DFBSpecName IN0_DFB{"in0_dfb"};
-    const experimental::DFBSpecName IN1_DFB{"in1_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::DFBSpecName PARTIALS_DFB{"partials_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
-    const experimental::NodeCoord node{core.x, core.y};
+    const DFBSpecName IN0_DFB{"in0_dfb"};
+    const DFBSpecName IN1_DFB{"in1_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const DFBSpecName PARTIALS_DFB{"partials_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
+    const NodeCoord node{core.x, core.y};
 
-    const experimental::DataflowBufferSpec in0_dfb_spec{
+    const DataflowBufferSpec in0_dfb_spec{
         .unique_id = IN0_DFB,
         .entry_size = static_cast<std::uint32_t>(in0_tile_size),
         .num_entries = M * K,
         .data_format_metadata = in0_fmt,
     };
-    const experimental::DataflowBufferSpec in1_dfb_spec{
+    const DataflowBufferSpec in1_dfb_spec{
         .unique_id = IN1_DFB,
         .entry_size = static_cast<std::uint32_t>(in1_tile_size),
         .num_entries = K * N,
         .data_format_metadata = in1_fmt,
     };
-    const experimental::DataflowBufferSpec out_dfb_spec{
+    const DataflowBufferSpec out_dfb_spec{
         .unique_id = OUT_DFB,
         .entry_size = static_cast<std::uint32_t>(out_tile_size),
         .num_entries = M * N,
         .data_format_metadata = out_fmt,
     };
-    const experimental::DataflowBufferSpec partials_dfb_spec{
+    const DataflowBufferSpec partials_dfb_spec{
         .unique_id = PARTIALS_DFB,
         .entry_size = static_cast<std::uint32_t>(partials_tile_size),
         .num_entries = M * N,
         .data_format_metadata = out_fmt,
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (cfg.packer_l1_acc) {
         compute_defines.emplace("PACKER_L1_ACC", "1");
     }
 
-    experimental::DataMovementHardwareConfig reader_hw_config;
-    experimental::DataMovementHardwareConfig writer_hw_config;
-    experimental::ComputeHardwareConfig compute_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
+    ComputeHardwareConfig compute_hw_config;
     if (is_quasar) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
         // Quasar's first fidelity phase covers the Float16_b and MxFp4_2x operands here in full
-        compute_hw_config = experimental::ComputeHardwareConfig{
-            .fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = cfg.fp32_dest_acc_en};
+        compute_hw_config =
+            ComputeHardwareConfig{.fpu_math_fidelity = MathFidelity::LoFi, .enable_32_bit_dest = cfg.fp32_dest_acc_en};
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
-        compute_hw_config = experimental::ComputeHardwareConfig{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
+        compute_hw_config = ComputeHardwareConfig{.enable_32_bit_dest = cfg.fp32_dest_acc_en};
     }
 
-    const experimental::KernelSpec reader_spec{
+    const KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/reader_binary_blocked_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ProducerOf(IN0_DFB, "in0"), experimental::ProducerOf(IN1_DFB, "in1")},
+        .dfb_bindings = {ProducerOf(IN0_DFB, "in0"), ProducerOf(IN1_DFB, "in1")},
         .runtime_arg_schema =
             {.runtime_arg_names =
                  {"src0_addr",
@@ -793,16 +793,16 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         .hw_config = reader_hw_config,
     };
 
-    const experimental::KernelSpec writer_spec{
+    const KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    const experimental::KernelSpec compute_spec{
+    const KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unit_tests/matmul/multi_block_compute.cpp",
         .num_threads = 1,
@@ -811,34 +811,34 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
             {{
                  .dfb_spec_name = IN0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = IN1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              // Partials is compute-only scratch (spill/reload, or the L1-acc accumulator), so
              // compute is both its producer and its consumer.
              {
                  .dfb_spec_name = PARTIALS_DFB,
                  .accessor_name = "partials",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = PARTIALS_DFB,
                  .accessor_name = "partials",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .compile_time_args =
             {{"in0_block_num_tiles", M * K},
@@ -851,13 +851,13 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
         .hw_config = compute_hw_config,
     };
 
-    const experimental::WorkUnitSpec wu{
+    const WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
 
-    const experimental::ProgramSpec spec{
+    const ProgramSpec spec{
         .name = "blocked_matmul",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {in0_dfb_spec, in1_dfb_spec, out_dfb_spec, partials_dfb_spec},
@@ -913,11 +913,11 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
     distributed::EnqueueWriteMeshBuffer(cq, input0_dram_buffer, in0_stim.packed, /*blocking=*/true);
     distributed::EnqueueWriteMeshBuffer(cq, input1_dram_buffer, in1_stim.packed, /*blocking=*/true);
 
-    experimental::ProgramRunArgs run_args;
+    ProgramRunArgs run_args;
     run_args.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", in0_dram_addr},
                  {"src0_dram_bank_id", 0u},
@@ -929,9 +929,9 @@ bool blocked_matmul(const std::shared_ptr<distributed::MeshDevice>& mesh_device,
                  {"in0_block_size_bytes", static_cast<std::uint32_t>(in0_block_size_bytes)},
                  {"in1_block_size_bytes", static_cast<std::uint32_t>(in1_block_size_bytes)}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node, {{"dst_addr", out_dram_addr}, {"bank_id", 0u}, {"num_tiles", M * N}}),
         },
     };
@@ -988,7 +988,7 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     distributed::MeshWorkload workload;
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     const bool is_quasar = mesh_device->arch() == tt::ARCH::QUASAR;
 
     const std::uint32_t rt_dim = test_config.rt_dim;
@@ -1022,20 +1022,20 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
     auto in1_dram = make_dram(in1_num_tiles);
     auto out_dram = make_dram(out_num_tiles);
 
-    experimental::KernelSpec::CompilerOptions::Defines defines_vec;
+    KernelSpec::CompilerOptions::Defines defines_vec;
     defines_vec.emplace("RT_DIM", std::to_string(rt_dim));
     defines_vec.emplace("CT_DIM", std::to_string(ct_dim));
     defines_vec.emplace("KT_DIM", std::to_string(kt_dim));
 
-    const experimental::DFBSpecName INP0_DFB{"inp0_dfb"};
-    const experimental::DFBSpecName INP1_DFB{"inp1_dfb"};
-    const experimental::DFBSpecName OUT_DFB{"out_dfb"};
-    const experimental::KernelSpecName READER{"reader"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const DFBSpecName INP0_DFB{"inp0_dfb"};
+    const DFBSpecName INP1_DFB{"inp1_dfb"};
+    const DFBSpecName OUT_DFB{"out_dfb"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
-    auto make_dfb = [&](const experimental::DFBSpecName& name, std::uint32_t num_entries) {
-        return experimental::DataflowBufferSpec{
+    auto make_dfb = [&](const DFBSpecName& name, std::uint32_t num_entries) {
+        return DataflowBufferSpec{
             .unique_id = name,
             .entry_size = single_tile_size,
             .num_entries = num_entries,
@@ -1044,49 +1044,49 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
     };
     // One matmul_block_no_mop call indexes a rt_dim x 1 slice of in0 and a 1 x ct_dim slice of in1 off
     // the read pointer within a single dest acquire, so both operands must be fully resident.
-    experimental::DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, in0_num_tiles);
-    experimental::DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, in1_num_tiles);
-    experimental::DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, out_num_tiles);
+    DataflowBufferSpec inp0_dfb_spec = make_dfb(INP0_DFB, in0_num_tiles);
+    DataflowBufferSpec inp1_dfb_spec = make_dfb(INP1_DFB, in1_num_tiles);
+    DataflowBufferSpec out_dfb_spec = make_dfb(OUT_DFB, out_num_tiles);
 
     // Quasar drives dataflow through the Gen2 config and takes its DFB sync explicitly
-    experimental::DataMovementHardwareConfig reader_hw_config;
-    experimental::DataMovementHardwareConfig writer_hw_config;
-    experimental::ComputeHardwareConfig compute_hw_config;
+    DataMovementHardwareConfig reader_hw_config;
+    DataMovementHardwareConfig writer_hw_config;
+    ComputeHardwareConfig compute_hw_config;
     if (is_quasar) {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_2xx =
-                experimental::DataMovementHardwareConfig::DataMovement2XXConfig{
+                DataMovementHardwareConfig::DataMovement2XXConfig{
                     .disable_dfb_implicit_sync_for_all = true,
                 },
         };
-        compute_hw_config = experimental::ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
+        compute_hw_config = ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
     } else {
-        reader_hw_config = experimental::DataMovementHardwareConfig{
+        reader_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = tt_metal::NOC::RISCV_1_default,
                 },
         };
-        writer_hw_config = experimental::DataMovementHardwareConfig{
+        writer_hw_config = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                DataMovementHardwareConfig::DataMovement1XXConfig{
                     .processor = tt_metal::DataMovementProcessor::RISCV_0,
                     .noc = tt_metal::NOC::RISCV_0_default,
                 },
         };
-        compute_hw_config = experimental::ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
+        compute_hw_config = ComputeHardwareConfig{.fpu_math_fidelity = test_config.math_fidelity};
     }
 
     // Reads num_tiles into in0 and num_bcast_tiles into in1 from two DRAM buffers, which is exactly
     // the two matmul operands; nothing about it is broadcast-specific.
-    experimental::KernelSpec reader_spec{
+    KernelSpec reader_spec{
         .unique_id = READER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_bcast_col_reuse.cpp",
         .num_threads = 1,
@@ -1094,14 +1094,14 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .runtime_arg_schema =
             {.runtime_arg_names =
@@ -1109,16 +1109,16 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
         .hw_config = reader_hw_config,
     };
 
-    experimental::KernelSpec writer_spec{
+    KernelSpec writer_spec{
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT_DFB, "in")},
+        .dfb_bindings = {ConsumerOf(OUT_DFB, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
         .hw_config = writer_hw_config,
     };
 
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/matmul_no_mop.cpp",
         .num_threads = 1,
@@ -1127,30 +1127,30 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
             {{
                  .dfb_spec_name = INP0_DFB,
                  .accessor_name = "in0",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = INP1_DFB,
                  .accessor_name = "in1",
-                 .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::CONSUMER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              },
              {
                  .dfb_spec_name = OUT_DFB,
                  .accessor_name = "out",
-                 .endpoint_type = experimental::DFBEndpointType::PRODUCER,
-                 .access_pattern = experimental::DFBAccessPattern::STRIDED,
+                 .endpoint_type = DFBEndpointType::PRODUCER,
+                 .access_pattern = DFBAccessPattern::STRIDED,
              }},
         .hw_config = compute_hw_config,
     };
 
-    experimental::WorkUnitSpec wu{
+    WorkUnitSpec wu{
         .name = "main",
         .kernels = {READER, WRITER, COMPUTE},
         .target_nodes = node,
     };
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "single_core_matmul_no_mop",
         .kernels = {reader_spec, writer_spec, compute_spec},
         .dataflow_buffers = {inp0_dfb_spec, inp1_dfb_spec, out_dfb_spec},
@@ -1161,11 +1161,11 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
     workload.add_program(device_range, std::move(built_program));
     auto& program_run = workload.get_programs().at(device_range);
 
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     params.kernel_run_args = {
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = READER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src0_addr", static_cast<std::uint32_t>(in0_dram->address())},
                  {"src0_bank_id", 0u},
@@ -1174,15 +1174,15 @@ void run_matmul_no_mop(const std::shared_ptr<distributed::MeshDevice>& mesh_devi
                  {"num_tiles", in0_num_tiles},
                  {"num_bcast_tiles", in1_num_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{
+        ProgramRunArgs::KernelRunArgs{
             .kernel = WRITER,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"dst_addr", static_cast<std::uint32_t>(out_dram->address())},
                  {"bank_id", 0u},
                  {"num_tiles", out_num_tiles}}),
         },
-        experimental::ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
     };
     experimental::SetProgramRunArgs(program_run, params);
 

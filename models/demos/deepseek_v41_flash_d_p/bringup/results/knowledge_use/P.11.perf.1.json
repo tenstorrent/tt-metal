@@ -1,0 +1,72 @@
+{
+ "used": [
+  {
+   "id": "DS41-73",
+   "how": "took the one-core planner's 1573 us (1024 tokens on one core) as the target and baseline; measured the same op in the same profiler mode",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-71",
+   "how": "the multi-core column planner reads the gathered TILE ids / weights directly (faces 0 / 2), no reshape to one page",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-69",
+   "how": "kept the pass options (tokens / token_base, partial last pass) in the multi-core planner and tested passes of 512 and 342 for the fp32-sum path",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on every model-sized run",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD for every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-65",
+   "how": "TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 for the per-op profile of the experts call",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the cost of scalar L1 loads / read-modify-writes on a BRISC (~10-25 cycles; local-memory counters and local NoC copies are much cheaper): only a code comment in combine_plan.py's V2 planner said it (now DS41-75)"
+ ],
+ "cited_only": [
+  "DS41-75"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.11",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T10:17:53",
+  "head": "08da41dfd9b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.11.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/combine_rf/CHANGELOG.md",
+   "ttnn/ttnn/bringup/combine_rf/README.md",
+   "ttnn/ttnn/bringup/combine_rf/combine_plan.py",
+   "ttnn/ttnn/bringup/combine_rf/tests/unit/test_column_planner_mc.py"
+  ]
+ }
+}

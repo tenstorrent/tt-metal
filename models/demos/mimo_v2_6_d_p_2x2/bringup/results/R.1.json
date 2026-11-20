@@ -1,0 +1,37 @@
+{
+ "metrics": {
+  "checkpoint_tensors": {
+   "t": "2026-09-28T04:27:35",
+   "value": 73033
+  },
+  "config_mismatches": {
+   "t": "2026-09-28T04:27:35",
+   "value": 0
+  },
+  "count_mismatches": {
+   "t": "2026-09-28T04:27:35",
+   "value": 0
+  },
+  "intake_approved": {
+   "t": "2026-09-28T04:27:35",
+   "value": 1
+  },
+  "missing_tensors": {
+   "t": "2026-09-28T04:27:35",
+   "value": 0
+  },
+  "prompt_hash_ok": {
+   "t": "2026-09-28T04:27:41",
+   "value": 1
+  },
+  "prompt_tokens": {
+   "t": "2026-09-28T04:27:41",
+   "value": 56320
+  },
+  "shape_mismatches": {
+   "t": "2026-09-28T04:27:35",
+   "value": 0
+  }
+ },
+ "task": "R.1"
+}

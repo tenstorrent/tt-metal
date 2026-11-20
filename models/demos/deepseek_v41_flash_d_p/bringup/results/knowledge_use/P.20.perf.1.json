@@ -1,0 +1,121 @@
+{
+ "used": [
+  {
+   "id": "DS41-80",
+   "how": "the stream passes are DRAM-bound, so bf16 streams were taken through the existing fused forks (mhc_pre_xing / pack / engram pack / mhc_post stats) instead of adding casts: attn_hc 2.65 -> 1.75, attn_residual 2.50 -> 1.80 ms a chunk",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-84",
+   "how": "folded the bf16 casts into the producers (wo_a, engram wkv, wk, the q_a exchange, the norms write bf16) instead of fp32 out + typecast",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-82",
+   "how": "kept tp_sum(exact=True) for the engram gate partials; the new fp32=False only returns the fabric_bf16 RS result unconverted for the [wq_a | wkv] exchange",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-77",
+   "how": "expected the packer to round ties away from zero; the fork tests check y / X' against round-to-nearest-ties-away bit for bit",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-87",
+   "how": "no per-op profile; one plain profile, sections compared with FIX.10's",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile for the model-sized profile and swap test",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run profile from bringup profiles/ (P.20_20261022T202929.json) and the quick side from ab/P.20",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-30",
+   "how": "kept fp32 where the reference is fp32 (mixes, gate sums, statistics on the SFPU); the bf16 X' projection is more exact than the fp32 one because the FPU reads bf16 exactly and fp32 at TF32",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-84",
+   "evidence": "says '(packer RNE)'; the packer's fp32 -> bf16 rounding is to nearest with ties AWAY from zero: mhc_pre_xing y (bf16 streams) vs torch .bfloat16() (RNE) differs on 8e-6 of values, every one an exact tie, 1 ulp; equal bit for bit to round-half-away (ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_bf16_streams.py::test_collapse_bf16, 2026-10-22). DS41-103.",
+   "cited": true
+  },
+  {
+   "id": "DS41-47",
+   "evidence": "'bf16 before fp4 ... keep the device's intermediates fp32' is out of date under the native reference (F128): the compressor's normed latent written bf16 (BF16_ACTIVATIONS=on) gives err_state_compress_kv_L02 0.0382 vs 0.0390 fp32 (limit 0.2095), index_k_L02 0.0205 vs 0.0210 (limit 0.2404); ab/P.20/new/side.json vs ab/P.21/new/side.json.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how the packer rounds fp32 -> bf16 (ties away from zero, not to even); a shared entry would save a test iteration",
+  "which mHC fork entries accept bf16 streams (only the plain mhc_post did before P.20)"
+ ],
+ "overseer": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.20",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T21:16:19",
+  "head": "bd42e1f2ecd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.20.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/common.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/norm.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/residual.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_bf16_streams.py",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_engram_pack_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/device/mhc_pre_xing_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_engram_pack_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/kernels/mhc_pre_xing_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/mhc_pre_xing.cpp",
+   "ttnn/ttnn/bringup/mhc_pre_ttnn/tests/unit/test_xing_bf16_streams.py"
+  ]
+ },
+ "cited_only": [
+  "DS41-103",
+  "DS41-104"
+ ]
+}

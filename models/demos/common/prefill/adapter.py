@@ -141,6 +141,10 @@ class PrefillModelAdapter(ABC):
     pipeline_activation_emb_tp_sharded: bool = True
     # Whether this model ships a DFlash speculative drafter the prefill runner can build during prefill
     supports_dflash: bool = False
+    # With ``kv_slot_layer_ids`` (a hybrid stack): True if the runtime calls the layer-completion sink with the
+    # layer's KV-slot index (the address table's layer) rather than its global layer index; the runner then maps
+    # the slot back to the global layer for the record (``build_layer_completion_sink``).
+    acks_in_kv_slot_space: bool = False
     # The drafter checkpoint trained against THIS verifier, and the context-KV golden for it. A drafter has
     # exactly one parent (tt_prefill_runtime asserts the match), so both belong to the model. Empty when the
     # model declares no drafter of its own; DFLASH_HF_MODEL / PREFILL_DFLASH_GOLDEN_KV_DIR override.
@@ -153,6 +157,8 @@ class PrefillModelAdapter(ABC):
     dflash_rope_convention: str = "interleaved"
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
+    # Builds any missing TTNN weight-cache pieces from the HF checkpoint (PREFILL_HF_MODEL) at start-up.
+    builds_missing_weight_cache: bool = False
     tp_shard_kv_default: bool = False
     # The runtime implements prefill_forward; without it a forward of several chunks runs prefill_chunk per chunk.
     supports_packed_forward: bool = False
@@ -228,9 +234,10 @@ class PrefillModelAdapter(ABC):
         return self.default_sparse_kv_cache_format if requested is None else requested
 
     @abstractmethod
-    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0) -> Optional[Path]:
         """The TTNN weight-cache dir for this model + mesh, mirroring the layout
-        the cache-populate run wrote. None only if the cache is explicitly empty."""
+        the cache-populate run wrote. None only if the cache is explicitly empty.
+        ``sp_axis`` is the mesh axis SP runs on; a model that only supports axis 0 raises on any other."""
 
     @abstractmethod
     def allocate_kv_cache(self, *, mesh_device: "ttnn.MeshDevice", hf_config, params: PrefillRunParams) -> KvCaches:
@@ -358,12 +365,21 @@ ADAPTER_PATHS = {
     # DeepSeek-V4: hyper-connection residual, per-layer SWA / HCA / CSA attention; serving is single-rank, eager.
     "deepseek_v4_flash": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4FlashAdapter",
     "deepseek_v4_pro": "models.demos.deepseek_v3_d_p.tt.runners.adapters.deepseek_v4:DeepSeekV4ProAdapter",
+    # ERNIE-4.5-21B-A3B: GQA (20/4) + 64-expert top-6 MoE with 2 shared experts; single rank on a 1x4 BH mesh.
+    "ernie45_d_p": "models.demos.ernie45_d_p.tt.runners.adapters.ernie45:Ernie45PrefillAdapter",
     "gemma4_d_p": "models.demos.gemma4_d_p.tt.runners.adapters.gemma4:Gemma4PrefillAdapter",
+    "gemma4_a4b_d_p": "models.demos.gemma4_a4b_d_p.tt.runners.adapter:Gemma4A4BPrefillAdapter",
     # GLM-5.2: runnable through the runner only (no tests / CI); same architecture as GLM-5.3.
     "glm_5_2": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_2:GLM52Adapter",
     "glm_5_3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.glm_5_3:GLM53Adapter",
+    # GLM-5.3-Flash: KDA linear attention + DSA sparse MLA (NoPE, pooled-key indexer), mHC; 2x2 BH mesh.
+    "glm53_flash_d_p": "models.demos.glm53_flash_d_p.tt.runners.adapter:Glm53FlashPrefillAdapter",
+    # the same on the 8-chip LoudBox (2x4: KDA SP 2 x TP 4, EP 8, bfp4 experts), all 45 text layers.
+    "glm53_flash_d_p_lb": "models.demos.glm53_flash_d_p.tt.runners.adapter:Glm53FlashLbPrefillAdapter",
     # GPT-OSS-120B: GQA (not MLA) + attention sinks + sliding/full alternation + EP MoE.
     "gpt_oss_d_p": "models.demos.gpt_oss_d_p.tt.runners.adapters.gpt_oss:GptOssPrefillAdapter",
+    # Hy4 Preview (layers subset): gated DSA sparse MLA + sinks + indexer sharing, iHC, 256-expert MoE; 2x2 BH mesh.
+    "hy4_preview_d_p": "models.demos.hy4_preview_d_p.tt.runners.adapter:Hy4PrefillAdapter",
     # Kimi-K2.7-Code: DeepSeek-V3 architecture (MLA + MoE), single expert group (adapters/kimi_k2_7.py).
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
@@ -372,6 +388,15 @@ ADAPTER_PATHS = {
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
+    # Bring-up models (dnijemcevic/model_bringup)
+    # DeepSeek-V4.1-Flash (layer subset, scaled on a 2x2 BH mesh): CSA window / compressed sparse attention, engram, mHC.
+    "deepseek_v41_flash_d_p": "models.demos.deepseek_v41_flash_d_p.tt.runners.adapter:DS41PrefillAdapter",
+    # Xing4.0-29B-A4B: dense MLA + mHC 4-stream residual + 64-expert top-4 MoE; 4x2 BH mesh (SP 4 x TP 2).
+    "xing40_a4b_d_p": "models.demos.xing40_a4b_d_p.tt.runners.adapter:XingPrefillAdapter",
+    # MiMo-V2.6-Flash-RL: full + sliding-window (sink) GQA, QK 192 / V 128, 256-expert top-8 MoE; 1x4 BH mesh.
+    "mimo_v2_6_d_p": "models.demos.mimo_v2_6_d_p.tt.runners.adapter:MiMoPrefillAdapter",
+    # MiMo-V2.6-Flash-RL on a 2x2 BH mesh (TP 4 over the flattened mesh, EP over 2 dispatch groups).
+    "mimo_v2_6_d_p_2x2": "models.demos.mimo_v2_6_d_p_2x2.tt.runners.adapter:MiMo2x2PrefillAdapter",
 }
 
 _ADAPTER_INSTANCES: dict = {}

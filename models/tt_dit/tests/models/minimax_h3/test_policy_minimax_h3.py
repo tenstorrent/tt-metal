@@ -482,3 +482,15 @@ def test_admit_request_accepts_served_requests(overrides):
 def test_admit_request_rejects_unserved_requests(overrides, match, expect_error):
     with expect_error(ValueError, match):
         policy.admit_request(**_admission(**overrides))
+
+
+def test_admit_request_collects_every_error(expect_error):
+    bad = (5000, 1000)
+    references = [_ref("image", f"images[{i}]", size=bad if i in (1, 3) else (1024, 1024)) for i in range(10)]
+    with expect_error(policy.MiniMaxH3AdmissionError, "at most 9 image references") as info:
+        policy.admit_request(**_admission(references=references))
+    errors = info.value.errors
+    assert [name for name, _ in errors] == [None, "images[1]", "images[3]"]
+    assert "at most 9 image references" in errors[0][1]
+    assert all("within 1:4 and 4:1" in message for _, message in errors[1:])
+    assert str(info.value) == "; ".join(message for _, message in errors)

@@ -5,10 +5,12 @@
 #include "indexed_entry_copy_program_factory.hpp"
 
 #include <algorithm>
+#include <iterator>
+#include <string>
 
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
@@ -40,13 +42,17 @@ uint32_t pages_per_entry(const Tensor& single_entry) {
 
 // Leave the flag unbound when absent; the reader resolves it with get_token_if_present.
 void bind_zero_fill_at_zero(
-    ProgramSpec& spec, ProgramRunArgs& run, const std::optional<Tensor>& zero_fill_at_zero, KernelSpec& reader) {
+    ProgramSpec& spec,
+    ProgramRunArgs& run,
+    const std::optional<Tensor>& zero_fill_at_zero,
+    KernelSpec& reader,
+    const std::string& tag) {
     reader.compile_time_args.insert({"has_zero_fill_at_zero", uint32_t(zero_fill_at_zero.has_value())});
     if (!zero_fill_at_zero) {
         return;
     }
     const TensorParamName name{"zero_fill_at_zero"};
-    const ScratchpadSpecName word{"zero_fill_at_zero_word"};
+    const ScratchpadSpecName word{"zero_fill_at_zero_word" + tag};
     const auto& tensor = zero_fill_at_zero->mesh_tensor();
     spec.tensor_parameters.push_back({.unique_id = name, .spec = tensor.tensor_spec()});
     spec.scratchpads.push_back({.unique_id = word, .size_per_node = zero_fill_at_zero->buffer()->aligned_page_size()});
@@ -55,12 +61,14 @@ void bind_zero_fill_at_zero(
     reader.scratchpad_bindings.push_back({word, "zero_fill_at_zero_word"});
 }
 
-}  // namespace
-
-ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_program_artifacts(
-    const IndexedEntryCopyParams& params, const IndexedEntryCopyInputs& inputs, Tensor& /*output*/) {
-    const auto& source = inputs.source;
-    const auto& destination = inputs.destination;
+// One (source, destination) copy on kWorkerRows rows from `first_row`; `tag` keeps its names apart from another's.
+ttnn::device_operation::ProgramArtifacts copy_artifacts(
+    const IndexedEntryCopyParams& params,
+    const IndexedEntryCopyInputs& inputs,
+    const Tensor& source,
+    const Tensor& destination,
+    const std::string& tag,
+    uint32_t first_row) {
     const auto& index = inputs.index;
 
     // Exactly one side may hold several entries along dim 0; with one entry on both, entry 0 copies the whole tensor.
@@ -77,17 +85,19 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
     const uint32_t page_stride = source.mesh_buffer().aligned_page_size();
 
     const auto grid = source.device()->compute_with_storage_grid_size();
+    TT_FATAL(grid.y >= first_row + kWorkerRows, "indexed_entry_copy needs {} grid rows", first_row + kWorkerRows);
+    const CoreRangeSet rows(CoreRange({0, first_row}, {grid.x - 1, first_row + kWorkerRows - 1}));
     auto [num_cores, all_cores, core_group_1, core_group_2, pages_per_core_1, pages_per_core_2] =
-        split_work_to_cores(CoreCoord{grid.x, std::min<std::size_t>(kWorkerRows, grid.y)}, entry_pages);
+        split_work_to_cores(rows, entry_pages);
 
-    const TensorParamName SOURCE{"source"};
-    const TensorParamName DESTINATION{"destination"};
+    const TensorParamName SOURCE{"source" + tag};
+    const TensorParamName DESTINATION{"destination" + tag};
     const TensorParamName INDEX{"index"};
-    const DFBSpecName STAGING{"staging"};
-    const ScratchpadSpecName READER_INDEX_WORD{"reader_index_word"};
-    const ScratchpadSpecName WRITER_INDEX_WORD{"writer_index_word"};
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
+    const DFBSpecName STAGING{"staging" + tag};
+    const ScratchpadSpecName READER_INDEX_WORD{"reader_index_word" + tag};
+    const ScratchpadSpecName WRITER_INDEX_WORD{"writer_index_word" + tag};
+    const KernelSpecName READER{"reader" + tag};
+    const KernelSpecName WRITER{"writer" + tag};
 
     const KernelSpec::CompileTimeArgs compile_time_args = {
         {"page_size", page_size},
@@ -167,7 +177,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
                 TensorParameter{.unique_id = DESTINATION, .spec = destination.tensor_spec()},
                 TensorParameter{.unique_id = INDEX, .spec = index.tensor_spec()},
             },
-        .work_units = {WorkUnitSpec{.name = "main", .kernels = {READER, WRITER}, .target_nodes = all_cores}},
+        .work_units = {WorkUnitSpec{.name = "main" + tag, .kernels = {READER, WRITER}, .target_nodes = all_cores}},
     };
 
     ProgramRunArgs run_args;
@@ -178,10 +188,39 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
         {INDEX, index.mesh_tensor()},
     };
 
-    bind_zero_fill_at_zero(spec, run_args, inputs.zero_fill_at_zero, reader);
+    bind_zero_fill_at_zero(spec, run_args, inputs.zero_fill_at_zero, reader, tag);
     spec.kernels = {std::move(reader), std::move(writer)};
 
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
+}
+
+}  // namespace
+
+ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_program_artifacts(
+    const IndexedEntryCopyParams& params, const IndexedEntryCopyInputs& inputs, Tensor& /*output*/) {
+    auto artifacts = copy_artifacts(params, inputs, inputs.source, inputs.destination, "", 0);
+    if (!inputs.paired_source) {
+        return artifacts;
+    }
+    // The pair is a second copy in the same program, on the next rows; it shares `index` and `zero_fill_at_zero`.
+    auto paired =
+        copy_artifacts(params, inputs, *inputs.paired_source, *inputs.paired_destination, "_paired", kWorkerRows);
+    auto& spec = artifacts.spec;
+    auto& run = artifacts.run_params;
+    const auto append = [](auto& to, auto& from) { std::move(from.begin(), from.end(), std::back_inserter(to)); };
+    append(spec.kernels, paired.spec.kernels);
+    append(spec.dataflow_buffers, paired.spec.dataflow_buffers);
+    append(spec.scratchpads, paired.spec.scratchpads);
+    append(spec.work_units, paired.spec.work_units);
+    append(run.kernel_run_args, paired.run_params.kernel_run_args);
+    for (auto& parameter : paired.spec.tensor_parameters) {
+        // `index` and `zero_fill_at_zero` are already bound by the first copy.
+        const auto& tensor = paired.run_params.tensor_args.find(parameter.unique_id)->second;
+        if (run.tensor_args.emplace(parameter.unique_id, tensor).second) {
+            spec.tensor_parameters.push_back(std::move(parameter));
+        }
+    }
+    return artifacts;
 }
 
 }  // namespace ttnn::experimental::prim

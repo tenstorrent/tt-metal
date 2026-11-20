@@ -383,6 +383,7 @@ run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Physi
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="ChannelTrimmingScenarios/ChannelTrimmingScenarioRulesTest.*:ChannelTrimmingFastPath.*:ChannelTrimmingGlobalOverride.*:ChannelTrimmingForwardedMask.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalNodeIdTest.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="PhysicalSystemDescriptorDiff.*"
+run_test ./build/test/tools/scaleout/test_factory_system_descriptor --gtest_filter="Cluster.TestFactorySystemDescriptorSingleNodeTypes"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdHostFilter.*"
 run_test ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="FsdChipsAbsentFromLive.*"
 

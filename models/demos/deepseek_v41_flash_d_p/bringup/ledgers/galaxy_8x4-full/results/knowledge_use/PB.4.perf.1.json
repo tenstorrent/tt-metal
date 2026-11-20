@@ -1,0 +1,91 @@
+{
+ "used": [
+  {
+   "id": "DS41-299",
+   "how": "routed experts + combine bound by the busiest chip's FPU: no rows-per-expert tuning built for 4 x 2k, nothing kept",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-278",
+   "how": "replicas (the only lever on that bound) are off this branch: not attempted",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "call-time switch through the frozen settings snapshot: packed_common.switch sets PACKED_MOE in snap and env",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-327",
+   "how": "kept the per-chunk host work to one word upload at begin_packed, only when the counts change",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "the MoE output may be LEAN_PY's pinned buffer: the test reads it before the next call and frees via ccl.dealloc",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the MoE head's padded-chunk words are read per device for the device's own SP row, so per-device values express any per-SP-row prefix (added as DS41-329)",
+  "P.80 (fp8 dispatch) was rejected by the owner and its code is not on this tree: the knowledge files still describe MOE_DISPATCH_FP8 as if present (DS41-300 / DS41-301)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or inflated: pad rows are removed from the dispatch, not added"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PPB.4 (default off per the brief's overseer note; tuning not built with evidence)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "test_packed_moe_block takes the gate's 40-layer 8192 accuracy model (BATCH_SHARED, no load-time env; PB4_MOE_LAYERS an item var); PACKED_MOE is call-time (batch_call_settings)"
+  },
+  {
+   "id": "OV-62",
+   "answer": "n/a",
+   "evidence": "walls slot capacities not touched by this task"
+  }
+ ],
+ "cited_only": [
+  "DS41-328",
+  "DS41-329"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.4",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T02:50:12",
+  "head": "e9baabaab8d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.4.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.4.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/packed_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_v2_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

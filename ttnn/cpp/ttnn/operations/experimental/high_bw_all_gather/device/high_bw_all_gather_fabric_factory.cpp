@@ -8,7 +8,9 @@
 // build_gather_plan decides the rings, every fabric link worker's outgoing shards and every core's placement; the
 // kernels only walk what they are given. Rings: an axis ring or line (cluster_axis 0 / 1), a snake over the whole mesh
 // (cluster_axis None), or on a torus with both sides >= 3 two edge-disjoint Hamiltonian cycles that each own half of
-// the fabric chunks, so every chip uses all four neighbours.
+// the fabric chunks, so every chip uses all four neighbours. On a 4x4 cylinder (one axis a ring, the other a line)
+// three Hamiltonian cycles each own a third, with every edge on at most two of them: the line-end chips (three
+// neighbours) then receive on all three. A hop shared by two rings gives each its own fabric links.
 
 #include "high_bw_all_gather_fabric_factory.hpp"
 #include "kernels/fabric/fabric_all_gather_chunk_walk.hpp"
@@ -27,6 +29,7 @@
 #include <tt-metalium/experimental/device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/global_semaphore.hpp"
@@ -83,12 +86,16 @@ struct FabricLinkWorker {
 struct GatherPlan {
     uint32_t num_ranks = 0;
     uint32_t num_rings = 0;
-    uint32_t num_links = 0;
+    uint32_t num_links = 0;      // per (ring, direction)
+    uint32_t links_per_hop = 0;  // num_links * the most (ring, direction)s sharing a hop
     uint32_t mesh_cols = 0;
     std::vector<uint32_t> rank_of_chip;                                  // [linear chip index]
     std::vector<std::vector<ChipOnRing>> chip_on_ring;                   // [linear chip index][ring]
     std::vector<std::vector<FabricLinkWorker>> fabric_link_workers;      // [linear chip index][link_worker_index(...)]
     std::vector<std::vector<tt::tt_metal::CoreCoord>> local_copy_cores;  // [linear chip index][link]
+    // One program per coordinate range (every chip's link workers are where its own Ethernet cores want them, and
+    // the local copy cores are the same on every chip), else one per chip (the grid is too small for that).
+    bool one_program_per_range = false;
 
     uint32_t linear_chip_index(const Coord& chip) const { return chip[0] * mesh_cols + chip[1]; }
 };
@@ -262,6 +269,63 @@ const std::pair<std::vector<Coord>, std::vector<Coord>>& cached_hamiltonian_deco
     return it->second;
 }
 
+// Three Hamiltonian cycles of the 4x4 cylinder, as {line axis index, ring axis index}; every edge is on at most two of
+// them (the 16 edges at a line end on exactly two, 4 middle edges on two, 8 middle edges on one). With each cycle
+// owning a third of every shard, the busiest directed edge carries 2 * 7.5 / 3 = 5 shards, the bound of a line-end chip
+// (15 shards over three neighbours); a snake carries 7.5. Found by exhaustive search (112 such triples exist); this one
+// is symmetric under reflecting either axis.
+// clang-format off
+constexpr std::array<std::array<std::array<uint8_t, 2>, 16>, 3> kCylinder4x4Cycles{{
+    {{{0, 0}, {0, 3}, {0, 2}, {0, 1}, {1, 1}, {2, 1}, {2, 0}, {2, 3},
+      {3, 3}, {3, 0}, {3, 1}, {3, 2}, {2, 2}, {1, 2}, {1, 3}, {1, 0}}},
+    {{{0, 0}, {0, 1}, {0, 2}, {1, 2}, {2, 2}, {2, 3}, {2, 0}, {3, 0},
+      {3, 3}, {3, 2}, {3, 1}, {2, 1}, {1, 1}, {1, 0}, {1, 3}, {0, 3}}},
+    {{{0, 0}, {0, 1}, {1, 1}, {1, 2}, {0, 2}, {0, 3}, {1, 3}, {2, 3},
+      {3, 3}, {3, 2}, {2, 2}, {2, 1}, {3, 1}, {3, 0}, {2, 0}, {1, 0}}},
+}};
+// clang-format on
+
+// Each cycle visits every chip once over direct neighbours (ring steps wrap, line steps do not), and no edge is on more
+// than two cycles.
+constexpr bool cylinder_4x4_cycles_valid() {
+    std::array<uint32_t, 16 * 16> cycles_on_edge{};
+    for (const auto& cycle : kCylinder4x4Cycles) {
+        std::array<bool, 16> visited{};
+        for (size_t i = 0; i < cycle.size(); ++i) {
+            const uint32_t line = cycle[i][0], ring = cycle[i][1];
+            const uint32_t next_line = cycle[(i + 1) % cycle.size()][0], next_ring = cycle[(i + 1) % cycle.size()][1];
+            if (line > 3 || ring > 3 || visited[line * 4 + ring]) {
+                return false;
+            }
+            visited[line * 4 + ring] = true;
+            const bool ring_step = line == next_line && ((ring + 1) % 4 == next_ring || (next_ring + 1) % 4 == ring);
+            const bool line_step = ring == next_ring && (line + 1 == next_line || next_line + 1 == line);
+            if (!ring_step && !line_step) {
+                return false;
+            }
+            const uint32_t a = line * 4 + ring, b = next_line * 4 + next_ring;
+            if (++cycles_on_edge[std::min(a, b) * 16 + std::max(a, b)] > 2) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+static_assert(cylinder_4x4_cycles_valid());
+
+// The cycles above on a 4x4 mesh whose `ring_axis` wraps and whose other axis is a line.
+std::vector<std::vector<Coord>> cylinder_4x4_cycles(uint32_t ring_axis) {
+    std::vector<std::vector<Coord>> cycles;
+    for (const auto& stored : kCylinder4x4Cycles) {
+        auto& cycle = cycles.emplace_back();
+        for (const auto& [line, ring] : stored) {
+            cycle.push_back(
+                ring_axis == 1 ? Coord(uint32_t{line}, uint32_t{ring}) : Coord(uint32_t{ring}, uint32_t{line}));
+        }
+    }
+    return cycles;
+}
+
 // A link worker's downstream sends back into this chip (the opposite direction) iff it has outgoing shards; then this
 // link worker signals it that this chip has started the call.
 bool signals_started_to_downstream(const GatherPlan& plan, uint32_t chip_index, uint32_t ring, uint32_t direction) {
@@ -301,7 +365,9 @@ GatherPlan build_gather_plan(
         }
     }
 
-    // Gather groups (members in row-major order; rank = index in the group) and the ring orders over each.
+    // Gather groups (rank = index in the group) and the ring orders over each. An axis group's members run
+    // along the axis; the full-mesh group's run row-major, or column-major with full_mesh_outer_axis 1 (a
+    // TP-deduplicated cache with SP on mesh axis 1 holds its shards SP-major).
     std::vector<std::vector<Coord>> groups;
     std::vector<std::vector<std::vector<Coord>>> rings_of_group;
     bool closed_ring = false;
@@ -320,17 +386,52 @@ GatherPlan build_gather_plan(
         }
     } else {
         std::vector<Coord> members;
-        for (uint32_t r = 0; r < mesh_rows; ++r) {
-            for (uint32_t c = 0; c < mesh_cols; ++c) {
-                members.emplace_back(r, c);
+        for (uint32_t outer = 0; outer < mesh_shape[args.full_mesh_outer_axis]; ++outer) {
+            for (uint32_t inner = 0; inner < mesh_shape[1 - args.full_mesh_outer_axis]; ++inner) {
+                members.push_back(args.full_mesh_outer_axis == 0 ? Coord(outer, inner) : Coord(inner, outer));
             }
         }
         groups.push_back(members);
         const bool torus = is_2d && axis_topology[0] == tt::tt_fabric::Topology::Ring &&
                            axis_topology[1] == tt::tt_fabric::Topology::Ring && mesh_rows >= 3 && mesh_cols >= 3;
+        // A 4x4 cylinder takes three cycles when every hop on them offers two links (a hop shared by two cycles gives
+        // each its own), else the snake.
+        const bool cylinder_4x4 =
+            is_2d && mesh_rows == 4 && mesh_cols == 4 &&
+            (axis_topology[0] == tt::tt_fabric::Topology::Ring) != (axis_topology[1] == tt::tt_fabric::Topology::Ring);
+        std::vector<std::vector<Coord>> cylinder_cycles;
+        if (cylinder_4x4 && args.num_links.value_or(2) >= 2) {
+            cylinder_cycles = cylinder_4x4_cycles(axis_topology[1] == tt::tt_fabric::Topology::Ring ? 1 : 0);
+            auto two_links = [&](const Coord& a, const Coord& b) {
+                return tt::tt_fabric::get_forwarding_link_indices(
+                           *mesh_device, mesh_device->get_fabric_node_id(a), mesh_device->get_fabric_node_id(b))
+                           .size() >= 2;
+            };
+            for (const auto& cycle : cylinder_cycles) {
+                for (uint32_t i = 0; i < cycle.size(); ++i) {
+                    const auto& a = cycle[i];
+                    const auto& b = cycle[(i + 1) % cycle.size()];
+                    if (!two_links(a, b) || !two_links(b, a)) {
+                        log_info(
+                            tt::LogOp,
+                            "high_bw_all_gather: {} <-> {} has fewer than two links, the 4x4 cylinder uses the snake",
+                            a,
+                            b);
+                        cylinder_cycles.clear();
+                        break;
+                    }
+                }
+                if (cylinder_cycles.empty()) {
+                    break;
+                }
+            }
+        }
         if (torus) {
             const auto& [cycle_a, cycle_b] = cached_hamiltonian_decomposition(mesh_rows, mesh_cols);
             rings_of_group.push_back({cycle_a, cycle_b});
+            closed_ring = true;
+        } else if (!cylinder_cycles.empty()) {
+            rings_of_group.push_back(cylinder_cycles);
             closed_ring = true;
         } else {
             const uint32_t probe_links = args.num_links.value_or(1);
@@ -390,11 +491,14 @@ GatherPlan build_gather_plan(
         }
     }
 
-    // Links: the requested number, else the fewest any used hop offers. forwarding_links[chip][ring * 2 + direction]:
-    // the hop's usable links (empty without a downstream).
-    uint32_t num_links = args.num_links.value_or(UINT32_MAX);
-    std::vector<std::vector<std::vector<uint32_t>>> forwarding_links(
-        num_chips, std::vector<std::vector<uint32_t>>(plan.num_rings * 2));
+    // Links. A directed hop (chip -> downstream) is used by one (ring, direction), or by two on the cylinder; a fabric
+    // link takes one worker connection, so each user of a hop gets its own links of it. Links per hop: the requested
+    // number, else the fewest any used hop offers; every (ring, direction) gets that / the most users of any hop.
+    // forwarding_links[chip][ring * 2 + direction]: its links (empty without a downstream).
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> users_of_hop;  // ring * 2 + direction, in order
+    std::map<std::pair<uint32_t, uint32_t>, std::vector<uint32_t>> links_of_hop;
+    uint32_t links_per_hop = args.num_links.value_or(UINT32_MAX);
+    uint32_t max_users_per_hop = 1;
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
         for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
@@ -403,7 +507,15 @@ GatherPlan build_gather_plan(
                 if (!downstream) {
                     continue;
                 }
-                auto& links = forwarding_links[chip_index][ring * 2 + direction];
+                const auto hop = std::pair{chip_index, plan.linear_chip_index(*downstream)};
+                auto& users = users_of_hop[hop];
+                users.push_back(ring * 2 + direction);
+                max_users_per_hop = std::max<uint32_t>(max_users_per_hop, users.size());
+                auto [it, inserted] = links_of_hop.try_emplace(hop);
+                if (!inserted) {
+                    continue;
+                }
+                auto& links = it->second;
                 links = tt::tt_fabric::get_forwarding_link_indices(
                     *mesh_device, mesh_device->get_fabric_node_id(chip), mesh_device->get_fabric_node_id(*downstream));
                 TT_FATAL(
@@ -421,13 +533,27 @@ GatherPlan build_gather_plan(
                         links.size(),
                         *args.num_links);
                 } else {
-                    num_links = std::min<uint32_t>(num_links, links.size());
+                    links_per_hop = std::min<uint32_t>(links_per_hop, links.size());
                 }
             }
         }
     }
-    plan.num_links = num_links;
-    const uint32_t L = num_links;
+    TT_FATAL(
+        links_per_hop >= max_users_per_hop,
+        "high_bw_all_gather: {} rings share a hop and need a link each, but only {} link(s) per hop are used",
+        max_users_per_hop,
+        links_per_hop);
+    const uint32_t L = links_per_hop / max_users_per_hop;
+    plan.num_links = L;
+    plan.links_per_hop = L * max_users_per_hop;
+    std::vector<std::vector<std::vector<uint32_t>>> forwarding_links(
+        num_chips, std::vector<std::vector<uint32_t>>(plan.num_rings * 2));
+    for (const auto& [hop, users] : users_of_hop) {
+        const auto& links = links_of_hop.at(hop);
+        for (uint32_t user = 0; user < users.size(); ++user) {
+            forwarding_links[hop.first][users[user]].assign(links.begin() + user * L, links.begin() + (user + 1) * L);
+        }
+    }
 
     // Placement: every link worker with a fabric connection as close as the grid allows (NoC1 hops, the sender's NoC)
     // to its link's Ethernet core, then the receive-only link workers and the local copy cores on free cores.
@@ -438,15 +564,16 @@ GatherPlan build_gather_plan(
     std::stable_partition(local_copy_core_order.begin(), local_copy_core_order.end(), [&](const auto& core) {
         return core.y >= middle_y;
     });
-    // one per link; a non-interleaved input takes two per link, since they also convert the own shard page by page for
-    // the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
-    const uint32_t num_local_copy_cores = input_interleaved ? L : 2 * L;
+    // one per link of a hop; a non-interleaved input takes two per link, since they also convert the own shard page by
+    // page for the link workers (QuietBox, GLM KV cache, 6 KiB: 4 is fastest; 6 wins only at 14 KiB)
+    const uint32_t num_local_copy_cores = input_interleaved ? plan.links_per_hop : 2 * plan.links_per_hop;
+    std::vector<std::set<std::pair<size_t, size_t>>> link_worker_cores_of_chip(num_chips);
     for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
         const Coord chip(chip_index / mesh_cols, chip_index % mesh_cols);
         auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
         auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
         fabric_link_workers.assign(plan.num_rings * 2 * L, {});
-        std::set<std::pair<size_t, size_t>> taken;
+        auto& taken = link_worker_cores_of_chip[chip_index];
         auto take = [&](const tt::tt_metal::CoreCoord& core) { taken.insert({core.x, core.y}); };
         auto is_free = [&](const tt::tt_metal::CoreCoord& core) { return !taken.contains({core.x, core.y}); };
         for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
@@ -515,16 +642,34 @@ GatherPlan build_gather_plan(
             take(*it);
             fabric_link_worker.core = *it;
         }
-        for (uint32_t link = 0; link < num_local_copy_cores; ++link) {
-            auto it = std::find_if(local_copy_core_order.begin(), local_copy_core_order.end(), is_free);
-            TT_FATAL(
-                it != local_copy_core_order.end(),
-                "high_bw_all_gather: the core grid {} has too few cores",
-                allowed_core_ranges);
-            take(*it);
-            plan.local_copy_cores[chip_index].push_back(*it);
-            log_debug(tt::LogOp, "high_bw_all_gather: chip {} local copy core {} at {}", chip, link, *it);
+    }
+    // Local copy cores: the first free ones in local_copy_core_order. Free on every chip, past the link workers of any
+    // chip, so one program serves all of them (a link worker core of one chip idles on the others); else free on
+    // each chip, one program per chip.
+    auto pick_local_copy_cores = [&](const std::set<std::pair<size_t, size_t>>& taken) {
+        std::vector<tt::tt_metal::CoreCoord> cores;
+        cores.reserve(num_local_copy_cores);
+        for (const auto& core : local_copy_core_order) {
+            if (cores.size() < num_local_copy_cores && !taken.contains({core.x, core.y})) {
+                cores.push_back(core);
+            }
         }
+        return cores;
+    };
+    std::set<std::pair<size_t, size_t>> link_worker_cores_of_any_chip;
+    for (const auto& taken : link_worker_cores_of_chip) {
+        link_worker_cores_of_any_chip.insert(taken.begin(), taken.end());
+    }
+    const auto shared_local_copy_cores = pick_local_copy_cores(link_worker_cores_of_any_chip);
+    plan.one_program_per_range = shared_local_copy_cores.size() == num_local_copy_cores;
+    for (uint32_t chip_index = 0; chip_index < num_chips; ++chip_index) {
+        plan.local_copy_cores[chip_index] = plan.one_program_per_range
+                                                ? shared_local_copy_cores
+                                                : pick_local_copy_cores(link_worker_cores_of_chip[chip_index]);
+        TT_FATAL(
+            plan.local_copy_cores[chip_index].size() == num_local_copy_cores,
+            "high_bw_all_gather: the core grid {} has too few cores",
+            allowed_core_ranges);
     }
     return plan;
 }
@@ -836,21 +981,39 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
     // 1D fabric routes by hop count (always one), 2D by destination chip
     const bool is_2d = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
 
+    // One program serves every chip of a coordinate range (plan.one_program_per_range, where the mesh supports
+    // per-device runtime args on that range): the per-core args, which differ from chip to chip, are per-device
+    // runtime args (distributed::SetRuntimeArgsPerDevice). Otherwise one program per chip, with its own runtime args.
+    std::vector<ttnn::MeshCoordinateRange> program_ranges;
+    program_ranges.reserve(tensor_coords.coords().size());
+    for (const auto& range : tensor_coords.ranges()) {
+        if (plan.one_program_per_range &&
+            tt::tt_metal::distributed::ArePerDeviceRuntimeArgsSupported(*mesh_device, range)) {
+            program_ranges.push_back(range);
+        } else {
+            for (const auto& chip : range) {
+                program_ranges.emplace_back(chip);
+            }
+        }
+    }
+
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
-    for (const auto& chip : tensor_coords.coords()) {
-        const uint32_t chip_index = plan.linear_chip_index(chip);
+    for (const auto& program_range : program_ranges) {
         tt::tt_metal::Program program{};
-        const auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
-        const auto& local_copy_cores = plan.local_copy_cores[chip_index];
-
-        std::vector<tt::tt_metal::CoreCoord> fabric_link_worker_cores;
-        for (const auto& fabric_link_worker : fabric_link_workers) {
-            fabric_link_worker_cores.push_back(fabric_link_worker.core);
+        // the link worker cores of any chip of the range (sorted), and the local copy cores (the same on every chip)
+        std::set<tt::tt_metal::CoreCoord> link_worker_core_set;
+        for (const auto& chip : program_range) {
+            for (const auto& fabric_link_worker : plan.fabric_link_workers[plan.linear_chip_index(chip)]) {
+                link_worker_core_set.insert(fabric_link_worker.core);
+            }
         }
-        std::vector<tt::tt_metal::CoreCoord> all_cores = fabric_link_worker_cores;
+        const std::vector<tt::tt_metal::CoreCoord> link_worker_cores(
+            link_worker_core_set.begin(), link_worker_core_set.end());
+        const auto& local_copy_cores = plan.local_copy_cores[plan.linear_chip_index(program_range.start_coord())];
+        std::vector<tt::tt_metal::CoreCoord> all_cores = link_worker_cores;
         all_cores.insert(all_cores.end(), local_copy_cores.begin(), local_copy_cores.end());
-        const auto fabric_link_worker_core_set = CoreRangeSet(fabric_link_worker_cores);
+        const auto fabric_link_worker_core_set = CoreRangeSet(link_worker_cores);
         const auto local_copy_core_set = CoreRangeSet(local_copy_cores);
         const auto all_core_set = CoreRangeSet(all_cores);
 
@@ -886,6 +1049,123 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
                     blocks_converted_semaphore + c,
                 "high_bw_all_gather: blocks-converted semaphores must have consecutive ids");
         }
+        // the fabric connection's teardown and buffer index semaphores (append_fabric_connection_rt_args), on every
+        // link worker core: the same ids whichever chip's link worker it is
+        const uint32_t fabric_teardown_semaphore =
+            tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0);
+        const uint32_t fabric_buffer_index_semaphore =
+            tt::tt_metal::CreateSemaphore(program, fabric_link_worker_core_set, 0);
+        // Per-core args of every chip of the range: [chip][core] -> reader's, sender's / local copy writer's. A link
+        // worker core of another chip idles on this one (no outgoing shards, nothing to signal or wait for). This
+        // relies on the kernels doing nothing for such args: the sender opens no fabric connection without outgoing
+        // shards or a started signal, and consumes no shards-arrived count when none are expected
+        // (kernels/fabric/fabric_all_gather_sender.cpp); the reader's outgoing-shard loop is empty.
+        using CoreArgs = std::map<tt::tt_metal::CoreCoord, std::vector<uint32_t>>;
+        std::vector<std::pair<CoreArgs, CoreArgs>> chip_core_args;
+        for (const auto& chip : program_range) {
+            const uint32_t chip_index = plan.linear_chip_index(chip);
+            const auto& fabric_link_workers = plan.fabric_link_workers[chip_index];
+            auto& [reader_args_of_core, writer_args_of_core] = chip_core_args.emplace_back();
+            for (const auto& core : link_worker_cores) {
+                reader_args_of_core[core] = {0, 1, 0};
+                writer_args_of_core[core] = {0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+            }
+            for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
+                const auto& on_ring = plan.chip_on_ring[chip_index][ring];
+                for (uint32_t direction = 0; direction < 2; ++direction) {
+                    const auto downstream = on_ring.neighbour(direction);
+                    const auto upstream = on_ring.upstream(direction);
+                    const auto& outgoing_shards = on_ring.outgoing_shards(direction);
+                    const uint32_t shards_expected_from_upstream =
+                        upstream ? plan.chip_on_ring[plan.linear_chip_index(*upstream)][ring]
+                                       .outgoing_shards(direction)
+                                       .size()
+                                 : 0;
+                    const bool signal_started_to_downstream =
+                        signals_started_to_downstream(plan, chip_index, ring, direction);
+                    for (uint32_t link = 0; link < L; ++link) {
+                        const auto& fabric_link_worker =
+                            fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)];
+                        const uint32_t first_owned_chunk = ring * L + link;
+
+                        auto& reader_args = reader_args_of_core[fabric_link_worker.core];
+                        reader_args = {
+                            first_owned_chunk, owned_chunk_stride, static_cast<uint32_t>(outgoing_shards.size())};
+                        reader_args.insert(reader_args.end(), outgoing_shards.begin(), outgoing_shards.end());
+
+                        // the started signal goes to the downstream's link worker that sends back into this chip;
+                        // data and shards-arrived increments go to the downstream's link worker of the same direction
+                        tt::tt_metal::CoreCoord started_signal_target{0, 0}, downstream_worker{0, 0};
+                        tt::tt_fabric::FabricNodeId downstream_node = mesh_device->get_fabric_node_id(chip);
+                        if (downstream) {
+                            auto* downstream_device = tt::tt_metal::internal::get_device(*mesh_device, *downstream);
+                            const auto& downstream_workers =
+                                plan.fabric_link_workers[plan.linear_chip_index(*downstream)];
+                            started_signal_target = downstream_device->worker_core_from_logical_core(
+                                downstream_workers[fabric_link_worker_index(ring, 1 - direction, link, L)].core);
+                            downstream_worker = downstream_device->worker_core_from_logical_core(
+                                downstream_workers[fabric_link_worker_index(ring, direction, link, L)].core);
+                            downstream_node = mesh_device->get_fabric_node_id(*downstream);
+                        }
+                        auto& sender_args = writer_args_of_core[fabric_link_worker.core];
+                        sender_args = {
+                            first_owned_chunk,
+                            owned_chunk_stride,
+                            signal_started_to_downstream ? 1u : 0u,
+                            static_cast<uint32_t>(started_signal_target.x),
+                            static_cast<uint32_t>(started_signal_target.y),
+                            static_cast<uint32_t>(downstream_worker.x),
+                            static_cast<uint32_t>(downstream_worker.y),
+                            static_cast<uint32_t>(*downstream_node.mesh_id),
+                            is_2d ? downstream_node.chip_id : 1u,
+                            shards_expected_from_upstream,
+                            static_cast<uint32_t>(outgoing_shards.size())};
+                        sender_args.insert(sender_args.end(), outgoing_shards.begin(), outgoing_shards.end());
+                        if (fabric_link_worker.has_fabric_connection) {
+                            // [Ethernet channel, teardown semaphore, buffer index semaphore]: the channel is this
+                            // chip's; the semaphores are the program's own, created above on every link worker core
+                            tt::tt_metal::Program scratch_program{};
+                            std::vector<uint32_t> connection_args;
+                            tt::tt_fabric::append_fabric_connection_rt_args(
+                                *mesh_device,
+                                mesh_device->get_fabric_node_id(chip),
+                                mesh_device->get_fabric_node_id(*downstream),
+                                fabric_link_worker.fabric_link_index,
+                                scratch_program,
+                                fabric_link_worker.core,
+                                connection_args);
+                            TT_FATAL(
+                                connection_args.size() == 3,
+                                "high_bw_all_gather: expected a 3-word worker fabric connection, got {} words",
+                                connection_args.size());
+                            sender_args.insert(
+                                sender_args.end(),
+                                {connection_args[0], fabric_teardown_semaphore, fabric_buffer_index_semaphore});
+                        }
+                    }
+                }
+            }
+            // Local copy core c of n owns chunk numbers c, c + n, ... of this chip's shard (interleaved input), or
+            // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the
+            // latter signals every fabric link worker of this chip per block.
+            const uint32_t rank = plan.rank_of_chip[chip_index];
+            auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
+            std::vector<uint32_t> local_copy_writer_args{
+                0, num_local_copy_cores, rank, static_cast<uint32_t>(fabric_link_workers.size())};
+            local_copy_writer_args.reserve(local_copy_writer_args.size() + 2 * fabric_link_workers.size());
+            for (const auto& fabric_link_worker : fabric_link_workers) {
+                const auto noc = device->worker_core_from_logical_core(fabric_link_worker.core);
+                local_copy_writer_args.push_back(noc.x);
+                local_copy_writer_args.push_back(noc.y);
+            }
+            for (uint32_t c = 0; c < num_local_copy_cores; ++c) {
+                reader_args_of_core[local_copy_cores[c]] = {
+                    c, num_local_copy_cores, 1, chunk_walk::make_outgoing_shard(rank, chunk_walk::kWholeChipShard)};
+                local_copy_writer_args[0] = c;
+                writer_args_of_core[local_copy_cores[c]] = local_copy_writer_args;
+            }
+        }
+
         const std::string dir(kKernelDir);
         const auto fabric_link_worker_reader_id = tt::tt_metal::CreateKernel(
             program,
@@ -904,103 +1184,55 @@ HighBwAllGatherFabricFactory::cached_mesh_workload_t HighBwAllGatherFabricFactor
             dir + "fabric_all_gather_copy_writer.cpp",
             local_copy_core_set,
             local_copy_writer_config(blocks_converted_semaphore));
-
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_reader_id, reader_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, fabric_link_worker_sender_id, writer_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_reader_id, reader_common);
         tt::tt_metal::SetCommonRuntimeArgs(program, local_copy_core_writer_id, reader_common);
 
-        for (uint32_t ring = 0; ring < plan.num_rings; ++ring) {
-            const auto& on_ring = plan.chip_on_ring[chip_index][ring];
-            for (uint32_t direction = 0; direction < 2; ++direction) {
-                const auto downstream = on_ring.neighbour(direction);
-                const auto upstream = on_ring.upstream(direction);
-                const auto& outgoing_shards = on_ring.outgoing_shards(direction);
-                const uint32_t shards_expected_from_upstream =
-                    upstream
-                        ? plan.chip_on_ring[plan.linear_chip_index(*upstream)][ring].outgoing_shards(direction).size()
-                        : 0;
-                const bool signal_started_to_downstream =
-                    signals_started_to_downstream(plan, chip_index, ring, direction);
-                for (uint32_t link = 0; link < L; ++link) {
-                    const auto& fabric_link_worker =
-                        fabric_link_workers[fabric_link_worker_index(ring, direction, link, L)];
-                    const uint32_t first_owned_chunk = ring * L + link;
-
-                    std::vector<uint32_t> reader_args{
-                        first_owned_chunk, owned_chunk_stride, static_cast<uint32_t>(outgoing_shards.size())};
-                    reader_args.insert(reader_args.end(), outgoing_shards.begin(), outgoing_shards.end());
-                    tt::tt_metal::SetRuntimeArgs(
-                        program, fabric_link_worker_reader_id, fabric_link_worker.core, reader_args);
-
-                    // the started signal goes to the downstream's link worker that sends back into this chip; data and
-                    // shards-arrived increments go to the downstream's link worker of the same direction
-                    tt::tt_metal::CoreCoord started_signal_target{0, 0}, downstream_worker{0, 0};
-                    tt::tt_fabric::FabricNodeId downstream_node = mesh_device->get_fabric_node_id(chip);
-                    if (downstream) {
-                        auto* downstream_device = tt::tt_metal::internal::get_device(*mesh_device, *downstream);
-                        const auto& downstream_workers = plan.fabric_link_workers[plan.linear_chip_index(*downstream)];
-                        started_signal_target = downstream_device->worker_core_from_logical_core(
-                            downstream_workers[fabric_link_worker_index(ring, 1 - direction, link, L)].core);
-                        downstream_worker = downstream_device->worker_core_from_logical_core(
-                            downstream_workers[fabric_link_worker_index(ring, direction, link, L)].core);
-                        downstream_node = mesh_device->get_fabric_node_id(*downstream);
-                    }
-                    std::vector<uint32_t> sender_args{
-                        first_owned_chunk,
-                        owned_chunk_stride,
-                        signal_started_to_downstream ? 1u : 0u,
-                        static_cast<uint32_t>(started_signal_target.x),
-                        static_cast<uint32_t>(started_signal_target.y),
-                        static_cast<uint32_t>(downstream_worker.x),
-                        static_cast<uint32_t>(downstream_worker.y),
-                        static_cast<uint32_t>(*downstream_node.mesh_id),
-                        is_2d ? downstream_node.chip_id : 1u,
-                        shards_expected_from_upstream,
-                        static_cast<uint32_t>(outgoing_shards.size())};
-                    sender_args.insert(sender_args.end(), outgoing_shards.begin(), outgoing_shards.end());
-                    if (fabric_link_worker.has_fabric_connection) {
-                        tt::tt_fabric::append_fabric_connection_rt_args(
-                            *mesh_device,
-                            mesh_device->get_fabric_node_id(chip),
-                            mesh_device->get_fabric_node_id(*downstream),
-                            fabric_link_worker.fabric_link_index,
-                            program,
-                            fabric_link_worker.core,
-                            sender_args);
-                    }
-                    tt::tt_metal::SetRuntimeArgs(
-                        program, fabric_link_worker_sender_id, fabric_link_worker.core, sender_args);
+        // Per core and kernel: the program's own args are the first chip's (padded to the longest of any chip); with
+        // several chips, every chip's args become per-device runtime args over the whole slot.
+        struct CoreKernelArgs {
+            tt::tt_metal::CoreCoord core;
+            tt::tt_metal::KernelHandle kernel;
+            uint32_t num_words;
+            bool reader;
+        };
+        std::vector<CoreKernelArgs> slots;
+        slots.reserve(2 * all_cores.size());
+        for (const auto& core : all_cores) {
+            const bool link_worker = link_worker_core_set.contains(core);
+            for (const bool reader : {true, false}) {
+                uint32_t num_words = 0;
+                for (const auto& [reader_args_of_core, writer_args_of_core] : chip_core_args) {
+                    const auto& args = (reader ? reader_args_of_core : writer_args_of_core).at(core);
+                    num_words = std::max<uint32_t>(num_words, args.size());
                 }
+                const auto kernel = reader ? (link_worker ? fabric_link_worker_reader_id : local_copy_core_reader_id)
+                                           : (link_worker ? fabric_link_worker_sender_id : local_copy_core_writer_id);
+                const auto& [first_reader_args, first_writer_args] = chip_core_args.front();
+                auto own = (reader ? first_reader_args : first_writer_args).at(core);
+                own.resize(num_words, 0);
+                tt::tt_metal::SetRuntimeArgs(program, kernel, core, own);
+                slots.push_back({core, kernel, num_words, reader});
             }
         }
-        // Local copy core c of n owns chunk numbers c, c + n, ... of this chip's shard (interleaved input), or
-        // conversion blocks c, c + n, ... of it (non-interleaved input, for_each_contiguous_input_run); the latter
-        // signals every fabric link worker of this chip per block.
-        const uint32_t rank = plan.rank_of_chip[chip_index];
-        auto* device = tt::tt_metal::internal::get_device(*mesh_device, chip);
-        std::vector<uint32_t> local_copy_writer_args{
-            0, num_local_copy_cores, rank, static_cast<uint32_t>(fabric_link_workers.size())};
-        for (const auto& fabric_link_worker : fabric_link_workers) {
-            const auto noc = device->worker_core_from_logical_core(fabric_link_worker.core);
-            local_copy_writer_args.push_back(noc.x);
-            local_copy_writer_args.push_back(noc.y);
-        }
-        for (uint32_t c = 0; c < num_local_copy_cores; ++c) {
-            tt::tt_metal::SetRuntimeArgs(
-                program,
-                local_copy_core_reader_id,
-                local_copy_cores[c],
-                std::vector<uint32_t>{
-                    c, num_local_copy_cores, 1, chunk_walk::make_outgoing_shard(rank, chunk_walk::kWholeChipShard)});
-            local_copy_writer_args[0] = c;
-            tt::tt_metal::SetRuntimeArgs(
-                program, local_copy_core_writer_id, local_copy_cores[c], local_copy_writer_args);
-        }
 
-        workload.add_program(ttnn::MeshCoordinateRange(chip), std::move(program));
+        workload.add_program(program_range, std::move(program));
+        if (chip_core_args.size() > 1) {
+            std::vector<uint32_t> values;
+            for (const auto& slot : slots) {
+                values.assign(chip_core_args.size() * slot.num_words, 0);
+                for (size_t chip = 0; chip < chip_core_args.size(); ++chip) {
+                    const auto& [reader_args_of_core, writer_args_of_core] = chip_core_args[chip];
+                    const auto& args = (slot.reader ? reader_args_of_core : writer_args_of_core).at(slot.core);
+                    std::copy(args.begin(), args.end(), values.begin() + chip * slot.num_words);
+                }
+                tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                    workload, program_range, slot.kernel, slot.core, 0, slot.num_words, values);
+            }
+        }
         shared_variables.emplace(
-            ttnn::MeshCoordinateRange(chip),
+            program_range,
             shared_variables_t{
                 .fabric_link_worker_reader_kernel_id = fabric_link_worker_reader_id,
                 .fabric_link_worker_sender_kernel_id = fabric_link_worker_sender_id,

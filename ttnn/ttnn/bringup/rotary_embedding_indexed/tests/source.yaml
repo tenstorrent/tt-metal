@@ -1,0 +1,24 @@
+# The source op's own tests (ttnn.experimental.deepseek_prefill.rotary_embedding_indexed), run in place against this
+# fork (models/demos/common/bringup/testing/fork_source.py). Best-effort selection: see the bringup-fork-op skill,
+# "Carry the source op's tests". The op's one test file (models/demos/deepseek_v3_d_p/tests/op_unit_tests) covers the
+# scalar and metadata paths, multi-iteration prefill with block-cyclic cos / sin (boundary-chip wrap), Q (heads over
+# TP) and KV inputs, bf16 / bfp8, sequence subshards, partial rotary regions, concat_prefix and the refusals. Upstream
+# CI runs its 2x4 cases and one 2x2 case (tests/pipeline_reorg).
+#
+# Recorded on a Galaxy 8x4 (DeepSeek-V4.1 P.5): the 8x4 cases on the whole box and the single-device cases. The 2x2 /
+# 2x4 cases need a card subset of the Galaxy that forms that mesh; not carried (the seed's 2x2 box can add them).
+#
+# Not covered upstream: uniform=True (the fork's one change; one program for the mesh). Every upstream case keeps
+# the default uniform=False, which builds the original per-coordinate programs; tests/unit/test_uniform.py covers it.
+upstream_sha: d2dc8639a5fa9c21c60a52cfd3f01619ceb1d592
+swap:
+  ttnn.experimental.deepseek_prefill.rotary_embedding_indexed: ttnn.bringup.rotary_embedding_indexed
+tests:
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py
+    k: "8x4"
+    mesh: [8, 4]
+    why: "the 8x4 multi-iteration prefill cases (small / repr, Q / KV, chunk-aligned and padded-partial starts with the boundary-chip wrap) and metadata-vs-scalar bit identity on the torus-xy 8x4"
+  - path: models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_deepseek_prefill_rotary_embedding_indexed.py
+    k: "padded_default or concat_prefix or logical_frequency_width"
+    mesh: [1, 1]
+    why: "single-device cases: padded default (scalar / metadata), concat_prefix (memory configs, offsets) and its padding refusal, cos / sin logical width refusals"

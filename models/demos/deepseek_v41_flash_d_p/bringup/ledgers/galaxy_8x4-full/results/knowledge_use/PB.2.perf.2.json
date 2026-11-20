@@ -1,0 +1,55 @@
+{
+ "used": [
+  {
+   "id": "DS41-279",
+   "how": "test_chunk8192_reference raises target.seq in memory only when the model's tables (table_seq) do not reach the case's end",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a model's position tables must cover a whole number of chunks when max_seq is not a multiple of the chunk (now DS41-323)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work added; table_seq extends the RoPE tables only, no kernel limit was involved"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; no owner decision was needed in this step"
+  },
+  {
+   "id": "OV-60",
+   "answer": "done",
+   "evidence": "test_chunk8192_reference passed both cases (resident request 20261119-224337-16f4d8, rc 0); the passed units were not run again"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the test runs on the gate's one model (no LM head, seq from table_seq, BRINGUP_CHUNK=8192); it shared the determinism unit's load (loads 0)"
+  }
+ ],
+ "cited_only": [
+  "DS41-323"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.2",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T22:59:10",
+  "head": "e86d53752a8",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.2.perf.2.json"
+  ]
+ }
+}

@@ -1,6 +1,6 @@
 # Real-time profiler — getting started
 
-The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: `runtime_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, and `kernel_sources` (paths for that program).
+The **real-time profiler** (RT profiler) streams per-program timing from the device over the existing fast-dispatch path (D2H socket). Each completed program yields a `ProgramRealtimeRecord`: `runtime_id`, raw `start_timestamp` / `end_timestamp`, device `frequency` (cycles per ns), `chip_id`, `core_count`, and `kernel_sources` (paths for that program).
 
 You can register **multiple** callbacks; they are invoked concurrently. If a callback shares a resource with other callbacks or across multiple meshes, access it in a thread-safe way (e.g. with a lock). Use `UnregisterProgramRealtimeProfilerCallback(handle)` when done (Python: `ttnn.device.UnregisterProgramRealtimeProfilerCallback`).
 
@@ -30,6 +30,7 @@ def on_record_batch(batch):
             "start_timestamp": record.start_timestamp,
             "end_timestamp": record.end_timestamp,
             "frequency": record.frequency,
+            "core_count": record.core_count,
             "kernel_sources": list(record.kernel_sources),
         }
         out.write(json.dumps(row) + "\n")

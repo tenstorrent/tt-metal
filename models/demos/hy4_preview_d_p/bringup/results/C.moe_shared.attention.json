@@ -1,0 +1,89 @@
+{
+ "metrics": {
+  "chunk0_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.005916079971939325
+  },
+  "chunk0_row_norm_ratio_max_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 1.0010433197021484
+  },
+  "chunk0_row_norm_ratio_min_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.9979442358016968
+  },
+  "chunk0_scale_coef_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.9996107551215622
+  },
+  "chunk0_worst_row_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.007955724373459816
+  },
+  "golden_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.006132446229457855
+  },
+  "golden_row_norm_ratio_max_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 1.0012189149856567
+  },
+  "golden_row_norm_ratio_min_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.9980242252349854
+  },
+  "golden_scale_coef_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.9997022305301998
+  },
+  "golden_worst_row_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:11",
+   "value": 0.008123893290758133
+  },
+  "pcc_attention_L02": {
+   "t": "2026-09-29T18:06:10",
+   "value": 0.9999811669520374
+  },
+  "probe_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:16",
+   "value": 0.005380208138376474
+  },
+  "probe_row_norm_ratio_max_attention_L02": {
+   "t": "2026-09-29T18:06:16",
+   "value": 1.001484751701355
+  },
+  "probe_row_norm_ratio_min_attention_L02": {
+   "t": "2026-09-29T18:06:16",
+   "value": 0.9973267316818237
+  },
+  "probe_scale_coef_attention_L02": {
+   "t": "2026-09-29T18:06:16",
+   "value": 0.9998813109953792
+  },
+  "probe_worst_row_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:16",
+   "value": 0.007886148989200592
+  },
+  "scaled_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:21",
+   "value": 0.011879317462444305
+  },
+  "scaled_row_norm_ratio_max_attention_L02": {
+   "t": "2026-09-29T18:06:21",
+   "value": 1.0034314393997192
+  },
+  "scaled_row_norm_ratio_min_attention_L02": {
+   "t": "2026-09-29T18:06:21",
+   "value": 0.9962787628173828
+  },
+  "scaled_scale_coef_attention_L02": {
+   "t": "2026-09-29T18:06:21",
+   "value": 0.9999205580883848
+  },
+  "scaled_worst_row_rel_l2_attention_L02": {
+   "t": "2026-09-29T18:06:21",
+   "value": 0.02057812362909317
+  }
+ },
+ "task": "C.moe_shared.attention"
+}

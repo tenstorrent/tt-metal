@@ -1,0 +1,78 @@
+# MiMo-V2.6-Flash-RL text prefill, layers 0-5, on the 2x2 Blackhole mesh (4x p150b, 32 GB each, FABRIC_2D).
+# Reasoning in plan.md. Re-planned from the 1x4 prior (models/demos/mimo_v2_6_d_p/bringup/plan.yaml):
+#   - attention and the dense MLP (layer 0): TP=4 over the flattened mesh (chip d = 2*row + col holds checkpoint TP
+#     rank d), residual [S, 4096] replicated; the reduce after o_proj / down is ttnn.all_reduce(cluster_axis=None),
+#     which on a 2x2 mesh runs axis 1 then axis 0.
+#   - routed experts: EP=4 in the DeepSeek layout the dispatch op was built for: dispatch along mesh axis 0
+#     (2 chips per dispatch group, fabric), one dispatch group per mesh column (128 experts each). Chip (r, c) holds
+#     experts 128c + 64r .. 128c + 64r + 63. Tokens are split by row (ttnn.mesh_partition, S/2 per row) at the MoE
+#     entry; after combine: all_reduce over axis 1 (the two groups) and all_gather over axis 0 (the two row halves).
+# Per-chip weight bytes are the same as on 1x4 (every tensor is still split 4 ways or replicated).
+# Layers 6-47 are skipped: the spec runs layers 0-5 only; the full model's experts alone need about 75 GiB per chip.
+headroom_frac: 0.15
+users: 1
+placements:
+  # --- not part of the text decoder (owner rule: text only; MTP layers are not in the downloaded shards)
+  - {pattern: "visual.*", placement: skip, why: text only (vision encoder)}
+  - {pattern: "audio_encoder.*", placement: skip, why: text only (audio encoder)}
+  - {pattern: "speech_embeddings.*", placement: skip, why: text only (audio)}
+
+  # --- layer subset: the spec runs layers 0-5 (they cover all three block types)
+  - {pattern: "model.layers.[6-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+  - {pattern: "model.layers.[1-4][0-9].*", placement: skip, why: layer subset 0-5 (spec layers)}
+
+  # --- block-quantization scales: folded into the device weights at load (fp8 x scale -> bf16, mxfp4 x e8m0 -> bfp8)
+  - {pattern: "model.layers.*.weight_scale_inv", placement: skip, why: fp8 128x128 block scales folded into the bf16 weight at load}
+  - {pattern: "model.layers.*.mlp.experts.*.weight_scale", placement: skip, why: mxfp4 e8m0 scales folded into the bfp8 expert weight at load}
+
+  # --- embedding (replicated) and the untied LM head (vocab-sharded over all 4 chips, 38144 rows per chip)
+  - {pattern: "model.embed_tokens.weight", placement: replicate, dtype: bf16, group: embedding}
+  - {pattern: "lm_head.weight", placement: shard, dtype: bf16, group: lm_head (vocab-sharded)}
+  - {pattern: "model.norm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+  # --- attention, TP=4 by head over the flattened mesh. The checkpoint stores the fused qkv per TP rank
+  #     ([q_r; k_r; v_r], tp_size 4), so chip d = 2*row + col holds rank d's slab: 16 Q heads + 1 KV head (full)
+  #     or 2 KV heads (sliding). fp8 -> bf16 on device. V stays 128 wide (ttnn.bringup SDPA fork), so no pad rows.
+  - {pattern: "model.layers.*.self_attn.qkv_proj.weight", placement: shard, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.o_proj.weight", placement: shard, dtype: bf16, group: attention}
+  - {pattern: "model.layers.*.self_attn.attention_sink_bias", placement: shard, dtype: bf16, group: norms and scalars}
+
+  # --- routed experts (layers 1-5): EP=4, chip (r, c) holds experts 128c + 64r .. +63 (DeepSeek col-major table),
+  #     bfp8 (owner rule). The checkpoint shape is mxfp4-packed (2 values per byte), so this line counts half of the
+  #     device bytes; the other half is under extra_gb_per_chip ("routed experts, second mxfp4 value per byte").
+  - {pattern: "model.layers.*.mlp.experts.*_proj.weight", placement: expert, dtype: bfp8, group: routed experts}
+
+  # --- router: replicated, fp32 (sigmoid + large correction bias makes top-8 selection precision-bound)
+  - {pattern: "model.layers.*.mlp.gate.weight", placement: replicate, dtype: fp32, group: router}
+  - {pattern: "model.layers.*.mlp.gate.e_score_correction_bias", placement: replicate, dtype: fp32, group: router}
+
+  # --- dense MLP (layer 0, SwiGLU 16384): gate/up column-parallel, down row-parallel over 4 chips, fp8 -> bf16
+  - {pattern: "model.layers.*.mlp.*_proj.weight", placement: shard, dtype: bf16, group: dense mlp}
+
+  # --- per-layer norms
+  - {pattern: "model.layers.*_layernorm.weight", placement: replicate, dtype: bf16, group: norms and scalars}
+
+state:
+  # Full-length K and V per layer (the prefill contract migrates the whole cache; the reference state is full length).
+  # V at its real head dim 128: ttnn.bringup.(chunked_)scaled_dot_product_attention takes V narrower than K.
+  # KV head h lives on chip d = h (full) or d = h // 2 (sliding), d = 2*row + col; none duplicated.
+  - {layers: [0, 5], what: K full attention, heads_per_chip: 1, head_dim: 192, tensors: 1, dtype: bf16, kv_heads: 4}
+  - {layers: [0, 5], what: V full attention, heads_per_chip: 1, head_dim: 128, tensors: 1, dtype: bf16, kv_heads: 4}
+  - {layers: "1-4", what: K sliding, heads_per_chip: 2, head_dim: 192, tensors: 1, dtype: bf16, kv_heads: 8}
+  - {layers: "1-4", what: V sliding, heads_per_chip: 2, head_dim: 128, tensors: 1, dtype: bf16, kv_heads: 8}
+
+extra_gb_per_chip:
+  # 5 MoE layers x 256 experts x (2 x 2048 x 2048 + 4096 x 1024) packed bytes x 1088/1024 / 4 chips = 3.98 GiB.
+  routed experts, second mxfp4 value per byte (bfp8): 3.99
+  # Second KV copy in the engine's contract format (bfp8, real head dims 192 + 128): 0.36 GB bf16 state x 1088/2048.
+  contract KV copy (bfp8): 0.20
+  # RoPE cos/sin for 56320 positions (two thetas, 64 dims), sink tensors, identity page tables, dispatch tables
+  # (per-column expert_dispatch_table, global expert idx table), program cache slack, fabric/CCL scratch.
+  rope tables, dispatch tables, misc: 0.25
+
+# Peak transient for one 8192-token chunk (the s16384 rung; the target chunk is 5120). MoE: each chip dispatches its
+# S/2 row-half; its dispatch buffer receives from both chips of its column, worst case 8 x S rows x 4096 bf16
+# (0.54 GB at S=8192), combine output [S/2, 8, 4096] bf16 (0.27 GB), expert gate/up fp32 partials; dense MLP
+# intermediates (S x 4096 per chip, 67 MB each), Q/K/V (16 x S x 192), residual copies (67 MB each), CCL buffers;
+# x2 for fragmentation. Same estimate as the 1x4 prior (the dispatch buffer's worst case does not shrink).
+activations_gb_per_chip: 4.0

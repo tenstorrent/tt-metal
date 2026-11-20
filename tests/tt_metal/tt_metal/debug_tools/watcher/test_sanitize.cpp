@@ -231,7 +231,7 @@ void RunTestOnCore(
     // A copy kernel, we'll feed it incorrect inputs to test sanitization.
     KernelHandle dram_copy_kernel = 0;
     int noc = 0;
-    const experimental::KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
+    const KernelSpecName DRAM_COPY_KERNEL_NAME{"dram_copy"};
     if (is_eth_core) {
         // ETH cores: invoke the original (legacy) kernel via the legacy host API.
         tt_metal::EthernetConfig config = {.noc = tt_metal::NOC::NOC_0};
@@ -245,8 +245,8 @@ void RunTestOnCore(
         // TENSIX kernel is launched via Metal 2.0 on both gen1 (WH/BH) and gen2 (Quasar).
         // On Quasar, user DMs (DM2..DM7) run the kernel; multi_dm_race syncs them to race, else only dm_id executes.
         // On WH/BH, BRISC or NCRISC (selected by use_ncrisc) runs the kernel.
-        experimental::KernelSpec::CompileTimeArgs cta_bindings;
-        experimental::KernelSpec::CompilerOptions::Defines defines;
+        KernelSpec::CompileTimeArgs cta_bindings;
+        KernelSpec::CompilerOptions::Defines defines;
         if (is_quasar && multi_dm_race) {
             constexpr uint32_t num_dms = 6;
             constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
@@ -279,13 +279,13 @@ void RunTestOnCore(
         auto gen1_processor =
             use_ncrisc ? tt::tt_metal::DataMovementProcessor::RISCV_1 : tt::tt_metal::DataMovementProcessor::RISCV_0;
         auto gen1_noc = use_ncrisc ? tt_metal::NOC::RISCV_1_default : tt_metal::NOC::RISCV_0_default;
-        experimental::DataMovementHardwareConfig dm_cfg;
+        DataMovementHardwareConfig dm_cfg;
         if (is_quasar) {
-            dm_cfg = experimental::DataMovementHardwareConfig{};
+            dm_cfg = DataMovementHardwareConfig{};
         } else {
-            dm_cfg = experimental::DataMovementHardwareConfig{
+            dm_cfg = DataMovementHardwareConfig{
                 .config_1xx =
-                    experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
+                    DataMovementHardwareConfig::DataMovement1XXConfig{
                         .processor = gen1_processor,
                         .noc = gen1_noc,
                     },
@@ -295,7 +295,7 @@ void RunTestOnCore(
         if (!is_quasar) {
             noc = static_cast<int>(gen1_noc);
         }
-        experimental::KernelSpec dm_spec{
+        KernelSpec dm_spec{
             .unique_id = DRAM_COPY_KERNEL_NAME,
             .source = kernel_metal2,
             .num_threads = num_threads,
@@ -326,17 +326,17 @@ void RunTestOnCore(
                       "use_dram_bank_dst"}},
             .hw_config = dm_cfg,
         };
-        experimental::WorkUnitSpec wu{
+        WorkUnitSpec wu{
             .name = "main",
             .kernels = {DRAM_COPY_KERNEL_NAME},
-            .target_nodes = experimental::NodeCoord{core},
+            .target_nodes = NodeCoord{core},
         };
-        experimental::ProgramSpec spec{
+        ProgramSpec spec{
             .name = "watcher_sanitize",
             .kernels = {dm_spec},
             .work_units = {wu},
         };
-        program = experimental::MakeProgramFromSpec(*mesh_device, spec);
+        program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
         if (is_quasar) {
             // Quasar SD does not yet expose a NOC index in the same way as legacy DMs; the watcher
             // log emits "noc0" for Metal 2.0 DM kernels. Match that so expected strings line up.
@@ -542,11 +542,11 @@ void RunTestOnCore(
         // ETH cores still go through the legacy API.
         tt_metal::SetRuntimeArgs(program, dram_copy_kernel, core, rta_values);
     } else {
-        const experimental::NodeCoord node{core};
-        experimental::ProgramRunArgs params;
-        params.kernel_run_args = {experimental::ProgramRunArgs::KernelRunArgs{
+        const NodeCoord node{core};
+        ProgramRunArgs params;
+        params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
             .kernel = DRAM_COPY_KERNEL_NAME,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"local_buffer_addr", buffer_addr},
                  {"buffer_src_addr", input_buffer_addr},
@@ -570,7 +570,7 @@ void RunTestOnCore(
                  {"invalid_txn_id", invalid_txn_id},
                  {"use_dram_bank_dst", use_dram_bank_dst}}),
         }};
-        experimental::SetProgramRunArgs(program, params);
+        tt_metal::experimental::SetProgramRunArgs(program, params);
     }
     workload.add_program(device_range, std::move(program));
 

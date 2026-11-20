@@ -1,0 +1,60 @@
+{
+ "used": [
+  {
+   "id": "DS41-121",
+   "how": "ruled out its ~2 min a layer expert-cache miss as the slowdown: the resident run's log shows EXPERTS_LOAD cache=hit for every layer; the 112 s a layer was the fused head's first call",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-99",
+   "how": "the engram host lookup is on the chunk's critical path until P.6, so the hugepage A/B was judged on the gather's ms a layer (6.3 vs 8.5) against the build cost",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "numba's omp threading layer sets the shared OpenMP max-threads ICV at its first launch and torch's intra-op pool follows it (32 -> 64 on the Galaxy host): now DS41-133",
+  "the Galaxy host's THP defrag is 'madvise': MADV_HUGEPAGE on 100+ GB of anonymous memory compacts synchronously in the faulting thread and evicts the page cache: now DS41-134",
+  "reading a large file once with pread leaves its pages in the page cache and evicts the weight cache; POSIX_FADV_DONTNEED after each block keeps the page cache for what the load reads next"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.10",
+   "answer": "done",
+   "evidence": "Cause measured: (1) numba's omp layer raised torch's intra-op pool 32 -> 64 at its first launch (head-layout workload 2.0 -> 23 s, user 1295 s, sys 0; restored 2.0 s): the 18:39 runner's ~112 s a layer; (2) MADV_HUGEPAGE + THP defrag 'madvise': table build 171-236 s, compact_stall 125-214k, 95 GB of page cache reclaimed; (3) the build's pread left ~200 GB of table bytes in the page cache. Fixed: tt/engram_bfp8.py _run keeps torch's count; ENGRAM_HUGEPAGES=off (74 s build, no compaction); POSIX_FADV_DONTNEED per read block; ENGRAM_BUILD=background (builds behind the weight load, 70.8 s). Rows bit-identical (test_engram_table_modes resident 9 passed, test_engram_bfp8 1 passed). Gate FIX.10: 6/6 PASS. Load 7m43s -> 3m21s (random 2m38s); head first call 112 -> 3.5 s a layer; K.1 runner smoke 848.6 s (random 897.5 s); runner peak RSS 244-249 GB, disk read 444 / 244 GB, system swap max 7 / 3 of 8 GB, compact_stall +2 over the gate. BREADCRUMBS FIX.10, DS41-133, DS41-134."
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: host-side thread, page and build-order changes only; the rows are the same bytes (tests/test_engram_table_modes.py with DS41_TEST_ENGRAM_RESIDENT=1: 9 passed; tests/test_engram_bfp8.py: 1 passed)"
+  }
+ ],
+ "cited_only": [
+  "DS41-133",
+  "DS41-134"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.10",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-28T20:49:01",
+  "head": "8679f5c2d8d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.10.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.10_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.10.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_bfp8.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_engram_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

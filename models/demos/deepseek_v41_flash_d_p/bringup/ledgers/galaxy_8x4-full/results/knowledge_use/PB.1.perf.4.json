@@ -1,0 +1,60 @@
+{
+ "used": [
+  {
+   "id": "DS41-322",
+   "how": "gate refuses the direct-pytest gate.cmd; ran the CPU test through scripts/run_safe_pytest.sh --run-all --no-precompile instead (the ledger's CPU-gate form) and reported the block",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-321",
+   "how": "kept the oracle's row-by-row routed SwiGLU (reference/packed_ref.fixed_expert_tiles) unchanged when checking the CPU rung",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the PB.1 gate.cmd in tasks.yaml is still 'python -m pytest', which core/gate.py refuses; F288 fixed only the settings lint, not this",
+  "the safe runner applies pytest's 300 s default timeout to CPU-only tests; a CPU reference test over several real layers needs its own @pytest.mark.timeout"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel or fork touched; CPU-only step"
+  },
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "PACKED_DESIGN.md covers the 20:45 clarifications (served-cache gathers each chunk s5-6, the 1M DRAM budget s7, padded / empty lanes in the test plan s9)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "the two open owner decisions in PACKED_DESIGN.md s11 are DECIDED (reshuffle order; pad rows out of MoE dispatch) and noted in BREADCRUMBS PPB.1 attempt 4"
+  },
+  {
+   "id": "OV-59",
+   "answer": "done",
+   "evidence": "checked the tree against the brief; attempt 3's hooks.py change stays; ran the CPU test through the safe runner, because the gate still refuses its direct-pytest cmd (DS41-322)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.1",
+  "role": "perf",
+  "attempt": 4,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T21:53:00",
+  "head": "cebb27e18f7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.1.perf.4.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py"
+  ]
+ }
+}

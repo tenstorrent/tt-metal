@@ -1,0 +1,2082 @@
+model: google/gemma-4-26B-A4B-it
+target:
+  seq: 56320
+  chunk: 5120
+  dtype: bf16
+tasks:
+- id: R.1
+  title: Checkpoint has every tensor the spec expects; intake approved; canonical prompt built
+  step: intake
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    metrics:
+      intake_approved: == 1
+      prompt_hash_ok: == 1
+      missing_tensors: == 0
+      shape_mismatches: == 0
+      count_mismatches: == 0
+      config_mismatches: == 0
+      checkpoint_tensors: '>= 1'
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/spec.yaml
+- id: R.2
+  title: Reference matches HF per layer and on logits (fp32)
+  step: reference
+  deps:
+  - R.1
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.check_hf --seq 512
+    metrics:
+      pcc_hidden_L*: '>= 0.9999'
+      pcc_logits: '>= 0.9999'
+      top1_match_frac: '>= 0.99'
+  paths: &id001
+  - models/demos/gemma4_a4b_d_p/reference
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  - models/demos/gemma4_a4b_d_p/__init__.py
+- id: R.3
+  title: Reference chunked == one-shot (4096 in 2048) and block graphs replay exactly
+  step: reference
+  deps:
+  - R.2
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    metrics:
+      pcc_hidden: '>= 0.99999'
+      pcc_state_min: '>= 0.99999'
+      graph_errors: == 0
+      boundaries_missing: == 0
+      graph_replay_maxabs: <= 0
+  paths: *id001
+- id: G.s4096
+  title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps'
+  step: goldens
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
+    metrics:
+      golden_layers: == 30
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s16384
+  title: 'Golden s16384: 16384 tokens in 8192-token chunks'
+  step: goldens
+  deps:
+  - G.s4096
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s16384
+    metrics:
+      golden_layers: == 30
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s56320
+  title: 'Golden s56320: 56320 tokens in 5120-token chunks'
+  step: goldens
+  deps:
+  - G.s16384
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s56320
+    metrics:
+      golden_layers: == 30
+      golden_chunks: == 11
+      golden_hash_ok: == 1
+- id: B.1
+  title: 'Box: mesh opens with the spec''s device params, collectives are exact'
+  step: box
+  deps: []
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py
+    metrics:
+      chips: == 4
+      all_gather_maxabs: == 0
+  device: true
+- id: PL.0
+  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
+  step: ledger
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.ledger_gen --extend
+    metrics:
+      ledger_errors: == 0
+      ledger_tasks: '>= 1'
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/plan.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/plan.md
+  - models/demos/gemma4_a4b_d_p/bringup/components.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/approvals.yaml
+  - models/demos/gemma4_a4b_d_p/bringup/results/plan_memory.json
+  approval: plan
+- id: C.sliding.attn_norm
+  title: sliding attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  brief:
+    block_type: sliding
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-25T23:14:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_norm.py: acb0428d9dfb433d0fc82af72dd150a6848e998f3a4d3a751fea394a103e5d6f
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.01
+  title: 'sliding block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.sliding.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-25T23:21:59'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_01_attn_norm.py: 6799bbc87daeaa3b701dbfaddadcff9a7fb0224b0a3d7ce2e52816c4bdafc5ba
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.attention
+  title: sliding attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+  frozen:
+    at: '2026-09-25T23:25:32'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attention.py: f0c0aaf81f6984054665fe3b46bab62cfae486bc47f395381cbda39c42746eb6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.02
+  title: 'sliding block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.sliding.attention
+  - S.sliding.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    layer: 0
+  frozen:
+    at: '2026-09-25T23:34:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_02_attention.py: ecb8859923dd62b4aaec7f2cf565aece1a287831ab0f5a7f2c28328bdb6cd111
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.post_attn_norm
+  title: sliding post_attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py
+    metrics:
+      pcc_post_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-25T23:36:49'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_attn_norm.py: a30a331cec29b919b2a7471f64b0c1f1ac748b23d5d126f7c07d4c4e8acd5feb
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.03
+  title: 'sliding block with steps 1-3 on device (last: post_attn_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_attn_norm
+  - S.sliding.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-25T23:40:50'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_03_post_attn_norm.py: 948091ff8f94eebc8d1ff2abc58a667bdc2a9e743292f52cb667abceee758980
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.attn_residual
+  title: sliding attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-25T23:47:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_attn_residual.py: e4c4ac40b19a193f9c891fff9dada892d477050aeda1ad494a10f95e33ef5268
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.04
+  title: 'sliding block with steps 1-4 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.sliding.attn_residual
+  - S.sliding.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    layer: 0
+  frozen:
+    at: '2026-09-25T23:51:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_04_attn_residual.py: aa3c913cb014c9f109bfef751ce185b992260f0df1aed8195c3a8d845b3aaf7d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.ffn_norm
+  title: sliding ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-25T23:54:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_norm.py: b1fedb27e1cfafc73e48a484d496920b891da62cf3bd9e2656f5977710e7c2bf
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.05
+  title: 'sliding block with steps 1-5 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.sliding.ffn_norm
+  - S.sliding.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-25T23:57:16'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_05_ffn_norm.py: ab360c1beaddcbd086746c905c0b0850d8b0e92d4da815a6af55d4bed1ad5f8d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.mlp
+  title: sliding mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T00:00:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_mlp.py: c7c7c5a3f9ee164476d06e9c0c7e99a7ddb04ad08b4ab8d02532dedac47fcb07
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.06
+  title: 'sliding block with steps 1-6 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.sliding.mlp
+  - S.sliding.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    layer: 0
+  frozen:
+    at: '2026-09-26T00:05:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_06_mlp.py: 6ea5bb45c0b879e521de5adf27b7abffe316807defab48e0d6515c8fa4176506
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.post_mlp_norm
+  title: sliding post_mlp_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py
+    metrics:
+      pcc_post_mlp_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_mlp_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T00:08:29'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_mlp_norm.py: a475b62462435a7ba7e3685ed853b99c5e9d70ab79dca70b1a6da9b7886c553f
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.07
+  title: 'sliding block with steps 1-7 on device (last: post_mlp_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_mlp_norm
+  - S.sliding.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    layer: 0
+  frozen:
+    at: '2026-09-26T00:11:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_07_post_mlp_norm.py: f3ee9cb78310eb659e5a1f849676ddca44291fd17683d79350c5d9a623c783a6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.router
+  title: sliding router (router) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py
+    metrics:
+      pcc_router_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: router
+    kind: router
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T00:15:41'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_router.py: 7c85ad8fe576807b073da39ed3fdc756fc473d498182fcf079bc80b9192f5207
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.08
+  title: 'sliding block with steps 1-8 on device (last: router)'
+  step: implement
+  deps:
+  - C.sliding.router
+  - S.sliding.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    layer: 0
+  frozen:
+    at: '2026-09-26T00:21:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_08_router.py: bb03129e0f1ebff2483fd2670e461dc25abe9bee9c825de3b509d79f60079798
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.moe_norm
+  title: sliding moe_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py
+    metrics:
+      pcc_moe_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: moe_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T00:24:20'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_moe_norm.py: a7596014f7a456a545d457aeadd2f074476e919efa27dc8b466cc080215dd1ac
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.09
+  title: 'sliding block with steps 1-9 on device (last: moe_norm)'
+  step: implement
+  deps:
+  - C.sliding.moe_norm
+  - S.sliding.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    layer: 0
+  frozen:
+    at: '2026-09-26T00:27:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_09_moe_norm.py: e66ac2be7fb6b278b38c588365ae17bf0257c2c1a0f10a686eda6de3fd39e6e5
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.experts
+  title: sliding experts (moe) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py
+    metrics:
+      pcc_experts_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py
+  freeze_extra: *id002
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+  brief:
+    block_type: sliding
+    step: experts
+    kind: moe
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T00:32:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_experts.py: 9c915646623d6c03246373fc7adcc974facc993cf205356dbf913d31a2a5a885
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.10
+  title: 'sliding block with steps 1-10 on device (last: experts)'
+  step: implement
+  deps:
+  - C.sliding.experts
+  - S.sliding.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    layer: 0
+  frozen:
+    at: '2026-09-26T01:18:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_10_experts.py: 008da22f59a39846fddc0fefd54aa2935aee350f0f263e8c0d1c15d717c079a8
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.post_moe_norm
+  title: sliding post_moe_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py
+    metrics:
+      pcc_post_moe_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_moe_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T01:21:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_moe_norm.py: 2436c005f5b7750b0f66550d79e9b83a7ccf065b1b15b7378024b9fa405763bf
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.11
+  title: 'sliding block with steps 1-11 on device (last: post_moe_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_moe_norm
+  - S.sliding.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    layer: 0
+  frozen:
+    at: '2026-09-26T01:25:40'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_11_post_moe_norm.py: a23eeada8512d50c0a07ee5de31584197a9fe397feada837a4ba2c9940c1bf80
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.ffn_combine
+  title: sliding ffn_combine (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py
+    metrics:
+      pcc_ffn_combine_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_combine
+    kind: residual
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T01:28:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_combine.py: 734c9968672eec6791c0b4c68080e3e7bfdc13b0c7641b895280b19e1c83edd4
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.12
+  title: 'sliding block with steps 1-12 on device (last: ffn_combine)'
+  step: implement
+  deps:
+  - C.sliding.ffn_combine
+  - S.sliding.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    layer: 0
+  frozen:
+    at: '2026-09-26T01:31:25'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_12_ffn_combine.py: 5bf01431c64d45f6e7872c482ff16b6f24ce1eb9a34d9a115617539965860b23
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.post_ffn_norm
+  title: sliding post_ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py
+    metrics:
+      pcc_post_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: post_ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T01:34:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_post_ffn_norm.py: 8b83cb7d483a9438ea2f80ebe9985ab6bf1dc7703cd9559eaed016b7e6e7d35e
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.13
+  title: 'sliding block with steps 1-13 on device (last: post_ffn_norm)'
+  step: implement
+  deps:
+  - C.sliding.post_ffn_norm
+  - S.sliding.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-26T01:38:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_13_post_ffn_norm.py: 7c494563ec6e5cc4df6622ce202086e16da471573fe11c1bbb9bbddc0484fecb
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.sliding.ffn_residual
+  title: sliding ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-26T01:40:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_sliding_ffn_residual.py: d862e1f3eb66eaddabc655d11fe82712cedca8df987cae014ce8b4f74ab2aba1
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.sliding.14
+  title: 'sliding block with steps 1-14 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.sliding.ffn_residual
+  - S.sliding.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: sliding
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    - ffn_residual
+    layer: 0
+  frozen:
+    at: '2026-09-26T01:44:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_sliding_14_ffn_residual.py: a3cc583a55f14ca7b27f1014e38b26c09bdfed4223ede0dc07b62cd16bb993c6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.attn_norm
+  title: global attn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py
+    metrics:
+      pcc_attn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T01:56:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_norm.py: 7325a352dd83d66ea3760592712f4cf5f72d4aa0003f6fa62b20633228dcadd9
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.01
+  title: 'global block with steps 1-1 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.global.attn_norm
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:00:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_01_attn_norm.py: 5db590df90574acc6a21441249bbe2466593cfae2de7f8b141de6f87b82e15d6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.attention
+  title: global attention (attention) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py
+    metrics:
+      pcc_attention_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attention
+    kind: attention
+    layer: 5
+    stateful: true
+  frozen:
+    at: '2026-09-26T02:04:24'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attention.py: c1873eb53eb1307875097206b53f93af93b5e07fbe58e58bdb19b4009185f0cd
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.02
+  title: 'global block with steps 1-2 on device (last: attention)'
+  step: implement
+  deps:
+  - C.global.attention
+  - S.global.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:10:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_02_attention.py: 70f1f792c3cbc2df43c127d5bfbfe351d3b9d8d96643f548e4172dd509aa2c0a
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.post_attn_norm
+  title: global post_attn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py
+    metrics:
+      pcc_post_attn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_attn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T02:13:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_attn_norm.py: e0680ba0602e6000aceeeff0f61dc57fdc834ac9d1250abcd3f0d550e0ea92d3
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.03
+  title: 'global block with steps 1-3 on device (last: post_attn_norm)'
+  step: implement
+  deps:
+  - C.global.post_attn_norm
+  - S.global.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:15:54'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_03_post_attn_norm.py: 79f575972a4e0ecf1f0ff561965de9fcb934fb19695ce115c24cfb2dba98ef8a
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.attn_residual
+  title: global attn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py
+    metrics:
+      pcc_attn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: attn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T02:18:57'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_attn_residual.py: fbe1583cc9fce1d6e7c322f3855fcb5ce2ce72b5388789ba40a9715549fbd6a8
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.04
+  title: 'global block with steps 1-4 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.global.attn_residual
+  - S.global.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:21:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_04_attn_residual.py: 0836cd6fe7e8391d7859e8b0d44ca570c80906c6656a309b8e005a395742c089
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.ffn_norm
+  title: global ffn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T02:41:46'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_norm.py: 420acf936bc74143f30864bd6e1f3ba241fb32253fdabc8839658e21c72ee3e3
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.05
+  title: 'global block with steps 1-5 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.global.ffn_norm
+  - S.global.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_05_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_05_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:44:10'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_05_ffn_norm.py: 80edaffb0b0739af354834b2cd19cfad3fe2fb22531f5d7d6fbad53aec754adf
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.mlp
+  title: global mlp (mlp) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_mlp.py
+    metrics:
+      pcc_mlp_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: mlp
+    kind: mlp
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T02:46:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_mlp.py: cf993ce3595cb691ff24bddd662bfe60bd92c9ba0aa3dae5323438171ad70e25
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.06
+  title: 'global block with steps 1-6 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.global.mlp
+  - S.global.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:49:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_06_mlp.py: e412cfe99758bb8a2e2f1bc8c53746d544f3fc0ac06eabeed2d9195f853f1f1d
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.post_mlp_norm
+  title: global post_mlp_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py
+    metrics:
+      pcc_post_mlp_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_mlp_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T02:51:43'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_mlp_norm.py: c14891d59545e60bb06a1c6bf83e527b0555e743b4074286a653626e202d9145
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.07
+  title: 'global block with steps 1-7 on device (last: post_mlp_norm)'
+  step: implement
+  deps:
+  - C.global.post_mlp_norm
+  - S.global.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T02:56:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_07_post_mlp_norm.py: 45f82e7b302ba2647ddac1f9eb94df0712ec5cfd5f622f7c0c29d16d81d65e97
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.router
+  title: global router (router) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py
+    metrics:
+      pcc_router_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: router
+    kind: router
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:00:05'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_router.py: 5846adda13d84c942cf341e7b25987e92edc9a30ef5273a28d831921ad1a2c95
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.08
+  title: 'global block with steps 1-8 on device (last: router)'
+  step: implement
+  deps:
+  - C.global.router
+  - S.global.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:02:57'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_08_router.py: 811822f131bedd388144108ca9930678afbb0939f3408440f857ae185c47f559
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.moe_norm
+  title: global moe_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py
+    metrics:
+      pcc_moe_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: moe_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:05:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_moe_norm.py: 3de93af6550e7731b0c3f633c1709dc162d5d70a2142ed324ac647a1da279b22
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.09
+  title: 'global block with steps 1-9 on device (last: moe_norm)'
+  step: implement
+  deps:
+  - C.global.moe_norm
+  - S.global.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:08:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_09_moe_norm.py: a8440b290389556b84673b9bd0a003fd62a015ad710e4679ed7e79177c009ef0
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.experts
+  title: global experts (moe) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py
+    metrics:
+      pcc_experts_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py
+  freeze_extra: *id002
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/gemma4_a4b_d_p/bringup/hooks.py
+  - ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/unified_routed_expert_ffn
+  brief:
+    block_type: global
+    step: experts
+    kind: moe
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:11:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_experts.py: e58512b36a56a5518b9dbf8e80db378833375938651153d72db5ccdc445cb0ec
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.10
+  title: 'global block with steps 1-10 on device (last: experts)'
+  step: implement
+  deps:
+  - C.global.experts
+  - S.global.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:14:01'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_10_experts.py: 799bb9b6089ad183f50d197e18b4a2f1e28cb56500a3239263d06e84e23e64ed
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.post_moe_norm
+  title: global post_moe_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py
+    metrics:
+      pcc_post_moe_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_moe_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:16:41'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_moe_norm.py: cc0a96ab0f93659c25af4a1361e658d4fb1b54c68cf165f98702bc9497a117d5
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.11
+  title: 'global block with steps 1-11 on device (last: post_moe_norm)'
+  step: implement
+  deps:
+  - C.global.post_moe_norm
+  - S.global.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:19:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_11_post_moe_norm.py: 3fae7725d5288d80b2676e4328fa670841a2ba1ff57e04e1a01d21db0501dd76
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.ffn_combine
+  title: global ffn_combine (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py
+    metrics:
+      pcc_ffn_combine_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_combine
+    kind: residual
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:21:50'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_combine.py: ea90b0be216d9d779158a822f2a6d3f052cce18acdaa1246f3ebe561f8aa9d23
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.12
+  title: 'global block with steps 1-12 on device (last: ffn_combine)'
+  step: implement
+  deps:
+  - C.global.ffn_combine
+  - S.global.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:24:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_12_ffn_combine.py: 0f7741f340df8a760eb68ad72bbefa72a99da49663910c8c07d0863a8b4db5bc
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.post_ffn_norm
+  title: global post_ffn_norm (norm) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py
+    metrics:
+      pcc_post_ffn_norm_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: post_ffn_norm
+    kind: norm
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:26:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_post_ffn_norm.py: 0b557b51738ad9e776deee6243ff311560619c3bfc8a8d73c51ed13d92e258d2
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.13
+  title: 'global block with steps 1-13 on device (last: post_ffn_norm)'
+  step: implement
+  deps:
+  - C.global.post_ffn_norm
+  - S.global.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:29:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_13_post_ffn_norm.py: b33641883c005bf37272caa5b703593cab5c4ec55d5837032c56c299a406b9a6
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: C.global.ffn_residual
+  title: global ffn_residual (residual) on device, layer 5
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L05: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    step: ffn_residual
+    kind: residual
+    layer: 5
+    stateful: false
+  frozen:
+    at: '2026-09-26T03:31:43'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_c_global_ffn_residual.py: 44954ed8f0a99d5f955538bbd101fe1dcfdddcf602dc7055e138b31b7c1b50f0
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: S.global.14
+  title: 'global block with steps 1-14 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.global.ffn_residual
+  - S.global.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: global
+    swapped:
+    - attn_norm
+    - attention
+    - post_attn_norm
+    - attn_residual
+    - ffn_norm
+    - mlp
+    - post_mlp_norm
+    - router
+    - moe_norm
+    - experts
+    - post_moe_norm
+    - ffn_combine
+    - post_ffn_norm
+    - ffn_residual
+    layer: 5
+  frozen:
+    at: '2026-09-26T03:34:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/gemma4_a4b_d_p/tests/bringup/test_swap_global_14_ffn_residual.py: f7569744c7c3036958c3f1a417b2e41f74b041c85b4979393fd02abb16e69e5e
+      /localdev/dnijemcevic/bringup/gemma4_a4b_d_p/golden/s4096_c2048/manifest.json: 89150a1755ca5a7eb3c565a64380f7f0c3db956e77546442588bf8d206f0927d
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - S.sliding.14
+  - S.global.14
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/gemma4_a4b_d_p/tt
+  - models/demos/common/prefill/adapter.py
+- id: P.1
+  title: Assemble the all-device model (hidden state on the device; no host work per step)
+  step: perf
+  role: assemble
+  deps:
+  - K.1
+  device: true
+  paths: *id003
+  brief:
+    details: 'tt/model.py (TtGemma4Model, written for K.1) already keeps the hidden state on the device and builds RoPE once
+      at load. Make the ladder/profile `device_model` hook in bringup/hooks.py an adapter over it (new_state, embed, from_host,
+      to_host, layer, final_norm, logits, free, sync) instead of HybridDeviceModel, so both paths share one model. Each block''s
+      forward goes through run_block(block_graph, ...) with the device modules, so the profiler sees one section per step.
+      Remove the per-chunk host uploads: RoPE tables and the global layers'' page-table slices come from device tensors built
+      once at load. Keep HybridDeviceModel behind BRINGUP_HYBRID=1. Only the LM head may stay on the host (ladder logits only).'
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py &&
+      TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      host_transfers_per_layer: == 0
+      pcc_chunk_out: '>= 0.97'
+      chunk_wall_ms: < 5000
+      device_ms_total: '> 0'
+- id: X.1
+  title: Warm per-section, per-chip profile of the all-device model (last chunk on the golden prefix)
+  step: perf
+  deps:
+  - P.1
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+      pcc_chunk_out: '>= 0.97'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/gemma4_a4b_d_p/bringup/opportunities.md
+- id: P.2
+  title: SDPA config A (HiFi2, fp32 dest acc off -> streaming kernel, approx exp) for sliding and global attention
+  step: perf
+  role: perf
+  deps:
+  - X.2
+  device: true
+  paths: *id003
+  brief:
+    details: 'Baseline (X.1): 742.8 ms for the last 5120-token chunk on the 51200-token golden prefix; attention 381 ms (51%).
+      Apply the SDPA settings that took ERNIE''s 50k->55k SDPA from 1328 to 203 ms (commit e35159e2651, models/demos/ernie45_d_p/tt/attention.py:
+      sdpa_settings): compute kernel config math_fidelity=HiFi2, fp32_dest_acc_en=False (fp32 dest acc disables SDPA''s streaming
+      kernel on Blackhole, sdpa_program_factory.cpp:75), packer_l1_acc=False, math_approx_mode=False; SDPAProgramConfig exp_approx_mode=True,
+      q_chunk_size=256, k_chunk_size=512, full compute grid. Apply it to both the sliding (head_dim 256) and the global (head_dim
+      512) SDPA; if a chunk size does not fit L1 for head_dim 512, use the largest that does and say so. Keep the bring-up
+      config selectable (env GEMMA4_SDPA_CFG=base) and record the active preset in the model''s perf_settings(). Leave the
+      other matmuls as they are.'
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_chunk_out: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attention: < 250
+      chunk_wall_ms: < 620
+      device_ms_total: '> 0'
+- id: P.3
+  title: Profile sub-sections inside attention (qkv, head norms, rope, kv write, sdpa, o_proj)
+  step: perf
+  role: perf
+  deps:
+  - P.2
+  device: true
+  paths: *id003
+  brief:
+    details: After P.2 attention is 248 ms of the 609 ms chunk (last 5120 tokens on the 51200 golden prefix), but the profile
+      shows it as one section, so SDPA cannot be told apart from the projections. In tt/attention.py (sliding and global),
+      call models.demos.common.bringup.testing.profiler.signpost(name) before each sub-step, with names attention.qkv, attention.head_norm,
+      attention.rope, attention.kv_write, attention.sdpa, attention.o_proj (plus attention.ccl if the output all-reduce is
+      separate). signpost is a no-op unless the profiler is on, so timing and serving are unchanged. Change nothing else;
+      the numbers must stay as P.2's.
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_chunk_out: '>= 0.97'
+      host_transfers_per_layer: == 0
+      device_ms_attention_sdpa: '> 0'
+      device_ms_attention_qkv: '> 0'
+      device_ms_attention_o_proj: '> 0'
+      chunk_wall_ms: < 640
+- id: X.3
+  title: 'Final: full 56k accuracy and warm full-prefill time (no readback) on the tuned model'
+  step: perf
+  deps:
+  - P.3
+  device: true
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --no-precompile models/demos/common/bringup/tests/test_ladder.py &&
+      BRINGUP_FULL_PREFILL=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      pcc_final_hidden: '>= 0.97'
+      top5_overlap: '>= 0.9'
+      prefill_ms_full: '> 0'
+      pcc_chunk_out: '>= 0.97'
+- id: X.4
+  title: 'Chunk time by position: one warm 5k chunk at 0, 50k, 100k, 150k, 200k'
+  step: perf
+  deps:
+  - X.3
+  device: true
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pos_chunk: '>= 1'
+      pos_ms_204800: '> 0'
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/gemma4_a4b_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/gemma4_a4b_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true

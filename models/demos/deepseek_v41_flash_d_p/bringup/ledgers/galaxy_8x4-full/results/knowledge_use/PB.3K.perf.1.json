@@ -1,0 +1,99 @@
+{
+ "used": [
+  {
+   "id": "DS41-145",
+   "how": "per-core runtime args are the host cost: unpack_fp8_rows' 5 value slots x 110 cores -> decodes on a 4 x 2 rectangle (250-340 -> ~100 us a call); LaneRows keeps 4 cores and a per-chip constant table instead of per-chip args",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-298",
+   "how": "pointed at the engram jobs as exposed host: the probe recorded the worker's job spans against the main thread's stalls and found the pinned upload's device drain (DS41-332)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-147",
+   "how": "LaneRows is one program for the mesh (each chip finds its pieces in a sharded constant), not one per mesh coordinate; snapshot sends / sdpa kv_lanes left as per-chip programs and named as what is left",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "expected a fresh device open on every python reload of the held model: batched several changes per probe iteration and ran the mesh-only LaneRows test where a reload was due anyway",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-171",
+   "how": "every Python-built op I added (LaneRows) goes through ttnn.bringup.prepare_program / run_prepared with value slots",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-298",
+   "evidence": "PB.3K: on the packed 8192-row chunk the engram stall is not host work but tt-metal's pinned write path: copy_host_to_device_tensor > 32 MiB -> enqueue_write_shards(blocking=True) -> finish() under the CQ lock (tt_metal/impl/tensor/tensor_apis.cpp:170, mesh_command_queue_base.cpp:394); the same 53.5 MB upload is 0.7 ms on an idle device, 6.3-6.9 ms inside the chunk; two uploads < 32 MiB are non-blocking (layer 1 wait 7 -> 0.01 ms). The entry's fix (defer the job) does not remove it; DS41-332 added.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "tt-metal's host->device tensor write is BLOCKING (finish under the command-queue lock) above 32 MiB (pinned path): any per-chunk upload over 32 MiB drains the device pipeline; now DS41-332",
+  "how to find where the host is on the critical path of a chunk: inject a host sleep after layer L and read the wall growth (the device's lead there); per-op host times are polluted by blocking waits landing on whichever op is issued"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work added; the engram upload is split into pieces of the same total bytes, the batched served writes move the same rows"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; no owner decision needed: the switch's changes are bit-identical (probe on/off check: engram rows equal, 200/200 slot digests equal; test_lane_rows 12/12 bit-exact)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no load-time env in any test; the new test (tests/packed/test_lane_rows.py) is mesh-only BATCH_SHARED; walls measured on the gate's walls config with the call-time switch"
+  },
+  {
+   "id": "OV-62",
+   "answer": "done",
+   "evidence": "walls unchanged (one slot capacity at the deployment context, the one-ring indexer in every case incl. mixed): 4x2k 110.2 ms, mixed 127.5 ms"
+  }
+ ],
+ "cited_only": [
+  "DS41-332"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.3K",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T06:30:19",
+  "head": "ac706c7f2c7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.3K.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.3K.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_lane_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/lane_rows.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

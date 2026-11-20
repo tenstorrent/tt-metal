@@ -1,0 +1,418 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "sparse_sdpa_device_operation.hpp"
+#include "kernels/sparse_sdpa_common.hpp"
+#include "ttnn/device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include "ttnn/device.hpp"
+#include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
+#include <bit>
+
+namespace ttnn::prim::bringup {
+
+namespace {
+// All input invariants the program hash does NOT key on, so they can vary while hitting the same cached
+// program and must be re-checked on EVERY dispatch (miss AND hit). The hash keys only on q/indices shape+dtype
+// and kv dtype+memory_config — NOT on tensor layout, padding, q/indices buffer type/sharding, the logical shape
+// of a plain interleaved kv, cache_batch_idx (a dynamic runtime arg), or device placement. The accessors assume
+// ROW_MAJOR, unpadded, DRAM, interleaved q/indices, so a cache hit with a tiled/padded/L1/sharded/off-device tensor
+// would otherwise run on wrong assumptions. K_DIM comes from q, whose shape IS hashed, so it is pinned. Shared by
+// validate_on_program_cache_miss and _hit.
+void validate_non_hashed(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    const auto& q = t.q;
+    const auto& kv = t.kv;
+    const auto& idx = t.indices;
+    TT_FATAL(
+        q.device() == kv.device() && q.device() == idx.device(), "sparse_sdpa: all inputs must be on the same device");
+    if (t.attention_sink.has_value()) {
+        const auto& sink = t.attention_sink.value();
+        TT_FATAL(
+            sink.storage_type() == StorageType::DEVICE && sink.is_allocated(),
+            "Attention sink tensor must be on device");
+        TT_FATAL(sink.device() == q.device(), "Attention sink must be on the same device as Q");
+        TT_FATAL(sink.dtype() == DataType::BFLOAT16, "Attention sink must be BF16");
+        TT_FATAL(sink.layout() == Layout::ROW_MAJOR, "Attention sink must be ROW_MAJOR");
+        TT_FATAL(sink.memory_config().buffer_type() == BufferType::DRAM, "Attention sink must be in DRAM");
+        TT_FATAL(!sink.memory_config().is_sharded(), "Attention sink must be interleaved");
+        TT_FATAL(
+            sink.logical_shape() == ttnn::Shape({1, 1, 1, q.logical_shape()[1]}),
+            "Attention sink must have shape [1, 1, 1, H] matching Q heads");
+        TT_FATAL(sink.padded_shape() == sink.logical_shape(), "Attention sink must not be padded");
+    }
+
+    // q and indices: ROW_MAJOR, DRAM, interleaved, unpadded (row-major paged-accessor assumptions).
+    for (const Tensor* tp : {&q, &idx}) {
+        TT_FATAL(tp->layout() == Layout::ROW_MAJOR, "sparse_sdpa q/indices must be ROW_MAJOR");
+        TT_FATAL(tp->memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa q/indices must be in DRAM");
+        TT_FATAL(!tp->memory_config().is_sharded(), "sparse_sdpa q/indices must be interleaved");
+        TT_FATAL(tp->padded_shape() == tp->logical_shape(), "sparse_sdpa q/indices must not be padded");
+    }
+    // kv: ROW_MAJOR and unpadded; may be interleaved OR ND-sharded DRAM (the accessor resolves the per-page
+    // bank/shard either way — kv's DRAM/shard layout is pinned via the hashed kv.memory_config(), its
+    // ROW_MAJOR layout and padding are not).
+    TT_FATAL(kv.layout() == Layout::ROW_MAJOR, "sparse_sdpa KV cache must be ROW_MAJOR");
+    TT_FATAL(kv.padded_shape() == kv.logical_shape(), "sparse_sdpa KV cache must not be padded");
+    TT_FATAL(kv.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa KV cache must be in DRAM");
+    const uint32_t K_DIM = q.logical_shape()[3];
+    const auto kvs = kv.logical_shape();
+    // kv is [B,1,T,K_DIM]: B == 1 normally; when indexed (cache_batch_idx set) B is the cache's batch slots
+    // and cache_batch_idx selects one. q is always batch-1, so the selected slot serves the whole query.
+    const uint32_t expected_kv_width = attrs.has_scaled_kv()
+                                           ? ::sparse_sdpa::packed_kv_payload_bytes(K_DIM, attrs.v_dim)
+                                       : attrs.has_row_bfp4() ? ::sparse_sdpa::row_bfp4_bytes(K_DIM)
+                                       : attrs.has_row_bfp8() ? ::sparse_sdpa::row_bfp8_bytes(K_DIM)
+                                                              : K_DIM;
+    // ROW_BFP8 also takes the window as blocks of 32 rows a page ([n / 32, window_block_bytes])
+    const bool kv_blocks =
+        attrs.has_row_bfp8() && kvs.rank() == 4 && kvs[3] == ::sparse_sdpa::window_block_bytes(K_DIM);
+    TT_FATAL(
+        kvs.rank() == 4 && kvs[1] == 1 && (kvs[3] == expected_kv_width || kv_blocks),
+        "kv must be [B,1,T,{}] (got {})",
+        expected_kv_width,
+        kvs);
+    TT_FATAL(kvs[2] > 0, "kv T (cache length) must be > 0");
+    const uint32_t B = kvs[0];
+    if (attrs.cache_batch_idx.has_value()) {
+        TT_FATAL(
+            attrs.cache_batch_idx.value() < B,
+            "cache_batch_idx ({}) must be < kv batch slots ({})",
+            attrs.cache_batch_idx.value(),
+            B);
+    } else {
+        TT_FATAL(B == 1, "kv batch must be 1 unless cache_batch_idx is set (got {})", B);
+    }
+    // ROW_BFP4 (fork option): the bf16 window rows of the first k_chunk (needed); BF16 may take a bf16 kv_window
+    // (fork option KV_WINDOW: [window k_chunk | top-k] lists, chunk 0 from kv_window); any other format takes none.
+    TT_FATAL(
+        attrs.has_row_bfp4()
+            ? t.kv_window.has_value()
+            : (!t.kv_window.has_value() || attrs.kv_format == transformer::bringup::SparseKVFormat::BF16),
+        "sparse_sdpa: kv_window is given with kv_format ROW_BFP4 (required) or BF16 (optional) only");
+    if (t.kv_window.has_value()) {
+        const auto& w = t.kv_window.value();
+        TT_FATAL(w.device() == q.device(), "sparse_sdpa: kv_window must be on q's device");
+        const bool rec8 = w.dtype() == DataType::UINT8;  // bfloat8_b row records (fork option)
+        TT_FATAL(attrs.has_row_bfp4() || !rec8, "sparse_sdpa: a BF16 kv takes a bf16 kv_window (KV_WINDOW)");
+        TT_FATAL(
+            w.dtype() == DataType::BFLOAT16 || rec8, "sparse_sdpa: kv_window must be bf16 or uint8 bfloat8_b records");
+        TT_FATAL(w.layout() == Layout::ROW_MAJOR, "sparse_sdpa: kv_window must be ROW_MAJOR");
+        TT_FATAL(w.memory_config().buffer_type() == BufferType::DRAM, "sparse_sdpa: kv_window must be in DRAM");
+        TT_FATAL(!w.memory_config().is_sharded(), "sparse_sdpa: kv_window must be interleaved");
+        TT_FATAL(w.padded_shape() == w.logical_shape(), "sparse_sdpa: kv_window must not be padded");
+        const auto ws = w.logical_shape();
+        TT_FATAL(
+            ws.rank() == 4 && ws[0] == 1 && ws[1] == 1 && ws[2] > 0 &&
+                (ws[3] == (rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM) ||
+                 (rec8 && ws[3] == ::sparse_sdpa::window_block_bytes(K_DIM))),
+            "sparse_sdpa: kv_window must be [1,1,Tw,{}] (or bfloat8_b blocks [1,1,Tw/32,{}]) (got {})",
+            rec8 ? ::sparse_sdpa::row_bfp8_bytes(K_DIM) : K_DIM,
+            ::sparse_sdpa::window_block_bytes(K_DIM),
+            ws);
+    }
+}
+}  // namespace
+
+void SparseSDPAOperation::validate_on_program_cache_hit(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    validate_non_hashed(attrs, t);
+}
+
+void SparseSDPAOperation::validate_on_program_cache_miss(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    const auto& q = t.q;
+    const auto& kv = t.kv;
+    const auto& idx = t.indices;
+
+    TT_FATAL(q.device()->arch() == tt::ARCH::BLACKHOLE, "sparse_sdpa is Blackhole-only");
+
+    // dtypes. q and kv may each be bf16 or fp8_e4m3 — fp8 halves that input's K/Q-gather bytes; the reader
+    // gathers it row-major and compute tilizes fp8 -> bfp8_b cb_*_in (near-lossless, also halves the L1).
+    // fp8 inputs require fp32_dest_acc_en (the unpack-to-dest path); enforced below.
+    const bool kv_is_fp8 = (kv.dtype() == DataType::FP8_E4M3);
+    const bool q_is_fp8 = (q.dtype() == DataType::FP8_E4M3);
+    TT_FATAL(
+        q.dtype() == DataType::BFLOAT16 || q_is_fp8 || (q.dtype() == DataType::FLOAT32 && attrs.fp32_scores),
+        "q must be bf16 or fp8_e4m3 (float32 only with fp32_scores)");
+    TT_FATAL(
+        kv.dtype() == DataType::BFLOAT16 || kv_is_fp8 || attrs.has_row_bfp4() || attrs.has_row_bfp8(),
+        "kv must be bf16 or fp8_e4m3 (uint8 with ROW_BFP4 / ROW_BFP8)");
+    switch (attrs.kv_format) {
+        case transformer::bringup::SparseKVFormat::BF16:
+            TT_FATAL(kv.dtype() == DataType::BFLOAT16, "BF16 sparse KV format requires bfloat16 storage");
+            if (t.kv_window.has_value()) {  // KV_WINDOW (fork option)
+                TT_FATAL(q.dtype() == DataType::BFLOAT16, "BF16 sparse KV format with a kv_window requires a bf16 q");
+                TT_FATAL(
+                    !attrs.has_block_cyclic(), "BF16 sparse KV format with a kv_window does not support block_cyclic");
+                TT_FATAL(
+                    t.indices.logical_shape()[3] > attrs.k_chunk_size,
+                    "BF16 sparse KV format with a kv_window needs TOPK > k_chunk_size (the first k_chunk is the "
+                    "window)");
+            }
+            break;
+        case transformer::bringup::SparseKVFormat::FP8_E4M3:
+            TT_FATAL(kv_is_fp8, "FP8_E4M3 sparse KV format requires fp8_e4m3 storage");
+            break;
+        case transformer::bringup::SparseKVFormat::SCALED_FP8:
+            TT_FATAL(kv_is_fp8, "SCALED_FP8 sparse KV format requires fp8_e4m3 byte storage");
+            break;
+        case transformer::bringup::SparseKVFormat::ROW_BFP4:
+            TT_FATAL(kv.dtype() == DataType::UINT8, "ROW_BFP4 sparse KV format requires uint8 row records");
+            TT_FATAL(q.dtype() == DataType::BFLOAT16, "ROW_BFP4 sparse KV format requires a bf16 q");
+            TT_FATAL(!attrs.has_block_cyclic(), "ROW_BFP4 sparse KV format does not support block_cyclic");
+            TT_FATAL(
+                q.logical_shape()[3] == 512,
+                "ROW_BFP4 needs K_DIM 512 (its two 32 B exponent copies cover a 64 B DRAM read line), got {}",
+                q.logical_shape()[3]);
+            TT_FATAL(
+                t.indices.logical_shape()[3] > attrs.k_chunk_size,
+                "ROW_BFP4 needs TOPK > k_chunk_size (the first k_chunk is the window)");
+            break;
+        case transformer::bringup::SparseKVFormat::ROW_BFP8:
+            TT_FATAL(kv.dtype() == DataType::UINT8, "ROW_BFP8 sparse KV format requires uint8 row records");
+            TT_FATAL(q.dtype() == DataType::BFLOAT16, "ROW_BFP8 sparse KV format requires a bf16 q");
+            TT_FATAL(!attrs.has_block_cyclic(), "ROW_BFP8 sparse KV format does not support block_cyclic");
+            TT_FATAL(!attrs.has_indexed_kv_cache(), "ROW_BFP8 sparse KV format does not support cache_batch_idx");
+            TT_FATAL(q.logical_shape()[3] == 512, "ROW_BFP8 needs K_DIM 512, got {}", q.logical_shape()[3]);
+            TT_FATAL(
+                t.indices.logical_shape()[3] == attrs.k_chunk_size,
+                "ROW_BFP8 needs TOPK == k_chunk_size (the window only)");
+            break;
+    }
+    if (attrs.has_scaled_kv()) {
+        TT_FATAL(
+            attrs.v_dim % ::sparse_sdpa::SCALE_BLOCK_WIDTH == 0,
+            "scaled KV v_dim must be divisible by {}",
+            ::sparse_sdpa::SCALE_BLOCK_WIDTH);
+        TT_FATAL(
+            ::sparse_sdpa::scaled_kv_rope_offset_is_aligned(attrs.v_dim),
+            "scaled KV scale/RoPE boundary must be {}-byte aligned (got v_dim={})",
+            ::sparse_sdpa::PACKED_FIELD_ADDRESS_UNIT_BYTES,
+            attrs.v_dim);
+    }
+    TT_FATAL(idx.dtype() == DataType::UINT32, "indices must be uint32");
+    if (attrs.high_precision) {
+        TT_FATAL(
+            get_fp32_dest_acc_en(attrs.compute_kernel_config),
+            "sparse_sdpa high_precision requires fp32_dest_acc_en=true");
+        TT_FATAL(
+            (q.dtype() == DataType::BFLOAT16 || (q.dtype() == DataType::FLOAT32 && attrs.fp32_scores)) &&
+                attrs.kv_format == transformer::bringup::SparseKVFormat::BF16,
+            "sparse_sdpa high_precision supports bf16 q and a BF16 kv only (a float32 q with fp32_scores)");
+    }
+    TT_FATAL(!attrs.fp32_output || attrs.high_precision, "sparse_sdpa fp32_output requires high_precision=true");
+    TT_FATAL(
+        !attrs.fp32_scores || (attrs.high_precision && (attrs.fp32_output || attrs.bf16_probs)),
+        "sparse_sdpa fp32_scores requires high_precision=true and fp32_output=true (or bf16_probs=true)");
+    TT_FATAL(
+        !attrs.bf16_probs || (attrs.fp32_scores && q.dtype() == DataType::BFLOAT16),
+        "sparse_sdpa bf16_probs requires fp32_scores=true and a bf16 q");
+
+    const auto qs = q.logical_shape();
+    const auto is = idx.logical_shape();
+    TT_FATAL(qs.rank() == 4 && qs[0] == 1, "q must be [1,H,S,K_DIM]");
+    const uint32_t H = qs[1];
+    const uint32_t S = qs[2];
+    const uint32_t K_DIM = qs[3];  // head dim, taken from the tensor (not hardcoded)
+    // H heads map to H/TILE_HEIGHT query tile-rows (compute processes them in DST-sized groups, so DST
+    // doesn't cap H). The upper bound is the per-core L1 budget — the flash state (out/max/sum) and Q both
+    // scale with H — so a too-large H simply fails CB allocation at program creation rather than here.
+    constexpr uint32_t tile_h = tt::constants::TILE_HEIGHT;
+    TT_FATAL(H % tile_h == 0 && H >= tile_h, "sparse_sdpa: H must be a multiple of {} (got {})", tile_h, H);
+    // Validate v_dim before validate_non_hashed derives the packed mixed-format row width. In particular,
+    // reject v_dim > K_DIM before the unsigned RoPE-width subtraction.
+    TT_FATAL(attrs.v_dim > 0 && attrs.v_dim <= K_DIM, "v_dim must be in (0, K_DIM={}] (got {})", K_DIM, attrs.v_dim);
+    TT_FATAL(
+        attrs.v_dim % tt::constants::TILE_WIDTH == 0,
+        "v_dim must be a multiple of {} (got {})",
+        tt::constants::TILE_WIDTH,
+        attrs.v_dim);
+    TT_FATAL(
+        K_DIM % tt::constants::TILE_WIDTH == 0,
+        "K_DIM (q/kv last dim) must be a multiple of {} (got {})",
+        tt::constants::TILE_WIDTH,
+        K_DIM);
+    // All non-hashed invariants (q/indices/kv layout+memory+padding, kv shape, cache_batch_idx, same-device).
+    // kv may be oversized: a persistent max-size cache whose logical T far exceeds the keys any query attends
+    // to. No valid-length bound is needed — reads are index-driven (indices < populated length, sentinels mark
+    // unused slots), so the unpopulated suffix is never addressed.
+    validate_non_hashed(attrs, t);
+    // Block-cyclic remap: indices are natural positions; the kernel maps them to physical pages with sp and
+    // chunk_local. seq_len_local = T/sp and slabs = seq_len_local/chunk_local must be integral. (sp and
+    // chunk_local were already resolved+cross-checked at the ttnn entry; these are the device-side backstops.)
+    // Miss-only is sufficient: sp, chunk_local AND T are all folded into the program hash (see
+    // compute_program_hash), so a cache HIT has identical values already validated by the miss that built it.
+    if (attrs.has_block_cyclic()) {
+        const auto& bc = attrs.block_cyclic.value();
+        const uint32_t T = kv.logical_shape()[2];
+        TT_FATAL(bc.sp > 0, "block_cyclic.sp must be > 0");
+        TT_FATAL(bc.chunk_local > 0, "block_cyclic.chunk_local must be > 0");
+        TT_FATAL(T % bc.sp == 0, "kv length T ({}) must be divisible by block_cyclic.sp ({})", T, bc.sp);
+        TT_FATAL(
+            (T / bc.sp) % bc.chunk_local == 0,
+            "seq_len_local (T/sp = {}) must be divisible by block_cyclic.chunk_local ({})",
+            T / bc.sp,
+            bc.chunk_local);
+    }
+    TT_FATAL(is.rank() == 4 && is[0] == 1 && is[1] == 1 && is[2] == S, "indices must be [1,1,S,TOPK]");
+    const uint32_t TOPK = is[3];
+    TT_FATAL(S > 0 && TOPK > 0, "S/TOPK must be > 0");
+
+    // k_chunk_size: multiple of the tile width (it tiles the key axis), divides TOPK
+    constexpr uint32_t tile_w = tt::constants::TILE_WIDTH;
+    TT_FATAL(
+        attrs.k_chunk_size >= tile_w && attrs.k_chunk_size % tile_w == 0,
+        "k_chunk_size must be a multiple of {} (got {})",
+        tile_w,
+        attrs.k_chunk_size);
+    TT_FATAL(TOPK % attrs.k_chunk_size == 0, "k_chunk_size must divide TOPK");
+    TT_FATAL(attrs.scale > 0.0f, "scale must be > 0");
+
+    // Row-byte alignment: each Q/K/index/output row is a DRAM page the reader DMAs from / the writer DMAs
+    // to (and tensors are unpadded, so the page == one row). The row byte count must be a multiple of the
+    // DRAM access alignment; that also covers the in-L1 row offsets (DRAM alignment >= L1 alignment).
+    // Each Q/K row is one DRAM page in its native dtype (fp8 -> 1 byte, bf16 -> 2). The output dtype
+    // matches q (compute_output_specs), so its row width uses q's element size.
+    const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
+    TT_FATAL((K_DIM * q.element_size()) % dram_align == 0, "Q row bytes must be {}B aligned", dram_align);
+    if (!attrs.has_scaled_kv() && !attrs.has_row_bfp4() && !attrs.has_row_bfp8()) {
+        TT_FATAL(
+            (kv.logical_shape()[3] * kv.element_size()) % dram_align == 0,
+            "K row bytes must be {}B aligned",
+            dram_align);
+    }
+    TT_FATAL((TOPK * idx.element_size()) % dram_align == 0, "indices row bytes must be {}B aligned", dram_align);
+    TT_FATAL((attrs.v_dim * q.element_size()) % dram_align == 0, "output row bytes must be {}B aligned", dram_align);
+
+    // fp8 q/kv tilizes through a 32-bit dest accumulator (fp8 unpacks to fp32 in DEST, packs to bf16/bfp8),
+    // so it requires fp32_dest_acc_en. The op factory defaults it on for fp8 inputs (see sparse_sdpa.cpp).
+    // (fp32_dest_acc_en is otherwise free: the compute kernel processes the H/TILE_HEIGHT query tile-rows in
+    // DST-sized groups, so DST never caps H — only per-core L1 does.)
+    TT_FATAL(
+        !(kv_is_fp8 || q_is_fp8) || get_fp32_dest_acc_en(attrs.compute_kernel_config),
+        "fp8 q/kv requires fp32_dest_acc_en=true (32-bit dest for the fp8 tilize)");
+}
+
+SparseSDPAOperation::spec_return_value_t SparseSDPAOperation::compute_output_specs(
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    auto shape = t.q.logical_shape();  // [1, H, S, K_DIM]
+    shape[3] = attrs.v_dim;            // [1, H, S, v_dim]
+    // Output dtype matches q (bf16 -> bf16, fp8_e4m3 -> fp8_e4m3): the final untilize packs the bf16
+    // accumulator to the output dtype (fp8 is a regular float8, not block-float, so it untilizes fine).
+    // The output is always DRAM-interleaved ROW_MAJOR — the writer drains it with per-head-row paged
+    // noc writes, so no caller-supplied memory_config is exposed (it could only ever be this).
+    const tt::tt_metal::MemoryConfig out_mem{
+        tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM};
+    // fp32_output (fork option): Float32 instead of q's dtype.
+    const DataType out_dtype = attrs.fp32_output ? DataType::FLOAT32 : t.q.dtype();
+    return tt::tt_metal::TensorSpec(
+        shape, tt::tt_metal::TensorLayout(out_dtype, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), out_mem));
+}
+
+SparseSDPAOperation::tensor_return_value_t SparseSDPAOperation::create_output_tensors(
+    const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    return create_device_tensor(compute_output_specs(attrs, t), t.q.device());
+}
+
+ttsl::hash::hash_t SparseSDPAOperation::compute_program_hash(const SparseSDPAParams& attrs, const SparseSDPAInputs& t) {
+    // kv_format + dtypes + compute_kernel_config MUST be in the hash: q/kv may be bf16 or fp8_e4m3 (different CB
+    // formats, row byte widths, fp32-dest/unpack modes, and output dtype), scaled FP8 changes row interpretation,
+    // and fp32_dest_acc_en changes
+    // the program. Same-shape-different-dtype (or -config) calls otherwise alias to one program and the
+    // second silently reuses the first's kernel (wrong results).
+    //
+    // kv's shape is hashed ONLY when kv is sharded. For an INTERLEAVED kv the per-page address is
+    // shape-independent (just page_id, page_size, num_banks), so T rides on the accessor's common runtime
+    // args and may change without recompiling. For a SHARDED kv the per-page bank mapping derives from the
+    // tensor shape (the shard-grid strides), which is baked into the accessor at create time and is NOT
+    // re-emitted on a cache-hit fast path — so a sharded kv MUST recompile when its shape changes, else a hit
+    // would reuse stale strides and read the wrong banks. (K_DIM is pinned via q's hashed shape regardless.)
+    return tt::tt_metal::operation::hash_operation<SparseSDPAOperation>(
+        std::bit_cast<uint32_t>(attrs.scale),
+        attrs.v_dim,
+        attrs.kv_format,
+        attrs.k_chunk_size,
+        attrs.compute_kernel_config,
+        t.q.logical_shape(),
+        t.q.dtype(),
+        t.kv.dtype(),
+        // kv.memory_config(): an ND-sharded kv produces different TensorAccessor compile-time args than an
+        // interleaved one, so they must be distinct programs.
+        t.kv.memory_config(),
+        // kv.logical_shape() when sharded (see above) OR block-cyclic: the block-cyclic remap bakes its
+        // T-dependent stride gap as a compile-time argument, so the cache length T must be in the hash (a
+        // different cache size is a distinct program). A plain interleaved kv keeps T out of the hash by using
+        // a sentinel shape, so changing only T does not recompile.
+        (t.kv.memory_config().is_sharded() || attrs.has_block_cyclic()) ? t.kv.logical_shape() : tt::tt_metal::Shape{},
+        // Only whether kv is indexed (not which slot): cache_batch_idx's VALUE is re-applied per dispatch
+        // (see override_runtime_arguments), so indexing into a different slot reuses the same program.
+        attrs.has_indexed_kv_cache(),
+        // Block-cyclic remap configuration is compile-time; distinct sp/chunk_local/cache-size values produce
+        // distinct programs (T is hashed above). No runtime remap arg.
+        attrs.has_block_cyclic(),
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->sp : 0u,
+        attrs.block_cyclic.has_value() ? attrs.block_cyclic->chunk_local : 0u,
+        t.indices.logical_shape(),
+        t.indices.dtype(),
+        t.attention_sink,
+        attrs.high_precision,
+        attrs.fp32_output,
+        attrs.fp32_scores,
+        attrs.bf16_probs,
+        attrs.max_grid.has_value() ? attrs.max_grid->x : 0u,
+        attrs.max_grid.has_value() ? attrs.max_grid->y : 0u,
+        // ROW_BFP4: the window tensor's memory config (its accessor's compile-time args); absent otherwise.
+        t.kv_window.has_value() ? std::optional<tt::tt_metal::MemoryConfig>(t.kv_window->memory_config())
+                                : std::nullopt,
+        // the window's dtype (bf16 rows or bfloat8_b records: SPARSE_SDPA_WINDOW_BFP8)
+        t.kv_window.has_value() ? std::optional<DataType>(t.kv_window->dtype()) : std::nullopt,
+        // the window's row width: records or blocks (SPARSE_SDPA_WINDOW_BLOCKS)
+        t.kv_window.has_value() ? t.kv_window->logical_shape()[-1]
+        : attrs.has_row_bfp8()  ? t.kv.logical_shape()[-1]
+                                : 0u);
+}
+
+Tensor sparse_sdpa(
+    const Tensor& q,
+    const Tensor& kv,
+    const Tensor& indices,
+    float scale,
+    uint32_t v_dim,
+    transformer::bringup::SparseKVFormat kv_format,
+    uint32_t k_chunk_size,
+    ttnn::DeviceComputeKernelConfig compute_kernel_config,
+    std::optional<uint32_t> cache_batch_idx,
+    std::optional<BlockCyclicLayout> block_cyclic,
+    const std::optional<Tensor>& attention_sink,
+    bool high_precision,
+    bool fp32_output,
+    bool fp32_scores,
+    bool bf16_probs,
+    const std::optional<Tensor>& kv_window,
+    std::optional<tt::tt_metal::CoreCoord> max_grid) {
+    using OperationType = ttnn::prim::bringup::SparseSDPAOperation;
+    return ttnn::device_operation::launch<OperationType>(
+        OperationType::operation_attributes_t{
+            .scale = scale,
+            .v_dim = v_dim,
+            .kv_format = kv_format,
+            .k_chunk_size = k_chunk_size,
+            .compute_kernel_config = compute_kernel_config,
+            .cache_batch_idx = cache_batch_idx,
+            .block_cyclic = block_cyclic,
+            .high_precision = high_precision,
+            .fp32_output = fp32_output,
+            .fp32_scores = fp32_scores,
+            .bf16_probs = bf16_probs,
+            .max_grid = max_grid,
+        },
+        OperationType::tensor_args_t{
+            .q = q,
+            .kv = kv,
+            .indices = indices,
+            .attention_sink = attention_sink,
+            .kv_window = kv_window,
+        });
+}
+
+}  // namespace ttnn::prim::bringup

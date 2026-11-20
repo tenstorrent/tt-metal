@@ -1,0 +1,38 @@
+{
+ "used": [],
+ "contradicted": [],
+ "missing": [
+  "testing/profiler.py align_timeline compares every outermost ttnn call, including ttnn.deallocate (1803 of 3796 calls in X.3's op profile), so a model whose deallocate count varies run to run fails timeline_ok even though the device work is identical",
+  "The X.3 profile (8 op layers, full prefill on) takes about 30 min, past the 20-min background limit a foreground call is moved to; it needs run_in_background with a long timeout (DS41-87 says the same for 2 layers at 12 min)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.5",
+   "answer": "done",
+   "evidence": "PENDING"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "PENDING"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.5",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-10-21T09:42:21",
+  "head": "11227c02e71",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.5.overseer.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py",
+   "tests/ttnn/unit_tests/operations/ds41_fix5/test_seqdiff.py"
+  ]
+ }
+}

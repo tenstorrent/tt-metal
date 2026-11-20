@@ -20,6 +20,7 @@ struct IndexedEntryCopyDeviceOperation {
     using program_factory_t = std::variant<IndexedEntryCopyProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
 };
@@ -30,6 +31,8 @@ Tensor indexed_entry_copy(
     const Tensor& index,
     uint32_t index_scale,
     uint32_t index_offset,
-    const std::optional<Tensor>& zero_fill_at_zero);
+    const std::optional<Tensor>& zero_fill_at_zero,
+    const std::optional<Tensor>& paired_source = std::nullopt,
+    const std::optional<Tensor>& paired_destination = std::nullopt);
 
 }  // namespace ttnn::experimental::prim

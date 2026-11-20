@@ -1,0 +1,5 @@
+# The source op's own tests: none to run in place (no ttnn/cpp/.../experimental/moe_block on this tree); the source's
+# tests are carried in this folder (tests/), run against ttnn.bringup.moe_block_main directly.
+upstream_sha: 0c0bbe59d98c61fb81eb7ce408aa5b8c319eba11
+swap: {}
+tests: []

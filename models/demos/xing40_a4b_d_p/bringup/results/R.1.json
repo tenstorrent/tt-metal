@@ -1,0 +1,53 @@
+{
+ "metrics": {
+  "checkpoint_tensors": {
+   "t": "2026-09-30T03:14:16",
+   "value": 8307
+  },
+  "config_mismatches": {
+   "t": "2026-09-30T03:14:16",
+   "value": 0
+  },
+  "count_mismatches": {
+   "t": "2026-09-30T03:14:16",
+   "value": 0
+  },
+  "intake_approved": {
+   "t": "2026-09-30T03:14:16",
+   "value": 1
+  },
+  "missing_tensors": {
+   "t": "2026-09-30T03:14:16",
+   "value": 0
+  },
+  "prompt_hash_ok": {
+   "t": "2026-09-30T03:14:22",
+   "value": 1
+  },
+  "prompt_tokens": {
+   "t": "2026-09-30T03:14:22",
+   "value": 56320
+  },
+  "revision_ok": {
+   "t": "2026-09-30T03:14:25",
+   "value": 1
+  },
+  "revision_pinned": {
+   "t": "2026-09-30T03:14:25",
+   "value": 1
+  },
+  "shape_mismatches": {
+   "t": "2026-09-30T03:14:16",
+   "value": 0
+  },
+  "smoke_ok": {
+   "t": "2026-09-30T03:14:33",
+   "value": 1
+  },
+  "text_top1_acc": {
+   "t": "2026-09-30T03:15:04",
+   "value": 0.748900830745697
+  }
+ },
+ "task": "R.1"
+}

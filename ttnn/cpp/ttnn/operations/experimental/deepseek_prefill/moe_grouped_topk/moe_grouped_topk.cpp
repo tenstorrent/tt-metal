@@ -38,7 +38,8 @@ std::array<Tensor, 2> moe_grouped_topk(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<Tensor>& padding_config,
     const std::optional<Tensor>& biased_scores,
-    tt::tt_metal::Layout weights_layout) {
+    tt::tt_metal::Layout weights_layout,
+    bool fp32_selection) {
     return ttnn::prim::moe_grouped_topk(
         scores,
         bias,
@@ -53,7 +54,8 @@ std::array<Tensor, 2> moe_grouped_topk(
         output_mem_config,
         padding_config,
         biased_scores,
-        weights_layout);
+        weights_layout,
+        fp32_selection);
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::moe_grouped_topk

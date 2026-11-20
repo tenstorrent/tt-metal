@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "DS41-35",
+   "how": "the shared expert's bfp8 weights laid out from the stored [N, K] matrices (weights_nk) so the bfp8 groups run along K",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-67",
+   "how": "the flat shared expert writes its partial in ccl.partial_dtype (bf16 under fabric_bf16), no typecast before moe_add",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-74",
+   "how": "explained the flat shared expert's +1.3 % bias (bfp8 x / h tiles under EXPERTS_PRECISION=glm) and the choice to follow that setting",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-61",
+   "how": "official path built with the routed plan (routed=True) so fp8_act_quant handles split h tiles",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "every device run with --no-precompile",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-53",
+   "how": "PYTHONPATH=$PWD on every run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "read the hand-run plain profiles from generated/bringup_adhoc/P.12.json",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-65",
+   "how": "profiler runs with TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "flat_routed_expert needs the expert intermediate to be a multiple of 256 (down kernel kt_d % 8); the planner accepts other widths and the kernel build fails (now DS41-76)",
+  "which operand bits LoFi / HiFi2 keep for fp8-valued bfp8 weights vs a bf16 activation (LoFi == HiFi2 bit for bit; the bias comes from the bf16 x; now DS41-77)",
+  "fp8_act_quant / routing_weights of flat_routed_expert refuse a token_index (indexed x)"
+ ],
+ "overseer": [],
+ "cited_only": [
+  "DS41-76",
+  "DS41-77"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.12",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-20T11:13:43",
+  "head": "e1de95b2fc2",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/P.12.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md"
+  ]
+ }
+}

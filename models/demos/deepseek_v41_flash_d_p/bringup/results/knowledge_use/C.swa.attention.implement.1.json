@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "DS41-11",
+   "how": "the scaled checkpoint has no inference/; wrote hf_scaled/quietbox_2x2/inference/config.json = ds41_ref.inference_config(scaled) (+ symlinks to the source's code files, so inference_dir still finds model.py) so the frozen contract test's caches.py:53 can read it; entry updated",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-28",
+   "how": "checked hooks.py DEVICE_STEPS['swa'] already lists attention (and every passed swa step) before running the contract",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the pcc=0 FAIL lines in the component gate as the precompile collect pass, not the real result",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-11",
+   "evidence": "the fix covered only the reference: tests/bringup/contract/caches.py:53 (model_args) still reads <hf>/inference/config.json directly; the gate's test_cache_starts failed 4/4 with FileNotFoundError (runs/run1/logs/C.swa.attention.log:2437). Entry updated in the model's known_issues.md.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "a scaled checkpoint needs every file the frozen tests read (inference/config.json), not only what the reference reads; scale.py should write it (framework)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "done",
+   "evidence": "touched known_issues.md (DS41-11); DS41-20 already reads '(RESOLVED by the framework, F73) ... the limit is now 2 x the step's own component error, no cap'; left as is"
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.attention",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T22:56:42",
+  "head": "ceef1c0b8d0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.attention.implement.1.json"
+  ]
+ }
+}

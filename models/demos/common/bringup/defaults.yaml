@@ -1,0 +1,91 @@
+# The bring-up framework's switches and their defaults: the one place they are set.
+# A model's spec.yaml overrides any of them under the same key (e.g. agents.component_review: all).
+# Framework code reads them through Spec.get / core.defaults, never from a constant of its own
+# (selftest/test_defaults.py enforces it). Change a default here, with a one-line reason.
+
+agents:
+  component_review: none   # all | none | [block types]: test-role review of component tests (F56; none since 2026-10-01)
+  swap_review: none        # all | none | [block types]: test-role review of swap tests (F49)
+  timeout_s: 0             # F252 (owner 2026-11-05): no fixed limit on an agent attempt; only a stall ends it
+  stall_s: 5400            # F252: an agent is stalled after this long with no transcript activity and no test of its own running
+  policy:                  # per role: attempts, escalate (debugger | stop), debugger_attempts
+    implement: {attempts: 3, escalate: debugger, debugger_attempts: 3, defer_after_debugger: true}
+    fix: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    reference: {attempts: 3, escalate: stop}
+    plan: {attempts: 3, escalate: stop}
+    contract: {attempts: 3, escalate: stop}
+    test: {attempts: 3, escalate: stop}
+    perf: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    assemble: {attempts: 3, escalate: debugger, debugger_attempts: 3}
+    port: {attempts: 3, escalate: debugger, debugger_attempts: 3}  # F185: a seeded run's W.1 / M.1
+    optests: {attempts: 3, escalate: stop}
+    serving: {attempts: 2, escalate: stop}
+    settings: {attempts: 2, escalate: stop}
+    scale: {attempts: 3, escalate: stop}
+    overseer: {attempts: 3, escalate: debugger, debugger_attempts: 3}  # F77: a fix the overseer queued
+
+e2e:                       # F128 (owner): end-to-end limits = calib x the reference's own drift from full precision
+  calib: 2.0               # (reference/drift.py, testing/e2e_limits.py); no fixed end-to-end bar exists
+goldens:
+  mirror: true             # F260 (owner 2026-11-06): tests read goldens from a node-local mirror (paths.golden_local) of
+                           # the shared copy (paths.golden, the source of truth), synced at run start; off: the shared copy
+reference:
+  shipped_dtype: bfloat16  # F128: the dtype the shipped code computes in (the official golden, the margin's source)
+  margin_source: reference # F136: reference (numerics official) | hf_official (owner-signed: hooks.hf_model at
+                           # shipped_dtype, layer outputs and top-5 only) for a reference that cannot run at it
+noise_floor:               # F80: the floor of every component / swap limit (testing/noise_floor.py)
+  seeds: 3                 # input-nudge runs per floor (the worst counts)
+  swap_seeds: 1            # in a swap test: for the steps before the newly swapped one (each had `seeds` in its own
+                           # swap test) and for the nudged block; the new step keeps `seeds`. CPU time: the floor runs
+                           # every swapped step again (DeepSeek-V4.1 S.swa.15: 35 s -> >300 s with 3 everywhere)
+  flip_spread: 2.0         # a selection flip is explained when both entries sit within this x the nudge's score spread of the cutoff
+  tie_rtol: 0.002          # F101: ... or within this x |cutoff| (a near tie by Momcilo's MoE-gate rule: the scores agree to rtol)
+
+tests:
+  official_floor: true        # F80: task R.5 taps the official code per step (the reference arithmetic of every limit)
+  waivers: {}                 # F85: owner waivers of a step's noise-floor checks, {<step> | <block type>.<step>: reason}
+                              # (a gap the device cannot close at its normal settings, fixed later); reported, recorded
+  contract_tail_pad: 32       # the contract test's last chunk ends this many tokens early
+  determinism_repeats: 5      # component and fork tests: A runs, A,B,A then A again, bit-identical to the first A
+                              # (testing/determinism.py; 0 turns it off). About 5 extra calls per test.
+  nondeterministic: {}        # component steps exempt from that check, {step: reason} (never the model: FIX.25)
+  model_determinism:          # FIX.25 (owner 2026-11-12): every model-level gate runs the device model twice and more
+    chunks: 4                 # on two prompts (testing/model_determinism.py): chunks per sequence from position 0
+    runs: 3                   # sequences per prompt (the first after the load cold; >= 2), compared bit for bit
+  fork_waivers: {}            # F199: owner-accepted failing fork tests, {<test id as fork_suite prints it>: reason}; WAIVED
+  one_process: true           # F259 (on: device check 2026-11-06, 3 runs 393 s vs ~20 min, accuracy identical): the A/B side's / a gate unit's profile, ladder and position runs in ONE pytest
+                              # process, the model loaded once (core/batch.py); false = a process each (until the
+                              # device check in F259 shows the numbers agree)
+  one_load: true              # F283 (OWNER 2026-11-19): with one_process, a gate loads the model at most once (its cold
+                              # determinism run aside): a gate needing more is refused before it runs, and validate
+                              # fails a queued task whose gate does; a run needing a second model fails, never a
+                              # fresh process
+
+box:
+  test_timeout_s: 3600     # one device test, seconds (hang guard)
+  chip_dram_gb: 32         # per-chip DRAM for the plan's memory check
+
+serving:
+  server_repo: ""           # tt-d-gen checkout; "" = /localdev/$USER/tt-d-gen. Asked at intake; the dgen-build agent fetches and builds it
+  require_engine: true      # runner tests fail without a tt-d-gen engine build; false lets tt-metal's prefill_producer stand in
+  max_chunk: 5120           # F67: the serving chunk (deploy.chunk, fixed on every box) and every test chunk stay at or below
+
+contract:
+  num_users: 2             # slots the contract test allocates (the serving contract may ask for more)
+  slot: 1                  # the slot it prefills
+  num_links: 1
+  pad_token: 4294967295    # 0xFFFFFFFF, what the engine sends past actual_end
+
+perf:
+  op_profile: true         # F187: per-op rows in every real-time profile (every layer, same run); on the device
+                           # profiler only when a spec sets it (representative layers, a minute each)
+  ab_mode: quick           # F122: a perf pick's A/B: quick (one process a side: the last chunk after the golden
+                           # prefix, every layer vs the golden, clean wall); full (frozen tests, ladder rungs,
+                           # profile). Quick picks' full gates run once, merged, before the final task (X.3)
+  full_prefill: false      # the full-target warm prefill in the profile
+  profiler: rt             # F155 (owner): device time from the program real-time profiler (dispatch start to end per
+                           # program, no syncs); device = the device profiler (kernel time only, a sync per section,
+                           # op mode on representative layers), for cross-checks only
+
+intake:
+  accuracy_tokens: 2048    # tokens the HF sanity scores for its accuracy floor

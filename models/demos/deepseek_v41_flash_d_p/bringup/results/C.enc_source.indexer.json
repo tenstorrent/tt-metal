@@ -1,0 +1,53 @@
+{
+ "metrics": {
+  "auto_indexer_L02_chunk0_overlap": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.998509407043457
+  },
+  "auto_indexer_L02_chunk0_worst_row": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.984375
+  },
+  "auto_indexer_L02_layer14_overlap": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.9956874847412109
+  },
+  "auto_indexer_L02_layer14_worst_row": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.9296875
+  },
+  "auto_indexer_L02_vs_cpu_overlap": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.9943666458129883
+  },
+  "auto_indexer_L02_vs_cpu_worst_row": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.98046875
+  },
+  "auto_indexer_L02_vs_golden_overlap": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.9825687408447266
+  },
+  "auto_indexer_L02_vs_golden_worst_row": {
+   "t": "2026-10-16T19:57:27",
+   "value": 0.943359375
+  },
+  "det_indexer_L02": {
+   "t": "2026-10-16T19:57:28",
+   "value": 1.0
+  },
+  "err_indexer_L02": {
+   "t": "2026-10-16T19:57:26",
+   "value": 0.017431259155273438
+  },
+  "err_indexer_L02_limit": {
+   "t": "2026-10-16T19:57:26",
+   "value": 0.03291511535644531
+  },
+  "pcc_indexer_L02": {
+   "t": "2026-10-16T19:57:26",
+   "value": 0.9825687408447266
+  }
+ },
+ "task": "C.enc_source.indexer"
+}

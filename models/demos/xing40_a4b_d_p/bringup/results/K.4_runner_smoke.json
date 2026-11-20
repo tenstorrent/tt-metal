@@ -1,0 +1,17 @@
+{
+ "task": "K.4",
+ "t": "2026-10-02T00:01:40",
+ "mode": "runner",
+ "prompt": "What is the capital of France? Answer in one word.",
+ "expected": "Paris",
+ "answer": "Paris",
+ "token_ids": [
+  9972
+ ],
+ "ok": true,
+ "seconds": 85.8,
+ "prompt_len": 135,
+ "boundary": 128,
+ "records": 160,
+ "prompt_variant": "padded smoke prompt (PAD_SYSTEM + smoke prompt)"
+}

@@ -1,0 +1,118 @@
+{
+ "used": [
+  {
+   "id": "DS41-297",
+   "how": "lanes of 2048 at 8192 are whole chips on every box (8192 % 1024 == 0); ChunkDescriptor.lane_chips asserts it, the test covers 4 boxes and the 1536 refusal",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-279",
+   "how": "test_chunk8192_reference.py raises target.seq in memory (57344 / 59392 > 56320) before the load, capped at deploy.seq",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-286",
+   "how": "design: a gather sub-device on row 0 cols 0-5 next to the Ethernet cores, compute keeping its core count (top-k ties)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-290",
+   "how": "design: 4 per-slot gather buffers + an sdpa fork table selector instead of one buffer with regions (no buffer-prefix view)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-315",
+   "how": "per-segment gather cost (packs 3 x 0.07, gathers ~0.7 ms at 142k) in the hiding budget",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-283",
+   "how": "hang history the hiding plan respects (rule 18 caps, bounded waits, smallest shape first)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-288",
+   "how": "same: STATIC_TABLES=off + overlap dispatch timeout came from 120-core programs; v2 overlap keeps every program capped",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-307",
+   "how": "sparse_sdpa per-query floor: the v1 loop's +8-10 ms and why v2 is one call with per-chip tables",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-278",
+   "how": "8192 check: P.85's replica table is not on this branch (no replication risk at 8192)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-281",
+   "how": "8192 check: programs keyed by chunk start, warm-up before walls",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "relied on the reference's fixed-tile GEMMs for bit-identical packed vs alone; found the elementwise exception (DS41-321)",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the CPU reference is row-local in its GEMMs but not in its routed SwiGLU elementwise ops (torch threading): now DS41-321",
+  "which fixed-size golden state snapshots exist (only at 51200 in s56320_c5120): decides which 8192 / packed reference comparisons are possible",
+  "a CPU-only gate command must go through scripts/run_safe_pytest.sh too: core/gate.py refuses 'python -m pytest' in any gate.cmd (PB.1's tasks.yaml gate is refused before it runs): now DS41-322"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated to fit a kernel: lane padding is the owner's v1 geometry (pad rows read / write no state), and the design excludes pad rows from MoE dispatch (PACKED_DESIGN.md sections 4, 11)"
+  },
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "started from the owner's 20:45 clarifications: serving-like inputs, per-chunk gathers from each slot's served cache, DRAM budget for 4 resident histories at 1M (section 7), hiding from the start (section 6), walls with real sessions and padded / empty lanes (section 9); attempt 1 left no code in the tree"
+  }
+ ],
+ "cited_only": [
+  "DS41-321",
+  "DS41-322",
+  "K-72"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.1",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T21:32:31",
+  "head": "c3c5408b5db",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/drafts/tt_d_gen_packed_ask.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.1.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/reference/packed_ref.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/__init__.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_chunk8192_reference.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_cpu.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -1,0 +1,401 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+//
+// End-to-end flat expert: x relay multicaster (NCRISC). Like se8_xmc.cpp, but its source is the tilizer's
+// super-blocks (MT row tiles x 32 K tiles, row tile major): each of a super-block's 4 x blocks ([MT x KBLK] tiles, row
+// tile major in the gate/up cores' x ring) goes out as MT linked multicasts of one row tile's KBLK tiles, once the
+// block's ring slot is free on every core of the rectangle (minimum of the cores' freed words). XARR is then set to
+// the number of blocks delivered, by a multicast that follows the linked data.
+// CT: 0 SB_CB, 1 MT, 2 TILE_BYTES, 3 X_SLOTS, 4 XARR_SEM, 5 WORD_SEM, 6 KBLK
+// RT: 0 x ring address, 1 rect start xy, 2 end xy, 3 dests, 4 freed words address, 5 cores whose words gate a slot,
+//     6 super-blocks this relay sends, 7 XARR semaphore id, 8 STRIDE, 9 OFF (this relay sends super-blocks OFF,
+//     OFF + STRIDE, ... in stream order; a block's ring slot follows its global index), 10 row tiles to send,
+//     m0 | m1 << 8 (0: all MT; M-groups by rectangle: the rectangle's cores only read their group's rows)
+#include <stdint.h>
+#ifndef SE_SBT
+#define SE_SBT 32  // K tiles per super-block (the row-major chunk width / 32 columns)
+#endif
+#include "api/dataflow/dataflow_api.h"
+#ifdef SE_DYN
+#include "se_dyn.hpp"
+#endif
+#ifdef SE_ZONES
+#include "api/debug/kernel_profiler.hpp"
+#define ZW(name) DeviceZoneScopedN(name)
+#else
+#define ZW(name)
+#endif
+
+void kernel_main() {
+#ifdef SE_X_RESIDENT
+    return;  // perf probe: x never moves (program factory, MIMO_FL_X_RESIDENT)
+#endif
+    constexpr uint32_t sb_cb = get_compile_time_arg_val(0);
+    constexpr uint32_t mt = get_compile_time_arg_val(1);
+    constexpr uint32_t tb = get_compile_time_arg_val(2);
+    constexpr uint32_t x_slots = get_compile_time_arg_val(3);
+    constexpr uint32_t word_sem = get_compile_time_arg_val(5);
+    constexpr uint32_t kblk = get_compile_time_arg_val(6);
+    constexpr uint32_t per_sb = SE_SBT / kblk;
+    constexpr uint32_t sb_tiles = mt * SE_SBT;
+    static_assert(SE_SBT % kblk == 0);
+    constexpr uint32_t blk_bytes = mt * kblk * tb, piece = kblk * tb;
+    const uint32_t ring = get_arg_val<uint32_t>(0);
+    const uint32_t a0 = get_arg_val<uint32_t>(1), a1 = get_arg_val<uint32_t>(2), dests = get_arg_val<uint32_t>(3);
+    volatile tt_l1_ptr uint32_t* freed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(4));
+    const uint32_t n_cores = get_arg_val<uint32_t>(5);
+#ifdef XMC_ZERO_WORDS
+    // the freed words restart every launch: zeroed here (the gate/up cores only bump them after consuming x this
+    // relay sent in this launch), so no host write is needed between launches
+    for (uint32_t i = 0; i < n_cores; ++i) {
+        freed[i] = 0;
+    }
+#endif
+    const uint32_t rows_rt = get_arg_val<uint32_t>(10);
+    const uint32_t m0 = rows_rt ? (rows_rt & 0xFF) : 0, m1 = rows_rt ? (rows_rt >> 8) : mt;
+#ifdef SE_DYN
+    // Dynamic counts: this relay's super-blocks follow from the active experts' sub-blocks (RT 14.. are the
+    // se_dyn.hpp args, CT 7 NUM_E, CB 7's upper half this RISC's scratch)
+    constexpr uint32_t num_e = get_compile_time_arg_val(7), nsb = get_compile_time_arg_val(8);
+#ifndef SE_XNH
+#define SE_XNH 1  // helpers per primary (XMC_HELPER)
+#endif
+#ifdef XMC_HELPER
+    constexpr uint32_t dyn0 = 16 + SE_XNH;
+#else
+    constexpr uint32_t dyn0 = 14;
+#endif
+    SeDyn dyn;
+    se_dyn_load<num_e>(dyn, dyn0, get_write_ptr(tt::CBIndex::c_7) + 2 * SE_DYN_HALF, mt * 32);
+    const uint32_t tot_sb = dyn.num_v * nsb, st_ = get_arg_val<uint32_t>(8), of_ = get_arg_val<uint32_t>(9);
+    const uint32_t num_sb = tot_sb > of_ ? (tot_sb - of_ + st_ - 1) / st_ : 0;
+#else
+    const uint32_t num_sb = get_arg_val<uint32_t>(6);
+#endif
+    // up to two rectangles: RT 1-3 and, when RT 11 (second rectangle's dests) is non-zero, RT 12-13 start / end xy
+    const uint32_t dests2 = get_arg_val<uint32_t>(11);
+    const uint32_t nrect = dests2 ? 2 : 1;
+    const uint32_t b0 = get_arg_val<uint32_t>(12), b1 = get_arg_val<uint32_t>(13);
+    const uint64_t rects[2] = {
+        get_noc_multicast_addr(a0 >> 16, a0 & 0xFFFF, a1 >> 16, a1 & 0xFFFF, 0),
+        dests2 ? get_noc_multicast_addr(b0 >> 16, b0 & 0xFFFF, b1 >> 16, b1 & 0xFFFF, 0) : 0};
+    const uint32_t ndest[2] = {dests, dests2};
+    volatile tt_l1_ptr uint32_t* word = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(word_sem));
+    const uint32_t xarr_addr = get_semaphore(get_arg_val<uint32_t>(7));
+    const uint32_t stride = get_arg_val<uint32_t>(8), soff = get_arg_val<uint32_t>(9);
+    // global index of this relay's k-th block
+    auto gidx = [&](uint32_t k) { return ((k / per_sb) * stride + soff) * per_sb + k % per_sb; };
+    auto min_freed = [&]() {
+        uint32_t lo = freed[0];
+        for (uint32_t i = 1; i < n_cores; ++i) {
+            lo = freed[i] < lo ? freed[i] : lo;
+        }
+        return lo;
+    };
+    uint32_t sent = 0;
+#ifdef XMC_CHAIN
+#ifdef XMC_CHAIN_HEADS
+    const uint32_t x_heads = dests;                                             // (column chains: one head per column)
+    auto x_head = [&](uint32_t hd) { return get_arg_val<uint32_t>(a1 + hd); };  // (RT 2: the list's first arg)
+#else
+    constexpr uint32_t x_heads = 1;
+    auto x_head = [&](uint32_t) { return a0; };
+#endif
+#ifndef XMC_CHAIN_DEPTH
+#define XMC_CHAIN_DEPTH 4  // batches of head writes in flight (transaction ids 1..DEPTH)
+#endif
+    // Batch b's head writes carry transaction id 1 + b % DEPTH; once they are acknowledged the heads' XARR move by
+    // that batch's pieces, in batch order (a head counts a contiguous prefix).
+    uint32_t cb_iss = 0, cb_done = 0, cb_n[XMC_CHAIN_DEPTH];
+    auto chain_retire = [&](uint32_t keep) {  // retire acknowledged batches; block while more than `keep` are out
+        // (the write command buffer drained first: an id's outstanding count only covers requests the NIU has taken -
+        // right after issuing, the last write can still sit in the command buffer and the id reads "done" early)
+        while (cb_done < cb_iss && !noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
+        }
+        while (cb_done < cb_iss && (cb_iss - cb_done > keep || ncrisc_noc_nonposted_write_with_transaction_id_flushed(
+                                                                   noc_index, 1 + cb_done % XMC_CHAIN_DEPTH))) {
+            while (!ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, 1 + cb_done % XMC_CHAIN_DEPTH)) {
+            }
+            for (uint32_t hd = 0; hd < x_heads; ++hd) {
+                const uint32_t hxy = x_head(hd);
+                noc_semaphore_inc(
+                    get_noc_addr(hxy >> 16, hxy & 0xFFFF, xarr_addr),
+                    cb_n[cb_done % XMC_CHAIN_DEPTH] * XMC_CHAIN_PIECES);
+            }
+            ++cb_done;
+        }
+    };
+#endif
+#ifdef XMC_FWD
+    // x read once (MIMO_FL_XFWD): this rectangle's relays read / tilize the super-blocks g with g % 2 == XMC_FWD_K
+    // (helpers sharing them as before, in this half's own order n = g / 2); this primary multicasts them here and
+    // forwards each (tilized) to the other primary's forward ring, and multicasts the other half from its own forward
+    // ring. RT after the dyn args: the forward ring address, the other primary's xy, the ring's slots. Semaphores
+    // (relays): 14 forwarded super-blocks landed here, 15 forward slots the other primary freed.
+    constexpr uint32_t fw_data_sem = 14, fw_credit_sem = 15;
+    const uint32_t fw_a = dyn0 + SE_DYN_NARGS;
+    const uint32_t fw_ring = get_arg_val<uint32_t>(fw_a), oxy = get_arg_val<uint32_t>(fw_a + 1);
+    const uint32_t fw_slots = get_arg_val<uint32_t>(fw_a + 2);
+    const uint64_t o_ring = get_noc_addr(oxy >> 16, oxy & 0xFFFF, fw_ring);
+    const uint64_t o_data = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_data_sem));
+    const uint64_t o_credit = get_noc_addr(oxy >> 16, oxy & 0xFFFF, get_semaphore(fw_credit_sem));
+    volatile tt_l1_ptr uint32_t* fw_data = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_data_sem));
+    volatile tt_l1_ptr uint32_t* fw_credit =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(fw_credit_sem));
+    constexpr uint32_t sb_bytes = sb_tiles * tb;
+#ifdef XMC_CHAIN
+    // (chain mode: an own super-block goes to the other primary first, as soon as it is tilized, under its own
+    // transaction id - 15, past the head batches' 1..DEPTH - and its count moves once that write is acknowledged,
+    // polled while this primary feeds its own snake: neither snake waits for the other's progress)
+    constexpr uint32_t fw_trid = 15;
+    bool fw_pending = false;
+    auto fw_poll = [&]() {
+        if (fw_pending && noc_cmd_buf_ready(noc_index, write_cmd_buf) &&
+            ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, fw_trid)) {
+            noc_semaphore_inc(o_data, 1);
+            fw_pending = false;
+        }
+    };
+#endif
+#endif
+    for (uint32_t b = 0; b < num_sb; ++b) {
+#ifdef XMC_FWD
+        const bool own = b % 2 == XMC_FWD_K;
+        const uint32_t ob = b / 2;  // this super-block's place in its half
+#else
+        constexpr bool own = true;
+        const uint32_t ob = b;
+#endif
+#ifdef XMC_HELPER
+#ifndef XMC_PRIM_ONLY
+#define XMC_PRIM_ONLY 0  // (perf probe MIMO_FL_XPRIM_ONLY: the primary reads and tilizes every super-block)
+#endif
+        // Super-blocks b with b % (1 + NH) = h + 1 were read and tilized by helper h (se13_xhelp.cpp) into landing
+        // ring h here (RT 14 helper 0 xy, 17.. helpers 1.. xy, 15 landing address (ring h follows ring h - 1), 16
+        // landing slots; DATA sem se_help_sem(h) here counts arrivals, CREDIT sem 5 on the helper counts freed slots).
+#ifdef XMC_HELP_ALL  // (MIMO_FL_XHELP_ALL: every super-block from helper b % NH, the primary reads none)
+        constexpr uint32_t hs = SE_XNH;
+#ifdef SE_SMALL_T
+        const bool from_helper = own && !dyn.small;  // small-M role split: the primary tilized all
+#else
+        const bool from_helper = own;
+#endif
+        const uint32_t hh = ob % hs, hb = ob / hs;
+#else
+        constexpr uint32_t hs = 1 + SE_XNH;
+#ifdef SE_SMALL_T
+        const bool from_helper =
+            !XMC_PRIM_ONLY && own && ob % hs != 0 && !dyn.small;  // small-M role split: the primary tilized all
+#else
+        const bool from_helper = !XMC_PRIM_ONLY && own && ob % hs != 0;
+#endif
+        const uint32_t hh = ob % hs - 1, hb = ob / hs;
+#endif
+        uint32_t src;
+#ifdef XMC_FWD
+        if (!own) {  // the other half: forwarded by the other primary
+            ZW("XMC_FW");
+#ifdef XMC_CHAIN
+            while (*fw_data < ob + 1) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
+            noc_semaphore_wait_min(fw_data, ob + 1);
+            src = fw_ring + (ob % fw_slots) * sb_bytes;
+        } else
+#endif
+            if (from_helper) {
+            ZW("XMC_HELP");
+            constexpr uint32_t help_sem[4] = {4, 7, 8, 10};
+#ifdef XMC_CHAIN
+            while (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])) < hb + 1) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(help_sem[hh])), hb + 1);
+            src = get_arg_val<uint32_t>(15) +
+                  (hh * get_arg_val<uint32_t>(16) + hb % get_arg_val<uint32_t>(16)) * sb_tiles * tb;
+        } else {
+            {
+                ZW("XMC_SB");
+#ifdef XMC_CHAIN
+                while (!cb_pages_available_at_front(sb_cb, sb_tiles)) {
+                    chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+                }
+#endif
+                cb_wait_front(sb_cb, sb_tiles);
+            }
+            src = get_read_ptr(sb_cb);
+        }
+#else
+        {
+            ZW("XMC_SB");
+#ifdef XMC_CHAIN
+            while (!cb_pages_available_at_front(sb_cb, sb_tiles)) {
+                chain_retire(XMC_CHAIN_DEPTH);  // (waiting: count acknowledged batches into the heads' XARR)
+            }
+#endif
+            cb_wait_front(sb_cb, sb_tiles);
+        }
+        const uint32_t src = get_read_ptr(sb_cb);
+#endif
+#if defined(XMC_FWD) && defined(XMC_CHAIN)
+        if (own) {  // to the other primary first (its slot ob % fw_slots, once freed there)
+            while (ob >= fw_slots && *fw_credit < ob + 1 - fw_slots) {
+                invalidate_l1_cache();
+                chain_retire(XMC_CHAIN_DEPTH);
+            }
+            for (uint32_t o = 0; o < sb_bytes; o += NOC_MAX_BURST_SIZE) {
+                const uint32_t n = sb_bytes - o < NOC_MAX_BURST_SIZE ? sb_bytes - o : NOC_MAX_BURST_SIZE;
+                noc_async_write_one_packet_with_trid(src + o, o_ring + (ob % fw_slots) * sb_bytes + o, n, fw_trid);
+            }
+            fw_pending = true;
+        }
+#endif
+        uint32_t i = 0;
+        while (i < per_sb) {
+            invalidate_l1_cache();
+#if defined(XMC_FWD) && defined(XMC_CHAIN)
+            fw_poll();
+#endif
+            const uint32_t lim = min_freed() + x_slots;
+            uint32_t n = 0;
+            while (i + n < per_sb && gidx(sent + n) < lim) {
+                ++n;
+            }
+#ifdef XMC_WHOLE_SB
+            if (i + n < per_sb) {  // wait for the whole super-block's slots: one longer linked burst
+                n = 0;
+            }
+#endif
+            if (!n) {
+                ZW("XMC_CRED");
+#ifdef XMC_CHAIN
+                // Batches in flight are only counted into the heads' XARR on retirement: every wait retires the
+                // acknowledged ones, else a compute that needs the whole ring (row passes: all Ht / KBLK blocks of a
+                // sub-block resident, GLM-5.3 24 of 24) never sees the last batch and never frees one (deadlock). The
+                // wait is for the same slot the batch needs (with XMC_WHOLE_SB the super-block's last block - waiting
+                // on the first one only could spin here without retiring: codex review) and retires at least once
+                do {
+                    invalidate_l1_cache();
+                    chain_retire(XMC_CHAIN_DEPTH);
+#ifdef XMC_FWD
+                    fw_poll();
+#endif
+#ifdef XMC_WHOLE_SB
+                } while (gidx(sent + (per_sb - 1 - i)) >= min_freed() + x_slots);
+#else
+                } while (gidx(sent) >= min_freed() + x_slots);
+#endif
+                continue;
+#endif
+#ifdef XMC_WHOLE_SB
+                while (gidx(sent + (per_sb - 1 - i)) >= min_freed() + x_slots) {
+#else
+                while (gidx(sent) >= min_freed() + x_slots) {
+#endif
+                    invalidate_l1_cache();
+                }
+                continue;
+            }
+            // the previous counter write has left L1 before its source word is reused (MIMO_FL_XRD_DYN: the relay's
+            // reads and multicasts share a NoC in dynamic-NoC mode, its counters are per RISC)
+            if constexpr (noc_mode == DM_DYNAMIC_NOC) {
+                while (!ncrisc_dynamic_noc_nonposted_writes_sent(noc_index)) {
+                }
+            } else {
+                while (!ncrisc_noc_nonposted_writes_sent(noc_index)) {
+                }
+            }
+            *word = sent + n;
+            // One linked chain per rectangle (a linked chain must keep one destination set; its last piece is
+            // unlinked), then that rectangle's XARR update, which follows the data on the same route and VC.
+            for (uint32_t q = 0; q < nrect; ++q) {
+                for (uint32_t k = 0; k < n; ++k) {
+                    const uint32_t dst = ring + (gidx(sent + k) % x_slots) * blk_bytes;
+#ifdef XMC_NODATA  // perf probe (MIMO_FL_XMC_NODATA): only the XARR counts go out
+                    continue;
+#endif
+                    for (uint32_t m = m0; m < m1; ++m) {
+#ifdef XMC_CHAIN  // (MIMO_FL_X_CHAIN: no multicast - unicast into the rectangle's chain head(s); the gate/up cores
+                  // forward along the chains, se5_recv.cpp. One head: RT 1; column chains: RT 3 heads listed from
+                  // the arg RT 2 names)
+                        if (k == 0 && m == m0) {
+                            chain_retire(XMC_CHAIN_DEPTH - 1);  // (room for this batch's id)
+                        }
+                        for (uint32_t hd = 0; hd < x_heads; ++hd) {
+                            const uint32_t hxy = x_head(hd);
+                            noc_async_write_one_packet_with_trid(
+                                src + (m * SE_SBT + (i + k) * kblk) * tb,
+                                get_noc_addr(hxy >> 16, hxy & 0xFFFF, dst + m * piece),
+                                piece,
+                                1 + cb_iss % XMC_CHAIN_DEPTH);
+                        }
+                        continue;
+#endif
+                        const bool last = k + 1 == n && m + 1 == m1;  // the chain ends before the next rectangle's
+                        noc_async_write_multicast(
+                            src + (m * SE_SBT + (i + k) * kblk) * tb,
+                            rects[q] | (dst + m * piece),
+                            piece,
+                            ndest[q],
+                            !last);
+                    }
+                }
+#ifdef XMC_CHAIN  // the heads' arrival counts move once this batch is acknowledged (chain_retire, in batch order)
+                cb_n[cb_iss % XMC_CHAIN_DEPTH] = n;
+                ++cb_iss;
+                chain_retire(XMC_CHAIN_DEPTH);
+                continue;
+#endif
+                noc_semaphore_set_multicast(reinterpret_cast<uint32_t>(word), rects[q] | xarr_addr, ndest[q]);
+            }
+            sent += n;
+            i += n;
+            noc_async_writes_flushed();
+        }
+#ifdef XMC_FWD
+        if (own) {  // forward it to the other primary (its slot ob % fw_slots, once freed there)
+            if (ob >= fw_slots) {
+                noc_semaphore_wait_min(fw_credit, ob + 1 - fw_slots);
+            }
+#ifdef XMC_CHAIN
+            while (fw_pending) {  // (issued before the snake sends; the source slot is released below)
+                chain_retire(XMC_CHAIN_DEPTH);
+                fw_poll();
+            }
+#else
+            noc_async_write(src, o_ring + (ob % fw_slots) * sb_bytes, sb_bytes);
+            noc_async_write_barrier();  // (landed before its count moves; and the source slot is released below)
+            noc_semaphore_inc(o_data, 1);
+#endif
+        } else {
+            noc_semaphore_inc(o_credit, 1);  // its forward slot is free again (the multicasts have left: flushed above)
+            continue;
+        }
+#endif
+#ifdef XMC_HELPER
+        if (from_helper) {
+            const uint32_t hxy = get_arg_val<uint32_t>(hh ? 16 + hh : 14);
+#ifndef XMC_CREDIT_SEM
+#define XMC_CREDIT_SEM 5  // (the helper's credit semaphore for this primary: 5, or 6 for primary 1 with XDUAL)
+#endif
+            noc_semaphore_inc(get_noc_addr(hxy >> 16, hxy & 0xFFFF, get_semaphore(XMC_CREDIT_SEM)), 1);  // slot free
+        } else {
+            cb_pop_front(sb_cb, sb_tiles);
+        }
+#else
+        cb_pop_front(sb_cb, sb_tiles);
+#endif
+    }
+#ifdef XMC_CHAIN
+    chain_retire(0);
+    noc_async_write_set_trid(0);
+#endif
+    noc_async_write_barrier();
+    // leave no NoC transaction in flight (reads, writes, atomics, posted writes): the next program starts clean
+    noc_async_full_barrier();
+}

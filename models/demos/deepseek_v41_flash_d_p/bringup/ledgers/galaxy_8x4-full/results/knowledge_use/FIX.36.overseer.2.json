@@ -1,0 +1,93 @@
+{
+ "used": [
+  {
+   "id": "DS41-176",
+   "how": "stock binary ops take the whole grid unless sub_core_grids is passed: capped the 8 binary calls still uncapped (moe add, mask lt's, indexer eq, engram maximum, off-path remap)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-179",
+   "how": "used the rt profiler's per-program core_count as the audit, built into the hang loop for the whole skip-positions flow (HANGLOOP_WATCH)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-283",
+   "how": "re-ran its reproduction (tests/test_skip_hang_loop.py) without the profiler and with the watch; rewrote the entry with the cause",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-284",
+   "how": "kept attempt 1's test fix (only allocation failures are 'does not fit')",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-283",
+   "evidence": "attempt-1 text tied the hang to the profiled run and chip 15: HANGLOOP_PROFILE=0 hung in round 7 (chip 3 MMIO dead) and with the watch in round 16 (chip 7); generated/devjobs/fix36_np1/log, fix36_w1/log (2026-11-18). Entry rewritten.",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "FIX.15's core audit covered one ladder chunk only: the DECODER_SKIP=decode flow (MOE_BLOCK_SRC=main, added later) ran two 120-core binary programs a chunk that no audit saw; an always-on rule-18 check over a long run would have caught it"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: the fix only gives existing ops a smaller core grid"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; only stock ttnn binary calls got sub_core_grids"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suites run; only the loop reproduction and the gate (model-level checks)"
+  },
+  {
+   "id": "OV-43",
+   "answer": "done",
+   "evidence": "HANGLOOP_PROFILE=0 hung (round 7, chip 3), so the trigger is not the profiled run and the fix is not in profile.py; dead chip recorded each time: 15, 3, 7 (not always the same chip, so not a single-chip box report). Root cause found by an rt-profiler core watch: two 120-core programs a chunk (rule 18), capped; 41 rounds (7,544 chunks) clean after, determinism 0.0. 2 hangs in this attempt (limit 3)."
+  },
+  {
+   "id": "FIX.36",
+   "answer": "done",
+   "evidence": "(1) a chip drops off PCIe (MMIO dead, PcieHangError) in mid-chunk, its CCL partners (ring_attention all_gather, rid 37292) wait; dispatch cores 15-2/15-3 only wait at teardown; steady and resumed both affected. Likely cause: rule 18 di/dt, 2 kernel sets at 120 cores. (2) capped (DS41-285); 41 consecutive clean rounds, bit-identical. (3) DS41-284 test fix kept; gate PASS."
+  }
+ ],
+ "cited_only": [
+  "DS41-285"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.36",
+  "role": "overseer",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T06:01:39",
+  "head": "2c99d4f7225",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.36.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.36.overseer.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.36.overseer.2.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_add.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

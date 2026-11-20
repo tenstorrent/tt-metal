@@ -1,0 +1,89 @@
+{
+ "used": [
+  {
+   "id": "DS41-175",
+   "how": "no single-card sweep (test_sweep_card) on the Galaxy: capture and both sweeps ran as 8x4 mesh jobs through run_safe_pytest, one process at a time (rule 19)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-57",
+   "how": "never a single-card job or probe on the 8x4: the mesh sweep test_sweep instead of the P.19 per-card shards",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-114",
+   "how": "the sweep's L1 budget is the capture's free-for-CBs (1357 KiB, allocator-base offsets) minus 16 KiB, with the filler buffer occupying the rest",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-112",
+   "how": "kept fp32-output calls (compressor, hc.fn) off minimal_matmul: the sweep's minimal candidates there were further from float64 (4.31e-3 vs 4.05e-3) and rejected",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-113",
+   "how": "wo_a (batched per-head weights) stays on 2D mcast fuse_batch=False bw32; the bmm candidates were not picked",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-139",
+   "how": "the 160-row projections stay on 1D mcast in0 (the sweep confirms: wq_b 0.198 vs minimal 0.214)",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-188",
+   "how": "the quick A/B is judged on L00-L38; L39 moves on rounding-only changes (here all configs bit-identical to auto)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the sweep's 'current' was tuned's rule, not the shipped galaxy table: a re-sweep against the shipped configs needed P23_CURRENT=galaxy",
+  "the sweep could pick auto or minimal's default grid (120 cores on a Galaxy) as a winner; a pick must name a grid within MAX_WORKER_CORES (added in test_matmul_sweep.py accepted())"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: only program configs changed (mm_configs.GALAXY110); weights, shapes and the op sequence unchanged"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; the change is the program config of stock ttnn.linear / matmul / minimal_matmul calls"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suites run; only the model's capture, the matmul sweep (tests/perf) and measure --task P.25"
+  }
+ ],
+ "cited_only": [
+  "DS41-191"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.25",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T22:00:56",
+  "head": "37d0985c4cc",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.25.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_matmul_sweep.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mm_configs.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -1,0 +1,26 @@
+{
+ "used": [
+  {"id": "DS41-303", "how": "explained OV-54's no-gain (combine floor ~800 us a layer at < 100 tiles) and read the census per layer (tiles vs program us) instead of a new device census"},
+  {"id": "DS41-299", "how": "scored the device's local split vs the offline best split on the same chunks with its fit (11.36 vs 10.92 ms) to judge OV-52's global counts"},
+  {"id": "DS41-235", "how": "expected on = off bit-identical (order-free combine): the A/B test asserts every layer output equal, and it held at 3 points"},
+  {"id": "DS41-228", "how": "measured the routing-dependent change on real text (BRINGUP_POS_TOKENS agentic / prose), never random ids"},
+  {"id": "DS41-252", "how": "every timed / captured chunk follows the real previous chunk, run untimed, as the census and skip_positions do"}
+ ],
+ "contradicted": [],
+ "missing": [
+  "a perf brief that names hooks.batch_call_settings (OV-51) must allow bringup/hooks.py: it is outside the step's paths, so a call-time switch cannot be declared to the runner by the step",
+  "with the resident runner serving, `measure --part test_ladder` finds no run (an A/B side carries only the timing tests, F285): the brief's 'accuracy first via measure --part' cannot be followed",
+  "the resident runner restarts on kernel-source mtimes changed since its start even when the step did not touch them (restart at 11:27 named routing_planner.hpp etc.)"
+ ],
+ "overseer": [
+  {"id": "OV-3", "answer": "done", "evidence": "no padding / duplicated work; the off side's router bias is a second 13-tile-row bias of the same size, the weights are shared"},
+  {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched; Python adapter only"},
+  {"id": "OV-25", "answer": "done", "evidence": "no fork suite run; one model-level resident submit (test_moe_replicas_ab) and the measure"},
+  {"id": "OV-50", "answer": "done", "evidence": "off compiles (attempt 2's divisor kept); every model-level run through resident submit in one process (20261119-112746), both MOE_REPLICAS values in it"},
+  {"id": "OV-51", "answer": "done", "evidence": "MOE_REPLICA_TABLE loads the 13th slot; MOE_REPLICAS read per MoE call (adapter replicas_active, _head_weights_off). Both sides in ONE load / one device open (tests/perf/test_moe_replicas_ab.py), every layer output on vs off bit-identical at 3 points x 2 chunks. Replica DRAM measured +19.69 MiB a chip a layer (0.40 GiB for layers 0-20, 0.77 GiB for 40). Not done: hooks.batch_call_settings (outside the step's paths) - patch in BREADCRUMBS; the off-side ladder on this code not run (it would restart the runner)"},
+  {"id": "OV-52", "answer": "disagree", "evidence": "global counts not built. Same chunks (census agentic p145408 k4, agentic.json): busiest-chip tiles off 1749, device local split 1073, offline best from global counts 1007 (DS41-299 fit 11.36 vs 10.92 ms; measured slope below 100 tiles ~0.3 us a tile -> ~0.02 ms). A count all-gather adds a fabric round to the head every layer, and this attempt measured the head's existing remap at +0.65..+1.12 ms a chunk. Default set to off as asked."},
+  {"id": "OV-53", "answer": "done", "evidence": "MOE_REPLICA_TABLE default agentic_traces (P.85 list format read by expert_replicas.table), agentic and none selectable. Note: on the gate's chunks agentic_traces balances less than agentic.json (offline best tiles 1395 vs 1007 at p145408 k4; measured 1359 on 2 chunks)"},
+  {"id": "OV-54", "answer": "done", "evidence": "rows reach the replicas (68052 rows a chunk on the 13th slots at agentic p145408) and the busiest chip's tiles fall (1626 -> 1359; attempt 1 with agentic.json 1749 -> 1073), but routed_experts_combine moves only -0.56 ms (floor ~800 us a layer, DS41-303; off least-loaded chip 16.04 vs slowest 18.38 ms: <= ~2.3 ms reachable) while moe_head grows +1.12 ms (DS41-305). Experts section -3 ms is not reachable by static replicas; stop rule fired"}
+ ],
+ "meta": {"model": "deepseek_v41_flash_d_p", "run": "run1", "task": "P.84", "role": "perf", "attempt": 3, "agent": "bringup-engineer"}
+}

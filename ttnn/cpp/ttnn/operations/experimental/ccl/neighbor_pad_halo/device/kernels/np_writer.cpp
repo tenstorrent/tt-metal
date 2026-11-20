@@ -304,7 +304,9 @@ void kernel_main() {
                     }
                     cb_wait_front(send_cb_id, g);
                     const uint32_t l1_read_addr = get_read_ptr(send_cb_id);
-                    const uint64_t dst_noc_addr = get_noc_addr(base + r, dst_accessor);
+                    // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                    const uint64_t dst_noc_addr =
+                        tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, base + r);
                     pkt_hdr->to_noc_unicast_write(tt::tt_fabric::NocUnicastCommandHeader{dst_noc_addr}, g * stick_size);
                     conn.wait_for_empty_write_slot();
                     conn.send_payload_without_header_non_blocking_from_address(l1_read_addr, g * stick_size);
@@ -473,7 +475,9 @@ void kernel_main() {
                                      ww += NP_NUM_DRAM_BANKS) {
                                     g++;
                                 }
-                                const uint64_t dst_noc = get_noc_addr(base_row + w, dst_accessor);
+                                // fabric router writes on NOC1: resolve the DRAM endpoint for its NoC (SYS-1419)
+                                const uint64_t dst_noc =
+                                    tt::tt_fabric::linear::addrgen_detail::get_noc_address(dst_accessor, base_row + w);
                                 pkt_hdr->to_noc_unicast_write(
                                     tt::tt_fabric::NocUnicastCommandHeader{dst_noc}, g * stick_size);
                                 conn.wait_for_empty_write_slot();

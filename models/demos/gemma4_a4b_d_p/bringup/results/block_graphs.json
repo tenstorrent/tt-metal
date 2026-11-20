@@ -1,0 +1,266 @@
+{
+ "sliding": [
+  {
+   "name": "attn_norm",
+   "inputs": [
+    "in"
+   ],
+   "output": "attn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "attention",
+   "inputs": [
+    "attn_norm"
+   ],
+   "output": "attn_out",
+   "kind": "attention",
+   "stateful": true
+  },
+  {
+   "name": "post_attn_norm",
+   "inputs": [
+    "attn_out"
+   ],
+   "output": "attn_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "attn_residual",
+   "inputs": [
+    "in",
+    "attn_post_norm"
+   ],
+   "output": "h_mid",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "ffn_norm",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "ffn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "mlp",
+   "inputs": [
+    "ffn_norm"
+   ],
+   "output": "mlp_out",
+   "kind": "mlp",
+   "stateful": false
+  },
+  {
+   "name": "post_mlp_norm",
+   "inputs": [
+    "mlp_out"
+   ],
+   "output": "mlp_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "router",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "router",
+   "kind": "router",
+   "stateful": false
+  },
+  {
+   "name": "moe_norm",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "moe_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "experts",
+   "inputs": [
+    "moe_norm",
+    "router"
+   ],
+   "output": "experts_out",
+   "kind": "moe",
+   "stateful": false
+  },
+  {
+   "name": "post_moe_norm",
+   "inputs": [
+    "experts_out"
+   ],
+   "output": "moe_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "ffn_combine",
+   "inputs": [
+    "mlp_post_norm",
+    "moe_post_norm"
+   ],
+   "output": "ffn_sum",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "post_ffn_norm",
+   "inputs": [
+    "ffn_sum"
+   ],
+   "output": "ffn_out",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "ffn_residual",
+   "inputs": [
+    "h_mid",
+    "ffn_out"
+   ],
+   "output": "out",
+   "kind": "residual",
+   "stateful": false
+  }
+ ],
+ "global": [
+  {
+   "name": "attn_norm",
+   "inputs": [
+    "in"
+   ],
+   "output": "attn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "attention",
+   "inputs": [
+    "attn_norm"
+   ],
+   "output": "attn_out",
+   "kind": "attention",
+   "stateful": true
+  },
+  {
+   "name": "post_attn_norm",
+   "inputs": [
+    "attn_out"
+   ],
+   "output": "attn_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "attn_residual",
+   "inputs": [
+    "in",
+    "attn_post_norm"
+   ],
+   "output": "h_mid",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "ffn_norm",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "ffn_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "mlp",
+   "inputs": [
+    "ffn_norm"
+   ],
+   "output": "mlp_out",
+   "kind": "mlp",
+   "stateful": false
+  },
+  {
+   "name": "post_mlp_norm",
+   "inputs": [
+    "mlp_out"
+   ],
+   "output": "mlp_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "router",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "router",
+   "kind": "router",
+   "stateful": false
+  },
+  {
+   "name": "moe_norm",
+   "inputs": [
+    "h_mid"
+   ],
+   "output": "moe_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "experts",
+   "inputs": [
+    "moe_norm",
+    "router"
+   ],
+   "output": "experts_out",
+   "kind": "moe",
+   "stateful": false
+  },
+  {
+   "name": "post_moe_norm",
+   "inputs": [
+    "experts_out"
+   ],
+   "output": "moe_post_norm",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "ffn_combine",
+   "inputs": [
+    "mlp_post_norm",
+    "moe_post_norm"
+   ],
+   "output": "ffn_sum",
+   "kind": "residual",
+   "stateful": false
+  },
+  {
+   "name": "post_ffn_norm",
+   "inputs": [
+    "ffn_sum"
+   ],
+   "output": "ffn_out",
+   "kind": "norm",
+   "stateful": false
+  },
+  {
+   "name": "ffn_residual",
+   "inputs": [
+    "h_mid",
+    "ffn_out"
+   ],
+   "output": "out",
+   "kind": "residual",
+   "stateful": false
+  }
+ ]
+}

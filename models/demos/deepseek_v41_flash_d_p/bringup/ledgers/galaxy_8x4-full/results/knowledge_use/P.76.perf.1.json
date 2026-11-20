@@ -1,0 +1,106 @@
+{
+ "used": [
+  {
+   "id": "DS41-226",
+   "how": "the served rows stay encoded from the chunk's bf16 keys (fp8(key), Blaze's writer); scoring them gives bfp8(fp8(key))",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-215",
+   "how": "served path needs no region path at start % S != 0: the decode re-reads the chunk's two W blocks from the served rows (update_padded_kv_cache already placed them)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-214",
+   "how": "test checks decoded values via host_rows of the uint8 served tensor, not to_dtype of FP8_E4M3",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-213",
+   "how": "unit test encodes rows on the host as the stock cast does and checks the device decode exactly",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-290",
+   "how": "one decoded-key buffer per (rows, source layer), as P.74/P.75's per-size / per-source gather buffers",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "decoded-key buffers allocated at the state's build (TtServedRows), never per chunk; the prepared program keys on shape, addresses patched",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-1",
+   "how": "the indexer never frees the returned shared buffer (k_kept); the memo stores it as Kept",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "copy_init / copy_tile_to_dst_init don't reconfigure the unpacker data format (state_configure is a sentinel check): mixing fp8 and fp32 CBs needs reconfig_data_format_srca (added DS41-292)",
+  "ttnn's host bfloat8_b packer is not exact RNE for fp32 inputs just above a tie (added DS41-293)",
+  "prepare_program value slots are per-core only: host cost ~3 us a core on 32 chips; no common-arg value slot"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: unpack_fp8_rows decodes exactly the 32-row bands asked; whole tile rows are the served layout's own unit (records of 16/32 rows, wr % 32 == 0)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "ttnn.bringup.unpack_fp8_rows always dispatches through prepare_program / run_prepared (fp8_rows.py _prepared_unpack; range = 5 value slots a core); host 0.096-0.377 ms a call measured in tests/unit/test_unpack_fp8_rows.py"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suite run; only the new tests/unit/test_unpack_fp8_rows.py and the model tests test_index_k_served / test_index_k_copy"
+  }
+ ],
+ "cited_only": [
+  "DS41-292",
+  "DS41-293"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.76",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T18:44:33",
+  "head": "4c5a3f4554e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.76.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_index_k_served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/fp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_compute.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_reader.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/kernels/unpack_fp8_rows_writer.cpp",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py"
+  ]
+ }
+}

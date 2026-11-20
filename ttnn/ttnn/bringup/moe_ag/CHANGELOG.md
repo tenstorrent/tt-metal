@@ -1,0 +1,52 @@
+# moe_ag (ttnn.bringup.moe_ag_*)
+
+- Source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_ag` on `mstaletovic/mimo-v2-dp` @ `b45a923d73c`. New op: it exists on that branch only, not in ttnn/cpp on this tree (no source op to keep in sync,
+  no upstream tests to carry: `tests/source.yaml` is empty).
+- Python: `ttnn.bringup.*` (was `ttnn.experimental.*` on the source branch)
+- Brought in for: glm53_flash_d_p_lb (MoE on the LoudBox, the MiMo-V2 all-gather MoE design: same hidden / expert
+  width / top-8 as MiMo-V2.6)
+- Used by: glm53_flash_d_p (tt/experts_ag.py, GLM_EXPERTS_MODE=ag; the whole model on the LoudBox via glm53_flash_d_p_lb)
+
+The device programs of the all-gather MoE block (MiMo-V2 `tt/moe_ag.py` on the source branch): `moe_ag_route_plan`
+(counts / regions of the flat expert space, token_index, y_slot), `moe_ag_local_reduce` (per token the weighted sum of
+this chip's experts' outputs, with the two fused send-back phases), `moe_ag_sum_rows_tiled`, `moe_ag_add_rows`,
+`moe_ag_untilize_active`, `moe_ag_untilize_x`.
+
+Mechanical changes (fork_op.py on a temporary checkout of the source folder): namespace `ttnn::operations::bringup`,
+CMake target `ttnn_op_bringup_moe_ag`, kernel paths and includes pointing at this folder, Python prefix `ttnn.bringup.`.
+
+Tests: `tests/unit/test_moe_ag_ops.py` (the source branch's nightly op test, `tests/ttnn/nightly/.../deepseek_prefill/test_moe_ag_ops.py`).
+
+## Changes
+
+<!-- One entry per change, newest last:
+### <short title>
+- What: the change, and the switch or argument that turns it on (default = source behaviour).
+- Why: the symptom it fixes or the feature it adds.
+- Needed by: <model> <task>
+- Files: <paths inside this folder>
+-->
+
+### Tests: glm_4x4 perf baselines; split / phases only where they apply (2026-10-27)
+- What: `test_moe_ag_ops_perf[glm_4x4]` skipped for lack of expected times; its four programs now have them in
+  `_PERF_EXPECTED_NS` (route_plan 50 629, local_reduce_tiled 296 880, sum_rows_tiled 97 787, untilize_x 79 511 ns:
+  the median of 3 runs of the RT-CAL lines on one BH p150 of the 2x2 QuietBox, spread <= 1.4%). The split / phases
+  cases of `test_moe_ag_local_reduce` are generated only for cases with two mesh rows (T == 2 S): galaxy and glm_4x4
+  no longer skip them at run time. No op change.
+- Why: owner, 2026-10-27: no skip that hides a dead test.
+- Tests: 71 collected (66 passed, 5 skipped) -> 67 collected, 67 passed.
+- Needed by: fork test hygiene
+- Files: `tests/unit/test_moe_ag_ops.py`
+
+### Rebase onto llk_helper_library 6b80daf43e3: kernel API port (2026-10-27)
+- What: `add_compute.cpp`: `binary_op_init_common` + `add_tiles_init` -> `compute_kernel_hw_startup` + `add_init`
+  (#57797 deleted the shims; the same 1:1 swap upstream made in its own kernels); `addt_compute.cpp`: `add_tiles_init`
+  -> `add_init`. Same init sequence, no behaviour change.
+- Why: the kernels of `moe_ag_add_rows` and `moe_ag_sum_rows_tiled` (2 blocks) no longer compiled.
+- Needed by: rebase 2026-10-27
+- Files: `device/kernels/add_compute.cpp`, `device/kernels/addt_compute.cpp`
+
+### Port to llk_helper_library `107f838f379` (2026-11-05): removed compute init shims (#60881)
+- `copy_tile_to_dst_init_short(cb)` -> `copy_init(cb)` (and `init_sfpu(icb, ocb)` / `copy_tile_init(cb)` ->
+  `compute_kernel_hw_startup(icb, ocb); copy_init(icb)`): the new base removed the deprecated shims; same calls
+  underneath, no behaviour change.

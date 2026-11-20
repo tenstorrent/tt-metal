@@ -8,12 +8,12 @@
 #include <cstdint>
 #include <unordered_map>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/metal2_host_api/program_spec/collection/collect_metadata.hpp"
 
-namespace tt::tt_metal::experimental {
+namespace tt::tt_metal {
 
 // Processor allocation on a node: bit i set = core i in use.
 using DMProcessorMask = std::bitset<QUASAR_DM_CORES_PER_NODE>;
@@ -29,4 +29,4 @@ using KernelRiscMaskMap = std::unordered_map<const KernelSpec*, uint16_t>;
 //  - Gen1: processor is user-specified in Gen1Config
 KernelRiscMaskMap SolveKernelRiscMasks(const ProgramSpec& spec, const CollectedSpecData& collected, const Hal& hal);
 
-}  // namespace tt::tt_metal::experimental
+}  // namespace tt::tt_metal

@@ -1,0 +1,77 @@
+{
+ "used": [
+  {
+   "id": "DS41-142",
+   "how": "its numbers (80 window-block calls at ~0.21 ms, 12 bfp_round at ~0.5 ms, carry 23.5 us device a layer) set the targets; the carry merged into the chunk call (prefix) removes the 40 carry programs a chunk",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-135",
+   "how": "P.7's prepared path kept (prepared=True); measured that what remained per call was run_prepared's dispatch of 120 cores of per-core args, which led to the compact option",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-144",
+   "how": "new: the one-call vs two-call comparison differed on 47 pages only in the unwritten gap bytes; tests compare with encode_blocks' mask",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-145",
+   "how": "new: per-core runtime args dominate host dispatch on 32 chips; compact = common args only, row0 frozen",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the host cost of a cached program on a 32-chip mesh scales with its per-core runtime args (now DS41-145); nothing said that common runtime args avoid it",
+  "ckv_bfp4 block pages have unwritten gap bytes, so whole-page byte comparisons between programs fail (now DS41-144; only the fork's reference.encode_blocks mask said it)",
+  "the quick A/B side (measure --task) needs ~10 min of device time on the 8x4, more than one 10-min foreground tool call; an agent cannot finish it",
+  "testing/settings_lint forbids os.environ in tt/** test helpers too; patch settings.get with monkeypatch for an in-process A/B"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or duplicated: the prefix call writes the same 164 bands once (fewer programs: 73312 -> 72032), compact runs the same cores and split; fork tests/unit 51 passed, model output on == off bit for bit (tt/perf_lowbit_identity.py)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.12",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-29T20:01:01",
+  "head": "58b024bf58b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.12.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/indexer.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_lowbit_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_lowbit_identity.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/README.md",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/ckv_bfp4.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/bfp_round_compute.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/bfp_round_writer.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_compute.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_reader.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_reader2.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_writer.cpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_share.hpp",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_bfp_round.py",
+   "ttnn/ttnn/bringup/ckv_bfp4_ttnn/tests/unit/test_ckv_bfp4.py"
+  ]
+ }
+}

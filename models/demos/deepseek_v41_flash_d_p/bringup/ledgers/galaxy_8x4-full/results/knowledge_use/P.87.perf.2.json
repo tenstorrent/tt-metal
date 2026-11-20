@@ -1,0 +1,98 @@
+{
+ "used": [
+  {
+   "id": "DS41-312",
+   "how": "per-packet fabric cost (~1.25 us) sized the fused history all-gather over 320 B row pages as tens of ms: not built this attempt",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-313",
+   "how": "a fabric-kernel hang resets the box; with the task's 2 device opens spent, no new fabric kernel was risked",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-308",
+   "how": "added its missing known_issues_detail.md section (the checker refused the pointer)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-311",
+   "how": "shortened under 600 chars, full text to known_issues_detail.md",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-295",
+   "how": "its pack floor made me measure pack vs gather separately before building the fusion (probe: packs 0.07, gathers 0.71 ms)",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-308",
+   "evidence": "the entry pointed at known_issues_detail.md, which had no section of its title (knowledge.check); section added",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "a diagnostic switch in model code must be a Setting too (rule 10 has the env exception only for forks): attempt 1 was refused for DS41_P87_DIAG read in tt/engram_device.py",
+  "which requests share the held model: a mesh-only test or a different target.seq releases it and costs a device open (DS41-316)",
+  "the fabric link count a direction on the 8x4 (2): ENGRAM_DEVICE_LINKS cannot go higher"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding added; attempt 2 changes no kernel or path (settings switch only)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "EngramLookup stays on ttnn.bringup.prepare_program / run_prepared; the load-time table copy (_Copy) is a one-time plain generic_op (not per chunk)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suites run"
+  },
+  {
+   "id": "OV-55",
+   "answer": "disagree",
+   "evidence": "op-level tests through the runner are NOT free while it holds a model: request 20261119-151826-cbcd23 (mesh-only test_engram_device.py) released the held model, the DRAM did not return, new process = 1 device open + 386 s table upload (DS41-316); also 20261119-150739-c3dec0 (a model test with another target.seq). This attempt: 3 opens"
+  },
+  {
+   "id": "overseer-msg-2026-11-19-fused",
+   "answer": "disagree",
+   "evidence": "not built: measured ceiling (tests/perf/test_engram_split_probe.py, p145408) = min(lookup 0.97, record gathers 0.71) = 0.71 ms device, below the 2 ms keep line, and needs an in-program gather at the stock op's ~127 GB/s while the lookup's exchange reaches ~4.4 GB/s; more links impossible (2 a direction). Stopped at the device-open limit (3 this attempt, DS41-316). Next: faster lookup sends first (BREADCRUMBS)"
+  }
+ ],
+ "cited_only": [
+  "DS41-315",
+  "DS41-316"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.87",
+  "role": "perf",
+  "attempt": 2,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T15:49:26",
+  "head": "fd362b0d93c",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.87.perf.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_engram_split_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_engram_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/engram_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

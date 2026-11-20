@@ -165,6 +165,7 @@ from ttnn._ttnn.fabric import (
     get_physical_mesh_shapes,
     get_eth_forwarding_direction,
     get_forwarding_link_indices,
+    get_neighbor_eth_directions,
     get_all_fabric_mesh_ids,
     get_all_mgd_fabric_types,
     MeshId,
@@ -205,6 +206,9 @@ from ttnn._ttnn.hd_socket import (
 
 from ttnn._ttnn.h2d_stream_service import (
     H2DStreamService,
+    StreamCounter,
+    StreamInputCounters,
+    StreamOutputCounters,
 )
 
 from ttnn._ttnn.d2h_stream_service import (
@@ -324,6 +328,46 @@ from ttnn.types import (
     UnpackToDestMode,
     FaceGeometry,
     compute_program_descriptor_hash,
+    freeze_program_hashes,
+    UnpackMode,
+    Precision,
+    DFBEndpointType,
+    DFBAccessPattern,
+    TensorSpecRelaxations,
+    TensorParameter,
+    DFBAdvancedOptions,
+    DataflowBufferSpec,
+    dfb_spec_from_sharded_tensor,
+    SemaphoreSpec,
+    ScratchpadSpec,
+    DataMovement1XXConfig,
+    DataMovement2XXConfig,
+    DataMovementHardwareConfig,
+    Compute1XXConfig,
+    Compute2XXConfig,
+    ComputeHardwareConfig,
+    create_reader_dm_config,
+    create_writer_dm_config,
+    SourceCode,
+    CompilerOptions,
+    DFBBinding,
+    producer_of,
+    consumer_of,
+    strided_consumer_of,
+    all_consumer_of,
+    SemaphoreBinding,
+    ScratchpadBinding,
+    TensorBinding,
+    RuntimeArgSchema,
+    KernelAdvancedOptions,
+    KernelSpec,
+    WorkUnitSpec,
+    ProgramSpec,
+    AdvancedKernelRunArgs,
+    KernelRunArgs,
+    DFBRunOverrides,
+    ProgramRunArgs,
+    compute_program_spec_hash,
     TensorAccessorArgs,
     attach_absent_mcast,
     TransferMode,
@@ -445,7 +489,25 @@ def auto_register_ttnn_cpp_operations(module):
             auto_register_ttnn_cpp_operations(attribute)
 
 
+import ttnn.bringup  # the derived-op package (ttnn/ttnn/bringup), so its C++ ops attach to it below
+
 auto_register_ttnn_cpp_operations(ttnn._ttnn)
+
+# Derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md): the ops were registered as ttnn.bringup.* above;
+# add the module's enums and constants beside them.
+_bringup = create_module_if_not_exists("ttnn.bringup")
+for _name in dir(ttnn._ttnn.operations.bringup):
+    if not _name.startswith("_") and not _name.endswith("_t") and not hasattr(_bringup, _name):
+        setattr(_bringup, _name, getattr(ttnn._ttnn.operations.bringup, _name))
+# A fork bound as a nanobind submodule (ttnn.bringup.moe_block_main): its ops were registered into a module of that name
+# above; add the submodule's classes and functions beside them (the registered ops win).
+for _name in dir(ttnn._ttnn.operations.bringup):
+    _sub = getattr(ttnn._ttnn.operations.bringup, _name)
+    if isinstance(_sub, ModuleType) and not _name.startswith("_"):
+        _mod = create_module_if_not_exists(f"ttnn.bringup.{_name}")
+        for _attr in dir(_sub):
+            if not _attr.startswith("_") and not hasattr(_mod, _attr):
+                setattr(_mod, _attr, getattr(_sub, _attr))
 
 import ttnn.operations
 
@@ -643,6 +705,14 @@ from ttnn._ttnn.operations import command_list as _command_list
 
 experimental.CommandListBuilder = _command_list.CommandListBuilder
 experimental.CommandList = _command_list.CommandList
+
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
 
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 

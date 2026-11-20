@@ -1,0 +1,82 @@
+{
+ "used": [
+  {
+   "id": "DS41-181",
+   "how": "the kept tail rtail is written by the last chip's send every chunk; steady_state marks it valid (rtail_end = start) instead of rebuilding chip 0's carry",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-146",
+   "how": "steady_state allocates nothing (re-keys load-time buffers only) so later addresses / address-keyed caches do not shift",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "--no-precompile on the baseline profile runs",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-58",
+   "how": "baseline profile runs redirected with BRINGUP_RESULTS_DIR / BRINGUP_RECORD_TASK so the gate's FIX.16 results are not overwritten",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-55",
+   "how": "ran pre-commit on the changed code before the gate --check",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the profile gate unit (two test_profile runs, ~12 min) exceeds the agent's 10-min foreground tool limit; how to run it within rule 3 is not written down",
+  "the real-time profiler's op file can attribute a whole layer's first sections to one '(other)' row (seen for L1 in one run); op-count comparisons must be per layer"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.16",
+   "answer": "done",
+   "evidence": "TtDS41Model.steady_state / TtWindowCache.steady; profile on vs STEADY_STATE=off: every attention section loses exactly ckv_bfp4 + slice + to_layout (22 -> 19 ops a layer), 407/416 sections identical (rest: profiler '(other)' attribution in the off run); wall 279.1 -> 262.5 ms, attention 59.10 -> 57.49 ms; gate PASS"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no kernel limit met; nothing padded"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; steady_state runs no op"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run; only the two baseline profile runs and the gate"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.16",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-31T11:11:41",
+  "head": "8d94bafdc07",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.16.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.16_ops.json.gz",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.16_profile.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.16.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

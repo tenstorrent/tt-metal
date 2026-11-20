@@ -7,10 +7,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/utility/table.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/workload/utils/table.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
 #include <unordered_map>
@@ -35,8 +35,14 @@ namespace tt::tt_metal::experimental {
 //
 // Runtime arguments for Programs created from a ProgramSpec must be configured
 // through SetProgramRunArgs or UpdateProgramRunArgs, not the legacy host APIs.
+//
+// defer_compile: build the Program but SKIP the trailing compile + allocation step,
+// returning an uncompiled Program. See the note on MakeMeshWorkloadFromSpecs below.
 Program MakeProgramFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& spec,
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
 // (This will become a constructor for the MeshWorkload class)
@@ -46,10 +52,21 @@ Program MakeProgramFromSpec(
 // PRE-CONDITION: If skip_validation is true, the caller guarantees that
 // the ProgramSpecs satisfy all semantic validation requirements.
 //
+// defer_compile: build the programs but SKIP the trailing
+// MeshWorkloadImpl::compile step, returning an UNCOMPILED, UNFINALIZED
+// MeshWorkload. This exists for callers that only want the Programs
+// materialized so their kernels can be JIT-compiled later, in bulk and in
+// parallel (see ttnn::up_front_compile). Setting run args on the result is
+// still legal — SetProgramRunArgs is order-agnostic with respect to allocation.
+//
+// PRE-CONDITION: a deferred MeshWorkload MUST NOT be enqueued or otherwise
+// treated as dispatch-ready until it has been compiled. The intended consumers
+// are compile-only paths that discard the workload afterwards.
 distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
     distributed::MeshDevice& mesh_device,
     const std::unordered_map<distributed::MeshCoordinateRange, ProgramSpec>& program_specs,
-    bool skip_validation = false);
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Create a MeshWorkload object from single ProgramSpec,
 // to be applied mesh-wide (SPMD)
@@ -60,8 +77,12 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpecs(
 // PRE-CONDITION: If skip_validation is true, the caller guarantees that
 // the ProgramSpec satisfies all semantic validation requirements.
 //
+// defer_compile: see MakeMeshWorkloadFromSpecs above.
 distributed::MeshWorkload MakeMeshWorkloadFromSpec(
-    distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec, bool skip_validation = false);
+    distributed::MeshDevice& mesh_device,
+    const ProgramSpec& program_spec,
+    bool skip_validation = false,
+    bool defer_compile = false);
 
 // Configure the arguments (mutable parameters) of an existing Program
 // (This will become a member function for the Program class)
@@ -72,6 +93,9 @@ distributed::MeshWorkload MakeMeshWorkloadFromSpec(
 //
 // For high-performance inner loops, prefer the power user APIs below.
 // If stateful behavior of parameters is required, use the power user APIs.
+//
+// PER-DEVICE VALUES: the args are set for every device the Program runs on. Every per-device value
+// (UpdateProgramRunArgsForDevice) of the Program is dropped.
 void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh an ARBITRARY subset of arguments for an existing Program.
@@ -92,6 +116,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
 //
 // NOTE: DFB size overrides follow the same stateful rule — a DFB whose size is not overridden here
 //       retains its current size (as last set), rather than reverting to the ProgramSpec default.
+//
+// PER-DEVICE VALUES: the args supplied are set for every device the Program runs on, and their per-device values
+// (UpdateProgramRunArgsForDevice) are dropped. Args not supplied keep their per-device values.
 void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip_validation = false);
 
 // Fast-path partial update: refresh ONLY the TensorArgs of an existing Program.
@@ -109,10 +136,39 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 //
 // USE CASE: Program re-enqueue loops where the only per-enqueue ProgramRunArgs variation
 // is in the tensor args (i.e. which specific MeshTensors are operated on by the Program).
+//
+// PER-DEVICE VALUES: tensor args cannot have per-device values, so every per-device value
+// (UpdateProgramRunArgsForDevice) is kept.
 void UpdateTensorArgs(
     Program& program,
     const Table<TensorParamName, ProgramRunArgs::TensorArgument>& tensor_args,
     bool skip_validation = false);
+
+// Per-device update: set the named run args in `values` to `device`'s own values.
+// (This will become a member function for the MeshWorkload class)
+// A Program added to a MeshWorkload on a range runs on every device of the range with the same args; this lets one
+// program serve a range where each chip needs a few different values (a ring rank, a peer chip). Calling again
+// replaces the values of the args supplied; the others keep theirs. Args without a per-device value use the program's
+// own values.
+//
+// PRE-CONDITION: the Program was created from a ProgramSpec, SetProgramRunArgs has been called on it, and `device`
+// lies in `program_range` (the range the Program was added with).
+//
+// PER-DEVICE VALUES:
+// - A per-device value lasts until the program's own value of that arg is set again: SetProgramRunArgs drops every
+//   per-device value, UpdateProgramRunArgs those of the args it supplies, UpdateTensorArgs none. Set them again
+//   after such a call.
+// - Traces and command lists keep the values they captured.
+// - Calls must be serialized with enqueue and trace / command-list capture of the workload.
+//
+// CONSTRAINTS: `values` holds only kernel run args (runtime_arg_values for the nodes given, common_runtime_arg_values,
+// and their array forms). Tensor args, DFB overrides, varargs and advanced program args are rejected. Some ranges,
+// devices and capture modes do not support per-device args: see distributed::ArePerDeviceRuntimeArgsSupported.
+void UpdateProgramRunArgsForDevice(
+    distributed::MeshWorkload& workload,
+    const distributed::MeshCoordinateRange& program_range,
+    const distributed::MeshCoordinate& device,
+    const ProgramRunArgs& values);
 
 }  // namespace tt::tt_metal::experimental
 

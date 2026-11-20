@@ -1,0 +1,290 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Run the source op's own tests against a derived bring-up op, in place, and keep a per-case baseline.
+
+A fork's ``tests/source.yaml`` names a best-effort selection of the upstream tests of the op it was forked from (or
+replaces), and the names to swap while they run:
+
+    upstream_sha: <sha the selection was made at>
+    swap:                                   # original name -> fork name, set for the whole pytest session
+      ttnn.rms_norm: ttnn.bringup.rms_norm
+    tests:                                  # pytest paths, optionally with a -k filter (mixed files)
+      - {path: tests/ttnn/unit_tests/operations/fused/test_rms_norm.py}
+      - {path: tests/ttnn/nightly/unit_tests/operations/fused/test_layernorm.py, k: "RMSN", why: "RMS cases only"}
+      - {path: ..., unskip: "unfeasible on the given hardware"}   # drop collection-time skips with this reason
+      - {path: ..., mesh: [2, 2]}            # the mesh the entry opens (else the first RxC in k, else 1x1)
+
+Each entry runs with only the cards that form its mesh on this box visible (``cards.py``: probed once per box and
+shape, cached), so a selection recorded on one box runs on a bigger one. A TT_VISIBLE_DEVICES set by the caller wins.
+
+    python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn --record   # baseline
+    python -m models.demos.common.bringup.testing.fork_source --fork rms_norm_ttnn            # check vs baseline
+
+``--record`` runs the selection twice, on the original op (no swap) and on the fork, and writes
+``tests/source_baseline.json`` (per test: the original's and the fork's outcome). A check runs it on the fork and
+fails if any test does not pass on the fork (F198, owner 2026-10-27: a failing test is never accepted because it failed
+at baseline too); each failure says whether it is a regression, a new test or one that fails at baseline too, skips
+are listed. A test the fork can never pass by design (its change) is filtered out of the entry's ``k`` with the reason
+in the manifest, not left failing.
+
+The swap is a pytest plugin (``-p models.demos.common.bringup.testing.fork_source``, env ``BRINGUP_FORK_SWAP``: a
+JSON dict): each original attribute (``ttnn.<...>``) is replaced by the fork's object for the session, so tests and the
+Python wrappers they call reach the fork without being edited. Enum types can be swapped the same way. When the tests
+still hand the original enum to other original ops, keep the enum and convert it at the fork op instead: a swap value
+``{op: ttnn.bringup.x, convert_enums: {ttnn.OrigEnum: ttnn.bringup.OrigEnum}}`` wraps the fork op so each argument
+of an original enum type becomes the fork enum's member of the same name.
+
+An entry's ``unskip`` (env ``BRINGUP_FORK_UNSKIP``) removes the collection-time skip marks whose reason contains that
+text, in both runs. Use it only where a conftest's hardware table is known to be too conservative for this box (the
+manifest's ``why:`` says why the cases run here); a real hardware limit then shows as a failure in both runs.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib
+import json
+import os
+import re
+import subprocess
+import sys
+import xml.etree.ElementTree as ET
+from pathlib import Path
+
+import pytest
+import yaml
+
+REPO = Path(__file__).resolve().parents[5]
+FORKS = REPO / "ttnn" / "ttnn" / "bringup"
+ENV = "BRINGUP_FORK_SWAP"
+UNSKIP_ENV = "BRINGUP_FORK_UNSKIP"
+_SAVED: list[tuple[object, str, object]] = []
+
+
+# ---- pytest plugin: swap the original names for the fork's
+def _resolve(path: str):
+    """'ttnn.experimental.deepseek_prefill.dispatch' -> (parent object, attribute name)."""
+    parts = path.split(".")
+    obj = importlib.import_module(parts[0])
+    for p in parts[1:-1]:
+        obj = getattr(obj, p)
+    return obj, parts[-1]
+
+
+_GOLDEN = ("golden_function", "preprocess_golden_function_inputs", "postprocess_golden_function_outputs")
+
+
+def _with_source_golden(new, old):
+    """The source op's tests take their reference from ttnn.get_golden_function(<source op>). A fork has none of its
+    own, so the swapped-in object carries the source's golden (the reference the fork must match)."""
+    import dataclasses
+
+    fields = {
+        f: getattr(old, f) for f in _GOLDEN if getattr(old, f, None) is not None and getattr(new, f, None) is None
+    }
+    if not fields:
+        return new
+    if dataclasses.is_dataclass(new):
+        return dataclasses.replace(new, **fields)
+    for f, v in fields.items():
+        setattr(new, f, v)
+    return new
+
+
+def _converting_enums(op, enums: dict):
+    """``op`` with every argument that is a member of an original enum type replaced by the fork enum's member of the
+    same name (``{original type: fork type}``), for a fork that binds its own copy of an enum the source's callers
+    still use elsewhere (so the type itself cannot be swapped)."""
+    import functools
+
+    def conv(v):
+        for o, n in enums.items():
+            if isinstance(v, o):
+                return getattr(n, v.name)
+        return v
+
+    @functools.wraps(op)
+    def wrapper(*args, **kwargs):
+        return op(*[conv(a) for a in args], **{k: conv(v) for k, v in kwargs.items()})
+
+    return wrapper
+
+
+def pytest_configure(config):
+    swap = json.loads(os.environ.get(ENV) or "{}")
+    for orig, new in swap.items():
+        parent, name = _resolve(orig)
+        spec = new if isinstance(new, dict) else {"op": new}
+        nparent, nname = _resolve(spec["op"])
+        obj = getattr(nparent, nname)
+        if spec.get("convert_enums"):
+            enums = {getattr(*_resolve(o)): getattr(*_resolve(n)) for o, n in spec["convert_enums"].items()}
+            obj = _converting_enums(obj, enums)
+        old = getattr(parent, name)
+        _SAVED.append((parent, name, old))
+        setattr(parent, name, _with_source_golden(obj, old))
+    if swap:
+        print(f"FORK_SWAP: {len(swap)} name(s) point at the fork: {sorted(swap)}")
+
+
+@pytest.hookimpl(trylast=True)
+def pytest_collection_modifyitems(config, items):
+    """Drop skip marks whose reason contains BRINGUP_FORK_UNSKIP (after every conftest has added its own)."""
+    text = os.environ.get(UNSKIP_ENV)
+    if not text:
+        return
+    n = 0
+    for item in items:
+        keep = [m for m in item.own_markers if not (m.name == "skip" and text in str(m.kwargs.get("reason", "")))]
+        n += len(item.own_markers) - len(keep)
+        item.own_markers = keep
+    print(f"FORK_UNSKIP: removed {n} skip mark(s) with reason containing {text!r}")
+
+
+def pytest_unconfigure(config):
+    while _SAVED:
+        parent, name, value = _SAVED.pop()
+        setattr(parent, name, value)
+
+
+# ---- runner
+def manifest(fork: str) -> dict:
+    p = FORKS / fork / "tests" / "source.yaml"
+    if not p.exists():
+        raise SystemExit(f"{p.relative_to(REPO)}: no source-test manifest (see the bringup-fork-op skill)")
+    return yaml.safe_load(p.read_text()) or {}
+
+
+def _outcomes(xml: Path) -> dict[str, str]:
+    out = {}
+    if not xml.exists():
+        return out
+    for tc in ET.parse(xml).getroot().iter("testcase"):
+        key = f"{tc.get('classname')}::{tc.get('name')}"
+        kinds = {c.tag for c in tc}
+        out[key] = "failed" if kinds & {"failure", "error"} else "skipped" if "skipped" in kinds else "passed"
+    return out
+
+
+def entry_mesh(t: dict) -> tuple[int, int]:
+    """The mesh an entry's tests open: its ``mesh: [rows, cols]``, else the first ``RxC`` in its -k filter, else 1x1."""
+    if t.get("mesh"):
+        return tuple(int(x) for x in t["mesh"])
+    found = re.search(r"\b(\d+)x(\d+)\b", t.get("k", ""))
+    return (int(found.group(1)), int(found.group(2))) if found else (1, 1)
+
+
+def _show_cards(env: dict, mesh: tuple[int, int]) -> None:
+    """Show the entry only the cards that form its mesh on this box (cards.py); a caller's TT_VISIBLE_DEVICES wins."""
+    if _USER_CARDS is not None:
+        return
+    from models.demos.common.bringup.testing.cards import visible_devices
+
+    cards = visible_devices(mesh)
+    if cards is None:
+        env.pop("TT_VISIBLE_DEVICES", None)
+    else:
+        env["TT_VISIBLE_DEVICES"] = cards
+
+
+_USER_CARDS = os.environ.get("TT_VISIBLE_DEVICES")
+
+
+def run(m: dict, swap: bool, tag: str, scratch: Path, only: list[int] | None = None) -> dict[str, str]:
+    """Every manifest entry (or the ones in ``only``) through run_safe_pytest, one session per entry, so a -k filter
+    applies to its file."""
+    env = dict(os.environ)
+    if swap:
+        env[ENV] = json.dumps(m.get("swap") or {})
+    else:
+        env.pop(ENV, None)
+    results: dict[str, str] = {}
+    for i, t in enumerate(m.get("tests") or []):
+        if only is not None and i not in only:
+            continue
+        xml = scratch / f"{tag}_{i}.xml"
+        cmd = ["scripts/run_safe_pytest.sh", "--run-all", "--no-precompile", t["path"], f"--junitxml={xml}"]
+        # the plugin swaps only when ENV is set; it is loaded in both runs so an entry's unskip applies to both
+        cmd += ["-p", "models.demos.common.bringup.testing.fork_source"]
+        env.pop(UNSKIP_ENV, None)
+        _show_cards(env, entry_mesh(t))
+        if t.get("unskip"):
+            env[UNSKIP_ENV] = t["unskip"]
+        if t.get("k"):
+            cmd += ["-k", t["k"]]
+        subprocess.run(cmd, cwd=REPO, env=env)
+        got = _outcomes(xml)
+        if not got:
+            results[f"{t['path']}::<no results>"] = "failed"
+        results.update(got)
+    return results
+
+
+def main(argv=None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--fork", required=True, help="folder under ttnn/ttnn/bringup")
+    ap.add_argument("--record", action="store_true", help="run on the original and on the fork, write the baseline")
+    ap.add_argument(
+        "--entry",
+        type=int,
+        action="append",
+        help="only these manifest entries (0-based; repeatable). With --record their results merge into the baseline",
+    )
+    a = ap.parse_args(argv)
+
+    m = manifest(a.fork)
+    scratch = REPO / "generated" / "bringup_fork_source" / a.fork
+    scratch.mkdir(parents=True, exist_ok=True)
+    base_path = FORKS / a.fork / "tests" / "source_baseline.json"
+    fork = run(m, True, "fork", scratch, a.entry)
+    if a.record:
+        orig = run(m, False, "original", scratch, a.entry)
+        keys = sorted(set(orig) | set(fork))
+        base = json.loads(base_path.read_text())["tests"] if (a.entry and base_path.exists()) else {}
+        base.update({k: {"original": orig.get(k, "missing"), "fork": fork.get(k, "missing")} for k in keys})
+        base_path.write_text(json.dumps({"upstream_sha": m.get("upstream_sha"), "tests": base}, indent=1) + "\n")
+        gaps = [k for k, v in base.items() if v["original"] == "passed" and v["fork"] != "passed"]
+        n = {s: sum(v["fork"] == s for v in base.values()) for s in ("passed", "failed", "skipped")}
+        print(f"baseline {base_path.relative_to(REPO)}: {len(base)} tests; fork {n}")
+        print(f"original passes, fork does not ({len(gaps)}): the fork's known gaps")
+        for k in gaps[:40]:
+            print(f"  {k}: {base[k]['fork']}")
+        return 0
+    if not base_path.exists():
+        raise SystemExit(f"no baseline {base_path.relative_to(REPO)}: run with --record first")
+    base = json.loads(base_path.read_text())["tests"]
+    if a.entry:  # only the tests of the entries that ran
+        base = {k: v for k, v in base.items() if k in fork}
+    return 1 if report(base, fork, a.fork) else 0
+
+
+def report(base: dict, fork: dict, name: str) -> int:
+    """F198: every test of the fork run that did not pass is a failure, whatever the baseline says (a test that fails on
+    the original too, or that never produced a result, is listed as such, never accepted). Skips are listed. Returns
+    the number of failures."""
+    keys = sorted(set(base) | set(fork))
+    out = {k: fork.get(k, "missing") for k in keys}
+    failing = [k for k in keys if out[k] not in ("passed", "skipped")]
+    skipped = [k for k in keys if out[k] == "skipped"]
+    n_pass = sum(v == "passed" for v in out.values())
+    print(f"{name}: {len(keys)} tests: passed {n_pass}, failing {len(failing)}, skipped {len(skipped)}")
+    for k in failing:
+        b = base.get(k)
+        why = (
+            "new test"
+            if b is None
+            else "regression (passed at baseline)"
+            if b["fork"] == "passed"
+            else f"failing at baseline too (original {b['original']})"
+        )
+        print(f"  FAIL {k}: {out[k]}, {why}")
+    for k in skipped:
+        print(f"  skipped {k}")
+    for k in [k for k, v in base.items() if v["fork"] != "passed" and out.get(k) == "passed"][:20]:
+        print(f"  newly passing {k}")
+    return len(failing)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

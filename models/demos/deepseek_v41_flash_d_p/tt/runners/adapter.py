@@ -1,0 +1,608 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""``DS41PrefillAdapter``: the common/prefill engine <-> DeepSeek-V4.1-Flash (text decoder; vision and MTP skipped).
+
+Single rank on a 2D Blackhole mesh (the spec's 2D fabric: FABRIC_2D_TORUS_XY on the Galaxy, FABRIC_2D elsewhere;
+SP = mesh rows over axis 0, TP = mesh columns over axis 1, both read from mesh.shape). The model is the all-device tt/model.py:TtDS41Model, the ladder's model (lm_head off). The KV caches
+the engine owns (tt/runners/kv_contract.py) are the model's served state: each slot's DS41DeviceState is bound to
+its slabs of them, so the window / compressor modules write the served records in place (one format: bf16
+ROW_MAJOR, what the ladder runs on).
+
+Served layers: engine layer k = model layer ``layer_ids[k]``, from testing/contract.layer_ids_from_env
+(PREFILL_LAYER_IDS when the bring-up contract serves a non-contiguous subset, F100; else
+[first_layer_idx, first_layer_idx + num_layers)). Acks, the table and the read-back use the engine index. A subset
+with gaps (a partial bring-up's representative layers) starts every run after a gap from the framework's feed
+(testing/contract.gap_feed, F102: the golden block input of the run's first layer, as the ladder does); None for a
+contiguous range (the served model).
+
+Per chunk (prefill_chunk). PREFILL_END=cap (P.49, the default): the chunk is computed over [actual_start, cap),
+cap = decode's cap of actual_end (attention.snapshot_cap: actual_end // KV_BLOCK_SIZE x KV_BLOCK_SIZE, DS41-219);
+"actual_end" in steps 1-3 then reads cap (positions >= cap are pad), except the acks, which name the engine's range.
+A chunk with cap <= actual_start computes nothing: each layer's snapshot at cap, then its ack (_acks_only).
+PREFILL_END=end: P.42's path, everything up to actual_end.
+  1. the engine input (uint32 ROW_MAJOR [sp, 1, chunk / sp], sharded over axis 0, replicated over axis 1, the server's
+     order for a chunk at actual_start, PAD_ID 0xFFFFFFFF past actual_end) is read back once: the token ids are the
+     engram step's host input (components.yaml engram_rows, CPU: hash + memory-mapped lookup), and the model's rows are
+     natural blocks (tt/model.py), so the ids are put in natural order with the load-time geometry
+     (tt/attention.WindowGeometry.server_rows) and embedded (pad ids clamped into the vocabulary, K-72)
+  2. the slot's id history takes [actual_start, actual_end); every engram layer's tail = the compressed ids of the 3
+     positions before actual_start (a follow-up starts inside the slot's earlier prompt); begin_chunk sends the rows
+  3. layer by layer: the layer writes its records (window rows, compressed / index rows, the last record's pad rows
+     zero) through update_padded_kv_cache; WINDOW_KV_KEEP=snapshot128 (P.42): the window rows go to the slot's ring
+     and the layer's served 128-row snapshot at cap(actual_end) is rewritten from it; then the ack: host sink = ttnn.synchronize_device, then
+     sink.layers_completed(g, g + 1, slot, actual_start, actual_end) with g = first_layer_idx + k (K-71); D2H (d2h_service given) = outbound_socket_service_sync on the same
+     command queue, no host sync
+No host round trip inside a layer (the ladder gates host_transfers_per_layer at 0).
+
+DECODER_SKIP=decode (P.51, decode's proposal, owner 2026-11-12): every chunk is marked not the request's last, so the
+model runs layers 0-19, layer 20's KV / index head (kv_only) and skips layers 21-39; every served layer is still acked
+once per chunk (tt-d-gen does not know which layers ran). The chunk's optional ``global_write_start`` (the frontier of
+the long-range caches decode / the prefix cache hold; missing = actual_start: no replay) goes to begin_chunk: no
+history-cache row below it is written, and a chunk starting below it is an encoder replay (windows truncated at
+actual_start). Other DECODER_SKIP values refuse a global_write_start above actual_start (ValueError).
+
+Model load (FIX.29, OWNER 2026-11-13 "LOAD THE MODEL ONLY ONCE"): ``load_model`` is the model's one load path; the
+runtime and the bring-up hook (bringup/hooks.py device_model: the ladder, determinism, the model's tests) both call it.
+Inside a bring-up batch process (testing/batch.py: one pytest process running several tests) it returns the batch's
+model, so the contract tests' adapter path and every other test of a gate share one load; elsewhere (the engine,
+a test of its own) it builds the model as asked.
+
+Import-light: all device / model imports happen inside the methods.
+"""
+
+from __future__ import annotations
+
+import json
+import types
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+from models.demos.common.prefill.adapter import KvCaches, PrefillModelAdapter, PrefillRunParams
+
+MODEL_NAME = "deepseek_v41_flash_d_p"
+SPEC_PATH = Path(__file__).resolve().parents[2] / "bringup" / "spec.yaml"
+PAD_ID = 0xFFFFFFFF
+
+
+class _FabricPayload(type):
+    """``DS41Config.FABRIC_PAYLOAD_SIZE``, read when the runner opens its mesh (runner_utils.open_mesh_device; K-79):
+    the payload bringup/hooks.py:device_params gives every bring-up mesh, so the runner's fabric matches the tests':
+    the routed experts' weighted combine (P.8) sends one expert row + trailer per packet (weighted_combine.
+    FABRIC_PAYLOAD, 10880 B). FIX.8, DS41-94: a fixed 4352 hung the runner in FlatWithProgramDeviceOperation. Lazy, so
+    importing the adapter stays light."""
+
+    @property
+    def FABRIC_PAYLOAD_SIZE(cls) -> int:
+        from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import fabric_payload
+
+        return int(fabric_payload())  # (MOE_BLOCK_SPLIT_ROWS=on: 6208 B)
+
+
+class DS41Config(metaclass=_FabricPayload):
+    """Static model-dimension constants (the prefill engine's ``model_config``; FABRIC_PAYLOAD_SIZE: _FabricPayload)."""
+
+    NUM_LAYERS = 40
+    EMB_SIZE = 5120
+    HEAD_DIM = 512
+    INDEX_HEAD_DIM = 128
+    HC_MULT = 4
+    VOCAB_SIZE = 129280
+    HF_ID = "deepseek-ai/DeepSeek-V4.1-Flash"
+
+
+def bringup_spec():
+    """The bring-up spec: BRINGUP_SPEC when set and this model's, else this model's own spec.yaml."""
+    from models.demos.common.bringup.reference.golden import load_spec
+
+    try:
+        s = load_spec()
+        if s.model == MODEL_NAME:
+            return s
+    except SystemExit:  # BRINGUP_SPEC unset
+        pass
+    return load_spec(str(SPEC_PATH))
+
+
+def model_path() -> str:
+    """The checkpoint the run uses (the spec's: the scaled one in a partial run on a smaller box, F75)."""
+    from models.demos.common.bringup.reference.golden import hf_path
+
+    return hf_path(bringup_spec())
+
+
+def served_layer_ids(first_layer_idx: int, num_layers: int) -> list[int]:
+    """Model layer of each engine layer (OV-14 / F100: testing/contract.layer_ids_from_env)."""
+    from models.demos.common.bringup.testing.contract import layer_ids_from_env
+
+    ids = layer_ids_from_env(first_layer_idx, num_layers)
+    assert ids == sorted(set(ids)) and ids, f"served layers {ids} must be ascending and distinct"
+    return ids
+
+
+def table_seq(max_seq: int, chunk: int) -> int:
+    """PB.2: the positions the model's load-time tables (RoPE) cover for prompts up to ``max_seq``. A prompt's last chunk
+    starts below ``max_seq`` and runs a whole chunk (pad rows past actual_end take positions too), so when ``max_seq``
+    is not a whole number of chunks (8192-row chunks: 56320, the deployment's 1,044,480) the tables reach one chunk
+    further, as the decoder tail's do (TtDS41Model.build_tail). A whole number of chunks (5120: 56320, 1,044,480) is
+    unchanged."""
+    max_seq, chunk = int(max_seq), int(chunk)
+    return max_seq if max_seq % chunk == 0 else max_seq + chunk
+
+
+def load_model(
+    mesh_device, layers, *, max_seq: int, chunk: int, lm_head: bool = False, weight_cache=None, checkpoint=None
+):
+    """The model's one load path (module docstring "Model load"): TtDS41Model of ``layers`` with RoPE tables for
+    ``max_seq`` positions; in a bring-up batch the batch's model (loaded once for the longest sequence its tests need,
+    with the LM head when one needs it), else a new model. Never a second copy of the weights in one process.
+    ``checkpoint``: the checkpoint directory (default: the run's, model_path())."""
+    from models.demos.common.bringup.testing import batch
+
+    ck = str(checkpoint or model_path())
+    max_seq = table_seq(max_seq, chunk)
+
+    def load(seq, head):
+        from models.demos.deepseek_v41_flash_d_p.tt.model import TtDS41Model
+
+        return TtDS41Model(
+            mesh_device, ck, list(layers), max_seq=seq, chunk=chunk, lm_head=head, weight_cache=weight_cache
+        )
+
+    return batch.shared_model(
+        mesh_device,
+        layers,
+        seq=int(max_seq),
+        lm_head=bool(lm_head),
+        load=load,
+        config={"chunk": int(chunk), "weight_cache": str(weight_cache), "checkpoint": ck},
+        spec=bringup_spec(),
+    )
+
+
+@dataclass
+class DS41KvCaches(KvCaches):
+    contract: object  # kv_contract.DS41ContractKV
+    layer_ids: list = field(default_factory=list)
+    by_config: dict = field(default_factory=dict)  # {config name: ttnn.Tensor}, table order
+
+
+class DS41PrefillRuntime:
+    """Runtime contract of ADDING_A_PREFILL_MODEL.md section 2 and bringup/serving_contract.md (stateless w.r.t. the
+    KV cache: each slot's state is bound to its slabs of the engine's caches)."""
+
+    def __init__(self, *, mesh_device, hf_config, params: PrefillRunParams):
+        import ttnn
+        from models.demos.deepseek_v41_flash_d_p.tt.attention import WindowGeometry
+
+        assert params.is_first_rank and params.is_last_rank, "single-rank only"
+        assert tuple(params.mesh_shape) == tuple(mesh_device.shape), (params.mesh_shape, tuple(mesh_device.shape))
+        c, m = params.chunk_size, params.max_seq_len
+        assert m % c == 0, (m, c)
+        self.mesh_device, self.config = mesh_device, params
+        self.layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
+        # FIX.29: through the one load path (in a bring-up batch: the batch's model, loaded once)
+        self.model = load_model(
+            mesh_device, self.layer_ids, max_seq=m, chunk=c, lm_head=False, weight_cache=params.weight_cache_path
+        )
+        # FIX.17: DEEP_LAYERS=tail skips layers 21-39 until the prompt's end; the engine reads every layer's window KV
+        assert not self.model.deep, "DEEP_LAYERS=tail is not served: the engine needs every layer's whole history"
+        # P.32: WINDOW_KV_KEEP=ring | none keep a ring, not tt-d-gen's 0_window_kv of every position (its reader pending);
+        # P.42: snapshot128 serves the 128-row snapshot at cap (tt-d-gen's snapshot config)
+        from ..attention import window_keep
+
+        assert window_keep() in (
+            "full",
+            "snapshot128",
+        ), f"WINDOW_KV_KEEP={window_keep()} is not served: tt-d-gen reads every position or the snapshot at cap"
+        self.geo = WindowGeometry(mesh_device, c)
+        from models.demos.common.bringup.testing.contract import gap_feed
+
+        self.gap_feed = gap_feed(self.layer_ids, m, c)  # the bring-up's gapped subset only (F102); None when served
+        self._ttnn = ttnn
+        self._sink = None
+        self._d2h = None
+        self._states = {}  # (id of the KvCaches, slot) -> DS41DeviceState bound to the slot's slabs
+
+    # ------------------------------------------------------------------ engine hooks
+    def set_layer_completion_sink(self, sink) -> None:
+        self._sink = sink
+
+    def set_d2h_ack_service(self, service) -> None:
+        self._d2h = service
+
+    def state(self, kv, slot: int):
+        """The slot's DS41DeviceState over the engine's caches (built once per slot; no device allocation but the
+        index keys' bf16 compute copies under INDEX_K_SERVED=fp8_row192, P.39)."""
+        key = (id(kv), int(slot))
+        if key not in self._states:
+            self._states[key] = self.model.new_state(
+                self.config.max_seq_len, slabs=kv.contract.slabs(int(slot)), keep_history=False
+            )
+        return self._states[key]
+
+    def make_chunk_input(self, token_ids, start: int = 0):
+        """The engine's H2D payload for a chunk at ``start`` (server order, PAD_ID tail), host side: compile()
+        warm-up only (the engine supplies real inputs)."""
+        import torch
+
+        ttnn = self._ttnn
+        c, sp, w = self.config.chunk_size, self.geo.sp, self.geo.w
+        nat = torch.full((c,), PAD_ID, dtype=torch.int64)
+        nat[: len(token_ids)] = torch.as_tensor(list(token_ids), dtype=torch.int64)
+        srv = nat[self.geo.server_rows(start).reshape(-1)].reshape(sp, 1, w)
+        return ttnn.from_torch(
+            srv.to(torch.uint32),
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.create_mesh_mapper(
+                self.mesh_device,
+                ttnn.MeshMapperConfig(placements=[ttnn.PlacementShard(0), ttnn.PlacementReplicate()]),
+            ),
+        )
+
+    def _host_ids(self, inp, start: int, end: int):
+        """Engine input -> the chunk's ids in natural order [chunk] int64 (PAD_ID past ``end``): one read of mesh
+        column 0's rows, un-shuffled with the load-time server order."""
+        import torch
+
+        ttnn = self._ttnn
+        g = self.geo
+        dev = ttnn.get_device_tensors(inp)
+        rows = [ttnn.to_torch(dev[r * g.tp]).reshape(-1).to(torch.int64) & 0xFFFFFFFF for r in range(g.sp)]
+        srv = torch.stack(rows)  # [SP, W] the server's order
+        nat = torch.empty(g.chunk, dtype=torch.int64)
+        nat[g.server_rows(start).reshape(-1)] = srv.reshape(-1)
+        nat[end - start :] = PAD_ID
+        return nat
+
+    def _run(
+        self,
+        inp,
+        kv,
+        slot,
+        start,
+        end,
+        acks: bool,
+        d2h_service=None,
+        metadata_msg=None,
+        last: bool | None = None,
+        write_start: int | None = None,
+    ):
+        ttnn = self._ttnn
+        model = self.model
+        sink = self._sink if acks else None
+        d2h = (d2h_service if d2h_service is not None else self._d2h) if acks else None
+        assert d2h is None or metadata_msg is not None, "metadata_msg is required with d2h_service"
+        st = self.state(kv, slot)
+        model.state = st  # begin_chunk reads (and advances) the active slot's engram tail
+        if acks:  # (P.42: the in-process read-back's snapshot cap; host bookkeeping)
+            from .kv_contract import SNAPSHOT_ENDS, WINDOW_UNWRITTEN
+
+            SNAPSHOT_ENDS[int(slot)] = int(end)
+            # FIX.28: the layers whose window (ring and served snapshot) this chunk never writes: DECODER_SKIP=decode's
+            # decoder (20-39); the in-process read-backs judge only what decode is served (host bookkeeping)
+            WINDOW_UNWRITTEN[int(slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
+        from ..attention import prefill_end
+
+        # PREFILL_END=cap (P.49): compute only [start, cap), cap = decode's cap of the engine's actual_end
+        # (snapshot_cap); positions >= cap are pad (the model's ``end``). The acks still name the engine's range.
+        run_end = prefill_end(end)
+        if run_end <= start:  # nothing below cap in this chunk: only every layer's snapshot at cap, then the acks
+            self._acks_only(st, slot, start, end, run_end, sink, d2h, metadata_msg)
+            return
+        if model.skip_mode == "decode":  # P.51: the decoder never runs in prefill (decode runs [P, N) itself)
+            last = False
+        if model.engram_on():  # P.87 (ENGRAM_DEVICE=on): the lookup and the embedding read the device ids: no readback
+            ids = None
+            model.begin_chunk(None, start, last=last, write_start=write_start, device_ids=inp, valid=run_end - start)
+        else:
+            ids = self._host_ids(inp, start, run_end)
+            st.note_tokens(ids, start, run_end)
+            # (P.30 / P.31: False skips the decoder; None = not told, every layer. P.51: write_start = global_write_start)
+            model.begin_chunk(ids, start, last=last, write_start=write_start)
+        h = None
+        for k, i in enumerate(self.layer_ids):
+            if k == 0 or (self.gap_feed is not None and i in self.gap_feed.starts):
+                if h is not None:
+                    model.free(h)
+                h = model.embed(ids, start) if i == 0 else model.from_host(self.gap_feed.rows(i, start), start)
+            h2 = model.layer(i, h, start, st, end=run_end)  # writes the layer's records, the last one's pad rows zero
+            model.free(h)
+            h = h2
+            if d2h is not None:
+                # device-op ack on the same command queue, after the layer's cache writes: no host sync
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
+            elif sink is not None:
+                # the ack promises the layer's KV is in DRAM (the KV Manager reads it out of band): wait for it (K-71)
+                ttnn.synchronize_device(self.mesh_device)
+                g = self.config.first_layer_idx + k
+                sink.layers_completed(g, g + 1, slot, start, end)
+        model.free(h)
+
+    def _acks_only(self, st, slot, start, end, cap, sink, d2h, metadata_msg) -> None:
+        """PREFILL_END=cap (P.49), a chunk with no position below cap (the request's last chunk, its whole range in
+        [cap, actual_end): cap <= start). Nothing is computed or written but each layer's served snapshot, rewritten at
+        cap from the layer's ring (window rows the earlier chunks wrote; the same bytes when the previous chunk ended
+        at cap; cap 0: zeros), then the layer's ack, as on a computed chunk (the engine still counts layers_per_chunk acks).
+        """
+        ttnn = self._ttnn
+        model = self.model
+        for k, i in enumerate(self.layer_ids):
+            c = st.window[i]
+            # (cap 0, a prompt shorter than a block: all 128 rows zero; DECODER_SKIP=decode, FIX.28: the decoder's
+            # snapshots are never written, as on a computed chunk)
+            if c.snap is not None and not (model.skip_mode == "decode" and i in model.decoder):
+                c.write_snapshot(cap)
+            if d2h is not None:
+                ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=metadata_msg)
+            elif sink is not None:
+                ttnn.synchronize_device(self.mesh_device)
+                g = self.config.first_layer_idx + k
+                sink.layers_completed(g, g + 1, slot, start, end)
+
+    def compile(self, kv_cache: DS41KvCaches) -> None:
+        """Warm the programs once in slot 0 (junk KV there; a request reads only rows it wrote itself): one cold full
+        chunk. Other starts compile on first use."""
+        ttnn = self._ttnn
+        assert kv_cache.layer_ids == self.layer_ids, (kv_cache.layer_ids, self.layer_ids)
+        c = self.config.chunk_size
+        ids = self.make_chunk_input([0] * c, 0)
+        self._run(ids, kv_cache, 0, 0, c, acks=False)
+        ttnn.deallocate(ids)
+        ttnn.synchronize_device(self.mesh_device)
+
+    def prefill_chunk(
+        self,
+        input_tensor,
+        kv_cache,
+        *,
+        slot_id,
+        actual_start,
+        actual_end,
+        request_id=0,
+        d2h_service=None,
+        metadata_msg=None,
+        last=None,
+        global_write_start=None,
+        **_unused,
+    ):
+        """``last`` (P.30): whether the chunk is the request's last. tt-d-gen's chunk header has no such flag yet, so
+        the engine never passes it: None (every layer, today's behaviour). Under DECODER_SKIP=exact a caller passing
+        False gets the decoder skipped (layers 20-39 write no window rows for the chunk); under replay128 (P.31) True
+        runs the decoder on the chunk's tail only (the tail model's own caches: not the served decoder rows). The
+        caller starts the request's last chunk at or before model.last_start(actual_end) (SKIP_TAIL_START, P.43:
+        cap: exact min(end - 2688, cap - 2668), replay128 min(end - 128, cap - 128), cap = end // 64 x 64 (P.49); the
+        chunk before it ending there); the model refuses a later start (ValueError), it never pulls back. Under
+        WINDOW_KV_KEEP=snapshot128 every layer's snapshot is then written on the last chunk.
+        ``global_write_start`` (P.51, chunk header field 4; None = actual_start): under DECODER_SKIP=decode no
+        history-cache row below it is written and a chunk starting below it replays the encoder (module docstring);
+        other DECODER_SKIP values refuse a value above actual_start."""
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        start, end = int(actual_start), int(actual_end)
+        assert start % 32 == 0, f"actual_start {start} must be tile (32) aligned"
+        assert start < end <= min(start + c, m), (start, end, c, m)
+        assert start + c <= m, "chunk overruns the slot (the server pulls the last chunk back)"
+        assert 0 <= int(slot_id) < kv_cache.contract.num_users, (slot_id, kv_cache.contract.num_users)
+        assert tuple(input_tensor.shape)[-1] * self.geo.sp == c, input_tensor.shape
+        gws = start if global_write_start is None else max(start, int(global_write_start))
+        self._run(
+            input_tensor,
+            kv_cache,
+            int(slot_id),
+            start,
+            end,
+            acks=True,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            last=None if last is None else bool(last),
+            write_start=gws,
+        )
+        return None  # last / single rank: the populated cache is the output
+
+    # ------------------------------------------------------------------ PACKED=on (PB.3, bringup/PACKED_DESIGN.md)
+    def make_packed_input(self, descriptor, ids_per_lane):
+        """The engine's H2D payload of a packed chunk (tests and compile only): tt/packed_device.make_input."""
+        from ..packed_device import make_input
+
+        return make_input(self.mesh_device, descriptor, ids_per_lane)
+
+    def _host_ids_packed(self, inp, descriptor):
+        """Engine input (lane-natural order) -> the chunk's ids (tt/packed_device.ids_from_input)."""
+        from ..packed_device import ids_from_input
+
+        return ids_from_input(self.mesh_device, inp, descriptor)
+
+    def prefill_packed(self, input_tensor, kv_cache, descriptor, *, d2h_service=None, metadata_msg=None, acks=True):
+        """PB.3 (PACKED=on): one packed chunk (tt/packed.ChunkDescriptor: up to 4 segments, each its own slot, start,
+        end and global_write_start; the engine input in lane-natural order). Every served layer is acked once per
+        segment (host sink: sink.layers_completed(g, g + 1, slot, start, end) for each segment after the layer's
+        sync; D2H: one outbound_socket_service_sync a segment). PACKED=off refuses (prefill_chunk is today's path)."""
+        from ..packed_device import packed_on
+
+        if not packed_on():
+            raise ValueError("prefill_packed needs PACKED=on (PACKED=off: prefill_chunk, one request a chunk)")
+        c, m = self.config.chunk_size, self.config.max_seq_len
+        assert int(descriptor.chunk) == c, (descriptor.chunk, c)
+        assert self.gap_feed is None, "PACKED=on serves a contiguous layer range"
+        for _, s in descriptor.live():
+            assert s.start % 32 == 0 and s.start < s.end and s.start + descriptor.lane_rows <= m, (s, m)
+            assert 0 <= int(s.slot) < kv_cache.contract.num_users, (s.slot, kv_cache.contract.num_users)
+        ttnn = self._ttnn
+        model = self.model
+        sink = self._sink if acks else None
+        d2h = (d2h_service if d2h_service is not None else self._d2h) if acks else None
+        live = descriptor.live()
+        states = [None if s is None else self.state(kv_cache, s.slot) for s in descriptor.segments]
+        if acks:
+            from .kv_contract import SNAPSHOT_ENDS, WINDOW_UNWRITTEN
+
+            for _, s in live:
+                SNAPSHOT_ENDS[int(s.slot)] = int(s.end)
+                WINDOW_UNWRITTEN[int(s.slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
+        ids = self._host_ids_packed(input_tensor, descriptor)
+        last = False if model.skip_mode == "decode" else None
+        model.begin_packed(descriptor, ids, states, last=last)
+        try:
+            from ..model import SKIPPED
+
+            h = model.embed(ids) if model._packed.segs else SKIPPED
+            for k, i in enumerate(self.layer_ids):
+                h2 = model.layer(i, h, 0, None)
+                if h2 is not h:
+                    model.free(h)
+                h = h2
+                if d2h is not None:
+                    for j, _ in enumerate(live):
+                        msg = metadata_msg[j] if isinstance(metadata_msg, (list, tuple)) else metadata_msg
+                        ttnn.experimental.deepseek_prefill.outbound_socket_service_sync(d2h, metadata=msg)
+                elif sink is not None:
+                    ttnn.synchronize_device(self.mesh_device)
+                    g = self.config.first_layer_idx + k
+                    for _, s in live:
+                        sink.layers_completed(g, g + 1, int(s.slot), int(s.start), int(s.end))
+            model.free(h)
+        finally:
+            model.end_packed()
+        return None
+
+    # ------------------------------------------------------------------ migration hooks
+    def kv_migration_stages(self, kv_cache, first_layer_idx, num_layers):
+        """One stage per table config, in table order (the runner gathers each one's base address and chips)."""
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        assert int(num_layers) == len(kv_cache.layer_ids), (num_layers, kv_cache.layer_ids)
+        return [KvCacheStage(b, int(first_layer_idx), int(num_layers)) for b in kv_cache.contract.stage_bases()]
+
+    def build_kv_chunk_table(
+        self, kv_cache, path: str, *, first_layer_idx=0, num_my_layers=None, stage_layout=None, stage_layouts=None
+    ) -> str:
+        """Export the address table (tt/runners/kv_contract.py). The runner's migration path passes the rank's layer
+        range and the gathered stage layouts (one per config); the mock-only path calls (kv, path=)."""
+        import ttnn
+
+        n = len(kv_cache.layer_ids)
+        assert num_my_layers in (None, n), (num_my_layers, n)
+        if stage_layouts is None and stage_layout is not None:
+            stage_layouts = [stage_layout]
+        table = kv_cache.contract.address_table(
+            seq_len=self.config.max_seq_len, first_layer_idx=int(first_layer_idx), stage_layouts=stage_layouts
+        )
+        ttnn.experimental.disaggregation.export_to_protobuf_file(table, path)
+        return path
+
+    def kv_migration_base_address(self, kv_cache) -> int:
+        return kv_cache.contract.base_address()
+
+
+class DS41PrefillAdapter(PrefillModelAdapter):
+    """DeepSeek-V4.1-Flash prefill adapter on a 2D Blackhole mesh (CSA window / compressed sparse attention with a
+    shared indexer, engram, mHC 4-stream residual, fp4 routed experts as bfp8 + a shared expert)."""
+
+    name = MODEL_NAME
+    model_config = DS41Config
+    hf_model_default = ""  # the bring-up spec's checkpoint (model_path)
+    ttnn_cache_default = ""
+    prefill_trace_default = ""  # the bring-up golden dir; PREFILL_TRACE_DIR overrides
+    default_gate_mode = "DEVICE_FP32"
+    l1_small_size = 24576  # the spec's device_params
+    hf_repo_id = DS41Config.HF_ID
+
+    def load_hf_config(self):
+        """The checkpoint's text config as attributes (the runner sets max_seq_len on it)."""
+        raw = json.loads((Path(model_path()) / "config.json").read_text())
+        return types.SimpleNamespace(**raw.get("text_config", raw))
+
+    def weight_cache_path(self, mesh_shape: tuple) -> Optional[Path]:
+        """The routed experts' laid-out weight cache (tt/experts.py:expert_cache_dir, EXPERTS_WEIGHT_CACHE); every
+        other weight loads from the checkpoint."""
+        from models.demos.deepseek_v41_flash_d_p.tt.experts import expert_cache_dir
+
+        return expert_cache_dir(bringup_spec())
+
+    def num_kv_cache_layers(self, num_layers: int) -> int:
+        """Acks per chunk: one per served layer (every layer owns 0_window_kv)."""
+        return int(num_layers)
+
+    def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
+        from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
+        from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import DS41ContractKV
+
+        layer_ids = served_layer_ids(params.first_layer_idx, params.num_layers)
+        contract = DS41ContractKV(
+            mesh_device,
+            Config.from_dir(model_path()),
+            layer_ids,
+            max_seq=params.max_seq_len,
+            chunk=params.chunk_size,
+            num_users=params.num_users,
+        )
+        return DS41KvCaches(contract=contract, layer_ids=layer_ids, by_config=dict(contract.by_config))
+
+    def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
+        return DS41PrefillRuntime(mesh_device=mesh_device, hf_config=hf_config, params=params)
+
+    def read_slot_kv_and_check_pcc(self, table, device_map, slot_id, real_len, trace_dir, num_layers):
+        """The producer's read-back (K-73): every served cache through the table vs the bring-up golden,
+        {window_kv, compress_kv, index_k: min PCC}."""
+        from models.demos.deepseek_v41_flash_d_p.reference.ds41_ref import Config
+        from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import read_slot_kv_and_check_pcc
+
+        return read_slot_kv_and_check_pcc(
+            table,
+            device_map,
+            slot_id,
+            real_len,
+            trace_dir,
+            Config.from_dir(model_path()),
+            served_layer_ids(0, int(num_layers)),
+        )
+
+
+def contract_state_pcc(spec, runtime, kv, slot, length, golden) -> dict:
+    """Bring-up contract hook (testing/contract.py; bringup/hooks.py re-exports it): the slot's fixed-size state
+    (spec state.fixed: the window ring, the compressor's partial group, the engram tail) after a request of
+    ``length`` tokens vs the golden snapshot at ``length``; {name: min PCC over the served layers} for the float
+    states, which testing/contract.py gates on calib x their drift. An integer state (the engram tail: the last token
+    ids, no rounding anywhere) has no drift entry (reference/drift.py keeps only float states, F134) and no margin:
+    it must equal the golden exactly; any difference fails here (FIX.8, DS41-93), the result recorded as
+    ``contract_state_exact_<name>`` (1 = equal on every served layer)."""
+    import torch
+    from loguru import logger
+
+    from models.demos.common.bringup.core import metrics
+    from models.demos.deepseek_v41_flash_d_p.tt.runners.kv_contract import WINDOW_UNWRITTEN, _pcc
+
+    st = runtime.state(kv, slot)
+    out, exact, bad = {}, {}, []
+    # FIX.28: DECODER_SKIP=decode never computes the decoder's windows (layers 20-39; decode rebuilds them from P):
+    # their window ring is not judged; every other fixed state is (layer 20's compressor partial: its kv_only head)
+    unwritten = WINDOW_UNWRITTEN.get(int(slot), frozenset())
+    if unwritten:
+        logger.info(f"  window_kv of layers {sorted(unwritten)} not judged: DECODER_SKIP=decode never writes it")
+    for layer in runtime.layer_ids:
+        gold = golden.state(layer, at=length)
+        dev = st.to_torch(layer, length)
+        for name in spec.state_fixed:
+            if name not in gold or name not in dev or (name == "window_kv" and layer in unwritten):
+                continue
+            if not gold[name].is_floating_point():
+                eq = torch.equal(dev[name].long().flatten(), gold[name].long().flatten())
+                exact[name] = exact.get(name, True) and eq
+                if not eq:
+                    bad.append(
+                        f"layer {layer} {name} at {length}: {dev[name].flatten().tolist()} != golden "
+                        f"{gold[name].flatten().tolist()}"
+                    )
+                logger.info(f"  layer {layer:>2} {name} at {length}: {'equal' if eq else 'DIFFERS'}")
+                continue
+            p = _pcc(dev[name].float(), gold[name].float().reshape(dev[name].shape))
+            out[name] = min(out.get(name, 1.0), p)
+            logger.info(f"  layer {layer:>2} {name} at {length}: {p:.6f}")
+    for name, eq in exact.items():
+        metrics.record(f"contract_state_exact_{name}", int(eq))
+    assert not bad, "integer fixed state differs from the golden (must be exact):\n" + "\n".join(bad)
+    return out

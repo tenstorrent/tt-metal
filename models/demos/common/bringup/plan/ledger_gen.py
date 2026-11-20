@@ -1,0 +1,722 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""The standard task ledger for a model, generated from its spec and its reference's block graphs.
+
+    python -m models.demos.common.bringup.plan.ledger_gen --spec S [--write]
+
+Task ids by pipeline step:
+    R.1 checkpoint   R.2 HF parity   R.3 chunked + graph replay         (reference)
+    R.4              trim a layer subset's checkpoint after the sanity   (intake, F47)
+    G.<rung>         one golden per rung that owns its golden            (goldens)
+    B.1              box: mesh opens, collectives work                   (box)
+    SC.1             serving contract: how-to + tests, from tt-d-gen's code    (serving, before the plan)
+    PL.1             plan fits DRAM, components mapped, ledger valid, approved   (plan)
+    C.<bt>.<step>    component test of one step of the representative layer      (implement, parallel)
+    S.<bt>.<nn>      swap test: steps 1..nn of the block on device, in graph order (implement, sequential)
+    L.<rung>         ladder rung on device                               (integrate)
+    K.1              serving contract through the engine API             (contract)
+    X.1 profile      X.2 opportunity list                                (perf)
+    Z.1              settings audit: every switch in tt/settings.py      (settings)
+    F.1              every forked op's every test, strictly (F199)       (optests, last)
+The plan agent may add, split or annotate tasks (e.g. a hooks-only task, a model-level embedding task) before the
+plan is approved; the generator only writes the skeleton.
+"""
+
+from __future__ import annotations
+
+import argparse
+
+import yaml
+
+from models.demos.common.bringup.core.spec import SEED_RUNG
+from models.demos.common.bringup.intake import trim_checkpoint
+from models.demos.common.bringup.plan.boxes import scaling_applies
+from models.demos.common.bringup.reference.golden import TARGET_NUMERICS, load_spec, reference_at, rung_dir
+from models.demos.common.bringup.testing import serving as SV
+from models.demos.common.bringup.testing.templates import component_test_path, swap_test_path
+
+SAFE = "scripts/run_safe_pytest.sh --run-all"
+PY = "python -m models.demos.common.bringup"
+REAL = "BRINGUP_SCALED=0"  # F75: a step that must read the real checkpoint on a scaled run (core/spec.py)
+# F155: device time comes from the program real-time profiler (no environment). The device profiler only on
+# perf.profiler: device (cross-checks); PROGRAM_SUPPORT_COUNT: its pipelined timeline reads it once per chunk, and
+# the default 1000 programs per core drops markers on large models (GLM-5.3, 5 layers: 1319 programs per chip).
+DEVICE_PROFILE_ENV = (
+    "BRINGUP_PROFILER=device TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1"
+    " TT_METAL_PROFILER_CPP_POST_PROCESS=1 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000"
+)
+
+
+def profile_env(spec) -> str:
+    """The environment prefix of a profile gate (with its trailing space), by the spec's perf.profiler."""
+    return f"{DEVICE_PROFILE_ENV} " if spec.get("perf.profiler") == "device" else ""
+
+
+# F128 (owner): end-to-end accuracy is gated against the limit each test records (calib x the reference's own drift
+# from full precision, testing/e2e_limits.py), never a fixed number
+# F135: float tensors by their rel L2 error (as per step), selections by their overlap; PCC is a diagnostic
+E2E = {"err_layer_L*": "<= limit", "err_state_*_L*": "<= limit"}  # index states: the missed fraction (F138)
+E2E_LAST = {"err_final_hidden": "<= limit", "top5_overlap": ">= limit"}
+
+
+def rel(spec, p) -> str:
+    return str(p.relative_to(spec.repo))
+
+
+def sanity_metrics(spec) -> dict:
+    """The HF sanity gate: pinned revision, usage-example smoke, next-token accuracy floor (R.1, or R.2 with F39)."""
+    return {
+        "revision_ok": "== 1",
+        "text_top1_acc": f">= {spec.get('text.min_top1', 0.4)}",
+        **({"smoke_ok": "== 1"} if spec.get("intake.smoke") else {}),
+    }
+
+
+def served_format(spec) -> dict:
+    """F58: with the served KV dtype in the spec (serving.kv_dtype, the owner's answer to SC.1), every ladder
+    rung must run on it: one cache format for the ladder, the contract and serving."""
+    bits = {"bf16": 16, "bfloat16": 16, "bfp8": 8, "bfloat8_b": 8, "fp32": 32}.get(
+        str(spec.get("serving.kv_dtype", ""))
+    )
+    if not bits:
+        return {}
+    names = set(spec.get("state.tensors") or []) | {
+        n for v in (spec.get("state.by_block_type") or {}).values() for n in v
+    }
+    return {f"state_bits_{n}": f"== {bits}" for n in sorted(names)}
+
+
+def contract_cmds_all(spec) -> str:
+    return f" && {PY}.testing.serving --run all" if SV.tests(spec) else ""
+
+
+def contract_cmds(spec, gate: str) -> str:
+    """The serving contract tests a step's gate runs too (contract_tests.yaml, written by SC.1)."""
+    return "".join(f" && {SAFE} --no-precompile {t['test']}" for t in SV.tests_for(spec, gate))
+
+
+def adder(tasks: list):
+    def add(tid, title, step, deps, cmd, metrics, **kw):
+        tasks.append(
+            {
+                "id": tid,
+                "title": title,
+                "step": step,
+                "deps": list(deps),
+                "gate": {"cmd": cmd, "metrics": metrics},
+                **kw,
+            }
+        )
+
+    return add
+
+
+def generate(spec, ref=None, early: bool = False) -> dict:
+    """early=True: only the tasks that exist before the reference does (R, G, B, and PL.0, which extends the ledger
+    with the rest once R.3 has passed and the block graphs are known). A seeded run has one graph (generate_seeded)."""
+    if spec.seed:
+        return generate_seeded(spec)
+    if ref is None and not early:
+        reps = sorted({spec.representative_layer(bt) for bt in spec.data["block_types"]})
+        ref = reference_at(spec, TARGET_NUMERICS, layers=reps)
+    model_dir = rel(spec, spec.model_dir)
+    ref_paths = [f"{model_dir}/reference", f"{model_dir}/bringup/hooks.py", f"{model_dir}/__init__.py"]
+    impl_paths = [f"{model_dir}/tt", f"{model_dir}/bringup/hooks.py"]
+    ladder = spec.data["ladder"]
+    first = ladder[0]
+    tasks = []
+    # F75: on a box with fewer chips than the deployment box the run IS the scaled model (core/spec.py): goldens and
+    # every device step use the reduced checkpoint; only the reference checks and the plan check read the real one
+    scaled = scaling_applies(spec)
+    real = f"{REAL} " if scaled else ""
+
+    add = adder(tasks)
+
+    # HF sanity (revision, usage-example smoke, accuracy floor) runs at R.1 on the stock HF loader. A checkpoint the
+    # stock loader cannot run on this host (custom quantized storage, too big for RAM in bf16) sets hf.custom_loader:
+    # the checks then move into R.2's gate, after the reference agent has written hooks.hf_model (F39).
+    sanity = sanity_metrics(spec)
+    late = bool(spec.get("hf.custom_loader"))
+    add(
+        "R.1",
+        "Checkpoint, intake approval, canonical prompt"
+        + ("" if late else ", HF sanity (revision, usage-example smoke, accuracy floor)"),
+        "intake",
+        [],
+        f"{real}{PY}.intake.check_checkpoint && {real}{PY}.reference.prompt"
+        + ("" if late else f" && {real}{PY}.intake.check_hf_sanity"),
+        {
+            "intake_approved": "== 1",
+            "prompt_hash_ok": "== 1",
+            **({} if late else sanity),
+            "missing_tensors": "== 0",
+            "shape_mismatches": "== 0",
+            "count_mismatches": "== 0",
+            "config_mismatches": "== 0",
+            "checkpoint_tensors": ">= 1",
+        },
+        paths=[f"{model_dir}/bringup/spec.yaml"],
+    )
+    add(
+        "R.2",
+        ("HF sanity on the model's loader (revision, smoke, accuracy floor); r" if late else "R")
+        + "eference matches HF per layer and on logits (fp32)",
+        "reference",
+        ["R.1"],
+        (f"{real}{PY}.intake.check_hf_sanity && " if late else "")
+        + f"{real}{PY}.reference.check_hf --seq {spec.get('hf.parity_seq', 512)}",
+        {
+            **(sanity if late else {}),
+            "pcc_hidden_L*": ">= 0.9999",
+            "pcc_logits": ">= 0.9999",
+            "top1_match_frac": ">= 0.99",
+        },
+        paths=ref_paths,
+    )
+    if trim_checkpoint.applies(spec):
+        # F47 (before R.3, so it runs as soon as R.2 passes): a layer subset needs the whole checkpoint only for the HF sanity; once it and the parity passed, the
+        # layers no later step reads are removed (bringup_trim.json keeps the full tensor map and the sanity metrics).
+        k = trim_checkpoint.keep_layers(spec)
+        add(
+            "R.4",
+            f"Trim the checkpoint to layers 0-{k - 1} (the whole model was needed only for the HF sanity)",
+            "intake",
+            ["R.2"],
+            f"{PY}.intake.trim_checkpoint",
+            {"trim_done": "== 1", "trim_verify_errors": "== 0", "trim_freed_gb": ">= 0"},
+        )
+    add(
+        "R.3",
+        f"Reference chunked == one-shot ({first['seq']} in {first['chunk']}) and block graphs replay exactly",
+        "reference",
+        ["R.2"],
+        f"{real}{PY}.reference.check_reference --seq {first['seq']} --chunk {first['chunk']}",
+        {  # F132: the full-precision target and the official arithmetic (official_), both self-consistent
+            f"{pre}{k}": v
+            for pre in ("", "official_")
+            for k, v in {
+                "pcc_hidden": ">= 0.99999",
+                "pcc_state_min": ">= 0.99999",
+                "graph_errors": "== 0",
+                "boundaries_missing": "== 0",
+                "graph_replay_maxabs": "<= 0",
+            }.items()
+        },
+        paths=ref_paths,
+    )
+    golden_task = {}
+
+    def add_goldens(prev: str) -> None:
+        for r in ladder:
+            if r.get("golden"):
+                golden_task[r["name"]] = f"G.{r['golden']}"
+                continue
+            tid = f"G.{r['name']}"
+            full = ", full dumps" if r.get("full_dumps") else ""
+            add(
+                tid,
+                f"Golden {r['name']}: {r['seq']} tokens in {r['chunk']}-token chunks{full}"
+                + (" (the scaled model)" if scaled else ""),
+                "goldens",
+                [prev],
+                # F128: the full-precision golden (the target), the official one and its drift (the margin)
+                f"{PY}.reference.generate_golden --rung {r['name']} --set",
+                {
+                    "golden_layers": f"== {len(spec.layers())}",
+                    "golden_chunks": f"== {r['seq'] // r['chunk']}",
+                    "golden_hash_ok": "== 1",
+                    "drift_metrics": ">= 1",
+                    "drift_layers_above_res": ">= 1",  # F136: the reference's shipped precision moves something
+                },
+            )
+            golden_task[r["name"]] = tid
+            prev = tid
+
+    if not scaled:  # a scaled run's goldens come from the reduced checkpoint, after the plan (below)
+        add_goldens("R.3")
+    add(
+        "B.1",
+        "Box: mesh opens with the spec's device params, collectives are exact",
+        "box",
+        [],
+        f"{SAFE} models/demos/common/bringup/tests/test_box.py",
+        {"chips": f"== {spec.mesh[0] * spec.mesh[1]}", "all_gather_maxabs": "== 0"},
+        device=True,
+    )
+    # The serving contract comes first (F58): how the inference server drives the model, as a how-to the plan and
+    # every step build to, and the frozen tests that hold each part of the model to it (agents/serving-contract.md).
+    add(
+        "SC.1",
+        "Serving contract: how tt-d-gen drives the model, a how-to for each part and its tests",
+        "serving",
+        ["R.1"],
+        f"{PY}.testing.serving",
+        {"serving_contract_errors": "== 0", "serving_contract_tests": ">= 1"},
+        role="serving",
+    )
+    add(
+        "PL.0",
+        "Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs",
+        "ledger",
+        ["R.3"],
+        f"{PY}.plan.ledger_gen --extend",
+        {"ledger_errors": "== 0", "ledger_tasks": ">= 1"},
+        paths=[f"{model_dir}/bringup/tasks.yaml"],
+    )
+    if early:
+        return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
+    add(
+        "PL.1",
+        "Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved",
+        "plan",
+        ["PL.0", "B.1", "SC.1"],
+        f"{real}{PY}.plan.check_plan",
+        {
+            "plan_fits": "== 1",
+            "unplaced_tensors": "== 0",
+            "plan_errors": "== 0",
+            "component_errors": "== 0",
+            "ledger_errors": "== 0",
+            "plan_approved": "== 1",
+        },
+        paths=[
+            f"{model_dir}/bringup/plan.yaml",
+            f"{model_dir}/bringup/plan.md",
+            f"{model_dir}/bringup/components.yaml",
+            f"{model_dir}/bringup/approvals.yaml",
+            f"{model_dir}/bringup/results/plan_memory.json",
+        ]
+        + (
+            [f"{model_dir}/bringup/results/plan_boxes.json", f"{model_dir}/bringup/scaling.yaml"]
+            if spec.has_deploy
+            else []
+        ),
+        approval="plan",
+    )
+
+    # F75: the scaled model is cut once the plan fixes the scale factors; its goldens, and everything after, use it
+    if scaled:
+        add(
+            "SG.1",
+            "The scaled model: the reduced checkpoint (heads and experts cut by the plan's scale factors)",
+            "scale",
+            ["PL.1"],
+            f"{PY}.plan.scale",
+            {"scale_errors": "== 0", "scale_tensors_total": ">= 1"},
+            role="scale",
+            paths=ref_paths + [f"{model_dir}/bringup/scaling.yaml"],
+        )
+        add_goldens("SG.1")
+
+    comp_rung = spec.get("tests.component_rung") or next(r["name"] for r in ladder if r.get("full_dumps"))
+    comp_golden = golden_task[comp_rung]
+    manifest = [str(rung_dir(spec, spec.rung(comp_rung)) / "manifest.json")]
+    # F80: the official code tapped per step on the component golden's chunk: the reference arithmetic of every
+    # component and swap limit (official_floor.json next to the goldens) and the check of the tap map
+    floor_dep = []
+    if spec.get("tests.official_floor"):
+        add(
+            "R.5",
+            "Official arithmetic per step (official_taps hook + official_taps.yaml; the noise floor's reference term)",
+            "reference",
+            [comp_golden, "R.3"],
+            f"{PY}.testing.official_floor",  # on the checkpoint the goldens come from (scaled on a scaled run)
+            {
+                "official_taps_steps": ">= 1",
+                "official_taps_errors": "== 0",
+                "official_taps_unmapped": "== 0",
+                "official_ref_vs_taps_errors": "== 0",  # F136: the margin's official numerics are the shipped code's
+            },
+            paths=ref_paths,
+        )
+        floor_dep = ["R.5"]
+    last_swaps = []
+    for bt in spec.data["block_types"]:
+        layer = spec.representative_layer(bt)
+        steps = ref.block_graph(layer)
+        prev_swap = None
+        for n, st in enumerate(steps, 1):
+            ctest = rel(spec, component_test_path(spec, bt, st.name))
+            cid = f"C.{bt}.{st.name}"
+            metric = f"err_{st.name}_L{layer:02d}"  # F81: the rel error (or missed fraction) vs the golden
+            add(
+                cid,
+                f"{bt} {st.name} ({st.kind}) on device, layer {layer}",
+                "implement",
+                ["PL.1", comp_golden, *floor_dep],
+                f"{SAFE} {ctest}" + contract_cmds(spec, st.name),
+                {metric: "<= limit"},  # F76 / F81: calib x the noise floor the test records (testing/noise_floor.py)
+                device=True,
+                tests=[ctest],
+                freeze_extra=manifest,
+                paths=impl_paths,
+                brief={"block_type": bt, "step": st.name, "kind": st.kind, "layer": layer, "stateful": st.stateful},
+            )
+            stest = rel(spec, swap_test_path(spec, bt, n, st.name))
+            sid = f"S.{bt}.{n:02d}"
+            add(
+                sid,
+                f"{bt} block with steps 1-{n} on device (last: {st.name})",
+                "implement",
+                [cid] + ([prev_swap] if prev_swap else []),
+                f"{SAFE} {stest}",
+                {"err_swap_out": "<= limit"},  # F81: the block out's rel error vs the golden
+                device=True,
+                tests=[stest],
+                freeze_extra=manifest,
+                paths=impl_paths,
+                brief={"block_type": bt, "swapped": [s.name for s in steps[:n]], "layer": layer},
+            )
+            prev_swap = sid
+        last_swaps.append(prev_swap)
+
+    integrate(spec, add, golden_task, last_swaps, impl_paths)
+    return {"model": spec.data["hf_id"], "target": spec.data["target"], "tasks": tasks}
+
+
+PORT_SEED = (
+    "This run grows the seed's model (the same tt/) to this box at this run's size. The gate runs the seed's layers, "
+    "each contiguous run from the golden input of its first layer, so every block type is checked in its new mesh at "
+    "once. What differs from the seed box is in the plan's `## Boxes` (per-chip shares, collective group sizes, "
+    "topology, payload and link constants): derive each from the mesh and the config, never hard-code this box. A "
+    "failing layer is located with its block type's swap and component tests (the seed's rendered tests; they read "
+    "the spec and its goldens) and the CPU at the device's formats (agent rule 14)."
+)
+PORT_ALL = (
+    "Every layer of the model on this box, from the blocks W.1 ported: the layers the seed never ran (more state "
+    "sources and readers, the deep layers, the final norm and LM head) and the whole stack's depth. Locate a failing "
+    "layer as in W.1."
+)
+CARRIED = ("R.1", "R.2", "R.3", "R.5", "SC.1", "PL.0", "PL.1")  # F185: what a seeded run takes from its seed's ledger
+
+
+def seed_record(spec) -> dict:
+    """F185: the seed's ledger evidence a seeded run carries instead of re-running: its spec, the commit of its last
+    gate and the carried tasks it passed."""
+    import subprocess
+
+    from models.demos.common.bringup.core.ledger import Ledger
+
+    seed = spec.seed_spec()
+    led = Ledger(seed.ledger_dir)
+    commit = subprocess.run(
+        ["git", "log", "-1", "--format=%H", "--", *map(str, led.state_store.paths())],  # F265: chunks or old file
+        cwd=spec.repo,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    tasks = led.tasks()
+    return {
+        "spec": rel(spec, seed.path),
+        "commit": commit,
+        "carried": [t for t in CARRIED if t in tasks and led.status(t) == "PASS"],
+        "not_passed": [t for t in CARRIED if t in tasks and led.status(t) != "PASS"],
+    }
+
+
+def generate_seeded(spec) -> dict:
+    """F185: the task graph of a run grown from a seed (spec run.seed). The seed's reference, serving contract and plan
+    are carried (seed_record), not re-run; its component and swap tests are not gated (they stay the diagnosis of a
+    failing layer). The checkpoint is checked on this host, the goldens are imported (made on another host, F186),
+    the seed's layers are ported to this box (W.1), then every layer and every end-to-end check."""
+    model_dir = rel(spec, spec.model_dir)
+    impl_paths = [f"{model_dir}/tt", f"{model_dir}/bringup/hooks.py"]
+    tasks = []
+    add = adder(tasks)
+    add(
+        "CK.1",
+        "Checkpoint on this host at the pinned revision, intake approval, canonical prompt",
+        "intake",
+        [],
+        f"{PY}.intake.check_checkpoint && {PY}.reference.prompt",
+        {
+            "intake_approved": "== 1",
+            "prompt_hash_ok": "== 1",
+            "missing_tensors": "== 0",
+            "shape_mismatches": "== 0",
+            "count_mismatches": "== 0",
+            "config_mismatches": "== 0",
+            "checkpoint_tensors": ">= 1",
+        },
+        paths=[rel(spec, spec.ledger_dir / "spec.yaml")],
+    )
+    golden_task = {}
+    for r in spec.data["ladder"]:
+        if r.get("golden"):
+            golden_task[r["name"]] = f"G.{r['golden']}"
+            continue
+        golden_task[r["name"]] = tid = f"G.{r['name']}"
+        add(
+            tid,
+            f"Golden {r['name']}: {r['seq']} tokens in {r['chunk']}-token chunks, made elsewhere, imported and checked",
+            "goldens",
+            [],
+            f"{PY}.reference.golden_import --rung {r['name']}",
+            {
+                "golden_layers": f"== {len(spec.layers())}",
+                "golden_chunks": f"== {r['seq'] // r['chunk']}",
+                "golden_hash_ok": "== 1",
+                "drift_metrics": ">= 1",
+                "drift_layers_above_res": ">= 1",
+            },
+        )
+    add(
+        "B.1",
+        "Box: mesh opens with the spec's device params, collectives are exact",
+        "box",
+        [],
+        f"{SAFE} models/demos/common/bringup/tests/test_box.py",
+        {"chips": f"== {spec.mesh[0] * spec.mesh[1]}", "all_gather_maxabs": "== 0"},
+        device=True,
+    )
+    seed_rung = spec.rung(SEED_RUNG)
+    wm = E2E | ({"host_transfers_per_layer": "== 0"} if seed_rung["seq"] // seed_rung["chunk"] > 1 else {})
+    add(
+        "W.1",
+        f"The seed's layers {seed_rung['layers']} on {'x'.join(map(str, spec.mesh))} at this run's size, each block "
+        "from its golden input",
+        "assemble",
+        ["B.1", "CK.1", golden_task[SEED_RUNG]],
+        f"BRINGUP_RUNG={SEED_RUNG} {SAFE} --no-precompile models/demos/common/bringup/tests/test_ladder.py",
+        wm,
+        device=True,
+        paths=impl_paths,
+        role="port",
+        brief={"details": PORT_SEED},
+    )
+    integrate(spec, add, golden_task, ["W.1"], impl_paths, seeded=True)
+    return {"model": spec.data["hf_id"], "target": spec.data["target"], "seed": seed_record(spec), "tasks": tasks}
+
+
+def integrate(spec, add, golden_task: dict, last_swaps: list[str], impl_paths: list[str], seeded: bool = False) -> None:
+    """The tasks after every block runs on the device: the all-device model (M.1), the ladder, the smoke, the contract,
+    the profile and opportunities, the final measurement, the derived-op tests and the settings audit. A seeded run
+    (F185) reaches M.1 from W.1 (the seed's layers ported to this box) instead of the swap chains."""
+    ladder = [r for r in spec.data["ladder"] if r["name"] != SEED_RUNG]
+    first = ladder[0]
+    model_dir = rel(spec, spec.model_dir)
+    # Assemble: the swap tests run every step on the device through the hybrid harness (host in / host out per step);
+    # the ladder, the contract and the profile need one model whose hidden state stays on the device.
+    if last_swaps:
+        multi = next((r for r in ladder if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1), first)
+        am = E2E | {"host_transfers_per_layer": "== 0"}
+        layers = multi.get("layers") or spec.layers()
+        if seeded and max(layers) == spec.num_layers - 1:
+            am |= E2E_LAST
+        add(
+            "M.1",
+            f"Every layer ({len(layers)}) on {'x'.join(map(str, spec.mesh))} at this run's size, from the ported blocks"
+            if seeded
+            else "Assemble the all-device model (hidden state on the device from embedding to final norm)",
+            "assemble",
+            last_swaps,
+            f"BRINGUP_RUNG={multi['name']} {SAFE} --no-precompile models/demos/common/bringup/tests/test_ladder.py",
+            am,
+            device=True,
+            paths=impl_paths,
+            **({"role": "port", "brief": {"details": PORT_ALL}} if seeded else {}),
+        )
+        last_swaps = ["M.1"]
+
+    prev = None
+    for r in ladder:
+        tid = f"L.{r['name']}"
+        m = E2E | served_format(spec)
+        layers = r.get("layers") or spec.layers()
+        if max(layers) == spec.num_layers - 1:
+            m.update(E2E_LAST)
+        if not r.get("prefix_from_golden") and r["seq"] // r["chunk"] > 1:
+            m["host_transfers_per_layer"] = "== 0"  # agent rule 5: no host work in the forward path (warm chunks)
+        add(
+            tid,
+            f"Ladder {r['name']}: {'last chunk after a golden prefix' if r.get('prefix_from_golden') else 'all chunks'} "
+            f"of {r['seq']} in {r['chunk']}",
+            "integrate",
+            [*(last_swaps if prev is None else [prev]), golden_task[r["name"]]],
+            f"BRINGUP_RUNG={r['name']} {SAFE} models/demos/common/bringup/tests/test_ladder.py",
+            m,
+            device=True,
+            paths=impl_paths,
+        )
+        prev = tid
+    # The intake smoke (R.1's prompt and answer) on the device model with its LM head, shipped defaults: the first
+    # check of the final norm and LM head, before the serving contract (the runner smoke is the contract's last test).
+    smoke = None
+    if spec.get("intake.smoke") and max(spec.layers()) == spec.num_layers - 1 and min(spec.layers()) == 0:
+        smoke = "L.smoke"
+        add(
+            smoke,
+            "Intake smoke on the device model: R.1's prompt, greedy, the expected answer",
+            "integrate",
+            [prev],
+            f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_smoke.py",
+            {"smoke_device_ok": "== 1"},
+            device=True,
+            paths=impl_paths,
+        )
+    add(
+        "K.1",
+        "Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)",
+        "contract",
+        [f"L.{first['name']}"] + ([smoke] if smoke else []),
+        f"{SAFE} --no-precompile models/demos/common/bringup/tests/test_contract.py" + contract_cmds(spec, SV.ADAPTER),
+        {"contract_checks_failed": "== 0", "acks_early": "== 0", "pcc_producer_kv_*": ">= limit"}
+        # the runner smoke (contract_tests.yaml kind: runner_smoke) runs in this gate and records its answer; a layer
+        # subset cannot answer, so it is required only where the intake smoke runs on the device model too
+        | ({"smoke_runner_ok": "== 1"} if smoke and SV.runner_smoke(spec, SV.ADAPTER) else {}),
+        device=True,
+        paths=[f"{model_dir}/tt"],  # plus models/demos/common/prefill, for every contract step (orchestrator)
+    )
+    add(
+        "X.1",
+        "Warm per-section, per-chip profile of one long chunk",
+        "perf",
+        [prev],
+        f"{profile_env(spec)}{SAFE} --no-precompile models/demos/common/bringup/tests/test_profile.py",
+        {"device_ms_total": "> 0", "profiled_programs": ">= 1"},
+        device=True,
+    )
+    prof = "X.1"
+    add(
+        "X.2",
+        "Opportunity list ranked by measured device time",
+        "perf",
+        [prof],
+        f"{PY}.plan.opportunities --profile {prof}",
+        {"opportunities_listed": ">= 1"},
+        paths=[f"{rel(spec, spec.ledger_dir)}/opportunities.md"],
+    )
+    # Final measurement once the picks are in (the overseer points X.3's deps at the last pick): full-target
+    # accuracy, the warm full prefill (TTFT without the LM head) and one warm chunk at several start positions.
+    full = ladder[-1]
+    fm = {
+        **E2E,
+        "prefill_ms_full": "> 0",
+        "pos_chunk": ">= 1",
+        "op_rows": ">= 1",  # the per-op breakdown (F43) and the pipelined timeline (F44) behind the dashboard
+        "timeline_ok": "== 1",
+    }
+    run_layers = full.get("layers") or spec.layers()
+    if run_layers != list(range(len(run_layers))):  # F125: the warm full prefill needs a stack from layer 0, no gaps
+        del fm["prefill_ms_full"]
+    if max(run_layers) == spec.num_layers - 1:
+        fm.update(E2E_LAST)
+    add(
+        "X.3",
+        "Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions",
+        "perf",
+        ["X.2"],
+        f"BRINGUP_RUNG={full['name']} {SAFE} models/demos/common/bringup/tests/test_ladder.py"
+        f" && BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 {profile_env(spec)}{SAFE} models/demos/common/bringup/tests/test_profile.py"
+        f" && {SAFE} models/demos/common/bringup/tests/test_positions.py",
+        fm,
+        device=True,
+    )
+    # The derived ops (ttnn/ttnn/bringup) this model calls get a test case for every call it makes: record the
+    # ttnn.bringup calls of one target-size chunk, then check each fork's tests/cases.py and run those tests
+    # (skill/bringup-fork-tests). Passes at once when the model calls no fork.
+    chunk = spec.data["target"]["chunk"]
+    cap = next(
+        (r for r in ladder if r.get("prefix_from_golden") and r["chunk"] == chunk),
+        next((r for r in ladder if r["chunk"] == chunk), ladder[-1]),
+    )
+    calls = f"{rel(spec, spec.ledger_dir)}/results/fork_calls.json"
+    capture = " models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture"
+    add(
+        "O.1",
+        "Derived-op tests: a random-input case for every ttnn.bringup call this model makes",
+        "optests",
+        ["X.3"],
+        f"BRINGUP_CAPTURE_FORKS={calls} BRINGUP_RUNG={cap['name']} {SAFE} --no-precompile{capture}"
+        f" && {PY}.testing.fork_cases --capture {calls} --run-tests --lint",
+        {
+            "forks_used": ">= 0",
+            "fork_calls_uncovered": "== 0",
+            "fork_tests_failed": "== 0",
+            "fork_cases_lint": "== 0",
+            "fork_tests_passed": ">= 0",  # (F198: shown in the gate output, with the skips)
+            "fork_tests_skipped": ">= 0",
+            "fork_tests_skipped_box": ">= 0",  # (F256: of the skips, the cases for another box, never run)
+        },
+        role="optests",
+        paths=["ttnn/ttnn/bringup"],
+        device=True,
+    )
+    # Every switch of the model and its forks in one place (tt/settings.py), behaviour unchanged (agents/settings-audit.md)
+    last = next((r for r in ladder if r.get("prefix_from_golden")), ladder[-1])
+    add(
+        "Z.1",
+        "Settings audit: every switch of the model and its forks in tt/settings.py, behaviour unchanged",
+        "settings",
+        ["O.1"],
+        f"{PY}.testing.settings_lint && BRINGUP_RUNG={last['name']} {SAFE} --no-precompile"
+        " models/demos/common/bringup/tests/test_ladder.py" + contract_cmds_all(spec),
+        {"settings_violations": "== 0"} | E2E,
+        device=True,
+        role="settings",
+    )
+    # F199 (owner, 2026-10-27): once the run is complete, every fork's every test (unit, model cases, source), strictly:
+    # a failing test is fixed or owner-waived (tests.fork_waivers), never accepted because it failed before
+    add(
+        "F.1",
+        "Every forked op's tests, strictly: unit suites, every model's cases, the original ops' tests",
+        "optests",
+        ["Z.1"],
+        f"{PY}.testing.fork_suite",  # (the gate's BRINGUP_SPEC gives the waivers)
+        {
+            "fork_suite_failed": "== 0",
+            "fork_suite_passed": ">= 0",
+            "fork_suite_skipped": ">= 0",
+            "fork_suite_skipped_box": ">= 0",  # (F256: of the skips, the tests for another box, never run)
+            "fork_suite_waived": ">= 0",
+        },
+        role="optests",
+        paths=["ttnn/ttnn/bringup"],
+        device=True,
+    )
+
+
+def main(argv=None):
+    from models.demos.common.bringup.core import metrics
+    from models.demos.common.bringup.core.ledger import Ledger
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--spec")
+    ap.add_argument("--write", action="store_true", help="write <ledger_dir>/tasks.yaml (refuses to overwrite)")
+    ap.add_argument("--early", action="store_true", help="only the tasks that need no reference (R, G, B, PL.0)")
+    ap.add_argument(
+        "--extend", action="store_true", help="append the generated tasks whose ids are not in tasks.yaml yet"
+    )
+    a = ap.parse_args(argv)
+    spec = load_spec(a.spec)
+    out = generate(spec, early=a.early)
+    led = Ledger(spec.ledger_dir)
+    if a.extend:
+        cur = led.load_spec()
+        have = {t["id"] for t in cur.get("tasks", [])}
+        new = [t for t in out["tasks"] if t["id"] not in have]
+        cur.setdefault("tasks", []).extend(new)
+        for k in ("model", "target"):
+            cur.setdefault(k, out[k])
+        led.write_tasks(cur)
+        errs = led.validate()
+        print(f"added {len(new)} tasks: {' '.join(t['id'] for t in new)}")
+        for e in errs:
+            print(f"LEDGER ERROR {e}")
+        metrics.record("ledger_tasks", len(cur["tasks"]))
+        metrics.record("ledger_tasks_added", len(new))
+        metrics.record("ledger_errors", len(errs))
+        return
+    if a.write:
+        if led.tasks_path.exists():
+            raise SystemExit(f"{led.tasks_path} exists; use --extend or edit it")
+        led.write_tasks(out)
+        print(f"wrote {led.tasks_path}: {len(out['tasks'])} tasks")
+    else:
+        print(yaml.safe_dump(out, sort_keys=False, width=120))
+
+
+if __name__ == "__main__":
+    main()

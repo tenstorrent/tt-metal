@@ -1,0 +1,6 @@
+# The source op's own tests, run in place against this fork (models/demos/common/bringup/testing/fork_source.py).
+# Best-effort selection: see the bringup-fork-op skill, "Carry the source op's tests".
+upstream_sha: c6a7679fb8787196a37d6e9447b20d5fcc1598e4
+swap:
+  ttnn.experimental.kda.prepare_chunk_recurrence: ttnn.bringup.prepare_chunk_recurrence
+tests: []

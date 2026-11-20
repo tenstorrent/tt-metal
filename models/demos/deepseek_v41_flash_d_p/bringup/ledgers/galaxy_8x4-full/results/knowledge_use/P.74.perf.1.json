@@ -1,0 +1,87 @@
+{
+ "used": [
+  {
+   "id": "DS41-149",
+   "how": "history_gather.gather hands back the kept persistent tensor, never high_bw_all_gather's new wrapper of it",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-216",
+   "how": "the whole-mesh history gather gets its own semaphore pair (ccl._sems(mesh, None)), not the TP or SP axis pair",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-287",
+   "how": "started from P.73's row gather (HISTORY_GATHER_OVERLAP=on), renamed HISTORY_GATHER=rows|rows_axes|tiles; rows now one whole-mesh gather from the served slab",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-282",
+   "how": "kept the bf16_tiles region path of STATIC_TABLES=off (region window + gathered history as the table, index offset 0) and only changed the owner stride",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-101",
+   "how": "the off path's memory is the shared gather buffer, not a per-user replicated table: buffer sized from the served slab's rows x owners",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "No Python API makes a view of a device buffer prefix with another volume (ttnn.view / ttnn.experimental.view check the volume; tt_metal::view's MeshBuffer view is C++ only): one persistent output cannot serve gathers of two worst-case shapes",
+  "high_bw_all_gather's gathered_dim_size + input_batch_index + cluster_axis=None read the ND-sharded served cache slot straight into a persistent worst-case output (deepseek_v3_d_p MLA, hy4 use it); not in the model's repo map"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: gathered_dim_size moves only each chip's first L rows; the buffer's unused rows are never written or read per chunk"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched: the gather is the stock C++ ttnn.experimental.high_bw_all_gather"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suites run; only the model-level tests the brief names and P.73's bit-identity test"
+  },
+  {
+   "id": "P.74-message (2026-11-18, cross-session)",
+   "answer": "done",
+   "evidence": "buffers held only for sources gathered in the running DECODER_SKIP mode (TtDS41Model.history_sources / hold_history; under decode no ratio-1 layer-20 buffer), set at state build and use_decoder_skip; determinism re-run under the run name 'determinism': rc 0, max abs diff 0.0"
+  }
+ ],
+ "cited_only": [
+  "DS41-290"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.74",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T16:02:09",
+  "head": "29d1a3cce78",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.74.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_history_gather_overlap_model.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_hang_loop.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

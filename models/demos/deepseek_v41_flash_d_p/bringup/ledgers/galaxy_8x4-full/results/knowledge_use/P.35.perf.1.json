@@ -1,0 +1,116 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "the norm is applied to the y POST_COLLAPSE collapses with the residual's own pre; only attn_norm / ffn_norm read attn_in / ffn_in, so the pass can write the norm instead of y",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-174",
+   "how": "the normalized y goes into the existing load-time y sites (fork.attn_hc.y / fork.ffn_hc.y) through y_output; no new allocation",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "norm eps / 1/C as compute common args after the hc scalars and the weight address as a reader common arg (no per-core host cost)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "the per-root owner lists are appended after the variable-length per-core args only because they never change on a cache hit; patched values stay in fixed slots / common args",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-189",
+   "how": "norm_apply / fold / rstd SFPU bodies are template instances with constant DEST indices (no runtime-indexed dst_reg loops)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-80",
+   "how": "kept the y tiles in L1 between phases instead of writing and re-reading them from DRAM",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-186",
+   "how": "did not route the norm through rms_norm's split program (LOCAL mode, one core a row tile); the norm lives in the collapse pass",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-12",
+   "how": "the statistic is an exact fp32 SFPU sum (the rms_norm fork's is FPU-grade); explains why the result is not bit-identical to off",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-103",
+   "how": "the y^2 statistic is taken from the packed bf16 y tiles (unpacked exactly), not from an SFPU emulation of the packer's rounding",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "BRISC word-copy transposes of a 32x32 fp32 tile cost ~8 us (volatile one-word loops); added as DS41-222",
+  "a core entering a compute phase cold (no units) keeps compute_kernel_hw_startup's formats; added as DS41-223",
+  "tt-probe.sh writes its probes under tests/ttnn/unit_tests/operations/<name>/probes (outside a perf step's allowed paths: delete them)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or duplicated: the norm reuses the collapse's y tiles in L1; the scratch keeps its shape; spare cores host the roots only when the grid has them"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "mhc_post is a C++ device operation (program cache, runtime-arg overrides), not a Python-built program; no Python op added or touched"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "only the new tests/unit/test_mhc_post_norm.py ran on the 8x4 (6 passed); no fork regression suite"
+  }
+ ],
+ "cited_only": [
+  "DS41-222",
+  "DS41-223"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.35",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-07T23:03:11",
+  "head": "632ffc6d406",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.35.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_norm.py"
+  ]
+ }
+}

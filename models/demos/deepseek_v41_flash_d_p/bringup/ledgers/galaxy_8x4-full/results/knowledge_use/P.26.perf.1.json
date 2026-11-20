@@ -1,0 +1,82 @@
+{
+ "used": [
+  {
+   "id": "DS41-182",
+   "how": "kept P.18's design point: no TILE-layout band read; the bf16 region is row pages read by the existing bf16 row reader (stock BF16 / fork ROW_BFP4 kv_window bf16), so no sdpa fork option was needed",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-181",
+   "how": "kept the carry design (last chip's kept tail -> chip 0 in the same send); bf16 tail [128, 512] rows filled from the served rows by slice_write",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every device run (send byte test, measure parts) started through devjob start / wait, never under a tool timeout",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-176",
+   "how": "window-only bf16 region read through ttnn.bringup.sparse_sdpa (BF16, every option off) with max_grid instead of stock sparse_sdpa, which takes no cap; row writes through ttnn.bringup.slice_write max_grid",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-193",
+   "how": "the err_*_official diagnostics reuse FIX.19's official per-position window KV (official_kv.load) on the same rows as each drift check",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the sparse_sdpa fork README still lists 576 B bfloat8_b window records only; the 18496 B block pages (SPARSE_SDPA_WINDOW_BLOCKS) used by bfp8_tiles are in the INDEX line but not in the README's kv_window paragraph",
+  "BREADCRUMBS.md was already 511756 B at HEAD, 244 B under the 500 KB commit-hook limit; any normal section breaks pre-commit (new DS41-194; section moved to known_issues_detail.md 'P.26 WINDOW_KV_BF16')"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the bf16 region is exactly 128 + q_rows rows; the send carries exactly 128 rows"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the one Python-built program touched (tt/window_send.py WindowSend) still dispatches prepared (prepare_program / run_prepared, patch count 2 a chip asserted); host enqueue a warm call 209-343 us (perf_window_tiles.py, 8x4), as P.18. ckv_bfp4 is not called on the bf16 path"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the new/extended test tt/perf_window_tiles.py (4 cases, bfp8 and bf16) and the model-level measure parts"
+  }
+ ],
+ "cited_only": [
+  "DS41-194"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.26",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-01T12:48:06",
+  "head": "396b6d3bad0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.26.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/caches.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_window_tiles.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/window_send.py"
+  ]
+ }
+}

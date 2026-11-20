@@ -25,13 +25,8 @@ void check_dram_operand(const Tensor& tensor, std::string_view name) {
         name);
 }
 
-}  // namespace
-
-void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& params, const tensor_args_t& inputs) {
-    const auto& source = inputs.source;
-    const auto& destination = inputs.destination;
-
+// One (source, destination) pair: the entry layout the program assumes.
+void validate_pair(const IndexedEntryCopyInputs& inputs, const Tensor& source, const Tensor& destination) {
     check_dram_operand(source, "source");
     check_dram_operand(destination, "destination");
     kda_factory_detail::check_same_device(source, destination, kOperation, "destination");
@@ -81,10 +76,55 @@ void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
         kOperation,
         source_shape,
         destination_shape);
+}
+
+// The two copies run in parallel, so neither may touch the other's buffers. Aliasing is not in the cache key: checked
+// on every call.
+void check_pair_buffers(const IndexedEntryCopyInputs& inputs) {
+    if (inputs.paired_source.has_value()) {
+        kda_factory_detail::check_distinct_buffers(
+            {{&inputs.source, "source"},
+             {&inputs.destination, "destination"},
+             {&*inputs.paired_source, "paired_source"},
+             {&*inputs.paired_destination, "paired_destination"}},
+            kOperation);
+    }
+}
+
+}  // namespace
+
+void IndexedEntryCopyDeviceOperation::validate_on_program_cache_miss(
+    const operation_attributes_t& params, const tensor_args_t& inputs) {
+    validate_pair(inputs, inputs.source, inputs.destination);
+    TT_FATAL(
+        inputs.paired_source.has_value() == inputs.paired_destination.has_value(),
+        "{}: pass both paired_source and paired_destination, or neither",
+        kOperation);
+    if (inputs.paired_source.has_value()) {
+        validate_pair(inputs, *inputs.paired_source, *inputs.paired_destination);
+    }
+    check_pair_buffers(inputs);
     TT_FATAL(params.index_scale >= 1, "{}: index_scale must be at least 1", kOperation);
     if (inputs.zero_fill_at_zero.has_value()) {
-        kda_factory_detail::check_device_scalar(source, *inputs.zero_fill_at_zero, kOperation, "zero_fill_at_zero");
+        kda_factory_detail::check_device_scalar(
+            inputs.source, *inputs.zero_fill_at_zero, kOperation, "zero_fill_at_zero");
     }
+}
+
+void IndexedEntryCopyDeviceOperation::validate_on_program_cache_hit(
+    const operation_attributes_t&, const tensor_args_t& inputs) {
+    // Shapes, layouts and memory configs are in the program-cache key; allocation, device and aliasing are not.
+    const auto optional = [](const std::optional<Tensor>& tensor) { return tensor ? &*tensor : nullptr; };
+    kda_factory_detail::check_allocated_on_device(
+        inputs.source,
+        {{&inputs.source, "source"},
+         {&inputs.destination, "destination"},
+         {&inputs.index, "index"},
+         {optional(inputs.zero_fill_at_zero), "zero_fill_at_zero"},
+         {optional(inputs.paired_source), "paired_source"},
+         {optional(inputs.paired_destination), "paired_destination"}},
+        kOperation);
+    check_pair_buffers(inputs);
 }
 
 IndexedEntryCopyDeviceOperation::spec_return_value_t IndexedEntryCopyDeviceOperation::compute_output_specs(
@@ -103,12 +143,19 @@ Tensor indexed_entry_copy(
     const Tensor& index,
     uint32_t index_scale,
     uint32_t index_offset,
-    const std::optional<Tensor>& zero_fill_at_zero) {
+    const std::optional<Tensor>& zero_fill_at_zero,
+    const std::optional<Tensor>& paired_source,
+    const std::optional<Tensor>& paired_destination) {
     using OperationType = ttnn::experimental::prim::IndexedEntryCopyDeviceOperation;
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{.index_scale = index_scale, .index_offset = index_offset},
         OperationType::tensor_args_t{
-            .source = source, .destination = destination, .index = index, .zero_fill_at_zero = zero_fill_at_zero});
+            .source = source,
+            .destination = destination,
+            .index = index,
+            .zero_fill_at_zero = zero_fill_at_zero,
+            .paired_source = paired_source,
+            .paired_destination = paired_destination});
 }
 
 }  // namespace ttnn::experimental::prim

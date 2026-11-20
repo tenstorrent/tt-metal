@@ -1,0 +1,73 @@
+{
+ "used": [
+  {
+   "id": "DS41-235",
+   "how": "the fix ported as found: MoEBlockConfig.combine_snap_split / COMBINE_SPLIT, no redesign; entry ported with DS41-233 / 234",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-185",
+   "how": "settings are frozen at model load, so the MoE block cache key now includes the split flag (moe_block_main_adapter.block) and the determinism test reads COMBINE_SPLIT through settings.get",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the orchestrator's A/B runs each frozen gate command as written; a command that pins the switch inline (DS41_COMBINE_SPLIT=on test_determinism.py) runs 'on' on BOTH sides, so the off side of the determinism table has to be measured by the agent"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or duplicated work; the split adds the fix's own second fp32 sum only"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; routed_experts_combine is a C++ fork op (compile arg 8 added)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression / unit suite run on the 8x4; only the model-level determinism test and the orchestrator measure"
+  }
+ ],
+ "cited_only": [
+  "DS41-233"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.50",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-12T16:15:02",
+  "head": "48d676ecdbe",
+  "touched": [
+   "models/demos/common/bringup/testing/b2b.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues_detail.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/P.50.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.50.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_determinism.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/moe_block_main_adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/README.md",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/common_nanobind.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/moe_block_config.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/common/moe_block_config.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_host.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_host.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/combine_program.hpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/routed_experts_combine/device/kernels/compute/accumulator_compute.cpp",
+   "ttnn/ttnn/bringup/moe_block_main_ttnn/tests/routed_experts_combine/test_experts_combine_checks.py"
+  ]
+ }
+}

@@ -1,0 +1,173 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-19T13:02:05",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-19T13:02:05",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-19T13:02:05",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-19T13:02:05",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-19T13:02:05",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-19T13:02:05",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-19T13:02:05",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-19T13:02:05",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-19T13:02:05",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-19T13:02:05",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-19T13:02:05",
+   "value": 88.9
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-19T13:02:05",
+   "value": 0.0
+  },
+  "gate_model_loads": {
+   "t": "2026-11-19T13:02:12",
+   "value": 2
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795093235414538189,
+   "pid": 3400267,
+   "t": "2026-11-19T13:00:35",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_p145408_nonlast_tagentic": {
+   "by": "run0",
+   "ns": 1795093795705844302,
+   "pid": 3428972,
+   "t": "2026-11-19T13:09:55",
+   "total": 2,
+   "value": 1
+  },
+  "model_loads_tagentic": {
+   "by": "run0",
+   "ns": 1795093574239480584,
+   "pid": 3418422,
+   "t": "2026-11-19T13:06:14",
+   "total": 2,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-19T13:00:35",
+   "value": 0
+  },
+  "model_shared_p145408_nonlast_tagentic": {
+   "t": "2026-11-19T13:09:55",
+   "value": 0
+  },
+  "model_shared_tagentic": {
+   "t": "2026-11-19T13:06:14",
+   "value": 0
+  },
+  "pos_text_p145408_nonlast_tagentic": {
+   "n": 1100000,
+   "repeats": 1,
+   "sha256": "dddfd0cfe2f8930543dc27a80c0ed722b8c4b8ab81324c48b99ce41f8e5576aa",
+   "source": "179 agent transcripts under /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/moe_replication/agents, /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/agents",
+   "t": "2026-11-19T13:08:33",
+   "value": "agentic"
+  },
+  "pos_text_tagentic": {
+   "n": 1100000,
+   "repeats": 1,
+   "sha256": "dddfd0cfe2f8930543dc27a80c0ed722b8c4b8ab81324c48b99ce41f8e5576aa",
+   "source": "179 agent transcripts under /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/moe_replication/agents, /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/agents",
+   "t": "2026-11-19T13:06:14",
+   "value": "agentic"
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-19T13:02:07",
+   "value": 168.23
+  },
+  "resident_first_chunk_s_tagentic": {
+   "t": "2026-11-19T13:07:05",
+   "value": 113.85
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-19T13:02:07",
+   "value": 1
+  },
+  "resident_model_loaded_p145408_nonlast_tagentic": {
+   "t": "2026-11-19T13:09:57",
+   "value": 1
+  },
+  "resident_model_loaded_tagentic": {
+   "t": "2026-11-19T13:07:05",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-19T13:02:07",
+   "value": 167.11
+  },
+  "resident_model_s_p145408_nonlast_tagentic": {
+   "t": "2026-11-19T13:09:57",
+   "value": 83.39
+  },
+  "resident_model_s_tagentic": {
+   "t": "2026-11-19T13:07:05",
+   "value": 113.33
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-19T13:02:07",
+   "value": 168.39
+  },
+  "resident_request_first_chunk_s_tagentic": {
+   "t": "2026-11-19T13:07:05",
+   "value": 114.01
+  },
+  "scaled_run_p145408_nonlast_tagentic": {
+   "t": "2026-11-19T13:08:33",
+   "value": 0
+  }
+ },
+ "task": "X.10"
+}

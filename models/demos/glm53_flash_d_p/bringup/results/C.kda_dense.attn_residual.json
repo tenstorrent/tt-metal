@@ -1,0 +1,81 @@
+{
+ "metrics": {
+  "comb_term_coef_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.9999983906745911
+  },
+  "comb_term_coef_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.9999953508377075
+  },
+  "comb_term_rel_l2_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.0014577364781871438
+  },
+  "comb_term_rel_l2_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.002348513575270772
+  },
+  "norm_ratio_max_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 1.004995346069336
+  },
+  "norm_ratio_max_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 1.0034852027893066
+  },
+  "norm_ratio_min_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.995898425579071
+  },
+  "norm_ratio_min_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.996454656124115
+  },
+  "pcc_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.9999936816635691
+  },
+  "post_term_coef_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.9999986290931702
+  },
+  "post_term_coef_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.9999974966049194
+  },
+  "post_term_rel_l2_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.0014400494983419776
+  },
+  "post_term_rel_l2_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.0022451775148510933
+  },
+  "rel_l2_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.003558580530807376
+  },
+  "rel_l2_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.003088632831349969
+  },
+  "worst_row_rel_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.010554603300988674
+  },
+  "worst_row_rel_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.005907073616981506
+  },
+  "worst_stream_rel_attn_residual_L00": {
+   "t": "2026-09-29T04:35:15",
+   "value": 0.004557945299893618
+  },
+  "worst_stream_rel_attn_residual_L01_distinct_streams": {
+   "t": "2026-09-29T04:35:16",
+   "value": 0.0033456431701779366
+  }
+ },
+ "task": "C.kda_dense.attn_residual"
+}

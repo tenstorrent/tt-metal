@@ -1,0 +1,621 @@
+{
+ "upstream_sha": "df92663a019f3d26e807fc780f73a6b78a5423ea",
+ "tests": {
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_cached_runtime_shape_changes[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_cached_runtime_shape_changes[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_cached_runtime_shape_changes[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_explicit_full_grid_backward_compatibility": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=1-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=31-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=32-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=33-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=64-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=1024-num_chunks=65-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=1-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=25-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=250-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=31-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=32-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=33-tail_trim=1]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=64-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=2048-num_chunks=65-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=512-num_chunks=1-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=512-num_chunks=2-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=512-num_chunks=31-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=512-num_chunks=32-tail_trim=17]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_fused_segment_boundaries[k=512-num_chunks=33-tail_trim=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off0-k1024_n4096_v1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off0-k256_n2048_v600]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off0-k512_n4096_v513]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off128-k1024_n4096_v1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off128-k256_n2048_v600]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_matches_scalar[off128-k512_n4096_v513]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_rejects_l1": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_rejects_scalar_alongside_tensor": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_trace_production_perf": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_trace_replay": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_metadata_zero_length_does_not_hang": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_production_perf_check[bounded_cache]": {
+   "original": "passed",
+   "fork": "failed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_production_perf_check[prefill]": {
+   "original": "passed",
+   "fork": "failed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_program_cache_ignores_row_count_and_array_size": {
+   "original": "passed",
+   "fork": "failed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_program_cache_separates_compute_body_modes": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_program_cache_separates_resolved_core_grids": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_random_bfloat16_ties_return_distinct_indices": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_rejects_invalid_subdevice_core_selection": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_rejects_offset_without_metadata": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_requires_explicit_k": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_restricted_grid_cache_hit_rebinds_shape_and_valid_length": {
+   "original": "passed",
+   "fork": "failed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_restricted_rectangular_and_discontiguous_grids": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_640_rows_51200_k1536": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=1024-num_rows=1-n=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=1024-num_rows=1-n=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=1024-num_rows=2-n=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=1024-num_rows=2-n=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=1536-num_rows=2-n=3000]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=16-num_rows=1-n=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=2032-num_rows=2-n=4095]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=2048-num_rows=1-n=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=2048-num_rows=1-n=4096]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=2048-num_rows=2-n=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=2048-num_rows=2-n=4096]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=256-num_rows=2-n=513]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=512-num_rows=1-n=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=512-num_rows=1-n=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=512-num_rows=2-n=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=512-num_rows=2-n=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_bfloat16_uint32_indices[k=768-num_rows=2-n=1537]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=1536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_mixed_negative_infinity_indices_are_sentinel[k=768]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=1536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_negative_infinity_indices_are_sentinel[k=768]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=1024-n=1025]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=1024-n=2047]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=1536-n=2049]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=16-n=17]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=2032-n=4095]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=2048-n=2049]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=2048-n=4095]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=256-n=511]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=512-n=1023]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=512-n=513]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n[k=768-n=1025]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_negative_infinity_indices_are_sentinel[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_negative_infinity_indices_are_sentinel[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_negative_infinity_indices_are_sentinel[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=1536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=2032]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_non_multiple_n_uint32_indices_above_uint16[k=768]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=1536]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=2032]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_parallelizes_640_rows[k=768]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=1024-num_chunks=128]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=1024-num_chunks=129]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=1024-num_chunks=65]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=2048-num_chunks=129]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=2048-num_chunks=33]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=2048-num_chunks=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=512-num_chunks=129]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=512-num_chunks=256]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_row_major_uint32_indices_above_uint16[k=512-num_chunks=257]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_short_valid_length_emits_sentinels[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_short_valid_length_emits_sentinels[k=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_short_valid_length_emits_sentinels[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_spread_winners_decode_global_indices[k=2048-llk_k=2048-num_chunks=40-tail_trim=7]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_spread_winners_decode_global_indices[k=512-llk_k=512-num_chunks=32-tail_trim=7]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_spread_winners_decode_global_indices[k=768-llk_k=1024-num_chunks=40-tail_trim=7]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_supported_ranks[shape=(2, 2, 513)-k=256]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_supported_ranks[shape=(2, 3, 512)-k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_supported_ranks[shape=(512,)-k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_excludes_stale_tail[aligned1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_excludes_stale_tail[unaligned1000]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[aligned1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[full2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[small100]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[unaligned1000]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[unaligned1023]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_matches_scalar_bound[unaligned1025]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_omitted_is_unchanged": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_end_varies_across_trace_replays": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_all_neginf_prefix_is_sentinel[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_all_neginf_prefix_is_sentinel[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_all_neginf_prefix_is_sentinel[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_full_width_is_noop": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=1024-n=4096-valid_length=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=16-n=4096-valid_length=64]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=2048-n=4096-valid_length=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=256-n=2048-valid_length=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=256-n=2048-valid_length=600]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=512-n=1024-valid_length=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=512-n=4096-valid_length=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_ignores_stale_tail[k=512-n=4096-valid_length=513]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_matches_sliced_input[k=1536-num_rows=2-n=102400-valid_length=56320]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_matches_sliced_input[k=1536-num_rows=2-n=3000-valid_length=2000]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_matches_sliced_input[k=16-num_rows=1-n=8192-valid_length=100]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_matches_sliced_input[k=2048-num_rows=2-n=4096-valid_length=2049]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_matches_sliced_input[k=512-num_rows=2-n=1024-valid_length=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail[k=1024]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail[k=16]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_mixed_prefix_ignores_finite_tail[k=512]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_out_of_range_raises[k=512-n=1024-valid_length=0]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_out_of_range_raises[k=512-n=1024-valid_length=2048]": {
+   "original": "passed",
+   "fork": "passed"
+  },
+  "tests.ttnn.nightly.unit_tests.operations.experimental.test_topk_large_indices::test_topk_large_indices_valid_length_program_cache_reuse_while_growing": {
+   "original": "passed",
+   "fork": "passed"
+  }
+ }
+}

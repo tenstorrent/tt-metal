@@ -1,0 +1,17 @@
+{
+  "used": [
+    {"id": "DS41-238", "how": "the decode request is judged at its stop P via FIX.26's handoff golden pipeline (reference/handoff.py golden + drift at P = 10048; hooks.contract_handoffs adds decoder_skip_stop)"},
+    {"id": "DS41-240", "how": "under decode only layers 20-39's windows are skipped (never written, never read by decode); every other served tensor is judged; entry rewritten for FIX.28"},
+    {"id": "DS41-241", "how": "the handoff golden at P was made with BRINGUP_CPU_THREADS=16 (attempt 1), the golden's thread count"}
+  ],
+  "contradicted": [
+    {"id": "DS41-240", "evidence": "out of date by FIX.28 (owner 2026-11-13): test_contract (hooks.contract_variants, testing/contract.py variants), test_adapter_acks (decoder_skip_requests) and test_determinism now run DECODER_SKIP=decode; rewritten in known_issues.md"}
+  ],
+  "missing": ["devjob wait blocks past a tool call's 2-minute limit even with `timeout`; run it as a background task (already in BREADCRUMBS P.51)"],
+  "overseer": [
+    {"id": "FIX.28", "answer": "done", "evidence": "see BREADCRUMBS FIX.28: determinism_max_abs_diff_decoder_skip 0; contract_checks_failed_decoder_skip 0, acks_early_decoder_skip 0, unwritten_records_changed_decoder_skip 0 of 60; test_adapter_acks decode requests at P and P+40"},
+    {"id": "OV-3", "answer": "n/a", "evidence": "no padding or inflated work added; test-side and host bookkeeping only"},
+    {"id": "OV-23", "answer": "n/a", "evidence": "no Python-built op added or touched"},
+    {"id": "OV-25", "answer": "done", "evidence": "no fork regression suite run; only the gate's model-level units"}
+  ]
+}

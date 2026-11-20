@@ -1,0 +1,654 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Model spec: the one file that says what is being brought up, on which box, and where everything lives.
+
+A spec is YAML (see templates/spec.yaml). Only ``model`` is needed to run gates. ``validate()`` checks
+the full schema that the pipeline steps rely on.
+
+Paths:
+    repo            git checkout that gates run in and commit to (default: this checkout)
+    bringup_dir     the model's bring-up files in the repo, shared by every run of the model: hooks.py, plan, serving
+                    contract, knowledge, BREADCRUMBS.md (default <model_dir>/bringup)
+    ledger_dir      one run's ledger: spec.yaml, tasks.yaml, state.json, results/, approvals.yaml, overseer.yaml,
+                    supervision.md, dashboard/ (= bringup_dir, except a seeded run's: bringup_dir/ledgers/<box>-<mode>)
+    art             artifact root outside git (default /localdev/$USER/bringup/<model>)
+      hf/ golden/ tt_cache/<mesh>/<version>/ profiles/ runs/<run>/ (a seeded run's: runs/<box>-<mode>/<run>/)
+    paths.hf, paths.golden, ...: absolute, or relative to art (F186)
+    paths.golden_local  F260: the node-local mirror of paths.golden that tests read (reference/golden.py read_dir);
+                    default: when paths.golden is outside art (e.g. NFS), art / <the shared path after the model's
+                    own dir name> (/data/u/bringup/<model>/golden_full/box -> <art>/golden_full/box), else no mirror
+    paths.tt_cache_shared  F261: the shared master of the weight cache (tt_cache/ is then its node-local mirror; the
+                    same <mesh>/<version> below both; core/weight_cache.py: pull at run start, push after a build);
+                    default: none (the local cache is the only copy)
+
+Prior bring-up: ``prior: models/demos/<slug>`` names an earlier bring-up of the same checkpoint (another mesh or
+configuration). This spec then shares its checkpoint download and goldens (hf/ and golden/ resolve to the prior's
+unless paths.hf / paths.golden say otherwise), its hooks reuse the prior's CPU reference, and every step's brief lists
+the prior's matching files to start from (orchestrator PRIOR_READS).
+
+Seeded run (F184): ``run: {box: galaxy_8x4, mode: full, seed: <the seed's spec path>}`` grows a finished bring-up of
+the same model (the seed, e.g. a partial run on a smaller box) into another run of the same model dir: the same tt/,
+hooks, CPU reference, plan, serving contract and forks, its own ledger (F183) and its own goldens. The seed's passed
+reference, contract and plan tasks are carried, not re-run (plan/ledger_gen.py seeded graph).
+
+Deployment target and boxes (F64). Without these keys the box the spec names is also the target (as before):
+
+    deploy: {box: galaxy_8x4, seq: 1044480, chunk: 5120}   # the system the plan is for; chunk: the serving chunk (F67)
+    boxes:                                                 # every box the model may run on
+      galaxy_8x4: {name: ..., chip: ..., mesh: [8, 4], chip_dram_gb: 32, device_params: {...}}
+      quietbox_2x2: {mesh: [2, 2], chip_dram_gb: 32, overrides: {device: {experts_dtype: bfp4}}}
+    run: {box: quietbox_2x2, mode: partial}                # partial: the `layers` subset; full: every layer
+
+The run's box becomes ``box`` (so every ``box.*`` reader sees it) and its ``overrides`` (spec keys) are merged into
+the spec. ``target`` stays this run's context at the model's real dimensions. ``raw`` is the file as written.
+"""
+
+from __future__ import annotations
+
+import getpass
+import importlib
+import os
+import re
+from pathlib import Path
+
+import yaml
+
+from models.demos.common.bringup.core import defaults
+
+FRAMEWORK = Path(__file__).resolve().parents[1]
+CODE_ROOT = FRAMEWORK.parents[3]
+
+# Spec keys that no longer exist, and why: a spec that sets one is refused (the target is never a switch)
+REFUSED = {
+    "golden.numerics": "F132: goldens are always the full-precision reference (native)",
+    "tests.step_numerics": "F132: per-step checks always compare with the full-precision reference (native)",
+    "thresholds": "F138: no fixed accuracy number; every limit is calib x a noise floor (drop the key)",
+    "tests.low_precision_kinds": "F138: no looser calib by step kind; the device-format cost is a CPU diagnostic",
+}
+
+REQUIRED = {
+    "model": str,
+    "hf_id": str,
+    "model_dir": str,
+    "hooks": str,
+    "box": dict,
+    "target": dict,
+    "ladder": list,
+    "block_types": dict,
+    "state": dict,
+}
+
+
+# F208: owner rules in agents.rules that contradict realistic precision (agents' rule 7, F123). A stale bring-up line
+# ("HiFi4, fp32 accumulation, bf16 KV cache", 2026-10-14) survived F123 in DeepSeek-V4.1's specs and the serving
+# contract followed it: KV caches bf16 where the reference stores fp8 / fp4. A deliberate exception says so.
+STALE_PRECISION = re.compile(
+    r"\bHiFi4\b|fp32 accumulation(?! only)|\bbf16 (KV|kv)[ -]cache|\b(full|max(imum)?)[ -]precision\b|"
+    r"precision during bring-?up",
+    re.I,
+)
+
+
+def stale_precision_rules(data: dict) -> list[str]:
+    """agents.rules entries that contradict rule 7 (realistic = the reference's widths), unless marked 'owner exception'."""
+    rules = ((data.get("agents") or {}).get("rules")) or []
+    out = []
+    for i, r in enumerate(rules):
+        text = str(r)
+        m = STALE_PRECISION.search(text)
+        if m and "owner exception" not in text.lower() and not re.search(r"replaces|superseded", text, re.I):
+            out.append(
+                f"agents.rules[{i}] contradicts realistic precision (agents' rule 7, F123): '{m.group(0)}' "
+                "(say 'owner exception' in the rule if it is deliberate)"
+            )
+    return out
+
+
+class SpecError(ValueError):
+    pass
+
+
+def _expand(v):
+    if isinstance(v, str):
+        return os.path.expandvars(os.path.expanduser(v))
+    return v
+
+
+def parse_layers(v, num_layers: int | None = None) -> list[int]:
+    """[0, 1, "3-5"] or "0,1,3-5" -> [0, 1, 3, 4, 5]. "all" needs num_layers."""
+    if v in (None, "all"):
+        if num_layers is None:
+            raise SpecError("layer list 'all' needs num_layers")
+        return list(range(num_layers))
+    items = v.split(",") if isinstance(v, str) else v
+    out = []
+    for it in items:
+        if isinstance(it, int):
+            out.append(it)
+            continue
+        it = str(it).strip()
+        if "-" in it:
+            a, b = it.split("-")
+            out.extend(range(int(a), int(b) + 1))
+        else:
+            out.append(int(it))
+    return sorted(set(out))
+
+
+MODES = ("partial", "full")
+
+
+def _merge(base: dict, over: dict) -> dict:
+    out = dict(base)
+    for k, v in over.items():
+        out[k] = _merge(out[k], v) if isinstance(v, dict) and isinstance(out.get(k), dict) else v
+    return out
+
+
+def _resolve(raw: dict) -> dict:
+    """The spec as the run sees it: ``box`` from ``boxes[run.box]`` plus that box's overrides (F64)."""
+    run, boxes = raw.get("run"), raw.get("boxes")
+    if not isinstance(run, dict) or not isinstance(boxes, dict) or run.get("box") not in boxes:
+        return raw
+    box = dict(boxes[run["box"]] or {})
+    over = box.pop("overrides", None) or {}
+    data = _merge(raw, over)
+    data["box"] = box
+    return data
+
+
+GOLDEN_MIRROR_FILE = "mirror.json"  # F260: per golden dir, its files (size, mtime_ns) for the node-local mirror
+SCALED_ENV = "BRINGUP_SCALED"
+CHUNK_ENV = "BRINGUP_CHUNK"  # F271: a measurement run's chunk (the chunk-size sweep); the written spec keeps its own
+SEED_RUNG = "seed"  # F185: a seeded run's ladder rung over the seed's layers (W.1, the port to this box)
+
+
+class Spec:
+    def __init__(self, data: dict, path: Path | None = None):
+        if "model" not in data:
+            raise SpecError("spec has no 'model'")
+        self.raw = data
+        self.data = _resolve(data)
+        if os.environ.get(CHUNK_ENV):  # F271: the run's chunk, e.g. a chunk-size sweep; not checked against
+            # serving.max_chunk (that limit is on the serving chunk the spec writes, validate() reads it from raw)
+            self.data = {
+                **self.data,
+                "target": {**(self.data.get("target") or {}), "chunk": int(os.environ[CHUNK_ENV])},
+            }
+        self.path = Path(path).resolve() if path else None
+        # F75: a partial bring-up on a box with fewer chips than the deployment box IS the scaled model. The deployment
+        # box only gives the scale factors (the plan's roles, plan/boxes.py); once the plan exists, everything this
+        # box runs is scaled: the reduced checkpoint (plan/scale.py), its goldens, the chunk and context. There is no
+        # real-size track. BRINGUP_SCALED=0 forces the real checkpoint, for the steps that need it: the reference
+        # checks against the model's own code (R.*) and the plan's memory check (PL.*).
+        self.scaled = self.scaling and os.environ.get(SCALED_ENV) != "0" and (self.bringup_dir / "plan.yaml").exists()
+        if self.scaled:
+            self.data = self._scaled_view()
+
+    @property
+    def scaling(self) -> bool:
+        """A partial run on a box with fewer chips than the deployment box: this box runs the scaled model (F75)."""
+        if not self.has_deploy or self.mode != "partial" or not {self.run_box, self.deploy_box} <= set(self.boxes):
+            return False
+        run, dep = self.boxes[self.run_box]["mesh"], self.boxes[self.deploy_box]["mesh"]
+        return run[0] * run[1] < dep[0] * dep[1]
+
+    def _scaled_view(self) -> dict:
+        """The spec as the scaled run sees it: its ladder and target are written in this box's units (the scaled
+        chunk); the chunk must be the deployment's chunk scaled to this box (plan/boxes.py context)."""
+        from models.demos.common.bringup.plan.boxes import context
+        from models.demos.common.bringup.plan.memory import load_plan
+
+        ctx = context(self, load_plan(self), self.run_box)
+        data = dict(self.data)
+        if (self.raw.get("scaled") or {}).get("ladder"):  # older specs (F64) kept a separate scaled ladder
+            data["ladder"] = self.raw["scaled"]["ladder"]
+        chunk = (data.get("target") or {}).get("chunk")
+        self.scaled_problem = (
+            f"target.chunk {chunk} is not this box's scaled chunk {ctx['chunk']} (the deployment chunk x the sequence "
+            "factor): on a smaller box everything runs scaled; write target and ladder in this box's units"
+            if ctx["exact"] and chunk != ctx["chunk"]
+            else None
+        )
+        return data
+
+    @classmethod
+    def load(cls, path) -> "Spec":
+        path = Path(path)
+        return cls(yaml.safe_load(path.read_text()) or {}, path)
+
+    def get(self, key: str, default=None):
+        """The spec's value, else the framework default (defaults.yaml), else ``default``."""
+        cur = self.data
+        for k in key.split("."):
+            if not isinstance(cur, dict) or k not in cur:
+                return defaults.get(key, default)
+            cur = cur[k]
+        return cur
+
+    def has(self, key: str) -> bool:
+        """Whether the spec itself sets ``key`` (not the framework default)."""
+        cur = self.data
+        for k in key.split("."):
+            if not isinstance(cur, dict) or k not in cur:
+                return False
+            cur = cur[k]
+        return True
+
+    # ---- identity and paths
+    @property
+    def model(self) -> str:
+        return self.data["model"]
+
+    @property
+    def tag(self) -> str:
+        """Commit-message tag. Gate commits are '[<tag>][<task id>] <title>'."""
+        return self.data.get("tag", self.model)
+
+    @property
+    def repo(self) -> Path:
+        return Path(_expand(self.get("paths.repo") or CODE_ROOT)).resolve()
+
+    @property
+    def model_dir(self) -> Path:
+        return self.repo / self.data.get("model_dir", f"models/demos/{self.model}")
+
+    @property
+    def bringup_dir(self) -> Path:
+        d = self.get("paths.bringup_dir")
+        return (self.repo / d) if d else self.model_dir / "bringup"
+
+    @property
+    def ledger_name(self) -> str | None:
+        """F183: a seeded run's ledger name, ``<run box>-<mode>``; None for the model's own (first) ledger."""
+        return f"{self.run_box}-{self.mode}" if self.seed else None
+
+    @property
+    def ledger_dir(self) -> Path:
+        """F183: this run's ledger. Two runs of one model (a seed and the run grown from it) never share tasks, state,
+        results, approvals or the overseer's files; the model's shared files stay in bringup_dir."""
+        return self.bringup_dir / "ledgers" / self.ledger_name if self.ledger_name else self.bringup_dir
+
+    @property
+    def art(self) -> Path:
+        root = self.get("paths.art") or f"/localdev/{getpass.getuser()}/bringup"
+        return Path(_expand(root)) / self.model
+
+    def _art_sub(self, key: str, default: str) -> Path:
+        """paths.<key>: absolute, or relative to the artifact root (F186: one spec on several hosts)."""
+        v = self.get(f"paths.{key}")
+        return self.art / _expand(v or default)
+
+    # ---- prior bring-up (same checkpoint, another mesh or configuration)
+    @property
+    def prior(self) -> Path | None:
+        """The prior bring-up's model dir (spec key ``prior``), or None."""
+        p = self.data.get("prior")
+        return (self.repo / p) if p else None
+
+    def prior_spec(self) -> "Spec | None":
+        return Spec.load(self.prior / "bringup" / "spec.yaml") if self.prior else None
+
+    # ---- seed (F184: a finished run of the same model this run grows from)
+    @property
+    def seed(self) -> Path | None:
+        """The seed's spec file (``run.seed``, relative to the repo), or None."""
+        p = (self.data.get("run") or {}).get("seed")
+        return (self.repo / p) if p else None
+
+    def seed_spec(self) -> "Spec | None":
+        return Spec.load(self.seed) if self.seed else None
+
+    def _shared(self, key: str, default: str) -> Path:
+        """hf/ and golden/ are the prior's (same checkpoint, same CPU reference) unless this spec sets paths.<key>."""
+        if self.get(f"paths.{key}") or not self.prior:
+            return self._art_sub(key, default)
+        return self.prior_spec()._shared(key, default)
+
+    @property
+    def hf_dir(self) -> Path:
+        """The checkpoint dir. BRINGUP_HF overrides the spec (paths.hf, else the prior's, else $ART/<model>/hf) without
+        editing it, e.g. a checkout of an approved spec whose paths.hf names another user's /localdev. A scaled run
+        reads the reduced checkpoint instead."""
+        return self.scaled_hf_dir if self.scaled else self.real_hf_dir
+
+    @property
+    def real_hf_dir(self) -> Path:
+        env = os.environ.get("BRINGUP_HF")
+        return Path(_expand(env)) if env else self._shared("hf", "hf")
+
+    @property
+    def scaled_hf_dir(self) -> Path:
+        """The reduced checkpoint of the run's box (plan/scale.py writes it)."""
+        return self._art_sub("hf_scaled", "hf_scaled") / self.run_box
+
+    @property
+    def golden_root(self) -> Path:
+        if self.scaled:
+            return self._art_sub("golden_scaled", "golden_scaled") / self.run_box
+        return self._shared("golden", "golden")
+
+    @property
+    def golden_mirror_root(self) -> Path | None:
+        """F260 (owner 2026-11-06): the node-local mirror of golden_root that tests read when it is complete
+        (reference/golden.py read_dir; `reference.golden sync` fills it). golden_root stays the source of truth (the
+        goldens are generated, pinned and frozen there). None: no mirror (goldens.mirror off, a scaled run's goldens,
+        or a golden root already under art)."""
+        if self.scaled or not self.get("goldens.mirror"):
+            return None
+        shared = Path(os.path.abspath(self.golden_root))
+        if self.get("paths.golden_local"):
+            local = self._art_sub("golden_local", "")
+        else:
+            if shared.is_relative_to(os.path.abspath(self.art)):
+                return None
+            at = max((i for i, x in enumerate(shared.parts) if x == self.model), default=None)
+            tail = shared.parts[at + 1 :] if at is not None else ()
+            local = self.art / (Path(*tail) if tail else Path("golden_mirror", shared.name))
+        return None if Path(os.path.abspath(local)) == shared else local
+
+    @property
+    def profiles_dir(self) -> Path:
+        return self._art_sub("profiles", "profiles")
+
+    def _cache_sub(self, variant: str = "") -> Path:
+        mesh = "x".join(str(x) for x in self.mesh) + ("-scaled" if self.scaled else "")
+        version = str(self.get("cache_version", "v1"))
+        return Path(mesh) / (f"{version}-{variant}" if variant else version)
+
+    def tt_cache(self, variant: str = "") -> Path:
+        """Weight cache dir. The .tensorbin name only holds name/dtype/layout, so the path carries mesh and version.
+        F261: with paths.tt_cache_shared, the node-local mirror of tt_cache_shared(variant) (core/weight_cache.py)."""
+        return self._art_sub("tt_cache", "tt_cache") / self._cache_sub(variant)
+
+    def tt_cache_shared(self, variant: str = "") -> Path | None:
+        """F261 (owner 2026-11-06): the shared master of tt_cache(variant) (paths.tt_cache_shared, e.g. on NFS and
+        readable by other users; the same <mesh>/<version> below it), or None: the local cache is the only copy.
+        core/weight_cache.py pulls what the master has into the local cache at run start and pushes what a run built."""
+        if not self.get("paths.tt_cache_shared"):
+            return None
+        shared = self._art_sub("tt_cache_shared", "") / self._cache_sub(variant)
+        return None if os.path.abspath(shared) == os.path.abspath(self.tt_cache(variant)) else shared
+
+    def run_dir(self, run: str) -> Path:
+        return self.art / "runs" / (f"{self.ledger_name}/{run}" if self.ledger_name else run)
+
+    # ---- model facts
+    @property
+    def mesh(self) -> list[int]:
+        return list(self.get("box.mesh", [1, 1]))
+
+    @property
+    def num_layers(self) -> int | None:
+        return self.get("num_layers")
+
+    def layers(self) -> list[int]:
+        """Layers brought up on device: the subset if given, else all."""
+        return parse_layers(self.data.get("layers", "all"), self.num_layers)
+
+    def block_type_of(self, layer: int) -> str:
+        for bt, info in self.data.get("block_types", {}).items():
+            if layer in parse_layers(info["layers"], self.num_layers):
+                return bt
+        raise SpecError(f"layer {layer} has no block type")
+
+    def representative_layer(self, block_type: str) -> int:
+        info = self.data["block_types"][block_type]
+        if "representative" in info:
+            return int(info["representative"])
+        sel = set(self.layers())
+        return next(i for i in parse_layers(info["layers"], self.num_layers) if i in sel)
+
+    def state_names(self, layer: int) -> list[str]:
+        """State tensor names of one layer: ``state.by_block_type[<its block type>]`` if given, else ``state.tensors``
+        (models whose layer types carry different state, e.g. an MLA latent cache on some layers and a linear-attention
+        recurrent state on others)."""
+        by_bt = self.get("state.by_block_type") or {}
+        if by_bt:
+            return list(by_bt.get(self.block_type_of(layer), []))
+        return list(self.get("state.tensors") or [])
+
+    def state_sources(self, layer: int) -> list[int]:
+        """F65: the earlier layers whose state this layer reads (hooks ``state_sources(spec, layer)``; e.g. a layer
+        attending over another layer's KV cache, or reusing its top-k indices). Their state as of the end of the
+        current chunk is part of this layer's context in every test."""
+        fn = getattr(self.hooks(), "state_sources", None)
+        return [int(j) for j in fn(self, layer)] if fn else []
+
+    @property
+    def state_fixed(self) -> list[str]:
+        """State tensors that do not grow along the sequence (recurrent state, conv tail): the state at position p
+        cannot be sliced out of the final state, so goldens store a snapshot at every chunk start tests need."""
+        return list(self.get("state.fixed") or [])
+
+    # ---- deployment target and boxes (F64)
+    @property
+    def has_deploy(self) -> bool:
+        """The spec plans for a target system that may differ from the box this run uses."""
+        return isinstance(self.raw.get("deploy"), dict)
+
+    @property
+    def boxes(self) -> dict[str, dict]:
+        """Every box by name, each with its own overrides; just {"box": box} for a spec without ``boxes``."""
+        if not isinstance(self.raw.get("boxes"), dict):
+            return {"box": dict(self.data.get("box") or {})}
+        return {k: dict(v or {}) for k, v in self.raw["boxes"].items()}
+
+    @property
+    def run_box(self) -> str:
+        return (self.data.get("run") or {}).get("box") or "box"
+
+    @property
+    def deploy_box(self) -> str:
+        return (self.raw.get("deploy") or {}).get("box") or self.run_box
+
+    @property
+    def deploy_seq(self) -> int:
+        return int((self.raw.get("deploy") or {}).get("seq") or self.get("target.seq"))
+
+    @property
+    def deploy_chunk(self) -> int:
+        return int((self.raw.get("deploy") or {}).get("chunk") or self.get("target.chunk"))
+
+    @property
+    def mode(self) -> str:
+        """partial (a layer subset brings up the layout) or full (every layer, every end-to-end check)."""
+        m = (self.data.get("run") or {}).get("mode")
+        if m:
+            return m
+        return "full" if self.layers() == list(range(self.num_layers)) else "partial"
+
+    def _validate_boxes(self) -> list[str]:
+        keys = [k for k in ("deploy", "boxes", "run") if k in self.raw]
+        if not keys:
+            return []
+        if len(keys) < 3:
+            return [f"deploy, boxes and run go together (have {keys})"]
+        errs = []
+        if self.raw.get("box"):
+            errs.append("with run / boxes the run's box comes from boxes: drop 'box'")
+        boxes, dep, run = self.raw["boxes"], self.raw["deploy"], self.raw["run"]
+        if not isinstance(boxes, dict) or not boxes:
+            return errs + ["boxes must map box names to boxes"]
+        for name, b in boxes.items():
+            m = (b or {}).get("mesh")
+            if not (isinstance(m, list) and len(m) == 2 and all(isinstance(x, int) and x > 0 for x in m)):
+                errs.append(f"boxes.{name}.mesh must be [rows, cols]")
+            if not isinstance((b or {}).get("chip_dram_gb"), (int, float)):
+                errs.append(f"boxes.{name}.chip_dram_gb must be a number")
+            bad = {"box", "boxes", "run", "deploy"} & set((b or {}).get("overrides") or {})
+            if bad:
+                errs.append(f"boxes.{name}.overrides cannot set {sorted(bad)}")
+        for what, d in (("deploy", dep), ("run", run)):
+            if not isinstance(d, dict) or d.get("box") not in boxes:
+                errs.append(f"{what}.box must name one of boxes {sorted(boxes)}")
+        if isinstance(dep, dict):
+            for k in ("seq", "chunk"):
+                if not isinstance(dep.get(k), int):
+                    errs.append(f"deploy.{k} must be an int")
+            if isinstance(dep.get("seq"), int) and isinstance(dep.get("chunk"), int) and dep["seq"] % dep["chunk"]:
+                errs.append("deploy.seq is not a multiple of deploy.chunk")
+            # F67: the serving chunk is one fixed size on every box, owner limit serving.max_chunk; tests stay below it
+            cap = int(self.get("serving.max_chunk"))
+            chunks = [("deploy.chunk", dep.get("chunk")), ("target.chunk", (self.raw.get("target") or {}).get("chunk"))]
+            chunks += [(f"ladder rung {r.get('name')}", r.get("chunk")) for r in self.data.get("ladder") or []]
+            chunks += [
+                (f"scaled.ladder rung {r.get('name')}", r.get("chunk"))
+                for r in (self.raw.get("scaled") or {}).get("ladder") or []
+            ]
+            for what, c in chunks:
+                if isinstance(c, int) and c > cap:
+                    errs.append(f"{what}: chunk {c} > serving.max_chunk {cap} (the owner's limit on the serving chunk)")
+        if isinstance(run, dict):
+            if run.get("mode") not in MODES:
+                errs.append(f"run.mode must be one of {MODES}")
+            elif run["mode"] == "full" and isinstance(self.num_layers, int):
+                try:
+                    if self.layers() != list(range(self.num_layers)):
+                        errs.append("run.mode full brings up every layer: set layers: all")
+                except SpecError:
+                    pass
+        return errs
+
+    def rung(self, name: str) -> dict:
+        for r in self.data.get("ladder", []):
+            if r["name"] == name:
+                return r
+        raise SpecError(f"no ladder rung {name!r}")
+
+    def hooks(self):
+        return importlib.import_module(self.data["hooks"])
+
+    def _validate_prior(self) -> list[str]:
+        if not self.data.get("prior"):
+            return []
+        f = self.prior / "bringup" / "spec.yaml"
+        if not f.is_file():
+            return [f"prior: {self.data['prior']} has no bringup/spec.yaml"]
+        p = Spec.load(f)
+        errs = []
+        if p.data.get("hf_id") != self.data.get("hf_id"):
+            errs.append(f"prior: hf_id {p.data.get('hf_id')!r} differs from {self.data.get('hf_id')!r}")
+        if p.model == self.model:
+            errs.append("prior: names this bring-up itself")
+        if p.layers() != self.layers():
+            errs.append("prior: a different layer subset (its goldens cover other layers); set paths.golden")
+        return errs
+
+    def _validate_seed(self) -> list[str]:
+        if not self.seed:
+            return []
+        if not self.seed.is_file():
+            return [f"run.seed: no spec at {self.seed}"]
+        s, errs = self.seed_spec(), []
+        for k in ("model", "hf_id", "model_dir", "hooks"):
+            if s.data.get(k) != self.data.get(k):
+                errs.append(
+                    f"run.seed: {k} {s.data.get(k)!r} differs from {self.data.get(k)!r} (a seed is the same model)"
+                )
+        if s.ledger_dir == self.ledger_dir:
+            errs.append("run.seed: the seed's ledger is this run's (another box or mode)")
+        if self.data.get("prior"):
+            errs.append("run.seed and prior exclude each other (prior copies the model; a seed grows it in place)")
+        if self.path and self.path.parent != self.ledger_dir:
+            errs.append(f"a seeded spec lives in its ledger: {self.ledger_dir / 'spec.yaml'}")
+        rung = next((r for r in self.data.get("ladder") or [] if r.get("name") == SEED_RUNG), None)
+        if rung is None:
+            errs.append(
+                f"a seeded spec has a ladder rung {SEED_RUNG!r}: the seed's layers at this run's size (task W.1)"
+            )
+        elif parse_layers(rung.get("layers", "all"), self.num_layers) != s.layers():
+            errs.append(f"ladder rung {SEED_RUNG!r}: layers must be the seed's {s.layers()}")
+        return errs
+
+    # ---- validation
+    def validate(self) -> list[str]:
+        """Schema errors for a model spec (empty list = valid)."""
+        errs = self._validate_boxes() + stale_precision_rules(self.data)
+        if getattr(self, "scaled_problem", None):  # F75: a scaled run is written in this box's units
+            errs.append(self.scaled_problem)
+        if errs:
+            return errs
+        for k, why in REFUSED.items():
+            if self.has(k):
+                errs.append(f"'{k}' is not a spec key any more ({why})")
+        for k, t in REQUIRED.items():
+            if k not in self.data:
+                errs.append(f"missing '{k}'")
+            elif not isinstance(self.data[k], t):
+                errs.append(f"'{k}' must be a {t.__name__}")
+        if errs:
+            return errs
+        if not isinstance(self.num_layers, int):
+            errs.append("missing 'num_layers' (int)")
+            return errs
+        mesh = self.get("box.mesh")
+        if not (isinstance(mesh, list) and len(mesh) == 2 and all(isinstance(x, int) and x > 0 for x in mesh)):
+            errs.append("box.mesh must be [rows, cols]")
+        errs += self._validate_prior()
+        errs += self._validate_seed()
+        for k in ("seq", "chunk"):
+            if not isinstance(self.get(f"target.{k}"), int):
+                errs.append(f"target.{k} must be an int")
+        names = set()
+        for r in self.data["ladder"]:
+            for k in ("name", "seq", "chunk"):
+                if k not in r:
+                    errs.append(f"ladder rung {r} misses '{k}'")
+            if "seq" in r and "chunk" in r and r["seq"] % r["chunk"]:
+                errs.append(f"ladder rung {r['name']}: seq is not a multiple of chunk")
+            sdl = r.get("step_dump_layers")  # F159: a subset of the run's layers
+            if sdl is not None and not set(sdl) <= set(self.layers()):
+                errs.append(
+                    f"ladder rung {r['name']}: step_dump_layers {sorted(set(sdl) - set(self.layers()))} not run"
+                )
+            if r.get("name") in names:
+                errs.append(f"duplicate ladder rung {r['name']}")
+            names.add(r.get("name"))
+            if r.get("golden"):
+                src = next((x for x in self.data["ladder"] if x.get("name") == r["golden"]), None)
+                if src is None:
+                    errs.append(f"ladder rung {r['name']}: golden rung {r['golden']} does not exist")
+                elif src.get("golden"):
+                    errs.append(f"ladder rung {r['name']}: golden rung {r['golden']} must own its golden")
+                elif (src.get("seq"), src.get("chunk")) != (r.get("seq"), r.get("chunk")):
+                    errs.append(f"ladder rung {r['name']}: seq/chunk differ from golden rung {r['golden']}")
+        covered = []
+        for bt, info in self.data["block_types"].items():
+            if "layers" not in info:
+                errs.append(f"block type {bt} has no 'layers'")
+                continue
+            covered += parse_layers(info["layers"], self.num_layers)
+        if sorted(covered) != list(range(self.num_layers)):
+            errs.append("block_types must cover every layer exactly once")
+        try:
+            sel = self.layers()
+            if not sel or min(sel) < 0 or max(sel) >= self.num_layers:
+                errs.append("layers subset out of range")
+        except (SpecError, ValueError) as e:
+            errs.append(str(e))
+        if not errs:
+            for bt in self.data["block_types"]:
+                try:
+                    self.representative_layer(bt)
+                except StopIteration:
+                    errs.append(f"block type {bt} has no layer in the selected subset")
+        window = self.get("checkpoint.config.sliding_window")
+        parity = int(self.get("hf.parity_seq", 512))
+        if window and parity <= int(window):
+            errs.append(f"hf.parity_seq {parity} must exceed the sliding window {window}, or HF parity never tests it")
+        if not self.get("state.tensors"):
+            errs.append("state.tensors must list the per-layer state tensor names (e.g. [key, value])")
+        names = set(self.get("state.tensors") or [])
+        by_bt = self.get("state.by_block_type") or {}
+        for bt, ns in by_bt.items():
+            if bt not in self.data["block_types"]:
+                errs.append(f"state.by_block_type: {bt} is not a block type")
+            elif set(ns or []) - names:
+                errs.append(f"state.by_block_type.{bt}: {sorted(set(ns) - names)} not in state.tensors")
+        if by_bt and set(self.data["block_types"]) - set(by_bt):
+            errs.append(f"state.by_block_type misses block types {sorted(set(self.data['block_types']) - set(by_bt))}")
+        if set(self.state_fixed) - names:
+            errs.append(f"state.fixed: {sorted(set(self.state_fixed) - names)} not in state.tensors")
+        return errs

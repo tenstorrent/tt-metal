@@ -27,6 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import ACTIVATION_SILU
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 from models.demos.deepseek_v3_d_p.tt.tt_distributed_rms_norm import TtDistributedRmsNorm
 from models.demos.deepseek_v3_d_p.tt.tt_ffn import TtFfn
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
@@ -66,6 +67,7 @@ class TtKimiK3Block(LightweightModule):
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
+        moe_impl: Optional[str] = None,  # tt/moe_impl.py: "block" (K3's default) / "ttmoe"
     ):
         super().__init__()
         self.mesh_device = mesh_device
@@ -83,6 +85,7 @@ class TtKimiK3Block(LightweightModule):
         # `TtPrefillBlock` stores the TP element under `self.topology` and this does the same.
         tp_topology = topology[tp_axis] if isinstance(topology, (tuple, list)) else topology
         self.topology = tp_topology
+        self.tp_axis = tp_axis
 
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
@@ -115,7 +118,21 @@ class TtKimiK3Block(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
-        if self.is_moe:
+        self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
+        if self.moe_block:
+            # (the MoE block's C++ ops: router, shared expert, latent and routed experts in one call -
+            # tt/kimi_k3/moe_block_ffn.py)
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockFfnOptions, TtK3MoEBlockFfn
+
+            # (the routed experts from TtMoe's tensorbins in weight_cache_path, laid out for this mesh and SP axis)
+            self.ffn = TtK3MoEBlockFfn(
+                mesh_device,
+                model_cfg,
+                layer_idx,
+                cache_path=weight_cache_path,
+                options=MoEBlockFfnOptions(sp_axis=sp_axis),
+            )
+        elif self.is_moe:
             # Kimi-K3 runs the device FP32 gate: one expert group, so there is no grouped-topk
             # fallback to prefer, and `KimiK3Adapter.default_gate_mode` names it. Defaulted here
             # rather than left None, which reaches TtMoEGatePrefill as a mode it cannot read.
@@ -150,6 +167,7 @@ class TtKimiK3Block(LightweightModule):
                 torch_weights=state_dict.get("ffn_weights"),
                 num_links=num_links,
                 topology=tp_topology,
+                tp_axis=tp_axis,
                 activations_dtype=shared_expert_activations_dtype,
                 weights_dtype=shared_expert_weights_dtype,
                 weight_cache_path=weight_cache_path,
@@ -263,6 +281,14 @@ class TtKimiK3Block(LightweightModule):
         residual.release(pre_ffn)
 
     def _ffn_path(self, ffn_norm_out, *, actual_isl, padding_side, ctx) -> ttnn.Tensor:
+        if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
+            return self.ffn(
+                ffn_norm_out,
+                actual_isl=actual_isl,
+                padding_side=padding_side,
+                actual_start=ctx.actual_start,
+                metadata=ctx.metadata,
+            )
         if self.is_moe:
             # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
             # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream
@@ -284,9 +310,9 @@ class TtKimiK3Block(LightweightModule):
 
         # Dense: gather to the full hidden dim, then TtFfn reduce-scatters internally — the same
         # collective pair the KDA attention above already uses.
-        if self.mesh_device.shape[1] > 1:
+        if self.mesh_device.shape[self.tp_axis] > 1:
             gathered = ttnn.all_gather(
-                ffn_norm_out, dim=-1, cluster_axis=1, num_links=self.num_links, topology=self.topology
+                ffn_norm_out, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
             )
             out = self.ffn(gathered)
             ttnn.deallocate(gathered)

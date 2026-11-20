@@ -29,7 +29,11 @@ from models.demos.deepseek_v3_d_p.reference.cpu_deepseek_v32 import pretrained_m
 from models.demos.deepseek_v3_d_p.reference.glm_5_3.block import glm_decoder_layer_reference
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.moe import load_moe_weights_from_hf
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import moe_fabric_payload, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    moe_fabric_payload,
+    torus_x_device_params,
+    torus_xy_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_reference import build_weights
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import indexer_layer_is_reused, num_full_indexer_layers
 from models.demos.deepseek_v3_d_p.tt.mla.rope import RotarySetup
@@ -39,9 +43,10 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_mesh_params
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import TtPrefillBlock
-from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
+from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, mesh_cache_key
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
     PROMPT_5K_PATH,
@@ -57,7 +62,7 @@ from models.demos.deepseek_v3_d_p.utils.transformer_helpers import (
 
 _PROMPT_PATHS = {"prompt_5k": PROMPT_5K_PATH}
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from tests.ttnn.utils_for_testing import assert_with_pcc, comp_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc, comp_pcc
 
 
 @dataclass(frozen=True)
@@ -356,7 +361,7 @@ def run_model(
     if gate_fallback_mode is not None:
         block_kwargs["gate_fallback_mode"] = gate_fallback_mode
 
-    block = TtPrefillBlock(**block_kwargs)
+    block = TtPrefillBlock(**block_kwargs, moe_impl="ttmoe")  # (TtMoe: tt/moe_impl.py)
     ttnn.synchronize_device(mesh_device)
     profiler.end("tt_block_creation")
 
@@ -649,17 +654,35 @@ def _glm_pretrained_weights(config, model_dir, layer_idx, is_moe):
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, num_links",
+    "mesh_device, device_params, num_links, sp_axis",
     [
         pytest.param(
             (8, 4),
+            # (GLM-5.3's MoE is the MoE block by default - tt/moe_impl.py, $MOE_IMPL=ttmoe for TtMoe: its fabric
+            # payload and L1_SMALL)
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[0],
                 worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[1],
             ),
             2,
+            0,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="torus-xy-8x4",
+        ),
+        # One 4x4 prefill stage (a Galaxy tray half, run_4x4_stage_tests.sh): SP on the axis-1 ring, TP=4 on
+        # the axis-0 line.
+        pytest.param(
+            (4, 4),
+            torus_x_device_params(
+                fabric_payload_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[0],
+                worker_l1_size=ttnn._ttnn.device.DEFAULT_WORKER_L1_SIZE,
+                l1_small_size=moe_block_mesh_params(GLM53Config, moe_fabric_payload(GLM53Config), 0)[1],
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-x-4x4-sp1",
         ),
     ],
     indirect=["mesh_device", "device_params"],
@@ -677,6 +700,7 @@ def test_glm_prefill_block(
     mesh_device,
     device_params,
     num_links,
+    sp_axis,
     seq_len,
     layer_type,
     model_path,
@@ -692,7 +716,7 @@ def test_glm_prefill_block(
     # (ReuseIndexer.forward raises). glm_5_3 -> 6 (3-5 shared).
     layer_idx = _first_full_moe_layer(config) if is_moe else 0
     hidden = config.hidden_size
-    sp_axis, tp_axis = 0, 1
+    tp_axis = 1 - sp_axis
     mesh_shape = list(mesh_device.shape)
 
     # Weight source: use the prebuilt ttnn tensorbin cache when present AND complete -> real weights (device
@@ -700,7 +724,9 @@ def test_glm_prefill_block(
     # Never (re)build the cache here.
     sp_factor, tp_factor = mesh_shape[sp_axis], mesh_shape[tp_axis]
     experts_per_chip = GLM53Config.NUM_ROUTED_EXPERTS // (sp_factor * tp_factor)
-    effective_cache = (weight_cache_path / f"{sp_factor}x{tp_factor}") if weight_cache_path is not None else None
+    effective_cache = (
+        (weight_cache_path / mesh_cache_key(mesh_shape, sp_axis)) if weight_cache_path is not None else None
+    )
     # The isolated MoE block is only meaningful on RANDOM weights, so it never consults the ttnn cache:
     # a random block input drives GLM's trained near-degenerate top-8 gate to pick different experts on
     # device vs the CPU reference (block PCC collapses to ~0.1), though the same layer scores ~0.995
@@ -756,6 +782,7 @@ def test_glm_prefill_block(
         f"[glm block {layer_type}] building TtPrefillBlock layer_idx={layer_idx} seq_len={seq_len} mesh={mesh_shape}"
     )
     block = TtPrefillBlock(
+        # (GLM-5.3's default MoE: the MoE block, its weights from this state dict's random host weights)
         mesh_device=mesh_device,
         config=config,
         model_cfg=GLM53Config,

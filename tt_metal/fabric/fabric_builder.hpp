@@ -34,6 +34,8 @@ class FabricBuilderContext;
  *      discover_channels() -> create_routers() -> connect_routers() ->
  *      compile_ancillary_kernels() -> create_kernels()
  *   3. FabricBuilder is destroyed, router builders are destroyed
+ *
+ * A subclass builds routers another way through make_router() and wires them through connect_routers().
  */
 class FabricBuilder {
 public:
@@ -42,6 +44,7 @@ public:
         tt::tt_metal::Program& program,
         FabricContext& fabric_context,
         CoreType dispatch_core_type);
+    virtual ~FabricBuilder() = default;
 
     /**
      * Discover active ethernet channels and neighbors for this device.
@@ -50,14 +53,14 @@ public:
     void discover_channels();
 
     /**
-     * Create all router builders for this device.
+     * Create all router builders for this device, one per live eth channel (see make_router()).
      */
     void create_routers();
 
     /**
      * Connect routers using topology-appropriate connections.
      */
-    void connect_routers();
+    virtual void connect_routers();
 
     /**
      * Compile ancillary kernels (e.g., tensix mux) for each router.
@@ -79,7 +82,12 @@ public:
      */
     size_t get_num_routers() const { return routers_.size(); }
 
-private:
+protected:
+    /**
+     * The router for one live eth channel.
+     */
+    virtual std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location);
+
     /**
      * RouterConnectionPair - Internal struct for router connection info
      */
@@ -135,5 +143,35 @@ private:
     // Master router channel (first in map)
     chan_id_t master_router_chan_ = 0;
 };
+
+// ============ Build Sessions ============
+
+/**
+ * FabricBuildSession
+ *
+ * Holds a builder's state for one fabric launch. Fabric init creates one session per launch,
+ * once and on one thread, before it builds any device, and destroys it when fabric is torn
+ * down. A builder that needs a whole-system view (e.g. lowering a topology graph before any
+ * router is built) does that work when its session is created; the per-device builders then
+ * only read it.
+ *
+ * make_device_builder() is called once per device, concurrently from the per-device build
+ * tasks, so it must be safe to call from several threads at once.
+ */
+class FabricBuildSession {
+public:
+    virtual ~FabricBuildSession() = default;
+
+    virtual std::unique_ptr<FabricBuilder> make_device_builder(
+        tt::tt_metal::IDevice* device,
+        tt::tt_metal::Program& program,
+        FabricContext& fabric_context,
+        CoreType dispatch_core_type) const;
+};
+
+/**
+ * The build session for one fabric launch.
+ */
+std::unique_ptr<FabricBuildSession> create_fabric_build_session(FabricContext& fabric_context);
 
 }  // namespace tt::tt_fabric

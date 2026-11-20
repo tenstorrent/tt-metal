@@ -1,0 +1,57 @@
+{
+ "used": [
+  {
+   "id": "DS41-299",
+   "how": "the census records DS41-299's fit (205 us + 6.77 us x the busiest chip's tiles) beside the measured program time, and the balanced fit from ceil(rows / chips / 32)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-278",
+   "how": "no replication on this branch: every expert lives on one chip, so per-expert rows are the sum of the chip's local counts and hot sets need no replica merge",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "whether the routed hot set is stable across texts (now DS41-302)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "a measurement; no kernel, fork or weight touched"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched; test-only change (tests/perf/test_expert_load_census.py, tests/perf/census_texts.py)"
+  }
+ ],
+ "cited_only": [
+  "DS41-302"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "X.9",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T06:48:39",
+  "head": "e5d992dfea3",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9_census_tagentic.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9_census_tcode.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9_census_tmath.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9_census_tmultilingual.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/X.9_census_tprose.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/X.9.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/census_texts.py"
+  ]
+ }
+}

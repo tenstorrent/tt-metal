@@ -1,0 +1,11 @@
+{
+  "used": [
+    {"id": "DS41-276", "how": "started from its symptom (layer 0, records 0/32/64/96, chunk-aligned stops only, the batch run after test_determinism) and found the cause it left open"},
+    {"id": "DS41-273", "how": "SnapshotSend (CHEAP_CCL=on) is where the fix went: its per-pattern prepared program cache"}
+  ],
+  "contradicted": [
+    {"id": "DS41-276", "evidence": "not an intermittent race: in the failing P.67 batch every chunk-aligned case (4 of 4) differed, the process had run test_determinism first; SnapshotSend._pp was keyed by block pattern only and the (31,31,31,31) program built for a ladder cache's 1-batch own slab was reused for the engine slab; ND TensorAccessor takes page_id % tensor_shape[0] (tt_metal/hw/inc/api/tensor/tensor_accessor.h:445), so every write landed in batch 0 = slot 0 layer 0"}
+  ],
+  "missing": ["a prepared program's cache key must cover every io tensor's TensorAccessor compile-time args (shape of ND-sharded tensors), not only addresses"],
+  "overseer": []
+}

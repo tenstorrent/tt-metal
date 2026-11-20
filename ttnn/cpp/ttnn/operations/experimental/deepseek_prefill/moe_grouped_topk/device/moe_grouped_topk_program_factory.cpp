@@ -284,6 +284,20 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
             unpack_to_dest_mode[static_cast<uint32_t>(cb)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         }
     }
+    // fp32_selection: the weights are normalized and scaled in fp32 on the SFPU, from the gathered scores unpacked
+    // straight to DEST (the FPU path reads them through the TF32 source registers, which biases every weight low).
+    // The selection half of the option (fp32 activation input, SFPU bias add, full-fp32 sort keys) is now what
+    // every path does, above.
+    const bool precise = operation_attributes.fp32_selection;
+    if (precise) {
+        unpack_to_dest_mode[static_cast<uint32_t>(cb_gathered_sigmoid)] =
+            tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
+    }
+    compute_named_compile_time_args.emplace_back("precise", static_cast<uint32_t>(precise));
+    compute_named_compile_time_args.emplace_back(
+        "packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon));
+    compute_named_compile_time_args.emplace_back(
+        "packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale));
 
     KernelDescriptor::NamedCompileTimeArgs writer_named_compile_time_args = {
         {"row_major_weights", static_cast<uint32_t>(row_major_weights)},
@@ -320,6 +334,7 @@ tt::tt_metal::ProgramDescriptor MoeGroupedTopkDeviceOperation::ProgramFactory::c
         {"packed_one_scalar", std::bit_cast<uint32_t>(1.0f)},
         {"packed_epsilon", std::bit_cast<uint32_t>(operation_attributes.epsilon)},
         {"packed_route_scale", std::bit_cast<uint32_t>(operation_attributes.route_scale)},
+        {"precise", static_cast<uint32_t>(precise)},
         {"cb_epsilon_scalar", cb_epsilon_scalar},
         {"cb_route_scale_scalar", cb_route_scale_scalar},
         {"seq_len_tiles", tt::div_up(seq_len, tile_height)},

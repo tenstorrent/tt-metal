@@ -1,0 +1,557 @@
+# Hy4 Preview (layers 0-5) on the 2x2 mesh (FABRIC_2D): every block step mapped to TTNN. Reasoning in plan.md.
+# Layout: SP=2 over mesh rows (axis 0: chunk rows split in halves) x TP=2 over mesh columns (axis 1: hidden columns and
+# heads), the (2, 2) layout of deepseek_v3_d_p's ttMLA / TtIndexer and tests/sparse_mla. Routed experts EP=4 with the
+# DeepSeek 2D dispatch (axis 0, one group per column), as models/demos/mimo_v2_6_d_p_2x2.
+# Hy4 modules live in models/demos/hy4_preview_d_p/tt: they copy or wrap deepseek_v3_d_p / mimo_v2_6_d_p_2x2 code (read-only
+# for this bring-up); op changes go through the ttnn/ttnn/bringup forks. Every matmul HiFi4 (+ fp32 acc); no bfp4.
+# No step is CPU or OPGEN: every Hy4 step has a TTNN op or composition (hy4_preview_findings.md; confirmed here).
+components:
+- block_type: dense_full
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: ttnn.matmul (streams [S/2, 12288] fp32 x this chip's fn^T slice [12288, 8] fp32, HiFi4 + fp32 acc) and ttnn.multiply + ttnn.sum (partial
+    sum of squares) -> ttnn.concat into one [S/2, 32] fp32 tile row -> ttnn.all_reduce(cluster_axis=1) -> ttnn.rsqrt(sum / 24576 + 1e-5) -> ttnn.multiply
+    -> ttnn.multiply(scale) + ttnn.add(base [1, 8]) -> ttnn.sigmoid (pre + 1e-6 | 2 * sigmoid + 1e-6 for post)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project (RMS commuted after the linear) and TtMHCHead.forward (sigmoid gate path)
+  searched: &id001
+  - 'repo_map: no iHC / hyper-connection row; Proposed row hy4_ref.py (CPU reference only)'
+  - 'models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py: TtMHCWrap / TtMHCHead / _project / _mix (DeepSeek-V4 mHC, single device, packed [1,1,T,n*C]
+    streams)'
+  - 'ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn: computes pre / post / comb with a Sinkhorn on comb; Hy4 has no comb (no mixing matrix)
+    and post is 2*sigmoid, so the fused op does not fit and is not used'
+  - 'grep hc_pre / hyper_connection in models/: only deepseek_v3_d_p (mhc, attn_res) and the Hy4 reference'
+  notes: 'hc_attn_layer: gates [S, 8] fp32 = (pre 4 | post 4). The fn columns are permuted on the host to the per-chip stream-column order and
+    split by mesh column (plan.yaml shard_cols); the only collective is a [S/2, 32] fp32 all_reduce over axis 1 (partial mixes 8 + partial sum
+    of squares 1, padded). Everything fp32, HiFi4 + fp32 acc (owner rule; HF runs iHC in fp32). Layout on the 2x2 mesh (plan.md): chip (r, c)
+    holds chunk rows [r*S/2, (r+1)*S/2) and hidden columns [c*3072, (c+1)*3072) of every stream; the residual is [S/2, 4 x 3072] fp32 per chip.'
+- block_type: dense_full
+  step: attn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 stream column blocks, 3072 wide) + ttnn.slice (4 gate columns) -> ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_streams / _cols / _mix
+  searched: *id001
+  notes: attn_x [S/2, 3072] per chip = sum_j pre_j * stream_j, fp32 accumulate, output bf16 (the reference casts to the stream dtype; the device
+    keeps fp32 streams, so the test compares against the fp32 golden). No collective.
+- block_type: dense_full
+  step: attn_norm
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm_pre_all_gather -> all_gather of the [S/2, 32] stats over axis 1 -> ttnn.rms_norm_post_all_gather (weight split by column,
+    eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:TtDistributedRmsNorm
+  searched:
+  - 'repo_map: no distributed-norm row; ttnn/ttnn/bringup/INDEX.md rms_norm_ttnn (single-chip rows, needs the whole hidden on the chip)'
+  - 'grep rms_norm_pre_all_gather models/demos/deepseek_v3_d_p: tt_distributed_rms_norm.py'
+  notes: 'input_layernorm, w * rms(x) (plain w, eps 1e-5). Output stays column-split [S/2, 3072] because ttMLA''s q_a / kv_a projections, the
+    output gate and the indexer''s wk / weights_proj all take a K-split hidden input. Alternative if the distributed norm misbehaves: all_gather
+    attn_x over axis 1 and ttnn.bringup.rms_norm locally.'
+- block_type: dense_full
+  step: q_a
+  tag: COMPOSED
+  ttnn: ttnn.linear (K-split q_a_proj [3072, 2048] per chip, bf16, HiFi4 + fp32 acc) -> ttnn.experimental.reduce_scatter_minimal_async + ttnn.experimental.high_bw_all_gather
+    over axis 1 (or ttnn.all_reduce(cluster_axis=1)) -> ttnn.rms_norm (q_a_layernorm, eps 1e-6)
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA._q_a_latent
+  searched:
+  - 'repo_map: MoE EP row points at deepseek_v3_d_p; no MLA row'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py: _q_a_latent is the q_a stem shared by the indexer and _q_stem'
+  notes: 'q_resid [S/2, 2048] per chip, replicated over the 2 columns of a row. eps is 1e-6 (LATENT_NORM_EPS), not rms_norm_eps 1e-5: ttMLA passes
+    config.rms_norm_eps, so the Hy4 module passes 1e-6 explicitly. The Hy4 module is written in models/demos/hy4_preview_d_p/tt (copy or wrap
+    ttMLA pieces; never edit deepseek_v3_d_p).'
+- block_type: dense_full
+  step: indexer
+  tag: COMPOSED
+  ttnn: 'ttnn.linear wk (K-split, bf16) -> reduce over axis 1 -> ttnn.layer_norm (k_norm with bias, eps 1e-5) -> ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    (interleaved, rotary_dim 64, block-cyclic positions) -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (bf16 index-key cache);
+    q: ttnn.mesh_partition(q_resid, axis 1) -> ttnn.linear wq_b (replicated, all 32 heads) -> ttnn.experimental.nlp_create_qkv_heads -> rotary_embedding_indexed;
+    weights_proj ttnn.linear (K-split, scale 32^-0.5 * 128^-0.5 folded) -> reduce_scatter over axis 1; ttnn.experimental.ring_indexer_score_dsa
+    (ReLU(q.k) weighted head sum, causal, ring over axis 0) -> ttnn.experimental.topk_large_indices (k 2048, valid_length -> 0xFFFFFFFF sentinel
+    tail)'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/indexer.py:TtIndexer (score / write_k / select_local / finalize_distribution), config sharing from
+    models/demos/deepseek_v3_d_p/reference/glm_5_2_config.py (indexer_types)
+  searched:
+  - hy4_preview_findings.md component table (Indexer)
+  - 'models/demos/deepseek_v3_d_p/tt/mla/indexer.py: TtIndexer, _bc_rope_pe, write_k, score'
+  - ttnn/cpp/ttnn/operations/experimental/indexer_score (ring_indexer_score_dsa)
+  - models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py (2x2 FABRIC_2D cases, SPARSE_INDEX_PCC)
+  - 'known_issues: transformers'' hy_v4 port uses the wrong RoPE style (interleaved RoPE, no host rotate-half permutation)'
+  notes: 'Stateful: writes index_key [seq, 128] (full layers 0, 1, 5). Output: uint32 top-2048 key positions per query row, row-sharded like the
+    queries. Differences from TtIndexer that the Hy4 module must handle: (1) Hy4 ropes the LAST 64 of 128 dims, TtIndexer''s rotary_embedding_indexed
+    ropes the first 64: permute the 128 output rows of wq_b (per head) and wk, and k_norm weight/bias, to [64..127 | 0..63] on the host (q.k,
+    LayerNorm and ReLU(q.k) are invariant), and un-permute index_key on state read-back; (2) k_norm eps 1e-5 (TtIndexer hard-codes 1e-6); (3)
+    the index-key cache is bf16 (TtIndexer uses bfp8; top-k stability), and q stays bf16 if ring_indexer_score_dsa accepts it (TtIndexer casts
+    q to bfp8 through its Hadamard matmul); the Hadamard basis change is optional (orthonormal, cancels in q.k) but then read-back must undo it;
+    (4) the reference returns ascending indices, -1 padded; the device returns unsorted indices with a sentinel tail, so the test compares selection
+    sets (overlap), not positions. Rows with position + 1 <= 2048 keep every causal key. HiFi4 + fp32 acc for every matmul.'
+- block_type: dense_full
+  step: attention
+  tag: COMPOSED
+  ttnn: 'kv stem: ttnn.linear kv_a_proj_with_mqa (K-split) -> reduce over axis 1 -> ttnn.rms_norm (kv_a_layernorm, eps 1e-6) on the 512 latent
+    + rotary_embedding_indexed (interleaved) on k_rope 64 -> ttnn.concat [576] -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (block-cyclic
+    bf16 MLA cache over SP x TP); q stem: ttnn.linear q_b_proj (32 heads per chip) -> ttnn.experimental.nlp_create_q_heads_split (192 | 64) ->
+    ttnn.linear wkv_b1 (q_nope -> 512 latent) + rotary_embedding_indexed (q_rope) -> ttnn.concat [576]; ttnn.experimental.high_bw_all_gather (cluster_axis=None,
+    KV prefix into one replicated scratch) -> ttnn.transformer.sparse_sdpa (32 heads per chip, v_dim 512, scale 1/16 explicit, attention_sink
+    = sink x 16 [1,1,1,32] bf16, block-cyclic remap, HiFi4 + fp32 dest) -> ttnn.linear wkv_b2 (512 -> 256 per head) -> ttnn.experimental.nlp_concat_heads
+    -> output gate: ttnn.experimental.high_bw_all_gather(attn_norm, axis 1) -> ttnn.linear linear_gate (32 x 256 per chip) -> ttnn.sigmoid ->
+    ttnn.multiply -> ttnn.linear o_proj (row-parallel) -> ttnn.experimental.reduce_scatter_minimal_async over axis 1'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA (_kv_stem, _q_stem, _update_kv_cache, _gather_kvpe_prefix, _sparse_mla, _output_gate
+    / _o_proj_epilogue with mla_use_output_gate, Kimi-K3); sinks as in models/demos/deepseek_v3_d_p/tt/mla/sliding_window_attention.py; models/demos/deepseek_v3_d_p/tests/sparse_mla
+    (2x2 SP2xTP2 FABRIC_2D cases, sparse_mla_reference.py)
+  searched:
+  - hy4_preview_findings.md component table (q_a / kv_a, sparse attention, output gate, KV cache)
+  - 'repo_map: Chunked causal attention (dense GQA only), SDPA program config'
+  - 'ttnn/cpp/ttnn/operations/transformer/sdpa/sparse_sdpa.hpp: attention_sink [1,1,1,H] bf16, multiplied by scale -> pass sink / scale; H % 32
+    == 0'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py:_needs_head_to_seq_reshard (64 heads / TP2 = 32: no reshard on 2x2)'
+  - 'known_issues: SDPA attention sink is folded with a bf16-truncated scale (1/16 is a power of two, so exact here)'
+  notes: 'Stateful: writes kv_latent [seq, 576] = kv_a_layernorm(latent) | RoPE(k_rope) (layers 0-5), block-cyclic over the 4 chips; state read-back
+    gathers and un-permutes it. RoPE is interleaved (GPT-J pairs, theta 1e7) on q_rope and k_rope in checkpoint order: no host permutation (R.2
+    finding, known issues). Sink: HF adds the raw sink as one more logit; sparse_sdpa multiplies it by scale, so pass sink * 16 (exact) with scale
+    = 1/16 given explicitly (the op defaults to 576^-0.5). The output gate is elementwise per (head, v-dim): sigmoid(linear_gate(x)) multiplies
+    the 256-wide head output after wkv_b2 and before o_proj, as Kimi-K3''s gate. Weights bf16 (as stored), not ttMLA''s bfp8. Every matmul and
+    sparse_sdpa at HiFi4 + fp32 acc (owner rule; sinks magnify score error, known issues). The first 2048 positions are dense (every causal key
+    selected). Output attn_out [S/2, 3072] per chip.'
+- block_type: dense_full
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, attn_out, post_j) in fp32 -> ttnn.concat
+  reuse: 'models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (without the comb mixing: Hy4 streams are not mixed)'
+  searched: *id001
+  notes: h_mid_j = stream_j + post_j * attn_out on each chip's [S/2, 3072] column block; fp32; no collective.
+- block_type: dense_full
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: 'as attn_hc (hc_mlp_layer fn / base / scale): ttnn.matmul + partial sum of squares -> ttnn.all_reduce(cluster_axis=1) of [S/2, 32] fp32
+    -> ttnn.rsqrt / ttnn.multiply / ttnn.add / ttnn.sigmoid'
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project, TtMHCHead.forward (same module as attn_hc)
+  searched: *id001
+  notes: Same module as attn_hc with the hc_mlp_layer parameters, on h_mid.
+- block_type: dense_full
+  step: ffn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice + ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix (same module as attn_hc_pre)
+  searched: *id001
+  notes: ffn_x [S/2, 3072] per chip; no collective.
+- block_type: dense_full
+  step: ffn_norm
+  tag: COMPOSED
+  ttnn: ttnn.all_gather(ffn_x, dim -1, cluster_axis=1) -> ttnn.bringup.rms_norm (post_attention_layernorm, full weight, eps 1e-5, HiFi4 + fp32
+    acc)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/rms_norm.py (ttnn.bringup.rms_norm caller)
+  searched:
+  - 'ttnn/ttnn/bringup/INDEX.md: rms_norm_ttnn (ttnn.bringup.rms_norm)'
+  - 'repo_map: Collectives on a 2D mesh (2x2)'
+  notes: 'ffn_norm [S/2, 6144] per chip, replicated over the 2 columns of a row: every consumer (dense MLP column-parallel gate/up, router, dispatch,
+    shared expert) needs the whole hidden, so one all_gather here serves them all.'
+- block_type: dense_full
+  step: mlp
+  tag: COMPOSED
+  ttnn: ttnn.linear gate / up (column-parallel, 9216 per chip, bf16 weights, HiFi4 + fp32 acc, fp32 out) -> ttnn.multiply (SILU on gate) -> ttnn.linear
+    down (row-parallel, K 9216) -> ttnn.experimental.reduce_scatter_minimal_async (or ttnn.reduce_scatter) over axis 1 -> [S/2, 3072]
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP; models/demos/deepseek_v3_d_p/tt/tt_ffn.py
+  searched:
+  - 'repo_map: MoE tensor parallel (shared_mlp.py)'
+  - 'known_issues: HiFi2 matmul shrinks output norms; bf16 expert intermediates and HiFi2 widen the per-token norm ratio'
+  notes: Layer 0 only, SwiGLU 18432, unclamped. fp32 gate/up/h intermediates (known issues). The reduce_scatter returns the column-split layout
+    of the residual.
+- block_type: dense_full
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, mlp_out, post_j) in fp32 -> ttnn.concat
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (same module as attn_residual)
+  searched: *id001
+  notes: out_j = h_mid_j + post_j * mlp_out; fp32; no collective. The block output stays resident as [S/2, 4 x 3072] fp32.
+- block_type: moe_full
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: ttnn.matmul (streams [S/2, 12288] fp32 x this chip's fn^T slice [12288, 8] fp32, HiFi4 + fp32 acc) and ttnn.multiply + ttnn.sum (partial
+    sum of squares) -> ttnn.concat into one [S/2, 32] fp32 tile row -> ttnn.all_reduce(cluster_axis=1) -> ttnn.rsqrt(sum / 24576 + 1e-5) -> ttnn.multiply
+    -> ttnn.multiply(scale) + ttnn.add(base [1, 8]) -> ttnn.sigmoid (pre + 1e-6 | 2 * sigmoid + 1e-6 for post)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project (RMS commuted after the linear) and TtMHCHead.forward (sigmoid gate path)
+  searched: *id001
+  notes: 'hc_attn_layer: gates [S, 8] fp32 = (pre 4 | post 4). The fn columns are permuted on the host to the per-chip stream-column order and
+    split by mesh column (plan.yaml shard_cols); the only collective is a [S/2, 32] fp32 all_reduce over axis 1 (partial mixes 8 + partial sum
+    of squares 1, padded). Everything fp32, HiFi4 + fp32 acc (owner rule; HF runs iHC in fp32). Layout on the 2x2 mesh (plan.md): chip (r, c)
+    holds chunk rows [r*S/2, (r+1)*S/2) and hidden columns [c*3072, (c+1)*3072) of every stream; the residual is [S/2, 4 x 3072] fp32 per chip.'
+- block_type: moe_full
+  step: attn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 stream column blocks, 3072 wide) + ttnn.slice (4 gate columns) -> ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_streams / _cols / _mix
+  searched: *id001
+  notes: attn_x [S/2, 3072] per chip = sum_j pre_j * stream_j, fp32 accumulate, output bf16 (the reference casts to the stream dtype; the device
+    keeps fp32 streams, so the test compares against the fp32 golden). No collective.
+- block_type: moe_full
+  step: attn_norm
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm_pre_all_gather -> all_gather of the [S/2, 32] stats over axis 1 -> ttnn.rms_norm_post_all_gather (weight split by column,
+    eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:TtDistributedRmsNorm
+  searched:
+  - 'repo_map: no distributed-norm row; ttnn/ttnn/bringup/INDEX.md rms_norm_ttnn (single-chip rows, needs the whole hidden on the chip)'
+  - 'grep rms_norm_pre_all_gather models/demos/deepseek_v3_d_p: tt_distributed_rms_norm.py'
+  notes: 'input_layernorm, w * rms(x) (plain w, eps 1e-5). Output stays column-split [S/2, 3072] because ttMLA''s q_a / kv_a projections, the
+    output gate and the indexer''s wk / weights_proj all take a K-split hidden input. Alternative if the distributed norm misbehaves: all_gather
+    attn_x over axis 1 and ttnn.bringup.rms_norm locally.'
+- block_type: moe_full
+  step: q_a
+  tag: COMPOSED
+  ttnn: ttnn.linear (K-split q_a_proj [3072, 2048] per chip, bf16, HiFi4 + fp32 acc) -> ttnn.experimental.reduce_scatter_minimal_async + ttnn.experimental.high_bw_all_gather
+    over axis 1 (or ttnn.all_reduce(cluster_axis=1)) -> ttnn.rms_norm (q_a_layernorm, eps 1e-6)
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA._q_a_latent
+  searched:
+  - 'repo_map: MoE EP row points at deepseek_v3_d_p; no MLA row'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py: _q_a_latent is the q_a stem shared by the indexer and _q_stem'
+  notes: 'q_resid [S/2, 2048] per chip, replicated over the 2 columns of a row. eps is 1e-6 (LATENT_NORM_EPS), not rms_norm_eps 1e-5: ttMLA passes
+    config.rms_norm_eps, so the Hy4 module passes 1e-6 explicitly. The Hy4 module is written in models/demos/hy4_preview_d_p/tt (copy or wrap
+    ttMLA pieces; never edit deepseek_v3_d_p).'
+- block_type: moe_full
+  step: indexer
+  tag: COMPOSED
+  ttnn: 'ttnn.linear wk (K-split, bf16) -> reduce over axis 1 -> ttnn.layer_norm (k_norm with bias, eps 1e-5) -> ttnn.experimental.deepseek_prefill.rotary_embedding_indexed
+    (interleaved, rotary_dim 64, block-cyclic positions) -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (bf16 index-key cache);
+    q: ttnn.mesh_partition(q_resid, axis 1) -> ttnn.linear wq_b (replicated, all 32 heads) -> ttnn.experimental.nlp_create_qkv_heads -> rotary_embedding_indexed;
+    weights_proj ttnn.linear (K-split, scale 32^-0.5 * 128^-0.5 folded) -> reduce_scatter over axis 1; ttnn.experimental.ring_indexer_score_dsa
+    (ReLU(q.k) weighted head sum, causal, ring over axis 0) -> ttnn.experimental.topk_large_indices (k 2048, valid_length -> 0xFFFFFFFF sentinel
+    tail)'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/indexer.py:TtIndexer (score / write_k / select_local / finalize_distribution), config sharing from
+    models/demos/deepseek_v3_d_p/reference/glm_5_2_config.py (indexer_types)
+  searched:
+  - hy4_preview_findings.md component table (Indexer)
+  - 'models/demos/deepseek_v3_d_p/tt/mla/indexer.py: TtIndexer, _bc_rope_pe, write_k, score'
+  - ttnn/cpp/ttnn/operations/experimental/indexer_score (ring_indexer_score_dsa)
+  - models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py (2x2 FABRIC_2D cases, SPARSE_INDEX_PCC)
+  - 'known_issues: transformers'' hy_v4 port uses the wrong RoPE style (interleaved RoPE, no host rotate-half permutation)'
+  notes: 'Stateful: writes index_key [seq, 128] (full layers 0, 1, 5). Output: uint32 top-2048 key positions per query row, row-sharded like the
+    queries. Differences from TtIndexer that the Hy4 module must handle: (1) Hy4 ropes the LAST 64 of 128 dims, TtIndexer''s rotary_embedding_indexed
+    ropes the first 64: permute the 128 output rows of wq_b (per head) and wk, and k_norm weight/bias, to [64..127 | 0..63] on the host (q.k,
+    LayerNorm and ReLU(q.k) are invariant), and un-permute index_key on state read-back; (2) k_norm eps 1e-5 (TtIndexer hard-codes 1e-6); (3)
+    the index-key cache is bf16 (TtIndexer uses bfp8; top-k stability), and q stays bf16 if ring_indexer_score_dsa accepts it (TtIndexer casts
+    q to bfp8 through its Hadamard matmul); the Hadamard basis change is optional (orthonormal, cancels in q.k) but then read-back must undo it;
+    (4) the reference returns ascending indices, -1 padded; the device returns unsorted indices with a sentinel tail, so the test compares selection
+    sets (overlap), not positions. Rows with position + 1 <= 2048 keep every causal key. HiFi4 + fp32 acc for every matmul.'
+- block_type: moe_full
+  step: attention
+  tag: COMPOSED
+  ttnn: 'kv stem: ttnn.linear kv_a_proj_with_mqa (K-split) -> reduce over axis 1 -> ttnn.rms_norm (kv_a_layernorm, eps 1e-6) on the 512 latent
+    + rotary_embedding_indexed (interleaved) on k_rope 64 -> ttnn.concat [576] -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (block-cyclic
+    bf16 MLA cache over SP x TP); q stem: ttnn.linear q_b_proj (32 heads per chip) -> ttnn.experimental.nlp_create_q_heads_split (192 | 64) ->
+    ttnn.linear wkv_b1 (q_nope -> 512 latent) + rotary_embedding_indexed (q_rope) -> ttnn.concat [576]; ttnn.experimental.high_bw_all_gather (cluster_axis=None,
+    KV prefix into one replicated scratch) -> ttnn.transformer.sparse_sdpa (32 heads per chip, v_dim 512, scale 1/16 explicit, attention_sink
+    = sink x 16 [1,1,1,32] bf16, block-cyclic remap, HiFi4 + fp32 dest) -> ttnn.linear wkv_b2 (512 -> 256 per head) -> ttnn.experimental.nlp_concat_heads
+    -> output gate: ttnn.experimental.high_bw_all_gather(attn_norm, axis 1) -> ttnn.linear linear_gate (32 x 256 per chip) -> ttnn.sigmoid ->
+    ttnn.multiply -> ttnn.linear o_proj (row-parallel) -> ttnn.experimental.reduce_scatter_minimal_async over axis 1'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA (_kv_stem, _q_stem, _update_kv_cache, _gather_kvpe_prefix, _sparse_mla, _output_gate
+    / _o_proj_epilogue with mla_use_output_gate, Kimi-K3); sinks as in models/demos/deepseek_v3_d_p/tt/mla/sliding_window_attention.py; models/demos/deepseek_v3_d_p/tests/sparse_mla
+    (2x2 SP2xTP2 FABRIC_2D cases, sparse_mla_reference.py)
+  searched:
+  - hy4_preview_findings.md component table (q_a / kv_a, sparse attention, output gate, KV cache)
+  - 'repo_map: Chunked causal attention (dense GQA only), SDPA program config'
+  - 'ttnn/cpp/ttnn/operations/transformer/sdpa/sparse_sdpa.hpp: attention_sink [1,1,1,H] bf16, multiplied by scale -> pass sink / scale; H % 32
+    == 0'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py:_needs_head_to_seq_reshard (64 heads / TP2 = 32: no reshard on 2x2)'
+  - 'known_issues: SDPA attention sink is folded with a bf16-truncated scale (1/16 is a power of two, so exact here)'
+  notes: 'Stateful: writes kv_latent [seq, 576] = kv_a_layernorm(latent) | RoPE(k_rope) (layers 0-5), block-cyclic over the 4 chips; state read-back
+    gathers and un-permutes it. RoPE is interleaved (GPT-J pairs, theta 1e7) on q_rope and k_rope in checkpoint order: no host permutation (R.2
+    finding, known issues). Sink: HF adds the raw sink as one more logit; sparse_sdpa multiplies it by scale, so pass sink * 16 (exact) with scale
+    = 1/16 given explicitly (the op defaults to 576^-0.5). The output gate is elementwise per (head, v-dim): sigmoid(linear_gate(x)) multiplies
+    the 256-wide head output after wkv_b2 and before o_proj, as Kimi-K3''s gate. Weights bf16 (as stored), not ttMLA''s bfp8. Every matmul and
+    sparse_sdpa at HiFi4 + fp32 acc (owner rule; sinks magnify score error, known issues). The first 2048 positions are dense (every causal key
+    selected). Output attn_out [S/2, 3072] per chip.'
+- block_type: moe_full
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, attn_out, post_j) in fp32 -> ttnn.concat
+  reuse: 'models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (without the comb mixing: Hy4 streams are not mixed)'
+  searched: *id001
+  notes: h_mid_j = stream_j + post_j * attn_out on each chip's [S/2, 3072] column block; fp32; no collective.
+- block_type: moe_full
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: 'as attn_hc (hc_mlp_layer fn / base / scale): ttnn.matmul + partial sum of squares -> ttnn.all_reduce(cluster_axis=1) of [S/2, 32] fp32
+    -> ttnn.rsqrt / ttnn.multiply / ttnn.add / ttnn.sigmoid'
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project, TtMHCHead.forward (same module as attn_hc)
+  searched: *id001
+  notes: Same module as attn_hc with the hc_mlp_layer parameters, on h_mid.
+- block_type: moe_full
+  step: ffn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice + ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix (same module as attn_hc_pre)
+  searched: *id001
+  notes: ffn_x [S/2, 3072] per chip; no collective.
+- block_type: moe_full
+  step: ffn_norm
+  tag: COMPOSED
+  ttnn: ttnn.all_gather(ffn_x, dim -1, cluster_axis=1) -> ttnn.bringup.rms_norm (post_attention_layernorm, full weight, eps 1e-5, HiFi4 + fp32
+    acc)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/rms_norm.py (ttnn.bringup.rms_norm caller)
+  searched:
+  - 'ttnn/ttnn/bringup/INDEX.md: rms_norm_ttnn (ttnn.bringup.rms_norm)'
+  - 'repo_map: Collectives on a 2D mesh (2x2)'
+  notes: 'ffn_norm [S/2, 6144] per chip, replicated over the 2 columns of a row: every consumer (dense MLP column-parallel gate/up, router, dispatch,
+    shared expert) needs the whole hidden, so one all_gather here serves them all.'
+- block_type: moe_full
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 x, fp32 gate [6144, 256] replicated, HiFi4 + fp32 acc, fp32 out) -> ttnn.sigmoid -> ttnn.add (fp32 correction bias [1,
+    256], SFPU) -> ttnn.topk (k 8) -> ttnn.gather (unbiased sigmoids) -> ttnn.sum / ttnn.div (renormalize) -> ttnn.multiply (x 2.827)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/router.py:TtRouter (fp32 select path, not moe_grouped_topk)
+  searched:
+  - 'repo_map Proposed: noaux_tc router with a large correction bias (mimo router.py), Sigmoid + correction-bias router (tt_moe_gate_prefill.py)'
+  - 'known_issues: moe_grouped_topk selects on TF32 keys; A large correction bias makes noaux_tc top-k selection precision-bound; Router mutations
+    score differently per layer'
+  notes: 'On the row''s S/2 tokens (both chips of a row compute the same routing; no collective). Output (idx, weights) [S/2, 8]; the component
+    boundary is the dense [S, 256] fp32 routing matrix (scatter at the harness boundary). Check the bias range on the Hy4 golden: if the choice
+    score sits near 2 the bf16 step exceeds the 8th/9th gap.'
+- block_type: moe_full
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount -> ttnn.bringup.offset_cumsum (cluster_axis 0) -> ttnn.bringup.dispatch (dispatch_group_size
+    2, cluster_axis 0, fabric, FABRIC_2D) -> ttnn.bringup.unified_routed_expert_moe (activation ClampedSiluGlu, limit 10; high_precision=True,
+    HiFi4 + fp32 dest; bf16 x, bfp8 weights) -> ttnn.bringup.combine (cluster_axis 0) -> ttnn.experimental.deepseek_prefill.post_combine_reduce
+    (routing weights, dispatch table masks the other group) -> ttnn.experimental.reduce_scatter_minimal_async (or ttnn.reduce_scatter) over axis
+    1 -> [S/2, 3072]
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts (routed_half, _unified_experts, _loop_experts); models/demos/deepseek_v3_d_p/tt/moe/init_helpers.py:ExpertMapping
+  searched:
+  - 'repo_map: MoE, expert parallel (EP); Proposed: Collectives and MoE dispatch on a 2D mesh (2x2), Fused routed experts at a chosen fidelity
+    with bf16 activations'
+  - 'ttnn/ttnn/bringup/INDEX.md: unified_routed_expert_ffn (ClampedSiluGlu = silu(min(g, 10)) * clamp(u, +-10), high_precision), dispatch / combine
+    / offset_cumsum'
+  - 'known_issues: TtReduceModule always reduce-scatters when its cluster axis has more than one device; The fused routed-expert kernel accumulates
+    K-blocks in bf16 L1 partials; bfp8 expert activations fail on a layer with outlier channels'
+  notes: '256 experts, top-8, SwiGLU 2048 clamped at 10. Chip (r, c) holds experts 128c + 64r .. +63 (ExpertMapping, column-major device index
+    2c + r); each chip dispatches its row''s S/2 tokens within its column. gate_up_proj [256, 4096, 6144] is split on the host into gate (rows
+    0-2047) and up (rows 2048-4095). bf16 checkpoint -> bfp8 weights (never bfp4). Keep the expert input bf16 (outlier channels, known issues);
+    check the per-channel max of ffn_norm on layers 1-5 first. Fallback: the per-expert loop (extract -> ttnn.linear SwiGLU with ttnn.clamp ->
+    insert). expert_token_counts / region offsets are [1, 256] (global ids). The component boundary experts_out is the full [S, 6144]; after the
+    reduce_scatter each chip holds its [S/2, 3072] block.'
+- block_type: moe_full
+  step: shared_expert
+  tag: COMPOSED
+  ttnn: ttnn.linear gate / up (column-parallel, 1024 per chip, bf16 weights, HiFi4 + fp32 acc) -> ttnn.multiply (SILU) -> ttnn.linear down (row-parallel)
+    -> reduce_scatter over axis 1 -> [S/2, 3072]
+  reuse: models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py; models/demos/mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP
+  searched:
+  - 'repo_map: MoE tensor parallel, decode-style (shared_mlp.py)'
+  - grep TtSharedExpert models/demos/deepseek_v3_d_p/tt/moe
+  notes: '1 shared expert, SwiGLU 2048, no clamp. Perf option for the assemble step: add the shared partial to the routed partial before one reduce_scatter.'
+- block_type: moe_full
+  step: moe_combine
+  tag: NATIVE
+  ttnn: ttnn.add (experts_out + shared_out, [S/2, 3072] per chip)
+  reuse: none
+  notes: mlp_out = experts_out + shared_out; no collective (both inputs are already reduce-scattered).
+- block_type: moe_full
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, mlp_out, post_j) in fp32 -> ttnn.concat
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (same module as attn_residual)
+  searched: *id001
+  notes: out_j = h_mid_j + post_j * mlp_out; fp32; no collective. The block output stays resident as [S/2, 4 x 3072] fp32.
+- block_type: moe_shared
+  step: attn_hc
+  tag: COMPOSED
+  ttnn: ttnn.matmul (streams [S/2, 12288] fp32 x this chip's fn^T slice [12288, 8] fp32, HiFi4 + fp32 acc) and ttnn.multiply + ttnn.sum (partial
+    sum of squares) -> ttnn.concat into one [S/2, 32] fp32 tile row -> ttnn.all_reduce(cluster_axis=1) -> ttnn.rsqrt(sum / 24576 + 1e-5) -> ttnn.multiply
+    -> ttnn.multiply(scale) + ttnn.add(base [1, 8]) -> ttnn.sigmoid (pre + 1e-6 | 2 * sigmoid + 1e-6 for post)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project (RMS commuted after the linear) and TtMHCHead.forward (sigmoid gate path)
+  searched: *id001
+  notes: 'hc_attn_layer: gates [S, 8] fp32 = (pre 4 | post 4). The fn columns are permuted on the host to the per-chip stream-column order and
+    split by mesh column (plan.yaml shard_cols); the only collective is a [S/2, 32] fp32 all_reduce over axis 1 (partial mixes 8 + partial sum
+    of squares 1, padded). Everything fp32, HiFi4 + fp32 acc (owner rule; HF runs iHC in fp32). Layout on the 2x2 mesh (plan.md): chip (r, c)
+    holds chunk rows [r*S/2, (r+1)*S/2) and hidden columns [c*3072, (c+1)*3072) of every stream; the residual is [S/2, 4 x 3072] fp32 per chip.'
+- block_type: moe_shared
+  step: attn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice (4 stream column blocks, 3072 wide) + ttnn.slice (4 gate columns) -> ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_streams / _cols / _mix
+  searched: *id001
+  notes: attn_x [S/2, 3072] per chip = sum_j pre_j * stream_j, fp32 accumulate, output bf16 (the reference casts to the stream dtype; the device
+    keeps fp32 streams, so the test compares against the fp32 golden). No collective.
+- block_type: moe_shared
+  step: attn_norm
+  tag: COMPOSED
+  ttnn: ttnn.rms_norm_pre_all_gather -> all_gather of the [S/2, 32] stats over axis 1 -> ttnn.rms_norm_post_all_gather (weight split by column,
+    eps 1e-5, HiFi4 + fp32 acc)
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_distributed_rms_norm.py:TtDistributedRmsNorm
+  searched:
+  - 'repo_map: no distributed-norm row; ttnn/ttnn/bringup/INDEX.md rms_norm_ttnn (single-chip rows, needs the whole hidden on the chip)'
+  - 'grep rms_norm_pre_all_gather models/demos/deepseek_v3_d_p: tt_distributed_rms_norm.py'
+  notes: 'input_layernorm, w * rms(x) (plain w, eps 1e-5). Output stays column-split [S/2, 3072] because ttMLA''s q_a / kv_a projections, the
+    output gate and the indexer''s wk / weights_proj all take a K-split hidden input. Alternative if the distributed norm misbehaves: all_gather
+    attn_x over axis 1 and ttnn.bringup.rms_norm locally.'
+- block_type: moe_shared
+  step: q_a
+  tag: COMPOSED
+  ttnn: ttnn.linear (K-split q_a_proj [3072, 2048] per chip, bf16, HiFi4 + fp32 acc) -> ttnn.experimental.reduce_scatter_minimal_async + ttnn.experimental.high_bw_all_gather
+    over axis 1 (or ttnn.all_reduce(cluster_axis=1)) -> ttnn.rms_norm (q_a_layernorm, eps 1e-6)
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA._q_a_latent
+  searched:
+  - 'repo_map: MoE EP row points at deepseek_v3_d_p; no MLA row'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py: _q_a_latent is the q_a stem shared by the indexer and _q_stem'
+  notes: 'q_resid [S/2, 2048] per chip, replicated over the 2 columns of a row. eps is 1e-6 (LATENT_NORM_EPS), not rms_norm_eps 1e-5: ttMLA passes
+    config.rms_norm_eps, so the Hy4 module passes 1e-6 explicitly. The Hy4 module is written in models/demos/hy4_preview_d_p/tt (copy or wrap
+    ttMLA pieces; never edit deepseek_v3_d_p).'
+- block_type: moe_shared
+  step: topk_shared
+  tag: NATIVE
+  ttnn: 'identity: returns the latest full layer''s device top-k tensor (layer 1 for layers 2-4), no op'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/indexer.py:ReuseIndexer + glm_5_2_config.py indexer_types (cross-layer top-k reuse)
+  notes: Shared layers have no indexer weights. In the all-device model the full layer's uint32 index tensor stays on the device and is handed
+    to layers 2-4 (kept alive until the next full layer). In the component / swap harness the index tensor comes from ctx.extra['shared_topk']
+    (the golden L1.topk), converted at the harness boundary.
+- block_type: moe_shared
+  step: attention
+  tag: COMPOSED
+  ttnn: 'kv stem: ttnn.linear kv_a_proj_with_mqa (K-split) -> reduce over axis 1 -> ttnn.rms_norm (kv_a_layernorm, eps 1e-6) on the 512 latent
+    + rotary_embedding_indexed (interleaved) on k_rope 64 -> ttnn.concat [576] -> ttnn.experimental.deepseek_prefill.update_padded_kv_cache (block-cyclic
+    bf16 MLA cache over SP x TP); q stem: ttnn.linear q_b_proj (32 heads per chip) -> ttnn.experimental.nlp_create_q_heads_split (192 | 64) ->
+    ttnn.linear wkv_b1 (q_nope -> 512 latent) + rotary_embedding_indexed (q_rope) -> ttnn.concat [576]; ttnn.experimental.high_bw_all_gather (cluster_axis=None,
+    KV prefix into one replicated scratch) -> ttnn.transformer.sparse_sdpa (32 heads per chip, v_dim 512, scale 1/16 explicit, attention_sink
+    = sink x 16 [1,1,1,32] bf16, block-cyclic remap, HiFi4 + fp32 dest) -> ttnn.linear wkv_b2 (512 -> 256 per head) -> ttnn.experimental.nlp_concat_heads
+    -> output gate: ttnn.experimental.high_bw_all_gather(attn_norm, axis 1) -> ttnn.linear linear_gate (32 x 256 per chip) -> ttnn.sigmoid ->
+    ttnn.multiply -> ttnn.linear o_proj (row-parallel) -> ttnn.experimental.reduce_scatter_minimal_async over axis 1'
+  reuse: models/demos/deepseek_v3_d_p/tt/mla/mla.py:ttMLA (_kv_stem, _q_stem, _update_kv_cache, _gather_kvpe_prefix, _sparse_mla, _output_gate
+    / _o_proj_epilogue with mla_use_output_gate, Kimi-K3); sinks as in models/demos/deepseek_v3_d_p/tt/mla/sliding_window_attention.py; models/demos/deepseek_v3_d_p/tests/sparse_mla
+    (2x2 SP2xTP2 FABRIC_2D cases, sparse_mla_reference.py)
+  searched:
+  - hy4_preview_findings.md component table (q_a / kv_a, sparse attention, output gate, KV cache)
+  - 'repo_map: Chunked causal attention (dense GQA only), SDPA program config'
+  - 'ttnn/cpp/ttnn/operations/transformer/sdpa/sparse_sdpa.hpp: attention_sink [1,1,1,H] bf16, multiplied by scale -> pass sink / scale; H % 32
+    == 0'
+  - 'models/demos/deepseek_v3_d_p/tt/mla/mla.py:_needs_head_to_seq_reshard (64 heads / TP2 = 32: no reshard on 2x2)'
+  - 'known_issues: SDPA attention sink is folded with a bf16-truncated scale (1/16 is a power of two, so exact here)'
+  notes: 'Stateful: writes kv_latent [seq, 576] = kv_a_layernorm(latent) | RoPE(k_rope) (layers 0-5), block-cyclic over the 4 chips; state read-back
+    gathers and un-permutes it. RoPE is interleaved (GPT-J pairs, theta 1e7) on q_rope and k_rope in checkpoint order: no host permutation (R.2
+    finding, known issues). Sink: HF adds the raw sink as one more logit; sparse_sdpa multiplies it by scale, so pass sink * 16 (exact) with scale
+    = 1/16 given explicitly (the op defaults to 576^-0.5). The output gate is elementwise per (head, v-dim): sigmoid(linear_gate(x)) multiplies
+    the 256-wide head output after wkv_b2 and before o_proj, as Kimi-K3''s gate. Weights bf16 (as stored), not ttMLA''s bfp8. Every matmul and
+    sparse_sdpa at HiFi4 + fp32 acc (owner rule; sinks magnify score error, known issues). The first 2048 positions are dense (every causal key
+    selected). Output attn_out [S/2, 3072] per chip.'
+- block_type: moe_shared
+  step: attn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, attn_out, post_j) in fp32 -> ttnn.concat
+  reuse: 'models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (without the comb mixing: Hy4 streams are not mixed)'
+  searched: *id001
+  notes: h_mid_j = stream_j + post_j * attn_out on each chip's [S/2, 3072] column block; fp32; no collective.
+- block_type: moe_shared
+  step: ffn_hc
+  tag: COMPOSED
+  ttnn: 'as attn_hc (hc_mlp_layer fn / base / scale): ttnn.matmul + partial sum of squares -> ttnn.all_reduce(cluster_axis=1) of [S/2, 32] fp32
+    -> ttnn.rsqrt / ttnn.multiply / ttnn.add / ttnn.sigmoid'
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_project, TtMHCHead.forward (same module as attn_hc)
+  searched: *id001
+  notes: Same module as attn_hc with the hc_mlp_layer parameters, on h_mid.
+- block_type: moe_shared
+  step: ffn_hc_pre
+  tag: COMPOSED
+  ttnn: ttnn.slice + ttnn.multiply + 3 x ttnn.addcmul (fp32)
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:_mix (same module as attn_hc_pre)
+  searched: *id001
+  notes: ffn_x [S/2, 3072] per chip; no collective.
+- block_type: moe_shared
+  step: ffn_norm
+  tag: COMPOSED
+  ttnn: ttnn.all_gather(ffn_x, dim -1, cluster_axis=1) -> ttnn.bringup.rms_norm (post_attention_layernorm, full weight, eps 1e-5, HiFi4 + fp32
+    acc)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/rms_norm.py (ttnn.bringup.rms_norm caller)
+  searched:
+  - 'ttnn/ttnn/bringup/INDEX.md: rms_norm_ttnn (ttnn.bringup.rms_norm)'
+  - 'repo_map: Collectives on a 2D mesh (2x2)'
+  notes: 'ffn_norm [S/2, 6144] per chip, replicated over the 2 columns of a row: every consumer (dense MLP column-parallel gate/up, router, dispatch,
+    shared expert) needs the whole hidden, so one all_gather here serves them all.'
+- block_type: moe_shared
+  step: router
+  tag: COMPOSED
+  ttnn: ttnn.linear (fp32 x, fp32 gate [6144, 256] replicated, HiFi4 + fp32 acc, fp32 out) -> ttnn.sigmoid -> ttnn.add (fp32 correction bias [1,
+    256], SFPU) -> ttnn.topk (k 8) -> ttnn.gather (unbiased sigmoids) -> ttnn.sum / ttnn.div (renormalize) -> ttnn.multiply (x 2.827)
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/router.py:TtRouter (fp32 select path, not moe_grouped_topk)
+  searched:
+  - 'repo_map Proposed: noaux_tc router with a large correction bias (mimo router.py), Sigmoid + correction-bias router (tt_moe_gate_prefill.py)'
+  - 'known_issues: moe_grouped_topk selects on TF32 keys; A large correction bias makes noaux_tc top-k selection precision-bound; Router mutations
+    score differently per layer'
+  notes: 'On the row''s S/2 tokens (both chips of a row compute the same routing; no collective). Output (idx, weights) [S/2, 8]; the component
+    boundary is the dense [S, 256] fp32 routing matrix (scatter at the harness boundary). Check the bias range on the Hy4 golden: if the choice
+    score sits near 2 the bf16 step exceeds the 8th/9th gap.'
+- block_type: moe_shared
+  step: experts
+  tag: COMPOSED
+  ttnn: ttnn.experimental.deepseek_prefill.masked_bincount -> ttnn.bringup.offset_cumsum (cluster_axis 0) -> ttnn.bringup.dispatch (dispatch_group_size
+    2, cluster_axis 0, fabric, FABRIC_2D) -> ttnn.bringup.unified_routed_expert_moe (activation ClampedSiluGlu, limit 10; high_precision=True,
+    HiFi4 + fp32 dest; bf16 x, bfp8 weights) -> ttnn.bringup.combine (cluster_axis 0) -> ttnn.experimental.deepseek_prefill.post_combine_reduce
+    (routing weights, dispatch table masks the other group) -> ttnn.experimental.reduce_scatter_minimal_async (or ttnn.reduce_scatter) over axis
+    1 -> [S/2, 3072]
+  reuse: models/demos/mimo_v2_6_d_p_2x2/tt/experts.py:TtExperts (routed_half, _unified_experts, _loop_experts); models/demos/deepseek_v3_d_p/tt/moe/init_helpers.py:ExpertMapping
+  searched:
+  - 'repo_map: MoE, expert parallel (EP); Proposed: Collectives and MoE dispatch on a 2D mesh (2x2), Fused routed experts at a chosen fidelity
+    with bf16 activations'
+  - 'ttnn/ttnn/bringup/INDEX.md: unified_routed_expert_ffn (ClampedSiluGlu = silu(min(g, 10)) * clamp(u, +-10), high_precision), dispatch / combine
+    / offset_cumsum'
+  - 'known_issues: TtReduceModule always reduce-scatters when its cluster axis has more than one device; The fused routed-expert kernel accumulates
+    K-blocks in bf16 L1 partials; bfp8 expert activations fail on a layer with outlier channels'
+  notes: '256 experts, top-8, SwiGLU 2048 clamped at 10. Chip (r, c) holds experts 128c + 64r .. +63 (ExpertMapping, column-major device index
+    2c + r); each chip dispatches its row''s S/2 tokens within its column. gate_up_proj [256, 4096, 6144] is split on the host into gate (rows
+    0-2047) and up (rows 2048-4095). bf16 checkpoint -> bfp8 weights (never bfp4). Keep the expert input bf16 (outlier channels, known issues);
+    check the per-channel max of ffn_norm on layers 1-5 first. Fallback: the per-expert loop (extract -> ttnn.linear SwiGLU with ttnn.clamp ->
+    insert). expert_token_counts / region offsets are [1, 256] (global ids). The component boundary experts_out is the full [S, 6144]; after the
+    reduce_scatter each chip holds its [S/2, 3072] block.'
+- block_type: moe_shared
+  step: shared_expert
+  tag: COMPOSED
+  ttnn: ttnn.linear gate / up (column-parallel, 1024 per chip, bf16 weights, HiFi4 + fp32 acc) -> ttnn.multiply (SILU) -> ttnn.linear down (row-parallel)
+    -> reduce_scatter over axis 1 -> [S/2, 3072]
+  reuse: models/demos/deepseek_v3_d_p/tt/moe/tt_shared_expert.py; models/demos/mimo_v2_6_d_p_2x2/tt/mlp.py:TtDenseMLP
+  searched:
+  - 'repo_map: MoE tensor parallel, decode-style (shared_mlp.py)'
+  - grep TtSharedExpert models/demos/deepseek_v3_d_p/tt/moe
+  notes: '1 shared expert, SwiGLU 2048, no clamp. Perf option for the assemble step: add the shared partial to the routed partial before one reduce_scatter.'
+- block_type: moe_shared
+  step: moe_combine
+  tag: NATIVE
+  ttnn: ttnn.add (experts_out + shared_out, [S/2, 3072] per chip)
+  reuse: none
+  notes: mlp_out = experts_out + shared_out; no collective (both inputs are already reduce-scattered).
+- block_type: moe_shared
+  step: ffn_residual
+  tag: COMPOSED
+  ttnn: ttnn.slice (post gate columns) -> 4 x ttnn.addcmul(stream_j, mlp_out, post_j) in fp32 -> ttnn.concat
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCWrap.hc_post (same module as attn_residual)
+  searched: *id001
+  notes: out_j = h_mid_j + post_j * mlp_out; fp32; no collective. The block output stays resident as [S/2, 4 x 3072] fp32.
+- block_type: model
+  step: embed
+  tag: COMPOSED
+  ttnn: ttnn.embedding (table [120832, 3072] bf16 per chip, hidden split over columns; token ids [S/2] per row) -> ttnn.typecast fp32 -> ttnn.repeat
+    (4 streams) -> [S/2, 4 x 3072]
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_parallel_embedding.py:TtParallelEmbedding; models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:mhc_expand
+  searched:
+  - 'repo_map: Prefill engine contract, Masking the engine''s pad id when the vocab is not a power of two (known issues)'
+  - 'known_issues: Contract cache on a 2x2 mesh with no sequence parallelism (engine input [sp=2, 1, chunk/2] over axis 0)'
+  notes: The engine's uint32 input is already [sp=2, 1, chunk/2] over axis 0, the row split this plan uses, so no gather of ids. Pad ids past
+    actual_end are clamped on the device with ttnn.minimum(ids, V - 1) (V = 120832 is not a power of two).
+- block_type: model
+  step: final_norm
+  tag: COMPOSED
+  ttnn: 'hc_head: ttnn.matmul (streams x hc_head_fn slice [12288, 4], fp32, HiFi4) + partial sum of squares -> ttnn.all_reduce(cluster_axis=1)
+    of [S/2, 32] -> ttnn.rsqrt / ttnn.multiply(scale) / ttnn.add(base) / ttnn.sigmoid (+1e-6) -> ttnn.multiply + 3 x ttnn.addcmul -> [S/2, 3072];
+    then ttnn.all_gather(dim -1, cluster_axis=1) -> ttnn.bringup.rms_norm (model.norm, eps 1e-5)'
+  reuse: models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py:TtMHCHead; ttnn.bringup.rms_norm caller in models/demos/mimo_v2_6_d_p_2x2/tt/rms_norm.py
+  searched:
+  - 'repo_map: no iHC / hyper-connection row; Proposed row hy4_ref.py (CPU reference only)'
+  - 'models/demos/deepseek_v3_d_p/tt/mhc/tt_mhc.py: TtMHCWrap / TtMHCHead / _project / _mix (DeepSeek-V4 mHC, single device, packed [1,1,T,n*C]
+    streams)'
+  - 'ttnn.experimental.deepseek_prefill.mhc_split_sinkhorn: computes pre / post / comb with a Sinkhorn on comb; Hy4 has no comb (no mixing matrix)
+    and post is 2*sigmoid, so the fused op does not fit and is not used'
+  - 'grep hc_pre / hyper_connection in models/: only deepseek_v3_d_p (mhc, attn_res) and the Hy4 reference'
+  - 'ttnn/ttnn/bringup/INDEX.md: rms_norm_ttnn'
+  notes: The reference records hc_head [S, H] and final_norm [S, H]; both are on the device for every row (the ladder compares final_hidden).
+    fp32 up to the norm.
+- block_type: model
+  step: lm_head
+  tag: NATIVE
+  ttnn: ttnn.linear (last token's final_norm, fp32 [1, 6144] broadcast to all 4 chips; lm_head [6144, 30208] bf16 per chip, vocab-sharded; HiFi4
+    + fp32 acc, fp32 out) -> ttnn.all_gather of the logits over both axes
+  reuse: models/demos/deepseek_v3_d_p/tt/tt_lm_head.py:TtLMHead
+  notes: HF runs the LM head in fp32 (enable_lm_head_fp32); the checkpoint is bf16, so bf16 weights are exact and fp32 activations + fp32 accumulation
+    match it. Last tokens only (the last token lives on mesh row 1).

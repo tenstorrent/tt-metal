@@ -1,0 +1,73 @@
+{
+ "used": [
+  {
+   "id": "DS41-119",
+   "how": "took its list of hanging cases as the repro set (glm_e12 first); fixed its open cause and rewrote the entry",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-57",
+   "how": "touched every /tmp/tt-device-N.dirty before the 8x4 mesh probes that followed single-card runs (the first 2x2 attempt failed the fabric handshake)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-63",
+   "how": "matched the 12 single-card TT_FATAL p.nsg == 1 failures (TP2 / TP4 subgrid cases) against the QuietBox baseline's same 12",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-119",
+   "evidence": "'mesh runs pass' is wrong: the glm_e12 shape (H 4096, I 2048, 12 experts, 64 tokens each) hung on the full 8x4 FABRIC_2D mesh too (probe glm_mesh84, before the fix). The mesh tests that passed only used plans without the SE_DYN_PULL path (reader tails, or a combine attached). Cause found: se_dyn.hpp compared my_x[0] / my_y[0] (BH firmware reads NOC_ID_LOGICAL = translated coords) with SE_DYN_LPX / LPY = flat_worker_noc0 (physical NoC0). On this card physical column 1 is harvested (triage: logical (0,5) = physical 2-7), so reader 0 (0,9) is physical (2,11), translated (1,11): no leader, every core polled SE_DYN_LSEM forever (triage: 36.9M completed reads on the pollers). MIMO_FL_DYN_PULL=0 passes; the fix (logical-coordinate leader check) passes single chip and 8x4.",
+   "cited": true
+  },
+  {
+   "id": "DS41-63",
+   "evidence": "on a Galaxy chip the k2 indexed_perf band fails as well (1573274 / 1575501 ns vs upper 1572413; k2 has reader tails, so it never takes the changed path; FIX.1 measured 1573083 before), and the mimo band fails SLOW (1843456 / 1838520 ns vs upper 1826488), not fast as on the QuietBox (1710341 < 1720090): the bands are QuietBox p150 timings",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "Blackhole kernels: my_x / my_y are the translated NoC coordinate (NOC_ID_LOGICAL), not the physical NOC0 one; compare a host coordinate with get_absolute_logical_x / _y or the virtual coordinate. Physical and translated agree only where no column west of the core is harvested (now in DS41-119)",
+  "the p150 QuietBox and Galaxy cards are harvested in different physical columns: a kernel bug in the physical / translated coordinate choice shows only on some boxes or cards"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.2",
+   "answer": "done",
+   "evidence": "Root cause from tt-triage (glm_e12 on one Galaxy chip, 5 s dispatch timeout): every role core polled reader 0's SE_DYN_LSEM forever (se_dyn_load, SE_DYN_PULL) because the leader check compared translated my_x with a physical NoC0 coordinate. Fixed in the fork (program factory + se_dyn.hpp: the leader compares logical coordinates). tests/unit/ on one Galaxy chip: 24 passed / 14 failed / 3 skipped (mesh-only tests), no hangs (was 11 hangs). 12 failures = TT_FATAL p.nsg == 1, the same 12 as the QuietBox baseline (DS41-63). 2 perf bands (mimo, k2 indexed_perf) are NOT identical to the baseline: timing calibrated on the QuietBox p150, slow by +0.7 % / +0.05-0.2 % past the upper bound on the Galaxy chip; not adjusted (a per-box band would special-case the box). The 4 builder asserts (flat_expert.py _layout, grid == 11 x 10) now derive the grid and the east reader column from the device; test_flat_routed_expert_op mimo / k2 pass on the 12 x 10 grid (C++ plan == Python layout). test_flat_widths' I 2304 Galaxy skip removed (passes). The glm shape that hung on the 8x4 mesh passes there too. Not run on the 2x2 QuietBox (not on this box): on a p150 with physical column 1 present the old and new leader checks select the same core, so the QuietBox runs the same schedule."
+  },
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or extra work: the fix is a coordinate comparison in the fork; no test or shape was changed to avoid the hang"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.2",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-26T16:39:05",
+  "head": "c9217573868",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.2.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.2.overseer.1.json",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_dyn.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_flat_widths.py"
+  ]
+ }
+}

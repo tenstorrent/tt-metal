@@ -1,0 +1,49 @@
+{
+ "used": [
+  {
+   "id": "K-55",
+   "how": "kept black's 3 formatting-only rewraps of the drop so the gate's commit is not refused by pre-commit",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding; the drop was taken as is, no DS41 change"
+  },
+  {
+   "id": "OV-23",
+   "answer": "n/a",
+   "evidence": "no Python-built op added or touched by DS41 code; the drop's own programs (se_engine3, combine_rf, flat_gather) are the import's, unchanged"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression or unit suite run; only measure --part quick"
+  },
+  {
+   "id": "OV-26",
+   "answer": "done",
+   "evidence": "drop files byte-equal to 5e86f048ad4 except 3 black rewraps; no knob converted or marked; rebuilt (rc 0), import OK, quick A/B side rc 0, then stopped"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.17",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-10-30T13:39:43",
+  "head": "4053399bb57",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.17.perf.3.json"
+  ]
+ }
+}

@@ -974,7 +974,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
                 DST_SYNC_MODE,
                 DST_ACCUM_MODE,
                 _calculate_fill_int_,
-                (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS),
+                (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS),
                 dst_index,
                 vector_mode,
                 static_cast<std::uint32_t>(fill_const_value));
@@ -1256,7 +1256,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
         if (math_format == ckernel::to_underlying(DataFormat::UInt16))
         {
             SFPU_UNARY_CALL(
-                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::LO16, ITERATIONS), dst_index, vector_mode);
+                DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logical_not, (APPROX_MODE, ckernel::InstrModLoadStore::UINT16, ITERATIONS), dst_index, vector_mode);
         }
         else if (math_format == ckernel::to_underlying(DataFormat::Int32) || math_format == ckernel::to_underlying(DataFormat::UInt32))
         {
@@ -1414,7 +1414,16 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::hardmish)
     {
-        SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, ITERATIONS), dst_index, vector_mode);
+        if (math_format == ckernel::to_underlying(DataFormat::Float16))
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, is_fp32_dest_acc_en, DataFormat::Float16, ITERATIONS), dst_index, vector_mode);
+        }
+        else
+        {
+            SFPU_UNARY_CALL(
+                DST_SYNC_MODE, DST_ACCUM_MODE, hardmish, (APPROX_MODE, is_fp32_dest_acc_en, DataFormat::Float16_b, ITERATIONS), dst_index, vector_mode);
+        }
     }
     else if constexpr (OPERATION == SfpuType::lgamma)
     {

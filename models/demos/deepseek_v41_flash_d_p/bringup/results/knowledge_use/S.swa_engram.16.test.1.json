@@ -1,0 +1,59 @@
+{
+ "used": [
+  {
+   "id": "DS41-32",
+   "how": "router vs golden split by routing (test 15's _router_checks carried over) because the CPU reference itself is PCC 0.9846",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-33",
+   "how": "experts vs golden split by routing, row / ratio 2 x the bf16 control, row slope check carried over from test 15",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-25",
+   "how": "added the w2 column-span check (SPAN_REL 0.003) to the swapped shared_expert's output; it is the only check that catches 1 % noise",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-22",
+   "how": "explained why the bf16 control's worst row (0.0546) exceeds the fixed 0.05: fp8 q-dq of x and h; limits set to 2 x the control",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the swap test's vs-CPU fixed worst row / ratio limits (swap_step_row 0.05, swap_step_ratio 0.02) fail a correct bf16 step for every fp8-requantizing FFN step (experts, shared expert); this is the second test that needed a per-step override (DS41-34)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-4",
+   "answer": "n/a",
+   "evidence": "DS41-20 already says (RESOLVED by the framework, F73) with the 2 x component error limit and no cap; I added DS41-34 but nothing in DS41-20 needed changing"
+  }
+ ],
+ "cited_only": [
+  "DS41-20",
+  "DS41-34"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "S.swa_engram.16",
+  "role": "test",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-16T05:39:17",
+  "head": "f94410bb422",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/S.swa_engram.16.test.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/test_swap_swa_engram_16_shared_expert.py"
+  ]
+ }
+}

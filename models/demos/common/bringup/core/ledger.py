@@ -1,0 +1,426 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Task ledger (tasks.yaml, written by the plan step and by people) and state (state.json, written only by the runner).
+
+tasks.yaml:
+    tasks:
+      - id: P2.3                      # unique; the commit tag is [<spec tag>][<id>]
+        title: RMSNorm on device
+        step: implement               # pipeline step that owns it (intake, reference, goldens, plan, tests,
+                                      # implement, integrate, contract, perf, framework)
+        deps: [P2.2]
+        device: true                  # gate cmd must go through run_safe_pytest.sh / tt-probe.sh
+        paths: [models/demos/x/tt/norm.py]   # what a PASS commit stages (plus ledger files)
+        gate:
+          cmd: scripts/run_safe_pytest.sh --run-all models/demos/x/tests/pcc/test_rms_norm.py
+          metrics: {"pcc_*": ">= 0.99"}      # glob -> "<op> <value>"; every glob must match >= 1 metric
+        artifacts: [path, ...]        # must exist after the gate
+        frozen: {files: {path: sha256}}      # written by `freeze`; any change fails the gate before it runs
+        brief: {...}                  # extra fields for the agent brief (component, block type, ...)
+
+state.json: {task id: {status, attempts, last_run, duration_s, rc, metrics, log, history, agent, ...},
+             "_run": {name, branch, created, forked_from}}
+F265: state.json, state_metrics.json (F253) and history_state.json (F180) are kept as chunk files below the repo's
+500 KB limit (state.chunks/0001.json, ...; core/chunked.py); read and write them only through Ledger.
+
+DEFERRED (F46): a component the implement agent deferred to the op code generator (plan/op_request.py). It stays on
+the CPU reference through the bridge (testing/cpu_bridge.py), so for its dependents it counts like PASS.
+
+REJECTED (F57): a perf pick the owner declined on its A/B report; the change was reverted. Done for its dependents.
+
+COMMIT_PENDING (F149): the gate passed but git refused its commit (a hook). Not done for its dependents until
+`gate <id> --commit-only` (or the orchestrator on resume) commits it; nothing re-runs, its outputs stay on disk.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import fcntl
+import re
+import time
+from pathlib import Path
+
+import yaml
+
+from models.demos.common.bringup.core.chunked import ChunkedJson
+
+STATUSES = (
+    "TODO",
+    "RUNNING",
+    "PASS",
+    "FAIL",
+    "HANG",
+    "BLOCKED",
+    "STOPPED",
+    "DEFERRED",
+    "REJECTED",
+    "COMMIT_PENDING",
+)
+DONE_STATUSES = ("PASS", "DEFERRED", "REJECTED")  # a dependent may run after any
+
+
+def satisfied(status: str | None) -> bool:
+    return status in DONE_STATUSES
+
+
+def _sig6(v):
+    """F246: a metric as state.json records it: floats to 6 significant digits (the full value is in results/)."""
+    return float(f"{v:.6g}") if isinstance(v, float) else v
+
+
+class LedgerError(ValueError):
+    pass
+
+
+# F138: an accuracy metric of a device check is gated only against the limit its test records, never a number; the
+# reference's own checks (CPU vs CPU: HF parity, chunked == one-shot) keep theirs
+ACCURACY = re.compile(r"^(pcc_|err_|overlap_|top1|top5)")
+CPU_CHECK_STEPS = ("intake", "reference", "goldens")
+
+
+def fixed_accuracy(task: dict, conds: dict | None = None) -> list[str]:
+    """F138: the accuracy conditions of a device check (a device task or a perf pick) that hold a number instead of
+    the limit its test records."""
+    if task.get("step") in CPU_CHECK_STEPS or not (task.get("device") or task.get("step") == "perf"):
+        return []
+    out = []
+    for glob, cond in (conds if conds is not None else (task.get("gate") or {}).get("metrics") or {}).items():
+        parts = str(cond).split()
+        if ACCURACY.match(glob) and len(parts) == 2 and parts[1] != "limit":
+            out.append(
+                f"{glob} {cond}: a fixed accuracy number (F138); gate on '{parts[0]} limit' (the limit the test "
+                "records: calib x the reference's own noise floor or drift)"
+            )
+    return out
+
+
+PROFILE_METRIC_PREFIXES = (
+    "device_ms",
+    "op_rows",
+    "chunk_wall",
+    "chunk_len",
+    "chunk_start",
+    "host_",
+    "deferred_cpu",
+    "timeline",
+)
+
+
+def position_role_metrics(task: dict) -> list[str]:
+    """F272: a test_profile.py segment run at a position (BRINGUP_POS=p) with BRINGUP_CHUNK_LAST=0/1 records every
+    metric as <name>_p<p>_nonlast / _last (F249). A gate naming <name>_p<p> without the role finds it MISSING after a
+    passing run, and a fix agent is started for a naming slip (DeepSeek-V4.1 X.6, X.7)."""
+    gate = task.get("gate") or {}
+    globs = [str(g) for g in (gate.get("metrics") or {})]
+    out = []
+    for seg in str(gate.get("cmd") or "").split("&&"):
+        if "test_profile.py" not in seg:
+            continue
+        pos = re.search(r"\bBRINGUP_POS=(\d+)", seg)
+        last = re.search(r"\bBRINGUP_CHUNK_LAST=([01])", seg)
+        if not pos or not last:
+            continue
+        role = "_last" if last.group(1) == "1" else "_nonlast"
+        bare = f"_p{pos.group(1)}"
+        for (
+            g
+        ) in globs:  # only test_profile's own metrics: other tests (test_skip_positions' steady_wall_ms_p<p>) differ
+            if g.endswith(bare) and g.startswith(PROFILE_METRIC_PREFIXES):
+                out.append(
+                    f"{g}: the profile at BRINGUP_POS={pos.group(1)} with BRINGUP_CHUNK_LAST={last.group(1)} "
+                    f"records it as {g}{role} (F249); name that"
+                )
+    return out
+
+
+def wall_only_device_metrics(task: dict) -> list[str]:
+    """F212: a gate that needs device_ms_* but whose every test_profile.py segment is wall-only
+    (BRINGUP_PROFILE_WALL=1): the gate then adds no profiled run (F114 with_clean_wall) and the metric is MISSING, an
+    agent attempt can never pass it (DeepSeek-V4.1 P.6: device_ms_total missing after a passing change)."""
+    gate = task.get("gate") or {}
+    need = sorted(g for g in (gate.get("metrics") or {}) if str(g).startswith("device_ms"))
+    segs = [s for s in str(gate.get("cmd") or "").split("&&") if "test_profile.py" in s]
+    if need and segs and all("BRINGUP_PROFILE_WALL" in s for s in segs):
+        return [
+            f"{', '.join(need)} gated but every test_profile.py segment is wall-only (BRINGUP_PROFILE_WALL=1): drop the "
+            "flag, the gate adds the clean wall run before the profiled run itself (F114, F212)"
+        ]
+    return []
+
+
+class Ledger:
+    def __init__(self, ledger_dir: Path):
+        self.dir = Path(ledger_dir)
+        self.tasks_path = self.dir / "tasks.yaml"
+        self.state_path = self.dir / "state.json"  # F265: the old single file; the state lives in state.chunks/
+        self.results_dir = self.dir / "results"
+        # F265 (owner, FIX.27): the three records that grow with every task are chunk files below the repo's 500 KB
+        # limit (core/chunked.py); every reader and writer goes through these stores
+        self.state_store = ChunkedJson(self.state_path, indent=1, merge_fields=("history",))
+        self.metrics_store = ChunkedJson(self.dir / "state_metrics.json", indent=1)
+        self.side_store = ChunkedJson(self.dir / "history_state.json", indent=None, merge_fields=("agent_runs",))
+
+    # ---- tasks
+    def load_spec(self) -> dict:
+        return yaml.safe_load(self.tasks_path.read_text()) or {} if self.tasks_path.exists() else {"tasks": []}
+
+    def tasks(self) -> dict[str, dict]:
+        out = {}
+        for t in self.load_spec().get("tasks", []):
+            if t["id"] in out:
+                raise LedgerError(f"duplicate task id {t['id']}")
+            out[t["id"]] = t
+        return out
+
+    def task(self, tid: str) -> dict:
+        tasks = self.tasks()
+        if tid not in tasks:
+            raise LedgerError(f"unknown task {tid}")
+        return tasks[tid]
+
+    def write_tasks(self, spec: dict) -> None:
+        with self.locked():
+            self.tasks_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = self.tasks_path.with_suffix(".tmp")
+            tmp.write_text(yaml.safe_dump(spec, sort_keys=False, width=120))
+            tmp.replace(self.tasks_path)
+
+    def update_task_def(self, tid: str, **fields) -> None:
+        """Change fields of one task in tasks.yaml (used by freeze)."""
+        spec = self.load_spec()
+        for t in spec.get("tasks", []):
+            if t["id"] == tid:
+                t.update(fields)
+                break
+        else:
+            raise LedgerError(f"unknown task {tid}")
+        self.write_tasks(spec)
+
+    def validate(self) -> list[str]:
+        errs = []
+        try:
+            tasks = self.tasks()
+        except LedgerError as e:
+            return [str(e)]
+        done = self.state() if self.state_store.exists() else {}
+        for tid, t in tasks.items():
+            for k in ("title", "gate"):
+                if k not in t:
+                    errs.append(f"{tid}: missing '{k}'")
+            if "gate" in t and "cmd" not in t["gate"]:
+                errs.append(f"{tid}: gate has no cmd")
+            for d in t.get("deps", []):
+                if d not in tasks:
+                    errs.append(f"{tid}: unknown dep {d}")
+            for glob, cond in (t.get("gate", {}).get("metrics") or {}).items():
+                parts = str(cond).split()
+                if len(parts) != 2 or parts[0] not in (">=", "<=", ">", "<", "=="):
+                    errs.append(f"{tid}: bad threshold {glob}: {cond!r}")
+                else:
+                    errs += [f"{tid}: {e}" for e in fixed_accuracy(t, {glob: cond})]
+            from models.demos.common.bringup.core.prior_work import needs_prior_work  # F278
+
+            errs += [f"{tid}: {e}" for e in needs_prior_work(t, (done.get(tid) or {}).get("status"))]
+            if (done.get(tid) or {}).get("status") not in ("PASS", "REJECTED"):  # a finished gate's cmd is history
+                errs += [f"{tid}: {e}" for e in wall_only_device_metrics(t) + position_role_metrics(t)]
+        try:
+            self.topo_order()
+        except LedgerError as e:
+            errs.append(str(e))
+        return errs
+
+    def topo_order(self) -> list[str]:
+        tasks, seen, order, stack = self.tasks(), set(), [], set()
+
+        def visit(t):
+            if t in seen:
+                return
+            if t in stack:
+                raise LedgerError(f"dependency cycle through {t}")
+            stack.add(t)
+            for d in tasks[t].get("deps", []):
+                if d in tasks:
+                    visit(d)
+            stack.discard(t)
+            seen.add(t)
+            order.append(t)
+
+        for t in tasks:  # declaration order breaks ties
+            visit(t)
+        return order
+
+    def upstream(self, tid: str) -> list[str]:
+        """tid and every task it depends on, directly or not, in topological order."""
+        tasks, need, todo = self.tasks(), set(), [tid]
+        while todo:
+            t = todo.pop()
+            if t in tasks and t not in need:
+                need.add(t)
+                todo += tasks[t].get("deps") or []
+        return [t for t in self.topo_order() if t in need]
+
+    def downstream(self, tid: str) -> list[str]:
+        """tid and every task that depends on it, directly or not, in topological order."""
+        tasks = self.tasks()
+        hit = {tid}
+        for t in self.topo_order():
+            if any(d in hit for d in tasks[t].get("deps", [])):
+                hit.add(t)
+        return [t for t in self.topo_order() if t in hit]
+
+    # ---- state
+    @contextlib.contextmanager
+    def locked(self):
+        """Serialize state/ledger read-modify-write and commits across concurrent gate runs."""
+        self.dir.mkdir(parents=True, exist_ok=True)
+        ignore = self.dir / ".gitignore"
+        if not ignore.exists():
+            ignore.write_text(".lock\n*.tmp\n")
+        with open(self.dir / ".lock", "w") as f:
+            fcntl.flock(f, fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                fcntl.flock(f, fcntl.LOCK_UN)
+
+    # F180: the per-task histories that grow with every attempt / pick live beside state.json, uncommitted (the repo's
+    # 500 KB hook refused DeepSeek-V4.1's state.json at Z.1: agent_runs 137 KB, ab 85 KB); state() merges them back
+    # F246: also a refused commit's record (commit_pending: every staged file's name, ~190 KB at P.29), transient by nature
+    SIDE_KEYS = ("agent_runs", "ab", "commit_pending")
+
+    @property
+    def side_path(self) -> Path:
+        return self.side_store.legacy
+
+    @property
+    def metrics_path(self) -> Path:
+        """F253: the tasks' gate metrics, committed beside state.json (DeepSeek-V4.1 X.3: state.json reached 503 KB
+        again, metrics 384 KB of it: the repo's 500 KB hook refused the commit). F265: kept as state_metrics.chunks/
+        (FIX.26: state_metrics.json reached 515,706 bytes); this is the old single file's path."""
+        return self.metrics_store.legacy
+
+    @property
+    def stores(self) -> tuple[ChunkedJson, ...]:
+        return (self.state_store, self.metrics_store, self.side_store)
+
+    def record_paths(self, committed_only: bool = True) -> list[Path]:
+        """F265: what a commit of the ledger's state stages: every store's chunk directory and its old single file
+        (the old file's deletion is committed once). history_state is the clone's own record (F180) unless asked."""
+        stores = (self.state_store, self.metrics_store) if committed_only else self.stores
+        return [p for st in stores for p in st.paths()]
+
+    def migrate(self) -> dict[str, list[Path]]:
+        """F265: turn every old single-file store into chunks once, losslessly (ChunkedJson.migrate checks it)."""
+        with self.locked():
+            return {st.legacy.name: st.migrate() for st in self.stores}
+
+    def _exclude_side(self) -> None:
+        """F180: keep history_state.json out of git (the clone's own info/exclude: no tracked file changes)."""
+        import subprocess
+
+        try:
+            ex = subprocess.run(
+                ["git", "rev-parse", "--git-path", "info/exclude"], cwd=self.dir, capture_output=True, text=True
+            ).stdout.strip()
+        except OSError:
+            return
+        if not ex:
+            return
+        p = Path(ex) if Path(ex).is_absolute() else self.dir / ex
+        text = p.read_text() if p.exists() else ""
+        # F265: and its chunks, with the same reach as the old line (a seeded run's ledger keeps tracking its own)
+        lines = ("**/bringup/history_state.json", "**/bringup/history_state.chunks/")
+        add = [ln for ln in lines if ln not in text.split("\n")]
+        if add:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(text + ("" if text.endswith("\n") or not text else "\n") + "\n".join(add) + "\n")
+
+    def state(self) -> dict:
+        state, mets, side = (st.read() for st in self.stores)  # F265: the chunks (or the old single file)
+        for tid, m in mets.items():  # F253
+            if isinstance(state.get(tid), dict):
+                state[tid].setdefault("metrics", m)
+        for tid, extra in side.items():
+            if isinstance(state.get(tid), dict):
+                for k, v in extra.items():
+                    state[tid].setdefault(k, v)
+        return state
+
+    def _trim_metrics(self, tid: str, metrics: dict) -> dict:
+        """The metrics a gate run records: the gated ones and their limits (F129), floats to 6 significant digits
+        (F246; results/<task>.json keeps every metric at full precision). F265: applied to the entry being written
+        only; a recorded entry is never trimmed or rounded again (owner, FIX.27: nothing dropped)."""
+        from models.demos.common.bringup.core.gate import state_metrics
+
+        try:
+            task = self.tasks().get(tid)
+        except (FileNotFoundError, KeyError, TypeError, LedgerError):
+            task = None
+        if task is not None:
+            metrics = state_metrics(task.get("gate", {}).get("metrics") or {}, metrics)
+        return {k: _sig6(v) for k, v in metrics.items()}
+
+    def _save_state(self, state: dict) -> None:
+        old_side, old_mets = self.side_store.read(), self.metrics_store.read()
+        side = {}
+        for tid, e in state.items():  # F180
+            if isinstance(e, dict):
+                moved = {k: e.pop(k) for k in self.SIDE_KEYS if k in e}
+                if moved:
+                    side[tid] = moved
+        mets = {}
+        for tid, e in state.items():  # F253: metrics in their own committed file
+            if isinstance(e, dict) and "metrics" in e:
+                mets[tid] = e.pop("metrics")
+        # F265: a record of a task state() could not attach (no state entry) is carried, never dropped
+        side = {**{t: v for t, v in old_side.items() if not isinstance(state.get(t), dict)}, **side}
+        mets = {**{t: v for t, v in old_mets.items() if not isinstance(state.get(t), dict)}, **mets}
+        self.metrics_store.write(mets)  # F265: chunks below the repo's limit, never compacted
+        self._exclude_side()
+        self.side_store.write(side)
+        self.state_store.write(state)
+
+    def update(self, tid: str, history_add: dict | None = None, **fields) -> dict:
+        with self.locked():
+            state = self.state()
+            entry = state.setdefault(tid, {})
+            if isinstance(fields.get("metrics"), dict):
+                fields["metrics"] = self._trim_metrics(tid, fields["metrics"])
+            entry.update(fields)
+            if history_add:
+                entry.setdefault("history", []).append(history_add)
+            self._save_state(state)
+            return entry
+
+    def reset(self, tids: list[str]) -> None:
+        """Mark tasks TODO again (rerun). Keeps their history."""
+        with self.locked():
+            state = self.state()
+            now = time.strftime("%Y-%m-%dT%H:%M:%S")
+            for t in tids:
+                e = state.setdefault(t, {})
+                if e.get("status") not in (None, "TODO"):
+                    e.setdefault("history", []).append({"t": now, "status": "RESET"})
+                e["status"] = "TODO"
+                e["attempts"] = 0
+                e.pop("commit_pending", None)  # F149: a rerun replaces the pending result
+            self._save_state(state)
+
+    def status(self, tid: str) -> str:
+        return self.state().get(tid, {}).get("status", "TODO")
+
+    def runnable(self) -> list[str]:
+        """Tasks not PASS (or DEFERRED) whose deps are all PASS or DEFERRED, in topological order."""
+        tasks, state = self.tasks(), self.state()
+        ok = lambda t: satisfied(state.get(t, {}).get("status"))  # noqa: E731
+        return [t for t in self.topo_order() if not ok(t) and all(ok(d) for d in tasks[t].get("deps", []))]
+
+    def first_unpassed(self) -> str | None:
+        state = self.state()
+        return next((t for t in self.topo_order() if not satisfied(state.get(t, {}).get("status"))), None)
+
+    def deferred(self) -> list[str]:
+        """Tasks deferred to op-gen (on the CPU bridge), in topological order."""
+        state = self.state()
+        return [t for t in self.topo_order() if state.get(t, {}).get("status") == "DEFERRED"]

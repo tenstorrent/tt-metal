@@ -1,0 +1,22 @@
+{
+ "used": [
+  {"id": "DS41-10", "how": "bfp8 and bfp8_down4 keep w1 / w3 (and bfp8's w2) in the stored [N, K] orientation with weights_nk, asserted exact per matrix (_bfp8_exact); the 1088 / 576 byte ratio gave the expected bfp8 expert DRAM (8.90 -> ~16.8 GiB a chip on 8x4)"},
+  {"id": "DS41-35", "how": "no W^T upload for any bfp8 matrix: the bfp4_mse groups are taken along K of the stored [N, K] too (one ue8m0 block per 16-value group)"},
+  {"id": "DS41-183", "how": "every device run over a few minutes (format smoke, fork test, test_dram gate unit, the bfp8 measure) started with devjob start / wait, never under a tool timeout"},
+  {"id": "DS41-185", "how": "tests/test_experts_formats.py sets DS41_EXPERTS_IMPL before each model load (the load re-reads the settings snapshot) and clears the block cache per value"},
+  {"id": "DS41-194", "how": "BREADCRUMBS.md is at the hook limit: the P.27 detail went to known_issues_detail.md and BREADCRUMBS gets a short pointer section"},
+  {"id": "K-55", "how": "pre-commit (black, clang-format 19) run on every changed file before the gate unit and the measures; the C++ reformat rebuilt before measuring"},
+  {"id": "DS41-196", "how": "the task's premise: bfp4 expert weights carry the device's extra error; measured per value at layer 0 (rel vs golden bfp4 0.0350, bfp4_mse 0.0247, bfp8_down4 0.0206, bfp8 0.0152)"}
+ ],
+ "contradicted": [],
+ "missing": [
+  "The MoE block's exchange (K3) builds its own placeholder flat op in os.environ K3_WDTYPE (default bf4) and plans the combine from it: a routed op in another weight format needs it set at build (now DS41-197)",
+  "bringup/hooks.py:devfmt_component and reference/ds41_ref.py (experts_w site) are the CPU emulation the brief asks to follow EXPERTS_IMPL, but neither path is in a perf step's allowed paths: P.27 added tt/experts.py:expert_weight_round(impl) for them to call",
+  "BREADCRUMBS.md has no room left (DS41-194): a perf step cannot append a section; the overseer should archive it"
+ ],
+ "overseer": [
+  {"id": "OV-3", "answer": "done", "evidence": "nothing padded or duplicated: bfp8_down4 is a fork option (down_weights_bf4) with bfp4-sized down regions, not bfp4 weights widened; bfp4_mse values are packed losslessly at bfp4 size"},
+  {"id": "OV-23", "answer": "done", "evidence": "no Python-built op added; the flat op change is in the C++ device op (plan / program factory / kernel); the block's K3 exchange is built as before (only its placeholder weight format follows the op)"},
+  {"id": "OV-25", "answer": "done", "evidence": "only the new fork test tests/unit/test_down_bf4.py (2 / 2 on 8x4) and the model-level checks ran; no fork regression suite"}
+ ]
+}

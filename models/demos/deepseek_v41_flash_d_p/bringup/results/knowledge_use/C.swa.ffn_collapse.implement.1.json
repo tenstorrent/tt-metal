@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "DS41-3",
+   "how": "ffn_collapse uses attn_hc's pre (mix columns 0..3), not ffn_hc's or the pending pre: hooks._ffn_collapse_host_fn passes attn_mix to TtHcCollapse",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "ignored the pcc=0 FAIL lines of the precompile collect pass; only the real pass counts",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-18",
+   "how": "the fast window attention's expected rel 0.021 vs CPU explains the S.swa.06 step-check failure (0.02123 > 0.02 cap) reported for OV-3",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-16",
+   "evidence": "its Fix (ExactMatmul as the ATTN_IN_MM path) is no longer the default: owner decision OV-3, tt/settings.py ATTN_IN_MM default fpu; S.swa.05 passes on fpu (swap_kv_out 0.0109 <= 0.0459)",
+   "cited": true
+  },
+  {
+   "id": "DS41-19",
+   "evidence": "its Fix (tt/window_exact.py) is no longer the default: OV-3, WINDOW_SDPA default high_precision; S.swa.06 tail passes on it (0.0169 <= 0.0392), only the fixed 2 % step cap fails (DS41-20)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the swap step-vs-CPU limit is still capped at defaults.yaml swap_step_rel 0.02 after F72 (now DS41-20)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "disagree",
+   "evidence": "Done: tt/settings.py defaults + MAX_PRECISION ATTN_IN_MM=fpu, WINDOW_SDPA=high_precision, exact paths kept as settings with the owner decision noted. S.swa.05 PASS: swap_kv_out_rel 0.010850, swap_kv_out_rel_limit 0.045857, pcc_swap_out 0.999929. S.swa.06 FAIL: swap_attention_out_rel 0.016893 <= swap_attention_out_rel_limit 0.039237 (tail ok, pcc_swap_out 0.999864), but the step check swap_attention vs CPU rel 0.021227 > 0.02000 (defaults.yaml swap_step_rel cap; component error 0.02227, testing/component.py:350). No exact kernel added; needs the framework's step cap to follow the precision model too (DS41-20)."
+  }
+ ],
+ "cited_only": [
+  "DS41-20"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.ffn_collapse",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T16:13:53",
+  "head": "5cc0c7075da",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.ffn_collapse.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/collapse.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

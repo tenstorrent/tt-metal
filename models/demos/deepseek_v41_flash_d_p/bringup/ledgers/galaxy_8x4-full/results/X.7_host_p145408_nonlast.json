@@ -1,0 +1,163 @@
+{
+ "task": "X.7",
+ "t": "2026-11-18T23:43:05",
+ "runs_ms": [
+  172.8,
+  157.1,
+  155.1,
+  152.9,
+  169.3
+ ],
+ "top": [
+  {
+   "fn": "~:0 <method 'acquire' of '_thread.lock' objects>",
+   "self_ms": 64.43,
+   "cum_ms": 64.43,
+   "calls": 3
+  },
+  {
+   "fn": "decorators.py:1236 __call__",
+   "self_ms": 55.51,
+   "cum_ms": 60.68,
+   "calls": 836
+  },
+  {
+   "fn": "model.py:1888 sync",
+   "self_ms": 8.07,
+   "cum_ms": 8.07,
+   "calls": 1
+  },
+  {
+   "fn": "ccl.py:96 dealloc",
+   "self_ms": 3.65,
+   "cum_ms": 3.72,
+   "calls": 553
+  },
+  {
+   "fn": "snapshot_send.py:396 __call__",
+   "self_ms": 2.02,
+   "cum_ms": 2.38,
+   "calls": 20
+  },
+  {
+   "fn": "fp8_rows.py:299 unpack_fp8_rows",
+   "self_ms": 2.02,
+   "cum_ms": 2.18,
+   "calls": 6
+  },
+  {
+   "fn": "window_send.py:404 fused",
+   "self_ms": 1.98,
+   "cum_ms": 2.08,
+   "calls": 20
+  },
+  {
+   "fn": "interface.py:95 run_block",
+   "self_ms": 1.06,
+   "cum_ms": 145.72,
+   "calls": 20
+  },
+  {
+   "fn": "ckv_bfp4.py:191 ckv_bfp4",
+   "self_ms": 0.82,
+   "cum_ms": 0.95,
+   "calls": 6
+  },
+  {
+   "fn": "~:0 <method 'get' of 'dict' objects>",
+   "self_ms": 0.71,
+   "cum_ms": 1.01,
+   "calls": 2065
+  },
+  {
+   "fn": "moe_block_v2_adapter.py:466 _own_rows",
+   "self_ms": 0.7,
+   "cum_ms": 10.23,
+   "calls": 20
+  },
+  {
+   "fn": "attention.py:907 write_own",
+   "self_ms": 0.65,
+   "cum_ms": 10.47,
+   "calls": 20
+  },
+  {
+   "fn": "host_alloc.py:144 mm_out",
+   "self_ms": 0.63,
+   "cum_ms": 0.87,
+   "calls": 80
+  },
+  {
+   "fn": "model.py:1002 run",
+   "self_ms": 0.62,
+   "cum_ms": 64.78,
+   "calls": 204
+  },
+  {
+   "fn": "fp8_rows.py:132 pack_fp8_rows",
+   "self_ms": 0.58,
+   "cum_ms": 0.74,
+   "calls": 4
+  },
+  {
+   "fn": "decorators.py:1141 _requires_slow_runtime",
+   "self_ms": 0.51,
+   "cum_ms": 0.51,
+   "calls": 836
+  },
+  {
+   "fn": "pair_pool.py:144 pair_pool",
+   "self_ms": 0.51,
+   "cum_ms": 0.58,
+   "calls": 3
+  },
+  {
+   "fn": "attention.py:938 _pin_put",
+   "self_ms": 0.41,
+   "cum_ms": 9.36,
+   "calls": 640
+  },
+  {
+   "fn": "residual.py:141 _collapse",
+   "self_ms": 0.38,
+   "cum_ms": 4.81,
+   "calls": 38
+  },
+  {
+   "fn": "attention.py:572 put",
+   "self_ms": 0.35,
+   "cum_ms": 8.79,
+   "calls": 40
+  },
+  {
+   "fn": "mhc.py:131 collapse_kwargs",
+   "self_ms": 0.35,
+   "cum_ms": 0.67,
+   "calls": 40
+  },
+  {
+   "fn": "attention.py:592 plan",
+   "self_ms": 0.34,
+   "cum_ms": 0.41,
+   "calls": 80
+  },
+  {
+   "fn": "model.py:205 _free",
+   "self_ms": 0.32,
+   "cum_ms": 1.17,
+   "calls": 342
+  },
+  {
+   "fn": "sparse_attention.py:391 __call__",
+   "self_ms": 0.28,
+   "cum_ms": 33.34,
+   "calls": 18
+  },
+  {
+   "fn": "host_alloc.py:269 fork_out",
+   "self_ms": 0.26,
+   "cum_ms": 0.51,
+   "calls": 240
+  }
+ ]
+}

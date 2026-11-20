@@ -1,0 +1,125 @@
+{
+ "used": [
+  {
+   "id": "DS41-286",
+   "how": "the gather sub-device is the free 12th column (slower than next to the links) because the matmul / fork grids are fixed at 11 x 10 from (0, 0); accepted since hidden",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-216",
+   "how": "every hidden gather keeps the one (ready, data_valid) pair of its axis (None) and the gathers of a region run in order on sub-device 1",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-291",
+   "how": "the combined tails input (a concat) gets the slab's tensor topology before the full-mesh gather",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-290",
+   "how": "per-lane / per-item record and tail buffers instead of views into one buffer",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "the mesh-only gather_hide test cost a fresh process on the held runner, as the entry says; kept to one such run",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-325",
+   "how": "every walls run with DS41_ENGRAM_TABLE=resident, as the gate's walls unit",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-328",
+   "how": "OV-62: the walls' slots at one capacity, so mixed takes the one ring",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-327",
+   "how": "kept per-chunk host work to two manager switches a region and no per-segment launches added outside regions",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-314",
+   "how": "the walls switch PACKED_GATHER_HIDE for the reference run through packed_common.switch (snapshot + env)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-311",
+   "how": "lint (pyflakes) before every submit and expect a fresh process after a model-python change on the resident runner",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the real-time profiler cannot show concurrent sub-device programs (one open record a CQ): DS41-331",
+  "dispatch is in order across sub-devices: a program's launch waits for the previous program of its own sub-device and blocks every later launch: DS41-331",
+  "the PB.3 / PB.3A oracle never exercised a history gather (every segment started in the first chunk): extended with packed3",
+  "a model-python reload on the resident runner usually costs a fresh process (the released model's memory does not come back): every walls iteration after a tt/ change reloaded the 21-layer model"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "nothing padded or inflated: the combined tail gather moves each segment's own rows only"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PPB.3H (gather column choice); the oracle failure found (DS41-330) fixed rather than stopped on"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the walls (the only performance unit) raise max_seq once to the one slot capacity; no load-time switch set in any test"
+  },
+  {
+   "id": "OV-62",
+   "answer": "done",
+   "evidence": "test_packed_walls: every lane's slot at ONE capacity (deployment context in whole chunks, 1,048,576; PACKED_WALL_CAP overrides); it fit next to the model (packed_dram_gib recorded); mixed takes the one ring"
+  }
+ ],
+ "cited_only": [
+  "DS41-330",
+  "DS41-331"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.3H",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T05:08:58",
+  "head": "af4368d296e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.3H.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.3H.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_gather_hide_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_oracle.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/cores.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/gather_hide.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

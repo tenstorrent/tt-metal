@@ -1,0 +1,2907 @@
+model: tencent/Hy4-preview
+target:
+  seq: 56320
+  chunk: 5120
+  dtype: bf16
+tasks:
+- id: R.1
+  title: Checkpoint, intake approval, canonical prompt
+  step: intake
+  deps: []
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_checkpoint && python -m models.demos.common.bringup.reference.prompt
+    metrics:
+      intake_approved: == 1
+      prompt_hash_ok: == 1
+      missing_tensors: == 0
+      shape_mismatches: == 0
+      count_mismatches: == 0
+      config_mismatches: == 0
+      checkpoint_tensors: '>= 1'
+  paths:
+  - models/demos/hy4_preview_d_p/bringup/spec.yaml
+- id: R.2
+  title: HF sanity on the model's loader (revision, smoke, accuracy floor); reference matches HF per layer and on logits (fp32)
+  step: reference
+  deps:
+  - R.1
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.check_hf_sanity && python -m models.demos.common.bringup.reference.check_hf
+      --seq 4096
+    metrics:
+      revision_ok: == 1
+      text_top1_acc: '>= 0.4'
+      smoke_ok: == 1
+      pcc_hidden_L*: '>= 0.9999'
+      pcc_logits: '>= 0.9999'
+      top1_match_frac: '>= 0.99'
+  paths: &id001
+  - models/demos/hy4_preview_d_p/reference
+  - models/demos/hy4_preview_d_p/bringup/hooks.py
+  - models/demos/hy4_preview_d_p/__init__.py
+- id: R.4
+  title: Trim the checkpoint to layers 0-5 (the whole model was needed only for the HF sanity)
+  step: intake
+  deps:
+  - R.2
+  gate:
+    cmd: python -m models.demos.common.bringup.intake.trim_checkpoint
+    metrics:
+      trim_done: == 1
+      trim_verify_errors: == 0
+      trim_freed_gb: '>= 0'
+- id: R.3
+  title: Reference chunked == one-shot (4096 in 2048) and block graphs replay exactly
+  step: reference
+  deps:
+  - R.2
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.check_reference --seq 4096 --chunk 2048
+    metrics:
+      pcc_hidden: '>= 0.99999'
+      pcc_state_min: '>= 0.99999'
+      graph_errors: == 0
+      boundaries_missing: == 0
+      graph_replay_maxabs: <= 0
+  paths: *id001
+- id: G.s4096
+  title: 'Golden s4096: 4096 tokens in 2048-token chunks, full dumps'
+  step: goldens
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s4096
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s16384
+  title: 'Golden s16384: 16384 tokens in 8192-token chunks'
+  step: goldens
+  deps:
+  - G.s4096
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s16384
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 2
+      golden_hash_ok: == 1
+- id: G.s56320
+  title: 'Golden s56320: 56320 tokens in 5120-token chunks'
+  step: goldens
+  deps:
+  - G.s16384
+  gate:
+    cmd: python -m models.demos.common.bringup.reference.generate_golden --rung s56320
+    metrics:
+      golden_layers: == 6
+      golden_chunks: == 11
+      golden_hash_ok: == 1
+- id: B.1
+  title: 'Box: mesh opens with the spec''s device params, collectives are exact'
+  step: box
+  deps: []
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_box.py
+    metrics:
+      chips: == 4
+      all_gather_maxabs: == 0
+  device: true
+- id: PL.0
+  title: 'Ledger: add the component, swap, ladder, contract and perf tasks from the block graphs'
+  step: ledger
+  deps:
+  - R.3
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.ledger_gen --extend
+    metrics:
+      ledger_errors: == 0
+      ledger_tasks: '>= 1'
+  paths:
+  - models/demos/hy4_preview_d_p/bringup/tasks.yaml
+- id: PL.1
+  title: 'Plan: fits per-chip DRAM (from the checkpoint), every step mapped, ledger valid, approved'
+  step: plan
+  deps:
+  - PL.0
+  - B.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.check_plan
+    metrics:
+      plan_fits: == 1
+      unplaced_tensors: == 0
+      plan_errors: == 0
+      component_errors: == 0
+      ledger_errors: == 0
+      plan_approved: == 1
+  paths:
+  - models/demos/hy4_preview_d_p/bringup/plan.yaml
+  - models/demos/hy4_preview_d_p/bringup/plan.md
+  - models/demos/hy4_preview_d_p/bringup/components.yaml
+  - models/demos/hy4_preview_d_p/bringup/approvals.yaml
+  - models/demos/hy4_preview_d_p/bringup/results/plan_memory.json
+  approval: plan
+- id: C.dense_full.attn_hc
+  title: dense_full attn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
+    metrics:
+      pcc_attn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py
+  freeze_extra: &id002
+  - /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json
+  paths: &id003
+  - models/demos/hy4_preview_d_p/tt
+  - models/demos/hy4_preview_d_p/bringup/hooks.py
+  brief:
+    block_type: dense_full
+    step: attn_hc
+    kind: op
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T04:49:44'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc.py: 3da81a0ceaa11b43822a872a18ae554e07e6cbcd5ac28ef95616b4c5da12e15d
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.01
+  title: 'dense_full block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.dense_full.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    layer: 0
+  frozen:
+    at: '2026-09-29T05:05:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_01_attn_hc.py: 92c137b72ea7440d52e18ad0fac6258c9f911dfc4de51d1efee7280046014048
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.attn_hc_pre
+  title: dense_full attn_hc_pre (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py
+    metrics:
+      pcc_attn_hc_pre_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: attn_hc_pre
+    kind: op
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T05:11:46'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_hc_pre.py: 755feeda025ea581c2a04f2c96350a27c5bd72beb7c1882c8694ca7408c26086
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.02
+  title: 'dense_full block with steps 1-2 on device (last: attn_hc_pre)'
+  step: implement
+  deps:
+  - C.dense_full.attn_hc_pre
+  - S.dense_full.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_02_attn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_02_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    layer: 0
+  frozen:
+    at: '2026-09-29T05:20:55'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_02_attn_hc_pre.py: 8c3ebeced758416cc169cc9843c4bb1e062a506c3f2c3232f8aacd6a61814c67
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.attn_norm
+  title: dense_full attn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py
+    metrics:
+      pcc_attn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: attn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T05:25:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_norm.py: c6a2c87e6a7df62add5dea87dd4104072d8b9d88b858211f7a74ffd2f8998a0f
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.03
+  title: 'dense_full block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.dense_full.attn_norm
+  - S.dense_full.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-29T05:41:20'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_03_attn_norm.py: 407d455ef4bf032fbc97cb9f73776b2749cebc790f472517fdbceed580bf84b6
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.q_a
+  title: dense_full q_a (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py
+    metrics:
+      pcc_q_a_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: q_a
+    kind: op
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T05:46:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_q_a.py: 9bbb13413d34b12991daa92727dbde68555774da1531b0b4979c9418d7752a13
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.04
+  title: 'dense_full block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.dense_full.q_a
+  - S.dense_full.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    layer: 0
+  frozen:
+    at: '2026-09-29T05:58:30'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_04_q_a.py: 60b8bc814f89c138477b537507273a72ec610b882b4595c17278af18c2f92eef
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.indexer
+  title: dense_full indexer (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_indexer.py
+    metrics:
+      pcc_indexer_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: indexer
+    kind: op
+    layer: 0
+    stateful: true
+  frozen:
+    at: '2026-09-29T06:05:40'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_indexer.py: 9e0fb6bca371187696e3ee7dd687f5bbaea65622a524a64bc6087b8fe3a0ca5c
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.05
+  title: 'dense_full block with steps 1-5 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.dense_full.indexer
+  - S.dense_full.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_05_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_05_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    layer: 0
+  frozen:
+    at: '2026-09-29T06:51:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_05_indexer.py: 18682cf913cb9c46cf8c7d819b5b388a462ae5fbe99193e7fd4bc35f12dd7aa5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.attention
+  title: dense_full attention (attention) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py
+    metrics:
+      pcc_attention_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: attention
+    kind: attention
+    layer: 0
+    stateful: true
+  frozen:
+    at: '2026-09-29T07:13:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py: b8498e2231cf22c36b7c04319bf33071ab97dfa7cadc039a44d3ec854326c1ab
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.06
+  title: 'dense_full block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.dense_full.attention
+  - S.dense_full.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    layer: 0
+  frozen:
+    at: '2026-09-29T07:35:56'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_06_attention.py: 69ce6a9e5330b1534cf6fe9f800e4bbbffdc0d2bcf695537165cd492b04e6218
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.attn_residual
+  title: dense_full attn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py
+    metrics:
+      pcc_attn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: attn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T07:43:21'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attn_residual.py: aba62caf218a1be1b191f1e717693f122dfecd92d79773d82c4c106e6d42fa53
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.07
+  title: 'dense_full block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.dense_full.attn_residual
+  - S.dense_full.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    layer: 0
+  frozen:
+    at: '2026-09-29T07:55:29'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_07_attn_residual.py: f245ddbabbcb11e5df1085efc10dca91fecba21034d8c2143f1fb8e3646919c2
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.ffn_hc
+  title: dense_full ffn_hc (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: ffn_hc
+    kind: op
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T08:04:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc.py: 505681d76d18c735c41b316093acb5917c19313ef620336b1c41a871c6c4a5f1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.08
+  title: 'dense_full block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.dense_full.ffn_hc
+  - S.dense_full.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 0
+  frozen:
+    at: '2026-09-29T08:19:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_08_ffn_hc.py: 0ab9e08661f45a8a46ec53bb1c8a4cab24b04e11fa587665ea03044378c29b12
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.ffn_hc_pre
+  title: dense_full ffn_hc_pre (op) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py
+    metrics:
+      pcc_ffn_hc_pre_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: ffn_hc_pre
+    kind: op
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T08:27:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_hc_pre.py: f26f1489112ef7ec1ea7568f6f27f6ffb71f96feef2d3b9bcc9310ec12ec694b
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.09
+  title: 'dense_full block with steps 1-9 on device (last: ffn_hc_pre)'
+  step: implement
+  deps:
+  - C.dense_full.ffn_hc_pre
+  - S.dense_full.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    layer: 0
+  frozen:
+    at: '2026-09-29T08:38:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_09_ffn_hc_pre.py: 149de4bdc7ae8494aa70ef99d23034b45a7a9853cee1c6f9dd4510af4fb015a1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.ffn_norm
+  title: dense_full ffn_norm (norm) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: ffn_norm
+    kind: norm
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T08:46:50'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_norm.py: d873567939ac10cee920684654e9831e049da8adcd4b8c5e5cf0b8e133bac767
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.10
+  title: 'dense_full block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.dense_full.ffn_norm
+  - S.dense_full.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    layer: 0
+  frozen:
+    at: '2026-09-29T09:00:14'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_10_ffn_norm.py: 20c5b5452d7a782496f3cee42a71ea31114e762712ea967fccbe5c2bddf49bd1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.mlp
+  title: dense_full mlp (mlp) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py
+    metrics:
+      pcc_mlp_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: mlp
+    kind: mlp
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T09:10:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_mlp.py: 248945b03b80201653f23429d1102f17a29d692a72d192e1ad73ebe496c5b63c
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.11
+  title: 'dense_full block with steps 1-11 on device (last: mlp)'
+  step: implement
+  deps:
+  - C.dense_full.mlp
+  - S.dense_full.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - mlp
+    layer: 0
+  frozen:
+    at: '2026-09-29T09:23:42'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_11_mlp.py: 2c4584f434e48c9b384b34bc6f61c513256b344188c5f3a479f7c2aac3c7147a
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.dense_full.ffn_residual
+  title: dense_full ffn_residual (residual) on device, layer 0
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L00: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    step: ffn_residual
+    kind: residual
+    layer: 0
+    stateful: false
+  frozen:
+    at: '2026-09-29T09:31:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_ffn_residual.py: 740e0ed8e7e5935db964a57e924f6ae35fc0c16a0d613c55722020f0e06d729e
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.dense_full.12
+  title: 'dense_full block with steps 1-12 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.dense_full.ffn_residual
+  - S.dense_full.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: dense_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - mlp
+    - ffn_residual
+    layer: 0
+  frozen:
+    at: '2026-09-29T09:43:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py: 83dea901fdd4101a282407fef670613d36f5b35c90b8ebf056b8e0b712ac96f8
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.attn_hc
+  title: moe_full attn_hc (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
+    metrics:
+      pcc_attn_hc_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: attn_hc
+    kind: op
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T09:54:18'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc.py: d8aa0188efb30e3cca77fd86d4327f507546afa7a67b42044bb7425adc347752
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.01
+  title: 'moe_full block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.moe_full.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    layer: 1
+  frozen:
+    at: '2026-09-29T10:07:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_01_attn_hc.py: 0adfadf0f43c485818c986e18f2c4c63dbe90f5ccb55ae47d5885f1df4afe193
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.attn_hc_pre
+  title: moe_full attn_hc_pre (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
+    metrics:
+      pcc_attn_hc_pre_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: attn_hc_pre
+    kind: op
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T10:13:38'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_hc_pre.py: 21de750a649df2efc1eaf4878ea153d962d9de542d34f020c8f4b9af82d127da
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.02
+  title: 'moe_full block with steps 1-2 on device (last: attn_hc_pre)'
+  step: implement
+  deps:
+  - C.moe_full.attn_hc_pre
+  - S.moe_full.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    layer: 1
+  frozen:
+    at: '2026-09-29T10:23:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_02_attn_hc_pre.py: eb5cdc5de0d4ec87b7eef744fc751c01426587dd2aa60534e70f88f38ff74859
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.attn_norm
+  title: moe_full attn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
+    metrics:
+      pcc_attn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: attn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T10:28:21'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_norm.py: d7cb457dc59eaa2b30a12bc86b3782205bef1036468695992be65de035498521
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.03
+  title: 'moe_full block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.moe_full.attn_norm
+  - S.moe_full.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    layer: 1
+  frozen:
+    at: '2026-09-29T10:37:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_03_attn_norm.py: cfa08f9d6a8162f725768dc1caa107edca064a6c6649e4574ea71919a4aaac5d
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.q_a
+  title: moe_full q_a (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
+    metrics:
+      pcc_q_a_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: q_a
+    kind: op
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T10:43:08'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_q_a.py: 39149cf5dedf38cc51b5ddd70c3cc03efdfbd5857bf098e4e417ea18dd765ee0
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.04
+  title: 'moe_full block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.moe_full.q_a
+  - S.moe_full.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    layer: 1
+  frozen:
+    at: '2026-09-29T10:52:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_04_q_a.py: 8d083526f1f5c83a4e4c056963451730eb588ab687616c1901f4cd1528f4e7a5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.indexer
+  title: moe_full indexer (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
+    metrics:
+      pcc_indexer_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: indexer
+    kind: op
+    layer: 1
+    stateful: true
+  frozen:
+    at: '2026-09-29T10:59:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_indexer.py: 392550b652fe80171fcea99da9617efb48dced6fb585ffc3fbe7a85b2420fa86
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.05
+  title: 'moe_full block with steps 1-5 on device (last: indexer)'
+  step: implement
+  deps:
+  - C.moe_full.indexer
+  - S.moe_full.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    layer: 1
+  frozen:
+    at: '2026-09-29T11:08:25'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_05_indexer.py: 1625eafd96b62b9e1cd95fd9d309a7977c4c8472819f3b6aab8b9b570c962094
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.attention
+  title: moe_full attention (attention) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
+    metrics:
+      pcc_attention_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: attention
+    kind: attention
+    layer: 1
+    stateful: true
+  frozen:
+    at: '2026-09-29T11:26:58'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py: c544c0293dde214e5d53329fa80cd0178538b968a5fb4bafd295352b9d595ea4
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.06
+  title: 'moe_full block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.moe_full.attention
+  - S.moe_full.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    layer: 1
+  frozen:
+    at: '2026-09-29T11:46:10'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_06_attention.py: 57719d87ee2a6c94745c119b8090f15fe24dc3833c64372c45e69d1d28746db7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.attn_residual
+  title: moe_full attn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
+    metrics:
+      pcc_attn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: attn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T11:58:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attn_residual.py: 2924fadb86b83956468c43c36ebfc485fd48924ed9cfe7eb98e6c7157e7194e1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.07
+  title: 'moe_full block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.moe_full.attn_residual
+  - S.moe_full.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    layer: 1
+  frozen:
+    at: '2026-09-29T12:12:04'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_07_attn_residual.py: 8b291c39677910587190016f09a88faacd2322f9175d95deceb05f8d5f7e5e21
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.ffn_hc
+  title: moe_full ffn_hc (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: ffn_hc
+    kind: op
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T12:22:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc.py: 1b0fbc8eef1b672564423efe169963bad3d8b456770d38e7ffc9876b5d928fe7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.08
+  title: 'moe_full block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.moe_full.ffn_hc
+  - S.moe_full.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 1
+  frozen:
+    at: '2026-09-29T12:42:17'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_08_ffn_hc.py: 7ddb045f9ac09a347e7dcbc0a30344dde834f744efb2c07c9afcd45761f307c9
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.ffn_hc_pre
+  title: moe_full ffn_hc_pre (op) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
+    metrics:
+      pcc_ffn_hc_pre_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: ffn_hc_pre
+    kind: op
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T12:51:22'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_hc_pre.py: 0230a6a391bd7d5e62a3ae4779b6c230aac4323fe40797be8e7df95faf17bd1a
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.09
+  title: 'moe_full block with steps 1-9 on device (last: ffn_hc_pre)'
+  step: implement
+  deps:
+  - C.moe_full.ffn_hc_pre
+  - S.moe_full.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    layer: 1
+  frozen:
+    at: '2026-09-29T13:03:45'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_09_ffn_hc_pre.py: 6d8a328becce573d120531bfe2d8bd3a8e563b0ffcb4ebd96a4ea69141f7db81
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.ffn_norm
+  title: moe_full ffn_norm (norm) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: ffn_norm
+    kind: norm
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T13:12:41'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_norm.py: c8bdef8db760414a8526d5d06d1e2a31056883a594f0999fef58fd3279c9c0cd
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.10
+  title: 'moe_full block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.moe_full.ffn_norm
+  - S.moe_full.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    layer: 1
+  frozen:
+    at: '2026-09-29T13:28:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_10_ffn_norm.py: 003252ec8b940937c5ff37eeaecc7607ef9f2408fd026fc431d7bd5100d67293
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.router
+  title: moe_full router (router) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+    metrics:
+      pcc_router_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: router
+    kind: router
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T13:39:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_router.py: dcc27987340a95bccc93f8d033d1bed6082151337a9fccd4dfa9f554c2fdce51
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.11
+  title: 'moe_full block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.moe_full.router
+  - S.moe_full.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    layer: 1
+  frozen:
+    at: '2026-09-29T13:55:21'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_11_router.py: 473eb568e323c52844b205bf7f6f7927518971ef1b2929d62788b2533c45c4fa
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.experts
+  title: moe_full experts (moe) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+    metrics:
+      pcc_experts_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: experts
+    kind: moe
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T14:18:17'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_experts.py: 09939f3e2b83340d4fc1bc68e4818fe48bd21668fbfc71acb7079e163568c00a
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.12
+  title: 'moe_full block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.moe_full.experts
+  - S.moe_full.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    layer: 1
+  frozen:
+    at: '2026-09-29T14:47:28'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_12_experts.py: 9590862daefe0d1f4a862ca5c6804c3dfe728c6e42040da55cd8d9fe9c6107e3
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.shared_expert
+  title: moe_full shared_expert (mlp) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py
+    metrics:
+      pcc_shared_expert_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: shared_expert
+    kind: mlp
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T14:57:14'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_shared_expert.py: a41db1851407755bd6f1b0a124c89500de5071ed9a1bbde781ae35e1f1dc9c5e
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.13
+  title: 'moe_full block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.moe_full.shared_expert
+  - S.moe_full.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 1
+  frozen:
+    at: '2026-09-29T15:10:24'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_13_shared_expert.py: 7f5e511cfcbcb2b141c27af5b4597939addb7bb05a3035f43562a12722332ce1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.moe_combine
+  title: moe_full moe_combine (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+    metrics:
+      pcc_moe_combine_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: moe_combine
+    kind: residual
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T15:23:39'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_moe_combine.py: 146f14597d0ac73c0b63ad0497f3aad720393befdd87e7b709f4417c94ee5567
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.14
+  title: 'moe_full block with steps 1-14 on device (last: moe_combine)'
+  step: implement
+  deps:
+  - C.moe_full.moe_combine
+  - S.moe_full.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_combine
+    layer: 1
+  frozen:
+    at: '2026-09-29T15:41:32'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_14_moe_combine.py: ccb5f9ef698478c506a4012a03ab4d37268b843e4dbee8c19a7af3848214bcd0
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_full.ffn_residual
+  title: moe_full ffn_residual (residual) on device, layer 1
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L01: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    step: ffn_residual
+    kind: residual
+    layer: 1
+    stateful: false
+  frozen:
+    at: '2026-09-29T15:56:54'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_ffn_residual.py: bb760d3b83680e725ed7868188e6eac9c27537c0cedee22cefa445b96aeb33bb
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_full.15
+  title: 'moe_full block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.moe_full.ffn_residual
+  - S.moe_full.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_full
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - indexer
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_combine
+    - ffn_residual
+    layer: 1
+  frozen:
+    at: '2026-09-29T16:12:34'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py: 312e55db8d4a4dd8ab1d5290917dc8e540fdcc300463b70218738b51581eec7e
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.attn_hc
+  title: moe_shared attn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
+    metrics:
+      pcc_attn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: attn_hc
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T16:25:28'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc.py: 267022137cef605666d057da8aac5cd44249995611ddb87de32b2746eb7f5d67
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.01
+  title: 'moe_shared block with steps 1-1 on device (last: attn_hc)'
+  step: implement
+  deps:
+  - C.moe_shared.attn_hc
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    layer: 2
+  frozen:
+    at: '2026-09-29T16:39:23'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_01_attn_hc.py: c5e45c02329641415834ab7d443e597ea78c8fa48cb1f71e1e19980d507fe104
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.attn_hc_pre
+  title: moe_shared attn_hc_pre (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
+    metrics:
+      pcc_attn_hc_pre_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: attn_hc_pre
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T16:44:57'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_hc_pre.py: 43544f370eb4e12085be270868e372a19257ed6f550e2a3aac97dec2e96ef0b7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.02
+  title: 'moe_shared block with steps 1-2 on device (last: attn_hc_pre)'
+  step: implement
+  deps:
+  - C.moe_shared.attn_hc_pre
+  - S.moe_shared.01
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    layer: 2
+  frozen:
+    at: '2026-09-29T16:55:14'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_02_attn_hc_pre.py: 4a1010dd5d84885a5aa7cab5242dd2dd05a235049eeb0b640a7d3b14869724ce
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.attn_norm
+  title: moe_shared attn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
+    metrics:
+      pcc_attn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: attn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T17:00:09'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_norm.py: 033f2e444e283fb35b7f4a83f345226f3e8ee8bec3933ed6db95022f708f3175
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.03
+  title: 'moe_shared block with steps 1-3 on device (last: attn_norm)'
+  step: implement
+  deps:
+  - C.moe_shared.attn_norm
+  - S.moe_shared.02
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    layer: 2
+  frozen:
+    at: '2026-09-29T17:08:51'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_03_attn_norm.py: 36ff4bd01daed03331f364dfca176582ff5f83d5930521513a330907834339a7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.q_a
+  title: moe_shared q_a (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
+    metrics:
+      pcc_q_a_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: q_a
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T17:13:52'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_q_a.py: e7e1bfef0f0c4aaff93bd3152d29ab1c3139b9d8b80a96f21b3e6fc83227ffaf
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.04
+  title: 'moe_shared block with steps 1-4 on device (last: q_a)'
+  step: implement
+  deps:
+  - C.moe_shared.q_a
+  - S.moe_shared.03
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    layer: 2
+  frozen:
+    at: '2026-09-29T17:22:09'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_04_q_a.py: 885675fe22a1d9aabcbae2ec94e76e76608c2197b3bee0e99d26f19c5a456550
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.topk_shared
+  title: moe_shared topk_shared (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+    metrics:
+      pcc_topk_shared_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: topk_shared
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T17:29:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_topk_shared.py: bf30317695dfea00bbaac7637a414fab61a5e8e38a0782da6fff75b31649f8c0
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.05
+  title: 'moe_shared block with steps 1-5 on device (last: topk_shared)'
+  step: implement
+  deps:
+  - C.moe_shared.topk_shared
+  - S.moe_shared.04
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    layer: 2
+  frozen:
+    at: '2026-09-29T17:42:12'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_05_topk_shared.py: b7afb3e6e6c75d1d2ca2ac9b35fbc0b1256bef5528982707f406c5ec6d66da5f
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.attention
+  title: moe_shared attention (attention) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py
+    metrics:
+      pcc_attention_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: attention
+    kind: attention
+    layer: 2
+    stateful: true
+  frozen:
+    at: '2026-09-29T18:04:27'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py: 5e987498d285e98466593f4c9ae3f2a49769c36b193ee93d76f53b586c981103
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.06
+  title: 'moe_shared block with steps 1-6 on device (last: attention)'
+  step: implement
+  deps:
+  - C.moe_shared.attention
+  - S.moe_shared.05
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    layer: 2
+  frozen:
+    at: '2026-09-29T18:20:12'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_06_attention.py: 767d3d54ef57d4ad28441bf12f9ca32c54b0521e1be35f7e7d4caeb6b3917f1c
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.attn_residual
+  title: moe_shared attn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
+    metrics:
+      pcc_attn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: attn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T18:30:13'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attn_residual.py: e89a84d917c655b3f1729a77323b59d526dad4f16230f6809d9801cef46dc363
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.07
+  title: 'moe_shared block with steps 1-7 on device (last: attn_residual)'
+  step: implement
+  deps:
+  - C.moe_shared.attn_residual
+  - S.moe_shared.06
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    layer: 2
+  frozen:
+    at: '2026-09-29T18:45:37'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_07_attn_residual.py: 0b56e3f98aacb6ea07425778d87e15c2a542e08d31831623805c753fd47c201b
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.ffn_hc
+  title: moe_shared ffn_hc (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
+    metrics:
+      pcc_ffn_hc_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: ffn_hc
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T18:56:09'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc.py: 2fc7a9eb23e05a9fb8c66b98e8c882e1a2bfa9d99e173b027a79b029fbebb326
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.08
+  title: 'moe_shared block with steps 1-8 on device (last: ffn_hc)'
+  step: implement
+  deps:
+  - C.moe_shared.ffn_hc
+  - S.moe_shared.07
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    layer: 2
+  frozen:
+    at: '2026-09-29T19:18:59'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_08_ffn_hc.py: e9560a148a7d97e17add8b5d9b7a423768b9050b1e0e139735cd9e5cbe0d2f5b
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.ffn_hc_pre
+  title: moe_shared ffn_hc_pre (op) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
+    metrics:
+      pcc_ffn_hc_pre_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: ffn_hc_pre
+    kind: op
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T19:27:47'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_hc_pre.py: 093bfaa3cc4a67ed1dcce104e433e32d647b11d9bc71c9400c66060f1ecce5e5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.09
+  title: 'moe_shared block with steps 1-9 on device (last: ffn_hc_pre)'
+  step: implement
+  deps:
+  - C.moe_shared.ffn_hc_pre
+  - S.moe_shared.08
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    layer: 2
+  frozen:
+    at: '2026-09-29T19:36:06'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_09_ffn_hc_pre.py: 7a3efbc53a82bee8307bce8de40186dae529c87761aa9109db07e39b384117af
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.ffn_norm
+  title: moe_shared ffn_norm (norm) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py
+    metrics:
+      pcc_ffn_norm_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: ffn_norm
+    kind: norm
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T19:45:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_norm.py: 9465281dcc488598d14eeae6c1b369afa82fd7578d5c7db78ee2a82ee914dabd
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.10
+  title: 'moe_shared block with steps 1-10 on device (last: ffn_norm)'
+  step: implement
+  deps:
+  - C.moe_shared.ffn_norm
+  - S.moe_shared.09
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    layer: 2
+  frozen:
+    at: '2026-09-29T20:10:17'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_10_ffn_norm.py: cf479f782a2f8bac697f592cb6bf7bc7c781d33cf41dab8aedc68161f6e101fd
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.router
+  title: moe_shared router (router) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
+    metrics:
+      pcc_router_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: router
+    kind: router
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T20:19:15'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_router.py: d6288f7663c29e784c69b7cd63affb9eaa3e0817ef852344a64e3f9f5d49d40e
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.11
+  title: 'moe_shared block with steps 1-11 on device (last: router)'
+  step: implement
+  deps:
+  - C.moe_shared.router
+  - S.moe_shared.10
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    layer: 2
+  frozen:
+    at: '2026-09-29T20:30:35'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_11_router.py: 671b76a34394fbe2eb1952ce18e1dab4275bc2aa53834b132651306b3ecfe7a7
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.experts
+  title: moe_shared experts (moe) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
+    metrics:
+      pcc_experts_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: experts
+    kind: moe
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T20:52:49'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_experts.py: ac904e7dda071641b9bb8fc2577dd42fef6ed3b6c32aeca2652e7e8bf3dffbca
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.12
+  title: 'moe_shared block with steps 1-12 on device (last: experts)'
+  step: implement
+  deps:
+  - C.moe_shared.experts
+  - S.moe_shared.11
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    layer: 2
+  frozen:
+    at: '2026-09-29T21:08:45'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_12_experts.py: c0f39ca8651f4189a66e4a651aeb4375abc032b73e0d5766018b1b38267332c5
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.shared_expert
+  title: moe_shared shared_expert (mlp) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
+    metrics:
+      pcc_shared_expert_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: shared_expert
+    kind: mlp
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T21:17:45'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_shared_expert.py: cd15dc7faf085b1cff4aba5dbeb93d89039f25a7461f56231c3a4f544676f4d3
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.13
+  title: 'moe_shared block with steps 1-13 on device (last: shared_expert)'
+  step: implement
+  deps:
+  - C.moe_shared.shared_expert
+  - S.moe_shared.12
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    layer: 2
+  frozen:
+    at: '2026-09-29T21:30:07'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_13_shared_expert.py: 02c7229ef164e71e99eac7897847aa7e2f1e2b525a20e31b84becd76029e7b3e
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.moe_combine
+  title: moe_shared moe_combine (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
+    metrics:
+      pcc_moe_combine_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: moe_combine
+    kind: residual
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T21:41:19'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_moe_combine.py: e02598954454ead3aa10ade68e2ec5cba5ea660b604e3141e61768382c7bc199
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.14
+  title: 'moe_shared block with steps 1-14 on device (last: moe_combine)'
+  step: implement
+  deps:
+  - C.moe_shared.moe_combine
+  - S.moe_shared.13
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_combine
+    layer: 2
+  frozen:
+    at: '2026-09-29T21:54:11'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_14_moe_combine.py: 6130d38281c6a8e761d3f247ebc0de664b3a309466c52517d0ecc09fa2637d77
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: C.moe_shared.ffn_residual
+  title: moe_shared ffn_residual (residual) on device, layer 2
+  step: implement
+  deps:
+  - PL.1
+  - G.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_residual.py
+    metrics:
+      pcc_ffn_residual_L02: '>= 0.99'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    step: ffn_residual
+    kind: residual
+    layer: 2
+    stateful: false
+  frozen:
+    at: '2026-09-29T22:05:41'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_ffn_residual.py: 0214ac0c3d6e3f75b5383cf031fbe84857464ca67e3b9efbb9a56d9de99b31d6
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: S.moe_shared.15
+  title: 'moe_shared block with steps 1-15 on device (last: ffn_residual)'
+  step: implement
+  deps:
+  - C.moe_shared.ffn_residual
+  - S.moe_shared.14
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
+    metrics:
+      pcc_swap_out: '>= 0.98'
+  device: true
+  tests:
+  - models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py
+  freeze_extra: *id002
+  paths: *id003
+  brief:
+    block_type: moe_shared
+    swapped:
+    - attn_hc
+    - attn_hc_pre
+    - attn_norm
+    - q_a
+    - topk_shared
+    - attention
+    - attn_residual
+    - ffn_hc
+    - ffn_hc_pre
+    - ffn_norm
+    - router
+    - experts
+    - shared_expert
+    - moe_combine
+    - ffn_residual
+    layer: 2
+  frozen:
+    at: '2026-09-29T22:22:03'
+    reference: PASS
+    stub: FAIL
+    files:
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py: a95ddbb4f217a5ef38dcc1416b31e01420642680907bfbdcef77c0dae52a8da1
+      /localdev/dnijemcevic/bringup/hy4_preview_d_p/golden/s4096_c2048/manifest.json: 887fe5b7de642101d650a200da8be5d3456941515de4f37d173a239c92913909
+- id: M.1
+  title: Assemble the all-device model (hidden state on the device from embedding to final norm)
+  step: assemble
+  deps:
+  - S.dense_full.12
+  - S.moe_full.15
+  - S.moe_shared.15
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s4096
+  title: 'Ladder s4096: all chunks of 4096 in 2048'
+  step: integrate
+  deps:
+  - M.1
+  - G.s4096
+  gate:
+    cmd: BRINGUP_RUNG=s4096 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.s16384
+  title: 'Ladder s16384: all chunks of 16384 in 8192'
+  step: integrate
+  deps:
+  - L.s4096
+  - G.s16384
+  gate:
+    cmd: BRINGUP_RUNG=s16384 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: L.last
+  title: 'Ladder last: last chunk after a golden prefix of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.s16384
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+  device: true
+  paths: *id003
+- id: L.s56320
+  title: 'Ladder s56320: all chunks of 56320 in 5120'
+  step: integrate
+  deps:
+  - L.last
+  - G.s56320
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      host_transfers_per_layer: == 0
+  device: true
+  paths: *id003
+- id: K.1
+  title: Serving contract through the prefill engine API (layout, table, acks, engine input, read-back)
+  step: contract
+  deps:
+  - L.s4096
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+    metrics:
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= 0.97'
+  device: true
+  paths:
+  - models/demos/hy4_preview_d_p/tt
+- id: X.1
+  title: Warm per-section, per-chip profile of one long chunk
+  step: perf
+  deps:
+  - L.s56320
+  gate:
+    cmd: TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_total: '> 0'
+      profiled_programs: '>= 1'
+  device: true
+- id: X.2
+  title: Opportunity list ranked by measured device time
+  step: perf
+  deps:
+  - X.1
+  gate:
+    cmd: python -m models.demos.common.bringup.plan.opportunities --profile X.1
+    metrics:
+      opportunities_listed: '>= 1'
+  paths:
+  - models/demos/hy4_preview_d_p/bringup/opportunities.md
+- id: P.1
+  title: 'Attention: cut its device time without a precision change'
+  step: perf
+  role: perf
+  deps:
+  - X.2
+  device: true
+  paths:
+  - models/demos/hy4_preview_d_p/tt
+  - models/demos/hy4_preview_d_p/bringup/hooks.py
+  brief:
+    details: 'Baseline (X.1, rung last, chunk 51200->56320, 6 layers): 519.0 ms device / 521.1 ms wall; attention 212.8 ms
+      (41%, ~35 ms per layer), indexer 31.5 ms. First measure where attention''s time goes per op (BRINGUP_PROFILE_OPS=1 profile):
+      the full-mesh gather of the latent-cache prefix (up to 65 MB at 56k per layer), sparse_sdpa, the q_b / kv_b / gate /
+      o_proj matmuls and their CCLs. Then remove the largest avoidable cost, e.g. gather or reuse less of the prefix, better
+      matmul program configs, fewer or fused CCLs, or a better sparse_sdpa chunking. No precision change: owner rule 7 (HiFi4
+      everywhere, fp32 accumulation where it is now, same weight and cache dtypes, same top-k). Keep the old path selectable
+      behind a switch and record the new default in perf_settings() if the model has one. Frozen tests must pass unchanged
+      (never edit a frozen test or its limits); if a change cannot pass them, stop and report the numbers. A fork change goes
+      behind an option whose default keeps the current behaviour (skill bringup-fork-op). Report the measured before/after
+      per op.'
+  gate:
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_dense_full_attention.py &&
+      scripts/run_safe_pytest.sh --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_full_attention.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/hy4_preview_d_p/tests/bringup/test_c_moe_shared_attention.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_dense_full_12_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_full_15_ffn_residual.py && scripts/run_safe_pytest.sh --run-all
+      models/demos/hy4_preview_d_p/tests/bringup/test_swap_moe_shared_15_ffn_residual.py && BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --no-precompile --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1
+      TT_METAL_PROFILER_CPP_POST_PROCESS=1 scripts/run_safe_pytest.sh --no-precompile --run-all models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      device_ms_attention: < 190
+      device_ms_total: < 500
+      host_transfers_per_layer: == 0
+      pcc_chunk_out: '>= 0.97'
+- id: X.3
+  title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
+  step: perf
+  deps:
+  - P.1
+  gate:
+    cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000
+      BRINGUP_FULL_PREFILL=1 BRINGUP_PROFILE_OPS=1 TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 TT_METAL_PROFILER_CPP_POST_PROCESS=1
+      scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh
+      --run-all models/demos/common/bringup/tests/test_positions.py
+    metrics:
+      pcc_layer_L*: '>= 0.97'
+      pcc_state_min: '>= 0.97'
+      prefill_ms_full: '> 0'
+      pos_chunk: '>= 1'
+      op_rows: '>= 1'
+      timeline_ok: == 1
+  device: true
+- id: O.1
+  title: 'Derived-op tests: a random-input case for every ttnn.bringup call this model makes'
+  step: optests
+  deps:
+  - X.3
+  gate:
+    cmd: BRINGUP_CAPTURE_FORKS=models/demos/hy4_preview_d_p/bringup/results/fork_calls.json BRINGUP_RUNG=last scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py -p models.demos.common.bringup.testing.fork_capture
+      && python -m models.demos.common.bringup.testing.fork_cases --capture models/demos/hy4_preview_d_p/bringup/results/fork_calls.json
+      --run-tests
+    metrics:
+      forks_used: '>= 0'
+      fork_calls_uncovered: == 0
+      fork_tests_failed: == 0
+  role: optests
+  paths:
+  - ttnn/ttnn/bringup
+  device: true

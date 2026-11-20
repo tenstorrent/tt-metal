@@ -25,6 +25,7 @@ import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
 from models.demos.deepseek_v3_d_p.tt.mla.rope import interleaved_perm_matrix
+from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # DSA indexer weight names are owned by TtIndexer.WEIGHT_NAMES (single source of truth). A
 # module-level INDEXER_WEIGHT_NAMES alias is defined at the bottom of this file for back-compat.
@@ -162,9 +163,7 @@ class TtIndexerBase:
         return True
 
     @classmethod
-    def build_ttnn_cache(
-        cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1
-    ) -> None:
+    def build_ttnn_cache(cls, idx_host, cache_path, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int) -> None:
         """Write the indexer tensorbins to disk (device=None, no device copy)."""
         cls._convert_and_cache_weights(
             idx_host, mesh_device, config, layer_idx, sp_axis, tp_axis, cache_path=cache_path, device=None
@@ -172,7 +171,7 @@ class TtIndexerBase:
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         """Indexer weights → device (or cache). Mirrors dense MLA's converter:
         - host tensors present: transpose/shard/replicate and (optionally) write the cache;
@@ -233,6 +232,7 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         def shard(
@@ -248,6 +248,7 @@ class TtIndexerBase:
                 memory_config=mem,
                 mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=dims),
                 cache_file_name=_cache_name(short),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         # wq_b is REPLICATED (all H_idx heads on every chip) so the indexer_score head-sum is COMPLETE
@@ -976,6 +977,9 @@ class TtIndexerBase:
             block_cyclic_chunk_local=q_dev.shape[2],
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
+            # Q rows and the index cache are SP-major (sp_coord*tp + tp_coord): row-major on the mesh at
+            # sp_axis=0, column-major at sp_axis=1.
+            full_mesh_outer_axis=self.sp_axis,
         )
         if host_start is not None:
             _fused_ring_host_timing["calls"] += 1
@@ -1176,7 +1180,7 @@ class TtCsaIndexer(TtIndexerBase):
 
     @classmethod
     def _convert_and_cache_weights(
-        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int = 0, tp_axis: int = 1, cache_path=None, device=None
+        cls, idx_host, mesh_device, config, layer_idx, sp_axis: int, tp_axis: int, cache_path=None, device=None
     ):
         index_n_heads = config.index_n_heads
         index_head_dim = config.index_head_dim
@@ -1225,6 +1229,7 @@ class TtCsaIndexer(TtIndexerBase):
                 memory_config=memory_config,
                 mesh_mapper=mapper,
                 cache_file_name=cache_name(name),
+                cache_dump_mode=weight_cache_dump_mode(),
             )
 
         result = {

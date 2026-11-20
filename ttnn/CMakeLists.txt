@@ -280,6 +280,7 @@ target_link_libraries(
         TTNN::Ops::Experimental
         TTNN::Ops::Experimental::DeepSeekPrefill
         TTNN::Ops::Experimental::Transformer
+        TTNN::Ops::Bringup # derived ops of model bring-ups (ttnn/ttnn/bringup/INDEX.md)
         TTNN::Ops::Moreh
         TTNN::Ops::Transformer
 )
@@ -335,6 +336,15 @@ if(WITH_PYTHON_BINDINGS)
         PRIVATE
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
+    )
+    # program_spec.cpp converts std::vector<uint32_t> to and from Python lists, while program_descriptors.cpp binds it
+    # as the opaque VectorUInt32. Building it on its own keeps it out of that unity batch and leaves the other files'
+    # batches as they were.
+    set_source_files_properties(
+        cpp/ttnn-nanobind/program_spec.cpp
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
     )
     target_include_directories(
         ttnn
@@ -465,6 +475,7 @@ add_subdirectory(cpp/ttnn/operations/eltwise/quantization)
 add_subdirectory(cpp/ttnn/operations/experimental)
 add_subdirectory(cpp/ttnn/operations/experimental/deepseek_prefill)
 add_subdirectory(cpp/ttnn/operations/experimental/transformer)
+add_subdirectory(ttnn/bringup)
 add_subdirectory(cpp/ttnn/kernel_lib)
 add_subdirectory(cpp/ttnn/operations/kernel_helper_functions)
 add_subdirectory(cpp/ttnn/operations/moreh)

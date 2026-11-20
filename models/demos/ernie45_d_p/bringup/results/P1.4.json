@@ -1,0 +1,21 @@
+{
+ "metrics": {
+  "book_top5_acc_last_chunk": {
+   "t": "2026-09-24T19:31:18",
+   "value": 0.884709358215332
+  },
+  "cpu_seconds": {
+   "t": "2026-09-24T19:31:18",
+   "value": 85.3
+  },
+  "golden_chunks": {
+   "t": "2026-09-24T19:31:18",
+   "value": 2
+  },
+  "golden_layers": {
+   "t": "2026-09-24T19:31:18",
+   "value": 28
+  }
+ },
+ "task": "P1.4"
+}

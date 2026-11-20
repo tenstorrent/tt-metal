@@ -1,0 +1,118 @@
+{
+ "used": [
+  {
+   "id": "DS41-324",
+   "how": "one region a layer for every lane in one-call mode; LaneSend has its own global semaphore, apart from WindowSend's and the per-segment snapshot instances",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-325",
+   "how": "ran every walls measurement with DS41_ENGRAM_TABLE=resident in the iteration command and reported the gate-cmd fix (not settable inside the test)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-245",
+   "how": "explained the gate walls' mmap tables: the Setting's pytest test value",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-316",
+   "how": "the mesh-only LaneCopy / LaneSend test ran on a freshly started runner before the model load (0 device opens)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-290",
+   "how": "the first one-call version copied each lane's gather buffer into one table (the stock gather cannot target a region); replaced by the sdpa fork's kv_lanes",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-311",
+   "how": "test_onecall_sizes reloads packed_common (importlib.reload) as the packed tests do",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "K-1",
+   "how": "rolled / sliced rows and lane slices never free a tensor that may wrap their input (the gathered rows kept until every lane is written)",
+   "traced": false,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "a model python edit on the resident runner reloads the model and twice cost a fresh device open; lint with the pre-commit cache's pyflakes before every submit (a NameError cost one)",
+  "a cached per-device program re-binds its buffers by their position in tensor_args: a device -> tensor map that varies per call must be in the program hash (DS41-326)",
+  "the rt profiler's op mode with rt=True (profiler.enable(mesh, ops=True, rt=True)) gives per-op device time in each signposted section without syncs: the cheapest way to split a section (tests/packed/test_onecall_host.py)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded or inflated: lanes without a segment run no copies or writes; the lane send's scratch tails / rings are never read; no zero-padded weights"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "DECIDED lines in BREADCRUMBS PPB.3A (v2 design without moves, the per-capacity ring fallback, MoE pad exclusion to PB.4); kept going on every failure (missing import, lane-map hash, unequal capacities)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every oracle / sizes rung on the one 40-layer load (DS41_PACKED_LAYERS picks the layers), the walls / probes on the one 21-layer load; no load-time env in any test (PB3A_PROBE_POS / PB3A_SIZES_OFF are BATCH_ITEM_VARS, read per run)"
+  }
+ ],
+ "cited_only": [
+  "DS41-326",
+  "DS41-328"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.3A",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T02:15:01",
+  "head": "2edd7a1be72",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.3A.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.3A.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_host.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_onecall_sizes.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_onecall.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/indexer_score/CHANGELOG.md",
+   "ttnn/ttnn/bringup/indexer_score/README.md",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_device_operation_types.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/indexer_score_host_common.hpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.cpp",
+   "ttnn/ttnn/bringup/indexer_score/device/ring_indexer_score_dsa_program_factory.hpp",
+   "ttnn/ttnn/bringup/indexer_score/indexer_score_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/CHANGELOG.md",
+   "ttnn/ttnn/bringup/sdpa/README.md",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.cpp",
+   "ttnn/ttnn/bringup/sdpa/device/sparse_sdpa_lanes_device_operation.hpp",
+   "ttnn/ttnn/bringup/sdpa/sdpa_nanobind.cpp",
+   "ttnn/ttnn/bringup/sdpa/sources.cmake",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.cpp",
+   "ttnn/ttnn/bringup/sdpa/sparse_sdpa.hpp"
+  ]
+ }
+}

@@ -1,0 +1,420 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "flat_routed_expert_nanobind.hpp"
+
+#include <map>
+#include <set>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/vector.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/string.h>
+
+#include <tt-metalium/mesh_device.hpp>
+
+#include "flat_routed_expert.hpp"
+#include "device/flat_drisc.hpp"
+#include "device/flat_pinned.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
+
+namespace ttnn::operations::bringup::detail {
+
+namespace nb = nanobind;
+namespace fre = ttnn::operations::bringup::flat_routed_expert;
+
+namespace {
+nb::list cores(const std::vector<tt::tt_metal::CoreCoord>& cs) {
+    nb::list l;
+    for (const auto& c : cs) {
+        l.append(nb::make_tuple(c.x, c.y));
+    }
+    return l;
+}
+
+// The plan's layout facts the weight preparation and the done words need (see flat_routed_expert_plan.hpp).
+nb::dict plan_dict(
+    tt::tt_metal::distributed::MeshDevice* device,
+    uint32_t hidden,
+    uint32_t intermediate,
+    uint32_t experts_per_chip,
+    uint32_t num_global_experts,
+    uint32_t max_tokens_per_expert,
+    bool weights_bf8,
+    uint32_t pin,
+    bool x_bf16,
+    bool h_bf16,
+    const fre::FlatLayoutOptions& layout,
+    uint32_t max_y_writers,
+    bool down_weights_bf4) {
+    const auto p = fre::flat_routed_expert_plan(
+        device,
+        fre::FlatRoutedExpertConfig{
+            .hidden = hidden,
+            .intermediate = intermediate,
+            .experts_per_chip = experts_per_chip,
+            .num_global_experts = num_global_experts,
+            .max_tokens = (max_tokens_per_expert + 31) / 32 * 32,
+            .weights_bf8 = weights_bf8,
+            .activation = 0,
+            .pin = pin,
+            .x_bf16 = x_bf16,
+            .h_bf16 = h_bf16,
+            .layout = layout,
+            .max_y_writers = max_y_writers,
+            .down_weights_bf4 = down_weights_bf4});
+    nb::dict d;
+    d["nsg"] = p->nsg;
+    d["n_rd"] = p->readers.size();
+    d["n_rd_sg"] = p->n_rd_sg;
+    d["np"] = p->np;
+    d["g"] = p->g;
+    d["mt"] = p->mt;
+    d["rg"] = p->rg;
+    d["uneven"] = p->uneven;
+    d["hg"] = p->hg;
+    d["nu"] = p->nu;
+    d["rgs"] = p->rgs;  // (uneven split: pair-sets per reader / first pair-set; empty when even)
+    d["ps0"] = p->ps0;
+    d["nk_gu"] = p->nk_gu;
+    d["kblk"] = 8;
+    d["nd"] = p->down.size();
+    d["pcds"] = p->pcds;
+    d["col0s"] = p->col0s;
+    d["rdown"] = p->rdown;
+    d["n_rdn"] = p->n_rdn;
+    d["pcd_r"] = p->pcd_r;
+    d["kd_r"] = p->kd_r;
+    d["nblk_r"] = p->nblk_r;
+    d["rem_cols"] = p->rem_cols;
+    d["banks"] = p->banks;
+    d["dw_rot"] = p->dw_rot;
+    d["wd_rot_tiles"] = p->wd_tile ? p->wd_rot_region / p->wd_tile : 0;
+    d["x_slots"] = p->x_slots;
+    d["hbuf"] = p->hbuf;
+    d["hu"] = p->hu;
+    d["gu_rp"] = p->gu_rp;
+    d["gu_l1acc"] = p->gu_l1acc;
+    d["arena_tiles"] = p->arena_tiles;
+    d["static_l1_bytes"] = p->static_l1_bytes;  // (the program's static CBs: leave this much L1 below the arena)
+    d["even_split"] = p->even_gu;               // (the gate/up split is the even one)
+    // (per-role arena offsets, bytes: gate/up x ring at x_off .. h_local at hl_off; down h at h_off, out at o_off;
+    // Tensix readers' rings end at rd_off; relays' staging ends at ti_off)
+    d["role_offsets"] = std::map<std::string, uint32_t>{
+        {"x_off", p->x_off},
+        {"p_off", p->p_off},
+        {"hl_off", p->hl_off},
+        {"rd_off", p->rd_off},
+        {"h_off", p->h_off},
+        {"o_off", p->o_off},
+        {"ti_off", p->ti_off}};
+    d["role_bytes"] = std::map<std::string, uint32_t>{
+        {"gu", p->gu_bytes}, {"down", p->dn_bytes}, {"relay", p->relay_bytes}, {"reader", p->rd_off}};
+    d["coords"] = cores(p->coords);
+    d["readers"] = cores(p->readers);
+    d["gu"] = cores(p->gu);
+    d["relays"] = cores(p->relays);
+    d["down"] = cores(p->down);
+    d["gu_idle"] = cores(p->gu_idle);
+    d["arena_cores"] = cores(p->arena_cores());
+    // DRISC: which reader cells still run Tensix readers (the others are free unless they became down cores) and the
+    // launcher (posts the DRISC jobs when no Tensix reader is left to)
+    // the per-call schedule's parameters (flat_schedule_defines without the pinning ones, which follow the call's
+    // pin): another op rebuilding a chip's schedule from counts (se_dyn_from_counts) must use the same
+    d["sched_rps"] = p->mt * 32;
+    d["sched_max_e"] = p->E <= 16 ? 16u : (p->E <= 32 ? 32u : 64u);
+    d["sched_gu_nreg"] = p->nk_gu ? p->ring_g / p->nk_gu : 0u;
+    d["drisc"] = p->drisc;
+    d["dual"] = p->dual;
+    {
+        std::vector<tt::tt_metal::CoreCoord> trd;
+        for (uint32_t r = 0; r < p->readers.size(); ++r) {
+            if (p->tensix_reader(r)) {
+                trd.push_back(p->readers[r]);
+            }
+        }
+        if (p->drisc && !p->dual) {
+            trd.push_back(p->launcher);
+        }
+        d["tensix_readers"] = cores(trd);
+    }
+    {  // the wiring, for NoC models: reader tails (reader, chain tail), down chains (down -> successor)
+        nb::list rdn, succ;
+        for (const auto& [r, t] : p->rdn) {
+            rdn.append(nb::make_tuple(r, t));
+        }
+        for (const auto& [a, b] : p->d_succ) {
+            succ.append(nb::make_tuple(a, b));
+        }
+        d["rdn"] = rdn;
+        d["d_succ"] = succ;
+        d["col0s"] = p->col0s;
+    }
+    {  // the y writers in the program factory's order (a writer's index in the combine's L1 hand-off): the reader
+       // tails (by pair-set count, then non-DRISC / DRISC slots), then the down cores grouped by column width
+        std::vector<tt::tt_metal::CoreCoord> yw;
+        const auto rg_at = [&](uint32_t r) { return p->rgs.empty() ? p->rg : p->rgs[r]; };
+        if (p->rdown) {
+            std::set<uint32_t> rgk;
+            for (const auto& [r, t] : p->rdn) {
+                rgk.insert(rg_at(r));
+            }
+            for (const uint32_t k : rgk) {
+                for (const bool dual_set : {false, true}) {
+                    for (const auto& [r, t] : p->rdn) {
+                        if ((p->dual && p->drisc_slot(r)) == dual_set && rg_at(r) == k) {
+                            yw.push_back(p->readers[r]);
+                        }
+                    }
+                }
+            }
+        }
+        std::map<uint32_t, std::vector<uint32_t>> dgroups;
+        for (uint32_t i = 0; i < p->down.size(); ++i) {
+            dgroups[p->pcds[i]].push_back(i);
+        }
+        for (const auto& [pw, ds] : dgroups) {
+            for (const uint32_t i : ds) {
+                yw.push_back(p->down[i]);
+            }
+        }
+        d["y_writers"] = cores(yw);
+    }
+    return d;
+}
+}  // namespace
+
+void bind_flat_routed_expert(nb::module_& mod) {
+    // the layout / program choices (FlatLayoutOptions: typed, in the plan key and the program hashes); presets in
+    // ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_layouts.py
+    nb::class_<fre::FlatLayoutOptions>(mod, "FlatLayoutOptions")
+        .def(nb::init<>())
+        .def_rw("drisc", &fre::FlatLayoutOptions::drisc)
+        .def_rw("drisc_dual", &fre::FlatLayoutOptions::drisc_dual)
+        .def_rw("drisc_in_overlap", &fre::FlatLayoutOptions::drisc_in_overlap)
+        .def_rw("drisc_pure", &fre::FlatLayoutOptions::drisc_pure)
+        .def_rw("max_down", &fre::FlatLayoutOptions::max_down)
+        .def_rw("x_helpers", &fre::FlatLayoutOptions::x_helpers)
+        .def_rw("half_width", &fre::FlatLayoutOptions::half_width)
+        .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
+        .def_rw("single_subgrid", &fre::FlatLayoutOptions::single_subgrid)
+        .def_rw("even_split", &fre::FlatLayoutOptions::even_split)
+        .def_rw("rows_hint", &fre::FlatLayoutOptions::rows_hint)
+        .def_rw("gu_kgroup", &fre::FlatLayoutOptions::gu_kgroup)
+        .def_rw("x_ready", &fre::FlatLayoutOptions::x_ready)
+        .def_rw("row0", &fre::FlatLayoutOptions::row0)
+        .def_rw("row1", &fre::FlatLayoutOptions::row1)
+        .def_rw("x_path", &fre::FlatLayoutOptions::x_path)
+        .def_rw("x_snakes", &fre::FlatLayoutOptions::x_snakes)
+        .def_rw("x_pieces", &fre::FlatLayoutOptions::x_pieces)
+        .def_rw("x_fwd_ncrisc", &fre::FlatLayoutOptions::x_fwd_ncrisc)
+        .def_rw("x_fwd_noc", &fre::FlatLayoutOptions::x_fwd_noc)
+        .def_rw("x_fwd_depth", &fre::FlatLayoutOptions::x_fwd_depth)
+        .def_rw("x_relay_depth", &fre::FlatLayoutOptions::x_relay_depth)
+        .def_rw("x_once", &fre::FlatLayoutOptions::x_once)
+        .def_rw("dw_batch", &fre::FlatLayoutOptions::dw_batch)
+        .def_rw("pin_ratio", &fre::FlatLayoutOptions::pin_ratio)
+        .def("key", &fre::FlatLayoutOptions::key)
+        .def("__repr__", [](const fre::FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
+        .def("__eq__", [](const fre::FlatLayoutOptions& a, const fre::FlatLayoutOptions& b) { return a == b; });
+    ttnn::bind_function<"flat_routed_expert", "ttnn.bringup.">(
+        mod,
+        R"doc(
+        Flat spatially pipelined routed experts (Blackhole): every local expert's SwiGLU FFN in ONE program that
+        streams each expert's weights once through a spatial pipeline. Reads the row-major bf16 dispatch buffer and
+        the routing's counts / regions rows on device (no tilize, no host sync).
+
+        Args:
+            dispatched_buffer (ttnn.Tensor): [rows, H] bf16 ROW_MAJOR, DRAM interleaved.
+            expert_token_counts (ttnn.Tensor): [1, num_global_experts] uint32 ROW_MAJOR.
+            expert_region_offsets (ttnn.Tensor): [1, num_global_experts] uint32 ROW_MAJOR.
+            global_expert_ids (ttnn.Tensor): [experts_per_chip] uint32 ROW_MAJOR (per device).
+            gate_up_weights, down_weights (ttnn.Tensor): the plan's bank layout (bfp4 / bfp8).
+            reader_down_weights (ttnn.Tensor, optional): when the plan has reader tails (``rdown``).
+            done_words (ttnn.Tensor): persistent zeroed L1 tensor on the plan's ``coords`` cores.
+            intermediate (int): the expert intermediate size (per device).
+            max_tokens_per_expert (int): the dispatch capacity per expert (>= 256).
+
+        Keyword Args:
+            activation (int): 0 SiLU, 1 SwiGluOai, 2 SituGlu, 3 ClampedSiluGlu, 4 GeluTanh.
+            pin (int): pin the largest expert's weights in chunks of >= pin sub-blocks (0: off).
+            token_index (ttnn.Tensor, optional): [1, rows] uint32 ROW_MAJOR DRAM. Indexed mode: row r of the flat
+                (region) space reads x row token_index[r] (x is then e.g. the all-gathered tokens, not a dispatch
+                buffer); y has token_index's rows.
+            x_pages_per_row (int): x stores each token row as this many consecutive pages ([rows * P, H / P]
+                row-major): P = 8 at H 4096 puts a 1 KB piece of every row in each of the 8 DRAM banks, so the reads
+                stay bank-balanced whatever rows the routing picks.
+
+            y_row_major (bool): y as row-major bf16 [rows, H] (one page per row), pack-untilized on the down cores,
+                instead of bfp8 tiles.
+            down_fp32 (bool): accumulate the down projection in fp32 DEST (full-sync DST) instead of bf16 DEST (whose
+                rounding inflates y by ~3-4% with bfp4 weights at K 2048); ~2% more kernel time.
+            pack_stochastic_rounding (bool): stochastic rounding in the compute kernels' packers (x tilize, h, y).
+                The default packer rounds bf16 -> bfp8 ties away from zero, a +0.28% magnitude bias per pack on
+                bf16-valued data that adds up to ~+1.25% on y; unbiased with this, at slightly more noise.
+            x_bf16 (bool): x as bf16 tiles (the relays tilize to bf16; else bfp8). Must match the plan the weights were
+                laid out with (flat_routed_expert_plan(..., x_bf16)).
+            h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
+            y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
+            math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
+            layout (FlatLayoutOptions): the layout / program choices (presets: flat_layouts.py); must match the
+                plan the weights were laid out with (flat_routed_expert_plan(..., layout)).
+            weights_nk (bool): the weights were laid out from nn.Linear's [N, K] matrices (flat_weight_regions(...,
+                nk=True): each tile the transpose of the x @ W tile, so a bfp8 tile shares its exponents along K) and
+                every weight matmul transposes its in1 tile back.
+            hidden (int): H when x's rows are wider (0: x's width x x_pages_per_row): the relays read each row's first
+                H values (x_pages_per_row 1, no token_index), e.g. a dispatch buffer with extra columns per row.
+            max_y_writers (int): at most this many y writers, down cores + reader tails (0: off, the plan unchanged;
+                DeepSeek-V4.1: an appended combine's L1 hand-off limit). As the plan the weights were laid out with.
+
+        Returns:
+            ttnn.Tensor: y [rows, H] bfp8 TILE, or bf16 ROW_MAJOR with y_row_major (rows: token_index's length in
+            indexed mode), written at the active experts' rows.
+        )doc",
+        &fre::flat_routed_expert,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("global_expert_ids").noconvert(),
+        nb::arg("gate_up_weights").noconvert(),
+        nb::arg("down_weights").noconvert(),
+        nb::arg("reader_down_weights") = nb::none(),
+        nb::arg("done_words").noconvert(),
+        nb::arg("intermediate"),
+        nb::arg("max_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("activation") = 0,
+        nb::arg("pin") = 1,
+        nb::arg("token_index") = nb::none(),
+        nb::arg("x_pages_per_row") = 1,
+        nb::arg("y_row_major") = false,
+        nb::arg("down_fp32") = false,
+        nb::arg("pack_stochastic_rounding") = false,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false,
+        nb::arg("y_bf16") = false,
+        nb::arg("math_fidelity") = 0,
+        nb::arg("layout") = fre::FlatLayoutOptions{},
+        nb::arg("output") = nb::none(),
+        nb::arg("weights_nk") = false,
+        nb::arg("hidden") = 0,
+        nb::arg("max_y_writers") = 0);
+
+    ttnn::bind_function<"flat_routed_expert_with_program", "ttnn.bringup.">(
+        mod,
+        R"doc(
+        The flat routed expert with another op's programs appended, one program per chip: the flat expert's arguments
+        as for flat_routed_expert, plus the caller's persistent arena (over the flat expert's cores and the other op's
+        cells) and y ([rows, H] bf16 ROW_MAJOR, DRAM), the other op's MeshProgramDescriptor (extra_key: its cache key),
+        and where the y writers report each local expert (counts[e] += 1 per writer and call at counts_addr on the
+        logical collector core; writers: the expected writer count). math_fidelity / weights_nk (DeepSeek-V4.1 P.8):
+        as for flat_routed_expert (defaults: LoFi, [K, N] weight tiles, the program before).
+        patch_addresses (DeepSeek-V4.1 FIX.5; default False = the program before, every buffer address in its cache
+        key): no address in the key; a hit patches every buffer address (the flat program's, the writers' report and
+        L1 hand-off args, the extra program's arena CBs); extra_addrs: the addresses the extra program bakes into its
+        runtime args - when they differ from the cached program's, the call must pass extra (its args are copied in).
+        max_y_writers (DeepSeek-V4.1; default 0 = off): at most this many y writers, as flat_routed_expert's.
+        Returns y.
+        )doc",
+        &fre::flat_routed_expert_with_program,
+        nb::arg("dispatched_buffer").noconvert(),
+        nb::arg("expert_token_counts").noconvert(),
+        nb::arg("expert_region_offsets").noconvert(),
+        nb::arg("global_expert_ids").noconvert(),
+        nb::arg("gate_up_weights").noconvert(),
+        nb::arg("down_weights").noconvert(),
+        nb::arg("reader_down_weights") = nb::none(),
+        nb::arg("done_words").noconvert(),
+        nb::arg("intermediate"),
+        nb::arg("max_tokens_per_expert"),
+        nb::kw_only(),
+        nb::arg("arena").noconvert(),
+        nb::arg("y").noconvert(),
+        nb::arg("extra"),
+        nb::arg("extra_key"),
+        nb::arg("collector"),
+        nb::arg("counts_addr"),
+        nb::arg("writers"),
+        nb::arg("activation") = 0,
+        nb::arg("pin") = 1,
+        nb::arg("token_index") = nb::none(),
+        nb::arg("down_fp32") = false,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false,
+        nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
+        nb::arg("relay_words") = nb::none(),
+        nb::arg("y_l1") = nb::none(),
+        nb::arg("layout") = fre::FlatLayoutOptions{},
+        nb::arg("math_fidelity") = 0,
+        nb::arg("weights_nk") = false,
+        nb::arg("patch_addresses") = false,
+        nb::arg("extra_addrs") = std::vector<uint32_t>{},
+        nb::arg("max_y_writers") = 0);
+    mod.def(
+        "flat_routed_expert_plan",
+        &plan_dict,
+        nb::arg("device"),
+        nb::arg("hidden"),
+        nb::arg("intermediate"),
+        nb::arg("experts_per_chip"),
+        nb::arg("num_global_experts"),
+        nb::arg("max_tokens_per_expert"),
+        nb::arg("weights_bf8") = false,
+        nb::arg("pin") = 1,
+        nb::arg("x_bf16") = false,
+        nb::arg("h_bf16") = false,
+        nb::arg("layout") = fre::FlatLayoutOptions{},
+        nb::arg("max_y_writers") = 0,
+        nb::arg("down_weights_bf4") = false,
+        "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). "
+        "max_y_writers (0: off): at most this many y writers (down cores + reader tails), the rest of the down cells "
+        "idle; the op's calls must pass the same value. down_weights_bf4 (with weights_bf8): bfp4 down weights under "
+        "bfp8 gate/up ones (the op takes it from the down weights' dtype).");
+    mod.def(
+        "flat_drisc_stop",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_stop(device);
+        },
+        nb::arg("device"),
+        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (layout.drisc); call before "
+        "closing it.");
+    mod.def(
+        "flat_drisc_dump",
+        [](tt::tt_metal::distributed::MeshDevice* device) {
+            ttnn::operations::bringup::flat_routed_expert::flat_drisc_dump(device);
+        },
+        nb::arg("device"),
+        "Logs the flat expert's DRISC senders' words (debug).");
+    // the routed-expert upload's pinned host memory window (bank_major.py pinned_upload; device/flat_pinned.hpp)
+    mod.def(
+        "pinned_memory_limit",
+        [](tt::tt_metal::distributed::MeshDevice* device) { return fre::pinned_memory_limit(device); },
+        nb::arg("device"),
+        "tt-metal's pinned host memory cache limit (bytes) of this mesh device's environment (default 4 GiB, "
+        "TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES).");
+    mod.def(
+        "set_pinned_memory_limit",
+        [](tt::tt_metal::distributed::MeshDevice* device, size_t limit_bytes) {
+            return fre::set_pinned_memory_limit(device, limit_bytes);
+        },
+        nb::arg("device"),
+        nb::arg("limit_bytes"),
+        "Sets tt-metal's pinned host memory cache limit (read at every pin request) and returns the previous one. "
+        "Lowering it unpins nothing already pinned (the cache evicts only when a later pin needs room): "
+        "release_pinned does.");
+    mod.def(
+        "release_pinned",
+        [](const ttnn::Tensor& host_tensor) { return fre::release_pinned(host_tensor); },
+        nb::arg("host_tensor"),
+        "Unpins every shard of a host tensor (drops their pinned-memory cache entries; a pin a transfer still holds "
+        "goes when the transfer lets go). Returns the shards' bytes. Freeing the tensor also does this (tt-metal's "
+        "HostBuffer final-release hook), before the memory goes.");
+    mod.def(
+        "pinned_cache_entries",
+        []() { return fre::pinned_cache_entries(); },
+        "The number of entries tt-metal's pinned-memory cache holds.");
+}
+
+}  // namespace ttnn::operations::bringup::detail

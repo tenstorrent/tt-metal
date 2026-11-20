@@ -1,0 +1,67 @@
+{
+ "used": [
+  {
+   "id": "DS41-213",
+   "how": "kept the served-bytes check against the stock cast (exact) and the tt-blaze recipe within one step; did not change the cast to match pack_index_keys",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-215",
+   "how": "left _region (the non-aligned start path into k8) unchanged; under bf16 the served rows are encoded from the tile after _region instead of a separately rounded bfp8 temp",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "every gate unit and the measure ran detached through devjob, none under a tool timeout",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the quick-mode measure only knows its quick / p51200 parts; the brief's `measure --part <test stem>` applies to ab_mode full only (use gate --check --unit 'P.44#<stem>', unit names carry the task prefix)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work; the change removes two ops a write"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "no new Python-built op; bfp_round still prepared=True (CKV_BFP4_PREPARED); fp8_rows_tile / pack_fp8_rows unchanged"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork suite run; only the model's units test_index_k_copy and test_kv_layout plus orchestrator measure"
+  }
+ ],
+ "cited_only": [
+  "DS41-226"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.44",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-10T17:22:38",
+  "head": "b06a0cbd169",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.44.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/migration_configs.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/serving_contract.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_index_k_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}

@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "K-30",
+   "how": "RoPE done with fp32 SFPU eltwise instead of rotary_embedding_llama (FPU at ~TF32); kv partials via tp_sum (all_gather + SFPU add)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-1",
+   "how": "kept every step before the fp8 q-dq exact so only the GEMM sum order flips e4m3 roundings (0.8 %)",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-13",
+   "how": "reused tt/quant.py:fp8_qdq for the input act quant and the output e4m3 RNE",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-14",
+   "how": "made the output bit-on the fp8 grid (RNE fp8_qdq) to meet the test's off-grid == 0 and mismatch checks",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-12",
+   "how": "kv_norm via TtDistributedRmsNorm(split=False), not ttnn.rms_norm on fp32",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-5",
+   "how": "laid the rope pairs out as two 32-wide tile-aligned blocks ([even | odd]) instead of 16-wide slices",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-52",
+   "how": "read the collect pass's FAIL lines as the precompile stub, judged the real pass",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-56",
+   "how": "deleted tests/ttnn/unit_tests/operations/ds41_kv after the probe",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-57",
+   "how": "probe opened the whole 2x2 mesh with FABRIC_2D",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "which data-movement ops are bit-exact on fp32 (RM / TILE transpose, permute, mesh_partition): probed exact here",
+  "how a chip writes its owned positions of a served ROW_MAJOR cache when the per-chip offset differs (SPMD ops take one offset)"
+ ],
+ "cited_only": [
+  "DS41-15"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "C.swa.kv",
+  "role": "implement",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-15T13:26:23",
+  "head": "c522ddff655",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/C.swa.kv.implement.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/kv.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/q_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py"
+  ]
+ }
+}

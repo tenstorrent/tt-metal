@@ -1,0 +1,254 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Shared pieces of the generic tests: spec, golden choice, the module under test, comparisons, mesh parameters.
+
+The module under test is chosen by BRINGUP_IMPL (set by freeze):
+    device     (default) the model's device implementation, from hooks.device_component / hooks.device_model
+    reference  the CPU reference's own component: the test must PASS with it
+    stub       zeros shaped like the reference output: the test must FAIL with it
+    mutate:<kind>  the CPU reference with its output altered (testing/mutate.py, F49): proves a test catches a
+               wrong module, on the CPU; BRINGUP_MUTATE_STEP names the one step to alter
+    mutations  the freeze sweep of a component test with checks="auto" (F56, testing/component_checks.py): every
+               standard mistake on the CPU in one process; the test must PASS (every mistake caught)
+
+Device hooks a model provides (the implement role writes them):
+    device_params(spec) -> dict                     mesh fixture params (fabric config, l1_small_size, ...)
+    device_component(mesh, spec, layer, step) -> fn(ctx, *host inputs) -> host tensor
+        ctx.extra: state_prefix ({name: tensor} from the golden, positions [0, prefix_len) valid; a fixed-size tensor
+        (spec state.fixed) is the state as of prefix_len), prefix_len, max_seq, tokens (the chunk's token ids); for a layer that reads other layers'
+        state (hooks state_sources, F65) also source_state ({source layer: {name: tensor}} as of source_len, the end
+        of this chunk: the sources have already run it) and source_len
+    device_model(mesh, spec, layers, lm_head=True) -> object with
+        load_seconds, new_state(max_seq), embed(tokens), from_host(h [S, H]), layer(i, h, start, state),
+        begin_chunk(tokens, start) (optional, F65: called with the chunk's token ids before its first layer, also when
+        the stack starts from a golden block input; e.g. host-side lookups keyed on token ids),
+        final_norm(h), to_host(h) -> [S, H], logits(hidden, rows) -> [len(rows), V], free(h), sync()
+        state.load_prefix(layer, tensors, length), state.to_torch(layer, length) -> {name: tensor}
+        (layer(i, h, 0, state) starts a new sequence: a fixed-size state resets there)
+"""
+
+from __future__ import annotations
+
+import os
+
+import torch
+
+from models.demos.common.bringup.core import defaults, metrics
+from models.demos.common.bringup.core.runs import IMPL_ENV
+from models.demos.common.bringup.reference.golden import Golden, load_spec
+from models.demos.common.bringup.reference.interface import Ctx
+
+
+def impl_mode() -> str:
+    from models.demos.common.bringup.testing.mutate import kind_of
+
+    mode = os.environ.get(IMPL_ENV, "device")
+    if mode not in ("device", "reference", "stub", "mutations") and kind_of(mode) is None:
+        raise ValueError(f"{IMPL_ENV}={mode!r}")
+    return mode
+
+
+def spec():
+    return load_spec()
+
+
+DEVICE_TEST_TIMEOUT_S = defaults.get("box.test_timeout_s")
+
+
+def device_timeout(s):
+    """pytest-timeout mark for the framework's device tests (ladder, contract, profile): the repo's pytest.ini default
+    (300 s) is shorter than a full-target rung. Spec ``box.test_timeout_s``; hangs are still caught by run_safe_pytest.
+    """
+    import pytest
+
+    return pytest.mark.timeout(int(s.get("box.test_timeout_s")))
+
+
+def threshold(s, key: str) -> float:
+    """F138 (owner): no fixed accuracy number exists; this stays only to fail an old test with the reason."""
+    raise KeyError(
+        f"thresholds.{key} no longer exists (F128, F138): every accuracy limit is calib x a noise floor (per step: "
+        "render the test with checks='auto', THRESHOLD None; end to end: testing/e2e_limits.py)"
+    )
+
+
+def component_golden(s) -> tuple[Golden, int]:
+    """The rung and chunk component and swap tests read: the spec's ``tests.component_rung`` or the first rung with
+    full dumps, and its last dumped chunk (start > 0, so stateful steps see a real prefix)."""
+    name = s.get("tests.component_rung") or next((r["name"] for r in s.data["ladder"] if r.get("full_dumps")), None)
+    if name is None:
+        raise ValueError("no ladder rung with full_dumps; set tests.component_rung")
+    g = Golden.for_rung(s, name)
+    return g, int(s.get("tests.component_chunk", g.dumped_chunks[-1]))
+
+
+def sources(layer: int, s=None) -> list[int]:
+    """F65: the layers whose state ``layer`` reads (spec.state_sources)."""
+    return (s or spec()).state_sources(layer)
+
+
+CHUNK_LAST_ENV = "BRINGUP_CHUNK_LAST"  # F248: "0" = time the chunk as one that is not the request's last
+
+
+def chunk_last() -> bool | None:
+    """F248: None (the model's default, every chunk the request's last) unless BRINGUP_CHUNK_LAST is set."""
+    v = os.environ.get(CHUNK_LAST_ENV)
+    return None if v in (None, "") else v not in ("0", "false", "False")
+
+
+def begin_chunk(model, tokens, start: int, last: bool | None = None) -> None:
+    """F65: hand the device model the chunk's token ids before its first layer runs (optional hook). F248: ``last``
+    (else BRINGUP_CHUNK_LAST) tells a model whose begin_chunk takes it whether the chunk is the request's last (e.g.
+    DeepSeek-V4.1's decoder skip); a model that does not take it refuses a non-last request instead of silently timing
+    the full chunk."""
+    last = chunk_last() if last is None else last
+    if not hasattr(model, "begin_chunk"):
+        if last is False:
+            raise RuntimeError("BRINGUP_CHUNK_LAST=0: the model has no begin_chunk(..., last=) hook")
+        return
+    if last is None:
+        model.begin_chunk(tokens, start)
+        return
+    import inspect
+
+    if "last" not in inspect.signature(model.begin_chunk).parameters:
+        if last is False:
+            raise RuntimeError("BRINGUP_CHUNK_LAST=0: the model's begin_chunk takes no `last`")
+        model.begin_chunk(tokens, start)
+        return
+    model.begin_chunk(tokens, start, last=last)
+
+
+def reference_ctx(ref, layer: int, g: Golden, c: int, s=None):
+    """The reference's context for chunk c: the layer's own state before the chunk, and its source layers' state
+    after it (they run the chunk before this layer does)."""
+    start, end = c * g.chunk, (c + 1) * g.chunk
+    state = ref.new_state(g.seq)
+    if start:
+        ref.load_state(state, layer, g.state(layer, at=start), start)
+    for j in sources(layer, s):
+        ref.load_state(state, j, g.state(j, at=end), end)
+    ctx = ref.chunk_context(layer, start, g.chunk, state)
+    ctx.extra.setdefault("tokens", g.tokens()[start:end])  # F65: steps keyed on token ids (e.g. an n-gram lookup)
+    return ctx
+
+
+def device_ctx(layer: int, g: Golden, c: int, s=None) -> Ctx:
+    start, end = c * g.chunk, (c + 1) * g.chunk
+    extra = {"state_prefix": g.state(layer, at=start), "prefix_len": start, "max_seq": g.seq}
+    extra["tokens"] = g.tokens()[start:end]  # F65: the chunk's token ids
+    src = sources(layer, s)
+    if src:
+        extra.update(source_state={j: g.state(j, at=end) for j in src}, source_len=end)
+    return Ctx(layer, start, g.chunk, None, extra)
+
+
+def as_float(t: torch.Tensor) -> torch.Tensor:
+    return t.float() if t.is_floating_point() else t
+
+
+def compare(name: str, got: torch.Tensor, want: torch.Tensor, mode: str, thr: float) -> tuple[float, bool]:
+    """pcc: Pearson correlation. match: fraction of equal elements (integer outputs such as expert ids).
+    topk_overlap: mean per-row fraction of the wanted set that the output contains (order-free)."""
+    if got.numel() == want.numel():
+        got = got.reshape(want.shape)  # device outputs may carry [1, 1, S, H] padding dims
+    if got.shape != want.shape:
+        v = 0.0
+    elif mode == "pcc":
+        v = metrics.pcc(as_float(got).float(), as_float(want).float())
+    elif mode == "match":
+        v = (got == want).float().mean().item()
+    elif mode == "topk_overlap":
+        w, gt = want.reshape(-1, want.shape[-1]), got.reshape(-1, got.shape[-1])
+        v = (
+            torch.tensor([len(set(a.tolist()) & set(b.tolist())) / len(set(b.tolist())) for a, b in zip(gt, w)])
+            .mean()
+            .item()
+        )
+    else:
+        raise ValueError(f"compare mode {mode!r}")
+    metrics.record(name, v)
+    ok = v >= thr
+    print(f"{'ok  ' if ok else 'FAIL'} {name}: {mode}={v:.6f} (>= {thr}) shape {tuple(got.shape)}")
+    return v, ok
+
+
+def default_mode(t: torch.Tensor) -> str:
+    return "pcc" if t.is_floating_point() else "match"
+
+
+def device_params(s) -> dict:
+    hooks = s.hooks()
+    if hasattr(hooks, "device_params"):
+        return hooks.device_params(s)
+    import ttnn
+
+    p = dict(s.get("box.device_params", {}))
+    if os.environ.get("BRINGUP_FABRIC"):  # e.g. FABRIC_2D_TORUS_X: the same mesh on a box with wrap links (Galaxy rows)
+        p["fabric_config"] = os.environ["BRINGUP_FABRIC"]
+    if os.environ.get("BRINGUP_TRACE_REGION_BYTES"):  # trace capture (perf probes); the specs reserve none
+        p["trace_region_size"] = int(os.environ["BRINGUP_TRACE_REGION_BYTES"])
+    if "fabric_config" in p:
+        p["fabric_config"] = getattr(ttnn.FabricConfig, p["fabric_config"])
+    if "fabric_payload_bytes" in p:  # global fabric packet payload (router default 4352 B; Blackhole max 15232 B)
+        rc = ttnn._ttnn.fabric.FabricRouterConfig()
+        rc.max_packet_payload_size_bytes = int(os.environ.get("BRINGUP_FABRIC_PAYLOAD", p.pop("fabric_payload_bytes")))
+        p["fabric_router_config"] = rc
+    return p
+
+
+FABRIC_KEYS = ("fabric_config", "fabric_router_config", "reliability_mode", "fabric_tensix_config", "fabric_manager")
+
+
+def open_mesh(s=None):
+    """F202: a mesh opened outside the mesh_device fixture (a test that opens a second, fresh mesh), with EVERY entry
+    of device_params applied as the repo fixture applies them (conftest.py set_fabric + open_mesh_device), so a test
+    never drops one (DeepSeek-V4.1 K.1: a hand-rolled open dropped fabric_router_config; the weighted combine's 10272 B
+    packets over the router's default 4352 B hung the stand-in decode). Returns (mesh, params) for close_mesh."""
+    import ttnn
+
+    s = s or spec()
+    p = device_params(s)
+    fab = {k: p.pop(k) for k in FABRIC_KEYS if k in p}
+    if fab.get("fabric_config"):
+        args = [
+            fab["fabric_config"],
+            fab.get("reliability_mode", ttnn.FabricReliabilityMode.STRICT_INIT),
+            None,
+            fab.get("fabric_tensix_config", ttnn.FabricTensixConfig.DISABLED),
+            ttnn.FabricUDMMode.DISABLED,
+            fab.get("fabric_manager", ttnn.FabricManagerMode.DEFAULT),
+        ]
+        if fab.get("fabric_router_config") is not None:
+            args.append(fab["fabric_router_config"])
+        ttnn.set_fabric_config(*args)
+    mesh = ttnn.open_mesh_device(ttnn.MeshShape(*s.mesh), **p)
+    return mesh, fab
+
+
+def close_mesh(mesh, fab) -> None:
+    """Close a mesh from open_mesh and turn its fabric off again."""
+    import ttnn
+
+    ttnn.close_mesh_device(mesh)
+    if fab.get("fabric_config"):
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
+
+
+def mesh_parametrize(fn=None, *, timeout_s: int | None = None):
+    """Parametrize a pytest test with the spec's mesh shape and device params (the repo's mesh_device fixture).
+    Under BRINGUP_IMPL=reference, stub or mutate:<kind> no device is opened: mesh_device is None.
+    ``timeout_s``: instead of the spec's box.test_timeout_s (F259: a batch of runs, 0 = none of its own)."""
+    import pytest
+
+    if fn is None:
+        return lambda f: mesh_parametrize(f, timeout_s=timeout_s)
+    s = spec()
+    # F170 (audit item 7): every device test takes the spec's box.test_timeout_s, frozen component and swap tests
+    # included (their templates had no mark, so pytest.ini's 300 s killed swap tests that take ~290 s unloaded)
+    fn = pytest.mark.timeout(int(s.get("box.test_timeout_s") if timeout_s is None else timeout_s))(fn)
+    if impl_mode() != "device":
+        return pytest.mark.parametrize("mesh_device", [None], ids=["nodevice"])(fn)
+    fn = pytest.mark.parametrize("device_params", [device_params(s)], indirect=True, ids=["box"])(fn)
+    return pytest.mark.parametrize("mesh_device", [tuple(s.mesh)], indirect=True, ids=["x".join(map(str, s.mesh))])(fn)

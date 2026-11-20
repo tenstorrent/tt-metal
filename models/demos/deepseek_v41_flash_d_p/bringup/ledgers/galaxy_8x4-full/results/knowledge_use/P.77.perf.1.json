@@ -1,0 +1,96 @@
+{
+ "used": [
+  {
+   "id": "DS41-291",
+   "how": "the local record buffer takes the slab's tensor topology before the full-mesh high_bw_all_gather (tt/history_gather._pack), as the tail slice does",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-135",
+   "how": "ckv_bfp4 called prepared=True (compact where row0 is 0) instead of a fresh descriptor per call",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-145",
+   "how": "compact (common args only) for the whole-history pack at row0 0; the tail keeps row0 as a value slot",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-148",
+   "how": "pack-before-gather idea (P.11) reused per owner: each chip packs its own served rows, the gather moves 320 B records",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-212",
+   "how": "a uint8 history beside the bf16 region goes through the sdpa fork's ROW_BFP4 + kv_window with uncompacted [region | top-k] lists",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "K-81",
+   "how": "ROW_BFP4 index list [window k_chunk | top-k] with a sentinel tail per part, no compaction",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-294",
+   "how": "the records are derived from the served rows every chunk, so test_outside_history stays bit-exact (measured 0.0)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-183",
+   "how": "model test and measure runs started through devjob, waited in short calls",
+   "traced": null,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the prepared ckv_bfp4 builds one program per row count, so a growing history pack needs bucketing (now DS41-295)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the pack rounds to whole tiles / a 2048-row bucket of real slab rows; no fork limit worked around"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "the only Python-built op added to the path, ttnn.bringup.ckv_bfp4, runs prepared=True (tt/history_gather._pack); host cost included in the 0.50-0.77 ms synced pack"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork changed, no fork suite run; only tests/test_history_bfp4.py and the model-level measure parts"
+  }
+ ],
+ "cited_only": [
+  "DS41-295"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.77",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-18T23:19:59",
+  "head": "8cd5247e55b",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.77.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_history_bfp4.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/sparse_attention.py"
+  ]
+ }
+}

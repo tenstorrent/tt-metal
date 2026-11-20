@@ -19,6 +19,7 @@ from models.common.ci_failure import assert_perf_gate
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, tp_axis_is_wrapped
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KIMI_K3_CONVOLUTION_NRMSE,
     LayerNrmseThresholds,
@@ -35,9 +36,8 @@ from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS
 from models.demos.deepseek_v3_d_p.utils.prefill_summary_utils import emit_perf_metrics
 from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from models.tt_transformers.tt.ccl import TT_CCL
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
+from tt_py_test_utils_common.comparison_funcs import comp_pcc
+from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged, require_realtime_profiler
 
 pytestmark = [
     run_for_blackhole(),
@@ -84,7 +84,7 @@ _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 # broadcast that a rank-aligned start skips. Production always passes actual_end, so the gate does too. An
 # untraced call also pays its host dispatch, which a block of 10 calls does not fully hide. Host dispatch varies more
 # from run to run than the device does, hence the untraced gate's wider margin.
-_GALAXY_PERF_REFERENCE_MS = {"traced": 1.418, "untraced": 1.435}
+_GALAXY_PERF_REFERENCE_MS = {"traced": 1.268, "untraced": 1.435}
 _GALAXY_UNTRACED_PERF_MARGIN = 0.06
 _GALAXY_TP = 4
 _GALAXY_HEADS_PER_CHIP = KimiK3Config.KDA_NUM_HEADS // _GALAXY_TP

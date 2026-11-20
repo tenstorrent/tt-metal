@@ -288,6 +288,66 @@ def test_one_trace_follows_the_zero_fill_at_zero_word(device, direction, dtype, 
         ttnn.release_trace(device, trace)
 
 
+@pytest.mark.parametrize("direction", DIRECTIONS)
+@pytest.mark.parametrize("flag", [None, 0, 32], ids=["no-flag", "zero-fill", "copy"])
+def test_paired_copy_moves_both_pairs_at_one_entry(device, direction, flag):
+    """A paired copy is two copies in one program, at the same entry and with the same zero-fill word: KDA's
+    FP32 ND-sharded recurrent slab paired with its BF16 row-major convolution slab."""
+    forms = [
+        (ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32]),
+        (ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (3, 192), None),
+    ]
+    value, scale, offset = 1, 3, 2
+    entry = value * scale + offset
+    tensors, expected = [], []
+    for seed, (dtype, layout, entry_shape, nd_shard) in enumerate(forms):
+        table_host = _random((_TABLE_ENTRIES + 1, *entry_shape), dtype, 2 * seed + 1)
+        single_host = _random((1, *entry_shape), dtype, 2 * seed + 2)
+        table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
+        single = _to_device(single_host, device, dtype, layout)
+        want_table, want_single = table_host.clone(), single_host.clone()
+        if direction == "load":
+            want_single = torch.zeros_like(single_host) if flag == 0 else table_host[entry : entry + 1]
+        else:
+            want_table[entry : entry + 1] = 0 if flag == 0 else single_host
+        tensors.append((table, single) if direction == "load" else (single, table))
+        expected.append((table, single, want_table, want_single))
+    index = _index(device, value)
+    zero_fill_at_zero = None if flag is None else _index(device, flag)
+    (source, destination), (paired_source, paired_destination) = tensors
+    ttnn.experimental.kda.indexed_entry_copy(
+        source,
+        destination,
+        index,
+        index_scale=scale,
+        index_offset=offset,
+        zero_fill_at_zero=zero_fill_at_zero,
+        paired_source=paired_source,
+        paired_destination=paired_destination,
+    )
+    for pair, (table, single, want_table, want_single) in enumerate(expected):
+        assert torch.equal(ttnn.to_torch(table), want_table), f"pair {pair}: table"
+        assert torch.equal(ttnn.to_torch(single), want_single), f"pair {pair}: single entry"
+
+
+def test_paired_copy_needs_both_paired_tensors(device, expect_error):
+    single = _to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
+    table = _to_device(torch.zeros(4, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
+    with expect_error(RuntimeError, "pass both paired_source and paired_destination"):
+        ttnn.experimental.kda.indexed_entry_copy(
+            single, table, _index(device, 0), index_scale=1, index_offset=0, paired_source=single
+        )
+
+
+def test_paired_copy_rejects_shared_buffers(device, expect_error):
+    """The two copies run in parallel: a pair reading the other's destination would race it."""
+    a, b, c = (_to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT) for _ in range(3))
+    with expect_error(RuntimeError, "destination and paired_source must be different tensors"):
+        ttnn.experimental.kda.indexed_entry_copy(
+            a, b, _index(device, 0), index_scale=1, index_offset=0, paired_source=b, paired_destination=c
+        )
+
+
 def test_zero_fill_at_zero_rejects_a_non_uint32_word(device, expect_error):
     source = _to_device(torch.zeros(1, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)
     destination = _to_device(torch.zeros(4, 32, 32), device, ttnn.float32, ttnn.TILE_LAYOUT)

@@ -1,0 +1,153 @@
+{
+ "overseer": [
+  {
+   "id": "FIX.9",
+   "answer": "done",
+   "evidence": "Deleted EXPERTS_COMBINE=separate, the routing-weight pieces, EXPERTS_KERNEL loop / unified, EXPERTS_IMPL fp4_decode, EXPERTS_DECODE and SHARED_EXPERT_IMPL=linear (tt/experts.py 1019 -> 383 lines, tt/shared_expert.py, tt/settings.py 24 -> 20 settings, perf files, hooks/adapter/model). No other model calls routing_weights / fp8_act_quant (grep of models/ and ttnn/ttnn/bringup incl. tests/cases.py), so both were removed from flat_routed_expert_ttnn (+ plan 'routed', se_rh.hpp) and unified_routed_expert_ffn; both test_ds41_h_options.py deleted, the surviving options' checks moved to tests/unit/test_weights_nk.py and test_weights_transposed.py. Numerics unchanged: every check line of the 6 baseline component tests identical after; L.last err_layer equal to FIX.8's; profile device 104.28 ms (104.31), 7800 programs. Fork regressions option-off match baselines (flat 19/13 = DS41-63; unified 73/75 source + 5/1 model cases; the 2 missing are a conftest import error from xing40's settings, F137). Gate: the 4 shared-expert tests and L.last pass; the 4 frozen experts tests fail identically before and after (DS41-95), so the brief's 'pass today' does not hold for them."
+  }
+ ],
+ "used": [
+  {
+   "id": "DS41-63",
+   "how": "compared the flat fork's option-off unit failures with the known 13 (12 x p.nsg == 1, MiMo perf band): the same 19 / 13",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "K-52",
+   "how": "ran L.last with --no-precompile so the body runs once and fits one 10-minute call",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-35",
+   "how": "kept the [N, K] orientation and the bfp8 exactness assert in TtExperts._load_block when deleting the per-expert device weights",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-94",
+   "how": "kept the 10880 B fabric payload in hooks.device_params and the runner adapter as the only value once EXPERTS_COMBINE was deleted",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-74",
+   "how": "explained the experts tests' vs-CPU rel 0.13-0.18 as bfp4 weight rounding, not a regression (DS41-95)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-64",
+   "how": "explained the glm-precision experts error (rel ~0.13 at L0) the frozen vs-CPU checks reject",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-23",
+   "evidence": "out of date since FIX.9: tt/experts.py has no _pieces / _weight_col; the routing weight is applied in the weighted combine, the dispatch path is deleted",
+   "cited": true
+  },
+  {
+   "id": "DS41-57",
+   "evidence": "out of date since FIX.9: EXPERTS_KERNEL=unified and the fork options routing_weights / fp8_act_quant are deleted (unified_routed_expert_ffn CHANGELOG 'Removed')",
+   "cited": true
+  },
+  {
+   "id": "DS41-58",
+   "evidence": "out of date since FIX.9: the h_opts UnpackToDestFp32 block is gone from unified_routed_expert_ffn_program_factory.cpp",
+   "cited": false
+  },
+  {
+   "id": "DS41-59",
+   "evidence": "out of date since FIX.9: fused_swiglu.cpp calculate_routed_h deleted",
+   "cited": false
+  },
+  {
+   "id": "DS41-60",
+   "evidence": "points at tests/unit/test_ds41_h_options.py, deleted in FIX.9 (the lesson itself still holds)",
+   "cited": false
+  },
+  {
+   "id": "DS41-61",
+   "evidence": "out of date since FIX.9: flat fork fp8_act_quant / se3_compute.cpp rh_phase2 deleted",
+   "cited": false
+  },
+  {
+   "id": "DS41-62",
+   "evidence": "out of date: the chain it measures (pieces, dispatch, combine, K-slot sum) and tt/perf_experts.py::test_kernels are deleted; the experts section is 16.77 ms a chunk on the weighted path (FIX.9 profile)",
+   "cited": true
+  },
+  {
+   "id": "DS41-94",
+   "evidence": "Fix says the payload 'follows the setting'; since FIX.9 tt/runners/adapter.py:_FabricPayload returns weighted_combine.FABRIC_PAYLOAD unconditionally (EXPERTS_COMBINE deleted)",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "the frozen C.*.experts component tests (2026-10-16/17) fail on the shipped bfp4 + glm path and test_c_swa_experts.py KeyErrors on lim['component_col_factor'] (added as DS41-95)",
+  "models/demos/deepseek_v3_d_p/tests/conftest.py imports xing40_a4b_d_p's adapter, whose tt/settings.py still passes max_precision= (removed by F137): unified fork_source's test_routed_expert_cache entry cannot be collected"
+ ],
+ "cited_only": [
+  "DS41-95"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.9",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-22T01:37:52",
+  "head": "e5abda64b9d",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/results/knowledge_use/FIX.9.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_experts.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/perf_shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/shared_expert.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/weighted_combine.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/README.md",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_device_operation.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_plan.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_program_factory.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/flat_routed_expert_types.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se3_compute.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se5_recv.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/device/kernels/se_rh.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_expert.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert.hpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_routed_expert_nanobind.cpp",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_ds41_h_options.py",
+   "ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_weights_nk.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/README.md",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/compute/fused_swiglu.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/kernels/dataflow/unified_routed_expert_ffn_reader.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_device_operation.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_program_factory.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/device/unified_routed_expert_ffn_types.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/reference.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/test_ds41_h_options.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/tests/unit/test_weights_transposed.py",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn.cpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn.hpp",
+   "ttnn/ttnn/bringup/unified_routed_expert_ffn/unified_routed_expert_ffn_nanobind.cpp"
+  ]
+ }
+}

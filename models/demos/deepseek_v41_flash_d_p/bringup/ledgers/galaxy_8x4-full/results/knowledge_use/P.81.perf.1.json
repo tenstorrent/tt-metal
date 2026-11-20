@@ -1,0 +1,95 @@
+{
+ "used": [
+  {
+   "id": "DS41-306",
+   "how": "attempt 1's projection probe and its 'DRAM-sharded does not pay' result: started from its harness (test_attn_proj_probe.py) and went to a per-group layout instead of DRAM sharding",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-307",
+   "how": "its per-query / per-chunk numbers sized the sdpa balance estimate (k-split ~0.4 ms, head split ~0.9 ms) that decided not to build it in this attempt",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-319",
+   "how": "issuing reads far ahead can make data land late: tried a depth-1 read-ahead with transaction ids anyway, measured it slower (0.143 vs 0.133 ms), kept one block in flight",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "op test as a BATCH_SHARED mesh test on the resident runner (tests/test_grouped_matmul_wo_a.py): 0 device opens",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-191",
+   "how": "no stock config sweep for wo_a beyond a few 2D / 1D points: the change is the program layout",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "that a direct scripts/run_safe_pytest.sh op probe costs a device open that leaks 10-27 GiB of host RAM (the rule changed mid-task, e093a88c63e); op probes go through the resident runner",
+  "that a CB block addressed by (block index % depth) must have the same size on every core sharing the CB layout"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding of work: the narrower column's weight block is padded in L1 layout only (no extra reads or products)"
+  },
+  {
+   "id": "OV-23",
+   "answer": "done",
+   "evidence": "grouped_matmul dispatches only through ttnn.bringup.prepare_program / run_prepared (3 address slots a kernel group patched)"
+  },
+  {
+   "id": "OV-25",
+   "answer": "done",
+   "evidence": "no fork regression suites; only the new op's own cases (5) through the resident runner"
+  },
+  {
+   "id": "OV-56",
+   "answer": "done",
+   "evidence": "measured through the resident runner (layers 0-20, one load); no serving-contract change (wo_a's input / output buffers and dtypes unchanged); kept at -0.9 ms device a chunk, just below the 1 ms line: the owner decides from the A/B"
+  }
+ ],
+ "cited_only": [
+  "DS41-320"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.81",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-19T18:23:18",
+  "head": "e093a88c63e",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.81.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_attn_proj_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_grouped_matmul_wo_a.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/README.md",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/grouped_matmul.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_compute.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_reader.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/kernels/gmm_writer.cpp",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/__init__.py",
+   "ttnn/ttnn/bringup/grouped_matmul_ttnn/tests/unit/test_grouped_matmul.py"
+  ]
+ }
+}
