@@ -5,21 +5,18 @@
 #pragma once
 
 #include <buffer_types.hpp>
-#include <stdint.h>
-#include <fstream>
+#include <cstdint>
 #include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#include <algorithm>
-#include <functional>
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/strong_type.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator_state.hpp"
 
 namespace tt::tt_metal {
@@ -127,6 +124,10 @@ public:
     MemoryBlockTable get_memory_block_table(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
 
+    // Allocated [begin, end) ranges in address order. Unlike extract_state, touching ranges are not coalesced.
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> get_allocated_ranges(
+        AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
+
     void shrink_size(
         DeviceAddr shrink_size,
         bool bottom_up = true,
@@ -150,14 +151,6 @@ public:
     // Extracts the state of the given allocator.
     AllocatorState::BufferTypeState extract_state(
         AllocatorDependencies::AllocatorID allocator_id = AllocatorDependencies::AllocatorID{0}) const;
-    // Extracts the merged state from all dependent allocators.
-    AllocatorState::BufferTypeState extract_merged_state() const;
-
-    // Applies the state of the given allocator without overriding the current state.
-    void apply_state(
-        const AllocatorState::BufferTypeState& state,
-        AllocatorDependencies::AllocatorID target_allocator_id = AllocatorDependencies::AllocatorID{0});
-
     // Overrides the current state with the given state.
     void override_state(
         const AllocatorState::BufferTypeState& state,

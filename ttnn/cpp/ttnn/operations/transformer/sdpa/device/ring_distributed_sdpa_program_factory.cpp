@@ -118,6 +118,11 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
             ? (program_config->exp_approx_mode.has_value() ? program_config->exp_approx_mode.value() : true)
             : true;
 
+    TT_FATAL(
+        grid_size.x > 0 && grid_size.y > 0,
+        "compute_with_storage_grid_size must be non-zero, got ({}, {})",
+        grid_size.x,
+        grid_size.y);
     auto core_grid = CoreRangeSet(CoreRange({0, 0}, {grid_size.x - 1, grid_size.y - 1}));
     uint32_t num_cores = grid_size.x * grid_size.y;
 
@@ -153,7 +158,7 @@ ProgramDescriptor build_ring_distributed_sdpa_program_descriptor(
         const auto& page_table_tensor = page_table.value();
         block_size = k_shape[2];  // K's sequence dimension represents block size
         block_size_t = block_size / TILE_HEIGHT;
-        page_table_stick_size = page_table_tensor.buffer()->aligned_page_size();
+        page_table_stick_size = page_table_tensor.mesh_buffer().aligned_page_size();
         TT_FATAL(
             page_table_stick_size % 32 == 0,
             "page table page size in bytes must be a multiple of 32 due to address alignment");

@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <cstddef>
 #include <optional>
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <hal_types.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>
 
