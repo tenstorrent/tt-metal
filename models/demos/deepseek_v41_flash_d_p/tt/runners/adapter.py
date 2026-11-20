@@ -448,7 +448,7 @@ class DS41PrefillRuntime:
         ids = self._host_ids_packed(input_tensor, descriptor)  # (model rows: a glued chunk's segments back to back)
         run_desc = as_run_desc(descriptor)  # (PB.7: a glued chunk that is a lane chunk runs the lane path)
         last = False if model.skip_mode == "decode" else None
-        model.begin_packed(run_desc, ids, states, last=last)
+        model.begin_packed(run_desc, ids, states, last=last, inp=input_tensor)
         try:
             from ..model import SKIPPED
 

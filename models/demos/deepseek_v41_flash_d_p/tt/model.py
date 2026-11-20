@@ -1890,7 +1890,7 @@ class TtDS41Model:
         self._hide_trigger = None if first is None else first + self._hide_defer
 
     # ------------------------------------------------------------------ PACKED=on (PB.3, tt/packed_device.py)
-    def begin_packed(self, desc, tokens: torch.Tensor, states: list, last: bool | None = None) -> None:
+    def begin_packed(self, desc, tokens: torch.Tensor, states: list, last: bool | None = None, inp=None) -> None:
         """PB.3 (PACKED=on): begin a packed chunk. ``desc``: tt/packed.ChunkDescriptor (lanes of desc.lane_rows rows);
         ``tokens``: the chunk's natural-order ids [chunk] (each lane its segment's ids, PAD_ID elsewhere: past a
         segment's end and in empty lanes); ``states``: per lane the segment's slot state (None for an empty lane).
@@ -1928,7 +1928,11 @@ class TtDS41Model:
             self.begin_chunk(None, s.start, last=last, write_start=s.gws, engram=False)
             segs.append(SegRun(lane, s, st, run_end, {f: getattr(self, f) for f in FIELDS}))
         assert segs or idle, "an empty packed chunk"
-        pk = PackedChunk(self, desc, segs, idle)
+        self._packed_inp = inp  # (PB.7C: the engine input, whose tail carries a glued chunk's header)
+        try:
+            pk = PackedChunk(self, desc, segs, idle)
+        finally:
+            self._packed_inp = None
         pk.bind()
         self._packed = pk
         if segs:

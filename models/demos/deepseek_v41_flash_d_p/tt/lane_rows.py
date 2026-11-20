@@ -208,3 +208,184 @@ def lane_rows(table: ttnn.Tensor, starts, n: int) -> ttnn.Tensor:
     if hit is None or hit[0] is not mesh:
         hit = _BY[key] = (mesh, LaneRows(mesh, table, n, len(starts)))
     return hit[1](table, starts)
+
+
+# ---------------------------------------------------------------------------------------------- PB.7C: glued pieces
+GMAXP = 8  # GluedRows: pieces an SP row (a glued chunk's segments, <= 6, and its tail pad)
+GWORDS = 1 + 2 * GMAXP  # GluedRows: values an SP row [pieces, (source unit, units | destination unit << 16) x GMAXP]
+
+_GKERNEL = r"""
+#include <cstdint>
+#include "api/dataflow/dataflow_api.h"
+
+constexpr uint32_t PAGE = get_compile_time_arg_val(0);  // bytes a page
+constexpr uint32_t PPU = get_compile_time_arg_val(1);   // pages a unit (a row: 1; a tile row: Wt)
+constexpr uint32_t B = get_compile_time_arg_val(2);     // pages a NoC barrier
+constexpr uint32_t NC = get_compile_time_arg_val(3);    // cores
+constexpr uint32_t GW = get_compile_time_arg_val(4);    // values an SP row
+constexpr uint32_t SLOT = (PAGE + 63) & ~63u;
+constexpr auto s_args = TensorAccessorArgs<5>();
+constexpr auto d_args = TensorAccessorArgs<s_args.next_compile_time_args_offset()>();
+
+void kernel_main() {
+    const uint32_t src = get_arg_val<uint32_t>(0);
+    const uint32_t dst = get_arg_val<uint32_t>(1);
+    const uint32_t k = get_arg_val<uint32_t>(2);   // this core's index of NC
+    const uint32_t r = get_arg_val<uint32_t>(3);   // this chip's SP row (frozen: one program an SP row)
+    const uint32_t w0 = 4 + r * GW;                // this SP row's pieces (per-run values)
+    const auto S = TensorAccessor(s_args, src, PAGE);
+    const auto D = TensorAccessor(d_args, dst, PAGE);
+    cb_reserve_back(0, 1);
+    const uint32_t buf = (get_write_ptr(0) + 63) & ~63u;
+    const uint32_t np = get_arg_val<uint32_t>(w0);
+    uint32_t total = 0;
+    for (uint32_t p = 0; p < np; ++p) {
+        total += (get_arg_val<uint32_t>(w0 + 2 + 2 * p) & 0xFFFFu) * PPU;
+    }
+    const uint32_t lo = static_cast<uint32_t>((static_cast<uint64_t>(total) * k) / NC);
+    const uint32_t hi = static_cast<uint32_t>((static_cast<uint64_t>(total) * (k + 1)) / NC);
+    uint32_t g = lo;
+    while (g < hi) {
+        uint32_t nb = 0;
+        const uint32_t d0 = g;
+        for (; nb < B && g < hi; ++nb, ++g) {
+            uint32_t sp = 0;
+            for (uint32_t p = 0; p < np; ++p) {
+                const uint32_t s0 = get_arg_val<uint32_t>(w0 + 1 + 2 * p);
+                const uint32_t cd = get_arg_val<uint32_t>(w0 + 2 + 2 * p);
+                const uint32_t cnt = cd & 0xFFFFu, dd = cd >> 16;
+                if (g >= dd * PPU && g < (dd + cnt) * PPU) {
+                    sp = s0 * PPU + (g - dd * PPU);
+                    break;
+                }
+            }
+            noc_async_read(S.get_noc_addr(sp), buf + nb * SLOT, PAGE);
+        }
+        noc_async_read_barrier();
+        for (uint32_t t = 0; t < nb; ++t) {
+            noc_async_write(buf + t * SLOT, D.get_noc_addr(d0 + t), PAGE);
+        }
+        noc_async_write_barrier();
+    }
+}
+"""
+
+
+def glued_pieces(starts, n: int, sp: int, unit: int) -> list:
+    """Per SP row r: [(source unit, units, destination unit)] of the glued natural rows [r R, (r + 1) R), R = n / sp,
+    ``starts`` ((first table row, rows), ...) in row order (tt/rope.GluedStarts), units of ``unit`` rows."""
+    R = n // sp
+    out = [[] for _ in range(sp)]
+    off = 0
+    for s, k in starts:
+        s, k = int(s), int(k)
+        if k <= 0:
+            continue
+        for r in range(off // R, min(sp, (off + k - 1) // R + 1)):
+            a, b = max(off, r * R), min(off + k, (r + 1) * R)
+            if a < b:
+                assert (s + a - off) % unit == 0 and (b - a) % unit == 0 and (a - r * R) % unit == 0, (s, a, b, unit)
+                out[r].append(((s + a - off) // unit, (b - a) // unit, (a - r * R) // unit))
+        off += k
+    assert off == n, (off, n)
+    for ps in out:
+        assert 1 <= len(ps) <= GMAXP, ps
+    return out
+
+
+class GluedRows:
+    """PB.7C (PACKED_GLUED_DYNAMIC=on): ``mesh_partition(glued_slices(table, starts, width), SP)`` in ONE prepared
+    program whose pieces are per-run values (every SP row's, each chip reads its own row's): no program a layout (the
+    slices and the concat of tt/rope.glued_slices are keyed on each piece's rows). The same page copies (the table's
+    rows, whole pages), one program for the mesh's SP rows (each its own row index, frozen)."""
+
+    def __init__(self, mesh, table: ttnn.Tensor, n: int):
+        self.mesh = mesh
+        self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
+        self.n = int(n)
+        self.R = self.n // self.sp
+        assert self.R * self.sp == self.n, (n, self.sp)
+        self.width = int(table.shape[-1])
+        self.dtype, self.layout = table.dtype, table.layout
+        tile = table.layout == ttnn.TILE_LAYOUT
+        self.unit = 32 if tile else 1
+        self.ppu = self.width // 32 if tile else 1
+        self.page = (
+            ttnn.tile_size(table.dtype) if tile else self.width * {ttnn.bfloat16: 2, ttnn.float32: 4}[table.dtype]
+        )
+        assert self.R % self.unit == 0, (self.R, self.unit)
+        self.batch = max(1, BATCH_BYTES // (-(-self.page // 64) * 64))
+        self._pp = None
+
+    def _out(self) -> ttnn.Tensor:
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, self.R, self.width]), self.dtype, self.layout, self.mesh, DRAM
+        )
+
+    def _build(self, table, out):
+        crs = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(NCORES - 1, 0))])
+        ct = [self.page, self.ppu, self.batch, NCORES, GWORDS]
+        for t in (table, out):
+            ct += list(ttnn.TensorAccessorArgs(t).get_compile_time_args())
+        size = 64 + self.batch * (-(-self.page // 64) * 64)
+        md = ttnn.MeshProgramDescriptor()
+        addrs = [int(table.buffer_address()), int(out.buffer_address())]
+        for r in range(self.sp):
+            prog = ttnn.ProgramDescriptor()
+            prog.cbs = [
+                ttnn.CBDescriptor(
+                    total_size=size, core_ranges=crs, format_descriptors=[ttnn.CBFormatDescriptor(0, ttnn.uint8, size)]
+                )
+            ]
+            rt = ttnn.RuntimeArgs()
+            for k in range(NCORES):
+                rt[k][0] = addrs + [k, r] + [0] * (self.sp * GWORDS)
+            prog.kernels = [
+                ttnn.KernelDescriptor(
+                    kernel_source=_GKERNEL,
+                    source_type=ttnn.KernelDescriptor.SourceType.SOURCE_CODE,
+                    core_ranges=crs,
+                    compile_time_args=ct,
+                    runtime_args=rt,
+                    config=ttnn.DataMovementConfigDescriptor(
+                        processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.RISCV_0_default
+                    ),
+                )
+            ]
+            md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, 0), ttnn.MeshCoordinate(r, self.tp - 1))] = prog
+        return md
+
+    def __call__(self, table: ttnn.Tensor, starts) -> ttnn.Tensor:
+        assert tuple(table.shape)[-1] == self.width and table.dtype == self.dtype and table.layout == self.layout
+        for s, k in starts:
+            assert int(s) >= 0 and int(s) + int(k) <= int(table.shape[-2]), (s, k, table.shape)
+        vals = []
+        for ps in glued_pieces(starts, self.n, self.sp, self.unit):
+            w = [len(ps)]
+            for s0, cnt, dd in ps:
+                assert cnt < 65536 and dd < 65536, (cnt, dd)
+                w += [int(s0), int(cnt) | (int(dd) << 16)]
+            vals += w + [0] * (GWORDS - len(w))
+        out = self._out()
+        io = [table, out]
+        if self._pp is None:
+            slots = [(0, 4 + i) for i in range(self.sp * GWORDS)]
+            self._pp = ttnn.bringup.prepare_program(self._build(table, out), io, slots)
+            want = self.sp * NCORES * (2 + self.sp * GWORDS)  # (table, out and the values a core)
+            assert self._pp.patch_count == want, f"GluedRows: {self._pp.patch_count} patched slots, {want} expected"
+        ttnn.bringup.run_prepared(self._pp, io, vals)
+        return out
+
+
+_GBY: dict = {}  # (id(mesh), table shape, dtype, layout, n) -> (mesh, GluedRows)
+
+
+def glued_rows(table: ttnn.Tensor, starts, n: int) -> ttnn.Tensor:
+    """PACKED_GLUED_DYNAMIC=on: each chip its SP row's rows of the glued pieces ``starts`` of ``table`` (n rows
+    together) -> [1, 1, n / SP, width] in the table's dtype / layout (a new tensor)."""
+    mesh = table.device()
+    key = (id(mesh), tuple(table.shape), table.dtype, table.layout, int(n))
+    hit = _GBY.get(key)
+    if hit is None or hit[0] is not mesh:
+        hit = _GBY[key] = (mesh, GluedRows(mesh, table, n))
+    return hit[1](table, starts)

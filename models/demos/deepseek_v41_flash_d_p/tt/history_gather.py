@@ -320,6 +320,22 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     a = lo // 32 * 32
     b = min(-(-hi // (PACK_BUCKET if a == 0 else 32)) * (PACK_BUCKET if a == 0 else 32), R)
     assert 0 <= a < b <= R and (b - a) % 32 == 0, (lo, hi, a, b, R)
+    from .page_copy import dyn
+
+    if dyn("hist"):  # PB.7C: page copies at fixed shapes (a whole history in PACK_BUCKET pieces; no slice a position)
+        from .page_copy import pages_of
+
+        step = PACK_BUCKET if a == 0 else b - a
+        for a0 in range(a, b, step):
+            n = min(step, b - a0)
+            rows = pages_of(slab.tensor, slab.batch * R + a0, n, [1, 1, n, int(slab.tensor.shape[-1])])
+            tl = to_tile(rows, memory_config=DRAM)
+            if tl is not rows:
+                dealloc(rows)
+            ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, compact=False, max_grid=max_grid())
+            dealloc(tl)
+        loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
+        return loc.tensor
     rows = slab.slice_rows(a, b)  # [1, 1, b - a, 512] bf16 ROW_MAJOR DRAM
     tl = to_tile(rows, memory_config=DRAM)
     if tl is not rows:
@@ -350,9 +366,19 @@ def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, a
 def _tail_part(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, loc: HistoryBuffer | None = None):
     """The tail's input: the chip's own rows [h, local_rows) (bfp4: packed into ``loc`` / the shared record buffer
     first, then sliced) as a full-mesh gather input (the slab's topology)."""
+    from .page_copy import dyn, pages_of
+
     if buf.bfp4:  # P.77: the chunk's own rows packed on their chip first, their records gathered
         rec = _pack(ckv_cache, h, local_rows, loc)
-        part = ttnn.slice(rec, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(rec))
+        if dyn("hist"):  # PB.7C: a page copy (the slice is keyed on h)
+            part = pages_of(rec, h, local_rows - h, [1, 1, local_rows - h, REC])
+        else:
+            part = ttnn.slice(
+                rec, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(rec)
+            )
+    elif dyn("hist"):
+        slab = ckv_cache.slab
+        part = pages_of(slab.tensor, slab.batch * slab.rows + h, local_rows - h, [1, 1, local_rows - h, slab.width])
     else:
         part = ckv_cache.slab.slice_rows(h, local_rows)  # [1, 1, m, 512] ROW_MAJOR DRAM interleaved
     # (host metadata only: the slice's own topology is not the slab's dim-2 sharding the full-mesh gather checks)
@@ -518,16 +544,43 @@ def tail_finish(plan, small: HistoryBuffer) -> None:
     STATS["tail"] += 1
 
 
+def tails_max_rows(plans: list) -> int:
+    """PB.7C (PACKED_GLUED_DYNAMIC=on): the combined tail gather's fixed rows an owner: every segment's tail at its
+    largest (two periods of the source's stripe a segment, GLUED_SEGS segments): one gather program for every layout;
+    only the plans' rows move (high_bw_all_gather's gathered_dim_size, a runtime value)."""
+    from .packed import GLUED_MAX
+
+    ckv = plans[0][0]
+    return 2 * GLUED_MAX * (ckv.stripe // ckv.ratio)
+
+
 def tails_input(plans: list):
     """PB.3H: several tail plans' inputs (each chip's own rows of each) concatenated on dim 2 in plan order: one
     full-mesh gather input (consumes the parts). Every plan of one gather geometry (owners, axis, record width)."""
     parts = [p[2] for p in plans]
     first = plans[0]
     assert all(p[5:7] == first[5:7] and p[1].bfp4 == first[1].bfp4 for p in plans), "tails_input: one geometry"
-    if len(parts) == 1:
+    from .page_copy import dyn, page_copy
+
+    if len(parts) == 1 and not dyn("hist"):
         return parts[0]
     with _Traced("pack", first[0], -1):
-        x = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores(parts[0]))
+        if dyn("hist"):  # PB.7C: page copies into the fixed-size input (the concat is keyed on every part's rows)
+            m_max = tails_max_rows(plans)
+            assert sum(int(t.shape[-2]) for t in parts) <= m_max, ([t.shape for t in parts], m_max)
+            x = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, m_max, int(parts[0].shape[-1])]),
+                parts[0].dtype,
+                parts[0].layout,
+                parts[0].device(),
+                DRAM,
+            )
+            o = 0
+            for t in parts:
+                page_copy(t, x, 0, o, int(t.shape[-2]))
+                o += int(t.shape[-2])
+        else:
+            x = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores(parts[0]))
     for t in parts:
         dealloc(t)
     x.update_tensor_topology(first[0].slab.tensor.tensor_topology())  # (host metadata, as _tail_part)
@@ -539,13 +592,21 @@ def tails_gather(plans: list, x, small: HistoryBuffer, sub: dict | None = None) 
     block holds every plan's rows in plan order): ONE gather for every segment's tail. Consumes ``x``."""
     first = plans[0]
     M = sum(p[4] - p[3] for p in plans)
-    assert small.rows == first[5] * M and small.view is not None and small.bfp4 == first[1].bfp4
+    from .page_copy import dyn
+
+    kw = {}
+    if dyn("hist"):  # PB.7C: fixed shapes; only each owner's first M rows move (a runtime extent)
+        assert small.rows == first[5] * tails_max_rows(plans) and small.view is not None, (small.rows, M)
+        kw = dict(gathered_dim_size=first[5] * M)
+    else:
+        assert small.rows == first[5] * M and small.view is not None and small.bfp4 == first[1].bfp4
     s0, s1 = ccl._sems(small.mesh, first[6])
     with _Traced("tail", first[0], -1):
         ttnn.experimental.high_bw_all_gather(
             x,
             2,
             small.tensor,
+            **kw,
             cluster_axis=first[6],
             num_links=ccl.AG_LINKS,
             ready_semaphore=s0,
@@ -558,11 +619,24 @@ def tails_gather(plans: list, x, small: HistoryBuffer, sub: dict | None = None) 
 def tails_finish(plans: list, small: HistoryBuffer) -> None:
     """Each plan's rows of ``small`` (its owner-block offset) slice_written into its source buffer (as tail_finish)."""
     o = 0
+    from .page_copy import dyn, page_copy
+
+    dy = dyn("hist")
+    M = tails_max_rows(plans) if dy else sum(p[4] - p[3] for p in plans)  # (an owner's block of ``small``)
     for ckv_cache, buf, part, h, local_rows, owners, axis, start in plans:
         m = local_rows - h
         with _Traced("write", ckv_cache):
             sl = small.view
-            if len(plans) > 1:
+            if dy:  # PB.7C: owner q's rows [o, o + m) of its block (M_max rows), one strided copy
+                sl = ttnn.allocate_tensor_on_device(
+                    ttnn.Shape([1, owners, m, buf.width]),
+                    small.view.dtype,
+                    small.view.layout,
+                    small.view.device(),
+                    DRAM,
+                )
+                page_copy(small.view, sl, o, 0, m, owners, M, m)
+            elif len(plans) > 1:
                 sl = ttnn.slice(
                     small.view,
                     [0, 0, o, 0],

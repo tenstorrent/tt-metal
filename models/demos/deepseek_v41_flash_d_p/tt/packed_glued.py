@@ -64,6 +64,7 @@ from .packed_onecall import (
     snapshot_carry_ok,
     topk_rows_lanes,
 )
+from .page_copy import dyn
 from .rope import GluedStarts
 from .settings import settings
 
@@ -96,6 +97,21 @@ COPY_CORES = (11, 8)  # ChipRows: a [x, y] rectangle of cores a chip from (0, 0)
 # compute sub-device of the gather hide)
 BATCH_BYTES = 32768  # ChipRows: L1 bytes of the page pieces read a NoC barrier
 SEG_BYTES = 8192  # ChipRows: bytes a piece of a page at most (a logits row is up to T x 2 bytes)
+
+
+def dynamic_on() -> bool:
+    """PACKED_GLUED_DYNAMIC=on (PB.7C, call-time, bringup/hooks.py batch_call_settings)."""
+    return settings.get("PACKED_GLUED_DYNAMIC") == "on"
+
+
+def _has_ranges() -> bool:
+    """The indexer fork's lane_ranges option is built (ttnn.bringup.ring_indexer_score_dsa's binding names it)."""
+    return "lane_ranges" in (getattr(ttnn.bringup.ring_indexer_score_dsa, "__doc__", "") or "")
+
+
+RANGES = [_has_ranges()]  # (a list: tests may switch it off)
+RANGES_MAX = 8  # ring_indexer_score_dsa lane_ranges: ranges a chip (the fork's kRangesMax)
+RANGE_STRIDE = 1 + 5 * RANGES_MAX  # words a chip
 
 
 def glued_onecall_on() -> bool:
@@ -414,10 +430,15 @@ def chip_rows(src: ttnn.Tensor, dst: ttnn.Tensor, tables: ChipTables, key, piece
     """dst's rows <- src's rows by ``pieces`` (per chip [(source row, destination row, rows)], every block alike);
     ``key`` names the pieces in ``tables`` (made once a chunk); ``cbytes``: only that prefix of each page (a row's
     first columns of a ROW_MAJOR tensor; None: whole pages)."""
+    t = tables.add(key, pieces, _layout_geo(src)[2])
+    chip_rows_at(src, dst, tables.tensor(), t, cbytes)
+
+
+def chip_rows_at(src: ttnn.Tensor, dst: ttnn.Tensor, cst: ttnn.Tensor, t: int, cbytes=None) -> None:
+    """chip_rows with table ``t`` of a table page already on the device (``cst``: ChipTables' layout; PB.7C attempt
+    3: tt/glued_derive's derived piece tables, in rows)."""
     mesh = src.device()
     geo = _layout_geo(src)
-    t = tables.add(key, pieces, geo[2])
-    cst = tables.tensor()
     ck = (
         id(mesh),
         geo,
@@ -430,6 +451,12 @@ def chip_rows(src: ttnn.Tensor, dst: ttnn.Tensor, tables: ChipTables, key, piece
     if hit is None or hit.mesh is not mesh:
         hit = _ROWS[ck] = ChipRows(mesh, src, dst, cst)
     hit(src, dst, cst, t, cbytes)
+
+
+def _rows_in_rows(src: ttnn.Tensor, dst: ttnn.Tensor, cst: ttnn.Tensor, t: int, cbytes=None) -> None:
+    """chip_rows_at with a derived table (tt/glued_derive: pieces in rows, so a ROW_MAJOR source: one row a unit)."""
+    assert _layout_geo(src)[2] == 1, "derived piece tables count rows: a ROW_MAJOR source"
+    chip_rows_at(src, dst, cst, t, cbytes)
 
 
 # ---------------------------------------------------------------------------------------------- GluedSend
@@ -827,6 +854,24 @@ def _gconst(mesh, kind: str, key, make):
     return t
 
 
+_SCRATCH: dict = {}  # (id(mesh), key spec, j) -> (mesh, a scratch key shard): PB.7C's padding ring buffers
+
+
+def _scratch_keys(mesh, like: ttnn.Tensor, j: int) -> ttnn.Tensor:
+    """PB.7C: a persistent tensor of ``like``'s spec (the ring's local key shard) for padding buffer j (allocated once;
+    its content is never read: only one slab of it is gathered)."""
+    key = (id(mesh), tuple(like.shape), like.dtype, like.layout, str(like.memory_config()), int(j))
+    hit = _SCRATCH.get(key)
+    if hit is None or hit[0] is not mesh or not hit[1].is_allocated():
+        t = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(list(like.shape)), like.dtype, like.layout, mesh, like.memory_config()
+        )
+        t.update_tensor_topology(like.tensor_topology())  # (host metadata: each chip its own shard, as the keys')
+        ccl.pin(mesh, t)
+        hit = _SCRATCH[key] = (mesh, t)
+    return hit[1]
+
+
 def _chip_u32(mesh, values: tuple) -> ttnn.Tensor:
     """[1, 1, 1, 1] uint32 ROW_MAJOR per chip (chip-linear values)."""
 
@@ -842,7 +887,7 @@ class Call:
     """One ring call of a glued layer's indexer: pass ``p``, segments ``js`` (<= MAX_BUFS, one key capacity), per chip
     its segment (``assign``), its rows [a, b) of it (None: a filler chip, rows not kept) and the roll."""
 
-    def __init__(self, geo: GluedGeo, p: int, js: list):
+    def __init__(self, geo: GluedGeo, p: int, js: list, roll: bool = True):
         self.p, self.js = p, list(js)
         self.assign, self.rows = [], []
         for q in range(geo.n):
@@ -853,7 +898,8 @@ class Call:
             else:
                 self.assign.append(self.js[0])
                 self.rows.append(None)
-        self.roll = any(r is not None and r[0] > 0 for r in self.rows)
+        # (roll False, PB.7C: the ring scored every row in place, lane_ranges; no rolled query copies)
+        self.roll = roll and any(r is not None and r[0] > 0 for r in self.rows)
         self.starts = [
             (geo.position(j, q, rw[0]) if rw is not None else int(geo.segs[j].start))
             for q, (j, rw) in enumerate(zip(self.assign, self.rows))
@@ -922,8 +968,15 @@ class GluedCall(OneCall):
         self.starts = self.geo.starts
         self.memo: dict = {}
         self.fast = settings.get("PACKED_HOST_FAST") == "on"
-        self.tables = ChipTables(mesh, self.geo.n)
+        self._tables = None
         self._calls: dict = {}
+        # PB.7C attempt 3 (OV-67): every per-chunk table derived on the device from the chunk header (tt/glued_derive)
+        self.dv = None
+        if dynamic_on():
+            from .glued_derive import derive
+
+            self.dv = derive(mesh, self.geo.chunk, int(getattr(pk.desc, "block", 64)))
+            self.dv.begin(pk.desc, getattr(pk, "header", None))
         self.hide = None
         from .gather_hide import Hide, Split, hide_on
 
@@ -940,9 +993,18 @@ class GluedCall(OneCall):
                 f"({self.geo.passes} passes)"
             )
 
+    @property
+    def tables(self) -> ChipTables:
+        if self._tables is None:
+            self._tables = ChipTables(self.model.mesh, self.geo.n)
+        return self._tables
+
     def close(self) -> None:
         super().close()
-        self.tables.free()
+        if self._tables is not None:
+            self._tables.free()
+        if self.dv is not None:
+            self.dv.end()
 
     # ------------------------------------------------------------------ per-descriptor constants
     def _const(self, kind: str, key, make):
@@ -950,6 +1012,8 @@ class GluedCall(OneCall):
 
     def _keep_rows(self) -> ttnn.Tensor:
         g = self.geo
+        if self.dv is not None:
+            return self.dv.run("keep")[0]
         return self._const(
             "keep", None, lambda: _upload(g.mesh, g.keep_rows(), ttnn.bfloat16, ttnn.TILE_LAYOUT, (0, 1))
         )
@@ -957,6 +1021,8 @@ class GluedCall(OneCall):
     def _ckeep(self, n: int) -> ttnn.Tensor:
         """[1, 1, n, 1] bf16 TILE replicated: the chunk's n natural compressed rows below the used rows."""
         g = self.geo
+        if self.dv is not None:
+            return self.dv.run("ckeep", (int(n),))[0]
 
         def make():
             t = torch.zeros(1, 1, n, 1)
@@ -970,6 +1036,13 @@ class GluedCall(OneCall):
 
     def _region_index(self, classes: tuple) -> ttnn.Tensor:
         g = self.geo
+        if self.dv is not None:  # (the device derives min(start, 128); a masked carry's segment: class 0, its bit)
+            mask = 0
+            for j, (r, c) in enumerate(zip(self.pk.segs, classes)):
+                if int(c) != min(int(r.start), WINDOW):
+                    assert int(c) == 0, (j, c, r.start)
+                    mask |= 1 << j
+            return self.dv.run("region", (), (mask,))[0]
         blocks = [int(r.lane) for r in self.pk.segs]
         return self._const(
             "region",
@@ -983,6 +1056,9 @@ class GluedCall(OneCall):
         r = self.geo.segs[j]
         k = (r.start % geo.chunk) // 32
         off = self.geo.off[j]
+        if self.dv is not None:
+            assert geo.chunk == self.dv.chunk and geo.w == self.dv.W, (geo.chunk, geo.w)
+            return self.dv.run("srv", (1,), (j,))[0]
 
         def make():
             d = geo.server_rows(32 * k)  # [SP, W]
@@ -1027,6 +1103,10 @@ class GluedCall(OneCall):
             rms.append(rm)
         js = {id(r): j for j, r in enumerate(self.geo.segs)}
         plain = [(r, js[id(r)]) for r in need]
+        # (PB.7C, PACKED_GLUED_DYNAMIC=on: the one-gather write as PB.7B: its shapes follow the segment count and a
+        # cache's slot index only (n <= GLUED_SEGS: a bounded set of programs, built by the first chunks of each count);
+        # per-segment writes measured ~+8 ms of host a 5-segment chunk, and padding the gather to GLUED_SEGS would
+        # move rows no segment needs, OV-3. DECIDED, OV-58)
         if not (self.fast and len(plain) > 1 and self._glued_write(i, rms, plain, geo)):
             for r, j in plain:
                 idx = self._srv(geo, j)
@@ -1059,6 +1139,9 @@ class GluedCall(OneCall):
                 return False
         key = ("gsrv_all", id(geo), tuple(j for _, j in plain))
         idx_all = self.memo.get(key)
+        if self.dv is not None:
+            assert geo.chunk == self.dv.chunk and geo.w == self.dv.W, (geo.chunk, geo.w)
+            idx_all = self.dv.run("srv", (len(plain),), tuple(j for _, j in plain))[0]
         if idx_all is None:
             parts = [self._srv(geo, j) for _, j in plain]
             idx_all = self.memo[key] = ttnn.concat(parts, dim=-1, memory_config=DRAM, sub_core_grids=sub_cores())
@@ -1099,6 +1182,8 @@ class GluedCall(OneCall):
     def _index(self, block, x: ttnn.Tensor, qr: ttnn.Tensor, pre=None) -> None:
         from .indexer import Kept, TtCandidateIndexer, TtReindexer, topk_large_indices
 
+        if dynamic_on() and RANGES[0] and dyn("ranges"):
+            return self._index_dynamic(block, x, qr, pre)
         ix, i, cfg = block.indexer, block.layer, block.cfg
         assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
         assert ix.tp == 1 or ix.local, "PACKED_ATTN_ONECALL=on: INDEXER_TOPK_LOCAL=on"
@@ -1266,8 +1351,274 @@ class GluedCall(OneCall):
                         cands_all = self._like(cc)
                     self._rows(cc, cands_all, kk, c.keep_pieces(g, phased))
                     dealloc(cc)
+        STATS["max_calls"] = max(STATS.get("max_calls", 0), len(calls))  # (PB.7C: ring calls this layer)
         if bias_full is not None:
             dealloc(bias_full)
+        if not q_kept:
+            dealloc(q)
+        dealloc(w)
+        self._keep(("top", i), top_all)
+        if cands_all is not None:
+            self._keep(("cands", i), cands_all)
+
+    # ------------------------------------------------------------------ indexer, PB.7C: ONE ring call a layer
+    def _ranges(self, lens: list) -> list:
+        """ring_indexer_score_dsa lane_ranges: per chip [n, (row_lo, row_hi, segment = its key buffer, position of
+        row_lo, kv_len) x RANGES_MAX] over its glued rows; rows no segment holds (the tail pad, an empty chip) a filler
+        range (buffer 0, position 0, kv_len 32: computed, never kept)."""
+        g = self.geo
+        out = []
+        for q in range(g.n):
+            w = []
+            last = 0
+            for j, a, b in g.chip[q]:
+                assert a == last, (q, g.chip[q])
+                w.append((a, b, j, g.position(j, q, a), lens[j]))
+                last = b
+            if last < g.R:
+                w.append((last, g.R, 0, 0, 32))
+            assert len(w) <= RANGES_MAX, (q, w)
+            flat = [len(w)]
+            for r in w:
+                flat += [int(v) for v in r]
+            out += flat + [0] * (RANGE_STRIDE - len(flat))
+        return out
+
+    def _cfg32(self, ix):
+        """The ring score's program config at q_chunk 32 (lane_ranges: a range's rows are whole q chunks; one tile
+        row a q chunk; the same products and head order as the model's q chunk, so the same bits)."""
+        from .indexer import K_CHUNK
+
+        c = ix.__dict__.get("score_cfg32")
+        if c is None:
+            c = ix.__dict__["score_cfg32"] = ttnn.bringup.IndexerScoreProgramConfig(
+                q_chunk_size=32,
+                k_chunk_size=K_CHUNK,
+                head_group_size=0,
+                max_grid_x=ix.score_cfg.max_grid_x,
+                max_grid_y=ix.score_cfg.max_grid_y,
+            )
+        return c
+
+    def _cand_cap(self, ix, nbv: tuple) -> ttnn.Tensor:
+        """[SP, TP, 1, ctopk] bf16 TILE per chip: +inf on its first nbv columns, -inf after (min() with it = the
+        short candidate pool's -inf pad at a fixed width: TtCandidateIndexer._candidates_glue's padded values)."""
+        g = self.geo
+
+        def make():
+            c = torch.arange(ix.ctopk).view(1, -1)
+            v = torch.tensor([int(x) for x in nbv]).view(-1, 1)
+            t = torch.where(c < v, float("inf"), float("-inf")).view(g.sp, g.tp, 1, ix.ctopk)
+            return _upload(g.mesh, t, ttnn.bfloat16, ttnn.TILE_LAYOUT, (0, 1))
+
+        return _gconst(g.mesh, "ccap", (int(ix.ctopk), tuple(int(x) for x in nbv)), make)
+
+    def _index_dynamic(self, block, x: ttnn.Tensor, qr: ttnn.Tensor, pre=None) -> None:
+        """PACKED_GLUED_DYNAMIC=on (PB.7C): the layer's indexer scores in ONE ring call (lane_ranges: each chip its
+        segments' row ranges, each at its own positions, key buffer and kv_len; runtime args, no program a layout),
+        then per pass p (each chip's p-th segment) its top-k at its alone chip rows (DS41-342) with each chip's own
+        valid length, copied back to the segment's rows."""
+        from . import cores
+        from .indexer import Kept, TtCandidateIndexer, TtReindexer, topk_large_indices
+
+        ix, i, cfg = block.indexer, block.layer, block.cfg
+        assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
+        assert ix.tp == 1 or ix.local, "PACKED_ATTN_ONECALL=on: INDEXER_TOPK_LOCAL=on"
+        if pre is None:
+            ix.qr_twin = block.q_a.twin_out if block.q_a.twin else None
+            pre = self._query(ix, qr, ix.gates(x))
+        w, q, q_kept = pre
+        g, mesh = self.geo, self.model.mesh
+        segs = g.segs
+        caches = [r.state.compress[block.kv_src].index_k for r in segs]
+        caps = [ix._capacity(c) for c in caches]
+        assert len(set(caps)) == 1, "PACKED_GLUED_DYNAMIC: one key capacity a chunk (DS41-328: the ring's buffers)"
+        assert len(segs) <= GLUED_SEGS, len(segs)
+        t = caps[0]
+        cand = isinstance(ix, TtCandidateIndexer)
+        reidx = isinstance(ix, TtReindexer)
+        lens = [min(cp, -(-((r.start + ix.chunk) // ix.ratio) // 32) * 32) for r, cp in zip(segs, caps)]
+        nbv = [v // ix.block for v in lens] if cand else [0] * len(segs)
+        k_locals = []
+        for r, cache in zip(segs, caches):
+            ix.share(r.state.memo, block.kv_src)
+            shared = ix._memo is not None
+            kkey = (r.start, id(cache), cache.version)
+            k_local = ix._memo[0].get(("keys", ix._memo[1]), kkey) if shared else None
+            if isinstance(k_local, Kept):
+                k_local = k_local.t
+            assert getattr(cache, "k_served", False), "PACKED_ATTN_ONECALL=on: INDEX_K_SOURCE=served (kept keys)"
+            if k_local is None:
+                k_local = ix._keys(cache, r.start)
+                if shared:
+                    ix._memo[0].put(("keys", ix._memo[1]), kkey, Kept(k_local))
+            k_locals.append(k_local)
+        bias_full = None
+        if reidx:
+            cands = self.memo.get(("cands", cfg.cand_source))
+            assert cands is not None, f"layer {i}: the candidate source {cfg.cand_source} did not run this chunk"
+            brm = ttnn.scatter(ix._neg[t], -1, cands, ix.src, memory_config=DRAM, sub_core_grids=sub_cores())
+            bias_full = ttnn.to_layout(brm, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(brm))
+            dealloc(brm)
+        # (a fixed buffer count, GLUED_SEGS: no program a segment count; the extra ones are scratch key shards of the
+        # same spec that gather one slab, never read. Distinct tensors: a tensor passed twice would let the op's buffer
+        # bindings, resolved once at the program's creation, follow another call's duplicate pattern)
+        kl = k_locals + [_scratch_keys(mesh, k_locals[0], b) for b in range(len(k_locals), GLUED_SEGS)]
+        ep = {}
+        if cand:
+            ep = dict(block_keys=ix.block, block_max_out=ix._bmax[t], block_max_pin=True)
+        elif reidx:
+            ep = dict(block_keys=ix.block, block_bias=bias_full)
+        profiler.signpost("indexer")
+        logits = ttnn.bringup.ring_indexer_score_dsa(
+            q,
+            ix._kbuf[t],
+            w,
+            kl[0],
+            ix.ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=SP_AXIS),
+            cluster_axis=SP_AXIS,
+            topology=ix.topology,
+            num_links=ix.num_links,
+            chunk_start_idx=0,
+            key_compression_ratio=ix.ratio,
+            program_config=self._cfg32(ix),
+            compute_kernel_config=ix.score_ckc,
+            kv_len=max(lens),
+            seq_subshard_axis=TP_AXIS if ix.tp > 1 else None,
+            block_cyclic_sp_axis=SP_AXIS,
+            block_cyclic_chunk_local=ix.key_rows,
+            natural_query_blocks=True,
+            natural_query_rows=0 if ix.key_rows == ix.w_rows else ix.w_rows,
+            k_extra=[_kbuf(mesh, ix._kbuf[t], b) for b in range(1, GLUED_SEGS)],
+            k_local_extra=kl[1:],
+            lane_ranges=self._ranges(lens),
+            **ep,
+        )
+        STATS["max_calls"] = max(STATS.get("max_calls", 0), 1)  # (PB.7C: ring calls this layer)
+        if bias_full is not None:
+            dealloc(bias_full)
+        bm32 = None
+        if cand:
+            bm32 = cores.typecast(ix._bmax[t], ttnn.bfloat16, memory_config=DRAM)
+        dv, douts, tabs = self.dv, None, None
+        if dv is not None:  # (attempt 3: valid lengths, caps and piece tables of every pass, derived from the header)
+            from .glued_derive import slot
+
+            iparams = (int(ix.chunk), int(ix.ratio), int(t), int(ix.block) if cand else 1)
+            iparams += (int(ix.ctopk) if cand else 0, bool(cand))
+            douts = dv.run("idx", iparams)
+            tabs = douts[-1]
+            assert g.passes <= GLUED_SEGS, g.passes
+        top_all, cands_all = None, None
+        for p in range(g.passes):
+            js = []
+            for qq in range(g.n):
+                e = g.entry(qq, p)
+                if e is not None and e[0] not in js:
+                    js.append(e[0])
+            c = Call(g, p, js, roll=False)
+            phased = any(c.phases(g))
+            pk_ = ("dphase", p)
+            if p:
+                profiler.signpost("indexer_pass")
+
+            def at_phase(t_in, cols, keep_in=True):
+                if not phased:
+                    return t_in
+                profiler.signpost("indexer_phase")
+                out_ = self._like(t_in)
+                if dv is not None:
+                    _rows_in_rows(t_in, out_, tabs, slot("phase", p), cbytes=cols)
+                else:
+                    self._rows(t_in, out_, pk_, c.phase_pieces(g), cbytes=cols)
+                if not keep_in:
+                    dealloc(t_in)
+                profiler.signpost("indexer_pass" if p else "indexer")
+                return out_
+
+            # (each chip's valid length: its pass-p segment's; a chip without one reads its first tile only)
+            clens = [lens[j] if rw is not None else 32 for j, rw in zip(c.assign, c.rows)]
+            lg = at_phase(logits, max(clens) * 2)
+            vl = douts[p] if dv is not None else _chip_u32(mesh, tuple(clens))
+            got = {}
+
+            def topk_step(_, lg=lg, vl=vl):
+                got["top"] = topk_large_indices(lg, k=ix.topk, valid_length_tensor=vl)
+                return got["top"]
+
+            if self.hide is not None and p == 0:
+                self.hide.topk(i, [topk_step])
+            else:
+                topk_step(None)
+            tc = got["top"]
+            if lg is not logits:
+                dealloc(lg)
+            kk = ("dkeep", p, phased)
+            direct = p == 0 and not phased
+            if top_all is None and direct:
+                top_all = tc
+            else:
+                if top_all is None:
+                    top_all = self._like(tc)
+                if dv is not None:
+                    _rows_in_rows(tc, top_all, tabs, slot("keep", p, phased))
+                else:
+                    self._rows(tc, top_all, kk, c.keep_pieces(g, phased))
+                dealloc(tc)
+            if cand:  # the candidate pool: long pools (nbv >= ctopk) by valid length, short ones -inf padded
+                real = [rw is not None for rw in c.rows]
+                cn = [nbv[j] for j in c.assign]
+                parts = []
+                if any(r_ and v >= ix.ctopk for r_, v in zip(real, cn)):
+                    rm = at_phase(bm32, None)
+                    vlc = (
+                        douts[GLUED_SEGS + p]
+                        if dv is not None
+                        else _chip_u32(mesh, tuple(v if r_ and v >= ix.ctopk else ix.ctopk for r_, v in zip(real, cn)))
+                    )
+                    parts.append((topk_large_indices(rm, k=ix.ctopk, valid_length_tensor=vlc), True))
+                    if rm is not bm32:
+                        dealloc(rm)
+                if any(r_ and v < ix.ctopk for r_, v in zip(real, cn)):
+                    # (TtCandidateIndexer._candidates_glue's padded pool at a fixed width: the first ctopk block
+                    # maxes, each chip's columns from its nbv on -inf: min() with a per-chip cap row)
+                    sl = ttnn.slice(
+                        bm32, [0, 0, 0, 0], [1, 1, ix.sq, ix.ctopk], memory_config=DRAM, sub_core_grids=sub_cores(bm32)
+                    )
+                    tl = ttnn.to_layout(sl, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(sl))
+                    if tl is not sl:
+                        dealloc(sl)
+                    cap = (
+                        douts[2 * GLUED_SEGS + p]
+                        if dv is not None
+                        else self._cand_cap(ix, tuple(v if r_ and v < ix.ctopk else 0 for r_, v in zip(real, cn)))
+                    )
+                    mn = ttnn.minimum(tl, cap, memory_config=DRAM)
+                    dealloc(tl)
+                    rmn = to_rm(mn, memory_config=DRAM)
+                    if rmn is not mn:
+                        dealloc(mn)
+                    rm = at_phase(rmn, None, keep_in=False)
+                    parts.append((topk_large_indices(rm, k=ix.ctopk), False))
+                    dealloc(rm)
+                for cc, long_ in parts:
+                    pieces = [
+                        (ps if (r_ and (v >= ix.ctopk) == long_) else [])
+                        for ps, r_, v in zip(c.keep_pieces(g, phased), real, cn)
+                    ]
+                    if cands_all is None and direct and len(parts) == 1:
+                        cands_all = cc
+                        continue
+                    if cands_all is None:
+                        cands_all = self._like(cc)
+                    if dv is not None:
+                        _rows_in_rows(cc, cands_all, tabs, slot("cand", p, phased, long_))
+                    else:
+                        self._rows(cc, cands_all, kk + (long_,), pieces)
+                    dealloc(cc)
+        dealloc(logits)
+        if bm32 is not None:
+            dealloc(bm32)
         if not q_kept:
             dealloc(q)
         dealloc(w)
@@ -1469,8 +1820,11 @@ class GluedCall(OneCall):
             loc0 = [(g.entry(q, 0)[0] if g.entry(q, 0) is not None else 0) for q in range(g.n)]
             profiler.signpost("attention")
 
+            # (PB.7C: GLUED_SEGS lane tensors always, the first again as padding: no program a segment count)
+            lbufs = list(bufs) + ([bufs[0]] * (GLUED_SEGS - len(bufs)) if dyn("lanes") else [])
+
             def sdpa_rows(q_rm):
-                o = sdpa_lanes(att, q_rm, bufs, loc0, index, region, lane_rows=rows_map)
+                o = sdpa_lanes(att, q_rm, lbufs, loc0, index, region, lane_rows=rows_map)
                 dealloc(q_rm)
                 return o
 
@@ -1549,4 +1903,5 @@ class GluedCall(OneCall):
         return out
 
 
-STATS = {"chunks": 0}  # glued chunks run through GluedCall since load (diagnostic)
+STATS = {"chunks": 0, "max_calls": 0}  # glued chunks run through GluedCall since load; the most ring calls a layer
+# made (PB.7C, tests/packed/test_glued_walls.py resets it per case)

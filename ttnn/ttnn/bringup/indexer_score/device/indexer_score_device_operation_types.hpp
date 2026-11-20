@@ -185,6 +185,20 @@ struct operation_attributes_t {
     // whose lane_buffer is that buffer), not the largest lane's: a mixed packed chunk's short lanes stop carrying the
     // longest lane's key extent around the ring. Runtime extents (re-patched every call); HASHED (one program a value).
     bool lane_own_extent{false};
+    // Bring-up fork option (DeepSeek-V4.1 PB.7C, glued packed prefill: ONE ring call when a device holds query rows of
+    // several segments; default empty = off; fused ring + natural_query_blocks only, exclusive with lane_rows): per
+    // device (natural chunk offset / Sq, i.e. chip-linear r TP + c) kRangeStride words [n, (row_lo, row_hi, buffer,
+    // start, kv_len) x kRangesMax]: the device's query rows [row_lo, row_hi) (multiples of 32 and of q_chunk_size)
+    // score at positions start + (row - row_lo) against the keys of buffer `buffer` (0: k / k_local, i: k_extra[i - 1]
+    // / k_local_extra[i - 1]) up to kv_len (compressed rows); rows no range covers score nothing (their output is
+    // left untouched). Every value is a RUNTIME value (re-patched every call; the buffer map too): only the presence
+    // is hashed. The ring gathers every buffer's k_local, each to the largest kv_len of the ranges reading it; the key
+    // multicast down a core column is off (a column's groups may read different buffers).
+    std::vector<uint32_t> lane_ranges{};
+    static constexpr uint32_t kRangesMax = 8;
+    static constexpr uint32_t kRangeWords = 5;
+    static constexpr uint32_t kRangeStride = 1 + kRangesMax * kRangeWords;
+    bool has_lane_ranges() const { return !lane_ranges.empty(); }
     // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
     // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
     // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.
@@ -228,8 +242,8 @@ struct tensor_args_t {
     std::optional<Tensor> block_bias{std::nullopt};
     std::optional<Tensor> block_max_out{std::nullopt};
     bool has_block_epilogue() const { return block_bias.has_value() || block_max_out.has_value(); }
-    // Bring-up fork (PB.3A, operation_attributes_t::lane_rows): the other lanes' gathered-key buffers (k's shape) and
-    // their local key shards (k_local's), one pair a lane buffer after the first (k / k_local).
+    // Bring-up fork (PB.3A, operation_attributes_t::lane_rows; PB.7C lane_ranges): the other lanes' gathered-key
+    // buffers (k's shape) and their local key shards (k_local's), one pair a lane buffer after the first (k / k_local).
     std::vector<Tensor> k_extra{};
     std::vector<Tensor> k_local_extra{};
 };

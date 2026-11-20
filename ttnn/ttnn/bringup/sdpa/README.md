@@ -105,7 +105,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   row (token) reads its own lane's kv: per device up to 8 row ranges [n, (end, lane) x 8] (17 words a device); the
   reader and writer pick the kv address per token from per-core runtime args (define SPARSE_SDPA_KV_ROWS), set on
   every call (runtime: any map reuses the program; only "on" is hashed). A chip holding rows of two segments of a
-  glued chunk reads each row's own history in ONE call (no second pass).
+  glued chunk reads each row's own history in ONE call (no second pass). PB.7C: with `kv_lane_rows` the
+  `kv_lane_of_chip` map is not hashed either (the override re-binds each device's base kv to the call's map; the
+  source key holds no kv rows): no program a glued layout.
 
 ## Limits
 - Narrow V: not with `paged_cache_geometry` or windowed mode; V % 32 == 0 and V <= K.

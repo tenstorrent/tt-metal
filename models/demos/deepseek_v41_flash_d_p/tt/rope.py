@@ -412,6 +412,12 @@ class RopeTable:
 
     def _rows(self, start: int, length: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
+        from .page_copy import dyn
+
+        if (
+            dyn("rows") and not isinstance(start, (GluedStarts, LaneStarts)) and length % (32 * sp) == 0
+        ):  # PB.7C: one start is one glued piece (the slice's start would key a program on the position)
+            start = GluedStarts(((int(start), int(length)),))
         glued = isinstance(start, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(start, LaneStarts)  # PB.3A: each lane its own start (tt/packed_onecall.py)
         if glued:
@@ -425,11 +431,17 @@ class RopeTable:
             assert start + length <= self.max_seq, f"positions up to {start + length} > the table's {self.max_seq}"
         out = []
         fast = packed and settings.get("PACKED_HOST_FAST") == "on"
+        dyn_rows = glued and dyn("rows")
         for t in (self.cos, self.sin):
             if fast:  # PB.3K: each chip its rows of every lane in one program (tt/lane_rows.py)
                 from .lane_rows import lane_rows
 
                 out.append(lane_rows(t, start, length))
+                continue
+            if dyn_rows:  # PB.7C: each chip its rows of every glued piece in one program, the pieces runtime values
+                from .lane_rows import glued_rows
+
+                out.append(glued_rows(t, start, length))
                 continue
             if glued:
                 sl = glued_slices(t, start, self.width)

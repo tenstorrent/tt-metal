@@ -28,6 +28,7 @@
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"  // block-max-pool: compute_kernel_lib::reduce
 #include "indexer_score_common.hpp"                             // shared CB indices, compile-time dims, work-unit walk
 #include "api/compute/experimental/indexer_mul_custom.h"
+#include "indexer_score_ranges.hpp"  // bring-up fork (PB.7C): per-device query-row ranges
 
 // qk subblock height (head rows per DEST pass).
 constexpr uint32_t heads_per_dest_pass = get_compile_time_arg_val(num_common_ct_args);
@@ -549,6 +550,15 @@ void kernel_main() {
             for_lane<shard_physical_sp, k_len_tiles, k_tiles_per_unit, schedule_blocks, schedule_cols, schedule_rotate>(
                 band0);
         const uint32_t group = row_group0 + phase * group_stride;
+#ifdef INDEXER_SCORE_RANGES
+        {  // PB.7C: this group's range: its kv_len and causal geometry (natural blocks: no straddle)
+            constexpr uint32_t ranges_base = get_named_compile_time_arg_val("ranges_base");
+            const auto range = indexer_ranges::find(
+                [](uint32_t i) { return get_common_arg_val<uint32_t>(i); }, ranges_base, group * q_tiles_per_unit);
+            shard_span.set_valid_k_len_tiles(range.kv_len_tiles);
+            chunk_start_tiles = range.chunk_start_tiles;
+        }
+#endif
         for (uint32_t band_i = 0; band_i < band_iters; ++band_i) {
             uint32_t band = band_i;
             uint32_t k_tiles_in_unit = 0;

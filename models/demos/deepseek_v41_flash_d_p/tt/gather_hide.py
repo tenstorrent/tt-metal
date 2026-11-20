@@ -387,6 +387,10 @@ class Hide:
         """The combined tail gather's output: [owners M, width] (M: every plan's rows together)."""
         buf, owners = plans[0][1], plans[0][5]
         rows = owners * sum(p[4] - p[3] for p in plans)
+        from .page_copy import dyn
+
+        if dyn("hist"):  # PB.7C: one size for every layout (history_gather.tails_max_rows)
+            rows = owners * history_gather.tails_max_rows(plans)
         key = (id(self.mesh), rows, owners, buf.bfp4)
         return _held(_SMALL, key, self.mesh, lambda: history_gather.HistoryBuffer(self.mesh, rows, owners, buf.bfp4))
 

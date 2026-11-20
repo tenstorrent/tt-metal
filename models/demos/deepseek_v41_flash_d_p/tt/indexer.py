@@ -541,8 +541,13 @@ class TtCandidateIndexer(TtIndexer):
         nb = -(-(t // self.block) // 32) * 32
         if self.glue:
             if t not in self._bmax:  # written by every call's score op (block_max_out), read by the top blocks
-                self._bmax[t] = ttnn.allocate_tensor_on_device(
-                    ttnn.Shape([1, 1, self.sq, nb]), ttnn.float32, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+                # (zeros, PB.7C: a column no call wrote yet is finite: PACKED_GLUED_DYNAMIC's short pool min())
+                self._bmax[t] = ttnn.zeros(
+                    [1, 1, self.sq, nb],
+                    dtype=ttnn.float32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=self.mesh,
+                    memory_config=DRAM,
                 )
             return
         if t not in self._cols:

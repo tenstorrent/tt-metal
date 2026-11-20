@@ -1443,6 +1443,18 @@ TABLE = {
         "today's steps per segment). Bit-identical to path (b) (tests/packed/test_glued_oracle.py). Default off (the "
         "task's: off = PB.7's path (b); the gate sets it)",
     ),
+    "PACKED_GLUED_DYNAMIC": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7C (OWNER 2026-11-20 16:00 / 16:10), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). With PACKED_GLUED_ONECALL=on: on = a glued chunk's layout costs no program build and its "
+        "indexer runs ONE ring call a layer: ring_indexer_score_dsa takes per-device query-row ranges (row range, key "
+        "buffer, start, kv_len as runtime args; the lane -> buffer map not hashed) so a chip holding two segments scores "
+        "both in the one call (no second pass, no rolled query copies); every other layout value (rope pieces, served "
+        "index rows, valid lengths, window classes) is a runtime value or a table of the chunk's one descriptor upload. "
+        "off = PB.7B's per-pass ring calls. Bit-identical to off (tests/packed/test_glued_oracle.py). Default off (the "
+        "task's: on = the change; the gate sets it)",
+    ),
     "MOE_HEAD_ORDER": Setting(
         "free",
         ("free", "source"),

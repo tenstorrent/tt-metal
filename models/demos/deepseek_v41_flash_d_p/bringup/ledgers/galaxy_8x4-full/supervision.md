@@ -982,3 +982,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - Before relaunching after a reject, run `resume --only <task>` first (PB.8 lesson); apply tasks.yaml edits only while
   the orchestrator is stopped (scratchpad patch scripts are gone with this session: re-derive from this log).
   tasks.yaml is 490 KB (repo hook 500 KB): trim PASS PB briefs if a commit nears it. RAM unaccounted ~105 GiB.
+- 20:49 UTC PB.7C attempt 3 done, WAITING; checked gate units (all PASS) AND the deliverable: the chunk header rides
+  in the engine input (ids + HDR words, packed_device.make_input), tt/glued_derive.Derive derives every per-chunk table
+  on device into persistent outputs; the only from_torch upload is the test fallback without an engine input. Metrics:
+  glued_new_layout_ms -1.40 / 1.38 / 0.17 (<= 1.5), 0 program builds after warm-up, 1 indexer ring call a layer,
+  oracles all 0. FIRST HONEST GLUED NUMBERS (fresh layouts every chunk, = repeated): AgentX mixes 47.2 / 51.0 / 51.7k
+  new tok/s; 5 x 1.6k 57.7k; 4x2k 72.6k. Fixed lanes fresh: 25.1 / 28.6 / 30.1k (repeated 33.1 / 36.1 / 35.5k) with
+  212 / 122 / 128 builds: PB.9X's job. DECIDED: accept.

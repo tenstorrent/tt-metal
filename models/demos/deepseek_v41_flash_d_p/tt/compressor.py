@@ -145,6 +145,12 @@ class CompressRope:
 
     def _rows(self, g0: int, n: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         sp = self.mesh.shape[SP_AXIS]
+        from .page_copy import dyn
+
+        if (
+            dyn("rows") and not isinstance(g0, (GluedStarts, LaneStarts)) and n % (32 * sp) == 0
+        ):  # PB.7C: one start is one glued piece (the slice's start would key a program on the position)
+            g0 = GluedStarts(((int(g0), int(n)),))
         glued = isinstance(g0, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(g0, LaneStarts)  # PB.3A: each lane its own first group (tt/packed_onecall.py)
         if glued:
@@ -156,8 +162,14 @@ class CompressRope:
             assert n % (32 * sp) == 0 and g0 + n <= self.rows_max, (g0, n, sp, self.rows_max)
         out = []
         fast = packed and settings.get("PACKED_HOST_FAST") == "on"  # PB.3K: each chip its rows (tt/lane_rows.py)
+        if glued and dyn("rows"):  # PB.7C: the glued pieces as runtime values
+            fast = True
         for t in (self.cos, self.sin):
-            if fast:
+            if fast and glued:
+                from .lane_rows import glued_rows
+
+                sl = glued_rows(t, g0, n)
+            elif fast:
                 from .lane_rows import lane_rows
 
                 sl = lane_rows(t, g0, n)

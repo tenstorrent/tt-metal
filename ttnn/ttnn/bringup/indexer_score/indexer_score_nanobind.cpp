@@ -351,6 +351,13 @@ void bind_indexer_score(nb::module_& mod) {
                 lane's; bring-up fork, deepseek_v41_flash_d_p PB.3M): each lane buffer gathered only to the largest
                 kv_len of the lanes that read it (a mixed packed chunk's short lanes do not carry the longest lane's
                 extent around the ring). Runtime extents; the scores are unchanged (no lane reads past its kv_len).
+            lane_ranges: optional list of ints (default empty = off; bring-up fork, deepseek_v41_flash_d_p PB.7C:
+                ONE ring call when a device holds query rows of several segments; needs natural_query_blocks, no
+                lane_rows): per device (chip-linear r * TP + c) 41 words [n, (row_lo, row_hi, buffer, start, kv_len)
+                x 8]: rows [row_lo, row_hi) of the device's Sq rows (multiples of 32 and of q_chunk_size) score at
+                positions start + (row - row_lo) against buffer `buffer`'s keys (0: k / k_local, i: k_extra[i - 1])
+                up to kv_len; rows no range covers are not written. Every value (the buffer map too) is a runtime
+                value; kv_len must cover every range's. The key multicast is off in this mode.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -394,7 +401,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("lane_buffer") = std::vector<uint32_t>{},
         nb::arg("k_extra") = std::vector<ttnn::Tensor>{},
         nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{},
-        nb::arg("lane_own_extent") = false);
+        nb::arg("lane_own_extent") = false,
+        nb::arg("lane_ranges") = std::vector<uint32_t>{});
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

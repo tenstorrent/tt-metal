@@ -1,0 +1,86 @@
+{
+ "used": [
+  {
+   "id": "DS41-342",
+   "how": "the top-k phase rolls to the alone chip rows stay; their ChipRows piece tables are derived on the device (glued_derive slot 'phase') instead of host-built",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-316",
+   "how": "the derive op test takes the held model's request (shares it) instead of a mesh-only request",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-343",
+   "how": "kept the ring's padding key buffers as distinct scratch tensors; the derive outputs are distinct persistent tensors per (kind, params, mask), never one tensor passed twice",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the Galaxy chip's worker grid is 12 columns: a 1-row core range wider than that lands on dispatch cores (now DS41-345)",
+  "a failed resident request costs a fresh process even when the next request shares the model (the released model's device memory does not come back)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "nothing padded: the derive outputs have the per-chunk shapes; srv rows are written for the writing segments only (one program a count, as attempt 2)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PPB.7C attempt 3 (runtime args stay runtime args); oracle measured (all 0)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every device test on the gate's two load classes (walls env 21 layers for the probe / op test, the 40-layer accuracy load for the oracle rung); no load-time env added to a single test"
+  },
+  {
+   "id": "OV-66",
+   "answer": "n/a",
+   "evidence": "attempt 1's stop; this attempt started from attempt 2's tree (PB.8 reverted before)"
+  },
+  {
+   "id": "OV-67",
+   "answer": "done",
+   "evidence": "the chunk header rides in the engine input (one upload: make_input [SP, 1, W + 32]); keep rows, MoE end words, window index lists, compressed keep, valid lengths, caps, piece tables, served-write rows derived on the device (tt/glued_derive.py); no per-descriptor host cache on the glued path; host probe fresh vs repeat 151.1 vs 154.4 ms wall, 0 builds; glued_new_layout_ms in the gate; NOT moved: the kernels' per-call runtime args that follow the layout (ring lane_ranges, sparse_sdpa kv_lane_rows, GluedSend pieces, snapshot owners, rope pieces) are still computed on the host from the descriptor every chunk (no cache, no upload: they ride with the launch; DECIDED in BREADCRUMBS)"
+  }
+ ],
+ "cited_only": [
+  "DS41-345"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.7C",
+  "role": "perf",
+  "attempt": 3,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T20:49:14",
+  "head": "535d21157c0",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/drafts/tt_d_gen_packed_ask.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7C.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.7C_glued_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.7C.perf.3.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_derive_ops.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_dynamic_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_host_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/glued_derive.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_device.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/packed_glued.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py"
+  ]
+ }
+}

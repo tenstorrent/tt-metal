@@ -19,12 +19,20 @@ Cases (metric suffix; glued = PACKED_GLUED=on, lanes = off: the accepted 4-lane 
                     history p50 139k / p90 547k; requests.json itself is not on this box; DECIDED, seed k), packed
                     as tt-d-gen would: glued (GluedChunk.fill: back to back, <= 6 a chunk, splits at a kv block)
                     and lanes (<= 2048 a lane, a longer request in 2048 pieces over later chunks, 4 lanes a chunk);
-                    tok/s = the mix's new tokens / the sum of its chunks' walls (each the median of WALL_RUNS)
+                    tok/s = the mix's new tokens / the sum of its chunks' walls.
+                    PB.7C (owner 2026-11-20 16:00): FRESH layouts, as serving sees them: every timed run is a NEW mix
+                    (seed 1000 k + run, logged), so no timed chunk repeats a layout; GLUED_WARM_MIXES warm-up mixes
+                    (seeds 1000 k + 900 + w) run first. Records glued_program_builds_after_warmup_<case> (program-
+                    cache entries the timed runs added: a layout-dependent program shows here) and the host ms a new
+                    layout costs (glued_new_layout_ms_<case>: every timed mix's chunk walls fresh minus the same
+                    chunks run again right after, averaged over every timed chunk), next to the repeated-layout tok/s
+                    (glued_serving_tok_s_repeat_<case>, PB.7B's method)
 Gathers: per segment the history gathers of a profiled run (tt/history_gather.TRACE, each at its least chip):
 the glued path's moves run each segment's gathers serially inside its attention (exposed whole); the lane path's
 are hidden beside the attention (PACKED_GATHER_HIDE) and reported by test_packed_walls' stamps method there.
 
-Metrics: glued_wall_ms_<case>, glued_serving_tok_s_<case>, glued_device_ms_<case> (profiled), glued_path_<case>
+Metrics: glued_indexer_ring_calls_per_layer_<case> (the most ring_indexer_score_dsa calls any layer of the glued side's
+timed chunks made, counted at the op; PB.7C: 1), glued_wall_ms_<case>, glued_serving_tok_s_<case>, glued_device_ms_<case> (profiled), glued_path_<case>
 (lanes / glued), lanes_* for the lane side, glued_gather_ms_<case>_seg<k> / glued_gather_exposed_ms_<case>_seg<k>,
 glued_dram_gib_6x_p1m / glued_dram_headroom_gb_6x_p1m, the table results/PB.7_glued_walls.md.
 
@@ -54,7 +62,7 @@ CHUNK, packed, glued = _pc.CHUNK, _pc.packed, _pc.glued
 
 S = spec()
 BATCH_SHARED = True
-BATCH_ITEM_VARS = ("GLUED_WALL_CASES", "PACKED_WALL_CAP", "GLUED_WALL_RUNS")
+BATCH_ITEM_VARS = ("GLUED_WALL_CASES", "PACKED_WALL_CAP", "GLUED_WALL_RUNS", "GLUED_WARM_MIXES")
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes (0-20 under decode)
 P139 = 139264
 P1M = 1040384
@@ -64,6 +72,15 @@ AGENTX_NEW = [(0.0, 64), (0.25, 640), (0.5, 1600), (0.75, 2900), (0.9, 5900), (1
 AGENTX_HIST = [(0.0, 4096), (0.25, 61440), (0.5, 139264), (0.75, 307200), (0.9, 546816), (1.0, 1000000)]
 AGENTX_MIXES = 3
 AGENTX_TOKENS = 20000  # new tokens a mix (~2.5 chunks)
+WARM_MIXES = 4  # PB.7C: fresh warm-up mixes before the timed fresh ones (GLUED_WARM_MIXES)
+
+
+def _fresh_seeds(case: str) -> tuple:
+    """PB.7C: (warm-up seeds, timed seeds) of an agentx case: every run a new mix (no layout repeats)."""
+    k = int(case[len("agentx_m") :])
+    runs = int(os.environ.get("GLUED_WALL_RUNS", "") or min(WALL_RUNS, 5))
+    warm = int(os.environ.get("GLUED_WARM_MIXES", "") or WARM_MIXES)
+    return [1000 * k + 900 + w for w in range(warm)], [1000 * k + r for r in range(runs)]
 
 
 def _shift(k: int) -> int:
@@ -173,14 +190,17 @@ def test_glued_walls(mesh_device, monkeypatch):
     if loaded != "decode":
         model.use_decoder_skip("decode")
     cases = _cases()
-    plans = {}
+    plans, fresh = {}, {}
     for c in cases:
         if c.startswith("agentx_m"):
-            plans[c] = agentx_mix(int(c[len("agentx_m") :]))
+            warm_seeds, timed_seeds = _fresh_seeds(c)
+            fresh[c] = {sd: agentx_mix(sd) for sd in warm_seeds + timed_seeds}
+            plans[c] = fresh[c][timed_seeds[0]]
         else:
             plans[c] = _case_requests(c)
-    need = max(_shift(k) + h + n for reqs in plans.values() for k, (h, n) in enumerate(reqs)) + CHUNK
-    assert max(h + n for reqs in plans.values() for h, n in reqs) <= cap, "a request past the slots' capacity"
+    every = list(plans.values()) + [m for f in fresh.values() for m in f.values()]
+    need = max(_shift(k) + h + n for reqs in every for k, (h, n) in enumerate(reqs)) + CHUNK
+    assert max(h + n for reqs in every for h, n in reqs) <= cap, "a request past the slots' capacity"
     text = PositionGolden(S, need, CHUNK).tokens()
     dram = W._dram(mesh_device)
     proj = W._Unloaded(model, full) if dram is not None else None
@@ -189,7 +209,9 @@ def test_glued_walls(mesh_device, monkeypatch):
         for c in cases:
             sides = ("glued", "lanes") if c.startswith("agentx_m") or c in ("5x1600_p139264",) else ("glued",)
             for side in sides:
-                rows.append(_measure(model, mesh_device, layers, c, side, plans[c], text, cap, dram, proj))
+                rows.append(
+                    _measure(model, mesh_device, layers, c, side, plans[c], text, cap, dram, proj, fresh.get(c))
+                )
     finally:
         if loaded != "decode":
             model.use_decoder_skip(loaded)
@@ -205,28 +227,65 @@ def test_glued_walls(mesh_device, monkeypatch):
     print("\n" + table)
 
 
-def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: int, dram, proj) -> dict:
+def _plan_chunks(plan: list, text, side: str):
+    """A mix [(history, new tokens)] -> (requests, their token rows, the chunks of ``side``, new tokens)."""
+    reqs = [Segment(10 + k, h, h + n) for k, (h, n) in enumerate(plan)]
+    toks = {s.slot: text[_shift(s.slot - 10) : _shift(s.slot - 10) + s.end].long() for s in reqs}
+    chunks = glued_chunks(reqs) if side == "glued" else lane_chunks(reqs)
+    return reqs, toks, chunks, sum(s.length for s in reqs)
+
+
+_RING = {
+    "n": 0,
+    "max_calls": 0,
+}  # PB.7C: ring_indexer_score_dsa calls since the last layer ended; the most a layer made
+
+
+def _ring_calls() -> dict:
+    return _RING
+
+
+def _counted(fn):
+    """run fn() with every ring_indexer_score_dsa call counted (the calls a layer: between two layer ends)."""
+    import ttnn
+
+    # (the model's modules read the op's binding docstring at import to see which fork options are built: import
+    # them before the op is wrapped, and give the wrapper the op's docstring)
+    from models.demos.deepseek_v41_flash_d_p.tt import packed_glued, packed_onecall  # noqa: F401
+
+    ring0 = ttnn.bringup.ring_indexer_score_dsa
+
+    def ring(*a, **k):
+        _RING["n"] += 1
+        return ring0(*a, **k)
+
+    ring.__doc__ = ring0.__doc__
+    ttnn.bringup.ring_indexer_score_dsa = ring
+    try:
+        return fn()
+    finally:
+        ttnn.bringup.ring_indexer_score_dsa = ring0
+
+
+def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: int, dram, proj, fresh=None) -> dict:
     """One case on one side: every chunk of the plan timed (median of the warm runs a chunk), fresh slot states for
-    every pass (the requests' histories are the states' zeros; the chunks of one pass continue each other)."""
+    every pass (the requests' histories are the states' zeros; the chunks of one pass continue each other).
+    ``fresh`` (PB.7C, agentx cases): {seed: mix}; every timed run is a new mix instead (no layout repeats)."""
     import ttnn
     from models.demos.deepseek_v41_flash_d_p.tt import history_gather
     from models.demos.deepseek_v41_flash_d_p.tt.packed_device import ids_from_input, make_input, run_chunk
 
     W = _walls_mod()
-    reqs = [Segment(10 + k, h, h + n) for k, (h, n) in enumerate(plan)]
-    toks = {s.slot: text[_shift(s.slot - 10) : _shift(s.slot - 10) + s.end].long() for s in reqs}
-    chunks = glued_chunks(reqs) if side == "glued" else lane_chunks(reqs)
-    new = sum(s.length for s in reqs)
+    reqs, toks, chunks, new = _plan_chunks(plan, text, side)
     runs = int(os.environ.get("GLUED_WALL_RUNS", "") or min(WALL_RUNS, 5))
 
-    last = {}  # slot -> the last chunk that holds it (its state is freed after it: at most a chunk's slots live)
-    for j, d in enumerate(chunks):
-        for _, s in d.live():
-            last[s.slot] = j
-
-    def one_pass(on_chunk=None, profile_chunk=None):
+    def one_pass(on_chunk=None, profile_chunk=None, chunks=chunks, toks=toks):
         """Every chunk of the plan once on fresh slot states (made at a request's first chunk, freed after its last)
         -> [wall ms a chunk]."""
+        last = {}  # slot -> the last chunk that holds it (its state is freed after it: at most a chunk's slots live)
+        for j, d in enumerate(chunks):
+            for _, s in d.live():
+                last[s.slot] = j
         states = {}
         walls = []
         try:
@@ -247,9 +306,17 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
                     history_gather.TRACE = []
                     profiler.set_layer(None)
                 t0 = time.time()
+
+                def on_layer(i, h):  # (PB.7C: the ring calls this layer made)
+                    _RING["max_calls"] = max(_RING["max_calls"], _RING["n"])
+                    _RING["n"] = 0
+                    if on_chunk is not None:
+                        on_chunk(i, h)
+
                 try:
                     nat = ids_from_input(mesh, inp, desc)
-                    run_chunk(model, desc, nat, sts, layers, last=False, on_layer=on_chunk)
+                    _RING["n"] = 0
+                    _counted(lambda: run_chunk(model, desc, nat, sts, layers, last=False, on_layer=on_layer, inp=inp))
                     model.sync()
                     walls.append((time.time() - t0) * 1e3)
                     if prof:
@@ -269,26 +336,69 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
                 st.free()
         return walls
 
+    from models.demos.common.bringup.testing.profile import cache_entries
+
+    extra = {}
     with packed("on"), glued("on" if side == "glued" else "off"):
-        w = warm_up(mesh, lambda: round(sum(one_pass()), 1))
-        assert w["warm"], f"{case} {side}: not warm after {len(w['walls'])} runs"
-        per = []
-        misses_allowed(mesh, False)
-        try:
-            for _ in range(runs):
-                per.append(one_pass())
-        finally:
-            misses_allowed(mesh, True)
-        med = [sorted(p[j] for p in per)[len(per) // 2] for j in range(len(chunks))]
-        wall = sum(med)
+        if fresh is not None:  # PB.7C: every timed run a new mix; the builds the timed runs add are the metric
+            warm_seeds, timed_seeds = _fresh_seeds(case)
+            print(f"CASE {case} [{side}] fresh layouts: warm-up seeds {warm_seeds}, timed seeds {timed_seeds}")
+            for sd in warm_seeds:
+                _, tk, ch, _ = _plan_chunks(fresh[sd], text, side)
+                one_pass(chunks=ch, toks=tk)
+            _ring_calls()["max_calls"] = 0
+            e0 = cache_entries(mesh)
+            walls_all, new_all, nch, per_mix, reps = [], 0, 0, [], []
+            for sd in timed_seeds:
+                _, tk, ch, nw = _plan_chunks(fresh[sd], text, side)
+                ws = one_pass(chunks=ch, toks=tk)
+                # (attempt 3: every timed mix once more right after its fresh run: the same layouts, so whatever a
+                # layout leaves warm on the host is warm; fresh - repeat over every timed chunk = the host ms a new
+                # layout costs. The repeats do not touch the fresh walls: the next mix is a new layout again)
+                rp = one_pass(chunks=ch, toks=tk)
+                walls_all += ws
+                reps += rp
+                new_all += nw
+                nch += len(ch)
+                per_mix.append((sd, len(ch), round(sum(ws), 1), nw))
+            e1 = cache_entries(mesh)
+            builds = -1 if e0 is None or e1 is None else e1 - e0
+            diffs = [a - b for a, b in zip(walls_all, reps)]
+            extra = dict(
+                builds=builds,
+                per_mix=per_mix,
+                new_layout_ms=sum(diffs) / max(1, len(diffs)),
+                new_layout_ms_median=sorted(diffs)[len(diffs) // 2] if diffs else 0.0,
+                repeat_tok_s=new_all / (sum(reps) / 1e3),
+                ring_calls=_ring_calls().get("max_calls", 0),
+            )
+            med, wall, new, chunks_n = walls_all, sum(walls_all), new_all, nch
+            reqs = [r for sd in timed_seeds for r in _plan_chunks(fresh[sd], text, side)[0]]
+            # (the paths / profile below: a new mix's chunks, chunk 0 profiled on a layout not seen before)
+            _, toks, chunks, _ = _plan_chunks(agentx_mix(1000 * int(case[len("agentx_m") :]) + 99), text, side)
+        else:
+            _ring_calls()["max_calls"] = 0
+            w = warm_up(mesh, lambda: round(sum(one_pass()), 1))
+            assert w["warm"], f"{case} {side}: not warm after {len(w['walls'])} runs"
+            per = []
+            misses_allowed(mesh, False)
+            try:
+                for _ in range(runs):
+                    per.append(one_pass())
+            finally:
+                misses_allowed(mesh, True)
+            med = [sorted(p[j] for p in per)[len(per) // 2] for j in range(len(chunks))]
+            wall = sum(med)
+            chunks_n = len(chunks)
+            extra = dict(ring_calls=_ring_calls().get("max_calls", 0))
         # one profiled pass: the device time and the gathers of the plan's first chunk
-        got = one_pass(profile_chunk=0)
+        got = one_pass(profile_chunk=0, chunks=chunks, toks=toks)
         prof, trace = got[1]
         dev = W._device_split(prof)
         ser = W._serial_gathers(prof, trace, set())
         peak = None
         if dram is not None and case == "6x_p1m":
-            peak = W._peak_run(dram, lambda on_layer: one_pass(on_chunk=on_layer))
+            peak = W._peak_run(dram, lambda on_layer: one_pass(on_chunk=on_layer, chunks=chunks, toks=toks))
     paths = ["lanes" if not getattr(d, "glued", False) or d.as_lanes() is not None else "glued" for d in chunks]
     pre = "glued" if side == "glued" else "lanes"
     sfx = f"_{case}"
@@ -296,10 +406,23 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
     W._record_gate_name(f"{pre}_serving_tok_s" + sfx, round(tok_s, 1))
     metrics.record(f"{pre}_wall_ms" + sfx, round(wall, 1))
     metrics.record(f"{pre}_chunk_walls_ms" + sfx, [round(x, 1) for x in med])
-    metrics.record(f"{pre}_chunks" + sfx, len(chunks))
+    metrics.record(f"{pre}_chunks" + sfx, chunks_n)
     metrics.record(f"{pre}_device_ms_chunk0" + sfx, round(dev["slowest"], 2))
     metrics.record(f"{pre}_path" + sfx, "/".join(paths))
-    metrics.record(f"{pre}_rows_real_frac" + sfx, round(new / (CHUNK * len(chunks)), 4))
+    metrics.record(f"{pre}_rows_real_frac" + sfx, round(new / (CHUNK * chunks_n), 4))
+    if side == "glued":  # (PB.7C: the indexer's ring calls a layer of the glued side's chunks)
+        W._record_gate_name("glued_indexer_ring_calls_per_layer" + sfx, int(extra.get("ring_calls", 0)))
+    if "builds" in extra:
+        if side == "glued":
+            W._record_gate_name("glued_program_builds_after_warmup" + sfx, int(extra["builds"]))
+        metrics.record(f"{pre}_program_builds_after_warmup" + sfx, int(extra["builds"]))
+        if side == "glued":  # (attempt 3: gated, glued_new_layout_ms* <= 1.5)
+            W._record_gate_name("glued_new_layout_ms" + sfx, round(extra["new_layout_ms"], 2))
+        else:
+            metrics.record(f"{pre}_new_layout_ms" + sfx, round(extra["new_layout_ms"], 2))
+        metrics.record(f"{pre}_new_layout_ms_median" + sfx, round(extra["new_layout_ms_median"], 2))
+        metrics.record(f"{pre}_serving_tok_s_repeat" + sfx, round(extra["repeat_tok_s"], 1))
+        metrics.record(f"{pre}_fresh_mixes" + sfx, [list(m) for m in extra["per_mix"]])
     if case.startswith("n"):
         metrics.record(f"glued_wall_ms_{case}", round(wall, 1))
     for lane, ms in ser["g"].items():
@@ -307,14 +430,14 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
         metrics.record(f"{pre}_gather_exposed_ms{sfx}_seg{lane}", round(ms, 3) if paths[0] == "glued" else -1)
     dr = None
     if peak is not None:
-        extra = 0
+        xb = 0
         if proj is not None:
             st = model.new_state(cap)
             try:
-                extra, _ = proj.bytes(st, len(chunks[0].segments))
+                xb, _ = proj.bytes(st, len(chunks[0].segments))
             finally:
                 st.free()
-        meas, dep, capg = peak[0] / GIB, (peak[0] + extra) / GIB, dram.capacity / GIB
+        meas, dep, capg = peak[0] / GIB, (peak[0] + xb) / GIB, dram.capacity / GIB
         dr = (meas, dep)
         metrics.record("glued_dram_gib" + sfx, round(dep, 3))
         metrics.record("glued_dram_measured_gib" + sfx, round(meas, 3))
@@ -324,9 +447,9 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
             f"CASE {case} DRAM a chip: peak {meas:.3f} GiB measured ({peak[1]}), 40-layer {dep:.3f} GiB, 32 - it = {32 - dep:.3f}"
         )
     print(
-        f"CASE {case} [{side}] {len(reqs)} requests, {new} new tokens in {len(chunks)} chunks ({'/'.join(paths)}): "
+        f"CASE {case} [{side}] {len(reqs)} requests, {new} new tokens in {chunks_n} chunks ({'/'.join(paths)}): "
         f"walls {[round(x, 1) for x in med]} = {wall:.1f} ms, {tok_s:.0f} new tok/s; chunk 0 device {dev['slowest']:.1f} ms; "
-        f"gathers chunk 0 per segment {ser['g']}",
+        f"gathers chunk 0 per segment {ser['g']}; {extra}",
         flush=True,
     )
     return {
@@ -334,8 +457,9 @@ def _measure(model, mesh, layers, case: str, side: str, plan: list, text, cap: i
         "side": side,
         "reqs": len(reqs),
         "new": new,
-        "chunks": len(chunks),
+        "chunks": chunks_n,
         "segs": [len([s for s in d.segments if s is not None]) for d in chunks],
+        "extra": extra,
         "paths": paths,
         "walls": med,
         "wall": wall,
@@ -364,7 +488,7 @@ def _table(rows: list, cap: int, plans: dict) -> str:
         "DRAM GiB 40-layer",
     ]
     lines = [
-        "# Glued packed prefill walls (test_glued_walls.py, PB.7)",
+        "# Glued packed prefill walls (test_glued_walls.py, PB.7 / PB.7C)",
         "",
         f"8192-row chunks; slots at one capacity {cap}; layers 0-20 run (DECODER_SKIP=decode). Wall = engine device "
         "input -> ids readback -> sync after the last layer, per chunk the median of the warm runs; tok/s = real new "
@@ -395,7 +519,24 @@ def _table(rows: list, cap: int, plans: dict) -> str:
         lines += ["", "## Per-segment overhead (139264, 8192 / k rows a segment)", ""]
         for r in ns:
             lines.append(f"- {r['case']}: {r['wall']:.1f} ms ({'/'.join(r['paths'])})")
-    lines += ["", "AgentX mixes (history, new tokens):"]
+    fr = [r for r in rows if r.get("extra", {}).get("builds") is not None]
+    if fr:
+        lines += [
+            "",
+            "## Fresh AgentX layouts (PB.7C: every timed run a new mix, no layout repeats)",
+            "",
+            "| case | side | timed mixes (seed, chunks, wall ms, new tokens) | fresh new tok/s | repeated-layout new tok/s "
+            "(the last mix again) | host ms a new layout (per chunk) | program builds after warm-up | indexer ring "
+            "calls a layer |",
+            "|---|---|---|---|---|---|---|---|",
+        ]
+        for r in fr:
+            x = r["extra"]
+            lines.append(
+                f"| {r['case']} | {r['side']} | {x['per_mix']} | {r['tok_s']:.0f} | {x['repeat_tok_s']:.0f} | "
+                f"{x['new_layout_ms']:.2f} | {x['builds']} | {x.get('ring_calls', '-')} |"
+            )
+    lines += ["", "AgentX mixes (history, new tokens; agentx cases: the first timed mix):"]
     for c, p in plans.items():
         if c.startswith("agentx_m"):
             lines.append(f"- {c}: {p}")

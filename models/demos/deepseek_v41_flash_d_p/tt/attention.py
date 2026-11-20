@@ -480,9 +480,18 @@ class WindowTables:
         hit = self._srv_row
         if hit is not None and hit[0] == k:
             return hit[1]
-        idx = ttnn.slice(
-            self.srv, [0, 0, k, 0], [1, 1, k + 1, self.geo.w], memory_config=DRAM, sub_core_grids=sub_cores(self.srv)
-        )
+        from .page_copy import dyn, pages_of
+
+        if dyn("pages"):  # PB.7C: row k's page copied (no program a position)
+            idx = pages_of(self.srv, k, 1, [1, 1, 1, self.geo.w])
+        else:
+            idx = ttnn.slice(
+                self.srv,
+                [0, 0, k, 0],
+                [1, 1, k + 1, self.geo.w],
+                memory_config=DRAM,
+                sub_core_grids=sub_cores(self.srv),
+            )
         if self.fold:
             if hit is not None:
                 dealloc(hit[1])
@@ -1036,6 +1045,10 @@ class TtWindowCache:
                 f"{[p for p in ring.pos if p is not None]}, last write ending at {ring.end}); begin_chunk truncates the "
                 "window at such a start under DECODER_SKIP=exact / replay128 and refuses it under off"
             )
+        from .page_copy import dyn
+
+        if dyn("pages"):
+            return self._ring_carry_pages(ring, start, n, p0)
         pieces, p = [], p0
         while p < start:  # (the ring rows in position order: one or two slices, the wrap)
             slot = p % RING
@@ -1101,6 +1114,48 @@ class TtWindowCache:
         )
         res = ttnn.concat([zeros, out], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
         dealloc(zeros)
+        dealloc(out)
+        return res
+
+    def _ring_carry_pages(self, ring, start: int, n: int, p0: int) -> ttnn.Tensor:
+        """PACKED_GLUED_DYNAMIC=on (PB.7C): ``_ring_carry``'s bytes by page copies (tt/page_copy.py) at fixed shapes:
+        the slices and concats there are keyed on the ring slot and the owners' rows (a program a position)."""
+        from .page_copy import page_copy
+
+        W = self.WIDTH
+        out = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, n, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+        )
+        p, d = p0, 0
+        while p < start:  # (the ring rows in position order: one or two runs, the wrap; a ROW_MAJOR page is a row)
+            slot = p % RING
+            take = min(RING - slot, start - p)
+            page_copy(ring.t, out, slot, d, take)
+            p += take
+            d += take
+        owners = [ring.own[(q // 32) % ring.BLOCKS] for q in range(p0, start, 32)]
+        if any(o is not None for o in owners):
+            tl = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=DRAM, sub_core_grids=sub_cores(out))
+            dealloc(out)
+            gat = self._gather_all(tl)  # [1, 1, N n, 512], chip-linear
+            if gat is not tl:
+                dealloc(tl)
+            mine = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, n, W]), gat.dtype, ttnn.TILE_LAYOUT, self.mesh, DRAM
+            )
+            wt = W // 32  # (tiles a tile row)
+            for k, o in enumerate(owners):  # (block k of owner o: its tile row of o's rows; None: chip 0's copy)
+                page_copy(gat, mine, ((o or 0) * n // 32 + k) * wt, k * wt, wt)
+            dealloc(gat)
+            out = to_rm(mine, memory_config=DRAM)
+            dealloc(mine)
+        if n == WINDOW:
+            return out
+        res = ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, WINDOW, W]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, self.mesh, DRAM
+        )
+        page_copy(self.tables.zero_carry, res, 0, 0, WINDOW - n)
+        page_copy(out, res, 0, WINDOW - n, n)
         dealloc(out)
         return res
 

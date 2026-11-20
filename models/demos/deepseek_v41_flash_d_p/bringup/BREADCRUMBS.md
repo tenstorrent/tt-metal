@@ -2242,3 +2242,230 @@ Plan and expectation (written before the first load):
   | agentx_m1 / m2 / m3 | 57.4k / 52.7k / 47.0k new tok/s | lanes 32.0k / 29.9k / 36.6k (+80 / +77 / +28 %) |
 - Final check `orchestrator measure --task PB.7B` (quick, switch on, the single-request path): rc 0, chunk_wall_ms
   216.8, min layer PCC 0.732 (L39, as PB.7), host_transfers_per_layer 0.
+
+## PPB.7C (PB.7C perf, attempt 2): dynamic glued layouts, one indexer ring call (PACKED_GLUED_DYNAMIC off | on)
+
+- Attempt 1 was stopped by the overseer before any change (OV-66: PB.8's tree); the tree was clean of model code at
+  the start of attempt 2 (only ledger files modified).
+- Expected saving per chunk (written before any code change, perf_guide s2):
+  - device: the second indexer ring pass goes (PB.7B measured 5.6 ms at 139k on 5 x 1600, 15.8 ms on the AgentX m1
+    chunk with 35k-444k histories) plus the rolled q / w / bias copies of a rolled call (~0.2-0.5 ms); the ring call
+    itself gets slower by the per-core key reads (k multicast off when groups of one column read different lanes:
+    the K bytes x 8 rows, ~0.1 ms at 139k, ~0.5 ms at 547k) and by q_chunk 32 (same products, smaller matmul
+    blocks; estimate +0-10 % of the first call's ~8 ms). Net: -4 to -5 ms at 139k, -12 to -15 ms on long mixes.
+    The top-k phase copies stay where a pass's rows sit at another chip row than alone (DS41-342), ~0.9-2 ms.
+  - host: with FRESH layouts every chunk (serving), PB.7B pays a program build per new lane map (sdpa
+    kv_lane_of_chip / ring lane_buffer hashed; glued rope slices and concats keyed on segment lengths; per-descriptor
+    uploads ~5-10 a chunk): estimated tens to hundreds of ms per new layout (one ring program ~50-100 ms to build).
+    Target 0 builds after warm-up and one upload a chunk; the per-layout host table work stays (~1-3 ms).
+  - So fresh-layout AgentX walls: PB.7B (repeated layouts) 57.4k / 52.7k / 47.0k new tok/s are the ceiling the
+    fresh layouts should reach, and the one-call indexer adds ~+5-10 % on top.
+- Load reason (1): tests/packed/test_glued_dynamic_probe.py (diagnostic, not gated): "needs the walls' performance
+  load (layers 0-20, decode) because the program-cache misses of a new layout come from every layer's steps; it
+  names the ops (wraps ttnn callables, counts program-cache entries)". On the code before any PB.7C change.
+- Probe result (PB.7B code, 3 fresh mixes = 9 chunks after 2 warm-up mixes): 322 program-cache entries added (~36 a
+  chunk). Sites: the glued rope slices + concats (rope.py / compressor.py glued_slices, 152), DeviceScalars.at slices
+  of the served writes (served.py:215, 50), the multi-segment served writes' part slices / embedding / reshape / fp8
+  (compressor.write_lanes, ~35), snapshot_send patterns (20), ring_indexer_score_dsa lane maps (12), history-gather
+  tail slices / concat / gather / pack (position-dependent, ~30), sparse_sdpa (7), the window ring carry (3).
+- Load reason (2): tests/packed/test_ring_ranges_ops.py: "needs only the held model's indexer objects (dtypes, ring
+  semaphores, program settings) and the mesh: the fork's lane_ranges vs PB.7B's lanes calls on random data".
+- Fork: ring_indexer_score_dsa `lane_ranges` (C++ / kernels; CHANGELOG PB.7C): per device up to 8 (row range, key
+  buffer, start, kv_len) entries as runtime args (reader / compute / writer common args, re-patched every call; the
+  buffer map too: every buffer's address bound in the reader's common args), each group of q rows looks up its range
+  (kernels/indexer_score_ranges.hpp: its key accessors, kv_len, causal geometry; the epilogue's chunk start), key
+  multicast off in this mode (a column's groups may read different buffers), each buffer gathered to the largest
+  kv_len of the ranges reading it. Only the presence is hashed. q_chunk 32 (a range is whole q chunks).
+- Op test tests/packed/test_ring_ranges_ops.py (held 21-layer model's indexer objects, random data, T 65536):
+  PASS, 1128 (chip, range) pairs bit-identical to PB.7B's per-chip lanes calls on host-rolled rows (q_chunk 64),
+  scores and the candidate layer's block maxes: two segments meeting inside a chip at every tile-row offset 32..224
+  (the second fresh at 0 and continuing at 4096), short (0 / 32 / 64 / 2048) and long histories (to the capacity),
+  six segments in one ring.
+- Load reason (3): the glued oracle rung DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 with PACKED_GLUED_DYNAMIC=on: "needs
+  the gate's 40-layer accuracy load (OV-61) but computes only the characteristic layers (the index layers, the
+  candidate source 20, the re-index 24)".
+- Model path (PACKED_GLUED_DYNAMIC=on, tt/packed_glued.GluedCall._index_dynamic): ONE ring call a layer (lane_ranges,
+  q_chunk 32, GLUED_SEGS key buffers: the unused ones distinct scratch shards, DS41-343), then per pass its top-k at
+  the alone chip rows (DS41-342's phase copies stay) with each chip's own valid length, keep copies to the segment
+  rows; the candidate layer's short pools (nbv < ctopk) as the -inf padded pool at a fixed width (min() with a per-chip
+  cap row; the block-max buffer zero-initialised so a never-written column is finite).
+- Other layout-dependent programs made runtime (each behind the same switch; tt/page_copy.DYN_PARTS names them for a
+  diagnostic bisect, tests/packed/test_glued_dyn_bisect.py): glued rope rows (tt/lane_rows.GluedRows: the pieces as
+  prepared-program values), served-write scalars and the server-order row (tt/page_copy.pages_of instead of slices
+  keyed on the position), the window ring carry (page copies), each segment's served writes on its own (the one-gather
+  write's shapes follow the segment count; padding it would gather rows nobody needs, OV-3), sparse_sdpa kv_lane_rows
+  without the lane map in its hash (sdpa fork, GLUED_SEGS lane tensors), the window snapshot broadcast with the block
+  owners as values (tt/snapshot_send: every chip derives its tree role; host check of the role rule vs plan() on 8x4 /
+  4x4 / 2x4 / 2x2 with and without wraps: 0 mismatches), the history pack / tail slices and concat as page copies
+  (whole histories in PACK_BUCKET pieces).
+- Debug log: oracle rung on the characteristic layers failed (inf) with every part on; bisect (drop one part at a
+  time): only 'ranges'; the v2 probe showed segment P's logits from another key buffer: DS41-343 (repeats of segment
+  0's k_local as padding). With distinct scratch shards: oracle rung (layers 0,1,2,3,14,20,21,24, every part on, hide
+  on): alone vs today 0, segment equivalence 0, split 0, digests 0, determinism 0.
+- Load reason (4): the probe again on the walls load: "the performance load; counts the programs a new layout still
+  builds with every part on".
+- Probe on the walls load, every part on (fresh process: the ENGRAM_TABLE switch): 3 fresh mixes = 9 chunks after 3
+  warm-up mixes: 1 program-cache entry (was 322 on PB.7B's code): the combined history-tail gather keyed on the
+  segments' tail rows. Fixed: one input / output size for every layout (history_gather.tails_max_rows: two periods a
+  segment x GLUED_SEGS) and high_bw_all_gather's gathered_dim_size (runtime) moves only the plans' rows (no extra bytes).
+- Load reason (5): the walls (GLUED_WALL_CASES=5x1600_p139264,agentx_m1 first): "the performance load: fresh-layout
+  walls, builds after warm-up, ring calls a layer".
+- Known issues used: DS41-342 (the top-k at the alone chip rows: the phase copies stay after the one ring call),
+  DS41-328 (one key capacity a ring: asserted), DS41-316 (the op test shares the held model, no mesh-only request),
+  DS41-286 (the top-k's tie order follows its core split: rows moved, not the core count), DS41-277 (PageCopy keyed on
+  the accessor compile-time args, an ND-sharded slab's geometry included). New: DS41-343.
+- Walls, first fresh-layout run (GLUED_WALL_CASES=5x1600_p139264,agentx_m1, GLUED_WALL_RUNS=3; served writes then
+  per segment): 5x1600 glued 142.4 ms = 56.2k new tok/s (device 116.9; PB.7B 134.4 ms / 59.5k), lanes 213.6 ms;
+  agentx_m1 glued, 3 fresh mixes (seeds 1000-1002, 10 chunks): 43.4k new tok/s, program builds after warm-up 0, ring
+  calls a layer 1, the same last mix's layouts repeated 46.4k (host 8.0 ms a new layout a chunk); lanes fresh 28.5k
+  (21 builds: the lane path is not made dynamic). The per-segment writes cost host (~+8 ms on 5 x 1600):
+  DECIDED (OV-58) back to PB.7B's one-gather write (its shapes follow the segment count only: one program a count,
+  built by the n2..n6 / first chunks; padding it would move rows no segment needs, OV-3).
+- Phases (tests/packed/test_glued_v2_phases.py, 5 x 1600 @ 139k, one-gather writes back): glued 140.8 ms wall, device
+  115.7 (PB.7B 115.3): indexer 10.60 (PB.7B's first call 8.3), indexer_pass 1.44 (now only the passes' top-k; PB.7B
+  5.6 with its second ring), indexer_phase 1.79 (0.9). The one ring call is ~2.3 ms slower than PB.7B's first call over
+  the 3 index layers (q_chunk 32: each k tile serves one q tile row; key multicast off: every core reads its keys), so
+  the indexer saves ~1 ms net at 139k, not the 5.6 expected. Not built (next step): runtime key multicast per device
+  (on where all of a chip's ranges read one buffer: most chips), q_chunk 64 where every range is 64-aligned.
+- 4 x 2k (the 67k bar's lane chunk) with every part on: 120.2 ms = 68.2k (PB.7B 113.4 / 72.2k; device 103.5 vs 100.0):
+  the dynamic parts cost a fixed-lane chunk ~3 ms device + ~3 ms host and buy it nothing (its layouts repeat by
+  construction). DECIDED (OV-58): a fixed-lane chunk keeps PB.7B's programs (tt/page_copy.KIND, set by PackedChunk);
+  glued, single-segment and PACKED=off chunks take the dynamic parts. Host trims: the snapshot's values packed (page0,
+  4 ring rows in one word, 4 owner codes in one word: 3 values a core instead of 9), GluedRows' pieces 2 words each.
+- Final oracle rung (characteristic layers, every part on, the lane-chunk gate and the packed values): alone vs today
+  0, segment equivalence 0, split 0, digests 0, determinism 0.
+- Not done (owner item 2, one upload a chunk): the per-chunk tables (keep rows, compressed keep, window index lists per
+  class tuple, server-order index rows per segment, top-k valid lengths, the short-pool caps, ChipRows piece tables,
+  the MoE pad words) stay small per-descriptor uploads (cached by value: ~10-15 a new layout). They are the bulk of the
+  ~8 ms a new layout costs (the window index lists are a [32, 256, 128] host build). Next: one int32 table a chunk
+  appended to the engine input (make_input writes it with the ids, the tt-d-gen side) and one prepared unpack program
+  into the persistent per-kind tensors, the window index lists generated on the device from a few words a segment.
+- Re-run: op test `resident submit --cmd "<the walls env> scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_ring_ranges_ops.py"` (shares the held model); host check
+  `PYTHONPATH=$PWD python -m pytest -q models/demos/deepseek_v41_flash_d_p/tests/packed/test_snapshot_dyn_host.py`;
+  oracle rung: the gate's glued env + DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 test_glued_oracle.py (or
+  test_glued_dyn_bisect.py with GLUED_DYN_DROPS); program-cache misses by op: the walls env +
+  test_glued_dynamic_probe.py; walls: the walls env + GLUED_WALL_CASES / GLUED_WALL_RUNS / GLUED_WARM_MIXES
+  test_glued_walls.py; gate `gate PB.7C --spec $BRINGUP_SPEC --check` (devjob).
+- Gate check #1 (`gate PB.7C --check`, 1456 s): FAIL. Passed: determinism 0; glued oracle 40 layers (segment equiv 0,
+  alone vs today 0, split 0, digests 0, determinism 0); glued reference (every gseg within its floor, top5 1.0); packed
+  oracle (lane equiv 0, alone vs today 0). Walls: 4x2k_p139264 71,452 new tok/s (>= 67k; the lane chunk keeps PB.7B's
+  programs), 5x1600 57,472 (139.2 ms), n2 / n3 / n5 / n6 112.3 / 124.8 / 142.0 / 150.0 ms, 6x_p1m 239.0 ms (DRAM
+  headroom 6.658 GB), agentx_m1 glued fresh: 5 new mixes (17 chunks) 42.6k new tok/s, builds after warm-up 0, ring
+  calls a layer 1, the last mix repeated 56.3k (12.2 ms of host a new layout a chunk). Failed: (a) the lanes side of
+  agentx_m1 crashed ("Tensor is not allocated", DS41-344: packed_onecall's constant cache evicted by insertion order;
+  fixed: LRU), so lanes_serving_tok_s_agentx_m* and agentx_m2 / m3 missing; (b) glued_indexer_ring_calls_per_layer_n1 =
+  0: n1 is a single-segment chunk (today's path, one ring call a layer) and the metric counted GluedCall's calls only;
+  now counted at the op (every ring_indexer_score_dsa call between two layer ends, the most any layer made).
+- Gate check #2's walls (fresh process): every glued chunk took path (b) ("the indexer fork's lanes ring is not built")
+  and 4x2k fell to 63.8k: the new op counter wrapped ttnn.bringup.ring_indexer_score_dsa before packed_onecall /
+  packed_glued were first imported, and those modules read the op's binding docstring at import to see which fork
+  options are built (the wrapper had none). Fixed in the test: import them first, the wrapper carries the docstring.
+- Gate check #3 (only the walls unit re-ran; the 40-layer units passed in #2 on the same code): PASS PB.7C.
+  Accuracy (#2): glued oracle 40 layers segment equiv 0, alone vs today 0, split 0, digests 0, determinism 0; packed
+  oracle lane equiv 0, alone vs today 0; glued reference every gseg within its floor (top5 1.0); determinism 0.
+  Walls (table results/PB.7C_glued_walls.md):
+  | case | PB.7C | PB.7B (gate, repeated layouts) |
+  | 4x2k_p139264 (lane chunk) | 115.3 ms, 71.1k (bar 67k) | 113.4 ms, 72.2k |
+  | 5x1600_p139264 | 140.4 ms, 57.0k (device 115.1) | 134.4 ms, 59.5k |
+  | n2 / n3 / n5 / n6 | 111.1 / 124.0 / 143.4 / 150.7 ms | 105.8 / 122.4 / 138.2 / 151.5 ms |
+  | 6x_p1m | 238.6 ms, DRAM headroom 6.658 GB | 228.1 ms, 6.69 GB |
+  | agentx m1 / m2 / m3, FRESH layouts (5 new mixes each) | 42.5k / 46.8k / 46.2k new tok/s, builds 0 / 0 / 0, ring calls 1 | (PB.7B mixes repeated: 57.4k / 52.7k / 47.0k; other mixes) |
+  | the last fresh mix's layouts repeated | 53.3k / 55.2k / 51.9k | |
+  | lanes fresh | 25.1k / 29.2k / 30.2k (builds 211 / 122 / 128: the lane path keeps PB.7B's programs) | 32.0k / 29.9k / 36.6k |
+  Every glued case 1 ring call a layer (n1: today's path, 1). Host a new layout costs on the glued side: 3.4 / 11.8 /
+  1.0 ms a chunk (the last mix fresh vs repeated); the fresh-vs-repeat gap over all mixes is larger (~15-20 %): the
+  per-descriptor uploads and host tables (not merged into one upload, see above).
+- Final check `orchestrator measure --task PB.7C` (quick, switch on, the single-request path): rc 0, chunk_wall_ms 222.0
+  (spread 31.6; PB.7B 216.8), min layer PCC 0.732 (L39, as PB.7B), host_transfers_per_layer 0.
+- For the owner: the gated items hold (one ring call a layer, 0 program builds after warm-up on fresh AgentX layouts,
+  bit-identical oracles, 4 x 2k >= 67k). Below the ask: the one ring call saves ~1 ms device at 139k, not 5.6 (q_chunk
+  32 and no key multicast make the call ~2.3 ms slower; next: runtime key multicast per chip, q_chunk 64 where
+  aligned); the per-chunk tables are not yet one upload with the ids (next: an int32 descriptor table appended to the
+  engine input and one prepared unpack; the window index lists made on the device).
+
+## PPB.7C (PB.7C perf, attempt 3): per-chunk tables derived on the device from the chunk header (PACKED_GLUED_DYNAMIC)
+
+- Start: attempt 2's tree stands (one ring call a layer, 0 builds after warm-up); OV-67: the per-descriptor host tables
+  and uploads go. Overseer notes OV-3 / OV-58 / OV-61 / OV-66 / OV-67 read first.
+- Expected saving per chunk (written before any code change, perf_guide): device ~0 (+ a few small derive programs,
+  ~0.05-0.2 ms a chunk); host on a NEW layout: attempt 2 measured 3.4 / 11.8 / 1.0 ms a chunk (AgentX m1 / m2 / m3,
+  fresh minus repeated): the ~10-15 per-descriptor uploads (keep rows, compressed keep, window index lists
+  [32, 256, 128] built on the host, server-order rows a segment, top-k / candidate valid lengths a pass, candidate
+  caps, ChipRows piece tables, MoE pad words) and their host builds -> ~0 (target <= 1 ms); a repeated layout pays
+  the same as a fresh one (no per-descriptor caches): ~+0-0.5 ms host a chunk for the derive launches.
+- Load reason (1): tests/packed/test_glued_host_probe.py (diagnostic, not gated) on attempt 2's code: "needs the walls'
+  performance load (layers 0-20, decode, resident engram table) because the host time a new layout costs comes from
+  every layer's steps; it attributes it (enqueue ms, uploads, cProfile fresh - repeat)".
+- Load reason (2): tests/packed/test_glued_derive_ops.py: "shares the held walls model (mesh + its indexers' parameters only): the derived tables vs the host functions, random layouts".
+- Load reason (3): test_glued_host_probe.py again on the attempt-3 code (the held walls model): "fresh - repeat host ms and uploads a chunk with the derived tables".
+- Load reason (4): the glued oracle rung DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24 (the gate's 40-layer accuracy load, OV-61; computes only the characteristic layers): "bit-identity of the derived tables path before the gate".
+- Probe (1) on attempt 2's code (3 warm mixes, 3 fresh mixes each run fresh then repeated, 10 chunks): enqueue 218.8
+  vs 150.4 ms a chunk fresh vs repeat (that probe's warm-up was short: the MoE's share of the gap was first-seen
+  programs; the walls warm 4 mixes). The per-layout host tables by cProfile, a chunk: _gconst 15.8 ms in all, of it the
+  window index lists 10.5 (GluedGeo.region_lists 8.5 on the host + the upload), the compressed keep 2.4, the
+  server-order rows 1.3, the keep rows 1.0; 8 more from_torch a chunk.
+- Built (PACKED_GLUED_DYNAMIC=on; off keeps attempt 2 / PB.7B): `tt/glued_derive.py`. The engine input of a glued
+  chunk carries the chunk header (tt-d-gen's G1 fields, 32 uint32 words: n, (slot, actual_start, actual_end,
+  global_write_start) a segment) after every SP row's ids: `[SP, 1, W + 32]`, ONE upload (packed_device.make_input;
+  ids_from_input cuts it). `Derive`: one kernel source, five sections (keep + MoE end words, region index lists,
+  compressed keep, idx = per pass valid lengths / candidate valid lengths / candidate caps + the ChipRows piece tables at
+  fixed slots, srv = the served writes' server-order rows), each a prepared program (chip index baked in at build; the
+  header's byte offset, the masked-carry bits, the writing segments as per-run values) into persistent pinned outputs;
+  a section runs once a chunk on first use (again only when its values change). The region section on 16 cores
+  (8 x 2: DS41-345), the rest on core (0, 0); data movement only. GluedCall (dynamic): _keep_rows / _ckeep /
+  _region_index / _srv / _glued_write / _index_dynamic read the derived outputs (ChipRows via `chip_rows_at` with the
+  derived table page and a fixed slot); PackedChunk's MoE span from the derived end words; ChipTables only on the
+  non-dynamic path (lazy). The header reaches the model through run_chunk(inp=) / begin_packed(inp=) / the adapter's
+  prefill_packed (the engine input); without it (tests driving host ids) Derive uploads the 32 words alone.
+- DECIDED (OV-58): the kernels' per-call runtime args that follow the layout (ring lane_ranges, sparse_sdpa
+  kv_lane_rows, GluedSend's carries / ring pieces, the snapshot owners, the glued rope pieces, page-copy offsets) stay
+  runtime args computed from the descriptor every chunk (no cache: a fresh layout costs what a repeated one does; they
+  ride with the launch, no upload), as the owner's 16:00 rule (1) names them (the sparse_sdpa kv_lane_rows pattern).
+  Moving them into device tables too would need every fork kernel to read its args from DRAM; the probe shows no host
+  ms left for a new layout, so that is not done here.
+- Op test (2) tests/packed/test_glued_derive_ops.py (shares the held model; random AgentX fills + two segments meeting
+  inside a chip at every tile-row offset, 1-token / idle segments, six segments, a full chunk; header from the engine
+  input and from the fallback upload): 30 cases x 2 sources, 0 mismatches vs GluedGeo.keep_rows / region_lists (mask 0
+  and random), real_prefix end words, the compressed keep, Call's phase / keep / candidate pieces, the valid lengths and
+  caps, server_rows + off. First run: DS41-345 (a 16 x 1 core row on the dispatch columns).
+- Probe (3) on the attempt-3 code (5 warm mixes, 4 fresh mixes run fresh then repeated, 14 chunks): enqueue 142.5 vs
+  145.8 ms, wall 151.1 vs 154.4 ms a chunk (fresh - repeat -3.3 ms: noise), 0 programs built, no table uploads (0.29
+  from_torch a fresh chunk: the slot id-history page of note_tokens, a host input).
+- Oracle rung (4), characteristic layers 0,1,2,3,14,20,21,24, every dynamic part on (header by the fallback upload):
+  alone vs today 0, segment equivalence 0, split vs alone 0, slot digests 0, determinism 0.
+- Walls test change: glued_new_layout_ms_<case> (gated <= 1.5) is now every timed mix's chunk walls fresh minus the
+  same mix run again right after (all ~15-17 timed chunks, was the last mix only: 3-4 chunks, noisy); the median is
+  recorded too (glued_new_layout_ms_median_<case>); the repeated-layout tok/s from all the repeats.
+- Known issues used: DS41-342 (the phase rolls to the alone chip rows stay: their piece tables are derived, slot
+  'phase'), DS41-316 (the op test shares the held model's request; a failed request still cost a fresh process: the
+  released model's memory did not come back), DS41-343 (the ring's padding buffers stay distinct scratch tensors;
+  untouched). New: DS41-345.
+- Re-run: op test `resident submit --cmd "<the walls env> scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_derive_ops.py"`; host probe: the walls env +
+  GLUED_PROBE_MIXES=4 test_glued_host_probe.py; oracle rung: the gate's glued env + DS41_PACKED_LAYERS=0,1,2,3,14,20,21,24
+  test_glued_oracle.py; gate `gate PB.7C --spec $BRINGUP_SPEC --check` (devjob).
+- Gate check (`gate PB.7C --check`, after the last code edit, hooks clean): PASS PB.7C. Glued oracle 40 layers:
+  segment equivalence 0, alone vs today 0, split vs alone 0, slot digests 0, determinism 0; packed oracle lane equiv 0,
+  alone vs today 0; glued reference every gseg within its floor (final 0.132 vs 0.242); determinism 0.0. Walls
+  (results/PB.7C_glued_walls.md):
+  | case | attempt 3 (derived tables) | attempt 2 (host tables) |
+  | 4x2k_p139264 (lane chunk) | 112.9 ms, 72.6k (bar 67k) | 115.3 ms, 71.1k |
+  | 5x1600_p139264 | 138.7 ms, 57.7k | 140.4 ms, 57.0k |
+  | n1 / n2 / n3 / n5 / n6 | 99.2 / 112.6 / 122.2 / 139.3 / 152.1 ms | 98.9 / 111.1 / 124.0 / 143.4 / 150.7 ms |
+  | 6x_p1m | 237.6 ms, DRAM headroom 6.66 GB | 238.6 ms, 6.66 GB |
+  | agentx m1 / m2 / m3 FRESH (5 new mixes each) | 47.2k / 51.0k / 51.7k new tok/s | 42.5k / 46.8k / 46.2k |
+  | the same mixes repeated | 46.8k / 51.5k / 51.7k | 53.3k / 55.2k / 51.9k (last mix only) |
+  | glued_new_layout_ms (fresh - repeat, every timed chunk) | -1.40 / 1.38 / 0.17 (medians -1.13 / 0.88 / -0.66) | 3.36 / 11.79 / 1.01 (last mix) |
+  | program builds after warm-up, ring calls a layer | 0 / 0 / 0, 1 | 0 / 0 / 0, 1 |
+  | lanes fresh | 25.1k / 28.6k / 30.1k (builds 212 / 122 / 128: the lane path keeps PB.7B's programs) | 25.1k / 29.2k / 30.2k |
+  Fresh AgentX glued walls +11 / +9 / +12 % over attempt 2; fresh now equals repeated (the noise is ~+-1.5 ms a chunk).
+- Final check `orchestrator measure --task PB.7C` (quick, switch on, the single-request path): rc 0, chunk_wall_ms 240.0
+  (spread 27.7; attempt 2 222.0 spread 31.6, PB.7B 216.8), min layer PCC 0.732 (L39, as before),
+  host_transfers_per_layer 0. That path runs none of attempt 3's code (Derive runs only in a glued chunk's GluedCall;
+  the header only in a glued chunk's input): the gap is inside the run-to-run spread.
+- For the owner: the per-chunk host tables are gone from the glued path (one upload a chunk: ids + header; tables
+  derived on the device; no per-descriptor cache); fresh AgentX layouts now cost what repeated ones do, and the fresh
+  walls rose ~10 %. Not moved: the kernels' per-call runtime args (computed from the descriptor each chunk, no upload,
+  DECIDED above). The packed_glued module docstring still says "uploaded once a descriptor" for the non-dynamic path
+  (PACKED_GLUED_DYNAMIC=off); left untouched after the gate so the recorded runs stay valid.

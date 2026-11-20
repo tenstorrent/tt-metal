@@ -168,8 +168,15 @@ SparseSDPALanesOperation::tensor_return_value_t SparseSDPALanesOperation::create
 
 ttsl::hash::hash_t SparseSDPALanesOperation::compute_program_hash(
     const operation_attributes_t& a, const tensor_args_t& t) {
-    // the source program's key (kv_lanes[0] stands for every lane: same spec, validated) + the lane map
+    // the source program's key (kv_lanes[0] stands for every lane: same spec, validated) + the lane map. PB.7C: with
+    // kv_lane_rows every token's kv address is a per-core runtime arg and the override re-binds the base program's kv
+    // to this call's lane_of_chip tensor every call, so the map is not hashed there (no program a glued layout; the
+    // rows T are not in the source program's key either, as for the lane map).
     const auto base = SparseSDPAOperation::compute_program_hash(a.base, base_inputs(t, t.kv_lanes.front()));
+    if (!a.lane_rows.empty()) {
+        return tt::tt_metal::operation::hash_operation<SparseSDPALanesOperation>(
+            base, static_cast<uint32_t>(t.kv_lanes.size()), true);
+    }
     return tt::tt_metal::operation::hash_operation<SparseSDPALanesOperation>(
         base, a.lane_of_chip, static_cast<uint32_t>(t.kv_lanes.size()), !a.lane_rows.empty());
 }

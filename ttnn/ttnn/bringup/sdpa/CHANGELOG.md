@@ -586,3 +586,15 @@ Build fixes after fork_op.py (no behaviour change):
 - Files: device/sparse_sdpa_lanes_device_operation.hpp, device/sparse_sdpa_lanes_device_operation.cpp,
   device/kernels/dataflow/sparse_sdpa_reader.cpp, device/kernels/dataflow/sparse_sdpa_writer.cpp, sparse_sdpa.hpp,
   sparse_sdpa.cpp, sdpa_nanobind.cpp, README.md
+
+### PB.7C (deepseek_v41_flash_d_p, 2026-11-20): kv_lane_rows calls do not hash kv_lane_of_chip
+- What: `SparseSDPALanesOperation::compute_program_hash` leaves `lane_of_chip` out when `kv_lane_rows` is given (the
+  per-token kv addresses are per-core runtime args set every call, and the override re-binds each device's base kv to
+  `kv_lanes[kv_lane_of_chip[chip]]` on every call; the source program's key holds no kv rows, as before for a lane's
+  rows). Without kv_lane_rows the map stays hashed (one program a map, unchanged).
+- Why: deepseek_v41_flash_d_p PB.7C (PACKED_GLUED_DYNAMIC): a glued chunk's layout (which segment's history each chip
+  reads first) changes every chunk in serving; no program a layout.
+- Default: unchanged for every call without kv_lane_rows (same hash).
+- Run: the model's glued oracle (tests/packed/test_glued_oracle.py, PACKED_GLUED_DYNAMIC=on, 8x4); no fork suite on
+  the 8x4 (PACKED_RULES).
+- Files: device/sparse_sdpa_lanes_device_operation.cpp, README.md

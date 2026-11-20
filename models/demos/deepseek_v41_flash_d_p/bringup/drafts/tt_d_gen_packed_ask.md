@@ -110,6 +110,10 @@ Why: fixed 2048-row lanes pad real AgentX turns (at p50 ~78 % of a lane chunk's 
   No reshuffle. The model reads the header and lays the computed rows out itself (each segment's `[actual_start, cap)`
   back to back: decode's cap drops `[cap, actual_end)`, which today's chunk never computes either).
 - With ask 2 of 2026-11-18 (host ids per segment `[start - 3, end)`): the same per segment; removes the ids readback.
+- PB.7C (2026-11-20, owner: one upload a chunk): the G1 header as 32 uint32 words (`n`, then `slot, actual_start,
+  actual_end, global_write_start` per segment, zeros after) appended to every mesh row's ids: the tensor is
+  `[SP, 1, 8192 / SP + 32]`, written in the same H2D transfer. The model derives every per-chunk table on the device
+  from these words (tt/glued_derive.py); the host header stays as today (the model's host still reads it).
 
 ### Ask G3: acks (as P3)
 

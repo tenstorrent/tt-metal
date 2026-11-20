@@ -66,6 +66,28 @@ ONCE a layer with the sdpa fork's `kv_lane_rows` (each query row its own segment
 kv_lanes once a pass, the other rows on their window keys only, pass outputs copied onto pass 0's). Chunks it does not
 take keep path (b) (`glued_call_ok`: a replay segment, PREFILL_END=end, < 128 rows a chip).
 
+PB.7C (PACKED_GLUED_DYNAMIC=on, owner 2026-11-20 16:00 / 16:10): serving sends a new layout nearly every chunk, so a
+layout builds no program. (1) The indexer in ONE ring call a layer: ring_indexer_score_dsa `lane_ranges` (fork): per
+device up to 8 (row range, key buffer, start, kv_len) entries as runtime args (the buffer map too), each q chunk's group
+looks up its range in the kernels; GLUED_SEGS key buffers always (distinct scratch shards pad: DS41-343); then per pass
+its top-k at the alone chip rows (DS41-342's phase copies) with each chip's own valid length. (2) Every other place a
+layout or a position keyed a program is a runtime value: glued rope rows (`lane_rows.GluedRows`, the pieces as
+prepared-program values), served scalars / server rows / ring carry / history pack and tail rows by prepared page copies
+(`tt/page_copy.py`), each segment's served write on its own (fixed shapes), sparse_sdpa kv_lane_rows without the lane map
+in its hash, the window snapshot broadcast with the block owners as values (each chip derives its tree role). (3) The
+walls time fresh AgentX layouts (tests/packed/test_glued_walls.py: a new mix every timed run, the builds after warm-up
+recorded, the host ms a new layout costs). (4) Attempt 3 (OV-67, owner 19:50): no per-chunk host table. The chunk
+header (tt-d-gen's G1 fields: n, then slot / actual_start / actual_end / global_write_start a segment; 32 uint32 words)
+rides after every SP row's ids in the engine input (`[SP, 1, W + 32]`, ONE upload a chunk; tt/packed_device.make_input),
+and prepared programs (`tt/glued_derive.py`, one kernel source, a section a program, the chip index baked in, the
+header's offset a per-run value) derive every per-chunk table from it into persistent outputs: the keep rows and the MoE
+head's end words, the window index lists (a per-run mask for masked carries), the compressed keep, per pass the top-k /
+candidate valid lengths and candidate caps, the ChipRows piece tables at fixed slots, the served writes' server-order
+rows. No per-descriptor host cache is left on the glued path; the host keeps only what decides the op sequence (passes,
+calls, which segments write) and the per-call runtime args of the kernels (lane ranges, kv lane rows, ring pieces,
+snapshot owners: dispatched with the launch, no upload). A run_chunk without the engine input (tests driving host ids)
+uploads the header alone.
+
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
 10 projected time, 11 owner decisions, 12 PB.2-PB.4 estimates.

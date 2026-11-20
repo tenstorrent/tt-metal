@@ -69,8 +69,10 @@ def _const(mesh, kind: str, key, make):
     k = (id(mesh), kind, key)
     hit = _CONST.get(k)
     if hit is not None and hit[0] is mesh and hit[1].is_allocated():
+        _CONST[k] = _CONST.pop(k)  # (most recent last: PB.7C, fresh layouts fill the set; the oldest insertion could
+        # be a constant the caller fetched a moment ago for this very call, freed under it: "not allocated")
         return hit[1]
-    if len(_CONST) >= _CONST_MAX:  # (a bounded set: the oldest goes)
+    if len(_CONST) >= _CONST_MAX:  # (a bounded set: the least recently used goes)
         old = next(iter(_CONST))
         t = _CONST.pop(old)[1]
         if t.is_allocated():

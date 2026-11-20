@@ -36,6 +36,7 @@
 #include "kernels/indexer_score_cb.hpp"
 #include "kernels/indexer_score_runtime_args.hpp"
 #include "kernels/indexer_score_work_split.hpp"
+#include "kernels/indexer_score_ranges.hpp"  // bring-up fork (PB.7C): per-device query-row ranges
 
 namespace ttnn::operations::bringup::indexer_score::program {
 
@@ -99,6 +100,57 @@ std::optional<uint32_t> lane_buffer_valid_height_tiles(
         out = std::max(out.value_or(0u), *v);
     }
     return out.has_value() ? out : gather_valid_height_tiles(args, k_local);
+}
+
+// PB.7C (lane_ranges): a device's slot in the ranges table (its natural chunk offset / Sq: chip-linear r TP + c).
+uint32_t range_slot(const operation_attributes_t& args, uint32_t device_index, uint32_t tp_index, uint32_t Sq) {
+    return natural_query_offset(args, device_index, tp_index, Sq) / Sq;
+}
+
+// PB.7C: the device's kernel table [n, (q_tile_lo, q_tile_hi, buffer, chunk_start_tiles, kv_len_tiles) x 8] from the
+// call's ranges (indexer_score_ranges.hpp): chunk_start_tiles = start / 32 - row_lo / 32 (mod 2^32).
+std::array<uint32_t, indexer_ranges::kTableWords> range_table(const operation_attributes_t& args, uint32_t slot) {
+    using A = operation_attributes_t;
+    static_assert(A::kRangesMax == indexer_ranges::kRangesMax && A::kRangeWords == indexer_ranges::kRangeWords);
+    std::array<uint32_t, indexer_ranges::kTableWords> t{};
+    const size_t base = static_cast<size_t>(slot) * A::kRangeStride;
+    TT_FATAL(
+        base + A::kRangeStride <= args.lane_ranges.size(),
+        "indexer_score lane_ranges: no ranges for device slot {} ({} words)",
+        slot,
+        args.lane_ranges.size());
+    const uint32_t n = args.lane_ranges[base];
+    t[0] = n;
+    constexpr uint32_t TW = tt::constants::TILE_WIDTH;
+    for (uint32_t e = 0; e < n; ++e) {
+        const uint32_t* r = &args.lane_ranges[base + 1 + e * A::kRangeWords];
+        uint32_t* o = &t[1 + e * indexer_ranges::kRangeWords];
+        o[0] = r[0] / TW;
+        o[1] = r[1] / TW;
+        o[2] = r[2];
+        o[3] = r[3] / TW - r[0] / TW;  // (wraps for a range starting before its row: causal_diag_tile adds it back)
+        o[4] = r[4] / TW;
+    }
+    return t;
+}
+
+// PB.7C: the gather extent of buffer `input` = the largest kv_len of the ranges (every device's) reading it; a buffer
+// no range reads moves one slab.
+std::optional<uint32_t> range_buffer_valid_height_tiles(
+    const operation_attributes_t& args, const Tensor& k_local, uint32_t input) {
+    using A = operation_attributes_t;
+    uint32_t widest = 1;
+    for (size_t d = 0; d + A::kRangeStride <= args.lane_ranges.size(); d += A::kRangeStride) {
+        for (uint32_t e = 0; e < args.lane_ranges[d]; ++e) {
+            const uint32_t* r = &args.lane_ranges[d + 1 + e * A::kRangeWords];
+            if (r[2] == input) {
+                widest = std::max(widest, r[4]);
+            }
+        }
+    }
+    operation_attributes_t a = args;
+    a.kv_len = widest;
+    return gather_valid_height_tiles(a, k_local);
 }
 
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
@@ -248,7 +300,9 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     }
 
     // k-mcast shares a block's band-chunk down its group_rows rows; q/w-mcast needs >1 column along a row.
-    const uint32_t k_mcast_on = (group_rows > 1) ? 1u : 0u;
+    // (PB.7C lane_ranges: off, a column's groups may read different key buffers)
+    const bool ranges = lanes_args != nullptr && lanes_args->has_lane_ranges();
+    const uint32_t k_mcast_on = (group_rows > 1 && !ranges) ? 1u : 0u;
     const uint32_t q_mcast_on = (cols_used > 1) ? 1u : 0u;
 
     // Semaphores: mcast handshake (3 per active direction), pushed as descriptors with sequential ids.
@@ -576,6 +630,11 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     reader_kernel.named_compile_time_args = schedule_args;
     writer_kernel.named_compile_time_args = schedule_args;
     compute_kernel.named_compile_time_args = schedule_args;
+    if (ranges) {  // PB.7C: each kernel reads its group's range from its common args (indexer_score_ranges.hpp)
+        reader_kernel.defines.emplace_back("INDEXER_SCORE_RANGES", "1");
+        writer_kernel.defines.emplace_back("INDEXER_SCORE_RANGES", "1");
+        compute_kernel.defines.emplace_back("INDEXER_SCORE_RANGES", "1");
+    }
 
     // Append uniform scalar fields to a kernel's common argument list, preserving order.
     const auto append_scalars = [](KernelDescriptor::RTArgList& rt, const auto& range) {
@@ -659,6 +718,25 @@ ProgramDescriptor build_ring_program_descriptor_impl(
     reader_common.append(shard_order);
     reader_common.append(fused_rt);
     append_multicast_axes(reader_common, phys);
+    // PB.7C lane_ranges: the device's range table, then every key buffer's gathered and local address (bound: the
+    // descriptor refreshes them every call), LAST in the common args (the override finds the table from the end)
+    std::array<uint32_t, indexer_ranges::kTableWords> rtable{};
+    if (ranges) {
+        rtable = range_table(*lanes_args, range_slot(*lanes_args, tensor_rank, tp_index, Sq));
+        const uint32_t reader_words = indexer_common::reader::Count + static_cast<uint32_t>(shard_order.size()) +
+                                      static_cast<uint32_t>(fused_rt.size()) + cols_used + rows_used;
+        reader_kernel.named_compile_time_args.emplace_back("ranges_base", reader_words);
+        append_scalars(reader_common, rtable);
+        const uint32_t nb = 1 + static_cast<uint32_t>(lanes_tensors->k_extra.size());
+        for (uint32_t b = 0; b < indexer_ranges::kBuffersMax; ++b) {
+            reader_common.push_back(
+                b == 0 || b >= nb ? lanes_tensors->k.buffer() : lanes_tensors->k_extra[b - 1].buffer());
+        }
+        for (uint32_t b = 0; b < indexer_ranges::kBuffersMax; ++b) {
+            reader_common.push_back(
+                b == 0 || b >= nb ? lanes_tensors->k_local->buffer() : lanes_tensors->k_local_extra[b - 1].buffer());
+        }
+    }
     reader_kernel.emplace_common_runtime_args(reader_common);
     KernelDescriptor::RTArgList writer_common;
     writer_common.push_back(out.buffer());
@@ -677,10 +755,21 @@ ProgramDescriptor build_ring_program_descriptor_impl(
             writer_common.push_back(0u);
         }
     }
+    if (ranges) {  // PB.7C: the range table, last
+        const uint32_t writer_words =
+            indexer_common::writer::Count + static_cast<uint32_t>(shard_order.size()) + (has_ep ? 2u : 0u);
+        writer_kernel.named_compile_time_args.emplace_back("ranges_base", writer_words);
+        append_scalars(writer_common, rtable);
+    }
     writer_kernel.emplace_common_runtime_args(writer_common);
     KernelDescriptor::RTArgList compute_common;
     append_scalars(compute_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     compute_common.append(shard_order);
+    if (ranges) {  // PB.7C: the range table, last
+        compute_kernel.named_compile_time_args.emplace_back(
+            "ranges_base", indexer_common::compute::Count + static_cast<uint32_t>(shard_order.size()));
+        append_scalars(compute_common, rtable);
+    }
     compute_kernel.emplace_common_runtime_args(compute_common);
 
     // Consumer kernels FIRST (indices 0/1/2), then the AG helper appends its workers (3..).
@@ -814,6 +903,9 @@ ProgramDescriptor build_ring_program_descriptor(
     const tensor_args_t& tensors,
     const Tensor& out,
     const ttnn::MeshCoordinate& coord) {
+    if (args.has_lane_ranges()) {  // PB.7C: every device the call's tensors; its ranges are runtime args
+        return build_ring_program_descriptor_impl(args, tensors, out, coord, &args, &tensors);
+    }
     if (args.lane_rows == 0) {
         return build_ring_program_descriptor_impl(args, tensors, out, coord, nullptr, nullptr);
     }
@@ -961,7 +1053,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         .lane_lo = args.natural_query_lane_lo,
         .lane_hi = args.natural_query_lane_hi};
     auto& previous_controls = cached.shared_variables.begin()->second.scalar_controls;
-    const bool lanes = args.lane_rows > 0;  // PB.3A: each range its lane's values, every call
+    const bool ranges = args.has_lane_ranges();       // PB.7C: each device its ranges, every call
+    const bool lanes = args.lane_rows > 0 || ranges;  // PB.3A: each range its lane's values, every call
     if (previous_controls == scalar_controls && !lanes) {
         return;
     }
@@ -969,8 +1062,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         return !previous_controls || (*previous_controls).*member != scalar_controls.*member;
     };
     // (PB.3M lane_own_extent: every input's extent is its own lanes', which change with the lanes: every call)
-    const bool update_extent =
-        changed(&ScalarControls::kv_len) || changed(&ScalarControls::cache_batch) || (lanes && args.lane_own_extent);
+    const bool update_extent = changed(&ScalarControls::kv_len) || changed(&ScalarControls::cache_batch) ||
+                               (lanes && (args.lane_own_extent || ranges));
     const bool update_metadata = changed(&ScalarControls::num_layers) || changed(&ScalarControls::layer_index);
     const bool update_consumer = update_extent || update_metadata || changed(&ScalarControls::chunk_start) ||
                                  changed(&ScalarControls::lane_lo) || changed(&ScalarControls::lane_hi) || lanes;
@@ -1022,8 +1115,10 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         for (uint32_t in = 0; in < n_inputs; ++in) {
             const auto& in_shape = in == 0 ? shape : tensors.k_local_extra[in - 1].padded_shape();
             const uint32_t in_Ht = in_shape[2] / tt::constants::TILE_HEIGHT;
-            const auto in_valid_Ht =
-                args.lane_own_extent ? lane_buffer_valid_height_tiles(args, k_local, in) : valid_Ht;  // PB.3M
+            const auto in_valid_Ht = ranges ? range_buffer_valid_height_tiles(args, k_local, in)  // PB.7C
+                                     : args.lane_own_extent
+                                         ? lane_buffer_valid_height_tiles(args, k_local, in)  // PB.3M
+                                         : valid_Ht;
             const uint32_t valid_pages = std::min(in_valid_Ht.value_or(in_Ht), in_Ht) * Wt;
             const uint32_t block = in * ag_rt::kTensorDescriptorFieldCount;
             for (size_t i : {0u, 1u}) {
@@ -1083,9 +1178,25 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
         if (update_consumer) {
-            const auto lane_args = lanes ? lane_attributes(args, shared.lane) : operation_attributes_t{};
-            const auto& a = lanes ? lane_args : args;
-            if (lanes) {  // (the lane's kv_len; the buffers are the call's, k_extra's shape is k's)
+            const bool lane = args.lane_rows > 0;
+            const auto lane_args = lane ? lane_attributes(args, shared.lane) : operation_attributes_t{};
+            const auto& a = lane ? lane_args : args;
+            if (ranges) {  // PB.7C: the device's range table, the last words of each kernel's common args
+                const auto t = range_table(
+                    args, range_slot(args, shared.device_index, shared.tp_index, tensors.q.logical_shape()[2]));
+                const auto put = [&](uint32_t kernel, uint32_t tail) {
+                    auto& c = tt::tt_metal::GetCommonRuntimeArgs(program, kernel);
+                    TT_FATAL(c.size() >= t.size() + tail, "indexer_score lane_ranges: common args too short");
+                    const size_t base = c.size() - tail - t.size();
+                    for (size_t i = 0; i < t.size(); ++i) {
+                        c[base + i] = t[i];
+                    }
+                };
+                put(kReaderKernelIndex, 2 * indexer_ranges::kBuffersMax);
+                put(kWriterKernelIndex, 0);
+                put(kComputeKernelIndex, 0);
+            }
+            if (lane) {  // (the lane's kv_len; the buffers are the call's, k_extra's shape is k's)
                 const auto lane_pcache = persistent_cache_args(a, k);
                 pcache.kv_len_tiles = lane_pcache.kv_len_tiles;
             }

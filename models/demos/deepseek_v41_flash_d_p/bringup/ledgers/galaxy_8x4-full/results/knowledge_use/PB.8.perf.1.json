@@ -1,0 +1,115 @@
+{
+ "used": [
+  {
+   "id": "DS41-222",
+   "how": "the root's hc row transposes (BRISC word copies 6.4 + 5.4 us) were the ffn call's tail: moved to the root's SFPU (mhc_post v2 HCT)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-318",
+   "how": "reused the SFPU lane mask (vConstTileId & 0xE) + subvec_shflror1 to build the hc transposes as exact bit moves",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-317",
+   "how": "the landing's port reader pushes packets into slots the sender never recycles in a call, so the 4-held-slots deadlock cannot arise; kept the sender's flush cadence bounded",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-224",
+   "how": "kept the port side per (me, target) from get_eth_forwarding_direction; did not try to route the far chip's block via the other side",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-225",
+   "how": "kept one program for every chip: the landing positions are computed in the kernels from the chip-independent feed table",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-210",
+   "how": "appended the multicast rectangle args after the per-core peer list (equal-length lists on unit cores)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-223",
+   "how": "the root window's new pack to cb_hsoa runs after the existing root-phase reconfig (fp32 formats) on spare-core roots",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-174",
+   "how": "no new output allocation: the landing is a program CB on the port cores, not a buffer",
+   "traced": false,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the kernel-config buffer limit is checked against the program with the device profiler's zones: a program that fits without TT_METAL_DEVICE_PROFILER can fail with it (DS41-343 added)",
+  "the rotate direction of sfpi subvec_shflror1 (lane i -> i + 1) is not documented in the sfpi docs",
+  "the 2D mesh fabric payload is 4352 B (2 bf16 tiles a packet): bounds every fabric feed's per-packet throughput (DS41-344 added)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding or duplicated work: the landing holds exactly each port's packets (+ one flag page); W segments move the same shares"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; one DECIDED line in BREADCRUMBS (MHC_POST_V2 needs a hooks.py batch_call_settings entry this step may not edit)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "the new model test (tests/test_mhc_post_v2.py) is mesh-only, BATCH_SHARED with BATCH_ITEM_VARS, no load-time env; no gate test changed"
+  }
+ ],
+ "cited_only": [
+  "DS41-343",
+  "DS41-344"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.8",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T16:52:46",
+  "head": "561fc994f0f",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.8.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.8.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_mhc_post_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/mhc.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/README.md",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_device_operation.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/device/mhc_post_stats_program_factory.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_common.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_feed_sender.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_compute.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_reader.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/kernels/mhc_post_stats_writer.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn.hpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/mhc_post_ttnn_nanobind.cpp",
+   "ttnn/ttnn/bringup/mhc_post_ttnn/tests/unit/test_mhc_post_v2.py"
+  ]
+ }
+}

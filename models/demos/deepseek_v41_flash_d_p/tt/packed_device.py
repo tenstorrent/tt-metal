@@ -337,6 +337,7 @@ class PackedChunk:
         self.segs = segs  # SegRun of the segments that compute (lane order)
         self.idle = idle  # SegRun of the segments with cap <= start (snapshot at cap and acks only)
         self.glued = getattr(desc, "glued", False)  # PB.7: a glued chunk that is not a lane chunk (moves by rows)
+        self.header = getattr(model, "_packed_inp", None)  # PB.7C: the engine input carrying the chunk header
         self.trivial = len(segs) == 1 and segs[0].lane == 0 and desc.lane_off(0) == 0  # (today's chunk: nothing moves)
         self.prefetched = False  # (TtDS41Model.take_engram_rows: once a chunk)
         if self.trivial:
@@ -361,10 +362,17 @@ class PackedChunk:
                 self.mover = None
             elif why != "switch off":
                 _log_once(f"PACKED_GLUED_ONECALL: path (b) for this chunk: {why}")
+        # PB.7C: the dynamic parts' chunk kind (tt/page_copy.KIND; a fixed-lane chunk keeps PB.7B's programs)
+        from .page_copy import KIND
+
+        KIND[0] = "lanes" if not (self.trivial or self.glued) else "glued" if self.glued else "trivial"
         # PB.4 (PACKED_MOE=on, read per chunk): the pad rows out of the MoE dispatch (MoEPadSpan; None: every row real
         # or the switch off)
         self.moe_span = None
-        if segs and moe_pad_on():
+        dv = getattr(self.oc, "dv", None)
+        if segs and moe_pad_on() and dv is not None:  # PB.7C attempt 3: the end words derived from the header
+            self.moe_span = dv.moe_span(desc.used_rows())
+        elif segs and moe_pad_on():
             import torch
 
             valid = torch.zeros(desc.chunk, dtype=torch.bool)
@@ -425,6 +433,9 @@ class PackedChunk:
                     r.restore.append((ik, "key_layer", orig))
 
     def unbind(self) -> None:
+        from .page_copy import KIND
+
+        KIND[0] = "any"
         if self.oc is not None:
             self.oc.close()
         for r in self.segs:
@@ -589,11 +600,12 @@ class PackedChunk:
             dealloc(g)
 
 
-def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_layer=None):
+def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_layer=None, inp=None):
     """Harness (tests): one chunk of ``desc`` through ``layers`` as PACKED says (read per chunk). on: begin_packed and
     the packed layers; off: today's single-request chunk, which needs exactly one live segment, in lane 0 (the rows of
     a packed chunk's lane 0 are today's chunk rows). ``tokens``: natural-order ids [chunk], PAD_ID past each segment's
-    end and in empty lanes. ``on_layer(i, h)`` after each layer (h is freed after it returns). Returns nothing."""
+    end and in empty lanes. ``on_layer(i, h)`` after each layer (h is freed after it returns). ``inp``: the engine input
+    (make_input; PB.7C: a glued chunk's header rides in it). Returns nothing."""
     from .attention import prefill_end
     from .model import SKIPPED
 
@@ -606,7 +618,7 @@ def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_lay
             n = max(0, prefill_end(s.end) - s.start)
             ids[lane * desc.lane_rows + n : (lane + 1) * desc.lane_rows] = PAD
     if packed_on():
-        model.begin_packed(desc, ids, states, last=last)
+        model.begin_packed(desc, ids, states, last=last, inp=inp)
         try:
             h = model.embed(ids) if model._packed.segs else SKIPPED
             for i in layers:
@@ -649,12 +661,13 @@ def ids_from_input(mesh, inp, desc):
 
     sp, tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
     dev = ttnn.get_device_tensors(inp)
+    w = int(desc.chunk) // sp  # (PB.7C: a glued chunk's input carries its header after each row's ids)
     if settings.get("PACKED_HOST_FAST") == "on":  # PB.3K: column 0's reads enqueued back to back, ONE wait (the last
         # read blocks; the queue completes them in order, so every earlier one has landed when it returns)
         hs = [ttnn.from_device(dev[r * tp], blocking=r == sp - 1) for r in range(sp)]
-        got = torch.cat([ttnn.to_torch(h).reshape(-1).to(torch.int64) & 0xFFFFFFFF for h in hs])
+        got = torch.cat([ttnn.to_torch(h).reshape(-1)[:w].to(torch.int64) & 0xFFFFFFFF for h in hs])
     else:
-        got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1).to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
+        got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1)[:w].to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
     if getattr(desc, "glued", False):  # PB.7: engine rows back to back -> model rows (each segment's computed rows)
         return desc.model_ids(got, pad=PAD)
     nat = torch.full((desc.chunk,), PAD, dtype=torch.int64)
@@ -671,12 +684,20 @@ def make_input(mesh, desc, ids_per_lane):
     import torch
 
     sp = int(mesh.shape[SP_AXIS])
-    if getattr(desc, "glued", False):  # PB.7: engine order, segments back to back (drafts/tt_d_gen_packed_ask.md)
+    glued = getattr(desc, "glued", False)
+    if glued:  # PB.7: engine order, segments back to back (drafts/tt_d_gen_packed_ask.md)
         nat = desc.engine_ids(ids_per_lane, pad=PAD)
     else:
         nat = desc.pack_ids(ids_per_lane, pad=PAD)
+    rows = nat.reshape(sp, 1, desc.chunk // sp)
+    if glued and settings.get("PACKED_GLUED_DYNAMIC") == "on":  # PB.7C attempt 3: the chunk header (tt-d-gen's G1
+        # fields) after every SP row's ids, in the same upload (tt/glued_derive derives every per-chunk table from it)
+        from .glued_derive import HDR_WORDS, header_words
+
+        hdr = torch.tensor(header_words(desc), dtype=torch.int64).view(1, 1, HDR_WORDS).expand(sp, 1, HDR_WORDS)
+        rows = torch.cat([rows, hdr], dim=-1)
     return ttnn.from_torch(
-        nat.reshape(sp, 1, desc.chunk // sp).to(torch.uint32),
+        rows.to(torch.uint32),
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh,
