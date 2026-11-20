@@ -724,7 +724,7 @@ tt-train/** @tenstorrent/tt-train
 tt-train/sources/ttml/metal/** @tenstorrent/tt-train @lgalasTT
 tt-train/sources/ttml/ops/** @tenstorrent/tt-train @lgalasTT
 tt-train/tests/** @tenstorrent/tt-train @lgalasTT @abustamanteTT
-# Files related to the productization of training. Code ownership is limited until support is stable.
+# Files related to the experimental features. Currently only scope trainer, so limited access.
 tt-train/sources/ttml/ttml/experimental/** @mmilosevicTT @mcupacTT @jmalone-tt @vladimirjovanovicTT
 # Last on purpose: CODEOWNERS is last-match-wins, so this must follow the directory rules
 # above for infra to keep co-ownership of every CMakeLists.txt.
