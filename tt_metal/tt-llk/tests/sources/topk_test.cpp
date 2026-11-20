@@ -262,6 +262,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         "iterations strips the tags a fresh-from-L1 rebuild would need; the ttnn pipeline re-stamps inside the merge "
         "and moves value words through raw Float32 CBs instead)");
     static_assert(TOPK_RANK_STAMPED || TOPK_TAG_BITS == 16, "TOPK_TAG_BITS only applies to the rank-stamped mode");
+    static_assert(!TOPK_MERGE_ONLY || TOPK_NUM_ITERATIONS == 1, "merge-only runs on a single tile pair per row");
+    // Merge-only: the tile pair goes straight into one merge, without local sort or rebuild.
+    constexpr bool run_network        = !TOPK_MERGE_ONLY;
     constexpr std::uint32_t dst_index = 0;             // base DEST index for the 4-tile group.
     const int end_phase               = TOPK_LOGK - 1; // same as other TopK call sites.
     constexpr int start_phase         = 0;
@@ -371,7 +374,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 
                 // Pick the first operation.
-                if (first_iteration)
+                if (run_network && first_iteration)
                 {
                     // same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_local_sort from metal.
                     if constexpr (NETWORK_STABLE_SORT)
@@ -434,7 +437,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             start_step);
                     }
                 }
-                else
+                else if (run_network)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
                     SFPU_UNARY_CALL(
@@ -466,11 +469,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                      TOPK_TAG_BITS),
                     dst_index,
                     vector_mode,
-                    current_iteration,
+                    TOPK_MERGE_ONLY ? TOPK_MERGE_M_ITER : static_cast<int>(current_iteration),
                     TOPK_K);
 
                 // Additional last operation.
-                if (last_iteration)
+                if (run_network && last_iteration)
                 {
                     // Same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_rebuild from metal.
                     SFPU_UNARY_CALL(
@@ -497,6 +500,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         // DEST (#50215 layout); the ttnn path packs raw u32 index words instead.
                         ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(0);
                         ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(2);
+                        if constexpr (TOPK_MERGE_ONLY)
+                        {
+                            ckernel::sfpu::_topk_strip_rank_tags_<TOPK_TAG_BITS>(1);
+                            ckernel::sfpu::_topk_uint16_move_dest_tile_to_pack_half_(3);
+                        }
                     }
                 }
 
@@ -543,8 +551,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     const int NUM_VALUE_TILES_PER_ROW = params.FULL_CT_DIM / NUM_STAGES;
 
-    // We pack the result with index tiles right after value tiles.
-    const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
+    // We pack the result with index tiles right after value tiles (merge-only: both tiles of each stage).
+    const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = TOPK_MERGE_ONLY ? NUM_TILES_PER_STAGE * NUM_STAGES : (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
 
     _llk_pack_dest_init_wrapper_<dest_sync, is_fp32_dest_acc_en, PackMode::Default>();
 
@@ -598,7 +606,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                     const int tile_dest_offset = stage_index * NUM_TILES_PER_STAGE;
 
-                    if (last_iteration)
+                    if (TOPK_MERGE_ONLY)
+                    {
+                        const int tile_L1_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW + tile_dest_offset;
+                        for (int tile = 0; tile < NUM_TILES_PER_STAGE; ++tile)
+                        {
+                            _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(
+                                tile_dest_offset + tile, L1_ADDRESS(params.buffer_Res[tile_L1_offset + tile]));
+                        }
+                    }
+                    else if (last_iteration)
                     {
                         const int tile_row_offset = current_tile_row * NUM_TILES_IN_RESULT_BUFFER_PER_ROW;
                         const int tile_L1_offset  = tile_row_offset + stage_index;
