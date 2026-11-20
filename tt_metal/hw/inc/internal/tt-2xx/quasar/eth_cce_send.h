@@ -14,9 +14,9 @@
 
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "hostdev/cce_spa_routes.h"
 #include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
+#include "internal/tt-2xx/quasar/cce_noc.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 namespace internal_::cce_eth {
@@ -175,23 +175,9 @@ FORCE_INLINE uint32_t noc_trid(uint32_t q_num) {
     return kFirstNocTrid + q_num;
 }
 
-// SRAM offset of the flat address @p flat (cached or uncached alias) of a CCE.
-FORCE_INLINE uint32_t sram_offset(uint32_t flat) {
-    const uint32_t offset = flat >= MEM_IERISC_UNCACHED_BASE ? flat - MEM_IERISC_UNCACHED_BASE : flat;
-    ASSERT(offset < MEM_IERISC_L1_SIZE);
-    return offset;
-}
-
-// Keraunos local address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE SRAM.
-FORCE_INLINE uint64_t sram_local_addr(uint32_t tile, uint32_t flat) {
-    return kHsioLocalBase + tile * kHsioTileStride + kHsioCceSramOffset + sram_offset(flat);
-}
-
-// System address of the flat address @p flat (cached or uncached alias) in HSIO tile @p tile's CCE SRAM
-// (Keraunos-E100 v1.0.9 Table 14; docs arch/KERAUNOS-HW-FINDINGS.md Q1). The system tile stride equals the local one.
-FORCE_INLINE uint64_t sram_system_addr(uint32_t tile, uint32_t flat) {
-    return KERAUNOS_HSIO0_SYSTEM_BASE + tile * kHsioTileStride + kHsioCceSramOffset + sram_offset(flat);
-}
+// SRAM offset of the flat address @p flat (cached or uncached alias) of a CCE0. Halts outside both
+// (cce_noc::Fault::OutsideSram).
+FORCE_INLINE uint64_t sram_offset(uint32_t flat) { return internal_::cce_noc::sram_offset(flat, 0); }
 
 // On an Ethernet link, true while the command buffer has no space on TX queue @p q_num's request VC. On a NOC link,
 // true while its iDMA request VC has no space or the queue's last send is not acked: one send in flight per queue.
