@@ -151,14 +151,14 @@ trainer applies nothing: apply the block when you create it, as `ttml.common.uti
 given the whole config (`train.py`).
 
 Weights loaded before the trainer is built went into the model's dtype, so fp32 master weights get them rounded to bf16
-first; that changes nothing for bf16 files. For full fine-tuning from an fp32 file, apply the block right after building
-the model, before loading (`ttml.common.utils.apply_precision(model, block)`), and pass it to the trainer as well;
-applying it again converts nothing. That works with loaders that write into the dtype a parameter is stored in:
-checkpoints and the Python Llama and Qwen3 loaders. The C++ safetensors loaders install bf16 tensors, so they run
-before the block and round an fp32 file to bf16 (see [fp32 master weights](MIXED_PRECISION.md#fp32-master-weights)).
-Don't do this with LoRA: `LoraModel` keeps the base's tensors, so the frozen base
-would stay in fp32, 6 bytes per parameter (fp32 plus its bf16 view) instead of 2. The trainer warns when a frozen
-parameter is stored in fp32.
+first; that changes nothing for bf16 files. For full fine-tuning from an fp32 file, build the trainer first and load the
+weights after it, as `load_checkpoint` does on a resume: the block is applied once, by the trainer, and a loader that
+writes into the dtype a parameter is stored in keeps the fp32 values. Checkpoints and the Python Llama and Qwen3
+loaders do. The C++ safetensors loaders install bf16 tensors, so they run before the block and round an fp32 file to
+bf16 (see [fp32 master weights](MIXED_PRECISION.md#fp32-master-weights)). With LoRA the order doesn't matter: the
+frozen base stays in bf16, so load it before the trainer as usual. Don't apply the block yourself before the trainer
+wraps the model: `LoraModel` keeps the base's tensors, so the frozen base would stay in fp32, 6 bytes per parameter
+(fp32 plus its bf16 view) instead of 2. The trainer warns when a frozen parameter is stored in fp32.
 
 ---
 

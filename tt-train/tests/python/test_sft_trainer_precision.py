@@ -6,6 +6,7 @@
 
 import logging
 
+import ml_dtypes
 import numpy as np
 import pytest
 
@@ -54,6 +55,15 @@ def _config(**overrides):
     return SFTConfig(
         **{"max_steps": 1, "eval_interval": 0, "save_interval": 0, "disable_progress_bar": True, **overrides}
     )
+
+
+def _loader():
+    rng = np.random.default_rng(0)
+    examples = []
+    for _ in range(8):
+        tokens = rng.integers(1, VOCAB_SIZE, SEQ_LEN).tolist()
+        examples.append({"input_ids": tokens, "labels": [-100] * 4 + tokens[4:]})
+    return InMemoryDataloader(examples, lambda batch: sft_collate_fn(batch, SEQ_LEN, 0), 2)
 
 
 def _dtypes(parameters) -> set:
@@ -151,19 +161,13 @@ class _StepLosses(TrainerCallback):
 def test_trains_fp32_master_weights_with_fp32_gradient_accumulation(gradient_reduce_default):
     """Two steps of two micro-batches each with fused AdamW: the gradients add up in fp32 from the second micro-batch,
     AdamW reads them as they are, and every fp32 master weight moves."""
-    rng = np.random.default_rng(0)
-    examples = []
-    for _ in range(8):
-        tokens = rng.integers(1, VOCAB_SIZE, SEQ_LEN).tolist()
-        examples.append({"input_ids": tokens, "labels": [-100] * 4 + tokens[4:]})
-    loader = InMemoryDataloader(examples, lambda batch: sft_collate_fn(batch, SEQ_LEN, 0), 2)
     model = _toy_llama()
     before = {name: p.to_numpy(ttnn.DataType.FLOAT32) for name, p in model.parameters().items()}
     losses = _StepLosses()
 
     SFTTrainer(
         model,
-        loader,
+        _loader(),
         None,
         _config(max_steps=2, gradient_accumulation_steps=2),
         optimizer={"type": "AdamW", "lr": 1e-3},
@@ -177,6 +181,47 @@ def test_trains_fp32_master_weights_with_fp32_gradient_accumulation(gradient_red
     assert {p.get_grad().dtype for p in parameters.values()} == {ttnn.DataType.FLOAT32}
     moved = [
         name for name, p in parameters.items() if not np.array_equal(p.to_numpy(ttnn.DataType.FLOAT32), before[name])
+    ]
+    assert len(moved) == len(parameters), f"unchanged: {sorted(set(parameters) - set(moved))}"
+    ttml.autograd.AutoContext.get_instance().reset_graph()
+
+
+@pytest.mark.requires_device
+def test_weights_loaded_after_the_trainer_is_built_keep_their_fp32_values(gradient_reduce_default):
+    """Full fine-tuning from an fp32 file: build the trainer, which applies the block once, then load. What checkpoints
+    and the Python loaders write with (``assign_numpy``) lands in the dtype a parameter is stored in, so fp32 master
+    weights get the values unrounded, the stored reduce dtype stays, and the optimizer built before the load steps the
+    loaded weights."""
+    model = _toy_llama()
+    losses = _StepLosses()
+    trainer = SFTTrainer(
+        model,
+        _loader(),
+        None,
+        _config(),
+        optimizer={"type": "AdamW", "lr": 1e-3},
+        callbacks=[losses],
+        precision=FP32_PRECISION,
+    )
+
+    rng = np.random.default_rng(1)
+    loaded = {}
+    for name, parameter in model.parameters().items():
+        loaded[name] = (0.02 * rng.standard_normal(parameter.shape())).astype(np.float32)
+        ttml.autograd.assign_numpy(parameter, loaded[name])
+    some = next(iter(loaded.values()))
+    assert not np.array_equal(some, some.astype(ml_dtypes.bfloat16).astype(np.float32)), "premise: not bf16 values"
+    for name, parameter in model.parameters().items():
+        np.testing.assert_array_equal(parameter.to_numpy(ttnn.DataType.FLOAT32), loaded[name], err_msg=name)
+    assert _reduce_default() == ttnn.DataType.FLOAT32
+
+    trainer.train()
+
+    assert len(losses.losses) == 1 and np.isfinite(losses.losses[0]), losses.losses
+    parameters = model.parameters()
+    assert _dtypes(parameters) == {ttnn.DataType.FLOAT32}
+    moved = [
+        name for name, p in parameters.items() if not np.array_equal(p.to_numpy(ttnn.DataType.FLOAT32), loaded[name])
     ]
     assert len(moved) == len(parameters), f"unchanged: {sorted(set(parameters) - set(moved))}"
     ttml.autograd.AutoContext.get_instance().reset_graph()
