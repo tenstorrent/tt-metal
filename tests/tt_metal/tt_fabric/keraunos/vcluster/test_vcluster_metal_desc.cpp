@@ -275,8 +275,8 @@ TEST_F(VclusterMetalDescDeathTest, OneEntryNoPackageVariableOpens) {
             files.package.clear();
         },
         [](const tt::Cluster& cluster) {
-            return cluster.get_soc_desc(0).get_num_eth_channels() == 4 &&
-                   cluster.get_soc_desc(2).get_num_eth_channels() == 4 && core_at(cluster, 1, 0) == "4-0";
+            return cluster.get_soc_desc(0).get_num_eth_channels() == 8 &&
+                   cluster.get_soc_desc(2).get_num_eth_channels() == 8 && core_at(cluster, 1, 0) == "4-0";
         });
 }
 
@@ -367,8 +367,8 @@ TEST_F(VclusterMetalDescDeathTest, E4DramViewsInOneFileOnly) {
 // E5: an eth core the package's eth lacks.
 TEST_F(VclusterMetalDescDeathTest, E5EthernetCoreNotThePackages) {
     EXPECT_REFUSED(
-        in_chip(0, [](YAML::Node& soc) { soc["eth"].push_back("5-0"); }),
-        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: Ethernet core 5-0 is not the package descriptor's");
+        in_chip(0, [](YAML::Node& soc) { soc["eth"].push_back("6-0"); }),
+        "Chip 0 descriptor [^ ]*chip_0_soc_desc\\.yaml: Ethernet core 6-0 is not the package descriptor's");
 }
 
 // E5, § Verification 3: a chip's keraunos.cores entry with another hsio.
