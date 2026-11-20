@@ -28,6 +28,22 @@ PrecisionPolicy joint_recipe_policy(const JointSDPAParams& attrs, const JointSDP
 
 void resolve_joint_recipe(JointSDPAParams& attrs, const JointSDPAInputs& tensors) {
     validate_recipe_grid(attrs.program_config);
+    {
+        const uint32_t nqh = tensors.input_q.logical_shape()[1], nkv = tensors.input_k.logical_shape()[1];
+        const uint32_t joint_nqh = tensors.joint_q.logical_shape()[1], joint_nkv = tensors.joint_k.logical_shape()[1];
+        TT_FATAL(
+            nkv > 0 && nqh == nkv,
+            "Q num_heads must be equal to K num_heads, and greater than 0. Got Q: {}, K: {}",
+            nqh,
+            nkv);
+        TT_FATAL(
+            joint_nqh == joint_nkv,
+            "Joint Q num_heads must be equal to Joint K num_heads. Got Q: {}, K: {}",
+            joint_nqh,
+            joint_nkv);
+        TT_FATAL(
+            joint_nkv == nkv, "Joint K num_heads must be equal to K num_heads. Got Joint K: {}, K: {}", joint_nkv, nkv);
+    }
     const auto resolution = memoized_recipe_resolution(recipe_resolution_key(tensors.input_q, attrs, tensors), [&] {
         const auto policy = joint_recipe_policy(attrs, tensors);
         const auto segments = joint_segments(tensors);

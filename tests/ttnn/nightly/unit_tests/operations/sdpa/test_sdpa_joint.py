@@ -183,17 +183,23 @@ def _zero_div_tensors(device, count, heads=1):
     ]
 
 
-# Chunk sizes and head counts are used as host-side divisors, so zero must raise a RuntimeError.
-@pytest.mark.parametrize("q_chunk_size, k_chunk_size, name", [(0, 32, "q_chunk_size"), (32, 0, "k_chunk_size")])
-def test_joint_sdpa_zero_chunk_size(device, expect_error, q_chunk_size, k_chunk_size, name):
+# A zero chunk size leaves that chunk to the op (op-chosen blocking); head counts must still be positive.
+@pytest.mark.parametrize("q_chunk_size, k_chunk_size", [(0, 32), (32, 0)])
+def test_joint_sdpa_zero_chunk_size(device, q_chunk_size, k_chunk_size):
     q, k, v, joint_q, joint_k, joint_v = _zero_div_tensors(device, 6)
     program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=(1, 1), q_chunk_size=q_chunk_size, k_chunk_size=k_chunk_size
     )
-    with expect_error(RuntimeError, f"{name} must be a positive multiple of TILE_SIZE"):
-        ttnn.transformer.joint_scaled_dot_product_attention(
-            q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
-        )
+    out, joint_out = ttnn.transformer.joint_scaled_dot_product_attention(
+        q, k, v, joint_q, joint_k, joint_v, joint_strategy="rear", program_config=program_config
+    )
+    tq, tk, tv, tjq, tjk, tjv = (ttnn.to_torch(t).float() for t in (q, k, v, joint_q, joint_k, joint_v))
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        torch.cat([tq, tjq], 2), torch.cat([tk, tjk], 2), torch.cat([tv, tjv], 2)
+    )
+    actual = torch.cat([ttnn.to_torch(out).float(), ttnn.to_torch(joint_out).float()], 2)
+    passing, pcc = comp_pcc(expected, actual, 0.999)
+    assert passing, pcc
 
 
 def test_joint_sdpa_zero_heads(device, expect_error):
