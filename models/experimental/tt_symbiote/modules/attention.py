@@ -52,6 +52,8 @@ class TTNNSDPAAttention(TTNNModule):
         self._fallback_torch_layer = TorchSDPAAttention()
         self.program_config = None
         self.compute_kernel_config = None
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.precision = None
         self.memory_config = None
 
     def forward(
@@ -89,6 +91,7 @@ class TTNNSDPAAttention(TTNNModule):
             scale=scaling,
             program_config=self.program_config,
             compute_kernel_config=self.compute_kernel_config,
+            precision=self.precision,
             memory_config=self.memory_config,
         )
         if transpose_output:
@@ -277,6 +280,7 @@ class TTNNSelfAttention(TTNNModule):
         )
         new_self_attention.sdpa.program_config = program_config
         new_self_attention.sdpa.compute_kernel_config = compute_kernel_config
+        new_self_attention.sdpa.precision = ttnn.SDPAPrecision.ACCURATE
         return new_self_attention
 
     def forward(self, hidden_states, head_mask=None, output_attentions: bool = False):
@@ -344,6 +348,7 @@ class TTNNViTSelfAttention(TTNNSelfAttention):
         )
         new_self_attention.sdpa.program_config = program_config
         new_self_attention.sdpa.compute_kernel_config = compute_kernel_config
+        new_self_attention.sdpa.precision = ttnn.SDPAPrecision.ACCURATE
         return new_self_attention
 
 
@@ -384,6 +389,7 @@ class TTNNWhisperAttention(TTNNModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self.sdpa.precision = ttnn.SDPAPrecision.ACCURATE
 
     @classmethod
     def from_torch(cls, whisper_attn: "WhisperAttention"):
