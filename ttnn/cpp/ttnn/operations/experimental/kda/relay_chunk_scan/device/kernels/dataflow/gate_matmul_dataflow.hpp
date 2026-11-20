@@ -121,7 +121,9 @@ public:
     // its leader.
     template <typename Read>
     FORCE_INLINE void take(uint32_t blocks, const Read& read) {
-        while (reserved_ < blocks && reserved_ - pushed_ < slots_ &&
+        // A leader keeps at most 3 reads in flight: enough to stay ahead of the matmul, without a burst of every
+        // slot's at the start, which the first blocks would queue behind.
+        while (reserved_ < blocks && reserved_ - pushed_ < slots_ && (in_ || reserved_ - loaded_ < 3) &&
                cb_pages_reservable_at_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_)) {
             cb_reserve_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_);
             if (in_) {
