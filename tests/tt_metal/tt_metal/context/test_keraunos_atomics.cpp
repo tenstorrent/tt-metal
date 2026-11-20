@@ -113,7 +113,8 @@ TEST_F(KeraunosAtomicsProbe, AccumulateOwnSramSweep) {
 }
 
 // Accumulates into HSIO 1's SRAM through the package address, with the settings given by KERAUNOS_ACCUM_FMT (default 3).
-TEST_F(KeraunosAtomicsProbe, AccumulateOtherTileSweep) {
+// Disabled on mmk (2026-11-20): package route to another tile copies instead of adding.
+TEST_F(KeraunosAtomicsProbe, DISABLED_AccumulateOtherTileSweep) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(1, 0);
     ASSERT_TRUE(a.has_value() && b.has_value());
@@ -180,7 +181,8 @@ protected:
     }
 };
 
-TEST_F(KeraunosNocAtomic, IncrementOwnSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs until the launch times out.
+TEST_F(KeraunosNocAtomic, DISABLED_IncrementOwnSram) {
     const auto a = hsio_core(0, 0);
     ASSERT_TRUE(a.has_value());
     expect_increment(*a, *a);
@@ -193,27 +195,31 @@ TEST_F(KeraunosNocAtomic, DISABLED_NonPostedIncrementOwnSram) {
     expect_increment(*a, *a, /*posted=*/false);
 }
 
-TEST_F(KeraunosNocAtomic, IncrementPeerCceSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocAtomic, DISABLED_IncrementPeerCceSram) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
     expect_increment(*a, *b);
 }
 
-TEST_F(KeraunosNocAtomic, IncrementCce1OwnSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocAtomic, DISABLED_IncrementCce1OwnSram) {
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(b.has_value());
     expect_increment(*b, *b);
 }
 
-TEST_F(KeraunosNocAtomic, IncrementCce0FromCce1) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocAtomic, DISABLED_IncrementCce0FromCce1) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
     expect_increment(*b, *a);
 }
 
-TEST_F(KeraunosNocAtomic, IncrementOtherTileSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocAtomic, DISABLED_IncrementOtherTileSram) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(1, 0);
     ASSERT_TRUE(a.has_value() && b.has_value());
@@ -303,14 +309,16 @@ TEST_F(KeraunosAccumulateForms, Cce1OwnSram) {
     expect_adds(*b, *b, soc_sram(0, 1) + unreserved_ + kSrcOffset, *b, soc_sram(0, 1) + unreserved_ + kDstOffset);
 }
 
-TEST_F(KeraunosAccumulateForms, Cce1ToCce0) {
+// Disabled on mmk (2026-11-20): from CCE1, CCE0's SoC address is not reached (a plain copy does not land either).
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce1ToCce0) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
     expect_adds(*b, *b, soc_sram(0, 1) + unreserved_ + kSrcOffset, *a, soc_sram(0, 0) + unreserved_ + kDstOffset);
 }
 
-TEST_F(KeraunosAccumulateForms, Cce0ToOtherTileSocForm) {
+// Disabled on mmk (2026-11-20): another tile's NoC-form address is not reached on mmk (a plain copy does not land either).
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce0ToOtherTileSocForm) {
     const auto a = hsio_core(0, 0);
     const auto c = hsio_core(1, 0);
     ASSERT_TRUE(a.has_value() && c.has_value());
@@ -319,7 +327,8 @@ TEST_F(KeraunosAccumulateForms, Cce0ToOtherTileSocForm) {
 
 // A plain IDMA copy (no accumulate) to HSIO 1 in its NoC form (cce-dv TILE1_SRAM 0x26800000), to tell whether that
 // route works at all; the accumulate there left the destination unchanged.
-TEST_F(KeraunosAccumulateForms, CopyToOtherTileSocForm) {
+// Disabled on mmk (2026-11-20): another tile's NoC-form address is not reached on mmk.
+TEST_F(KeraunosAccumulateForms, DISABLED_CopyToOtherTileSocForm) {
     const auto a = hsio_core(0, 0);
     const auto c = hsio_core(1, 0);
     ASSERT_TRUE(a.has_value() && c.has_value());
@@ -348,20 +357,23 @@ TEST_F(KeraunosAccumulateForms, CopyToOtherTileSocForm) {
 
 // The CCE CPU-view form: plain local SRAM offsets, where each CCE sees CCE0's SRAM at [0, 4 MiB) and CCE1's at
 // [4, 8 MiB). cce-dv's IP-level tests use this form (SRAM_LBASE 0).
-TEST_F(KeraunosAccumulateForms, Cce0OwnCpuForm) {
+// Disabled on mmk (2026-11-20): IDMA does not take CPU-view (local offset) addresses.
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce0OwnCpuForm) {
     const auto a = hsio_core(0, 0);
     ASSERT_TRUE(a.has_value());
     expect_adds(*a, *a, unreserved_ + kSrcOffset, *a, unreserved_ + kDstOffset);
 }
 
-TEST_F(KeraunosAccumulateForms, Cce0ToCce1CpuForm) {
+// Disabled on mmk (2026-11-20): IDMA does not take CPU-view (local offset) addresses.
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce0ToCce1CpuForm) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
     expect_adds(*a, *a, unreserved_ + kSrcOffset, *b, 0x400000ULL + unreserved_ + kDstOffset);
 }
 
-TEST_F(KeraunosAccumulateForms, Cce1ToCce0CpuForm) {
+// Disabled on mmk (2026-11-20): IDMA does not take CPU-view (local offset) addresses.
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce1ToCce0CpuForm) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
@@ -369,7 +381,8 @@ TEST_F(KeraunosAccumulateForms, Cce1ToCce0CpuForm) {
 }
 
 // A plain IDMA copy from CCE1 to CCE0's SoC form: tells whether that route exists at all.
-TEST_F(KeraunosAccumulateForms, CopyCce1ToCce0SocForm) {
+// Disabled on mmk (2026-11-20): from CCE1, CCE0's SoC address is not reached.
+TEST_F(KeraunosAccumulateForms, DISABLED_CopyCce1ToCce0SocForm) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
@@ -395,7 +408,8 @@ TEST_F(KeraunosAccumulateForms, CopyCce1ToCce0SocForm) {
 }
 
 // Source in the SoC form, destination another tile through the package address (how cce-dv reaches other tiles).
-TEST_F(KeraunosAccumulateForms, Cce0ToOtherTilePackageDestination) {
+// Disabled on mmk (2026-11-20): package route to another tile copies instead of adding.
+TEST_F(KeraunosAccumulateForms, DISABLED_Cce0ToOtherTilePackageDestination) {
     const auto a = hsio_core(0, 0);
     const auto c = hsio_core(1, 0);
     ASSERT_TRUE(a.has_value() && c.has_value());
@@ -486,26 +500,30 @@ protected:
     }
 };
 
-TEST_F(KeraunosNocProbe, WriteOwnSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocProbe, DISABLED_WriteOwnSram) {
     const auto a = hsio_core(0, 0);
     ASSERT_TRUE(a.has_value());
     expect_write(*a, *a);
 }
 
-TEST_F(KeraunosNocProbe, WritePeerCce) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocProbe, DISABLED_WritePeerCce) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());
     expect_write(*a, *b);
 }
 
-TEST_F(KeraunosNocProbe, AtomicIncrementOwnSram) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocProbe, DISABLED_AtomicIncrementOwnSram) {
     const auto a = hsio_core(0, 0);
     ASSERT_TRUE(a.has_value());
     expect_increment(*a, *a);
 }
 
-TEST_F(KeraunosNocProbe, AtomicIncrementPeerCce) {
+// Disabled on mmk (2026-11-20): no NOC (non-IDMA) traffic from a CCE completes; hangs.
+TEST_F(KeraunosNocProbe, DISABLED_AtomicIncrementPeerCce) {
     const auto a = hsio_core(0, 0);
     const auto b = hsio_core(0, 1);
     ASSERT_TRUE(a.has_value() && b.has_value());

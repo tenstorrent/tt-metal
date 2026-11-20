@@ -180,9 +180,9 @@ protected:
     }
 };
 
-// Disabled: on MMK emulation (2026-11-06) both complete and are acked, but the destination reads 1 1 1 ...:
-// format 0 / operation 9 acts as a plain copy. The format and operation encodings for an accumulate are
-// not documented; re-enable with the right values once SysEng confirms them.
+// Disabled: they use format 0, which is not an accumulate format, and the package address, which copies even with
+// a valid format. The working form (format 4 INT32_NORMAL, the SoC-form SRAM address, same tile only) is covered by
+// KeraunosAccumulateForms in test_keraunos_atomics.cpp; see keraunos_worklog.md for the full matrix.
 TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOwnSram) { expect_accumulate(0); }
 TEST_F(KeraunosAtomics, DISABLED_IdmaAtomicAccumulateOtherTileSram) { expect_accumulate(1); }
 

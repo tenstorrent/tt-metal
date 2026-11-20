@@ -297,3 +297,37 @@ NOC (non-IDMA) path from a CCE (`KeraunosNocAtomic.*`, `KeraunosNocProbe.*`): no
 SRAM is issued but never acked and the data does not arrive; overlay `noc_atomic_increment_cmdbuf` to own and peer
 SRAM times out. Either a CCE has no NOC endpoint behind the overlay NOC command buffer (all its SRAM traffic is AXI
 through IDMA), or the virtual coordinates used are wrong for it; not yet determined.
+
+### Remote atomics: conclusion on mmk (2026-11-20)
+
+Further probes (all IDMA unless noted):
+
+| Issuer -> destination | Address form | Result |
+|---|---|---|
+| CCE1 -> CCE0 (same tile) | SoC form 0x22800000 | not reached: plain copy does not land either; destination unchanged |
+| CCE0 -> HSIO1 | NoC form 0x26800000 (cce-dv TILE1_SRAM) | not reached: plain copy acked, nothing lands |
+| any CCE, own or peer | CPU view (local offset, CCE1 at +4 MiB) | nothing lands: IDMA does not take CPU-view addresses |
+| Mimir CCE -> own SRAM | route-table form (0x12_8000_0000 + cce * 4 MiB) | adds |
+| Mimir CCE -> own SRAM | 0x1280000000 + offset (cce-dv local, index 0) | not this CCE's SRAM; unchanged |
+| HSIO2 CCE0 -> Mimir CCE SRAM | package form | plain copy |
+| Mimir CCE -> HSIO2 SRAM | package form | plain copy |
+
+What works on mmk: IDMA L1 accumulate (operation 9, format 4 for int32 two's complement) into the issuer's own SRAM
+(Keraunos CCE0, CCE1, Mimir CCE) and from Keraunos CCE0 into its tile's CCE1, using the SoC/NoC form address
+(Keraunos 0x22800000 + cce * 4 MiB for HSIO 0; Mimir: the route-table SRAM address). Everything that crosses a tile or a
+chiplet goes through the package fabric, which turns the accumulate into a plain write; and no NOC (non-IDMA) traffic
+from a CCE completes. So there is no remote atomic between tiles or chiplets on mmk; credits stay monotonic counters
+written with write32 (as KeraunosFabric does).
+
+Tests: the passing cases stay enabled (KeraunosAtomicsProbe.AccumulateOwnSramSweep, KeraunosAccumulateForms.{Cce0OwnSram,
+Cce0ToPeerCce1, Cce1OwnSram, Int32FormatsWithNegativeValue}, KeraunosMimirAccumulate.MimirOwnSramRouteForm); every case
+that fails or hangs is DISABLED_ with its reason.
+
+Questions for SysEng:
+1. Should a Keraunos CCE1 reach its tile's CCE0 through the SoC form (cce-dv KERSramOffset says 0x22800000), and should
+   a CCE reach another HSIO tile through TILEn_SRAM (0x22800000 + n * 0x4000000)? Neither lands on mmk.
+2. Do the D2D / NOC2AXI package routes carry the L1-accumulate attribute in silicon (they copy in emulation)?
+3. Is the overlay NOC command buffer usable from an HSIO CCE at all (NOC write and atomic increment never complete), and
+   if so with which coordinates?
+4. Is there another remote atomic for CCEs (AXI atomics over the fabric, a mailbox/semaphore block) that tt-metal
+   should use for fabric credits?
