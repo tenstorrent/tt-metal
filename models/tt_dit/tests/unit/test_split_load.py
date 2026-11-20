@@ -92,3 +92,32 @@ def test_truncated_file_is_refused(tmp_path):
     path.write_bytes(data[: len(data) // 2])
     with pytest.raises(ValueError, match="truncated"):
         split_load.read_shards(path)
+
+
+def test_host_slices_of_a_column_split_tensor(tmp_path):
+    """A tensor already split over mesh axis 1: each chip gets its own column's slice; the slices of a column,
+    stacked in row order, are that column's tensor (what the axis-0 all-gather builds)."""
+    import types
+    from pathlib import Path
+
+    shape = [1, 1, 4096, 1024]
+    columns = [torch.randn(*shape).to(torch.bfloat16) for _ in range(MESH[1])]
+    hosts = [ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT) for t in columns]
+    path = tmp_path / "t.tensorbin"
+    shard_list = [hosts[c] for r in range(MESH[0]) for c in range(MESH[1])]
+    ttnn.dump_tensor(str(path), ttnn.from_host_shards(shard_list, ttnn.MeshShape(*MESH)))
+
+    dim, axes = split_load.plan_for(shape, (None, None, None, 1), MESH, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    assert (dim, axes) == (2, [0])
+    param = types.SimpleNamespace(
+        local_shape=shape,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        device=types.SimpleNamespace(shape=MESH),
+    )
+    part, _mm = split_load.SplitLoad(None)._host_slices(param, Path(path), dim, axes)
+    pieces = [ttnn.to_torch(t) for t in ttnn.get_device_tensors(part)]
+    for c in range(MESH[1]):
+        stacked = torch.cat([pieces[r * MESH[1] + c] for r in range(MESH[0])], dim=dim)
+        assert torch.equal(stacked, columns[c]), f"column {c}"

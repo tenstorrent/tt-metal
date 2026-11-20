@@ -280,7 +280,10 @@ class SplitLoad:
         if piece * n != full_bytes:
             raise ValueError(f"slice bytes {piece} x {n} != tensor bytes {full_bytes}")
         spec = ttnn.TensorSpec(ttnn.Shape(piece_shape), param.dtype, param.layout, param.memory_config)
-        views: dict[tuple[int, int], object] = {}
+        # one view per (file offset, slice index); kept apart from the per-chip list, whose (row, col) keys
+        # would collide with (offset 0, k) and hand column 0 another column's slice
+        pieces: dict[tuple[int, int], object] = {}
+        shard_list = []
         rows, cols = mesh
         for r in range(rows):
             for c in range(cols):
@@ -291,11 +294,10 @@ class SplitLoad:
                 for a in axes:
                     k = k * mesh[a] + (r, c)[a]
                 key = (offset, k)
-                if key not in views:
+                if key not in pieces:
                     arr = np.frombuffer(mm, dtype=np.uint8, count=piece, offset=data_start + offset + k * piece)
-                    views[key] = ttnn.host_tensor_from_bytes(arr, spec)
-                views[(r, c)] = views[key]
-        shard_list = [views[(r, c)] for r in range(rows) for c in range(cols)]
+                    pieces[key] = ttnn.host_tensor_from_bytes(arr, spec)
+                shard_list.append(pieces[key])
         return ttnn.from_host_shards(shard_list, ttnn.MeshShape(rows, cols)), mm
 
     def _gather(self, part, dim, axes, rank):
