@@ -696,12 +696,20 @@ def test_sub_block_shard_tail(runtime, pooled):
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("geom", list(RAGGED))
 def test_kept_partial_blocks(runtime, geom, pooled):
-    """Kept partial last blocks and logical_n tail blocks: computed exactly over their real tokens."""
+    """Kept partial last blocks and logical_n tail blocks: computed exactly over their real tokens. The length comes
+    from logical_n_tensor, with the full padded length as the host logical_n."""
     geo = RAGGED[geom]
     case = Case(runtime, geo)
     live = _block_lengths(geo, case.S).reshape(-1)
     mask = make_mask(geo, case.S, case.H, density=0.3, seed=22, counts=live)
-    r = case.run(*case.inputs(22), mask, want_dense=False, pooled=pooled)
+    r = case.run(
+        *case.inputs(22),
+        mask,
+        want_dense=False,
+        pooled=pooled,
+        logical_n_tensor=case.length_tensor(geo.logical_n),
+        host_logical_n=case.S * geo.rows,
+    )
     _check(f"kept partial {_mode(pooled)} {geom}", r, _density(mask, geo, case.S, live), dense_min=None, ref_min=0.999)
 
 
