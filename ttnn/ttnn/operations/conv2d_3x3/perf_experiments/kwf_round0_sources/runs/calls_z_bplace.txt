@@ -1,0 +1,9 @@
+res3x copy 0
+res3x b_p69 0
+res3x b_p68 0
+sdr3f1 copy 0
+sdr3f1 b_p69 0
+sdr3f1 b_p68 0
+idr3f0 copy 0
+idr3f0 b_p69 0
+idr3f0 b_p68 0

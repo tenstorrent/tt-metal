@@ -1,0 +1,6 @@
+s2:height_w128_two_rows base 0
+s2:height_w128_two_rows copy:S2W_RESIDENT=True 0
+s2:height_w128_two_rows copy:S2W_RESIDENT=True 1
+s2:height_w128_two_rows base 1
+s2:height_w128_two_rows base 2
+s2:height_w128_two_rows copy:S2W_RESIDENT=True 2

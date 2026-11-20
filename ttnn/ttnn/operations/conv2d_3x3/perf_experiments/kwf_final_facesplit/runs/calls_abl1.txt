@@ -1,0 +1,5 @@
+stem2 copy 0
+stem2 nopack 0
+stem2 nomath 0
+stem2 nomath_nopack 0
+stem2 base 0

@@ -1,0 +1,6 @@
+res3_0_conv2 base 0
+res3_0_conv2 copy:S2W_RESIDENT=True 0
+res3_0_conv2 copy:S2W_RESIDENT=True 1
+res3_0_conv2 base 1
+res3_0_conv2 base 2
+res3_0_conv2 copy:S2W_RESIDENT=True 2

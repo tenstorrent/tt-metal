@@ -1,0 +1,183 @@
+Binary files ./__pycache__/__init__.cpython-310.pyc and ../op_grad/__pycache__/__init__.cpython-310.pyc differ
+Binary files ./__pycache__/conv2d_3x3.cpython-310.pyc and ../op_grad/__pycache__/conv2d_3x3.cpython-310.pyc differ
+Binary files ./__pycache__/conv2d_3x3_program_descriptor.cpython-310.pyc and ../op_grad/__pycache__/conv2d_3x3_program_descriptor.cpython-310.pyc differ
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 04:27:16.768096258 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 05:34:11.248964818 +0000
+@@ -264,7 +264,8 @@
+ # multicasts the first weight round on NoC0 (kernels/conv2d_3x3_reader.cpp, SD_R0_NOC0), which the forward fill of the
+ # critical cores (the writers' NoC1 reads of higher shards) does not use; its writer reads the round from DRAM first
+ # thing at kernel entry. stem.conv1 @ LoFi, unzoned, 3 alternating pairs: 10.27 -> 9.83 us (the NoC1 multicast slowed
+-# the last grid row's forward fill by ~0.4 us; a diagnostic with no multicast at all: 9.80 us).
++# the last grid row's forward fill by ~0.4 us; a diagnostic with no multicast at all: 9.80 us). No receiver ack (its slot
++# is fresh at kernel start): 64x128x8 -> 64 s2 3.34 -> 2.98 us, stem.conv1 flat.
+ 
+ 
+ # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
+@@ -2905,12 +2906,12 @@
+     ):
+         slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
+         sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
+-    # Slab-direct round 0 over NoC0 (SD_R0_NOC0): the sender's ack count, every participant's ready flag, the sender's
+-    # local go / source-read state.
++    # Slab-direct round 0 over NoC0 (SD_R0_NOC0): every participant's ready flag, the sender's local go / source-read
++    # state (no ack count: round 0's slot is fresh at kernel start).
+     sd_r0_noc0 = slab_direct and weight_servers is None and mcast_receivers is not None
+     if sd_r0_noc0:
+-        assert len(sem_ids) + 3 <= MAX_SEMAPHORES, sem_ids
+-    sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 3)) if sd_r0_noc0 else ()
++        assert len(sem_ids) + 2 <= MAX_SEMAPHORES, sem_ids
++    sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 2)) if sd_r0_noc0 else ()
+     sem_ids += sd_r0_sems
+     # N-slice spread column stream (see NSLICE_SPREAD): every round of a core's stream in its own slot, one flag
+     # semaphore per round, no channel. Not where cores run different M-block counts (the cores outside the column
+@@ -3381,17 +3382,16 @@
+         for c in shard_cores(input_tensor):
+             v = device.worker_core_from_logical_core(c)
+             kwf_shard_xy.append((v.x, v.y))
+-    # SD_R0_NOC0: the sender's reader args (the reader's SD_R0_ARG; 0 on every other core): role, the receivers' ack
+-    # count, the round's bytes, the rectangles, and per rectangle its NoC0 multicast start (low corner), end (high
+-    # corner) and destination count (the sender excluded).
++    # SD_R0_NOC0: the sender's reader args (the reader's SD_R0_ARG; 0 on every other core): role, the round's bytes, the
++    # rectangles, and per rectangle its NoC0 multicast start (low corner), end (high corner) and destination count (the
++    # sender excluded).
+     sd_r0_arg = None
+     sd_r0_args = []
+     if sd_r0_noc0:
+         sender = core_list[0]
+         rects = list(mcast_receivers.ranges())
+         inside = [r.start.x <= sender.x <= r.end.x and r.start.y <= sender.y <= r.end.y for r in rects]
+-        sd_r0_args = [1, mcast_receivers.num_cores() - sum(inside)]
+-        sd_r0_args += [(bk + int(sd_bias_in_weights)) * bn * g.weight_tile_bytes, len(rects)]
++        sd_r0_args = [1, (bk + int(sd_bias_in_weights)) * bn * g.weight_tile_bytes, len(rects)]
+         for rect, ins in zip(rects, inside):
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+@@ -3583,9 +3583,8 @@
+         if sd_r0_noc0:
+             _sd_dm_defines += [
+                 ("SD_R0_NOC0", "1"),
+-                ("SD_R0_ACK_SEM", str(sd_r0_sems[0])),
+-                ("SD_R0_READY_SEM", str(sd_r0_sems[1])),
+-                ("SD_R0_LOCAL_SEM", str(sd_r0_sems[2])),
++                ("SD_R0_READY_SEM", str(sd_r0_sems[0])),
++                ("SD_R0_LOCAL_SEM", str(sd_r0_sems[1])),
+                 ("SD_R0_ARG", str(sd_r0_arg)),
+                 ("SD_R0_CB_WEIGHTS", str(CB_WEIGHTS)),
+             ]
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 04:27:16.772096314 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 05:34:11.247964804 +0000
+@@ -123,9 +123,14 @@
+ // DRAM at kernel entry and bias-split, to the channel's rectangles on NoC0, polled from the fill loops (r0_try). The
+ // writers' NoC1 multicast of it ran beside, and slowed, the forward fill of the cores whose slab lies mostly in higher
+ // shards (stem.conv1's last grid row: the 108-core split drifts past the 110 input shards), and those cores bound the
+-// op. Its own handshake (receivers ack at their kernel start, a ready flag per receiver), so the channel's later rounds
+-// keep theirs. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
+-// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us.
++// op. Its own ready flag per receiver, so the channel's later rounds keep their handshake. No ack: round 0's slot is
++// fresh at kernel start, and a program's go reaches a core only after every core finished the previous program and this
++// one's semaphores and runtime args were written (dispatch's wait_for_workers), so the multicast may land before a
++// receiver starts. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
++// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us. The
++// receivers' kernel-start acks (up to 107 NoC1 atomics into the sender, ~10 ns apart) delayed the sender's own DRAM read
++// of the round past its writer's first landing poll: 64x128x8 -> 64 s2 3.34 -> 2.98 us without them, stem.conv1 flat
++// (its critical core waits on its slab, not the round).
+ //
+ // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
+ // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
+@@ -301,11 +306,10 @@
+     constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
+ #ifdef SD_R0_NOC0
+     // Slab-direct round 0 on NoC0 (see the file comment). Args at SD_R0_ARG: 1 on the weight multicast's sender (0
+-    // elsewhere), then the receivers' ack count, the round's bytes, the rectangles, and per rectangle its NoC0
+-    // multicast start x, y, end x, y and destination count (the sender excluded). r0_try: go (this core's writer set
+-    // SD_R0_LOCAL_SEM to 1: the round landed and its bias is split) and every receiver's ack in SD_R0_ACK_SEM, then the
+-    // round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle; SD_R0_LOCAL_SEM = 2 once the source was
+-    // read.
++    // elsewhere), then the round's bytes, the rectangles, and per rectangle its NoC0 multicast start x, y, end x, y and
++    // destination count (the sender excluded). r0_try: go (this core's writer set SD_R0_LOCAL_SEM to 1: the round landed
++    // and its bias is split), then the round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle;
++    // SD_R0_LOCAL_SEM = 2 once the source was read.
+     const bool r0_sender = get_arg_val<uint32_t>(SD_R0_ARG) != 0;
+     uint32_t r0_state = r0_sender ? 0 : 2;
+     auto r0_try = [&]() {
+@@ -316,16 +320,15 @@
+             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM));
+         if (r0_state == 0) {
+             invalidate_l1_cache();
+-            if (*r0_local != 1 || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_ACK_SEM)) <
+-                                      get_arg_val<uint32_t>(SD_R0_ARG + 1)) {
++            if (*r0_local != 1) {
+                 return;
+             }
+             MaybeDeviceZoneScope("reader_r0_mcast");
+             const uint32_t src = get_write_ptr(SD_R0_CB_WEIGHTS);
+-            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 2);
++            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 1);
+             const uint32_t ready = get_semaphore(SD_R0_READY_SEM);
+             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready) = 1;
+-            for (uint32_t r = 0, a = SD_R0_ARG + 4; r < get_arg_val<uint32_t>(SD_R0_ARG + 3); ++r, a += 5) {
++            for (uint32_t r = 0, a = SD_R0_ARG + 3; r < get_arg_val<uint32_t>(SD_R0_ARG + 2); ++r, a += 5) {
+                 const uint32_t cnt = get_arg_val<uint32_t>(a + 4);
+                 if (cnt == 0) {
+                     continue;
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 04:27:16.773096328 +0000
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 04:56:55.633292497 +0000
+@@ -293,11 +293,11 @@
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
+     uint32_t k_blocks_issued = 0;
+     // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
+-    // under transaction id 8 at kernel entry (below), a receiver acks it before the fill; it completes (sd_w0_try) the
+-    // moment it is in.
++    // under transaction id 8 at kernel entry (below), a receiver of the reader multicast reserves its slot before the
++    // fill; it completes (sd_w0_try) the moment it is in.
+     constexpr uint32_t TRID_SD_WEIGHTS = 8;
+     [[maybe_unused]] bool sd_w_issued_early = false;
+-    [[maybe_unused]] bool sd_acked_early = false;
++    [[maybe_unused]] bool sd_r0_mcast = false;  // round 0 comes over the sender reader's NoC0 multicast
+     [[maybe_unused]] uint32_t sd_w0 = 0;  // 0: round 0 not taken early, 1: pending, 2: pushed
+     auto finish_weight_k_block = [&](uint32_t l1) {
+ #if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
+@@ -1465,7 +1465,7 @@
+         } else if (weight_receiver) {
+             if constexpr (tile_fill_split || slab_direct) {
+                 // Round 0 of a slab-direct receiver came over the reader multicast, not this channel.
+-                receive_serving(weight_mcast, k_blocks_issued - (sd_acked_early ? 1 : 0));
++                receive_serving(weight_mcast, k_blocks_issued - (sd_r0_mcast ? 1 : 0));
+             } else {
+                 weight_receiver->receive(k_blocks_issued);
+             }
+@@ -2430,26 +2430,18 @@
+     };
+ 
+ #if defined(CONV2D_3X3_SLAB_DIRECT)
+-    // Slab-direct round 0 ahead of the fill: a receiver reserves its slot (free at kernel start) and acks the sender's
+-    // reader-multicast now (SD_R0_NOC0), so the multicast waits on no receiver's fill issue. Its DRAM reader issued it
+-    // at kernel entry; either completes it the moment it is in (sd_w0_try).
++    // Slab-direct round 0 ahead of the fill: a receiver of the sender's reader-multicast (SD_R0_NOC0) reserves its slot,
++    // with no ack: the slot is fresh at kernel start (see the reader's file comment), so the multicast may already have
++    // landed. Its DRAM reader issued it at kernel entry; either completes it the moment it is in (sd_w0_try).
+     if (num_m_blocks_this_core > 0 && !server_receiver) {
+         MaybeDeviceZoneScope("writer_sd_weight_early");
+ #ifdef SD_R0_NOC0
+         if (!sd_w_issued_early && weight_receiver) {
+             cb_reserve_back(cb_weights, weight_k_block_tiles);
+-            // Generic (a template): an absent channel's type has no sender coordinates.
+-            sd_acked_early = [&](auto& wm) {
+-                using WM = std::decay_t<decltype(wm)>;
+-                if constexpr (WM::active) {
+-                    noc_semaphore_inc(get_noc_addr(wm.sender_x(), wm.sender_y(), get_semaphore(SD_R0_ACK_SEM)), 1);
+-                    return true;
+-                }
+-                return false;
+-            }(weight_mcast);
++            sd_r0_mcast = std::decay_t<decltype(weight_mcast)>::active;
+         }
+ #endif
+-        sd_w0 = (sd_w_issued_early || sd_acked_early) ? 1 : 0;
++        sd_w0 = (sd_w_issued_early || sd_r0_mcast) ? 1 : 0;
+         if constexpr (!weight_servers) {
+             sd_w0_try();
+         }

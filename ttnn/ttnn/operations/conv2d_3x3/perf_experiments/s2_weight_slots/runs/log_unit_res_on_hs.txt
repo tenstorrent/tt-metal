@@ -1,0 +1,94 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 04:36:02] SAFE_PYTEST: waiting for device (20s) — holder pid=2491006 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all /localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/block_wstream_latency/test_wsl.py --import-mode=prepend " parent pid=2490849 cmd="bash ./run.sh r1_first "
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect -k ragged --import-mode=prepend ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py
+========================================
+2026-11-20 04:36:27.455 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 04:36:27.681 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 04:36:27.681 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 04:36:27.683 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 04:36:27.683 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 04:36:27.707 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 04:36:27.708 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 04:36:27.969 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 04:36:27.969 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 04:36:27.969 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 04:36:27.969 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 04:36:27.976 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 04:36:28.390 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 04:36:28.529 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 04:36:28.529 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 04:36:28.661 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+collected 47 items / 45 deselected / 2 selected
+
+UP_FRONT_INLINE: collect pass over 2 item(s) took 1.7s
+UP_FRONT_INLINE: compile route local (programs=2, farm_min=10)
+
+UP_FRONT_COLLECT: 2 ops stashed across 2 bodies -> 2 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=6 fallback=0
+2026-11-20 04:36:29.554 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 04:36:29.634 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/11319157130675821159/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,32,64,64,2048,64,64,1,1,1,1,6,6,3,34,0,128,0,1,2,0,192,0,0,1,2,2,2,5,8,2,3,1,0,2,2,1,0,1,0,1,0,0,102,11,0,10,0,1,0,2,0,0,0,0,0,0,2,0,0,0,0,12,0,1,13,1,1,2,1,1,1,0,0,1,128,1,11,2048,192,33685762,67240706,100795650,167905026,201460482,3330 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/11319157130675821159/ncrisc/ncrisck.8196485100962486815_2500857.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/11319157130675821159/ncrisc/ncrisck.8196485100962486815_2500857.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/7586632706999790067/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,32,64,64,2048,64,64,1,1,1,1,6,6,3,34,1,1088,9,3,2,0,6,0,0,1,2,2,2,5,8,2,3,1,0,2,2,0,0,1,0,1,0,0,0,11,0,10,0,1,0,2,0,0,0,0,0,0,2,1,0,0,0,12,0,1,13,1,1,2,2,1,1,0,0,1,1088,1,11,128,12,33685762,67240706,100795650,167905026,201460482,3330 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/7586632706999790067/ncrisc/ncrisck.8196485100962486815_2500857.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/7586632706999790067/ncrisc/ncrisck.8196485100962486815_2500857.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/op_copy/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+UP_FRONT_COLLECT: 2 collected · 2 built · 0 already compiled in 1.0s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=2 programs=2 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=2 compile_s=1.2 collect_s=1.7 route=local
+UP_FRONT_INLINE: compile step took 1.2s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[rm_bf16] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py 2026-11-20 04:36:30.778 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[tile_bf8b] <- tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_height_sharded.py PASSEDUP_FRONT_INLINE: real pass took 0.3s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.25s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[rm_bf16]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[tile_bf8b]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[rm_bf16]
+0.01s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[tile_bf8b]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[tile_bf8b]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/s2_weight_slots/test_sws_unit.py::test_conv2d_3x3_height_sharded_weight_mcast_ragged_core[rm_bf16]
+======================= 2 passed, 45 deselected in 3.35s =======================
+2026-11-20 04:36:32.396 | info     |    BuildKernels | JIT cache stats: 10/22 hits (45.5%) [10 cached, 22 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 04:36:32.396 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 04:36:32.446 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 04:36:32.446 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 04:36:32.880 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 04:36:32.881 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 04:36:32.881 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 2 item(s) took 1.7s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=2, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 2 ops stashed across 2 bodies -> 2 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=6 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 2 collected · 2 built · 0 already compiled in 1.0s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 1.2s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m11s (11s total, device-lock-acquired -> exit)

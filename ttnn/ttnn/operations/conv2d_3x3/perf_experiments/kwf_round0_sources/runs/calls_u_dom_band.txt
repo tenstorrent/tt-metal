@@ -1,0 +1,12 @@
+sdr3f0 base 0
+sdr3f0 grad 0
+idr3f0 base 0
+idr3f0 grad 0
+sdr3f0 grad 1
+sdr3f0 base 1
+idr3f0 grad 1
+idr3f0 base 1
+sdr3f0 base 2
+sdr3f0 grad 2
+idr3f0 base 2
+idr3f0 grad 2

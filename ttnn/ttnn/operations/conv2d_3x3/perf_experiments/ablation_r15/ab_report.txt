@@ -1,0 +1,66 @@
+guard set (non-focus):
+  test_conv2d_3x3_perf[H32_W64_Ci128_Co128_p1-rm_bf16]                      24.55 ->    24.41   -0.6%  base 24.34-24.67 final 24.05-24.63
+  test_conv2d_3x3_perf[H32_W64_Ci128_Co128_p1-tile_bf16]                    24.69 ->    24.76   +0.3%  base 24.66-24.70 final 24.63-24.87
+  test_conv2d_3x3_perf[H32_W64_Ci128_Co128_p1-tile_bf8b]                    24.21 ->    24.13   -0.3%  base 24.12-24.26 final 24.06-24.23
+  test_conv2d_3x3_perf[H16_W16_Ci64_Co128_p1-rm_bf16]                       10.16 ->    10.09   -0.7%  base 10.08-10.30 final 10.08-10.10
+  test_conv2d_3x3_perf[H16_W16_Ci64_Co128_p1-tile_bf16]                     10.38 ->    10.16   -2.2%  base 10.28-10.46 final 10.11-10.22
+  test_conv2d_3x3_perf[H16_W16_Ci64_Co128_p1-tile_bf8b]                     10.27 ->    10.25   -0.2%  base 10.25-10.29 final 10.15-10.34
+  test_conv2d_3x3_perf[H8_W16_Ci512_Co256_p1-rm_bf16]                       79.49 ->    79.65   +0.2%  base 79.46-79.54 final 79.55-79.83
+  test_conv2d_3x3_perf[H8_W16_Ci512_Co256_p1-tile_bf16]                     79.67 ->    79.41   -0.3%  base 79.48-79.79 final 79.37-79.45
+  test_conv2d_3x3_perf[H8_W16_Ci512_Co256_p1-tile_bf8b]                     79.81 ->    79.74   -0.1%  base 79.80-79.83 final 79.68-79.82
+  test_conv2d_3x3_perf[H8_W16_Ci2048_Co256_p1-rm_bf16]                     286.40 ->   286.52   +0.0%  base 286.28-286.49 final 286.25-286.66
+  test_conv2d_3x3_perf[H8_W16_Ci2048_Co256_p1-tile_bf16]                   291.66 ->   291.75   +0.0%  base 291.48-291.82 final 291.56-291.92
+  test_conv2d_3x3_perf[H8_W16_Ci2048_Co256_p1-tile_bf8b]                   292.05 ->   292.12   +0.0%  base 291.99-292.10 final 291.89-292.25
+  test_conv2d_3x3_perf[H64_W128_Ci128_Co128_p1-rm_bf16]                     75.32 ->    75.09   -0.3%  base 74.89-75.53 final 74.82-75.26
+  test_conv2d_3x3_perf[H64_W128_Ci128_Co128_p1-tile_bf16]                   51.47 ->    51.67   +0.4%  base 51.31-51.55 final 51.54-51.86
+  test_conv2d_3x3_perf[H64_W128_Ci128_Co128_p1-tile_bf8b]                   42.37 ->    42.41   +0.1%  base 42.34-42.39 final 42.36-42.46
+  test_conv2d_3x3_perf[H128_W256_Ci64_Co64_p1-rm_bf16]                     182.66 ->   183.11   +0.2%  base 181.83-183.49 final 182.16-183.78
+  test_conv2d_3x3_perf[H128_W256_Ci64_Co64_p1-tile_bf16]                    61.09 ->    61.09   -0.0%  base 60.78-61.46 final 60.72-61.39
+  test_conv2d_3x3_perf[H128_W256_Ci64_Co64_p1-tile_bf8b]                    45.28 ->    45.25   -0.1%  base 45.15-45.41 final 45.05-45.49
+  test_conv2d_3x3_height_sharded_perf[stem_conv1]                           19.32 ->    19.20   -0.6%  base 19.28-19.34 final 19.10-19.26
+  test_conv2d_3x3_height_sharded_perf[stem_conv3]                          150.55 ->   149.22   -0.9%  base 150.49-150.59 final 149.21-149.23
+  test_conv2d_3x3_height_sharded_perf[res2_conv2]                           21.23 ->    20.94   -1.4%  base 21.23-21.24 final 20.91-20.96
+  test_conv2d_3x3_height_sharded_perf[res3_0_conv2]                         28.74 ->    28.72   -0.1%  base 28.69-28.78 final 28.69-28.76
+  test_conv2d_3x3_height_sharded_perf[res3_conv2]                           24.34 ->    24.27   -0.3%  base 24.34-24.35 final 24.18-24.44
+  test_conv2d_3x3_height_sharded_perf[sem_res2_fuse_conv0]                 327.75 ->   326.69   -0.3%  base 327.69-327.80 final 326.47-326.86
+  test_conv2d_3x3_height_sharded_perf[stem_conv2]                           74.62 ->    73.87   -1.0%  base 74.51-74.76 final 73.85-73.89
+  test_conv2d_3x3_height_sharded_perf[sem_res3_fuse_conv0]                 111.30 ->   110.84   -0.4%  base 111.16-111.41 final 110.78-110.94
+  test_conv2d_3x3_height_sharded_perf[inst_res3_fuse_conv0]                 56.98 ->    56.98   -0.0%  base 56.95-57.05 final 56.89-57.10
+  test_conv2d_3x3_height_sharded_perf[sem_res3_fuse_conv1]                  89.83 ->    89.37   -0.5%  base 89.73-90.00 final 89.35-89.40
+  test_conv2d_3x3_height_sharded_perf[inst_res2_fuse_conv0]                 93.76 ->    93.49   -0.3%  base 93.52-93.94 final 93.33-93.62
+  test_conv2d_3x3_height_sharded_perf[sem_res2_fuse_conv1]                 291.95 ->   291.38   -0.2%  base 291.76-292.05 final 290.99-291.58
+  test_conv2d_3x3_height_sharded_perf[inst_res2_fuse_conv1]                 75.66 ->    75.27   -0.5%  base 75.62-75.69 final 75.18-75.35
+  test_conv2d_3x3_height_sharded_perf[center_head1]                         21.06 ->    21.01   -0.2%  base 21.03-21.09 final 20.96-21.06
+  test_conv2d_3x3_block_sharded_perf[res4_0_conv2]                          22.65 ->    22.61   -0.2%  base 22.60-22.70 final 22.57-22.64
+  test_conv2d_3x3_block_sharded_perf[res4_conv2]                            21.72 ->    21.74   +0.1%  base 21.72-21.73 final 21.73-21.75
+  test_conv2d_3x3_block_sharded_perf[res4_conv2_lofi]                        9.36 ->     9.37   +0.1%  base 9.26-9.53 final 9.27-9.44
+  test_conv2d_3x3_block_sharded_perf[res5_0_conv2]                          77.57 ->    77.58   +0.0%  base 77.31-77.77 final 77.44-77.75
+  test_conv2d_3x3_block_sharded_perf[res5_1_conv2]                          77.37 ->    77.69   +0.4%  base 77.14-77.73 final 77.45-77.97
+  test_conv2d_3x3_block_sharded_perf[res5_2_conv2]                          72.79 ->    72.87   +0.1%  base 72.70-72.84 final 72.57-73.05
+  test_conv2d_3x3_block_sharded_perf[aspp_convs1]                          138.05 ->   138.02   -0.0%  base 137.92-138.14 final 137.96-138.10
+  test_conv2d_3x3_block_sharded_perf[aspp_convs2]                          123.57 ->   123.61   +0.0%  base 123.53-123.63 final 123.53-123.70
+  test_conv2d_3x3_block_sharded_perf[aspp_convs3]                           50.23 ->    50.14   -0.2%  base 50.07-50.46 final 50.12-50.15
+focus:
+| 1 | aspp.convs.3 | 19.55 | 19.19 | 1.02x | 22.7 | 81% -> 83% |
+| 2 | sem res2 fc1 | 83.24 | 82.53 | 1.01x | 90.8 | 76% -> 77% |
+| 3 | res4.x | 9.43 | 9.41 | 1.00x | 5.7 | 42% -> 42% |
+| 4 | res3.x | 9.26 | 8.78 | 1.05x | 5.7 | 43% -> 45% |
+| 5 | stem.conv2 | 26.64 | 25.92 | 1.03x | 22.7 | 60% -> 61% |
+| 6 | aspp.convs.2 | 41.22 | 40.76 | 1.01x | 45.4 | 77% -> 78% |
+| 7 | aspp.convs.1 | 44.13 | 44.22 | 1.00x | 45.4 | 72% -> 72% |
+| 8 | res2 | 9.26 | 9.16 | 1.01x | 5.7 | 43% -> 43% |
+| 9 | center_head.1 | 8.88 | 8.77 | 1.01x | 5.7 | 45% -> 45% |
+| 10 | inst res2 fc1 | 23.88 | 23.24 | 1.03x | 22.7 | 67% -> 68% |
+| 11 | stem.conv3 | 47.80 | 46.47 | 1.03x | 45.4 | 66% -> 68% |
+| 12 | sem dec res2 fc0 | 92.91 | 91.67 | 1.01x | 102.1 | 77% -> 78% |
+| 13 | sem dec res3 fc0 | 33.53 | 33.28 | 1.01x | 28.4 | 59% -> 60% |
+| 14 | sem dec res3 fc1 | 27.55 | 26.98 | 1.02x | 22.7 | 58% -> 59% |
+| 15 | stem.conv1 | 9.74 | 9.72 | 1.00x | 1.1 | 8% -> 8% |
+| 16 | inst dec res3 fc0 | 18.39 | 18.20 | 1.01x | 14.2 | 54% -> 55% |
+| 17 | inst dec res2 fc0 | 29.07 | 28.16 | 1.03x | 28.4 | 68% -> 71% |
+| 18 | res5.2 | 24.44 | 24.30 | 1.01x | 22.7 | 65% -> 65% |
+| 19 | res5.1 | 25.14 | 25.14 | 1.00x | 22.7 | 63% -> 63% |
+| 20 | res5.0 | 25.25 | 25.26 | 1.00x | 22.7 | 63% -> 63% |
+| 21 | res3.0 | 13.05 | 12.99 | 1.00x | 5.7 | 30% -> 31% |
+| 22 | res4.0 | 9.89 | 9.90 | 1.00x | 5.7 | 40% -> 40% |
+per inference: 1083 -> 1069 us (-1.3%)

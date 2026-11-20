@@ -1,0 +1,407 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -73,6 +73,10 @@
+ CB_RING_TOKEN = 10
+ RING_TOKEN_BYTES = 16
+ RING_TOKEN_PAGES = 4
++# N-slice ring unit (tile-rows): each row group is packed onto its incoming partial, tokened and forwarded in units of
++# this many rows (kernels/conv2d_3x3_nslice_order.hpp, ring_unit_rows). A unit at least as tall as the ring subblock is
++# the per-group forwarding (bit-identical either way).
++RING_UNIT_ROWS = 2
+ # Tap-major only: 32 zero pixels, so an out-of-image tap run is one read instead of one per 512 B MEM_ZEROS chunk.
+ CB_ZERO_SRC = 11
+ # Center-tap direct in0 (see CENTER_TAP_DIRECT): the kw = 1 K-blocks' input tiles, copied by the reader.
+@@ -3624,6 +3628,8 @@
+     # N-slice ring: the packer waits for its incoming partials on the arrival count itself (see the reader's
+     # nslice_outer forwarding). Only a semaphore id: harmless where the walk is not compiled.
+     _ring_arrival_defines = [("RING_ARRIVAL_SEM_ID", str(SEM_COMBINE_ARRIVAL))]
++    # N-slice ring units (compute packs / tokens and the reader forwards per unit). Harmless where no ring is compiled.
++    _ring_unit_defines = [("RING_UNIT_ROWS", str(RING_UNIT_ROWS))]
+     _s2_dm_defines = [("CONV2D_3X3_S2_TAPS", "1")] if s2_taps else []
+     _s2_compute_defines = (
+         [
+@@ -3668,7 +3674,8 @@
+             + _ring_owner_defines
+             + _sd_dm_defines
+             + _s2_dm_defines
+-            + _host_fill_defines,
++            + _host_fill_defines
++            + _ring_unit_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -3714,7 +3721,8 @@
+         + _sd_compute_defines
+         + _wide_short_defines
+         + _s2_compute_defines
+-        + _ring_arrival_defines,
++        + _ring_arrival_defines
++        + _ring_unit_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp
+@@ -1030,7 +1030,8 @@
+     constexpr uint32_t in0_stream_rows = get_compile_time_arg_val(28);
+     constexpr uint32_t bias_stream_groups = get_compile_time_arg_val(29);
+     constexpr bool nslice_outer = get_compile_time_arg_val(30) != 0;
+-    // N-slice ring: one page per packed row group, packer -> reader (see the N-slice branch).
++    // N-slice ring: one page per packed ring unit (conv2d_3x3::ring_unit_rows rows of a row group), packer -> reader
++    // (see the N-slice branch).
+     constexpr uint32_t cb_ring_token = get_compile_time_arg_val(31);
+     // N-slice ring subblock: slice_sb_h rows (the ring's row group; the last group of a slice may be shorter, see
+     // conv2d_3x3::ring_group_row0) x slice_sb_w columns.
+@@ -1309,7 +1310,7 @@
+     // rt_valid: the per-M-block args follow the kernel-row masks (ceil(ring groups / 10) words per M-block).
+     constexpr uint32_t rt_ring_groups = (block_m_tiles + slice_sb_h - 1) / slice_sb_h;
+     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
+-    // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
++    // N-slice ring: incoming ring units packed onto so far, over all M-blocks (the arrival count each waits for).
+     [[maybe_unused]] uint32_t ring_need = 0;
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+@@ -1401,12 +1402,12 @@
+             // multiplies owner my_col - 1 - j's slice over the whole K (DEST accumulates over K) and packs it into
+             // slot k_cols - 1 - j of cb_combine_slots with packer L1 accumulation onto the partial column my_col - 1
+             // sent for that owner (step 0 starts the chain: plain pack). The slots are reserved whole, so every pack
+-            // is at an absolute offset. Each row group (one matmul subblock row) of a step with an incoming partial
+-            // (j >= 1) waits for this core's arrival count, which the reader of column my_col - 1 writes right
+-            // behind the group's data, and is pushed as a ring token (4 pages) after its pack, which tells the reader
+-            // the group is ready to forward to my_col + 1. The last step (own slice) leaves the row's fp32 sum in
+-            // slot 0, the front of cb_combine_slots: only the bias add (or a copy) and ReLU remain, packed into the
+-            // output shard.
++            // is at an absolute offset. Each ring unit (conv2d_3x3::ring_unit_rows tile-rows of a row group, one
++            // matmul subblock row) of a step with an incoming partial (j >= 1) waits for this core's arrival count,
++            // which the reader of column my_col - 1 writes right behind the unit's data, and is pushed as a ring token
++            // (4 pages) after its pack, which tells the reader the unit is ready to forward to my_col + 1. The last
++            // step (own slice) leaves the row's fp32 sum in slot 0, the front of cb_combine_slots: only the bias add
++            // (or a copy) and ReLU remain, packed into the output shard.
+             // Raw LLK (matmul_block / pack_tile): compute_kernel_lib::matmul_block cannot pack its only K-block
+             // with L1 accumulation onto a partial already in L1 (its L1-accumulating pack is "K-block > 0"), nor
+             // gate each subblock row's pack on another core's arrival count, nor run a shorter last subblock: it
+@@ -1626,18 +1627,6 @@
+                             init_rows = rows;
+                             init_w = group_w;
+                         }
+-                        ring_token.reserve_back(1);
+-                        if (j >= 1) {
+-                            // The group's incoming partial landed: column my_col - 1 wrote this core's arrival count
+-                            // right behind it. The packer waits for it itself; the matmul runs ahead regardless.
+-                            ++ring_need;
+-                            PACK(({
+-                                volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
+-                                do {
+-                                    invalidate_l1_cache();
+-                                } while (*arrived < ring_need);
+-                            }));
+-                        }
+                         // The group's matmuls and packs. ct_group_rows: the group height is a template constant (one
+                         // instance per height 1..slice_sb_h), so the r x 1 subblock's unpack / math loops are
+                         // specialized (on the balanced split's ranges; with runtime dims a 1-row group costs nearly a
+@@ -1795,13 +1784,40 @@
+                                 }
+                                 tile_regs_commit();
+                                 tile_regs_wait();
+-                                ckl::pack_subblock_row_strided(
+-                                    0,
+-                                    cb_combine_slots,
+-                                    slot_base + r0 * out_n_tiles + c0,
+-                                    out_n_tiles,
+-                                    group_rows,
+-                                    sb_w);
++                                // The group's rows in ring units of ring_unit_rows (conv2d_3x3_nslice_order.hpp). The
++                                // first subblock packing a unit waits for the unit's incoming partial: column
++                                // my_col - 1 wrote this core's arrival count (in units) right behind it; the packer
++                                // waits for it itself, the matmul runs ahead regardless. The last subblock packing a
++                                // unit pushes its ring token, so the reader forwards each unit as soon as it is packed.
++                                // The same pack_tile calls in the same order onto the same partials: bit-identical.
++                                const bool last_c = c0 + sb_w >= out_n_tiles;
++                                for (uint32_t ra = 0; ra < group_rows; ra += conv2d_3x3::ring_unit_rows) {
++                                    const uint32_t n = group_rows - ra < conv2d_3x3::ring_unit_rows
++                                                           ? group_rows - ra
++                                                           : conv2d_3x3::ring_unit_rows;
++                                    if (c0 == 0 && j >= 1) {
++                                        ++ring_need;
++                                        PACK(({
++                                            volatile tt_l1_ptr uint32_t* arrived = ring_arrival_count();
++                                            do {
++                                                invalidate_l1_cache();
++                                            } while (*arrived < ring_need);
++                                        }));
++                                    }
++                                    if (last_c) {
++                                        ring_token.reserve_back(1);
++                                    }
++                                    ckl::pack_subblock_row_strided(
++                                        ra * sb_w,
++                                        cb_combine_slots,
++                                        slot_base + (r0 + ra) * out_n_tiles + c0,
++                                        out_n_tiles,
++                                        n,
++                                        sb_w);
++                                    if (last_c) {
++                                        ring_token.push_back(1);
++                                    }
++                                }
+                                 tile_regs_release();
+                             }
+                         };
+@@ -1824,7 +1840,6 @@
+                         } else {
+                             group_mm(RuntimeRows{rows}, SbW{});
+                         }
+-                        ring_token.push_back(1);
+                     }
+                     weights.pop_front(k_tiles * out_n_tiles);
+                 }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_nslice_order.hpp
+@@ -61,10 +61,24 @@
+     return k_cols;
+ }
+ 
+-// Row groups of an owner slice [bm, out_n] (one ring hop and one token each): R rows, the last group shorter when R
+-// does not divide bm, last for every owner. The ring k-steps never re-init the matmul between group heights (see
+-// ring_unpack_stream_in0_at in the compute kernel), so the order no longer follows owner parity (which kept each step
+-// at the height the previous one ended on); with the big group first, each step's largest partial goes out first.
++// Ring units: each row group goes round the ring in units of ring_unit_rows tile-rows (one arrival count, one token,
++// one write each; the last unit of a group may be shorter). The packer packs a unit onto its incoming partial as soon
++// as that unit landed and the reader forwards it right after, so a hop's latency covers a unit, not a group.
++// Measured (Blackhole p150b, LoFi, unzoned, bit-identical; perf_experiments/ring_tile_pipeline): a chain-bound ring
++// (11 columns, 5 owners) 10682 -> 9168 ns; res4.x 9330 -> 9233 ns and res5.0 / res5.2 / aspp.convs.2 flat (median of
++// 3: their walks are not chain-bound); 1-row units cost res4.x +2.8% (a packer drain per token), so 2.
++// The descriptor passes RING_UNIT_ROWS (conv2d_3x3_program_descriptor.RING_UNIT_ROWS); a unit as tall as the row
++// group is the per-group forwarding.
++#ifndef RING_UNIT_ROWS
++#define RING_UNIT_ROWS 2
++#endif
++constexpr uint32_t ring_unit_rows = RING_UNIT_ROWS;
++
++// Row groups of an owner slice [bm, out_n] (forwarded in ring units, see ring_unit_rows): R rows, the last group
++// shorter when R does not divide bm, last for every owner. The ring k-steps never re-init the matmul between group
++// heights (see ring_unpack_stream_in0_at in the compute kernel), so the order no longer follows owner parity (which
++// kept each step at the height the previous one ended on); with the big group first, each step's largest partial goes
++// out first.
+ // Measured (Blackhole p150b, LoFi, unzoned, bit-identical): res4.x 10445 -> 10301 ns with the k-steps (weights stubbed
+ // 9656 -> 9575), res5.0 26050 -> 25657 even with its wide short group's two re-inits per step
+ // (perf_experiments/nslice_short_row). The order is a function of g only, so the two columns a partial moves between
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -1758,12 +1758,13 @@
+ 
+         if constexpr (nslice_outer) {
+             // Ring reduce-scatter forwarding (conv2d_3x3_nslice_order.hpp). Compute packs step j's partial into slot
+-            // k_cols - 1 - j one row group at a time, each onto the incoming partial it waited for itself (the arrival
+-            // count, see the compute kernel), and pushes a ring token after each. The reader writes each group one
+-            // column on (NoC0, +x) into slot k_cols - 2 - j of column my_col + 1 (that core's step j + 1 partial) and
+-            // pops the token. Right behind the group it writes that core's arrival count (the absolute number of
+-            // groups sent there): same command buffer, same static VC, same destination, so the count lands after the
+-            // data with no wait for the data's ack, and the arrival is not delayed by this reader's next wait.
++            // k_cols - 1 - j one ring unit (ring_unit_rows rows of a row group) at a time, each onto the incoming
++            // partial it waited for itself (the arrival count, see the compute kernel), and pushes a ring token after
++            // each. The reader writes each unit one column on (NoC0, +x) into slot k_cols - 2 - j of column
++            // my_col + 1 (that core's step j + 1 partial) and pops the token. Right behind the unit it writes that
++            // core's arrival count (the absolute number of units sent there): same command buffer, same static VC,
++            // same destination, so the count lands after the data with no wait for the data's ack, and the arrival is
++            // not delayed by this reader's next wait.
+             // The previous protocol freed the packer's next group from this reader once its incoming partial landed,
+             // and signalled each arrival after the write's ack: two RISC hand-overs and a NoC round trip per hop.
+             // Measured (Blackhole p150b, unzoned, medians of 3): a 5-owner 11-column ring (6 non-owning columns) at
+@@ -1793,43 +1794,49 @@
+             for (uint32_t j = first; j < k_cols;
+                  j = conv2d_3x3::ring_next_real<k_cols, num_owning_cols>(my_col, j + 1)) {
+                 for (uint32_t g = 0; g < groups; ++g) {
+-                    {
+-                        MaybeDeviceZoneScope("reader_ring_wait_step");
+-                        cb_wait_front(cb_ring_token, 1);
+-                    }
+-                    MaybeDeviceZoneScope("reader_ring_send");
+-                    if (j + 1 < k_cols) {
+-                        if (!credited) {
+-                            // Column my_col + 1's slots are free (its slab is dead, its previous M-block combined).
+-                            credit.wait_min(m_block_idx + 1);
+-                            credited = true;
+-                        }
+-                        const uint32_t w = ring_sent % ring_trids;
+-                        const uint32_t trid = ring_trid_base + w;
+-                        while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
++                    const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
++                    const uint32_t r0 = rt_valid
++                                            ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
++                                            : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
++                    const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
++                    // One token, one write and one arrival count per ring unit (ring_unit_rows rows, see
++                    // conv2d_3x3_nslice_order.hpp).
++                    for (uint32_t ra = 0; ra < rows; ra += conv2d_3x3::ring_unit_rows) {
++                        const uint32_t n =
++                            rows - ra < conv2d_3x3::ring_unit_rows ? rows - ra : conv2d_3x3::ring_unit_rows;
++                        {
++                            MaybeDeviceZoneScope("reader_ring_wait_step");
++                            cb_wait_front(cb_ring_token, 1);
+                         }
+-                        const uint32_t owner = conv2d_3x3::nslice_owner<k_cols>(my_col, j);
+-                        const uint32_t r0 = rt_valid
+-                                                ? conv2d_3x3::ring_group_row0_rt<ring_group_rows>(walk_rows, owner, g)
+-                                                : conv2d_3x3::ring_group_row0<block_m_tiles, ring_group_rows>(owner, g);
+-                        const uint32_t rows = walk_rows - r0 < ring_group_rows ? walk_rows - r0 : ring_group_rows;
+-                        const uint32_t group_bytes = rows * row_bytes;
+-                        const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + r0 * row_bytes;
+-                        const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + r0 * row_bytes;
+-                        for (uint32_t off = 0; off < group_bytes; off += NOC_MAX_BURST_SIZE) {
+-                            const uint32_t bytes =
+-                                group_bytes - off < NOC_MAX_BURST_SIZE ? group_bytes - off : NOC_MAX_BURST_SIZE;
+-                            noc_async_write_one_packet_with_trid(
+-                                src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
++                        MaybeDeviceZoneScope("reader_ring_send");
++                        if (j + 1 < k_cols) {
++                            if (!credited) {
++                                // Column my_col + 1's slots are free (its slab is dead, its previous M-block combined).
++                                credit.wait_min(m_block_idx + 1);
++                                credited = true;
++                            }
++                            const uint32_t w = ring_sent % ring_trids;
++                            const uint32_t trid = ring_trid_base + w;
++                            while (!ncrisc_noc_nonposted_write_with_transaction_id_sent(noc_index, trid)) {
++                            }
++                            const uint32_t unit_bytes = n * row_bytes;
++                            const uint32_t src = combine_base + (k_cols - 1 - j) * slot_bytes + (r0 + ra) * row_bytes;
++                            const uint32_t dst = combine_base + (k_cols - 2 - j) * slot_bytes + (r0 + ra) * row_bytes;
++                            for (uint32_t off = 0; off < unit_bytes; off += NOC_MAX_BURST_SIZE) {
++                                const uint32_t bytes =
++                                    unit_bytes - off < NOC_MAX_BURST_SIZE ? unit_bytes - off : NOC_MAX_BURST_SIZE;
++                                noc_async_write_one_packet_with_trid(
++                                    src + off, get_noc_addr(nx, ny, dst + off), bytes, trid);
++                            }
++                            ++ring_sent;
++                            const uint32_t word = ring_count_words + w * 16;
++                            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
++                            // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
++                            asm volatile("fence" ::: "memory");
++                            noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
+                         }
+-                        ++ring_sent;
+-                        const uint32_t word = ring_count_words + w * 16;
+-                        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(word) = ring_sent;
+-                        // The store reaches L1 before the NoC reads it (Blackhole stores can land out of order).
+-                        asm volatile("fence" ::: "memory");
+-                        noc_async_write_one_packet_with_trid(word, next_arrival, 4, trid);
++                        cb_pop_front(cb_ring_token, 1);
+                     }
+-                    cb_pop_front(cb_ring_token, 1);
+                 }
+             }
+             for (uint32_t t = 0; t < ring_trids; ++t) {
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+@@ -22,6 +22,8 @@
+   handshake, bit-identical to the handshake stream.
+ - balanced, gated fill: slab rows moved between the NoC0 reader and the NoC1 writer either way round the column, the
+   first kernel row's band issued first, where the bands are disjoint; bit-identical to the direction split.
++- ring units: every ring row group packed onto its incoming partial, tokened and forwarded in units of 1 or 2
++  tile-rows (one arrival count each); bit-identical to the per-group forwarding.
+ """
+ 
+ import importlib
+@@ -904,3 +906,101 @@
+     assert torch.equal(out_spread_hit, out_handshake)
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, with_bias)
+     assert_with_pcc(expected, out_spread, PCC[ttnn.bfloat8_b])
++
++
++RING_UNIT_CASES = [
++    # res4.x: 5-row M-groups run as a 4-row and a 1-row ring group (units 2 + 2 + 1), 13 M-groups (spare columns).
++    pytest.param(((32, 64, 256), 256, 1, 1, 1), (256, 32), False, id="res4_8x8"),
++    # res5.0: 2-tile N-slices, so a unit's arrival is waited for by the first subblock and its token pushed by the last.
++    pytest.param(((32, 64, 512), 512, 2, 1, 2), (224, 64), False, id="res5_0_8x10"),
++    # aspp.convs.3: 11 columns, 8 owners spread over them, a short last channel slice, no bias.
++    pytest.param(((32, 64, 1024), 256, 18, 1, 18), (256, 96), False, id="aspp3_k11"),
++    # A chain-bound ring: 11 columns, 5 owners (6 non-owning columns), no bias.
++    pytest.param(((32, 64, 352), 160, 2, 1, 2), (256, 32), False, id="k11_o5"),
++    # Two 2-tile-row M-blocks per core (the arrival and send counts cross M-blocks), 2 columns, a short last N-slice.
++    pytest.param(((16, 64, 64), 96, 1, 1, 1), (128, 32), True, id="k2_two_m_blocks"),
++]
++
++
++@pytest.mark.parametrize("case_hw,shard,two_m_blocks", RING_UNIT_CASES)
++def test_conv2d_3x3_block_sharded_ring_units(case_hw, shard, two_m_blocks, device, monkeypatch):
++    """N-slice ring units (RING_UNIT_ROWS): every ring row group is packed onto its incoming partial, tokened and
++    forwarded in units of 2 (the default) or 1 tile-rows. Bit-identical to the per-group forwarding (a unit as tall as
++    the ring subblock), on the program-cache hit too."""
++    torch.manual_seed(11)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10):
++        pytest.skip("pinned to the 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard)
++    with_bias = c_in not in (1024, 352)
++    if two_m_blocks:
++        # The test pins the grid-row groups' structure: no spare-column groups.
++        monkeypatch.setattr(_pd, "SPARE_MGROUPS", False)
++        real_select = _pd.select_blocking
++
++        def two_row_blocks(g, grid, l1_budget):
++            b = real_select(g, grid, l1_budget)
++            assert g.k_split and b.core_m_tiles == 4, "the test expects a K split and a 4-tile-row output shard"
++            fit = _pd._footprint(g, b.core_m_tiles, 2, b.block_k_tiles, b.block_n_tiles, nslice=b.nslice)
++            return _pd.Conv3x3Blocking(
++                grid_x=b.grid_x,
++                core_m_tiles=b.core_m_tiles,
++                num_m_groups=b.num_m_groups,
++                block_m_tiles=2,
++                block_k_tiles=b.block_k_tiles,
++                block_n_tiles=b.block_n_tiles,
++                out_depth_row_groups=b.out_depth_row_groups,
++                **fit,
++            )
++
++        monkeypatch.setattr(_op_module, "select_blocking", two_row_blocks)
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16) if with_bias else None
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    kwargs = dict(
++        stride=s,
++        padding=p,
++        dilation=d,
++        input_dtype=dtype,
++        input_layout=layout,
++        weight_dtype=ttnn.bfloat8_b,
++        input_memory_config=config,
++        device=device,
++    )
++    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs) if with_bias else None
++
++    def run():
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu" if with_bias else None,
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        return ttnn.to_torch(tt_output).float()
++
++    assert _pd.RING_UNIT_ROWS == 2
++    out_units2 = run()
++    out_units2_hit = run()
++    entries = device.num_program_cache_entries()
++    monkeypatch.setattr(_pd, "RING_UNIT_ROWS", 1)
++    out_units1 = run()
++    monkeypatch.setattr(_pd, "RING_UNIT_ROWS", 4)
++    out_groups = run()
++    assert device.num_program_cache_entries() == entries + 2, "each unit size must compile its own program"
++    assert torch.equal(out_units2, out_groups)
++    assert torch.equal(out_units2_hit, out_groups)
++    assert torch.equal(out_units1, out_groups)
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, with_bias)
++    assert_with_pcc(expected, out_units2, PCC[ttnn.bfloat8_b])

@@ -1,0 +1,560 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -1931,8 +1931,12 @@
+ # 12.1, inst res2.fuse_conv.0 44.4 -> 33.3, inst res2.fuse_conv.1 34.7 -> 28.1, inst res3.fuse_conv.0 29.0 -> 25.6,
+ # res2 16.7 -> 13.7 us. Where it does not pay (_kw_fold_pays) the K-blocked walk runs.
+ KW_FOLD = True
+-# kw-fold's final pass adds the bias as 8 srcB rows: 4 copies of the fp32 bias row of one output column tile.
+-KWF_BIAS_ROWS_BYTES = 4 * TILE * 4
++# kw-fold's final pass adds the bias as srcB rows 0 and 1 (row-broadcast): the fp32 bias row [b_0 .. b_31] of one output
++# column tile.
++KWF_BIAS_ROWS_BYTES = TILE * 4
++# The final pass reaches a tile's right half-plane in at most two srcA Z steps of the unpacker's 16-bit x_dim (fp32
++# datums): an ACC plane of at most 8191 rows (1 MB, more than a core's L1 holds with the rest of kw-fold's CBs).
++KWF_MAX_PLANE_BYTES = 8191 * TILE * 4
+ IM2COL_NS_PER_TILE = 25
+ # With more than one M-block per core either form recomputes the two halo tile-rows' products, about 6 * Ct * N extra
+ # tile-MACs per M-block, at the user's fidelity, to save the im2col (tilized taps plus the untilized slab, ~25 ns per
+@@ -1971,6 +1975,8 @@
+     if g.input_width % TILE or g.c_in % TILE or g.c_in_p != g.c_in:
+         return None
+     for bm in (d for d in range(b.core_m_tiles, 0, -1) if b.core_m_tiles % d == 0):
++        if _kw_fold_plane_bytes(g, bm) > KWF_MAX_PLANE_BYTES:
++            continue
+         kb = _kw_fold_blocking(g, b, bm)
+         if _kw_fold_cb_bytes(g, kb) <= l1_budget:
+             # K-blocked rounds: a third weight slot where it fits at this bm (never at the cost of a smaller bm).
+@@ -2237,7 +2243,8 @@
+ 
+ 
+ def _kw_fold_plane_bytes(g, bm):
+-    """One ACC plane, one output column tile wide: [rows, 32] fp32; rows bound every core's rowbase(bm + 1) + 32 + d."""
++    """One ACC plane, one output column tile wide: [rows, 32] fp32 as two [rows, 16] half-planes (face-split, see
++    conv2d_3x3_kw_fold.hpp); rows bound every core's rowbase(bm + 1) + 32 + d."""
+     tpr = g.input_width // TILE
+     rows = TILE * (bm + 3) + g.dilation * ((bm + 2) // tpr + 3)
+     return rows * TILE * 4
+@@ -3524,7 +3531,8 @@
+                 ("KWF_CB_ACC", str(CB_MATMUL_PARTIALS)),
+                 ("KWF_D", str(g.dilation)),
+                 # ACC: one n-group's planes, one output column tile wide each (conv2d_3x3_kw_fold.hpp).
+-                ("KWF_PITCH", str(TILE * 4)),
++                # A half-plane row (the face-split ACC: each plane is two [rows, 16] fp32 half-planes).
++                ("KWF_PITCH", str(16 * 4)),
+                 ("KWF_PLANE_BYTES", str(_kw_fold_plane_bytes(g, bm))),
+                 ("KWF_PLANES", str(_kw_fold_group(g.tensor_n_tiles))),
+                 ("KWF_NG", str(g.tensor_n_tiles // _kw_fold_group(g.tensor_n_tiles))),
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_kw_fold.hpp
+@@ -33,12 +33,14 @@
+ // of Q_0 (w >= W - d) and Q_2 (w < d) land there and are never read (the masks cost nothing). Q_1 covers every valid
+ // ACC row exactly once and its round comes first, so it packs as an overwrite (packer L1 accumulation off) and Q_0 /
+ // Q_2, which spill d rows into the neighbouring row regions, accumulate onto it. Gap and halo rows take accumulations
+-// onto garbage, and nothing reads them. A plane's rows are 128 B: row r of a Q tile lands at (32 t + r) * 128 B,
+-// exactly PACR emission order, so a run of a subblock's tiles down one column is one packer stream with no ADC
+-// instruction inside (pack_zst). Last, each output tile of the n-group is tilized from ACC (srcA, tf32) plus the bias
+-// (srcB) and packed with ReLU; the next pass's Q_1 overwrites the planes. The bias therefore has no reader seed and no
+-// wait before the first pack: the writer reads it after the first pass's weights and the reader decodes it into fp32
+-// rows (cb_bias_rows) once its fill is done. One n-group's planes (not all N) and one sub-round per weight slot let
++// onto garbage, and nothing reads them. Each plane is face-split: two half-planes of 64 B rows, the left one holding
++// columns 0-15 and the right one (HALF = plane_bytes / 2 further) columns 16-31, so ACC rows [r, r + 32) are faces 0
++// and 2 of a tile in the left half-plane and faces 1 and 3 in the right one, at any r. A run of a subblock's tiles
++// down one column packs as two replayed streams of 4-row PACRs, one per half-plane (pack_fst). Last, each output tile
++// of the n-group is unpacked from ACC as two 2-face runs (no tilize), plus the bias (srcB), and packed with ReLU; the
++// next pass's Q_1 overwrites the planes. The bias therefore has no reader seed and no wait before the first pack: the
++// writer reads it after the first pass's weights and the reader decodes it into the fp32 row [b_0 .. b_31]
++// (cb_bias_rows) once its fill is done. One n-group's planes (not all N) and one sub-round per weight slot let
+ // kw-fold run sem res2.fuse_conv.0 / .1 (C_out 256) in one M-block per core. Measured (Blackhole p150b, LoFi, against
+ // the K-blocked tap-direct walk they ran before): 135.9 -> 100.4 and 108.8 -> 89.7 us; all planes resident measured the
+ // same (89.4 us) at 215 KB more L1.
+@@ -75,20 +77,29 @@
+ // Raw LLK (capability): compute_kernel_lib::matmul_block reads in0 as one contiguous [M, K] block and packs at a CB's
+ // write pointer; here a tile-row's K' comes from three slab tile-rows (whole input rows apart, one in0 base per kernel
+ // row, all accumulated in DEST before the one pack of a column round), out-of-image kernel rows are skipped, and each
+-// subblock is pack-untilized at a computed ACC row offset (a replayed PACR stream with an explicit base, below).
+-// compute_kernel_lib::tilize reads at the CB read pointer; the final pass tilizes from computed ACC rows.
+-// The final pass's bias add (capability): compute_kernel_lib::tilize has no second operand, and an add after it
+-// (binary_dest_reuse_tiles) needs an unpacker re-init per DEST batch and a second unpack + FPU pass per tile. The
+-// fp32-DEST tilize copy is already an ELWADD of the tilized srcA and a zeroed srcB, so the tilize MOP's srcB op becomes
+-// a real unpack of 8 rows of fp32 bias (raw UNPACR at unpacker 1's base address); the math is the stock copy.
+-// Measured (Blackhole p150b, LoFi, against the reader-seeded accumulator): stem.conv2 40.6 -> 37.6, stem.conv3 60.0 ->
+-// 53.3 us; the final pass took 3.0 us on stem.conv2 with and without the add.
+-// The pack stream (raw PACR replay, bypassing llk_pack_untilize's per-row MOP and the 2/4-wide stream MOP it replaced):
+-// fp32 untilize into a 1-wide plane runs at ~75 cycles per tile isolated (1 core, 4-tile DEST sections, L1
+-// accumulation on or off) against 100 for a 2-wide stream MOP and 122 for a 1-wide one; in the op (matmul stubbed,
+-// stem.conv2) 83 against 144 cycles per tile. That lets N = 2 run 4 x 1 subblocks (one unpack context per call; 2 x 2
+-// needs two): stem.conv2 34.3 -> 32.2 us, where 4 x 1 on the old 1-wide stream MOP was pack-bound (40.4 us). N = 4
+-// keeps 1 x 4 (as 4 x 1, with four srcB unpacks per 4 tile-MACs instead of one: +2% to +22%).
++// subblock is packed as rows at a computed ACC row offset (replayed PACR streams with an explicit base, below).
++// The face-split ACC (capability): no helper packs DEST tiles as rows at an arbitrary ACC row offset (the untilize
++// helpers write whole tile-rows at a CB write pointer), none unpacks a tile from two 2-face runs at computed
++// addresses, and compute_kernel_lib::tilize reads at the CB read pointer with no second operand. Bypassed: the
++// llk_pack_untilize stream (and its HEAD replacement, a 2-interface strided PACR per 32-datum row, 32 per tile) and
++// compute_kernel_lib::tilize + the BH non-8-bit tilize workaround of the final pass (the tilize unpack leaves tile row
++// r in srcA rows 2r / 2r + 1, so the Tilize pack MOP unswizzled with 32 PACRs per tile and the bias was a raw srcB
++// unpack inside the tilize MOP).
++//   Q packs (pack_fst): 4-interface normal-mode PACRs, 16 per tile instead of 32 (the packer here is bound by PACRs
++//   and their RISC issue, not bytes). Isolated (1 core, fp32 DEST, 4-tile sections, cycles per tile, overwrite /
++//   L1 accumulation): 4 x 1 run 73 / 73 -> 43 / 48, 1 x 4 82 / 82 -> 49 / 53, fused side row 86 / 86 -> 54 / 59.
++//   With the matmul stubbed, the stem.conv2 walk 15.5 -> 12.9 us, inst res2 fc1 8.1 -> 5.7 us. A version with a
++//   destination program and counter resets per stream was slower than HEAD in the op (stem.conv2 side rounds +1.7 us,
++//   103 cycles per tile) though faster isolated: the op's pack thread is issue-bound.
++//   Final pass: srcA two 2-face runs (column order F0 F2 F1 F3), one unpacker config context per run of a plane's
++//   tile-rows inside one image row (CFGSHIFTMASK steps the srcA base 2 KB per tile); the fp32-DEST copy's ELWADD with
++//   DEST row immediates (back to row order) and srcB row-broadcast of the bias row (srcB RWC 0: b_0 .. b_15 for
++//   faces 0, 2; 1: b_16 .. b_31 for faces 1, 3); a Default-mode pack. The same ELWADDs of the same tf32 operands as
++//   the tilize copy: bit-identical. stem.conv2's final pass 3.0 -> 2.6 us (now pack-bound, ~42 cycles per tile).
++//   Measured (Blackhole p150b, LoFi bf8_b, unzoned, medians of 3 alternating, bit-identical on every kw-fold focus
++//   case): stem.conv2 26.57 -> 25.98, stem.conv3 47.73 -> 46.47, inst res2 fc1 23.97 -> 23.44, sem dec res3 fc1 27.64
++//   -> 27.01, inst dec res2 fc0 28.92 -> 28.58, center_head.1 8.83 -> 8.67 us; the HiFi4 HEIGHT kw-fold layers flat
++//   to -1%.
+ // Fused side rounds (capability, on the same raw walk): compute_kernel_lib::matmul_block has one in1 block per call
+ // and one pack destination per output tile; the fused pass's 1 x 4 takes two weight columns' in1 tiles from one
+ // interleaved row and packs them at two different ACC row offsets (Q_0 at +d, Q_2 at -d, a packer drain between).
+@@ -138,105 +149,172 @@
+ }
+ 
+ #ifdef TRISC_PACK
+-// One fp32 untilize stream down a 1-wide plane: 15 PACRs step y (ADDR_MOD_1, y += 1, from the untilize init) and the
+-// 16th clears y and steps z (ADDR_MOD_2). The untilize init's Z stride is two faces, so z walks F0|F1, F2|F3 of tile W,
+-// then tile W + 1 at z = 2: a run of tiles is replays only, and only its last PACR closes the stream.
+-constexpr uint32_t ZST_REPLAY = ckernel::packer::replay_buf_offset;
+-inline void zst_init() {
+-    addr_mod_pack_t{.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
+-    load_replay_buf(ZST_REPLAY, 16, [] {
+-        for (uint32_t i = 0; i < 15; ++i) {
+-            TTI_PACR(
+-                p_pacr::CFG_CTXT_0,
+-                p_pacr::NO_ROW_PAD_ZERO,
+-                p_pacr::DST_ACCESS_STRIDED_MODE,
+-                ADDR_MOD_1,
+-                p_pacr::ADDR_CNT_CTXT_0,
+-                0,
+-                p_pacr::TWO_INTFS_ACTIVE,
+-                0,
+-                0,
+-                p_pacr::NO_CTXT_CTRL,
+-                0,
+-                0);
+-        }
++// Face-split ACC (file comment): a plane is two half-planes of 16-column fp32 rows (64 B), the left (columns 0-15) at
++// the plane's base and the right (16-31) HALF bytes further, so a tile's faces 0 and 2 are 32 consecutive rows of the
++// left half-plane and faces 1 and 3 of the right one. A run of Q tiles packs as two streams of normal-mode 4-row PACRs
++// (one face = 4 PACRs of 256 B), one per half-plane: with the DEST Z stride two faces and the W stride one face,
++// W = 4 t walks faces 0, 2 of DEST tile t, then t + 1's (Z = 2, 3), and W = 4 t + 1 faces 1, 3. A run is replays
++// only: one destination program, and after the left stream's Last a CFGSHIFTMASK adds HALF (SCRATCH_SEC2, in 16 B
++// words) to L1_Dest_addr, which the right stream re-samples. Each stream's last PACR clears Y and Z (the entry state
++// of the next). Replay buffer: [face | last face].
++constexpr uint32_t FST_REPLAY = ckernel::packer::replay_buf_offset;
++inline void fst_pacr_face(uint32_t last_addr_mod, uint32_t last) {
++    for (uint32_t i = 0; i < 3; ++i) {
+         TTI_PACR(
+             p_pacr::CFG_CTXT_0,
+             p_pacr::NO_ROW_PAD_ZERO,
+-            p_pacr::DST_ACCESS_STRIDED_MODE,
+-            ADDR_MOD_2,
++            p_pacr::DST_ACCESS_NORMAL_MODE,
++            ADDR_MOD_0,
+             p_pacr::ADDR_CNT_CTXT_0,
+             0,
+-            p_pacr::TWO_INTFS_ACTIVE,
++            p_pacr::ALL_INTF_ACTIVE,
+             0,
+             0,
+             p_pacr::NO_CTXT_CTRL,
+             0,
+             0);
+-    });
+-}
+-// DEST tiles t0 .. t0 + g - 1 into consecutive ACC rows from byte address addr: one stream. Exit state: ch0 X / Y / Z
+-// and W at 0 (the BH tilize pack of the final pass does not reset Y at tile start).
+-inline void pack_zst(uint32_t addr, uint32_t t0, uint32_t g) {
+-    program_packer_destination((addr >> 4) - 1);
+-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);
+-    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, t0);
+-    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+-    for (uint32_t k = 0; k + 1 < 2 * g; ++k) {
+-        lltt::replay(ZST_REPLAY, 16);
+     }
+-    lltt::replay(ZST_REPLAY, 15);
+-    TTI_PACR(
++    TT_PACR(
+         p_pacr::CFG_CTXT_0,
+         p_pacr::NO_ROW_PAD_ZERO,
+-        p_pacr::DST_ACCESS_STRIDED_MODE,
+-        ADDR_MOD_2,
++        p_pacr::DST_ACCESS_NORMAL_MODE,
++        last_addr_mod,
+         p_pacr::ADDR_CNT_CTXT_0,
+         0,
+-        p_pacr::TWO_INTFS_ACTIVE,
++        p_pacr::ALL_INTF_ACTIVE,
+         0,
+         0,
+         p_pacr::NO_CTXT_CTRL,
+         0,
+-        1);
++        last);
++}
++inline void fst_init(uint32_t half) {
++    addr_mod_pack_t{.y_src = {.incr = 4}}.set(ADDR_MOD_0);
++    addr_mod_pack_t{.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 1}}.set(ADDR_MOD_2);
++    addr_mod_pack_t{.y_src = {.incr = 0, .clr = 1}, .z_src = {.incr = 0, .clr = 1}}.set(ADDR_MOD_1);
++    // DEST strides (fp32 DEST rows of 64 B): Z two faces, W one face.
++    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Zstride_RMW>(2 * FACE_R_DIM * FACE_C_DIM * 4);
++    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_0_Wstride_RMW>(FACE_R_DIM * FACE_C_DIM * 4);
++    TTI_SETADCXX(p_setadc::PAC, FACE_C_DIM - 1, 0x0);
+     TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);
+     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+-    set_dst_write_addr(0);
++    TT_SETDMAREG(0, LOWER_HALFWORD(half / 16), 0, LO_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
++    TT_SETDMAREG(0, UPPER_HALFWORD(half / 16), 0, HI_16(p_gpr_pack::OUTPUT_ADDR_OFFSET));
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
++    TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR_OFFSET, 0, SCRATCH_SEC2_val_ADDR32);
++    TTI_NOP;
++    load_replay_buf(FST_REPLAY, 8, [] {
++        fst_pacr_face(ADDR_MOD_2, 0);
++        fst_pacr_face(ADDR_MOD_1, 1);
++    });
++}
++// DEST tiles t0 .. t0 + g - 1 into consecutive ACC rows from byte address addr (left half-plane; the right one HALF
++// further). Entry and exit state: packer ch0 Y / Z at 0.
++inline void pack_fst(uint32_t addr, uint32_t t0, uint32_t g) {
++    program_packer_destination((addr >> 4) - 1);
++    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 4 * t0);
++    for (uint32_t k = 0; k + 1 < 2 * g; ++k) {
++        lltt::replay(FST_REPLAY, 4);
++    }
++    lltt::replay(FST_REPLAY + 4, 4);
++    TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
++    TTI_NOP;
++    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, 4 * t0 + 1);
++    for (uint32_t k = 0; k + 1 < 2 * g; ++k) {
++        lltt::replay(FST_REPLAY, 4);
++    }
++    lltt::replay(FST_REPLAY + 4, 4);
+ }
+ #endif
+ 
+ #ifdef TRISC_UNPACK
+-// The tilize MOP (_llk_unpack_tilize_mop_config_, non-8-bit) with its srcB op a real unpack instead of the zeroed srcB
+-// the fp32-DEST copy (ELWADD, srcB rows 0-7 for every 8-row step) adds. The BH tilize unpack leaves tile row r in srcA
+-// rows 2r (columns 0-15) and 2r + 1 (16-31), so 8 srcB rows of the row-major bias row [b_0..b_31] (4 rows of it) add
+-// the bias to every row.
+-inline void tilize_bias_mop_config() {
+-    static constexpr uint32_t unpack_srca =
+-        TT_OP_UNPACR(SrcA, 0b1, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+-    static constexpr uint32_t unpack_srcb =
+-        TT_OP_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+-    ckernel_template tmp(1, 1, unpack_srcb);
+-    tmp.set_start_op(unpack_srca);
+-    tmp.program();
+-    TTI_SETADCXX(p_setadc::UNP_B, 8 * FACE_C_DIM - 1, 0x0);
+-}
+-// _llk_unpack_tilize_ (non-8-bit, srcA) for column tile col_tile of the rows at addr, plus srcB from addr_b.
+-template <uint32_t cb_acc>
+-inline void unpack_tilize_bias_at(uint32_t addr, uint32_t col_tile, uint32_t addr_b) {
+-    const uint32_t id = get_operand_id(cb_acc);
+-    const uint32_t a = (addr >> 4) - 1 + (SCALE_DATUM_SIZE(unpack_src_format[id], col_tile) << 1);
++// Final pass, face-split ACC: srcA takes a tile as two 2-face runs, the left half-plane's 32 rows (faces 0, 2) and the
++// right one's (faces 1, 3) a srcA L1 Z step (x_dim = HALF / 4 datums) further, the second run two faces further in
++// srcA (ch1 Z stride doubled): srcA holds the tile in column order F0 F2 F1 F3. x_dim is 16 bits: past 64K datums the
++// step is zk = 2 Z steps of HALF / 8 datums. srcB takes the fp32 bias row [b_0 .. b_31] as srcB rows 0 (b_0 .. b_15)
++// and 1 (b_16 .. b_31). Saved at init, restored at uninit: Tile_x_dim (both contexts) and the srcA ch1 Z stride.
++static uint32_t fs_saved_xdim = 0;
++static uint32_t fs_saved_zstride = 0;
++template <uint32_t zk>
++inline void fs_unpack_init(uint32_t half) {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
++    volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
++    fs_saved_xdim = cfg[THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32];
++    fs_saved_zstride = (cfg[UNP0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32] & UNP0_ADDR_CTRL_ZW_REG_1_Zstride_MASK) >>
++                       UNP0_ADDR_CTRL_ZW_REG_1_Zstride_SHAMT;
++    const uint32_t xd = half / (4 * zk);
++    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(xd | (xd << 16));
++    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(2 * fs_saved_zstride);
++    TTI_SETADCXX(p_setadc::UNP_A, 2 * FACE_R_DIM * FACE_C_DIM - 1, 0x0);
++    TTI_SETADCXX(p_setadc::UNP_B, 2 * FACE_C_DIM - 1, 0x0);
++    TT_SETDMAREG(0, LOWER_HALFWORD(2048 / 16), 0, LO_16(p_gpr_unpack::TMP0));
++    TT_SETDMAREG(0, UPPER_HALFWORD(2048 / 16), 0, HI_16(p_gpr_unpack::TMP0));
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
++    TTI_WRCFG(p_gpr_unpack::TMP0, p_cfg::WRCFG_32b, SCRATCH_SEC0_val_ADDR32);
++    TTI_NOP;
++}
++inline void fs_unpack_uninit() {
++    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
++    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xffffffff>(fs_saved_xdim);
++    cfg_reg_rmw_tensix<UNP0_ADDR_CTRL_ZW_REG_1_Zstride_RMW>(fs_saved_zstride);
++}
++// A run of n output tiles whose left half-plane rows are consecutive from addr (one plane, one image row: tile k at
++// addr + 2 KB k), each plus srcB = the bias rows at addr_b, in one config context: between tiles the Z counters go
++// back to 0 and CFGSHIFTMASK adds SCRATCH_SEC0 (2 KB, in 16 B words; fs_unpack_init) to the context's srcA base.
++template <uint32_t zk>
++inline void fs_unpack_run(uint32_t addr, uint32_t n, uint32_t addr_b) {
+     volatile uint32_t tt_reg_ptr* cfg = get_cfg_pointer();
+     TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
+     wait_for_next_context(2);
+-    _llk_unpack_configure_addresses_(a, (addr_b >> 4) - 1, cfg);
++    _llk_unpack_configure_addresses_((addr >> 4) - 1, (addr_b >> 4) - 1, cfg);
+     semaphore_post(semaphore::UNPACK_SYNC);
+     TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+-    ckernel::ckernel_template::run();
++    for (uint32_t k = 0;;) {
++        TTI_UNPACR(SrcB, 0b0, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        // AddrMode: ch1 Z += 1 (bits 5:4), ch0 Z += zk (bits 1:0).
++        TTI_UNPACR(SrcA, 0b00010000 | zk, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        TTI_UNPACR(SrcA, 0b00010000 | zk, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
++        if (++k == n) {
++            break;
++        }
++        TTI_SETADCZW(p_setadc::UNP_AB, 0, 0, 0, 0, 0b1111);
++        if (0 == unp_cfg_context) {
++            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_address_ADDR32);
++        } else {
++            TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG3_Base_cntx1_address_ADDR32);
++        }
++        TTI_NOP;
++    }
+     t6_semaphore_get(semaphore::UNPACK_SYNC);
+     switch_config_context(unp_cfg_context);
+ }
+ #endif
+ 
++#ifdef TRISC_MATH
++// Final pass math: the fp32-DEST copy's ELWADD (srcA + srcB, 8 rows each), with DEST row immediates that put srcA's
++// column-order faces back in row order, and srcB row-broadcast: ELWADD with SRCB_BCAST_ROW adds the srcB row at the
++// srcB RWC to all 8 rows, row 0 (b_0 .. b_15) for faces 0, 2 and row 1 (b_16 .. b_31) for faces 1, 3.
++inline void fs_math_init() {
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_4);
++    addr_mod_t{.srca = {.incr = 8}, .srcb = {.incr = 1}, .dest = {.incr = 0}}.set(ADDR_MOD_5);
++    TTI_SETC16(CLR_DVALID_SrcA_Disable_ADDR32, 0);
++    math::reset_counters(p_setrwc::SET_ABD_F);
++}
++inline void fs_math_tile(uint32_t j) {
++    math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(j);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 0);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 8);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 32);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_5, 40);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 16);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 24);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 48);
++    TTI_ELWADD(0, 0, p_elwise::SRCB_BCAST_ROW, ADDR_MOD_4, 56);
++    TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_ABD);
++    math::clear_dst_reg_addr();
++}
++#endif
++
+ // One subblock's K steps with compile-time subblock dims: matmul_block given a runtime ct / rt keeps the unpack and
+ // math loops over them (and the ct >= rt operand choice) at run time (see the file comment, "Subblock dims").
+ template <uint32_t ct, uint32_t rt, uint32_t kt>
+@@ -340,10 +418,14 @@
+     bool fused>
+ ALWI void run(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t num_blocks, bool xchg_top, bool xchg_bot) {
+     constexpr uint32_t R = d * tpr;
+-    // ACC is gw planes of [rows, 32] fp32, one per output column tile of the n-group. Subblocks are sbh x 1 (a column
+-    // run: one stream per run of ACC-consecutive rows) or 1 x sbw (one 1-tile stream per column).
+-    constexpr uint32_t PITCH = 32 * 4;
++    // ACC is gw planes of [rows, 32] fp32, one per output column tile of the n-group, each split into two half-planes
++    // of [rows, 16] (face-split, see pack_fst). Subblocks are sbh x 1 (a column run: one stream pair per run of
++    // ACC-consecutive rows) or 1 x sbw (one 1-tile stream pair per column).
++    constexpr uint32_t PITCH = 16 * 4;  // a half-plane row
+     constexpr uint32_t PLANE = plane_bytes;
++    constexpr uint32_t HALF = plane_bytes / 2;
++    constexpr uint32_t ZK = HALF / 4 <= 0xffff ? 1 : 2;  // the final pass's srcA Z steps between a tile's two runs
++    static_assert(HALF % (4 * ZK) == 0 && HALF / (4 * ZK) <= 0xffff);  // the unpacker's 16-bit x_dim
+     static_assert(N % gw == 0 && gw % sbw == 0 && sbw * sbh <= 4 && (sbw == 1 || sbh == 1) && d >= 1 && d <= 32);
+     // One pass per n-group of gw output column tiles: its columns kw = 1, 0, 2 onto the ACC planes, then its final
+     // pass. K-blocked weights stream in sub-rounds of one column and one n-group, sub-round s = (n-group s / 3, kw =
+@@ -399,8 +481,7 @@
+                 // step waits only for rounds 0 .. step.
+                 reconfig_data_format(cb_w, cb_in);
+                 pack_reconfig_data_format(cb_acc);
+-                pack_untilize_dest_init<1, 1>(cb_acc);
+-                PACK((zst_init()));
++                PACK((fst_init(HALF)));
+                 uint32_t init_rows = sbh;
+                 matmul_block_init(cb_in, cb_w, false, sbw, sbh, Ct);
+                 // Rows [i0, i0 + h) (tile-row t0 - 1 + i), one kw, sbw columns from in1 index w0 (row stride RW) into
+@@ -465,7 +546,7 @@
+                         [[maybe_unused]] const uint32_t row =
+                             acc_base + (rowbase<d, tpr>(t0, i0 + r) + d - kw * d) * PITCH;
+                         for (uint32_t j = 0; j < sbw; ++j) {
+-                            PACK((pack_zst(row + (p0 + j) * PLANE, r * sbw + j, sbw == 1 ? e - r : 1)));
++                            PACK((pack_fst(row + (p0 + j) * PLANE, r * sbw + j, sbw == 1 ? e - r : 1)));
+                         }
+                         r = e;
+                     }
+@@ -528,7 +609,7 @@
+                             PACK((TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::PACK)));
+                         }
+                         [[maybe_unused]] const uint32_t row = acc_base + (q2 ? rb - d : rb + d) * PITCH;
+-                        PACK((pack_zst(row + (jj < gw ? jj : jj - gw) * PLANE, jj, 1)));
++                        PACK((pack_fst(row + (jj < gw ? jj : jj - gw) * PLANE, jj, 1)));
+                     }
+                     tile_regs_release();
+                 };
+@@ -671,7 +752,6 @@
+                         w.pop_front(ROUND_TILES);
+                     }
+                 }
+-                pack_untilize_uninit(cb_acc);
+                 pack_reconfig_l1_acc(0);
+                 // The final pass unpacks ACC: its rows must have landed. A CB push from the pack thread is stored only
+                 // after the packer drained (llk_push_to_brisc), so the unpacker's wait below orders its reads after
+@@ -689,7 +769,7 @@
+                 [[maybe_unused]] uint32_t rows_rd = 0;
+                 UNPACK((acc_rd = get_local_cb_interface(get_operand_id(cb_acc)).fifo_rd_ptr << 4));
+                 UNPACK((rows_rd = get_local_cb_interface(get_operand_id(cb_bias_rows)).fifo_rd_ptr << 4));
+-                // The reader's fp32 bias rows (one 512 B page per output column tile: 4 copies of [b_0 .. b_31]).
++                // The reader's fp32 bias rows (one 128 B page per output column tile: [b_0 .. b_31]).
+                 if (blk == 0 && g == 0) {
+                     bias_rows.wait_front(N);
+                 }
+@@ -698,9 +778,10 @@
+                 if constexpr (relu) {
+                     pack_relu_config(ReluConfig::zero());
+                 }
+-                tilize_init(cb_acc, 1, cb_out);
+-                UNPACK((tilize_bias_mop_config()));
+-                constexpr uint32_t ROWS_BYTES = 4 * 32 * 4;  // one column tile's 4 fp32 bias rows
++                UNPACK((fs_unpack_init<ZK>(HALF)));
++                MATH((fs_math_init()));
++                PACK((llk_pack_init<PackMode::Default>(cb_out)));
++                constexpr uint32_t ROWS_BYTES = 32 * 4;  // one column tile's fp32 bias row
+                 if (g == 0) {
+                     out.reserve_back(bm * N);
+                 }
+@@ -714,31 +795,48 @@
+                         halo_in.wait_front(++halo_seen);
+                     }
+                 }
+-                for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
+-                    const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
+-                    MATH((llk_math_wait_for_dest_available()));
+-                    PACK((llk_packer_wait_for_math_done()));
+-                    for (uint32_t j = 0; j < cnt; ++j) {
+-                        const uint32_t u = (f0 + j) / gw;
+-                        const uint32_t nn = (f0 + j) - u * gw;  // column tile within the n-group
+-                        UNPACK((unpack_tilize_bias_at<cb_acc>(
+-                            acc_rd + nn * PLANE + rowbase<d, tpr>(t0, u + 1) * PITCH,
+-                            0,
+-                            rows_rd + (n_first + nn) * ROWS_BYTES)));
+-                        MATH((llk_math_eltwise_unary_datacopy<
+-                              DataCopyType::A2D,
+-                              DST_ACCUM_MODE,
+-                              BroadcastType::NONE,
+-                              UnpackToDestEn>(j, cb_acc)));
+-                    }
+-                    for (uint32_t j = 0; j < cnt; ++j) {
+-                        const uint32_t u = (f0 + j) / gw;
+-                        const uint32_t nn = (f0 + j) - u * gw;
+-                        PACK((llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn)));
++                // Tiles go plane-major (column tile nn, then tile-row u): a plane's tile-rows inside one image row are
++                // consecutive 2 KB in each half-plane, so the unpacker takes each such run in one config context.
++                UNPACK(({
++                    for (uint32_t nn = 0; nn < gw; ++nn) {
++                        for (uint32_t u = 0; u < valid;) {
++                            const uint32_t rb = rowbase<d, tpr>(t0, u + 1);
++                            uint32_t e = u + 1;
++                            while (e < valid && rowbase<d, tpr>(t0, e + 1) == rb + 32 * (e - u)) {
++                                ++e;
++                            }
++                            fs_unpack_run<ZK>(
++                                acc_rd + nn * PLANE + rb * PITCH, e - u, rows_rd + (n_first + nn) * ROWS_BYTES);
++                            u = e;
++                        }
++                    }
++                }));
++                MATH(({
++                    for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                        const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                        llk_math_wait_for_dest_available();
++                        for (uint32_t j = 0; j < cnt; ++j) {
++                            fs_math_tile(j);
++                        }
++                        llk_math_dest_section_done<DST_ACCUM_MODE>();
++                    }
++                }));
++                PACK(({
++                    uint32_t u = 0;
++                    uint32_t nn = 0;
++                    for (uint32_t f0 = 0; f0 < total; f0 += FINAL_BATCH) {
++                        const uint32_t cnt = total - f0 < FINAL_BATCH ? total - f0 : FINAL_BATCH;
++                        llk_packer_wait_for_math_done();
++                        for (uint32_t j = 0; j < cnt; ++j) {
++                            llk_pack<DST_ACCUM_MODE, true, PackMode::Default>(j, cb_out, u * N + n_first + nn);
++                            if (++u == valid) {
++                                u = 0;
++                                ++nn;
++                            }
++                        }
++                        llk_pack_dest_section_done<DST_ACCUM_MODE>();
+                     }
+-                    MATH((llk_math_dest_section_done<DST_ACCUM_MODE>()));
+-                    PACK((llk_pack_dest_section_done<DST_ACCUM_MODE>()));
+-                }
++                }));
+                 if (g + 1 == NG) {
+                     out.push_back(bm * N);
+                 }
+@@ -749,7 +847,7 @@
+                         halo_seen = 0;
+                     }
+                 }
+-                tilize_uninit(cb_acc, cb_out);
++                UNPACK((fs_unpack_uninit()));
+                 if constexpr (relu) {
+                     pack_relu_config(ReluConfig::none());
+                 }
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -1260,10 +1260,11 @@
+ #ifdef CONV2D_3X3_KW_FOLD
+         // kw-fold (conv2d_3x3_kw_fold.hpp): no gather, and no accumulator seed (compute packs Q_1 as an overwrite).
+         if (m_block_idx == 0) {
+-            // kw-fold's final pass adds the bias as srcB rows: per output column tile n, 4 copies of the fp32 row
+-            // [b_0 .. b_31] (KWF_CB_BIAS_ROWS page n), decoded from the bias tiles the writer reads into cb_bias after
+-            // its first M-block's weights. Done after the first block's fill, not at kernel end: a later block's fill
+-            // can wait for the first block's slab, which compute frees only after the final pass that adds this bias.
++            // kw-fold's final pass adds the bias as srcB rows: per output column tile n, the fp32 row [b_0 .. b_31]
++            // (KWF_CB_BIAS_ROWS page n: srcB rows 0 and 1, each broadcast to its faces' rows), decoded from the bias
++            // tiles the writer reads into cb_bias after its first M-block's weights. Done after the first block's fill,
++            // not at kernel end: a later block's fill can wait for the first block's slab, which compute frees only
++            // after the final pass that adds this bias.
+             // Row 0 of a tile is row 0 of faces 0 and 1: bf16 at datum c % 16 (+ 256 for face 1); bf8_b
+             // (KWF_BIAS_BFP8): 64 exponent bytes, one per face row (face f row 0 at byte 16 f), then sign-magnitude
+             // bytes m, value (-1)^s (m & 127) 2^(e - 133), from byte 64 (+ 256 for face 1).
+@@ -1274,7 +1275,7 @@
+             const uint32_t raw = get_read_ptr(KWF_CB_BIAS);
+             const uint32_t tile_bytes = get_tile_size(KWF_CB_BIAS);
+             uint32_t* rows = reinterpret_cast<uint32_t*>(get_write_ptr(KWF_CB_BIAS_ROWS));
+-            for (uint32_t n = 0; n < KWF_N; ++n, rows += 128) {
++            for (uint32_t n = 0; n < KWF_N; ++n, rows += 32) {
+                 const uint32_t t = raw + n * tile_bytes;
+                 for (uint32_t c = 0; c < 32; ++c) {
+ #if KWF_BIAS_BFP8
+@@ -1297,9 +1298,6 @@
+                         static_cast<uint32_t>(reinterpret_cast<const uint16_t*>(t)[256 * (c / 16) + c % 16]) << 16;
+ #endif
+                     rows[c] = v;
+-                    rows[32 + c] = v;
+-                    rows[64 + c] = v;
+-                    rows[96 + c] = v;
+                 }
+             }
+             cb_push_back(KWF_CB_BIAS_ROWS, KWF_N);
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -1165,8 +1165,9 @@
+     auto khx_send =
+         [&](uint64_t noc_base, uint32_t src_row, uint32_t dst_row, uint32_t rows, uint32_t sem_id, uint32_t sem_value) {
+             MaybeDeviceZoneScope("writer_khx_send");
+-            for (uint32_t p = 0; p < KWF_PLANES; ++p) {
+-                const uint32_t plane = khx_acc + p * KWF_PLANE_BYTES;
++            // Each plane's two half-planes (face-split ACC, conv2d_3x3_kw_fold.hpp).
++            for (uint32_t h = 0; h < 2 * KWF_PLANES; ++h) {
++                const uint32_t plane = khx_acc + h * (KWF_PLANE_BYTES / 2);
+                 noc_async_write(
+                     plane + src_row * KWF_PITCH, noc_base | (plane + dst_row * KWF_PITCH), rows * KWF_PITCH);
+             }

@@ -1,0 +1,440 @@
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0m1", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0m1", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "pmin10", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "pmin10", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": null, "chunk_tiles": 16, "chunk_rows": 4, "split": 16, "r0_split": 16}
+{"case": "ir2f1", "variant": "pfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "pfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0m1", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0m1", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "pmin10", "rect": [[0, 0], [10, 6]], "server": [10, 7], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "pmin10", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": null, "chunk_tiles": 16, "chunk_rows": 4, "split": 16, "r0_split": 16}
+{"case": "res3x", "variant": "pfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "pfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "p_noread", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "p_noread", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "p_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "p_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "s_noread", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "s_noread", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "s_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "s_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "p_noread", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "p_noread", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "p_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "p_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "s_noread", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "s_noread", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "s_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "s_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "sfirst_r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "res3x", "variant": "sfirst_r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "res3x", "variant": "noread_nomcast", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sr2f1", "variant": "noread_nomcast", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "sr2f1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sr2f1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sr2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 24}
+{"case": "sr2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 24}
+{"case": "sdr2f0", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 16}
+{"case": "sdr2f0", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 16}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr3f0", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 20}
+{"case": "sdr3f0", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 20}
+{"case": "sdr3f0", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 32}
+{"case": "sdr3f0", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 32}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 20}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 20}
+{"case": "idr3f0", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 32}
+{"case": "idr3f0", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": 32}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 16}
+{"case": "sdr3f1", "variant": "r0q3", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 24}
+{"case": "sdr3f1", "variant": "r0q3", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": 24}
+{"case": "res2", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 4, "chunk_rows": 2, "split": 2, "r0_split": 2}
+{"case": "res2", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 4, "chunk_rows": 2, "split": 2, "r0_split": 2}
+{"case": "res2", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 4, "chunk_rows": 2, "split": 2, "r0_split": 4}
+{"case": "res2", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 4, "chunk_rows": 2, "split": 2, "r0_split": 4}
+{"case": "ch1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 4, "chunk_rows": 4, "split": 2, "r0_split": 2}
+{"case": "ch1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 4, "chunk_rows": 4, "split": 2, "r0_split": 2}
+{"case": "ch1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 4, "chunk_rows": 4, "split": 2, "r0_split": 3}
+{"case": "ch1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 4, "chunk_rows": 4, "split": 2, "r0_split": 3}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 12}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "idr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": 16}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "sdr2f0", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 20}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "sdr2f0", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 36, "chunk_rows": 9, "split": 16, "r0_split": 28}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0ceil", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 8}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "r0q3", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": 12}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "ir2f1", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f67", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 12, 12]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "idr2f0", "variant": "f75", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [16, 16, 12]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 8]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f67", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 20, 20]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "sdr3f1", "variant": "f75", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [24, 24, 24]}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself_sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself_sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself_sfirst", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself_sfirst", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself_sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself_sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself_sfirst", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself_sfirst", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 0, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "copy", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 0, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pselfrow", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "pself_f58", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "res3x", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pselfrow", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "sdr3f1", "variant": "pself_f58", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "ir2f1", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 0], [10, 8]], "server": [4, 9], "partner": [10, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "idr2f0", "variant": "g2", "rect": [[0, 9], [3, 9]], "server": [5, 9], "partner": [9, 9], "self_read": 1, "chunk_tiles": 20, "chunk_rows": 5, "split": 8, "r0_split": [12, 12, 12]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [12, 8, 8]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "g2", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 1, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [20, 20, 16]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "b_p69", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "b_p69", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "b_p68", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 8], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "b_p68", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "b_p69", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "b_p69", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "b_p68", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 8], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "b_p68", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "b_p69", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "b_p69", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "b_p68", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 8], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "b_p68", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 8]}
+{"case": "res3x", "variant": "b_p69_s5", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 4]}
+{"case": "res3x", "variant": "b_p69_s5", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 8, 4]}
+{"case": "res3x", "variant": "b_p69_s4", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 4, 4]}
+{"case": "res3x", "variant": "b_p69_s4", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 16, "chunk_rows": 4, "split": 8, "r0_split": [8, 4, 4]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 16, 16]}
+{"case": "sdr3f1", "variant": "b_p69_s5", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 12, 12]}
+{"case": "sdr3f1", "variant": "b_p69_s5", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [16, 12, 12]}
+{"case": "sdr3f1", "variant": "b_p69_s4", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [12, 12, 8]}
+{"case": "sdr3f1", "variant": "b_p69_s4", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 32, "chunk_rows": 8, "split": 16, "r0_split": [12, 12, 8]}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [0, 9], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "copy", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [20, 20, 20]}
+{"case": "idr3f0", "variant": "b_p69_s5", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [16, 16, 16]}
+{"case": "idr3f0", "variant": "b_p69_s5", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [16, 16, 16]}
+{"case": "idr3f0", "variant": "b_p69_s4", "rect": [[0, 0], [10, 6]], "server": [10, 8], "partner": [6, 9], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [16, 12, 12]}
+{"case": "idr3f0", "variant": "b_p69_s4", "rect": [[0, 7], [8, 7]], "server": [9, 7], "partner": [10, 7], "self_read": 0, "chunk_tiles": 40, "chunk_rows": 10, "split": 20, "r0_split": [16, 12, 12]}

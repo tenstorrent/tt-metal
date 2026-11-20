@@ -1,0 +1,125 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+PRECOMPILE: on — collect + parallel compile (x64) inside the pytest session, local
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen pytest -p tests.plugins.up_front_collect --import-mode=prepend -k round0_self_read ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py
+========================================
+2026-11-20 06:06:47.236 | DEBUG    | ttnn:<module>:45 - Initial ttnn.CONFIG:
+Config{cache_path=/home/pmilojevic/.cache/ttnn,model_cache_path=/home/pmilojevic/.cache/ttnn/models,tmp_dir=/tmp/ttnn,enable_model_cache=false,enable_fast_runtime_mode=true,validate_program_args=false,throw_exception_on_fallback=false,enable_logging=false,enable_graph_report=false,enable_graph_python_stack_traces=false,enable_detailed_buffer_report=false,enable_detailed_tensor_report=false,enable_comparison_mode=false,comparison_mode_should_raise_exception=false,comparison_mode_pcc=0.9999,root_report_path=generated/ttnn/reports,report_name=std::nullopt,strict_ccl_topology=false,verify_replicated_shards_on_dump=true,std::nullopt}
+============================= test session starts ==============================
+platform linux -- Python 3.10.19, pytest-9.0.3, pluggy-1.7.0 -- /localdev/pmilojevic/workspaces/opgen/python_env/bin/python
+cachedir: .pytest_cache
+benchmark: 5.2.3 (defaults: timer=time.perf_counter disable_gc=False min_rounds=5 min_time=0.000005 max_time=1.0 calibration_precision=10 warmup=False warmup_iterations=100000)
+rootdir: /localdev/pmilojevic/workspaces/opgen
+configfile: pytest.ini
+plugins: split-0.11.0, repeat-0.9.4, anyio-4.16.0, benchmark-5.2.3, github-actions-annotate-failures-0.3.0, timeout-2.4.0, cov-7.0.0, dash-2.15.0
+timeout: 300.0s
+timeout method: signal
+timeout func_only: False
+collecting ... 2026-11-20 06:06:47.438 | info     |          Device | Opening user mode device driver (tt_cluster.cpp:252)
+2026-11-20 06:06:47.438 | info     |             UMD | Cluster constructor started. (cluster.cpp:434)
+2026-11-20 06:06:47.440 | info     |             UMD | Creating TopologyDiscovery for architecture: blackhole (topology_discovery.cpp:137)
+2026-11-20 06:06:47.440 | info     |             UMD | Starting topology discovery. (topology_discovery.cpp:156)
+2026-11-20 06:06:47.464 | info     |             UMD | Established firmware bundle version: 19.16.1 (topology_discovery.cpp:700)
+2026-11-20 06:06:47.464 | info     |             UMD | Completed topology discovery. (topology_discovery.cpp:161)
+2026-11-20 06:06:47.737 | info     |             UMD | Opening local chip ids/PCIe ids: {0, 1, 2, 3, 4, 5, 6, 7}/[2, 3, 1, 0, 6, 7, 5, 4] and remote chip ids {} (cluster.cpp:174)
+2026-11-20 06:06:47.737 | info     |             UMD | IOMMU: enabled (cluster.cpp:148)
+2026-11-20 06:06:47.737 | info     |             UMD | KMD version: 2.9.0 (cluster.cpp:151)
+2026-11-20 06:06:47.738 | info     |             UMD | Cluster constructor completed. (cluster.cpp:893)
+2026-11-20 06:06:47.745 | info     |             UMD | Starting devices in cluster (cluster.cpp:1482)
+2026-11-20 06:06:48.179 | info     |             UMD | Starting devices in cluster completed. (cluster.cpp:1491)
+2026-11-20 06:06:48.320 | info     |     Distributed | Using auto discovery to generate mesh graph. (metal_env.cpp:571)
+2026-11-20 06:06:48.320 | info     |     Distributed | Constructing control plane using auto-discovery (no mesh graph descriptor). (metal_env.cpp:624)
+2026-11-20 06:06:48.454 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 06:06:49.165 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.189 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.207 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.226 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.247 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.266 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.283 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+2026-11-20 06:06:49.352 | info     |           Metal | Clearing program cache on MeshDevice 1 (mesh_device.cpp:1327)
+collected 33 items / 25 deselected / 8 selected
+
+UP_FRONT_INLINE: collect pass over 8 item(s) took 2.0s
+UP_FRONT_INLINE: compile route local (programs=16, farm_min=10)
+
+UP_FRONT_COLLECT: 24 ops stashed across 8 bodies -> 16 unique programs (swallowed 0, skipped-capture 0)
+UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=72 fallback=0
+2026-11-20 06:06:49.569 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 06:06:49.649 | info     |           Metal | Enabling program cache on MeshDevice 3 (mesh_device.cpp:1322)
+Building ncrisc, compile step:
+/localdev/pmilojevic/workspaces/opgen/runtime/sfpi/compiler/bin/riscv-tt-elf-g++ -O2 -std=c++17 -ftt-nttp -ftt-constinit -ftt-consteval -ftt-no-dyninit -flto=1 -flto-partition=one -ffast-math -fno-finite-math-only -fsigned-zeros -fno-associative-math -fno-exceptions -fno-rtti -fno-use-cxa-atexit -g -MMD -Wall -Werror -Wno-error=deprecated-declarations -Wno-error=multistatement-macros -Wno-error=parentheses -Wno-error=unused-but-set-variable -Wno-unused-variable -Wno-unused-function --param=min-pagesize=0 -mcpu=tt-bh -fno-tree-loop-distribute-patterns -Winvalid-pch -Wno-error=invalid-pch -I. -I.. -I/localdev/pmilojevic/workspaces/opgen/ -I/localdev/pmilojevic/workspaces/opgen/ttnn -I/localdev/pmilojevic/workspaces/opgen/ttnn/cpp -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tools/include -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hostdevcommon/api -I/localdev/pmilojevic/workspaces/opgen/tt_metal/api/ -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/common -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/ckernels/blackhole/metal/llk_io -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/blackhole_defines -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/inc/internal/tt-1xx/blackhole/noc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/common/inc -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib -I/localdev/pmilojevic/workspaces/opgen/tt_metal/tt-llk/tt_llk_blackhole/llk_lib/hal -I/localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx -I/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/op_grad/kernels -include /localdev/pmilojevic/tt-metal-cache/tt-metal-cache/pch/842cea1ec115824b/pch.h -DIS_NOT_POW2_NUM_L1_BANKS=1 -DLOG_BASE_2_OF_NUM_DRAM_BANKS=3 -DNUM_DRAM_BANKS=8 -DNUM_L1_BANKS=110 -DPCIE_NOC_X=19 -DPCIE_NOC_Y=24 -DTENSIX_FIRMWARE -DLOCAL_MEM_EN=0 -DL1_ECC_HALT -DPROCESSOR_INDEX=1 -DCOMPILE_FOR_NCRISC -DPROGRAMMABLE_CORE_TYPE=0 -DARCH_BLACKHOLE -DDISPATCH_MESSAGE_ADDR=4290184248 -DKERNEL_BUILD -DCONV2D_3X3_KW_FOLD=1 -DKWF_BIAS_BFP8=1 -DKWF_CB_ACC=5 -DKWF_CB_BIAS=4 -DKWF_CB_BIAS_ROWS=9 -DKWF_CB_HALO_IN=15 -DKWF_CB_HALO_OUT=14 -DKWF_D=1 -DKWF_FILL_MAX_GROUPS=16 -DKWF_FUSED_GW=2 -DKWF_KBLOCKED=0 -DKWF_N=2 -DKWF_NG=1 -DKWF_PITCH=128 -DKWF_PLANES=2 -DKWF_PLANE_BYTES=45696 -DKWF_SEM_FROM_LOWER=10 -DKWF_SEM_FROM_UPPER=9 -DKWF_XCHG=1 -DNOC_INDEX=0 -DNOC_MODE=0 -DFULL_KERNEL_NAME="conv2d_3x3_reader/12848585223035814263/" -DKERNEL_COMPILE_TIME_ARGS=0,1,7,64,128,128,8192,32,32,1,1,1,8,3,3,3,128,1,1088,20,4,8,0,8,0,0,1,6,2,2,5,8,2,3,1,0,2,2,0,0,1,0,8,0,0,0,11,0,10,0,1,0,2,0,0,0,0,0,0,2,1,0,0,0,12,0,0,13,4,1,5,4,0,0,0,0,1,1088,1,32,256,8,33685762,67240706,100795650,167905026,201460482,16977154,50528771,84083715,117638659,184748547,218303491,33816836,67371780,100926724,168036100,201591556 -c -o /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/12848585223035814263/ncrisc/ncrisck.7833945131013621308_3245021.o /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc -MF /localdev/pmilojevic/tt-metal-cache/tt-metal-cache2778076107680524023/kernels/conv2d_3x3_reader/12848585223035814263/ncrisc/ncrisck.7833945131013621308_3245021.d
+In file included from ../kernel_includes.hpp:2,
+                 from /localdev/pmilojevic/workspaces/opgen/tt_metal/hw/firmware/src/tt-1xx/ncrisck.cc:23:
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/op_grad/kernels/conv2d_3x3_reader.cpp: In function 'void kernel_main()':
+/localdev/pmilojevic/workspaces/opgen/ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/op_grad/kernels/conv2d_3x3_reader.cpp:348:10: warning: variable 'r0_try' set but not used [-Wunused-but-set-variable]
+  348 |     auto r0_try = [&]() {};
+      |          ^~~~~~
+UP_FRONT_COLLECT: 16 collected · 16 built · 0 already compiled in 1.1s (workers=64, errors=0) -> on-disk JIT cache warm
+UP_FRONT_COLLECT_RESULT: status=ok reason=ok unique=16 programs=16 errors=0 pytest_exit=0 xpass_strict=0 other_failures=0 built=16 compile_s=1.3 collect_s=2.0 route=local
+UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin32_whole_k] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:50.913 | warning  |           Metal | Opening subset of mmio devices slows down UMD read/write to remote chips. If opening more devices, consider using distributed::MeshDevice::create_unit_meshes(). (device_manager.cpp:265)
+2026-11-20 06:06:50.995 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin64] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.023 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin96] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.044 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin128_kblocked] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.069 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin160] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.097 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin256_n2_kblocked] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.125 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[multiblock] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.150 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSED
+ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[rule_103_cores] <- ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/krs_unit_kw_fold.py 2026-11-20 06:06:51.251 | info     |           Metal | Clearing program cache on MeshDevice 5 (mesh_device.cpp:1327)
+PASSEDUP_FRONT_INLINE: real pass took 0.6s
+
+
+- generated xml file: /localdev/pmilojevic/workspaces/opgen/generated/test_reports/most_recent_tests.xml -
+============================= slowest 25 durations =============================
+0.24s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin32_whole_k]
+0.15s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[rule_103_cores]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin32_whole_k]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin256_n2_kblocked]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin160]
+0.03s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin128_kblocked]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[multiblock]
+0.02s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[rule_103_cores]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin96]
+0.02s call     ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin64]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin64]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[rule_103_cores]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin96]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[multiblock]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin256_n2_kblocked]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin160]
+0.00s setup    ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin128_kblocked]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin32_whole_k]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[multiblock]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin128_kblocked]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin160]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin256_n2_kblocked]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin64]
+0.00s teardown ttnn/ttnn/operations/conv2d_3x3/perf_experiments/kwf_round0_sources/test_krs_unit.py::test_conv2d_3x3_kw_fold_round0_self_read[cin96]
+======================= 8 passed, 25 deselected in 4.00s =======================
+2026-11-20 06:06:52.851 | info     |    BuildKernels | JIT cache stats: 72/83 hits (86.7%) [72 cached, 177 build-once dedup, 0 merged artifacts, 0 merged genfiles] (build_cache_telemetry.cpp:362)
+2026-11-20 06:06:52.851 | info     |    BuildKernels | JIT telemetry: 48 registered TelemetryTokens (build_cache_telemetry.cpp:510)
+2026-11-20 06:06:52.900 | info     |          Device | Closing user mode device drivers (tt_cluster.cpp:605)
+2026-11-20 06:06:52.900 | info     |             UMD | Closing devices in cluster (cluster.cpp:1496)
+2026-11-20 06:06:53.377 | info     |             UMD | Closing devices in cluster completed. (cluster.cpp:1506)
+2026-11-20 06:06:53.377 | info     |             UMD | Cluster destructor started. (cluster.cpp:1227)
+2026-11-20 06:06:53.377 | info     |             UMD | Cluster destructor completed. (cluster.cpp:1240)
+========================================
+PRECOMPILE: UP_FRONT_INLINE: collect pass over 8 item(s) took 2.0s
+PRECOMPILE: UP_FRONT_INLINE: compile route local (programs=16, farm_min=10)
+PRECOMPILE: UP_FRONT_COLLECT: 24 ops stashed across 8 bodies -> 16 unique programs (swallowed 0, skipped-capture 0)
+PRECOMPILE: UP_FRONT_COLLECT: fast-shallow from_torch — shape-only=72 fallback=0
+PRECOMPILE: UP_FRONT_COLLECT: 16 collected · 16 built · 0 already compiled in 1.1s (workers=64, errors=0) -> on-disk JIT cache warm
+PRECOMPILE: UP_FRONT_INLINE: compile step took 1.3s; starting the real pass
+SAFE_PYTEST_RESULT: PASS
+========================================
+SAFE_PYTEST_TOTAL_RUNTIME: 0m11s (11s total, device-lock-acquired -> exit)

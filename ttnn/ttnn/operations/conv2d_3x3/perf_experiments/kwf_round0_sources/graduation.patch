@@ -1,0 +1,614 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index ec569f0dee6..88a83f47989 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -357,7 +357,20 @@ WEIGHT_SERVER_CHUNKS = 3
+ # -1.7%, sem dec res3 fc1 -1.1%, the other kw-fold layers flat. Not off kw-fold: there the first matmul waits for the
+ # tilize, round 0 is hidden, and the partner's NoC0 multicast only slows the reader's NoC0 fill (res3.0, stride 2:
+ # fill 3.62 -> 3.93 us, +2.0% to +2.7% over 3 options x 3 runs).
++# Round 0, which gates compute's first subblock, comes sooner from a partner whose NoC1 reads would cross receivers
++# (_r0_partner_self_read): that partner's writer reads its part of round 0 on NoC0 at kernel start instead of its reader
++# on NoC1, and the first server takes WEIGHT_SERVER_R0_SHARE of round 0's slot rows (rounded, the extra rows to the
++# earliest chunks; the later rounds keep the halves) (conv2d_3x3_weight_server_writer.cpp). The partner was round 0's
++# late half there: its kernel starts ~0.3-0.45 us after the first server's (the last kernel group's launch message
++# lands last), and on the 103-core layers its NoC1 responses run west along row 11 through the 4-core rectangle, under
++# that rectangle's own NoC1 multicast (inst res2 fc1, zoned: first server done ~2.2 us, partner ~2.9-3.5, round 0
++# complete ~3.0-3.5). A partner whose row holds no receiver (the 86-core layers' big rectangle: first server done
++# ~1.9 us, partner ~2.0-2.2) keeps its NoC1 reads and the halves: there NoC0 reads ran down the column its own
++# multicast enters by and slowed the fill (res3.x +2.9%), and a larger first-server share was +0.5% to +1.4%.
++# Measured: see the changelog (kwf_round0_sources).
+ WEIGHT_SERVER_PARTNERS = True
++WEIGHT_SERVER_R0_SHARE = (7, 12)
++WEIGHT_SERVER_R0_SELF_READ = True
+ # Blackhole NoC grid (x, y), the torus of the partner placement's hop metric.
+ _NOC_GRID = (17, 12)
+ # Hardware multicast rectangles one channel may carry (dataflow_kernel_lib::MAX_MCAST_RECTANGLES).
+@@ -1771,6 +1784,42 @@ def _weight_shard_tiles(weight_tensor, slot_rows_whole):
+     return (shape[-2] // TILE, shape[-1] // TILE)
+ 
+ 
++def _r0_partner_self_read(device, weight_servers, partner, weight_tensor, bk, bn, tensor_n_tiles):
++    """Whether a partner reads its part of round 0 on NoC0 (WEIGHT_SERVER_R0_SELF_READ): where a NoC1 response of one
++    of round 0's pages would cross a receiver core. On Blackhole a NoC1 DRAM response climbs its bank's DRAM column (x 0
++    for banks 0-3, x 9 for 4-7: no workers) to the partner's row, then runs west (x decreasing, mod the NoC grid width)
++    along that row to the partner. Round 0 holds weight column kw = 1: prepared tile-rows (kh * 3 + 1) C_in + c."""
++    pv = device.worker_core_from_logical_core(partner)
++    row = set()
++    for rect, _, _ in weight_servers:
++        for x in range(rect.start.x, rect.end.x + 1):
++            for y in range(rect.start.y, rect.end.y + 1):
++                v = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
++                if v.y == pv.y:
++                    row.add(v.x)
++    if not row:
++        return False
++    banks = device.dram_grid_size().x
++    shard_cols = _weight_shard_tiles(weight_tensor, True)[1]
++    columns = set()
++    for kh in range(3):
++        for c in range(bk):
++            tile_row = (kh * 3 + 1) * bk + c
++            # ND-sharded: one shard per (tile-row, shard_cols columns), round-robin; interleaved: one page per tile.
++            pages = (
++                [tile_row * (tensor_n_tiles // shard_cols)]
++                if shard_cols
++                else [tile_row * tensor_n_tiles + n for n in range(bn // 3)]
++            )
++            columns.update(0 if page % banks < banks // 2 else 9 for page in pages)
++    for x in columns:
++        while x != pv.x:
++            x = (x - 1) % _NOC_GRID[0]
++            if x != pv.x and x in row:
++                return True
++    return False
++
++
+ def _weight_servers(input_tensor, core_list, receivers, partners):
+     """One spare core per rectangle of the weight channel (closest to the rectangle's NoC1 multicast start, its high
+     corner), as [(rectangle, server core, partner core or None)], or None when the device grid has too few spare cores.
+@@ -3750,13 +3799,33 @@ def create_program_descriptor(
+         slot_row = max(1, bn // 3) if kwf else bn
+         chunk_rows = chunk_tiles // slot_row if chunk_tiles % slot_row == 0 else 0
+         split = (chunk_rows // 2) * slot_row if chunk_rows >= 2 else chunk_tiles // 2
++        # Round 0's split under a self-reading partner: the first server's slot tiles of every chunk, one byte per chunk
++        # (see WEIGHT_SERVER_R0_SHARE); 0 (one server, or the halves): every round takes the args' part.
++        r0_share = [split] * num_chunks
++        if chunk_rows >= 2:
++            num, den = WEIGHT_SERVER_R0_SHARE
++            rows = (2 * num * num_chunks * chunk_rows + den) // (2 * den)
++            r0_share = [
++                (rows // num_chunks + (1 if c < rows % num_chunks else 0)) * slot_row for c in range(num_chunks)
++            ]
++        r0_self_reads = {
++            (partner.x, partner.y): WEIGHT_SERVER_R0_SELF_READ
++            and _r0_partner_self_read(device, weight_servers, partner, weight_tensor, bk, bn, g.tensor_n_tiles)
++            for _, _, partner in weight_servers
++            if partner is not None
++        }
+         for rect, server, partner in weight_servers:
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+             n_receivers = rect.grid_size().x * rect.grid_size().y
+             end = split if partner is not None else chunk_tiles
+             ahead = num_chunks if partner is not None else 1
+-            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, 0, end, ahead]
++            self_read = partner is not None and r0_self_reads[(partner.x, partner.y)]
++            r0_split = 0
++            if self_read:
++                assert num_chunks <= 4 and chunk_tiles <= 0xFF and all(0 < t <= chunk_tiles for t in r0_share)
++                r0_split = sum(t << (8 * c) for c, t in enumerate(r0_share))
++            server_reader_rt[server.x][server.y] = [weight_addr, num_rounds, 0, end, ahead, r0_split]
+             # NoC1 multicast: from the rectangle's high corner to its low corner.
+             fwd = 0
+             if partner is not None:
+@@ -3774,9 +3843,18 @@ def create_program_descriptor(
+                 end,
+                 1 if partner is not None else 0,
+                 fwd,
++                r0_split,
+             ]
+             if partner is not None:
+-                partner_reader_rt[partner.x][partner.y] = [weight_addr, num_rounds, split, chunk_tiles, ahead]
++                partner_reader_rt[partner.x][partner.y] = [
++                    weight_addr,
++                    num_rounds,
++                    split,
++                    chunk_tiles,
++                    ahead,
++                    r0_split,
++                    int(self_read),
++                ]
+                 # NoC0 multicast: from the low corner to the high corner.
+                 partner_writer_rt[partner.x][partner.y] = [
+                     num_rounds,
+@@ -3790,18 +3868,22 @@ def create_program_descriptor(
+                     chunk_tiles,
+                     2,
+                     0,
++                    r0_split,
++                    weight_addr,
++                    int(self_read),
+                 ]
+         server_cores = _core_range_set(servers)
+-        server_reader_ct = [
+-            CB_WEIGHTS,
++        # The page-run parameters (conv2d_3x3_server_pages.hpp) and the weight accessor: the server reader's, and the
++        # partner writer's for its part of round 0.
++        server_pages_ct = [
+             bk,
+             bn,
+             b.num_k_blocks,
+-            num_chunks,
+             (1 + kw_fold_fused_gw(g.tensor_n_tiles)) if kwf else 0,
+             g.tensor_n_tiles,
+             *_weight_shard_tiles(weight_tensor, kwf or bn == g.tensor_n_tiles),
+         ] + list(ttnn.TensorAccessorArgs(weight_tensor).get_compile_time_args())
++        server_reader_ct = [CB_WEIGHTS, *server_pages_ct[:3], num_chunks, *server_pages_ct[3:]]
+         server_kernels = [
+             ttnn.KernelDescriptor(
+                 kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_reader.cpp"),
+@@ -3835,7 +3917,9 @@ def create_program_descriptor(
+         ]
+         if partners:
+             # The partners run the same two kernels with their NoCs swapped (reads on NoC1, multicast on NoC0) and no
+-            # bias; their ack semaphore counts the first server's forwarded clearances.
++            # bias; their ack semaphore counts the first server's forwarded clearances. A partner's writer may read
++            # its part of round 0 itself, on NoC0 (SERVER_R0_SELF_READ, per core by runtime arg; see
++            # WEIGHT_SERVER_R0_SHARE).
+             partner_cores = _core_range_set(partners)
+             server_kernels += [
+                 ttnn.KernelDescriptor(
+@@ -3843,6 +3927,7 @@ def create_program_descriptor(
+                     core_ranges=partner_cores,
+                     compile_time_args=server_reader_ct,
+                     runtime_args=partner_reader_rt,
++                    defines=[("SERVER_R0_SELF_READ", "1")] if any(r0_self_reads.values()) else [],
+                     config=ttnn.DataMovementConfigDescriptor(
+                         processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
+                     ),
+@@ -3851,9 +3936,12 @@ def create_program_descriptor(
+                     kernel_source=str(KERNEL_DIR / "conv2d_3x3_weight_server_writer.cpp"),
+                     core_ranges=partner_cores,
+                     compile_time_args=[CB_WEIGHTS, bk * bn, *server_sem_ids, b.weight_depth, num_chunks, 0, CB_BIAS, 0]
+-                    + list(ttnn.TensorAccessorArgs().get_compile_time_args()),
++                    + list(ttnn.TensorAccessorArgs().get_compile_time_args())
++                    + (server_pages_ct if any(r0_self_reads.values()) else []),
+                     runtime_args=partner_writer_rt,
+-                    defines=_round0_defines + [("SERVER_FWD_ACKS", "1")],
++                    defines=_round0_defines
++                    + [("SERVER_FWD_ACKS", "1")]
++                    + ([("SERVER_R0_SELF_READ", "1")] if any(r0_self_reads.values()) else []),
+                     config=ttnn.DataMovementConfigDescriptor(
+                         processor=ttnn.DataMovementProcessor.RISCV_0, noc=ttnn.NOC.NOC_0
+                     ),
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+index 127a05514c7..75b941f5f91 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_reader.cpp
+@@ -26,12 +26,16 @@
+ // the reads latency-bound (res3.x: chunk halves landed ~0.3 us apart, as whole chunks had): a dual server issues every
+ // chunk of every round first (arg ahead = num_chunks), each still under its own transaction id and handed over in
+ // order. res3.x (unzoned, medians of 3): dual with one chunk ahead 9.23 us, round 0 all ahead 8.98, every round 8.94.
++// Round 0 has its own split (arg r0_split, byte c: the first server's slot tiles [0, split_c) of chunk c, the partner
++// the rest; see the server writer), and a partner's writer may read the partner's part of round 0 itself
++// (SERVER_R0_SELF_READ, arg 6): this reader hands round 0's slot over unread there.
+ 
+ #include <cstdint>
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "conv2d_3x3_gather_dataflow.hpp"
++#include "conv2d_3x3_server_pages.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -39,26 +43,18 @@ void kernel_main() {
+     constexpr uint32_t block_n_tiles = get_compile_time_arg_val(2);
+     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(3);
+     constexpr uint32_t num_chunks = get_compile_time_arg_val(4);
+-    // kw-fold (conv2d_3x3_kw_fold.hpp): round kb is n-group kb / 3 of rw output column tiles, weight column kw = (1, 0,
+-    // 2)[kb % 3], [3 C_in, rw] in (kh, c, n) order (block_k_tiles = C_in, block_n_tiles = 3 rw: the same round size).
+-    // Arg 5: 0 off kw-fold, else 1 + the fused side rounds' n-group width (0: not fused; kw_fold.hpp): rounds 1 and 2
+-    // of an n-group set then hold the kw = 0 | 2 pair interleaved per (kh, c) row of 2 rw tiles, each gw-wide
+-    // n-group's kw = 0 columns, then its kw = 2 columns.
+-    constexpr bool kw_fold = get_compile_time_arg_val(5) != 0;
+-    constexpr uint32_t kwf_fused_gw = kw_fold ? get_compile_time_arg_val(5) - 1 : 0;
++    // Arg 5: 0 off kw-fold, else 1 + the fused side rounds' n-group width (conv2d_3x3_server_pages.hpp).
++    constexpr uint32_t kwf_arg = get_compile_time_arg_val(5);
+     constexpr uint32_t tensor_n_tiles = get_compile_time_arg_val(6);
+     // ND-sharded weights: the shard's [rows, columns] in tiles; 0 rows = interleaved (one read per tile).
+     constexpr uint32_t shard_rows = get_compile_time_arg_val(7);
+     constexpr uint32_t shard_cols = get_compile_time_arg_val(8);
+     constexpr auto weight_args = TensorAccessorArgs<9>();
++    using Pages = conv2d_3x3::
++        ServerPages<block_k_tiles, block_n_tiles, num_k_blocks, kwf_arg, tensor_n_tiles, shard_rows, shard_cols>;
+     constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+-    static_assert(num_chunks >= 1 && num_chunks <= 8 && round_tiles % num_chunks == 0);
++    static_assert(num_chunks >= 1 && num_chunks <= 4 && round_tiles % num_chunks == 0);
+     constexpr uint32_t chunk_tiles = round_tiles / num_chunks;
+-    // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
+-    constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
+-    // A slot holds rows of row_tiles tiles: (kh, c) rows of one n-group on kw-fold, K-block rows of all C_out
+-    // otherwise.
+-    constexpr uint32_t row_tiles = kw_fold ? rw : block_n_tiles;
+ 
+     const uint32_t weight_addr = get_arg_val<uint32_t>(0);
+     const uint32_t num_rounds = get_arg_val<uint32_t>(1);
+@@ -66,6 +62,8 @@ void kernel_main() {
+     const uint32_t part_lo = get_arg_val<uint32_t>(2);
+     const uint32_t part_hi = get_arg_val<uint32_t>(3);
+     const uint32_t chunks_ahead = get_arg_val<uint32_t>(4);
++    // Round 0's split (see the file comment; 0: the args' part); part_lo 0 is the first (or only) server.
++    const uint32_t r0_split = get_arg_val<uint32_t>(5);
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, tile_bytes);
+     conv2d_3x3::TaggedReads<false> reads;
+@@ -75,88 +73,25 @@ void kernel_main() {
+         cb_reserve_back(cb_weights, round_tiles);
+         const uint32_t l1 = get_write_ptr(cb_weights);
+         MaybeDeviceZoneScope("server_read");
+-        // The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round of column kw
+-        // reads the prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n).
+-        const uint32_t kb = r % num_k_blocks;
+-        const uint32_t page0 = kb * round_tiles;
+-        auto page_of = [&](uint32_t t) -> uint32_t {
+-            if constexpr (kw_fold) {
+-                if constexpr (kwf_fused_gw != 0) {
+-                    const uint32_t col = kb % 3;
+-                    if (col != 0) {
+-                        constexpr uint32_t frow = 2 * rw;
+-                        const uint32_t f = (col - 1) * round_tiles + t;
+-                        const uint32_t kc = f / frow;  // kh * C_in + c
+-                        const uint32_t j = f - kc * frow;
+-                        const uint32_t grp = j / (2 * kwf_fused_gw);
+-                        const uint32_t jj = j - grp * 2 * kwf_fused_gw;
+-                        const uint32_t kh = kc / block_k_tiles;
+-                        const uint32_t kwf = jj < kwf_fused_gw ? 0 : 2;
+-                        const uint32_t n = grp * kwf_fused_gw + (jj < kwf_fused_gw ? jj : jj - kwf_fused_gw);
+-                        return ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles +
+-                               (kb / 3) * rw + n;
+-                    }
+-                }
+-                const uint32_t n = t % rw;
+-                const uint32_t kc = t / rw;
+-                const uint32_t kh = kc / block_k_tiles;
+-                const uint32_t col = kb % 3;
+-                const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
+-                return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + (kb / 3) * rw + n;
+-            } else {
+-                return page0 + t;
+-            }
+-        };
+-        // Slot tiles [t, end) of this chunk, as runs. From slot tile t the run goes to the edge of its page's shard row
+-        // (within the slot row); while a slot row is exactly one shard row, on through the shard's next rows, which the
+-        // next slot rows hold (kw-fold: up to the end of the kh block; K-block: of the round).
+-        auto read_tiles = [&](uint32_t t, uint32_t end) {
+-            while (t < end) {
+-                const uint32_t page = page_of(t);
+-                uint32_t len = 1;
+-                if constexpr (shard_rows > 0 && kwf_fused_gw != 0) {
+-                    if (kb % 3 != 0) {
+-                        // Fused side round: a run is one n-group's kw = 0 (or kw = 2) columns of one (kh, c) row.
+-                        // kernel_main is not a template: the discarded branch is still checked, so no / 0.
+-                        constexpr uint32_t gw = kwf_fused_gw != 0 ? kwf_fused_gw : 1;
+-                        static_assert(shard_cols % gw == 0);
+-                        len = gw - ((kb % 3 - 1) * round_tiles + t) % gw;
+-                        if (len > end - t) {
+-                            len = end - t;
+-                        }
+-                        reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
+-                        t += len;
+-                        continue;
+-                    }
+-                }
+-                if constexpr (shard_rows > 0) {
+-                    const uint32_t i = t / row_tiles;
+-                    const uint32_t n = t - i * row_tiles;
+-                    const uint32_t row = page / tensor_n_tiles;
+-                    const uint32_t c = page - row * tensor_n_tiles;
+-                    len = shard_cols - c % shard_cols;
+-                    if (len > row_tiles - n) {
+-                        len = row_tiles - n;
+-                    }
+-                    if (row_tiles == shard_cols && (c - n) % shard_cols == 0 && n + len == row_tiles) {
+-                        const uint32_t in_shard = shard_rows - 1 - row % shard_rows;
+-                        const uint32_t follow = block_k_tiles - 1 - (kw_fold ? i % block_k_tiles : i);
+-                        len += (in_shard < follow ? in_shard : follow) * row_tiles;
+-                    }
+-                    if (len > end - t) {
+-                        len = end - t;
+-                    }
+-                }
+-                reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
+-                t += len;
+-            }
+-        };
+         // Issue chunk c, then hand over chunk c - ahead; a one-burst round issues every chunk first.
+         const uint32_t ahead = small_round ? num_chunks : chunks_ahead;
+         for (uint32_t c = 0; c < num_chunks + ahead; ++c) {
+             if (c < num_chunks) {
++                uint32_t lo = part_lo;
++                uint32_t hi = part_hi;
++                if (r == 0 && r0_split != 0) {
++                    const uint32_t split = (r0_split >> (8 * c)) & 0xFF;
++                    lo = part_lo == 0 ? 0 : split;
++                    hi = part_lo == 0 ? split : chunk_tiles;
++                }
+                 reads.begin(1 + c);
+-                read_tiles(c * chunk_tiles + part_lo, c * chunk_tiles + part_hi);
++#ifdef SERVER_R0_SELF_READ
++                // A partner whose writer reads its part of round 0 (arg 6).
++                if (r != 0 || get_arg_val<uint32_t>(6) == 0)
++#endif
++                {
++                    Pages::read(reads, weights, tile_bytes, r, l1, c * chunk_tiles + lo, c * chunk_tiles + hi);
++                }
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+             }
+             if (c >= ahead) {
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+index 112952d91c8..21510e1d38f 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_weight_server_writer.cpp
+@@ -32,6 +32,14 @@
+ // the receivers ack this server only; it forwards each round's clearance to the partner (arg fwd: its NoC (x | y << 8)
+ // + 1), whose ack semaphore counts the forwarded rounds (SERVER_FWD_ACKS). res3.x (unzoned, medians of 3) 9.82 ->
+ // 8.94 us.
++// Round 0 (it gates compute's first subblock) can come sooner from a partner whose NoC1 reads would cross receivers
++// (descriptor _r0_partner_self_read; arg 13): that partner's writer reads its part of round 0 itself on NoC0 at kernel
++// start (SERVER_R0_SELF_READ; chunk c under transaction id 1 + c) instead of its reader on NoC1, and round 0 has its
++// own split (arg r0_split, byte c: the first server's slot tiles [0, split_c) of chunk c, the partner the rest; 0: the
++// halves of args part_lo / part_hi). The partner was round 0's late half there: its kernel starts ~0.3-0.45 us after
++// the first server's (the last kernel group's launch message lands last), and its NoC1 responses ran west through the
++// receivers on its row, under their own rectangle's NoC1 multicast (inst res2 fc1, zoned: first server done ~2.2 us,
++// partner ~2.9-3.5, round 0 complete ~3.0-3.5). Measured: see the descriptor's WEIGHT_SERVER_R0_SHARE.
+ //
+ // With a bias the server also reads it once (NoC1, at kernel start) and multicasts it into every receiver's cb_bias
+ // (same index and size, so the same L1 address) before round 0, then sets the receivers' bias flag (the semaphore
+@@ -45,6 +53,10 @@
+ 
+ #include "api/dataflow/dataflow_api.h"
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++#ifdef SERVER_R0_SELF_READ
++#include "conv2d_3x3_gather_dataflow.hpp"
++#include "conv2d_3x3_server_pages.hpp"
++#endif
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -83,6 +95,8 @@ void kernel_main() {
+     const uint32_t part_hi = get_arg_val<uint32_t>(8);
+     const uint32_t lane = get_arg_val<uint32_t>(9);
+     const uint32_t fwd = get_arg_val<uint32_t>(10);
++    // Round 0's split (see the file comment); part_lo 0 is the first (or only) server.
++    const uint32_t r0_split = get_arg_val<uint32_t>(11);
+     const uint32_t lane_off = lane == 2 ? 1 : 0;
+     const uint64_t fwd_ack_noc =
+         fwd != 0 ? get_noc_addr((fwd - 1) & 0xFF, ((fwd - 1) >> 8) & 0xFF, get_semaphore(ack_sem_id)) : 0;
+@@ -95,6 +109,42 @@ void kernel_main() {
+         }
+     };
+     const uint32_t tile_bytes = get_tile_size(cb_weights);
++#ifdef SERVER_R0_SELF_READ
++    // The partner's part of round 0 (where arg 13 is set), read here at kernel start into round 0's slot (slot 0: the
++    // CB is fresh), chunk c under transaction id 1 + c; the server reader's compile-time args follow the bias
++    // accessor's (page runs: conv2d_3x3_server_pages.hpp).
++    const bool r0_self_read = get_arg_val<uint32_t>(13) != 0;
++    constexpr uint32_t sr_args = bias_args.next_compile_time_args_offset();
++    using Pages = conv2d_3x3::ServerPages<
++        get_compile_time_arg_val(sr_args),
++        get_compile_time_arg_val(sr_args + 1),
++        get_compile_time_arg_val(sr_args + 2),
++        get_compile_time_arg_val(sr_args + 3),
++        get_compile_time_arg_val(sr_args + 4),
++        get_compile_time_arg_val(sr_args + 5),
++        get_compile_time_arg_val(sr_args + 6)>;
++    constexpr auto weight_args = TensorAccessorArgs<sr_args + 7>();
++    if (r0_self_read) {
++        const auto weights = TensorAccessor(weight_args, get_arg_val<uint32_t>(12), tile_bytes);
++        conv2d_3x3::TaggedReads<false> r0_reads;
++        const uint32_t l1 = get_read_ptr(cb_weights);
++        for (uint32_t c = 0; c < num_chunks; ++c) {
++            r0_reads.begin(1 + c);
++            Pages::read(
++                r0_reads,
++                weights,
++                tile_bytes,
++                0,
++                l1,
++                c * chunk_tiles + ((r0_split >> (8 * c)) & 0xFF),
++                (c + 1) * chunk_tiles);
++        }
++        dataflow_kernel_lib::set_read_trid(r0_reads.noc, 0);
++    }
++    auto r0_read = [&](uint32_t c) -> bool {
++        return !r0_self_read || ncrisc_noc_read_with_transaction_id_flushed(noc_index, 1 + c);
++    };
++#endif
+     volatile tt_l1_ptr uint32_t* ack = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(ack_sem_id));
+     // The round whose ack wait the bias multicast follows. Round 1 only with two or more slots: its ack wait then needs
+     // no ack, while a non-kw-fold receiver blocks on the bias right after round 0 (with one slot, round 1 would wait
+@@ -156,12 +206,21 @@ void kernel_main() {
+         const uint64_t flag_mcast = get_noc_multicast_addr(sx, sy, ex, ey, flag);
+         const uint32_t base = get_read_ptr(cb_weights);
+         auto landed = [&](uint32_t c) -> bool {
++#ifdef SERVER_R0_SELF_READ
++            if (r == 0 && !r0_read(c)) {
++                return false;
++            }
++#endif
+             return cb_pages_available_at_front(cb_weights, (c + 1) * chunk_tiles);
+         };
+         for (uint32_t c = 0; c < num_chunks;) {
+             {
+                 MaybeDeviceZoneScope("server_wait_read");
+                 cb_wait_front(cb_weights, (c + 1) * chunk_tiles);
++#ifdef SERVER_R0_SELF_READ
++                while (r == 0 && !r0_read(c)) {
++                }
++#endif
+             }
+             MaybeDeviceZoneScope("server_send");
+             uint32_t n = 1;
+@@ -177,15 +236,25 @@ void kernel_main() {
+                     num_receivers,
+                     true);
+             } else {
+-                // This server's part of each landed chunk, one multicast per chunk in the same linked chain.
++                // This server's part of each landed chunk, one multicast per chunk in the same linked chain (an empty
++                // part of round 0 sends nothing: only the flag lane below).
+                 for (uint32_t i = c; i < c + n; ++i) {
+-                    const uint32_t src = base + (i * chunk_tiles + part_lo) * tile_bytes;
+-                    noc_async_write_multicast(
+-                        src,
+-                        get_noc_multicast_addr(sx, sy, ex, ey, src),
+-                        (part_hi - part_lo) * tile_bytes,
+-                        num_receivers,
+-                        true);
++                    uint32_t lo = part_lo;
++                    uint32_t hi = part_hi;
++                    if (r == 0 && r0_split != 0) {
++                        const uint32_t split = (r0_split >> (8 * i)) & 0xFF;
++                        lo = part_lo == 0 ? 0 : split;
++                        hi = part_lo == 0 ? split : chunk_tiles;
++                    }
++                    if (hi > lo) {
++                        const uint32_t src = base + (i * chunk_tiles + lo) * tile_bytes;
++                        noc_async_write_multicast(
++                            src,
++                            get_noc_multicast_addr(sx, sy, ex, ey, src),
++                            (hi - lo) * tile_bytes,
++                            num_receivers,
++                            true);
++                    }
+                 }
+             }
+             c += n;
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_server_pages.hpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_server_pages.hpp
+new file mode 100644
+index 00000000000..c4224ee772d
+--- /dev/null
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_server_pages.hpp
+@@ -0,0 +1,122 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// conv2d_3x3 weight-server page runs: the DRAM reads of one slot range of a weight round, shared by the server reader
++// (every round) and a dual-source partner's writer (its part of round 0, conv2d_3x3_weight_server_writer.cpp).
++//
++// The K-block's tiles are consecutive pages (bn is the whole C_out on this path); kw-fold's round of column kw reads
++// the prepared tile ((kh * 3 + kw) C_in + c, n) for slot (kh, c, n). kw-fold (conv2d_3x3_kw_fold.hpp): round kb is
++// n-group kb / 3 of rw output column tiles, weight column kw = (1, 0, 2)[kb % 3], [3 C_in, rw] in (kh, c, n) order
++// (block_k_tiles = C_in, block_n_tiles = 3 rw: the same round size). kwf_arg: 0 off kw-fold, else 1 + the fused side
++// rounds' n-group width (0: not fused; kw_fold.hpp): rounds 1 and 2 of an n-group set then hold the kw = 0 | 2 pair
++// interleaved per (kh, c) row of 2 rw tiles, each gw-wide n-group's kw = 0 columns, then its kw = 2 columns.
++// ND-sharded weights (conv2d_3x3.weight_memory_config: shards of shard_rows tile-rows x shard_cols columns,
++// round-robin over the DRAM banks; shard_rows 0 = interleaved, one read per tile): every run of slot tiles that is
++// contiguous both in the slot and in one shard is one read.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++namespace conv2d_3x3 {
++
++template <
++    uint32_t block_k_tiles,
++    uint32_t block_n_tiles,
++    uint32_t num_k_blocks,
++    uint32_t kwf_arg,
++    uint32_t tensor_n_tiles,
++    uint32_t shard_rows,
++    uint32_t shard_cols>
++struct ServerPages {
++    static constexpr bool kw_fold = kwf_arg != 0;
++    static constexpr uint32_t kwf_fused_gw = kw_fold ? kwf_arg - 1 : 0;
++    static constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
++    // Guarded: this branch is compiled on every shape (block_n_tiles may be < 3 off kw-fold).
++    static constexpr uint32_t rw = block_n_tiles >= 3 ? block_n_tiles / 3 : 1;
++    // A slot holds rows of row_tiles tiles: (kh, c) rows of one n-group on kw-fold, K-block rows of all C_out
++    // otherwise.
++    static constexpr uint32_t row_tiles = kw_fold ? rw : block_n_tiles;
++
++    // Prepared page of slot tile t of round r.
++    static FORCE_INLINE uint32_t page_of(uint32_t r, uint32_t t) {
++        const uint32_t kb = r % num_k_blocks;
++        if constexpr (kw_fold) {
++            if constexpr (kwf_fused_gw != 0) {
++                const uint32_t col = kb % 3;
++                if (col != 0) {
++                    constexpr uint32_t frow = 2 * rw;
++                    const uint32_t f = (col - 1) * round_tiles + t;
++                    const uint32_t kc = f / frow;  // kh * C_in + c
++                    const uint32_t j = f - kc * frow;
++                    const uint32_t grp = j / (2 * kwf_fused_gw);
++                    const uint32_t jj = j - grp * 2 * kwf_fused_gw;
++                    const uint32_t kh = kc / block_k_tiles;
++                    const uint32_t kwf = jj < kwf_fused_gw ? 0 : 2;
++                    const uint32_t n = grp * kwf_fused_gw + (jj < kwf_fused_gw ? jj : jj - kwf_fused_gw);
++                    return ((kh * 3 + kwf) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles +
++                           (kb / 3) * rw + n;
++                }
++            }
++            const uint32_t n = t % rw;
++            const uint32_t kc = t / rw;
++            const uint32_t kh = kc / block_k_tiles;
++            const uint32_t col = kb % 3;
++            const uint32_t kw = col == 0 ? 1 : (col == 1 ? 0 : 2);  // kw_fold.hpp KW_ROUND_ORDER
++            return ((kh * 3 + kw) * block_k_tiles + (kc - kh * block_k_tiles)) * tensor_n_tiles + (kb / 3) * rw + n;
++        } else {
++            return kb * round_tiles + t;
++        }
++    }
++
++    // Slot tiles [t, end) of round r into the slot at l1, as runs. From slot tile t the run goes to the edge of its
++    // page's shard row (within the slot row); while a slot row is exactly one shard row, on through the shard's next
++    // rows, which the next slot rows hold (kw-fold: up to the end of the kh block; K-block: of the round).
++    template <typename Reads, typename Accessor>
++    static FORCE_INLINE void read(
++        Reads& reads, const Accessor& weights, uint32_t tile_bytes, uint32_t r, uint32_t l1, uint32_t t, uint32_t end) {
++        const uint32_t kb = r % num_k_blocks;
++        while (t < end) {
++            const uint32_t page = page_of(r, t);
++            uint32_t len = 1;
++            if constexpr (shard_rows > 0 && kwf_fused_gw != 0) {
++                if (kb % 3 != 0) {
++                    // Fused side round: a run is one n-group's kw = 0 (or kw = 2) columns of one (kh, c) row.
++                    constexpr uint32_t gw = kwf_fused_gw != 0 ? kwf_fused_gw : 1;
++                    static_assert(shard_cols % gw == 0);
++                    len = gw - ((kb % 3 - 1) * round_tiles + t) % gw;
++                    if (len > end - t) {
++                        len = end - t;
++                    }
++                    reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
++                    t += len;
++                    continue;
++                }
++            }
++            if constexpr (shard_rows > 0) {
++                const uint32_t i = t / row_tiles;
++                const uint32_t n = t - i * row_tiles;
++                const uint32_t row = page / tensor_n_tiles;
++                const uint32_t c = page - row * tensor_n_tiles;
++                len = shard_cols - c % shard_cols;
++                if (len > row_tiles - n) {
++                    len = row_tiles - n;
++                }
++                if (row_tiles == shard_cols && (c - n) % shard_cols == 0 && n + len == row_tiles) {
++                    const uint32_t in_shard = shard_rows - 1 - row % shard_rows;
++                    const uint32_t follow = block_k_tiles - 1 - (kw_fold ? i % block_k_tiles : i);
++                    len += (in_shard < follow ? in_shard : follow) * row_tiles;
++                }
++                if (len > end - t) {
++                    len = end - t;
++                }
++            }
++            reads.read(weights.get_noc_addr(page), l1 + t * tile_bytes, len * tile_bytes);
++            t += len;
++        }
++    }
++};
++
++}  // namespace conv2d_3x3

@@ -1,0 +1,12 @@
+ir2f1 copy 0
+ir2f1 pself 0
+ir2f1 pselfrow 0
+idr2f0 copy 0
+idr2f0 pself 0
+idr2f0 pselfrow 0
+res3x copy 0
+res3x pself 0
+res3x pselfrow 0
+sdr3f1 copy 0
+sdr3f1 pself 0
+sdr3f1 pselfrow 0

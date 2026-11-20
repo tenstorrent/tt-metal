@@ -1,0 +1,2 @@
+res3_0_conv2 base 0
+res3_0_conv2 copy:WEIGHT_DEPTH=3 0

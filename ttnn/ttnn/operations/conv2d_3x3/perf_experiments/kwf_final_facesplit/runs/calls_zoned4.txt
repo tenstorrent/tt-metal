@@ -1,0 +1,10 @@
+sdr3f0 base 0
+sdr3f0 copy 0
+stem2 base 0
+stem2 copy 0
+res2 base 0
+res2 copy 0
+ch1 base 0
+ch1 copy 0
+ir2f1 base 0
+ir2f1 copy 0

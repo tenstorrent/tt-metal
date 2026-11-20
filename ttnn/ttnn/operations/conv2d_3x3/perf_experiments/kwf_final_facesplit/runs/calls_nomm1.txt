@@ -1,0 +1,6 @@
+stem2 nomm_base 0
+stem2 nomm_copy 0
+res2 nomm_base 0
+res2 nomm_copy 0
+ir2f1 nomm_base 0
+ir2f1 nomm_copy 0

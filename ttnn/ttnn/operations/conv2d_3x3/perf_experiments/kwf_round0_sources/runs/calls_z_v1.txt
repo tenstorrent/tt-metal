@@ -1,0 +1,14 @@
+ir2f1 base 0
+ir2f1 copy 0
+ir2f1 r0q3 0
+ir2f1 r0m1 0
+ir2f1 pmin10 0
+ir2f1 pfirst 0
+ir2f1 sfirst 0
+res3x base 0
+res3x copy 0
+res3x r0q3 0
+res3x r0m1 0
+res3x pmin10 0
+res3x pfirst 0
+res3x sfirst 0

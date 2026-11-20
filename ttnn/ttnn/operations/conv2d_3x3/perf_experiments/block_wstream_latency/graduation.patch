@@ -1,0 +1,237 @@
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+index ec569f0dee6..d3b480aaa4b 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -401,8 +401,18 @@ NSLICE_ROUND0_MODEL_MIN_BYTES = 16384
+ # with round 0, which gates every walk). The handshake stream's round was a serial chain: a receiver acks round r + 1
+ # only once round r landed, the sender multicasts once every ack is in (res4.x: ~0.85 us a round against ~0.75 us of
+ # step compute; the spare members, one forward later, ended the op). Measured: changelog Perf 14 (nslice_stream_spread).
++# A column's multicasts go out in round order (round r once round r - 1 landed on its reader): two multicasts from
++# different members never share the column's links, which on Blackhole stalled a deeper lookahead (unordered lookahead 3
++# measured res5.1 +6%, aspp.convs.3 +8%; with model readers res5.x +23% to +29%).
+ NSLICE_SPREAD = True
+ NSLICE_SPREAD_LOOKAHEAD = 2
++# Spread readers from a NoC1 path model (_spread_reader_rows): rounds 2+ of each column from the member whose read
++# response shares the fewest DRAM-column climb links with the reads in flight beside it, and
++# NSLICE_SPREAD_MODEL_LOOKAHEAD reads in flight per column. Measured (Blackhole p150b, res4.x @ LoFi, unzoned, medians of 3, bit-identical): with the
++# ring step's matmul stubbed 8.20-8.26 -> 7.71-7.76 us (weight stream stubbed too: 7.43), the real op 9.36 -> 9.29 us
++# (flat: the walk is ring-bound); the other BLOCK spread shapes flat (block_wstream_latency).
++NSLICE_SPREAD_MODEL = True
++NSLICE_SPREAD_MODEL_LOOKAHEAD = 3
+ # Blackhole NoC1 DRAM endpoint row per bank (soc descriptor dram_views worker_endpoint[1]; the relocated set once
+ # CMFW moved its MRISC port), keyed by whether the endpoints are relocated. Banks 0-3 sit on DRAM column x 0, 4-7 on
+ # x 9; worker rows are physical y 2..11.
+@@ -1607,12 +1617,57 @@ def _round0_args(input_tensor, weight_tensor, g, b, work, m_blocks_per_index, sp
+     return args
+ 
+ 
+-def _spread_args(input_tensor, work, m_blocks_per_index, spare_groups, column_channel, spare, round0_args, rounds):
++@functools.lru_cache(maxsize=64)
++def _spread_reader_rows(banks, ys, fixed, relocated, window):
++    """Grid row of each spread round's reader per column (NSLICE_SPREAD_MODEL), from the Blackhole NoC1 path model of
++    _round0_reader_rows: a DRAM read response climbs north (y decreasing, mod 12) along its bank's DRAM column from the
++    bank's NoC1 endpoint to the reader's row. Reads of rounds less than `window` apart are in flight together. banks[c][j]:
++    round j's bank in column c; ys[p]: grid row p's NoC y; fixed: ((c, j), row) pairs kept (rounds 0 and 1). Each other
++    (c, j), greedily in round order and then twice more given all the others, takes the row minimizing (the most reads
++    sharing one of its climb links, the sum over its links, its hops, the member's other reads)."""
++    ep_y = _ROUND0_NOC1_EP_Y[relocated]
++    k, rounds, nrows = len(banks), len(banks[0]), len(ys)
++
++    def climb(b, p):
++        y, links = ep_y[b], []
++        while y != ys[p]:
++            links.append((b // 4, y))
++            y = (y - 1) % 12
++        return links
++
++    links = {(c, j, p): climb(banks[c][j], p) for c in range(k) for j in range(rounds) for p in range(nrows)}
++    rows = [[None] * rounds for _ in range(k)]
++    for (c, j), p in fixed:
++        rows[c][j] = p
++
++    def cost(c, j, p):
++        use = {}
++        for c2 in range(k):
++            for j2 in range(max(0, j - window + 1), min(rounds, j + window)):
++                if (c2, j2) != (c, j) and rows[c2][j2] is not None:
++                    for link in links[(c2, j2, rows[c2][j2])]:
++                        use[link] = use.get(link, 0) + 1
++        per = [use.get(link, 0) + 1 for link in links[(c, j, p)]] or [1]
++        return (max(per), sum(per), len(per), sum(1 for j2 in range(rounds) if j2 != j and rows[c][j2] == p))
++
++    free = [(c, j) for j in range(rounds) for c in range(k) if rows[c][j] is None]
++    for c, j in free:
++        rows[c][j] = min(range(nrows), key=lambda p: cost(c, j, p))
++    for _ in range(2):
++        for c, j in free:
++            rows[c][j] = None
++            rows[c][j] = min(range(nrows), key=lambda p: cost(c, j, p))
++    return tuple(tuple(r) for r in rows)
++
++
++def _spread_args(
++    input_tensor, work, m_blocks_per_index, spare_groups, column_channel, spare, round0_args, rounds, banks=None
++):
+     """NSLICE_SPREAD writer args per core (x, y), in the NSLICE_ROUND0 args' place: [rounds this core reads (bit mask),
+     the column's multicast rectangle (NoC1-ordered), column dests, its slice's spare members' rectangle, spare dests,
+     rounds this core relays to them (bit mask)] (zeros where absent). Round 0's reader is the NSLICE_ROUND0 reader,
+-    round 1's the column sender, round r >= 2's the column's other rows in turn; the column sender relays every
+-    round."""
++    round 1's the column sender, round r >= 2's the column's other rows in turn, or the NoC1 path model's rows
++    (_spread_reader_rows) given each round's bank (banks[c][j]); the column sender relays every round."""
+     device = input_tensor.device()
+     _, rows_n, _ = column_channel
+     most = max(m_blocks_per_index[i] for _, i, _ in work)
+@@ -1625,14 +1680,31 @@ def _spread_args(input_tensor, work, m_blocks_per_index, spare_groups, column_ch
+         hi = device.worker_core_from_logical_core(ttnn.CoreCoord(max(c.x for c in cores), max(c.y for c in cores)))
+         return [hi.x, hi.y, lo.x, lo.y]  # the writer's NoC1 order
+ 
++    columns = [[next(core for core, i, cc in work if i == row and cc == c) for row in grid_rows] for c in range(k_cols)]
++    r0s = [
++        next(p for p, core in enumerate(column) if round0_args.get((core.x, core.y), [0])[0] == 1) for column in columns
++    ]
++    model_rows = None
++    if banks is not None:
++        relocated = {14: False, 12: True}.get(device.dram_core_from_logical_core(ttnn.CoreCoord(0, 0)).y)
++        ys = tuple(device.worker_core_from_logical_core(core).y for core in columns[0])
++        model_rows = _spread_reader_rows(
++            banks,
++            ys,
++            tuple(((c, 0), r0s[c]) for c in range(k_cols)) + tuple(((c, 1), c % rows_n) for c in range(k_cols)),
++            relocated,
++            NSLICE_SPREAD_MODEL_LOOKAHEAD,
++        )
+     args = {}
+     for c in range(k_cols):
+-        column = [next(core for core, i, cc in work if i == row and cc == c) for row in grid_rows]
+-        r0 = next(p for p, core in enumerate(column) if round0_args.get((core.x, core.y), [0])[0] == 1)
++        column = columns[c]
++        r0 = r0s[c]
+         # The staggered column sender of column c is participant c % rows (_column_weight_mcast).
+         sender = c % rows_n
+         others = [p for p in ((r0 + k) % rows_n for k in range(1, rows_n)) if p != sender] or [sender]
+         readers = [r0, sender] + [others[(r - 2) % len(others)] for r in range(2, rounds)]
++        if model_rows is not None:
++            readers = list(model_rows[c])
+         for p, core in enumerate(column):
+             mask = sum(1 << r for r in range(rounds) if readers[r] == p)
+             if mask:
+@@ -2919,6 +2991,7 @@ def create_program_descriptor(
+     spread_rounds = 0
+     spread_flag_sem0 = 0
+     spread_banks = 0
++    spread_lookahead = NSLICE_SPREAD_LOOKAHEAD
+     if NSLICE_SPREAD and round0_args:
+         most = max(m_blocks_per_index[i] for _, i, _ in work)
+         rounds = _div_up(g.tensor_n_tiles, ns) * most
+@@ -2933,20 +3006,6 @@ def create_program_descriptor(
+             spread_rounds = rounds
+             spread_flag_sem0 = len(sem_ids)
+             sem_ids += tuple(range(len(sem_ids), len(sem_ids) + rounds))
+-            round0_args = _spread_args(
+-                input_tensor, work, m_blocks_per_index, spare_groups, column_channel, spare_channel, round0_args, rounds
+-            )
+-            if rounds > b.weight_depth:
+-                b = replace(b, weight_depth=rounds)
+-                for i, cb in enumerate(cbs):
+-                    if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
+-                        cbs[i] = _cb(
+-                            CB_WEIGHTS,
+-                            weight_tensor.dtype,
+-                            g.weight_tile_bytes,
+-                            rounds * slice_bytes // g.weight_tile_bytes,
+-                            cores,
+-                        )
+             # A round is ND shard (channel slice, N-slice) of conv2d_3x3._block_weight_memory_config, round-robin over
+             # the DRAM banks: the writer computes its bank and offset itself (the TensorAccessor's page-to-shard
+             # arithmetic costs ~0.15 us of RISC time per read). Any other placement keeps the accessor.
+@@ -2960,6 +3019,54 @@ def create_program_descriptor(
+                 and weight_tensor.buffer_aligned_page_size() == g.weight_tile_bytes
+             ):
+                 spread_banks = wspec.grid.num_cores()
++            # The NoC1 path model needs each round's bank (that placement), the Blackhole endpoint table (8 banks,
++            # endpoint set known) and the columns along x (ROW_MAJOR).
++            model_banks = None
++            device = input_tensor.device()
++            if (
++                NSLICE_SPREAD_MODEL
++                and spread_banks == 8
++                and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
++                and input_tensor.memory_config().shard_spec.orientation == ttnn.ShardOrientation.ROW_MAJOR
++                and device.dram_core_from_logical_core(ttnn.CoreCoord(0, 0)).y in (12, 14)
++            ):
++                k_cols = max(c for _, _, c in work) + 1
++                owners = ring_owner_cols(g, b)
++                num_owning = _div_up(g.tensor_n_tiles, g.out_n_tiles)
++                model_banks = []
++                for c in range(k_cols):
++                    # Round j is column c's j-th owner slice in the walk order (conv2d_3x3_nslice_order.hpp), ND shard
++                    # (c, slice) in bank (c x owning columns + slice) mod 8.
++                    order = [
++                        owners.index(o) if owners is not None else o
++                        for o in ((c + 2 * k_cols - 1 - j) % k_cols for j in range(k_cols))
++                        if ((o in owners) if owners is not None else (o < num_owning))
++                    ]
++                    model_banks.append(tuple((c * num_owning + order[r % len(order)]) % 8 for r in range(rounds)))
++                model_banks = tuple(model_banks)
++                spread_lookahead = NSLICE_SPREAD_MODEL_LOOKAHEAD
++            round0_args = _spread_args(
++                input_tensor,
++                work,
++                m_blocks_per_index,
++                spare_groups,
++                column_channel,
++                spare_channel,
++                round0_args,
++                rounds,
++                banks=model_banks,
++            )
++            if rounds > b.weight_depth:
++                b = replace(b, weight_depth=rounds)
++                for i, cb in enumerate(cbs):
++                    if cb.format_descriptors[0].buffer_index == CB_WEIGHTS:
++                        cbs[i] = _cb(
++                            CB_WEIGHTS,
++                            weight_tensor.dtype,
++                            g.weight_tile_bytes,
++                            rounds * slice_bytes // g.weight_tile_bytes,
++                            cores,
++                        )
+     k_padded = g.tensor_kkh_tiles * TILE > 3 * g.c_in_p
+     # Work-balanced M split (g.m_ranges): the N-slice prelude, walk and forwarding sized by each M-block's valid
+     # tile-rows (the split row gather keeps its CT unit sequence), the fill / untilize by the block's own slab rows where
+@@ -3693,7 +3800,7 @@ def create_program_descriptor(
+                     ("NSLICE_SPREAD", "1"),
+                     ("NSLICE_SPREAD_ROUNDS", str(spread_rounds)),
+                     ("NSLICE_SPREAD_FLAG_SEM0", str(spread_flag_sem0)),
+-                    ("NSLICE_SPREAD_LOOKAHEAD", str(NSLICE_SPREAD_LOOKAHEAD)),
++                    ("NSLICE_SPREAD_LOOKAHEAD", str(spread_lookahead)),
+                     ("NSLICE_SPREAD_BANKS", str(spread_banks)),
+                 ]
+                 if spread_rounds
+diff --git a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+index 8fe5ba84af3..ce67fb11ab5 100644
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp
+@@ -109,8 +109,9 @@
+ // multicasts it down its column, then sets flag semaphore NSLICE_SPREAD_FLAG_SEM0 + r there (same path, after the
+ // data); the column sender relays each round, in order, as it lands on it to its slice's spare members. Every core
+ // pushes round r once its flag is VALID. A reader issues round r >= NSLICE_SPREAD_LOOKAHEAD once round r - lookahead
+-// landed on it; round 1 goes down the column only once round 0 landed on its sender. One multicast per poll (its issue
+-// holds this RISC for the injection, ~0.45 us for a 39 KB round), so a core pushes its own round as soon as it is
++// landed on it; a column's multicasts go out in round order (round r once round r - 1 landed on its reader: two
++// multicasts from different members on the column's links stall each other on Blackhole). One multicast per poll (its
++// issue holds this RISC for the injection, ~0.45 us for a 39 KB round), so a core pushes its own round as soon as it is
+ // flagged; the stream is polled from every wait of the walk (poll_credit). The handshake stream's round was a serial
+ // chain (a receiver acks round r + 1 once round r landed; the sender multicasts once every ack is in): ~0.85 us a
+ // round on res4.x, now its rounds land as their reads do (res4.x 10.53 -> 10.15 us, changelog Perf 14).
+@@ -1745,7 +1746,8 @@ void kernel_main() {
+         sp_issue();
+         const uint32_t own = sp_k_sent < sp_k_landed ? sp_mine[sp_k_sent] : sp_rounds;
+         const uint32_t rel = sp_relay_k < sp_nrelay ? sp_relays[sp_relay_k] : sp_rounds;
+-        const bool own_ok = own < sp_rounds && (own != 1 || sp_landed(0));
++        // Round order down the column (see the file comment).
++        const bool own_ok = own < sp_rounds && (own == 0 || sp_landed(own - 1));
+         const bool relay_ok = rel < sp_rounds && sp_landed(rel);
+         if (relay_ok && (!own_ok || rel < own)) {
+             MaybeDeviceZoneScope("writer_spread_relay");

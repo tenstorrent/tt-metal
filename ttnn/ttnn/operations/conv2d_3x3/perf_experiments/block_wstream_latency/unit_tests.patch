@@ -1,0 +1,101 @@
+diff --git a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+index 710ed64ea42..708352aa494 100644
+--- a/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
++++ b/tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_block_sharded.py
+@@ -890,9 +890,9 @@ def test_conv2d_3x3_block_sharded_spread_stream(case_hw, shard, device, monkeypa
+     real_spread_args = _pd._spread_args
+     taken = []
+ 
+-    def recording(*args):
+-        taken.append(args[-1])
+-        return real_spread_args(*args)
++    def recording(*args, **kwargs):
++        taken.append(args[7])
++        return real_spread_args(*args, **kwargs)
+ 
+     monkeypatch.setattr(_pd, "_spread_args", recording)
+     out_spread = run()
+@@ -904,3 +904,83 @@ def test_conv2d_3x3_block_sharded_spread_stream(case_hw, shard, device, monkeypa
+     assert torch.equal(out_spread_hit, out_handshake)
+     expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, with_bias)
+     assert_with_pcc(expected, out_spread, PCC[ttnn.bfloat8_b])
++
++
++@pytest.mark.parametrize("case_hw,shard", SPREAD_CASES)
++def test_conv2d_3x3_block_sharded_spread_model_readers(case_hw, shard, device, monkeypatch):
++    """Spread stream readers from the NoC1 path model (NSLICE_SPREAD_MODEL, lookahead NSLICE_SPREAD_MODEL_LOOKAHEAD,
++    a column's multicasts in round order): one reader per round and column, round 0 on the round-0 reader, round 1 on
++    the column sender. Bit-identical to the HEAD readers at lookahead 2 (NSLICE_SPREAD_MODEL off) and to the handshake
++    stream (NSLICE_SPREAD off), on the program-cache hit too."""
++    torch.manual_seed(11)
++    grid = device.compute_with_storage_grid_size()
++    if (grid.x, grid.y) != (11, 10) or device.arch() != ttnn._ttnn.device.Arch.BLACKHOLE:
++        pytest.skip("the NoC1 path model runs on the Blackhole 11 x 10 grid")
++    (H, W, c_in), c_out, p, s, d = case_hw
++    dtype, layout = ttnn.bfloat8_b, ttnn.TILE_LAYOUT
++    config = _block_config(H * W, c_in, layout, shard)
++    with_bias = c_in != 1024
++    torch_weight = torch.randn(c_out, c_in, 3, 3).to(torch.bfloat16)
++    torch_bias = torch.randn(c_out).to(torch.bfloat16) if with_bias else None
++    torch_input = torch.randn(1, 1, H * W, c_in).to(torch.bfloat16)
++    kwargs = dict(
++        stride=s,
++        padding=p,
++        dilation=d,
++        input_dtype=dtype,
++        input_layout=layout,
++        weight_dtype=ttnn.bfloat8_b,
++        input_memory_config=config,
++        device=device,
++    )
++    tt_weight = prepare_conv2d_weights(torch_weight, **kwargs)
++    tt_bias = prepare_conv2d_bias(torch_bias, **kwargs) if with_bias else None
++
++    def run():
++        tt_input = ttnn.from_torch(torch_input, dtype=dtype, layout=layout, device=device, memory_config=config)
++        tt_output = conv2d_3x3(
++            tt_input,
++            tt_weight,
++            input_height=H,
++            input_width=W,
++            bias=tt_bias,
++            padding=p,
++            stride=s,
++            dilation=d,
++            activation="relu" if with_bias else None,
++            compute_kernel_config=ttnn.ComputeConfigDescriptor(
++                math_fidelity=ttnn.MathFidelity.LoFi, fp32_dest_acc_en=True, math_approx_mode=False
++            ),
++        )
++        return ttnn.to_torch(tt_output).float()
++
++    real_spread_args = _pd._spread_args
++    seen = []
++
++    def recording(*args, **kwargs):
++        out = real_spread_args(*args, **kwargs)
++        seen.append((args, kwargs.get("banks"), out))
++        return out
++
++    monkeypatch.setattr(_pd, "_spread_args", recording)
++    out_model = run()
++    assert seen and seen[-1][1] is not None, "the model readers were not taken"
++    (_, work, *_, round0_args, rounds), banks, args = seen[-1][0], seen[-1][1], seen[-1][2]
++    assert len(banks[0]) == rounds
++    # One reader per round in every column; round 0 on the round-0 reader.
++    for c in range(len(banks)):
++        masks = [args.get((core.x, core.y), [0])[0] for core, _, cc in work if cc == c]
++        assert sum(masks) == (1 << rounds) - 1 and all(a & b == 0 for i, a in enumerate(masks) for b in masks[i + 1 :])
++    for (x, y), a in round0_args.items():
++        if a[0] == 1:
++            assert args[(x, y)][0] & 1, (x, y)
++    out_model_hit = run()
++    monkeypatch.setattr(_pd, "NSLICE_SPREAD_MODEL", False)
++    out_head = run()
++    monkeypatch.setattr(_pd, "NSLICE_SPREAD", False)
++    out_handshake = run()
++    assert torch.equal(out_model, out_head)
++    assert torch.equal(out_model_hit, out_head)
++    assert torch.equal(out_model, out_handshake)
++    expected = _reference(torch_input, torch_weight, torch_bias, H, W, p, s, d, with_bias)
++    assert_with_pcc(expected, out_model, PCC[ttnn.bfloat8_b])
