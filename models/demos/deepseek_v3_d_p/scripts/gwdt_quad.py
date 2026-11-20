@@ -109,6 +109,9 @@ def _common_env(repo: Path) -> dict[str, str]:
     }
 
 
+TTNN_CACHE_ENV = "PREFILL_TTNN_CACHE"
+
+
 def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir: Path) -> str:
     """tt-run passes only TT_/ARCH_/... prefixes to remote ranks, so every PREFILL_* goes inside the bash -lc."""
     exports = _common_env(repo) | {
@@ -123,6 +126,9 @@ def runner_cmd(repo: Path, hosts: list[str], mode: str, fabric: str, results_dir
         # Ranks reach fabric init up to a minute apart, so the 10 s default fails healthy inter-galaxy links.
         "TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS": "300000",
     }
+    if cache := os.environ.get(TTNN_CACHE_ENV):
+        # Opt-in: block-random's random weights are cached there and loaded on later bring-ups.
+        exports[TTNN_CACHE_ENV] = shlex.quote(cache)
     argv = [
         "python3",
         f"{repo}/ttnn/ttnn/distributed/ttrun.py",

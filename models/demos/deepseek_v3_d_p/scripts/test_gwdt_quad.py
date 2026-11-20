@@ -743,3 +743,26 @@ def test_quad_aborts_when_ssh_fails(tmp_path, monkeypatch, capsys):
     assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
     out = capsys.readouterr().out
     assert "cannot ssh from here to h1" in out and "SSH_AUTH_SOCK is not set" in out and "ssh -A" in out
+
+
+def test_runner_gets_the_ttnn_cache_only_when_set(monkeypatch):
+    monkeypatch.delenv("PREFILL_TTNN_CACHE", raising=False)
+    assert "PREFILL_TTNN_CACHE" not in runner_cmd(REPO, HOSTS, "block_random", "2d_torus_xy", Path("/r"))
+    monkeypatch.setenv("PREFILL_TTNN_CACHE", "/local/my cache")
+    run = _inner(runner_cmd(REPO, HOSTS, "block_random", "2d_torus_xy", Path("/r")))
+    assert "export PREFILL_TTNN_CACHE='/local/my cache';" in run
+
+
+def test_quad_header_lists_its_env(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setenv("PREFILL_TTNN_CACHE", "/local/cache")
+    monkeypatch.delenv("GWDT_SKIP_CHECKOUT_CHECK", raising=False)
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt, "run_all", lambda steps, ctx, skip, update: None)
+    assert gwdt.main(["--quad", "--co", "--hosts", ",".join(HOSTS)]) == 0
+    assert (
+        f"env   GWDT_SHARED_FOLDER={tmp_path}  GWDT_SKIP_CHECKOUT_CHECK=0  PREFILL_TTNN_CACHE=/local/cache"
+        in capsys.readouterr().out
+    )

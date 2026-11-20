@@ -59,6 +59,15 @@ def quad_rows(state) -> list[tuple[str, Result]]:
     return [(label, r) for label, r in zip(labels, state.rows)]
 
 
+def quad_env() -> dict[str, str]:
+    """The env variables a --quad run reads, as it sees them."""
+    return {
+        SHARED_FOLDER_ENV: os.environ.get(SHARED_FOLDER_ENV) or "unset",
+        gwdt_quad.SKIP_CHECKOUT_ENV: os.environ.get(gwdt_quad.SKIP_CHECKOUT_ENV) or "0",
+        gwdt_quad.TTNN_CACHE_ENV: os.environ.get(gwdt_quad.TTNN_CACHE_ENV) or "unset (weights built every bring-up)",
+    }
+
+
 def now_text(state) -> str:
     """What a running step is doing; a running fallback's own progress when it is the one going."""
     f = state.fallbacks[-1] if state.fallbacks and state.fallbacks[-1].result.status == Status.RUN else None
@@ -321,6 +330,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     header = [f"{TOOL_NAME}  {host}  run {run}  mode={'co' if args.co else 'real'}", f"logs  {run_dir}/"]
+    if args.quad:
+        header.append("env   " + "  ".join(f"{k}={v}" for k, v in quad_env().items()))
     meta = {"host": host, "run": run, "mode": "co" if args.co else "real", "commit": commit, "run_dir": str(run_dir)}
     if args.quad:
         meta["hosts"] = hosts  # in --hosts order: stage i runs on hosts[i]
