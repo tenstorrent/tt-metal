@@ -1448,7 +1448,9 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     if (not circular_buffer->globally_allocated()) {
         this->invalidate_circular_buffer_allocation();
     } else {
-        circular_buffer->assign_global_address();
+        if (!circular_buffer->config().buffer_unbound()) {
+            circular_buffer->assign_global_address();
+        }
         // invalidate_circular_buffer_allocation() would have done this; adding a buffer still means
         // the program has to be laid out again.
         this->compile_and_allocate_needed_ = true;
@@ -1488,6 +1490,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     }
 
     this->circular_buffers_.push_back(circular_buffer);
+    this->circular_buffers_known_bound_ = false;
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
     return circular_buffer->id();
 }
@@ -2493,33 +2496,34 @@ void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
 
     for (const auto& circular_buffer : this->circular_buffers_) {
         if (circular_buffer->globally_allocated()) {
-            // Track globally allocated CBs too (they use L1 memory allocated via the allocator)
+            // Track globally allocated CBs too (they use L1 memory from the allocator), but skip unbound buffers
+            if (!circular_buffer->config().buffer_unbound()) {
+                for (const IDevice* dev : devices_to_track) {
+                    tt::tt_metal::GraphTracker::instance().track_allocate_cb(
+                        circular_buffer->core_ranges(),
+                        circular_buffer->address(),
+                        circular_buffer->size(),
+                        circular_buffer->globally_allocated(),
+                        dev);
+                }
+            }
+        } else {
+            const uint64_t computed_addr = allocate_dfb(
+                this->cb_allocation_metadata_,
+                circular_buffer->core_ranges(),
+                circular_buffer->size(),
+                device->allocator()->get_alignment(BufferType::DRAM));
+            // Report CB allocation for ALL devices being tracked
             for (const IDevice* dev : devices_to_track) {
                 tt::tt_metal::GraphTracker::instance().track_allocate_cb(
                     circular_buffer->core_ranges(),
-                    circular_buffer->address(),
+                    computed_addr,
                     circular_buffer->size(),
                     circular_buffer->globally_allocated(),
                     dev);
             }
-            continue;
+            circular_buffer->set_locally_allocated_address(computed_addr);
         }
-
-        const uint64_t computed_addr = allocate_dfb(
-            this->cb_allocation_metadata_,
-            circular_buffer->core_ranges(),
-            circular_buffer->size(),
-            device->allocator()->get_alignment(BufferType::DRAM));
-        // Report CB allocation for ALL devices being tracked
-        for (const IDevice* dev : devices_to_track) {
-            tt::tt_metal::GraphTracker::instance().track_allocate_cb(
-                circular_buffer->core_ranges(),
-                computed_addr,
-                circular_buffer->size(),
-                circular_buffer->globally_allocated(),
-                dev);
-        }
-        circular_buffer->set_locally_allocated_address(computed_addr);
     }
 
     // Register program ONLY with NEW devices (prevents duplicate registration)
@@ -3688,6 +3692,17 @@ size_t detail::ProgramImpl::num_kernels() const {
 
 std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circular_buffers() const {
     return circular_buffers_;
+}
+
+void detail::ProgramImpl::check_circular_buffers_bound() const {
+    // A bound CB stays bound, so a passing check holds until a CB is added.
+    if (circular_buffers_known_bound_) {
+        return;
+    }
+    for (const auto& circular_buffer : circular_buffers_) {
+        circular_buffer->check_bound();
+    }
+    circular_buffers_known_bound_ = true;
 }
 
 std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {

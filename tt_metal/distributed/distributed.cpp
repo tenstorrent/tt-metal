@@ -129,6 +129,8 @@ void EnqueueMeshWorkload(MeshCommandQueue& mesh_cq, MeshWorkload& mesh_workload,
     const bool emulated = env.get_cluster().get_target_device_type() == tt::TargetDevice::Emule;
     if (env.get_rtoptions().get_fast_dispatch() && !emulated) {
         mesh_workload.impl().compile(mesh_cq.device());
+        // Before load_binaries, so an unbound CB doesn't leave the workload's binaries in flight.
+        mesh_workload.impl().check_circular_buffers_bound();
         mesh_workload.impl().load_binaries(mesh_cq);
         mesh_workload.impl().generate_dispatch_commands(mesh_cq);
     } else if (env.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {

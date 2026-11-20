@@ -251,6 +251,7 @@ public:
     ProgramId get_id() const;
     std::size_t num_kernels() const;
     std::span<const std::shared_ptr<CircularBufferImpl>> circular_buffers() const;
+    void check_circular_buffers_bound() const;
     const std::vector<Semaphore>& semaphores() const;
     const std::vector<std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>>& dataflow_buffers()
         const;
@@ -960,6 +961,7 @@ private:
     // invalidate_*_allocation hooks and the CB/DFB creation paths set this back to true. Recorded
     // per device, since the layout steps also register the program against the device.
     bool compile_and_allocate_needed_{true};
+    mutable bool circular_buffers_known_bound_{false};
     const IDevice* compile_and_allocate_device_{nullptr};
     // For lockstep allocation, a single live L1 frontier check covers every static CB and DFB
     // region validated during layout. Service-core claims only add checks for CB regions that sit
