@@ -28,6 +28,10 @@ inline constexpr std::uint8_t CompareSetValueLimit      = 16;
 inline constexpr std::uint8_t GprsPerQuad               = 4;
 inline constexpr std::uint8_t LockFree                  = 0;
 inline constexpr std::uint8_t LockHeld                  = 1;
+
+// Template operands are rejected at compile time in every build; hal::gpr(index) operands are checked by require.
+template <std::uint32_t Index>
+inline constexpr bool is_valid_static_gpr = Index == hal::detail::DynamicGprIndex || Index < hal::detail::GprCount;
 } // namespace detail
 
 /** @brief Select the hardware-managed FIFO pointer encoded by a low-level ATINCGETPTR descriptor. */
@@ -683,6 +687,9 @@ template <std::uint8_t CapacityLog2, FifoPointer Pointer, std::uint32_t AddressI
 inline constexpr __attribute__((always_inline)) FifoAcquire<AddressIndex, ResultIndex> fifo_update_descriptor(
     const hal::Gpr<AddressIndex> address, const hal::Gpr<ResultIndex> result, const std::uint8_t increment_log2)
 {
+    static_assert(CapacityLog2 <= FifoUpdateCapacityLog2Max, "ATINCGETPTR FIFO capacity logarithm must be in [0, 14] for pointer updates");
+    static_assert(is_valid_static_gpr<AddressIndex>, "ATINCGETPTR address GPR index must be in [0, 63]");
+    static_assert(is_valid_static_gpr<ResultIndex>, "ATINCGETPTR result GPR index must be in [0, 63]");
     return {address, result, Pointer, CapacityLog2, increment_log2, false /*probe_only*/};
 }
 
@@ -747,6 +754,9 @@ template <std::uint8_t WidthBits, std::uint32_t AddressIndex>
 template <std::uint32_t DataIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t Counter<WidthBits, AddressIndex>::Operations::fetch_add(const hal::Gpr<DataIndex> data) const
 {
+    static_assert(WidthBits >= 1u && WidthBits <= detail::CounterWidthMax, "ATINCGET counter width must be in [1, 32]");
+    static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATINCGET address GPR index must be in [0, 63]");
+    static_assert(detail::is_valid_static_gpr<DataIndex>, "ATINCGET data GPR index must be in [0, 63]");
     return FetchIncrement<AddressIndex, DataIndex> {address, data, word, WidthBits}.operation();
 }
 
@@ -825,6 +835,9 @@ template <std::uint8_t CapacityLog2, std::uint32_t AddressIndex>
 template <FifoState State, std::uint32_t ResultIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t Fifo<CapacityLog2, AddressIndex>::Operations::wait_while(const hal::Gpr<ResultIndex> result) const
 {
+    static_assert(CapacityLog2 <= detail::FifoCapacityLog2Max, "ATINCGETPTR FIFO capacity logarithm must be in [0, 15] for readiness probes");
+    static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATINCGETPTR address GPR index must be in [0, 63]");
+    static_assert(detail::is_valid_static_gpr<ResultIndex>, "ATINCGETPTR result GPR index must be in [0, 63]");
     return FifoAcquire<AddressIndex, ResultIndex> {
         control_address, result, detail::pointer_for<State>(), CapacityLog2, 0 /*increment_log2*/, true /*probe_only*/}
         .operation();
@@ -880,6 +893,7 @@ template <std::uint32_t AddressIndex>
 inline constexpr __attribute__((always_inline)) std::uint32_t Lock<AddressIndex>::Operations::compare_set(
     const std::uint8_t compare, const std::uint8_t set) const
 {
+    static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATCAS address GPR index must be in [0, 63]");
     return CompareSet<AddressIndex> {address, compare, set, word}.operation();
 }
 
@@ -931,6 +945,9 @@ inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIn
 template <std::uint32_t AddressIndex, std::uint32_t DataIndex>
 inline __attribute__((always_inline)) void store_masked(const hal::Gpr<AddressIndex> address, const hal::Gpr<DataIndex> data, const std::uint8_t granule_mask)
 {
+    static_assert(detail::is_valid_static_gpr<AddressIndex>, "ATSWAP address GPR index must be in [0, 63]");
+    static_assert(detail::is_valid_static_gpr<DataIndex>, "ATSWAP data GPR index must be in [0, 63]");
+    static_assert(DataIndex == hal::detail::DynamicGprIndex || DataIndex % detail::GprsPerQuad == 0u, "ATSWAP data GPR must be four-aligned");
     const MaskedWrite<AddressIndex, DataIndex> descriptor {address, data, granule_mask};
     TT_INSN(descriptor.operation());
 }
