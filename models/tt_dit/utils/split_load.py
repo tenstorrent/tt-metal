@@ -23,6 +23,7 @@ from __future__ import annotations
 import contextlib
 import contextvars
 import mmap
+import os
 import struct
 import time
 from pathlib import Path
@@ -234,6 +235,8 @@ class SplitLoad:
                 ttnn.deallocate(t)
             full = part = None
             param.data = dst
+            if os.environ.get("TT_DIT_SPLIT_LOAD_VERIFY") == "1":
+                self._verify(param, dst, Path(path))
         except Exception as err:  # noqa: BLE001 — the caller (all-or-nothing per module) loads plainly
             for t in (full, part, dst):
                 if t is not None:
@@ -247,6 +250,19 @@ class SplitLoad:
         self.stats["bytes"] += slice_bytes(param.local_shape, param.dtype, param.layout)
         self.stats["seconds"] += time.monotonic() - started
         return True
+
+    def _verify(self, param: Parameter, dst, path: Path) -> None:
+        """TT_DIT_SPLIT_LOAD_VERIFY=1: every chip's copy must equal a plain load of the same file, byte for byte.
+        A mismatch raises, so the module falls back to the plain load and stamps `split-load-failed`."""
+        import torch
+
+        ref = ttnn.load_tensor(str(path), device=param.device)
+        try:
+            for i, (a, b) in enumerate(zip(ttnn.get_device_tensors(dst), ttnn.get_device_tensors(ref))):
+                if not torch.equal(ttnn.to_torch(a).view(torch.uint8), ttnn.to_torch(b).view(torch.uint8)):
+                    raise ValueError(f"chip {i} differs from a plain load")
+        finally:
+            ttnn.deallocate(ref)
 
     def _host_slices(self, param: Parameter, path: Path, dim: int, axes: list[int]):
         """The host tensor holding, per chip, its slice of the file: borrowed views of the file's mapping."""
