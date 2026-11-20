@@ -155,7 +155,7 @@ public:
     DataflowBuffer(RelayDFBBindingToken token) : DataflowBuffer(static_cast<uint16_t>(token)) {
 #if defined(COMPILE_FOR_TRISC) && !defined(UCK_CHLKC_MATH) && !defined(UCK_CHLKC_ISOLATE_SFPU)
         if (token.prefetcher_pipe_id() != RelayDFBBindingToken::NO_PREFETCHER_PIPE) {
-            experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
+            ::experimental::align_local_dfb_to_prefetcher_pipe_slot(logical_dfb_id_, token.prefetcher_pipe_id());
         }
 #endif
     }
