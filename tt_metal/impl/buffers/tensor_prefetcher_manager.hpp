@@ -14,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <span>
 #include <string_view>
 #include <thread>
 #include <unordered_map>
@@ -27,6 +28,7 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 
 #include "tt_metal/common/scoped_timer.hpp"
+#include "impl/buffers/tensor_prefetcher_fifo.hpp"
 #include "impl/buffers/tensor_prefetcher_request.hpp"
 
 namespace tt::tt_metal {
@@ -216,6 +218,8 @@ private:
         std::vector<uint32_t> recv_index_base_per_sender;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
         uint32_t per_recv_capacity_bytes = 0;
+        // Receivers of every sender together (the ring size).
+        uint32_t total_receivers = 0;
     };
 
     // Validate and serialize one Queue call into shared requests, one per logical page, and record its
@@ -230,9 +234,13 @@ private:
         MeshCommandQueue& cq, ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset);
     // One WAIT_SIGNAL page on signal slot `slot_index` for `wait_value`.
     std::vector<uint8_t> wait_signal_page(uint32_t slot_index, uint32_t wait_value) const;
+    // If `request` is a wait on an op signal, replaces it with a copy carrying its WAIT_SIGNAL page, which waits
+    // for the next count of that signal. The worker thread calls it as it takes each request.
+    void add_op_signal_wait_page(std::shared_ptr<const Request>& request);
     // TT_FATAL unless op signal `signal_id`, which `api_name`'s caller passed in, is in range.
     static void validate_signal_id(uint32_t signal_id, std::string_view api_name);
-    // DRISC L1 address of signal slot `slot_index`, uniform across every sender core of every device.
+    // L1 address of signal slot `slot_index` on every core that keeps a signal slot table: each DRAM-core sender,
+    // or the dispatch engine that keeps the one table for all of its senders.
     uint32_t signal_slot_addr(uint32_t slot_index) const;
     // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
     // the ones whose memory is gone.
@@ -268,6 +276,31 @@ private:
         const std::vector<std::shared_ptr<const Request>>& requests, MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
+    // Sets stage_ring_size_ from `raw_bytes`, with the halves and thirds the request serializer sizes
+    // layouts from.
+    void set_stage_ring_size(uint32_t raw_bytes, uint32_t l1_alignment);
+
+    // DRAM-sender endpoints on the dispatch engine (DramSenderPlacement::DispatchEngine). Fast dispatch
+    // already runs the kernels that serve them, and requests go into a FIFO in the engine's L1
+    // instead of one H2D socket per sender. Defined in tensor_prefetcher_manager_dispatch_engine.cpp.
+    bool on_dispatch_engine() const;
+    // The rest of start() for this placement: stage-ring geometry, FIFO state, the worker.
+    void start_on_dispatch_engine();
+    // Rejects, before a request records any state, what the dispatch-engine kernels do not serve.
+    void validate_dispatch_engine_pages(
+        const std::vector<std::vector<uint8_t>>& sender_pages, const RequestTarget& target) const;
+    void worker_loop_dispatch_engine();
+    // Writes one FIFO slot to device `d`, waiting for a free slot first.
+    void write_fifo_slot(uint32_t d, std::span<const uint8_t> slot);
+    // Slots every kernel on device `d` has retired.
+    uint32_t fifo_slots_retired(uint32_t d) const;
+    // Waits until every kernel on device `d` has retired `target` slots. With an operation timeout set
+    // (TT_METAL_OPERATION_TIMEOUT_SECONDS), no slot retiring for that long is a hang: it runs the dispatch
+    // timeout hook and throws, which on the worker thread ends the process.
+    void wait_for_fifo_retired(uint32_t d, uint32_t target) const;
+    // Waits until every kernel on every device has retired every slot written to it.
+    void wait_for_fifo_idle() const;
+
     MeshDevice* mesh_device_;
     // Grabs the owning MeshDevice's api_mutex_ for the duration of an API call.
     std::function<std::lock_guard<std::mutex>()> lock_api_function_;
@@ -284,9 +317,9 @@ private:
     // over NOC.
     uint32_t socket_config_l1_addr_ = 0;
     uint32_t socket_data_l1_addr_ = 0;
-    // Base (local DRISC L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots,
-    // then kTensorPrefetcherNumSignals op signal slots. Uniform across all sender cores of every device,
-    // carved at the front of the kernel working region.
+    // Base (local L1) of this prefetcher's signal slot table: kNumCqSignalSlots CQ fence slots, then
+    // kNumOpSignalSlots op signal slots. Uniform across all sender cores of every device, carved at the front of
+    // the DRISC kernel working region, or the table in the dispatch engine's region.
     uint32_t signal_slots_l1_addr_ = 0;
     // Base (local DRISC L1) of the kTensorPrefetcherSelectorScratchBytes a selector page is read into;
     // uniform across all sender cores.
@@ -317,6 +350,9 @@ private:
     // Waits on each op signal handed to the worker since start, i.e. the count the latest of them waits
     // for. Zeroed by start, as the slots are, before the worker starts; only worker_loop touches it after.
     std::array<uint32_t, experimental::kTensorPrefetcherNumSignals> op_signal_waits_{};
+    // How much one op signal raises a slot the kernels wait on: one per DRAM bank whose counter that slot is. A
+    // DRAM-core sender keeps its own bank's counter; a dispatch engine's one table holds every bank's.
+    uint32_t op_signal_increments_ = 1;
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
@@ -333,6 +369,15 @@ private:
 
     // sockets_[d * num_senders_ + s] = socket for (device d, sender s).
     std::vector<std::unique_ptr<H2DSocket>> sockets_;
+    // DispatchEngine placement: the engine's L1 region base, and per device the engine holding its
+    // FIFO and the slots written to it.
+    struct DeviceFifo {
+        CoreCoord dispatch_engine;
+        uint32_t written = 0;
+    };
+    uint32_t fifo_region_base_ = 0;
+    tensor_prefetcher_fifo::RegionLayout fifo_layout_;
+    std::vector<DeviceFifo> fifos_;
 
     // MeshCoordinate -> index into devices_, populated once at start() so
     // worker_loop fan-out is O(targets) instead of O(targets * devices).
