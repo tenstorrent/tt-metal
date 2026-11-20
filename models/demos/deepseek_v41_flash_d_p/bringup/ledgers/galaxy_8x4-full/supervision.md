@@ -782,3 +782,12 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   1.0. Not built (agent DECIDED, accepted): splitting the longest lane's score over idle chips (tie order of top-k
   breaks bit-identity; the logits' return traffic ~ the ring's). DECIDED: accept. Next PB.5 (scripted accept gate).
 - 07:16 UTC PB.3M gate PASS -> 98aa03d3acd. DEVICE OPEN (PB.5, reason: the accept gate's one fresh 40-layer process at 8192 for the packed oracle / reference / 8192 reference, then the walls' 21-layer load). RAM before: available 459.1 GB leaked 50.3 GB .
+- 07:27 UTC PB.5 gate PASS -> 3f8be7264b4. Fresh 40-layer process: 8192 single-request vs goldens (from0 err_final_hidden
+  0.141 / limit 0.259, last 0.135 / 0.242, top-5 1.0), packed oracle all 0 (lane equivalence, alone vs today incl.
+  digests, slot digests, packed determinism), per-segment reference within limits; determinism 0.0 and walls reused from
+  PB.3M (same code). Walls (serving-equivalent, layers 0-20, agentic_cc, slots at 1M capacity): 4x2k@139264 109.4 ms =
+  74.9k new tok/s (device 99.7, host exposed 9.7; experts 38.2, attention 29.8, indexer 7.4), mixed 126.4 = 64.8k
+  (device 116.7; indexer 19.8, attention 43.0), 1x2k + 3 empty 88.4 = 23.2k. Gathers exposed 10 % / 13 %. DRAM 13.0 GiB
+  a chip. BOTH OWNER TARGETS MET. Gap found: the padded-lanes case (4 x ~1.6k) and the 4 x 1M DRAM case were never
+  added to the walls test (PB.1 named them), nor the walls table: DECIDED: PB.5C (test-only) completes them (owner rule
+  3: padded / empty cases, DRAM at 1M with all histories resident).
