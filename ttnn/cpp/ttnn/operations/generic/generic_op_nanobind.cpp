@@ -4,6 +4,7 @@
 
 #include "generic_op_nanobind.hpp"
 
+#include <algorithm>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -38,6 +39,14 @@ bool holds_some_devices(const Tensor& tensor) {
     return is_device_tensor(tensor) && tensor.is_allocated() && !tensor.device_storage().is_uniform_storage();
 }
 
+// On a one-device mesh every tensor holds the only device, so there are no views to read. generic_op rejects
+// io_tensors with no tensor on a device, and a tensor argument on another MeshDevice than io_tensors.
+bool on_one_device_mesh(const std::vector<Tensor>& io_tensors) {
+    const auto entry = std::ranges::find_if(
+        io_tensors, [](const Tensor& tensor) { return is_device_tensor(tensor) && tensor.is_allocated(); });
+    return entry == io_tensors.end() || entry->device()->num_devices() == 1;
+}
+
 TensorViews::value_type view_of(const ProgramRunArgs& run_args, std::string_view name, const Tensor& tensor) {
     const auto devices = tensor.device_storage().get_coords();
     return {run_args, std::string(name), std::vector<ttnn::MeshCoordinate>(devices.begin(), devices.end())};
@@ -45,7 +54,10 @@ TensorViews::value_type view_of(const ProgramRunArgs& run_args, std::string_view
 
 // The views in run args made in Python, read from the ttnn.Tensors they keep, with the GIL held. The visitors capture
 // one reference each, which std::function holds without allocating.
-TensorViews tensor_views(const ProgramRunArgs& run_args) {
+TensorViews tensor_views(const std::vector<Tensor>& io_tensors, const ProgramRunArgs& run_args) {
+    if (on_one_device_mesh(io_tensors)) {
+        return {};
+    }
     struct Found {
         const ProgramRunArgs& run_args;
         TensorViews views;
@@ -58,7 +70,10 @@ TensorViews tensor_views(const ProgramRunArgs& run_args) {
     return std::move(found.views);
 }
 
-TensorViews tensor_views(const MeshProgramRunArgs& run_args) {
+TensorViews tensor_views(const std::vector<Tensor>& io_tensors, const MeshProgramRunArgs& run_args) {
+    if (on_one_device_mesh(io_tensors)) {
+        return {};
+    }
     struct Found {
         const MeshProgramRunArgs& run_args;
         TensorViews views;
@@ -77,28 +92,28 @@ TensorViews tensor_views(const MeshProgramRunArgs& run_args) {
 // functions without views.
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
-    auto views = tensor_views(run_args);
+    auto views = tensor_views(io_tensors, run_args);
     const nb::gil_scoped_release release;
     return ttnn::prim::generic_op(io_tensors, spec, run_args, std::move(views));
 }
 
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
-    auto views = tensor_views(run_args);
+    auto views = tensor_views(io_tensors, run_args);
     const nb::gil_scoped_release release;
     return ttnn::prim::generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
-    auto views = tensor_views(run_args);
+    auto views = tensor_views(io_tensors, run_args);
     const nb::gil_scoped_release release;
     ttnn::prim::prepare_generic_op(io_tensors, spec, run_args, std::move(views));
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
-    auto views = tensor_views(run_args);
+    auto views = tensor_views(io_tensors, run_args);
     const nb::gil_scoped_release release;
     ttnn::prim::prepare_generic_op(io_tensors, spec.programs, run_args.programs, std::move(views));
 }
