@@ -1017,6 +1017,10 @@ class _MockPrefixBackend(_MockStackBackend):
         super().decode(io, kv, width)
 
 
+class _MockPrefix1Backend(_MockPrefixBackend):
+    snapshot_entries = 1
+
+
 def _prefix_adapter(monkeypatch, backend_cls=None):
     """the adapter under GLM53_STACK_PREFIX=1 (read at import: the module flag) on the prefix-capable mock"""
     monkeypatch.setattr(gvs, "PREFIX_CACHE", True)
@@ -1048,9 +1052,10 @@ def test_prefix_cache_snapshot_confirm_attach_release(monkeypatch):
     """GLM53_STACK_PREFIX: prompt A (a 256-token document + its question) in three engine steps snapshots its state at
     the on-grid chunk ends 128 / 256 (inside the prefill: snapshot_after); after A finished, the scheduler's
     confirmation answers B's proposed hits (B = the document + another question) with the longest resident snapshot
-    and pins it; B's prefill at start 256 in a free plugin slot is admitted as a NEW request (the lowest free generator
-    slot), attaches the entry (prefix_attach) on A's cached blocks and prefills only its suffix; B and the cold B
-    decode alike; B's release detaches; an identical resend of A attaches too."""
+    and holds nothing (pure: the plugin's contract); B's prefill at start 256 in a free plugin slot is admitted as a NEW
+    request (the lowest free generator slot), attaches the entry (prefix_attach) on A's cached blocks and prefills only
+    its suffix, the call's hold released when it returns; B and the cold B decode alike; B's release detaches; an
+    identical resend of A attaches too."""
     ad, backend, gen, kv = _prefix_adapter(monkeypatch)
     pc = ad.prefix
     doc = _prompt(256, 5)
@@ -1066,8 +1071,8 @@ def test_prefix_cache_snapshot_confirm_attach_release(monkeypatch):
     assert gen.live_slots(kv) == [] and pc.store.attached == {}
     # ---- the scheduler's confirmation of vLLM's proposed hits for B
     assert ad.confirm_prefix_cache_hit(b, [], 255) == 128  # below 256: the 128 snapshot
-    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256  # the same prompt confirmed again: one pin, moved
-    assert e256.readers == 1 and pc.store.entries[pc.store.key(a, 128)].readers == 0 and len(pc.pins) == 1
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256  # the same prompt confirmed again
+    assert e256.readers == 0 and pc.store.entries[pc.store.key(a, 128)].readers == 0  # pure: nothing held
     assert ad.confirm_prefix_cache_hit(b, [], 0) == 0 and ad.confirm_prefix_cache_hit(b, [], 64) == 0
     assert ad.confirm_prefix_cache_hit(b, [("img", 3, 4, "image")], 256) == 0  # text only
     assert ad.confirm_prefix_cache_hit(_prompt(300, 33), [], 256) == 0  # another prefix
@@ -1079,7 +1084,7 @@ def test_prefix_cache_snapshot_confirm_attach_release(monkeypatch):
     assert gb == 0 and ad._alias == [2, 1, 0, 3]  # the lowest free generator slot, as a first chunk takes
     assert backend.state_io[-1] == (gb, 256, 1, None)  # the suffix only, from entry 1
     assert kv.state[gb] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
-    assert pc.store.attached == {gb: key256} and e256.readers == 1 and not pc.pins and pc.stats["attaches"] == 1
+    assert pc.store.attached == {gb: key256} and e256.readers == 1 and not pc._held and pc.stats["attaches"] == 1
     assert gen.counters["prefix_attaches"] == 1
     # ---- B cold (plugin slot 1, its own blocks), then both decode: the same tokens, each on its own pages
     row_c = _blocks(2, len(b))
@@ -1107,11 +1112,13 @@ def test_prefix_cache_snapshot_confirm_attach_release(monkeypatch):
     assert pc.report()["hits"] == 2
 
 
-def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
-    """A confirmed (pinned) entry survives the LRU reuse of the pool by another prompt's snapshots and is attached
-    after it; a snapshot whose pages lost a block (the owner pool evicted it) is not confirmed -- a shorter resident
-    one is, else none; a block evicted between the confirmation and the prefill, or a hit at a position without a
-    snapshot, prefills the request from position 0 instead (the plugin passes the whole history)."""
+def test_prefix_cache_holds_lru_and_eviction_fallbacks(monkeypatch):
+    """An entry a slot reads survives the LRU reuse of the pool by another prompt's snapshots; a snapshot whose pages
+    lost a block (the owner pool evicted it) is not confirmed -- a shorter resident one is, else none; a block evicted
+    between the confirmation and the prefill, or a hit at a position without a snapshot, prefills the request from
+    position 0 instead (the plugin passes the whole history). The confirmation holds nothing (vllm-tt-plugin's pure
+    confirms_prefix_cache_hits contract): a request confirmed, deferred and aborted before its prefill leaves the
+    entry reusable, and the prefill call that admits a hit holds its entry against the call's own reservations."""
     ad, backend, gen, kv = _prefix_adapter(monkeypatch)
     pc, obm = ad.prefix, gen.dsa_shard_map(kv)
     doc = _prompt(256, 5)
@@ -1120,20 +1127,20 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])
     ad.release_request(0)
     key128, key256 = pc.store.key(a, 128), pc.store.key(a, 256)
-    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256  # pinned until B's prefill
+    assert ad.confirm_prefix_cache_hit(b, [], 256) == 256 and pc.store.entries[key256].readers == 0
+    row_b = row_a[:4] + _blocks(2, len(b))[4:]
+    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
+                             start_pos=[256], empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
+    g = ad._alias[0]
+    assert backend.state_io[-1] == (g, 256, 1, None) and kv.state[g] == b
+    assert int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
     # ---- prompt C (384 tokens of another document) snapshots at 128 / 256 / 384 with one free entry of three: the
-    #      least recently used UNPINNED entries are reused (A's 128, then C's own 128); A's pinned 256 survives
+    #      least recently used UNREAD entries are reused (A's 128, then C's own 128); A's 256, read by B's slot, survives
     c = _prompt(384, 9) + _prompt(10, 33)
     row_c = _blocks(1, len(c))
     _prefill_steps(ad, kv, c, row_c, slot=1, ends=[128, 256, 384, len(c)])
     assert [r[3] for r in backend.state_io[-4:]] == [2, 0, 2, None]
     assert key128 not in pc.store.entries and key256 in pc.store.entries and pc.stats["snapshots"] == 5
-    row_b = row_a[:4] + _blocks(2, len(b))[4:]
-    out = ad.prefill_forward(_history([b]), page_table=_table([row_b], 1), kv_cache=kv, prompt_lens=[len(b)],
-                             start_pos=[256], empty_slots=[0], sampling_params=_greedy(1))  # fmt: skip
-    g = ad._alias[0]
-    assert backend.state_io[-1] == (g, 256, 1, None) and kv.state[g] == b  # entry 1 was never overwritten
-    assert int(out[0][0, 0]) == (b[-1] + 1) % VOCAB
     ad.release_request(0)
     ad.release_request(1)
     # ---- residency: C's 384 snapshot loses a block of [256, 384) -> the 256 one is confirmed; then nothing
@@ -1142,7 +1149,7 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     obm.forget(row_c[5])  # the owner pool evicts a released block (OwnerBlockMap: least recently released first)
     assert ad.confirm_prefix_cache_hit(c2, [], 384) == 256 and pc.stats["not_resident"] == 1
     obm.forget(row_c[0])
-    assert ad.confirm_prefix_cache_hit(c2, [], 384) == 0 and not pc.pins  # (the 256 answer's pin dropped)
+    assert ad.confirm_prefix_cache_hit(c2, [], 384) == 0
     # ---- the race: B confirmed while A's blocks are resident, one evicted before its prefill -> from 0, correct
     assert ad.confirm_prefix_cache_hit(b, [], 256) == 256
     obm.forget(row_a[1])
@@ -1152,7 +1159,7 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     g = ad._alias[2]
     assert [r[1:3] for r in backend.state_io[n:]] == [(0, None), (128, None), (256, None)]  # no attach
     assert kv.state[g] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and obm.physical(row_a[1]) is not None
-    assert pc.stats["fallbacks"] == 1 and not pc.pins and pc.store.entries[key256].readers == 0
+    assert pc.stats["fallbacks"] == 1 and pc.store.entries[key256].readers == 0 and not pc._held
     assert pc.store.attached == {}  # nothing to detach at its release
     ad.release_request(2)
     # ---- a hit at a position without a snapshot (192: vLLM's proposal not trimmed by this cache) -> from 0
@@ -1258,6 +1265,41 @@ def test_prefix_cache_pins_lru_and_eviction_fallbacks(monkeypatch):
     o, (ph, done, err) = two_hits(3, spare=False)  # 2 blocks per chip: no room for 22 -- slot 1 is refused, the hit's
     assert isinstance(err, RuntimeError) and "no free physical block" in str(err) and done == []  # blocks stay cached
     assert o.physical(10) is not None and o.physical(11) is not None and o.evictions == 0 and o.rows[1] == [13]
+
+    # ---- one device entry: confirm gets no request identity and no abort notice, so nothing it held for a request
+    #      deferred and then aborted before its prefill could ever be released, and every later snapshot would be skipped
+    ad, backend, gen, kv = _prefix_adapter(monkeypatch, _MockPrefix1Backend)
+    pc = ad.prefix
+    _prefill_steps(ad, kv, a, row_a, slot=0, ends=[128, 256, len(a)])  # A's 256 takes the entry over its 128
+    ad.release_request(0)
+    key256 = pc.store.key(a, 256)
+    e256 = pc.store.entries[key256]
+    assert list(pc.store.entries) == [key256] and e256.device_entry == 0
+    # one prefill call admits B at its hit (row 0) and a cold 700-token F (row 1) whose last chunk splits at 640
+    # (GLM53_STACK_PREFIX_EXACT, grid 512): the split's inner call runs first and its snapshot at 640 finds the pool
+    # full -- the call holds B's entry from its start, so the snapshot is skipped and B attaches after it
+    backend.prefill_chunk_tokens, pc.exact, pc.exact_min = 512, True, 128
+    f = _prompt(700, 91)
+    row_f = _blocks(3, len(f))
+    out = ad.prefill_forward(_history([b, f]), page_table=_table([row_b, row_f], 2), kv_cache=kv,
+                             prompt_lens=[len(b), len(f)], start_pos=[256, 0], empty_slots=[1, 2],
+                             sampling_params=_greedy(2))  # fmt: skip
+    gb, gf = ad._alias[1], ad._alias[2]
+    assert (gb, 256, 0, None) in backend.state_io and kv.state[gb] == b and kv.state[gf] == f
+    assert out[0].reshape(-1).tolist() == [(b[-1] + 1) % VOCAB, (f[-1] + 1) % VOCAB]
+    assert pc.stats["exact_splits"] == 1 and pc.stats["snapshots_skipped"] == 1 and pc.stats["attaches"] == 1
+    assert e256.readers == 1 and pc.store.attached == {gb: key256} and not pc._held  # B's slot; the hold released
+    ad.release_request(1)
+    ad.release_request(2)
+    # B's next turn is confirmed while it waits (the scheduler asks again at every step it retries it), then deferred
+    # and aborted: no call reaches the model, and the entry is free for the next prompt's snapshot
+    q = doc + _prompt(50, 70)
+    assert [ad.confirm_prefix_cache_hit(q, [], 256) for _ in range(3)] == [256] * 3 and e256.readers == 0
+    h = _prompt(140, 44)
+    _prefill_steps(ad, kv, h, _blocks(1, len(h)), slot=3, ends=[128, len(h)])
+    assert list(pc.store.entries) == [pc.store.key(h, 128)] and pc.stats["snapshots_skipped"] == 1
+    assert ad.confirm_prefix_cache_hit(q, [], 256) == 0  # the aborted request's hit is gone: vLLM is told so
+    assert "ttnn" not in sys.modules
 
 
 class _MockHostTierBackend(_MockPrefixBackend):
@@ -4290,7 +4332,7 @@ def test_prefix_cache_running_keys_equal_the_confirm_keys(monkeypatch, fast):
     g = ad._alias[0]
     keys = {e.n_tokens: k for k, e in pc.store.entries.items()}
     assert sorted(keys) == [128, 256, 384]
-    n_ids, _fp, hs = pc._prompt_keys(list(a))
+    n_ids, hs = pc._prompt_keys(list(a))
     for n, k in keys.items():
         assert k == pc.store.key(a, n) == hs[n // 128 - 1] == pc.store.key(torch.tensor(a, dtype=torch.int64), n)
     assert pc.store.stats["chain_tokens"] == 384 and pc.chains[g].n == 384 and "chain_restarts" not in pc.store.stats
@@ -4308,7 +4350,7 @@ def test_prefix_cache_running_keys_equal_the_confirm_keys(monkeypatch, fast):
         start = end
     gb = ad._alias[1]
     assert kv.state[gb] == b and int(out[0][0, 0]) == (b[-1] + 1) % VOCAB and pc.stats["attaches"] == 1
-    hb = pc._prompt_keys(list(b))[2]
+    hb = pc._prompt_keys(list(b))[1]
     for n in (384, 512):
         assert pc.store.key(b, n) in pc.store.entries and pc.store.key(b, n) == hb[n // 128 - 1]
     assert pc.store.stats["chain_tokens"] == 384 + 512  # B: its attach key (256) once, then 128 per chunk end
@@ -4368,7 +4410,8 @@ def test_prefix_cache_confirm_memoizes_per_token_list(monkeypatch):
     assert pc.stats["confirm_memo_misses"] == 1 and pc.stats["confirm_memo_hits"] == 0
     for _ in range(3):  # the scheduler's retries of the waiting request
         assert ad.confirm_prefix_cache_hit(q, [], 256) == 256
-    assert pc.stats["confirm_memo_hits"] == 3 and len(pc.pins) == 1  # one pin, moved by every retry
+    assert pc.stats["confirm_memo_hits"] == 3
+    assert all(e.readers == 0 for e in pc.store.entries.values())  # the retries hold nothing either
     q[200] = (q[200] + 1) % VOCAB  # changed in place, same length: [128, 256) no longer matches A
     assert ad.confirm_prefix_cache_hit(q, [], 256) == 128 and pc.stats["confirm_memo_misses"] == 2
     cl = _ConstantList(a[:260] + _prompt(20, 9))
