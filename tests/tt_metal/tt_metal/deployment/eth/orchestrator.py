@@ -191,11 +191,12 @@ def run_many(
     env: dict[str, str | int],
     wfds: Optional[list[int]] = None,
     sync: bool = True,
+    syseng: bool = False,
 ) -> list[int]:
     hostnames = [h.hostname for h in hosts]
     hostconfigs = [h.host_config for h in hosts]
 
-    args = [(shlex.quote(h.workdir),) for h in hosts]
+    args = [(shlex.quote(h.workdir if not syseng else h.syseng),) for h in hosts]
 
     client = ParallelSSHClient(hosts=hostnames, host_config=hostconfigs, compress=True)
 
@@ -622,7 +623,7 @@ def main() -> int:
     if opts.e:
         assert not opts.t and not opts.l and not opts.s and not opts.r and not opts.d
         env: dict = {}  # TODO
-        rets = run_many(hs, opts.e, env)
+        rets = run_many(hs, opts.e, env, syseng=True)
         return int(sum(rets) > 0)
 
     test_pass = True
