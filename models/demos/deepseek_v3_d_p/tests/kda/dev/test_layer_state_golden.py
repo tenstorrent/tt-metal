@@ -4,7 +4,7 @@
 
 The production-dimension synthetic K3 layer (Galaxy SP8xTP4, or one 4x4 stage: SP4 on the axis-1 ring, TP4 on axis 0)
 runs over a two-slot, one-layer slab on a schedule of chunks, eager and then as one captured trace replayed with other
-slots and bounds. After every chunk it records, on every chip: the layer output and every slot's carry read back as a
+slots and bounds. After every chunk it records, on every chip: the layer output (its valid rows) and every slot's carry read back as a
 native carry (``read_slab_layer``). ``KDA_LAYER_GOLDEN=save:<file>`` writes them; ``KDA_LAYER_GOLDEN=compare:<file>``
 requires every tensor to match the saved one bit for bit. Take the golden at the commit before the change and compare
 at the change; no mode of the old storage needs to stay alive for it. Everything the test writes or reads goes through the
@@ -33,6 +33,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     kda_device_params,
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
+    mla_row_permutation,
     native_state_from_global,
     read_slab_layer,
 )
@@ -93,6 +94,20 @@ def _host(tensor: ttnn.Tensor) -> list[torch.Tensor]:
     return [ttnn.to_torch(shard).clone() for shard in ttnn.get_device_tensors(tensor)]
 
 
+def _valid_output_rows(
+    shards: list[torch.Tensor], mesh_shape: tuple[int, int], sp_axis: int, start: int, end: int
+) -> list[torch.Tensor]:
+    """The output with its padded rows (positions at or past ``actual_end``) zeroed: the layer leaves them unspecified
+    (``ttKDA.forward``), so they hold whatever the buffer held before and are not part of the contract."""
+    sp_size = mesh_shape[sp_axis]
+    valid = mla_row_permutation(start, sp_size, _ROWS).reshape(sp_size, _ROWS) < end - start
+    masked = []
+    for chip, shard in enumerate(shards):
+        sp_rank = divmod(chip, mesh_shape[1])[sp_axis]
+        masked.append(shard.masked_fill(~valid[sp_rank].reshape(1, _ROWS, 1), 0))
+    return masked
+
+
 def _write_native(mesh_device, slabs: KdaStates, slot: int, layer: int, state) -> None:
     """Store a native (SP-replicated) carry as the slot's carry."""
     slot_tt = device_scalar(mesh_device, slot)
@@ -137,7 +152,8 @@ def test_layer_outputs_and_carries_match_golden(mesh_device, device_params, sp_a
         logger.info(f"[golden {mode} +{time.monotonic() - started:.0f}s] {what}")
 
     tp_axis = 1 - sp_axis
-    chunk = tuple(mesh_device.shape)[sp_axis] * _ROWS
+    mesh_shape = tuple(mesh_device.shape)
+    chunk = mesh_shape[sp_axis] * _ROWS
     case = make_synthetic_kimi_k3_test_case(sequence=chunk)
     layer, hidden = make_kimi_k3_device_case(
         mesh_device, case, tensor_parallel_axis=tp_axis, cache_weights=False, shard_hidden_over_tp=True
@@ -157,11 +173,11 @@ def test_layer_outputs_and_carries_match_golden(mesh_device, device_params, sp_a
         deallocate_state(noise)
     records: dict[str, list[torch.Tensor]] = {}
 
-    def record(label: str, output: ttnn.Tensor | None) -> None:
-        """``output`` None: before the first call."""
+    def record(label: str, output: ttnn.Tensor | None, start: int = 0, end: int = 0) -> None:
+        """``output`` None: before the first call. Only the output's valid rows, ``[start, end)``, are recorded."""
         ttnn.synchronize_device(mesh_device)
         if output is not None:
-            records[f"{label}/output"] = _host(output)
+            records[f"{label}/output"] = _valid_output_rows(_host(output), mesh_shape, sp_axis, start, end)
         for slot in range(_NUM_SLOTS):
             carry = read_slab_layer(mesh_device, slabs, slot, _LAYER)
             records[f"{label}/slot{slot}.recurrent"] = _host(carry.recurrent)
@@ -184,7 +200,7 @@ def test_layer_outputs_and_carries_match_golden(mesh_device, device_params, sp_a
     for index, (slot, start, end) in enumerate(eager_chunks):
         stage(slot, start, end)
         output = call()
-        record(f"eager{index}-slot{slot}-{start}-{end}", output)
+        record(f"eager{index}-slot{slot}-{start}-{end}", output, start, end)
         ttnn.deallocate(output)
 
     # Warm twice on the capture's metadata, capture on slot 0 at a head, then replay other slots and bounds.
@@ -199,7 +215,7 @@ def test_layer_outputs_and_carries_match_golden(mesh_device, device_params, sp_a
         for index, (slot, start, end) in enumerate(traced_chunks):
             stage(slot, start, end)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
-            record(f"traced{index}-slot{slot}-{start}-{end}", traced_output)
+            record(f"traced{index}-slot{slot}-{start}-{end}", traced_output, start, end)
     finally:
         ttnn.release_trace(mesh_device, trace)
         ttnn.deallocate(traced_output)
