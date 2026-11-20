@@ -52,6 +52,7 @@ def chunked_global_prefill_sdpa(q, k_cache, v_cache, page_table, user_id, scale,
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         )
         qc.deallocate(True)
@@ -91,6 +92,7 @@ def sliding_prefill_sdpa(
             sliding_window_size=window,
             program_config=program_config_fn(hi - lo),
             compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         if not whole:
             for t in (qs, ks, vs):
@@ -431,6 +433,7 @@ class MuseGlimmerAttention:
                 sliding_window_size=self.sliding_window,
                 program_config=self._prefill_sdpa_config(seq_len),
                 compute_kernel_config=self.sdpa_cfg,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         for t in (q, k, v):
             t.deallocate(True)
