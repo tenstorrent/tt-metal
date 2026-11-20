@@ -93,6 +93,34 @@ def _digest(rt, kv, S: int) -> dict:
         n = -(-S // pf.cfg.role(b.layer).compress_ratio)
         host = _read(slab, 0)
         sacc = zlib.crc32(f"{b.layer}:{_crc(host[..., pf.chunk : pf.chunk + n, :]):08x}".encode(), sacc)
+    detail = ""
+    if os.environ.get("PREFIX_CHECK_LAYER_DETAIL", "0") == "1":
+        # DS41F-0169 bisect: every layer's window carry (the last 128 positions' KV, from the layer's input), and each KV
+        # source's entries / index keys split at the final chunk's start (earlier chunks | the final chunk), chip 0, plus the
+        # same rows on the last chip (a replica that disagrees = a cross-chip order effect, not a run-to-run one)
+        last_start = (S - 1) // pf.chunk * pf.chunk
+        parts = []
+        for b in pf.blocks:
+            car = getattr(b.state, "sliding_carry", None)
+            if car is not None:
+                parts.append(f"c{b.layer}:{_crc(_read(car, 0)):08x}")
+        for L, st in mods:
+            r = pf.cfg.role(L).compress_ratio
+            n = -(-(-(-S // r)) // 32) * 32
+            m = last_start // r
+            for nm, src in (("kv", st.compressed_kv), ("ik", st.index_k)):
+                part = ttnn.slice(src, [0, 0, 0, 0], [1, 1, n, int(src.shape[3])])
+                h0, hl = _read(part, 0), _read(part, last)
+                ttnn.deallocate(part)
+                parts.append(
+                    f"{nm}{L}:{_crc(h0[..., :m, :]):08x}|{_crc(h0[..., m:, :]):08x}"
+                    + (
+                        ""
+                        if torch.equal(h0.contiguous().view(torch.uint8), hl.contiguous().view(torch.uint8))
+                        else "|REPL"
+                    )
+                )
+        detail = ";".join(parts)
     try:  # the Engram n-gram history of slot 0 (tt-blaze EngramHost: one NgramHashState cache per slot)
         eng = _crc(rt.engram._hash[0].cache[0, :S].contiguous())
     except Exception:  # noqa: BLE001 -- another EngramHost layout: not digested
@@ -105,6 +133,7 @@ def _digest(rt, kv, S: int) -> dict:
         "slab": sacc,
         "engram": eng,
         "notes": notes,
+        "detail": detail,
         "digest_s": round(time.perf_counter() - t0, 2),
     }
 
@@ -129,6 +158,8 @@ def prefill_chunk(self, input_tensor, kv_caches, *, metadata_msg=None, **kw):
                     f"slab={d['slab']:08x} engram={d['engram']:08x} ({d['digest_s']} s) tensors="
                     + ";".join(f"{k}:{v:08x}" for k, v in d["tensors"].items())
                 )
+                if d["detail"]:
+                    logger.info(f"[prefix-check] detail {tag} S={S} {d['detail']}")
             except Exception as e:  # noqa: BLE001 -- a failed digest must not take the runner down
                 logger.exception(f"[prefix-check] digest {tag} FAILED: {e}")
         # every flush is also the tt-d-gen prefill_wait_for_arm_us EMPTY chunk: each next prompt checks the runtime left the
