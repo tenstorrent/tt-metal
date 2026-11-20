@@ -175,8 +175,6 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
     }
     v_endif;
 
-    y = _sfpu_binary_power_propagate_nan_(y, base, pow);
-
     if constexpr (!is_fp32_dest_acc_en) {
         // LRegs work on float32 data. If DST is bfloat16 then SFPSTORE will truncate it.
         // This can reduce accuracy: for instance, 9**2 = 80.8 gets round to 80.5
@@ -184,6 +182,9 @@ sfpi_inline sfpi::vFloat _sfpu_binary_power_21f_(sfpi::vFloat base, sfpi::vFloat
         // To avoid this issue, we explicitly convert to bfloat16 using round-to-nearest.
         y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
     }
+
+    // After the bf16 rounding above, which turns a NaN into an infinity.
+    y = _sfpu_binary_power_propagate_nan_(y, base, pow);
 
     return y;
 }
