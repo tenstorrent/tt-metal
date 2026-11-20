@@ -261,6 +261,8 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.atomic_inc_val = specific.atomic_inc_val.has_value() ? specific.atomic_inc_val : base.atomic_inc_val;
     merged.mcast_start_hops = specific.mcast_start_hops.has_value() ? specific.mcast_start_hops : base.mcast_start_hops;
     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
+    merged.packet_period_cycles =
+        specific.packet_period_cycles.has_value() ? specific.packet_period_cycles : base.packet_period_cycles;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {

@@ -368,6 +368,7 @@ void BandwidthProfiler::calculate_bandwidth(
                     .num_devices = num_devices,
                     .device_id = device_id.chip_id,
                     .direction = direction,
+                    .link_id = link_id,
                     .total_traffic_count = total_traffic_count,
                     .num_packets = num_packets,
                     .packet_size = packet_size,

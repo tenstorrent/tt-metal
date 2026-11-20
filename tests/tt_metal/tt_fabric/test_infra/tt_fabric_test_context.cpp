@@ -374,8 +374,8 @@ void TestContext::profile_results(const TestConfig& config) {
     }
     bandwidth_results_manager_->add_summary(config, bandwidth_profiler_->get_latest_summary());
 
-    if (!latest_results.empty()) {
-        bandwidth_results_manager_->append_to_csv(config, latest_results.back());
+    for (const auto& result : latest_results) {
+        bandwidth_results_manager_->append_to_csv(config, result);
     }
 }
 
@@ -585,9 +585,16 @@ void TestContext::validate_packet_sizes_for_policy(const TestConfig& config, uin
 }
 
 void TestContext::process_traffic_config(TestConfig& config) {
-    // Latency test mode: manually populate senders_ and receivers_ maps
-    // with latency-specific kernels and configurations
+    // Latency test mode: the probe (first sender) gets the latency kernels. Any further senders are
+    // background load: they go through the normal allocation and traffic path.
     if (config.performance_test_mode == PerformanceTestMode::LATENCY) {
+        if (config.senders.size() > 1) {
+            this->allocator_->allocate_resources(config);
+            for (auto& [coord, device] : test_devices_) {
+                device.set_pristine_cores(allocator_->get_pristine_cores_for_device(device.get_node_id()));
+            }
+            this->add_sender_traffic(config, 1);
+        }
         setup_latency_test_workers(config);
         return;
     }
@@ -648,7 +655,12 @@ void TestContext::process_traffic_config(TestConfig& config) {
         }
     }
 
-    for (const auto& sender : config.senders) {
+    this->add_sender_traffic(config, 0);
+}
+
+void TestContext::add_sender_traffic(const TestConfig& config, size_t first_sender) {
+    for (size_t sender_idx = first_sender; sender_idx < config.senders.size(); sender_idx++) {
+        const auto& sender = config.senders[sender_idx];
         for (const auto& pattern : sender.patterns) {
             // Track local sync core for this device
             device_local_sync_cores_[sender.device].push_back(sender.core.value());
@@ -665,6 +677,7 @@ void TestContext::process_traffic_config(TestConfig& config) {
                 .atomic_inc_val = pattern.atomic_inc_val,
                 .mcast_start_hops = pattern.mcast_start_hops,
                 .enable_flow_control = config.enable_flow_control,
+                .packet_period_cycles = pattern.packet_period_cycles.value_or(0),
                 .seed = config.seed,
                 .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                 .mesh_shape = this->fixture_->get_mesh_shape(),

@@ -87,6 +87,10 @@ ParsedDestinationConfig YamlConfigParser::parse_destination_config(const YAML::N
     if (dest_yaml["core"]) {
         config.core = parse_core_coord(dest_yaml["core"]);
     }
+    if (dest_yaml["noc_id"]) {
+        config.noc_id = static_cast<tt::tt_metal::NOC>(parse_scalar<uint8_t>(dest_yaml["noc_id"]));
+        TT_FATAL(config.noc_id == 0 || config.noc_id == 1, "Expected destination NOC ID 0 or 1");
+    }
     if (dest_yaml["hops"]) {
         if (dest_yaml["hops"].IsScalar()) {
             TT_FATAL(
@@ -140,6 +144,9 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
     }
     if (pattern_yaml["mcast_start_hops"]) {
         config.mcast_start_hops = parse_scalar<uint32_t>(pattern_yaml["mcast_start_hops"]);
+    }
+    if (pattern_yaml["packet_period_cycles"]) {
+        config.packet_period_cycles = parse_scalar<uint32_t>(pattern_yaml["packet_period_cycles"]);
     }
     if (pattern_yaml["vc_id"]) {
         config.vc_id = parse_scalar<uint8_t>(pattern_yaml["vc_id"]);
@@ -204,14 +211,15 @@ static void validate_latency_test_config(const ParsedTestConfig& test_config) {
             test_config.name,
             iterator->type);
     } else {
+        // The first sender is the latency probe; any further senders are background load that runs the
+        // regular benchmark sender kernel alongside it.
         TT_FATAL(
-            test_config.senders.size() == 1,
-            "Test '{}': latency_test_mode requires exactly one sender, got {}",
-            test_config.name,
-            test_config.senders.size());
+            !test_config.senders.empty(),
+            "Test '{}': latency_test_mode requires at least one sender (the probe)",
+            test_config.name);
         TT_FATAL(
             test_config.senders[0].patterns.size() == 1,
-            "Test '{}': latency_test_mode requires exactly one pattern per sender, got {}",
+            "Test '{}': latency_test_mode requires exactly one pattern for the probe sender, got {}",
             test_config.name,
             test_config.senders[0].patterns.size());
         TT_FATAL(
@@ -1489,6 +1497,7 @@ TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTraf
     resolved_pattern.num_packets = parsed_pattern.num_packets;
     resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
     resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
+    resolved_pattern.packet_period_cycles = parsed_pattern.packet_period_cycles;
     resolved_pattern.sender_credit_info = std::nullopt;
     resolved_pattern.credit_return_batch_size = std::nullopt;
 
@@ -1507,6 +1516,7 @@ DestinationConfig TestConfigBuilder::resolve_destination_config(const ParsedDest
     resolve_core_config(parsed_dest, resolved_dest);
 
     resolved_dest.hops = parsed_dest.hops;
+    resolved_dest.noc_id = parsed_dest.noc_id;
     resolved_dest.target_address = parsed_dest.target_address;
     resolved_dest.atomic_inc_address = parsed_dest.atomic_inc_address;
 

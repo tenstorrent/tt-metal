@@ -114,6 +114,7 @@ inline constexpr uint32_t kNumLinksAll = 0;
 struct ParsedDestinationConfig {
     std::optional<DeviceIdentifier> device;
     std::optional<CoreConfig> core;
+    std::optional<tt::tt_metal::NOC> noc_id;  // NOC of the responder kernel (latency tests)
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     bool full_mcast_hops = false;  // hops: full_mcast -> resolved to get_full_mcast_hops(src) at build time
     std::optional<uint32_t> target_address;
@@ -129,6 +130,7 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
+    std::optional<uint32_t> packet_period_cycles;  // benchmark senders: issue one packet every N cycles (0 = unpaced)
 };
 
 struct ParsedSenderConfig {
@@ -144,6 +146,7 @@ struct ParsedSenderConfig {
 struct DestinationConfig {
     std::optional<FabricNodeId> device;
     std::optional<tt::tt_metal::CoreCoord> core;
+    std::optional<tt::tt_metal::NOC> noc_id;
     std::optional<std::unordered_map<RoutingDirection, uint32_t>> hops;
     std::optional<uint32_t> target_address;
     std::optional<uint32_t> atomic_inc_address;
@@ -165,6 +168,7 @@ struct TrafficPatternConfig {
     std::optional<uint32_t> atomic_inc_val;
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
+    std::optional<uint32_t> packet_period_cycles;
 
     // Credit info
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender

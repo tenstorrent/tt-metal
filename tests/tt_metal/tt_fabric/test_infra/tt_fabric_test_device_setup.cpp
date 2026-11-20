@@ -568,13 +568,19 @@ void TestReceiver::add_config(TestTrafficReceiverConfig config) {
         const auto src_node_id = this->test_device_ptr_->get_node_id();
         auto outgoing_direction = this->test_device_ptr_->get_forwarding_direction(src_node_id, dst_node_id);
 
-        // Use common helper to register fabric connection for credit return
+        // Credit return link: the sender's link by default. FABRIC_TEST_CREDIT_LINK overrides it, for synced
+        // tests where the sync core holds link 0 of every direction and a credit connection opened at kernel
+        // start would deadlock against it.
+        uint32_t credit_link = config.link_id;
+        if (const char* env_link = std::getenv("FABRIC_TEST_CREDIT_LINK")) {
+            credit_link = static_cast<uint32_t>(std::atoi(env_link));
+        }
         credit_connection_key = this->test_device_ptr_->register_fabric_connection(
             this->logical_core_,
             TestWorkerType::RECEIVER,
             this->test_device_ptr_->connection_manager_,
             outgoing_direction,
-            config.link_id,
+            credit_link,
             /*vc_id=*/0);
     }
 
@@ -808,7 +814,7 @@ void TestDevice::add_mux_worker_config(
     this->muxes_.at(logical_core).set_config(mux_config, connection_key, next_hop_dst);
 }
 
-void TestDevice::create_kernels() {
+void TestDevice::create_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores) {
     log_debug(tt::LogTest, "creating kernels on node: {}", fabric_node_id_);
 
     // Create local allocator for on-demand mux core allocation
@@ -830,8 +836,8 @@ void TestDevice::create_kernels() {
 
     // Normal flow (benchmark_mode affects kernel behavior via compile-time args)
     // Note: Latency tests call create_latency_sender_kernel() and create_latency_responder_kernel() directly
-    this->create_sender_kernels();
-    this->create_receiver_kernels();
+    this->create_sender_kernels(skip_cores);
+    this->create_receiver_kernels(skip_cores);
 }
 
 void TestDevice::create_mux_kernels() {
@@ -999,7 +1005,7 @@ void TestDevice::create_sync_kernel() {
     log_debug(tt::LogTest, "created sync kernel on core: {}", sync_core);
 }
 
-void TestDevice::create_sender_kernels() {
+void TestDevice::create_sender_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores) {
     // Unified sender kernel creation - handles both fabric and mux connections based on per-pattern flow control
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
     uint32_t num_local_sync_cores = static_cast<uint32_t>(this->senders_.size()) + 1;
@@ -1008,6 +1014,9 @@ void TestDevice::create_sender_kernels() {
     TT_FATAL(sender_memory_map_->is_valid(), "Sender memory map is invalid");
 
     for (const auto& [core, sender] : this->senders_) {
+        if (std::find(skip_cores.begin(), skip_cores.end(), core) != skip_cores.end()) {
+            continue;
+        }
         // Get connection count and generate all connection args via FabricConnectionManager
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::SENDER);
 
@@ -1128,6 +1137,15 @@ void TestDevice::create_sender_kernels() {
                 {sender_memory_map_->get_local_sync_address(), sender_memory_map_->get_local_sync_region_size()});
         }
 
+        // clear out credit counters: the receiver may return credits (or its ready token) before this kernel starts
+        for (const auto& [config, _] : sender.configs_) {
+            if (config.sender_credit_info.has_value()) {
+                addresses_and_size_to_clear.push_back(
+                    {config.sender_credit_info->credit_reception_address_base,
+                     config.sender_credit_info->expected_receiver_count * SenderMemoryMap::CREDIT_ADDRESS_STRIDE});
+            }
+        }
+
         // clear out mux termination sync address (if mux connections are present)
         if (!mux_termination_local_args.empty()) {
             addresses_and_size_to_clear.push_back(
@@ -1156,13 +1174,16 @@ void TestDevice::create_sender_kernels() {
     }
 }
 
-void TestDevice::create_receiver_kernels() {
+void TestDevice::create_receiver_kernels(const std::vector<tt::tt_metal::CoreCoord>& skip_cores) {
     const bool is_2D_routing_enabled = this->device_info_provider_->is_2D_routing_enabled();
 
     TT_FATAL(receiver_memory_map_ != nullptr, "Receiver memory map is required for creating receiver kernels");
     TT_FATAL(receiver_memory_map_->is_valid(), "Receiver memory map is invalid");
 
     for (const auto& [core, receiver] : this->receivers_) {
+        if (std::find(skip_cores.begin(), skip_cores.end(), core) != skip_cores.end()) {
+            continue;
+        }
         // Get connection count and generate all connection args via FabricConnectionManager (for credit return)
         size_t num_connections = connection_manager_.get_connection_count_for_core(core, TestWorkerType::RECEIVER);
 
@@ -1464,7 +1485,10 @@ void TestDevice::create_latency_sender_kernel(
     uint32_t payload_size,
     uint32_t num_samples,
     NocSendType noc_send_type,
-    tt::tt_metal::CoreCoord responder_virtual_core) {
+    tt::tt_metal::CoreCoord responder_virtual_core,
+    uint32_t link_idx,
+    tt::tt_metal::NOC noc_id,
+    uint32_t start_delay_cycles) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1497,13 +1521,18 @@ void TestDevice::create_latency_sender_kernel(
         static_cast<int>(outgoing_direction),
         fabric_node_id_,
         dest_node);
-    uint32_t link_idx = available_links[0];  // Use first available link
+    TT_FATAL(
+        std::find(available_links.begin(), available_links.end(), link_idx) != available_links.end(),
+        "Latency sender link_idx {} is not a forwarding link from node {} to node {}",
+        link_idx,
+        fabric_node_id_,
+        dest_node);
 
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
     bool sem_inc_only = (payload_size == 0);
     std::vector<uint32_t> ct_args = {
-        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u};
+        enable_fused_payload_with_sync ? 1u : 0u, sem_inc_only ? 1u : 0u, is_2d_fabric ? 1u : 0u, start_delay_cycles};
 
     // Runtime args
     // Calculate send and receive buffer addresses after timestamp storage
@@ -1553,7 +1582,7 @@ void TestDevice::create_latency_sender_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear);
+    senders_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear, noc_id);
 
     log_debug(
         tt::LogTest,
@@ -1570,7 +1599,9 @@ void TestDevice::create_latency_responder_kernel(
     NocSendType noc_send_type,
     uint32_t sender_send_buffer_address,
     uint32_t sender_receive_buffer_address,
-    tt::tt_metal::CoreCoord sender_virtual_core) {
+    tt::tt_metal::CoreCoord sender_virtual_core,
+    tt::tt_metal::NOC noc_id,
+    uint32_t sender_link_idx) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1604,7 +1635,27 @@ void TestDevice::create_latency_responder_kernel(
         static_cast<int>(outgoing_direction),
         fabric_node_id_,
         sender_node);
-    uint32_t link_idx = available_links[0];  // Use first available link
+    uint32_t link_idx = available_links[0];
+    {
+        // Reply over the same physical link the sender used, when the sender is a direct neighbour.
+        const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+        auto fwd_dir = cp.get_forwarding_direction(sender_node, fabric_node_id_);
+        if (fwd_dir.has_value()) {
+            auto fwd_chans = cp.get_active_fabric_eth_channels_in_direction(sender_node, fwd_dir.value());
+            if (sender_link_idx < fwd_chans.size()) {
+                auto peer = cp.get_connected_mesh_chip_chan_ids(sender_node, fwd_chans[sender_link_idx]);
+                if (peer.first == fabric_node_id_) {
+                    auto my_chans = cp.get_active_fabric_eth_channels_in_direction(fabric_node_id_, outgoing_direction);
+                    for (uint32_t i = 0; i < my_chans.size(); ++i) {
+                        if (my_chans[i] == peer.second &&
+                            std::find(available_links.begin(), available_links.end(), i) != available_links.end()) {
+                            link_idx = i;
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Compile-time args: fused_sync, sem_inc_only, is_2d_fabric, use_dynamic_routing
     bool enable_fused_payload_with_sync = (noc_send_type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
@@ -1662,7 +1713,7 @@ void TestDevice::create_latency_responder_kernel(
     const std::vector<std::pair<size_t, size_t>>& addresses_and_size_to_clear = {
         {semaphore_address, sender_memory_map_->get_local_sync_region_size()}};
 
-    receivers_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear);
+    receivers_.at(core).create_kernel(coord_, ct_args, rt_args, {}, {}, {}, addresses_and_size_to_clear, noc_id);
 
     log_debug(
         tt::LogTest,

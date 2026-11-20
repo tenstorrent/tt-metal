@@ -97,6 +97,9 @@ void kernel_main() {
     };
 
     // Round-robin packet sending: send one packet from each config per iteration
+    if constexpr (BENCHMARK_MODE) {
+        sender_config->wait_for_receivers_ready();
+    }
     uint64_t start_timestamp = get_timestamp();
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
 

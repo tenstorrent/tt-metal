@@ -97,6 +97,7 @@ void kernel_main() {
 
                 packets_left_to_validate |= traffic_config->has_packets_to_validate();
             } else {
+                traffic_config->benchmark_ack_all();
                 total_packets_received += traffic_config->metadata.num_packets;
             }
         }
