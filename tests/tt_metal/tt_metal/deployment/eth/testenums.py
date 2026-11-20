@@ -22,6 +22,7 @@ class DistTestCase(str, Enum):
     BANDWIDTH = "BandwidthDist"
     BANDWIDTH_BIDIR = "BandwidthBidirDist"
     DATA_INTEGRITY = "DataIntegrityDramDist"
+    DATA_INTEGRITY_BIDIR = "DataIntegrityDramBidirDist"
 
     # TODO
     def get_test_info(t: "DistTestCase") -> TestInfo:
