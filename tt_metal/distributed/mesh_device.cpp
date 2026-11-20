@@ -1054,6 +1054,24 @@ void MeshDeviceImpl::establish_device_property_caches() {
     mesh_properties_ = std::move(properties);
 }
 
+std::vector<SubDevice> MeshDeviceImpl::full_grid_sub_devices() const {
+    // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
+    const auto& compute_grid_size = this->compute_with_storage_grid_size();
+    return {SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
+}
+
+void MeshDeviceImpl::refresh_compute_grid() {
+    // Held for the same reason as in reshape: enqueue reads the property caches and the active sub-device.
+    auto lock = lock_api();
+    establish_device_property_caches();
+    validate_sub_device_manager_tracker();
+    TT_FATAL(
+        sub_device_manager_tracker_->get_active_sub_device_manager_id() ==
+            sub_device_manager_tracker_->get_default_sub_device_manager_id(),
+        "The compute grid can only change while the default sub-device manager is active");
+    sub_device_manager_tracker_->get_default_sub_device_manager()->reset_full_grid_sub_devices(full_grid_sub_devices());
+}
+
 tt::ARCH MeshDeviceImpl::arch() const { return metal_env().get_cluster().arch(); }
 
 size_t MeshDeviceImpl::num_rows() const { return view_->num_rows(); }
@@ -1861,10 +1879,7 @@ bool MeshDeviceImpl::initialize_impl(
 
     establish_device_property_caches();
 
-    // For MeshDevice, we support uniform sub-devices across all devices and we do not support ethernet subdevices.
-    const auto& compute_grid_size = this->compute_with_storage_grid_size();
-    auto sub_devices = {
-        SubDevice(std::array{CoreRangeSet(CoreRange({0, 0}, {compute_grid_size.x - 1, compute_grid_size.y - 1}))})};
+    const auto sub_devices = full_grid_sub_devices();
 
     // Resource shared across mesh command queues.
     auto cq_shared_state = std::make_shared<CQSharedState>();

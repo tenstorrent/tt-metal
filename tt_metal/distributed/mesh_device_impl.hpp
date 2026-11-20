@@ -254,6 +254,11 @@ private:
     // Resolves the mesh-wide device properties that are fixed once the devices are open. Called
     // during initialization and again after a reshape swaps the view.
     void establish_device_property_caches();
+    // One sub-device spanning the current compute grid, the shape of the default sub-device manager.
+    std::vector<SubDevice> full_grid_sub_devices() const;
+    // Re-derives the property caches and the default sub-device from the devices' current compute grid.
+    // Manual fast dispatch calls it on entry and exit, since the dispatch cores leave and rejoin the grid.
+    void refresh_compute_grid();
 
     // Distributed context used to synchronize operations done by all ranks on the given mesh device.
     std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;

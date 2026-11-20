@@ -173,6 +173,20 @@ void SubDeviceManager::set_sub_device_stall_group(ttsl::Span<const SubDeviceId> 
 
 void SubDeviceManager::reset_sub_device_stall_group() { this->set_sub_device_stall_group(sub_device_ids_); }
 
+void SubDeviceManager::reset_full_grid_sub_devices(ttsl::Span<const SubDevice> sub_devices) {
+    TT_FATAL(
+        local_l1_size_ == 0 && sub_device_allocators_.size() == 1,
+        "Only the default sub-device manager can be resized to the full grid");
+    sub_devices_.assign(sub_devices.begin(), sub_devices.end());
+    sub_device_ids_.clear();
+    num_cores_ = {};
+    has_noc_mcast_txns_.clear();
+    core_go_message_mapping_.clear();
+    this->populate_sub_device_ids();
+    this->populate_num_cores();
+    this->populate_noc_data();
+}
+
 uint8_t SubDeviceManager::get_sub_device_index(SubDeviceId sub_device_id) const {
     auto sub_device_index = *sub_device_id;
     TT_FATAL(

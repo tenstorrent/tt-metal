@@ -17,6 +17,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
+#include "llrt/hal/generated/dev_msgs.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include "impl/trace/trace_buffer.hpp"
@@ -147,6 +148,9 @@ public:
     void init_command_queue_device();
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
+    // Points every Tensix worker back at launch slot 0 and go row 0, marks its go messages done, and fills its launch
+    // message ring with empty messages in the given dispatch mode. Workers must be idle.
+    void reset_worker_mailboxes(dev_msgs::dispatch_mode mode);
 
     void update_smc_dispatch_telemetry_for_fast_dispatch(
         uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords);

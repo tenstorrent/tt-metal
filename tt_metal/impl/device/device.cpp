@@ -394,6 +394,51 @@ void Device::init_command_queue_host() {
     }
 }
 
+void Device::reset_worker_mailboxes(dev_msgs::dispatch_mode mode) {
+    MetalEnvImpl& env_impl = MetalEnvAccessor(*env_).impl();
+    auto& cluster = env_impl.get_cluster();
+    const auto& hal = env_impl.get_hal();
+    constexpr auto core_type = HalProgrammableCoreType::TENSIX;
+
+    // Every slot of the launch message ring gets an empty message, so a stale one cannot run again on the next GO.
+    std::vector<std::byte> launch_msg_ring;
+    auto launch_msg = hal.get_dev_msgs_factory(core_type).create<dev_msgs::launch_msg_t>();
+    launch_msg.view().kernel_config().mode() = mode;
+    for (size_t i = 0; i < dev_msgs::launch_msg_buffer_num_entries; ++i) {
+        launch_msg_ring.insert(launch_msg_ring.end(), launch_msg.data(), launch_msg.data() + launch_msg.size());
+    }
+    // Every go message in every row, so no slot holds a stale go.
+    const std::vector<uint32_t> go_messages_done(
+        hal.get_dev_size(core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
+    const uint32_t zero = 0;
+
+    std::optional<std::unique_lock<std::mutex>> watcher_lock;
+    if (env_impl.get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
+        watcher_lock = context_->watcher_server()->get_lock();
+    }
+    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
+        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
+            const tt_cxy_pair core(
+                id_, cluster.get_virtual_coordinate_from_logical_coordinates(id_, CoreCoord(x, y), CoreType::WORKER));
+            cluster.write_core(
+                launch_msg_ring.data(),
+                launch_msg_ring.size(),
+                core,
+                hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH));
+            cluster.write_core(
+                &zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR));
+            cluster.write_core(
+                go_messages_done.data(),
+                go_messages_done.size() * sizeof(uint32_t),
+                core,
+                hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG));
+            cluster.l1_barrier(id_);
+            cluster.write_core(
+                &zero, sizeof(zero), core, hal.get_dev_noc_addr(core_type, HalL1MemAddrType::GO_MSG_INDEX));
+        }
+    }
+}
+
 void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
     TT_ASSERT(topo != nullptr, "Dispatch topology required for init_command_queue_device_with_topology");
     this->command_queue_programs_.push_back(topo->get_compiled_cq_program(this));
@@ -418,33 +463,13 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
         auto programmable_core_type = get_programmable_core_type(virtual_core);
         reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
-    auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
-        CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
-        auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t go_message_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
-        // Every go message in every row, so no slot holds a stale go.
-        const std::vector<uint32_t> go_messages_done(
-            hal.get_dev_size(programmable_core_type, HalL1MemAddrType::GO_MSG) / sizeof(uint32_t), 0);
-        cluster.write_core(
-            go_messages_done.data(),
-            go_messages_done.size() * sizeof(uint32_t),
-            tt_cxy_pair(id_, virtual_core),
-            go_message_addr);
-        cluster.l1_barrier(id_);
-        uint32_t zero = 0;
-        uint64_t go_message_index_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
-    };
+    // Workers brought up under slow dispatch still hold DISPATCH_MODE_HOST launch messages, and a worker only reports
+    // done to the dispatcher when its launch message is DISPATCH_MODE_DEV.
+    this->reset_worker_mailboxes(dev_msgs::DISPATCH_MODE_DEV);
+
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
     if (MetalEnvAccessor(*env_).impl().get_rtoptions().get_watcher_enabled() && context_->watcher_server()) {
         watcher_lock = context_->watcher_server()->get_lock();
-    }
-    for (uint32_t y = 0; y < logical_grid_size().y; y++) {
-        for (uint32_t x = 0; x < logical_grid_size().x; x++) {
-            CoreCoord logical_core(x, y);
-            reset_launch_message_rd_ptr(logical_core, CoreType::WORKER);
-            reset_go_message_index(logical_core, CoreType::WORKER);
-        }
     }
     for (const auto& logical_core : this->get_active_ethernet_cores()) {
         if (!has_flag(env_impl.get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
