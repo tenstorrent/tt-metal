@@ -191,7 +191,7 @@
   cmd: ./tests/scripts/multihost/run_fabric_cpu_only_unit_tests.sh --group teardown-sanity-ttmetal
   skus:
     cpu_medium:
-      timeout: 20  # 7 rows of two ttnn ranks on the mock galaxy; the 6 strict xfails hang to their 45 s deadline
+      timeout: 25  # 47 rows of two ttnn ranks on the mock galaxy; ~14 min locally (two rows wait 60 s), 25 covers CI
   team: scaleout
   budget_type: unit
   arch: wormhole_b0
