@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
+#include "ttnn/core.hpp"
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
@@ -183,7 +184,7 @@ void queue_in1_tensor_prefetcher_request(const SparseMatmulParams& attributes, c
     // The calling thread's current queue is the one launch dispatches on, so a trace recording there
     // captures the request with the program and re-sends it on every replay.
     metal_exp::QueueTensorPrefetcherRequest(
-        *mesh_device, pipes, std::nullopt, request, &mesh_device->mesh_command_queue());
+        *mesh_device, pipes, std::nullopt, request, &ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace
@@ -329,6 +330,26 @@ void SparseMatmulDeviceOperation::validate_on_program_cache_miss(
         sparsity.logical_shape(),
         operation_attributes.is_input_a_sparse,
         operation_attributes.is_input_b_sparse);
+
+    // The in0 sender reads the sparsity mask as one ROW_MAJOR page per outer batch (page_id = b) and
+    // indexes entry bB of that page for every B batch slot, so each page must hold exactly batch_length_B
+    // entries. A tensor of the right volume but another layout, e.g. [1, 1, 1, 32] or [32, 1, 1, 1] for an
+    // expected [1, 4, 1, 8], is otherwise read with the wrong stride. Indexed/gather mode never reads it.
+    if (!operation_attributes.use_indices) {
+        const auto& sparsity_shape = sparsity.logical_shape();
+        TT_FATAL(
+            sparsity_shape[-1] == batch_length_B,
+            "sparsity must hold one ROW_MAJOR page of batch_length_B ({}) entries per outer batch, so its last "
+            "dimension ({}) must equal {} and the other dimensions must multiply to {} "
+            "[sparsity_shape={}, is_input_a_sparse={}, is_input_b_sparse={}]",
+            batch_length_B,
+            sparsity_shape[-1],
+            batch_length_B,
+            batch_length / batch_length_B,
+            sparsity_shape,
+            operation_attributes.is_input_a_sparse,
+            operation_attributes.is_input_b_sparse);
+    }
 
     TT_FATAL(
         operation_attributes.nnz.value_or(1) <= batch_length,

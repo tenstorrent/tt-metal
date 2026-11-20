@@ -9,10 +9,11 @@
 #include <vector>
 
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
@@ -22,7 +23,6 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     const ConcatParams& operation_attributes, const ConcatInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const unsigned int groups = operation_attributes.groups;
 
@@ -187,7 +187,11 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
     // >> (input_tensors[0].padded_shape()[-1] / groups % TILE_WIDTH == 0
     // >> && input_tensors[1].padded_shape()[-1] / groups % TILE_WIDTH == 0)
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
-    const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / inputs[0].get().element_size();
+    // 32-bit Dest halves per-tile capacity; floor sub-2-byte elements at 2 to stay inside Dest when 8-bit ints are promoted.
+    const uint32_t effective_element_size = ttnn::operations::data_movement::requires_32bit_dest(data_format)
+                                                ? std::max<uint32_t>(inputs[0].get().element_size(), 2u)
+                                                : inputs[0].get().element_size();
+    const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / effective_element_size;
 
     // Calculate stride sizes to determine if we can use single-packet NOC reads
     // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
@@ -292,8 +296,8 @@ ttnn::device_operation::ProgramArtifacts ConcatS2STiledProgramFactory::create_pr
         .hw_config = ttnn::create_writer_datamovement_config(),
     };
 
-    const bool fp32_dest_acc_en = data_format == tt::DataFormat::Float32 || data_format == tt::DataFormat::Int32 ||
-                                  data_format == tt::DataFormat::UInt32;
+    // UInt8 needs 32-bit Dest on WH/BH.
+    const bool fp32_dest_acc_en = ttnn::operations::data_movement::requires_32bit_dest(data_format);
 
     // Metal 2.0's validator requires an explicit unpack mode for every Float32 buffer a compute
     // kernel consumes while 32-bit dest is enabled. When the data format is Float32 all three

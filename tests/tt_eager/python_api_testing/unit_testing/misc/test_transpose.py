@@ -12,7 +12,7 @@ from loguru import logger
 from models.common.utility_functions import is_blackhole, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc, comp_equal
 from models.common.utility_functions import skip_for_blackhole, run_for_blackhole, skip_for_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
 
 
 def random_torch_tensor(dtype, shape):
@@ -465,7 +465,6 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [224])
 @pytest.mark.parametrize("h", [16])
@@ -747,6 +746,206 @@ def test_transpose_hc_sharded_cache_hit_new_input(device, n, c, h, w, grid_size)
             assert (
                 device.num_program_cache_entries() == expected_cache_entries
             ), "transpose must reuse the cached program on a hit"
+
+
+# The sharded HC factory used to place its runtime args, and find each input shard's core, by an
+# origin-anchored walk of the shard grid's bounding box. Where the walk left the grid, program build hit a
+# TT_FATAL (runtime args for a core the kernel does not run on). Where it stayed inside the grid but in
+# another order (two_row_ranges_col), the output values were wrong.
+# Each grid reaches the special case with one H block per shard, with several, and the generic path.
+@pytest.mark.parametrize(
+    "grid_ranges, orientation, layout",
+    [
+        ([((1, 1), (1, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (1, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.WIDTH_SHARDED),
+        ([((1, 1), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((0, 0), (0, 0)), ((2, 1), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.ROW_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.COL_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+        # Every core of the bounding-box walk is in this grid, but COL_MAJOR walks each one-row range in
+        # turn: shard 1 is on (1, 0), not (0, 1).
+        ([((0, 0), (1, 0)), ((0, 1), (1, 1))], ttnn.ShardOrientation.COL_MAJOR, ttnn.TensorMemoryLayout.HEIGHT_SHARDED),
+    ],
+    ids=[
+        "core_1_1_height",
+        "core_1_1_width",
+        "offset_row",
+        "two_ranges",
+        "offset_2x2_row",
+        "offset_2x2_col",
+        "two_row_ranges_col",
+    ],
+)
+@pytest.mark.parametrize("path", ["special_single_h", "special_multi_h", "generic"])
+def test_transpose_hc_sharded_non_origin_grid(device, grid_ranges, orientation, layout, path):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    num_cores = grid.num_cores()
+    # Shard heights H, 2 * H, and (C = 3) 96 / num_cores, which neither divides nor is a multiple of H = 32.
+    # Every shard holds a multiple of 1024 values and H, W are tile multiples, or transpose would not
+    # pick the sharded HC factory.
+    shape = {
+        "special_single_h": [1, num_cores, 32, 32],
+        "special_multi_h": [1, 2 * num_cores, 32, 32],
+        "generic": [1, 3, 32, 128],
+    }[path]
+    n, c, h, w = shape
+    shard_spec = ttnn.ShardSpec(grid, (n * c * h // num_cores, w), orientation)
+    mem_config = ttnn.MemoryConfig(layout, ttnn.BufferType.L1, shard_spec)
+
+    torch.manual_seed(0)
+    # The second run hits the program cache with a new input at another address, so it relies on the
+    # NoC table and runtime args from the first run staying in place.
+    tt_inputs = []
+    for run in range(2):
+        torch_input = torch.rand(shape, dtype=torch.bfloat16)
+        tt_inputs.append(
+            ttnn.from_torch(
+                torch_input, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+            )
+        )
+        tt_output = ttnn.transpose(tt_inputs[-1], 1, 2)
+        assert tt_output.memory_config() == mem_config
+        wrong = int((ttnn.to_torch(tt_output) != torch_input.transpose(1, 2)).sum())
+        assert wrong == 0, f"run {run}: {wrong} of {torch_input.numel()} values wrong"
+        if run == 0:
+            num_cache_entries = device.num_program_cache_entries()
+    assert device.num_program_cache_entries() == num_cache_entries, "the second transpose must hit the program cache"
+
+
+_SENTINEL = 0x3A3A
+
+
+def _check_transpose_hc_sharded_spare_cores(device, grid_ranges, orientation, shape, shard_height):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    num_cores = grid.num_cores()
+    w = shape[-1]
+    shard_spec = ttnn.ShardSpec(grid, (shard_height, w), orientation)
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    num_shards = torch_input.numel() // (shard_height * w)
+    assert num_shards < num_cores
+    tt_input = ttnn.from_torch(torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
+
+    # Fill one output-sized slot on every core of the grid with a sentinel, then free it for the output to take.
+    slots_shape = [1, 1, num_cores * shard_height, w]
+    sentinel = torch.full(slots_shape, _SENTINEL, dtype=torch.int16).view(torch.bfloat16)
+    slots = ttnn.from_torch(sentinel, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config)
+    slot_address = slots.buffer_address()
+    ttnn.deallocate(slots)
+
+    tt_output = ttnn.transpose(tt_input, 1, 2)
+    assert tt_output.buffer_address() == slot_address, "the output did not take the sentinel slots"
+    wrong = int((ttnn.to_torch(tt_output) != torch_input.transpose(1, 2)).sum())
+    assert wrong == 0, f"{wrong} of {torch_input.numel()} values wrong"
+    ttnn.deallocate(tt_output)
+
+    slots = ttnn.allocate_tensor_on_device(
+        ttnn.Shape(slots_shape), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, mem_config
+    )
+    assert slots.buffer_address() == slot_address, "the slots did not land where the output was"
+    spare = ttnn.to_torch(slots).contiguous().view(torch.int16).reshape(num_cores, shard_height, w)[num_shards:]
+    overwritten = int((spare != _SENTINEL).sum())
+    assert overwritten == 0, f"cores without a shard wrote {overwritten} of {spare.numel()} words of their output slots"
+
+
+# A grid with more cores than shards: only the cores that hold a shard may run. A core without one read
+# sticks past the end of the tensor: it wrote its own unused output slot, and on ttsim it read from a
+# NoC coordinate that is no core.
+_L_SHAPE = [((0, 0), (1, 0)), ((0, 1), (0, 2))]
+
+
+@pytest.mark.parametrize(
+    "grid_ranges, orientation",
+    [
+        ([((0, 0), (1, 1))], ttnn.ShardOrientation.ROW_MAJOR),
+        ([((0, 0), (1, 1))], ttnn.ShardOrientation.COL_MAJOR),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.ROW_MAJOR),
+        ([((1, 1), (2, 2))], ttnn.ShardOrientation.COL_MAJOR),
+        (_L_SHAPE, ttnn.ShardOrientation.ROW_MAJOR),
+        (_L_SHAPE, ttnn.ShardOrientation.COL_MAJOR),
+    ],
+    ids=["origin_2x2_row", "origin_2x2_col", "offset_2x2_row", "offset_2x2_col", "l_shape_row", "l_shape_col"],
+)
+@pytest.mark.parametrize(
+    "shape, shard_height",
+    [([1, 2, 32, 32], 32), ([1, 4, 32, 32], 64), ([1, 3, 32, 128], 32)],
+    ids=["special_single_h", "special_multi_h", "generic"],
+)
+def test_transpose_hc_sharded_spare_cores(device, grid_ranges, orientation, shape, shard_height):
+    _check_transpose_hc_sharded_spare_cores(device, grid_ranges, orientation, shape, shard_height)
+
+
+# One-row shards: with 4 shards on 6 cores, a core without a shard got no sticks and the host divided by zero.
+def test_transpose_hc_sharded_spare_cores_one_row_shards(device):
+    _check_transpose_hc_sharded_spare_cores(
+        device, [((0, 0), (2, 1))], ttnn.ShardOrientation.ROW_MAJOR, [1, 2, 2, 1024], 1
+    )
+
+
+# The sharded HC factory writes output shard i on the core that holds input shard i. An output on the same grid
+# with another shard orientation or shard height must take another factory.
+@pytest.mark.parametrize(
+    "grid_ranges, shape, input_shard, output_shard",
+    [
+        (
+            [((0, 0), (1, 1))],
+            [1, 3, 128, 32],
+            (96, ttnn.ShardOrientation.ROW_MAJOR),
+            (96, ttnn.ShardOrientation.COL_MAJOR),
+        ),
+        (
+            [((1, 1), (2, 2))],
+            [1, 3, 128, 32],
+            (96, ttnn.ShardOrientation.ROW_MAJOR),
+            (96, ttnn.ShardOrientation.COL_MAJOR),
+        ),
+        (
+            [((1, 1), (2, 2))],
+            [1, 3, 128, 32],
+            (96, ttnn.ShardOrientation.COL_MAJOR),
+            (96, ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        (
+            [((0, 0), (1, 1))],
+            [1, 4, 32, 32],
+            (32, ttnn.ShardOrientation.ROW_MAJOR),
+            (32, ttnn.ShardOrientation.COL_MAJOR),
+        ),
+        (
+            [((0, 0), (1, 1))],
+            [1, 2, 64, 32],
+            (32, ttnn.ShardOrientation.ROW_MAJOR),
+            (64, ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+    ],
+    ids=[
+        "generic_row_to_col",
+        "offset_generic_row_to_col",
+        "offset_generic_col_to_row",
+        "special_row_to_col",
+        "shard_height",
+    ],
+)
+def test_transpose_hc_sharded_output_sharded_differently(device, grid_ranges, shape, input_shard, output_shard):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(*s), ttnn.CoreCoord(*e)) for s, e in grid_ranges})
+    w = shape[-1]
+
+    def config(shard_height, orientation):
+        shard_spec = ttnn.ShardSpec(grid, (shard_height, w), orientation)
+        return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+
+    torch.manual_seed(0)
+    torch_input = torch.rand(shape, dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config(*input_shard)
+    )
+    output_config = config(*output_shard)
+    tt_output = ttnn.transpose(tt_input, 1, 2, memory_config=output_config)
+    assert tt_output.memory_config() == output_config
+    wrong = int((ttnn.to_torch(tt_output) != torch_input.transpose(1, 2)).sum())
+    assert wrong == 0, f"{wrong} of {torch_input.numel()} values wrong"
 
 
 def _run_transpose_sharded_override_addr_change(
@@ -1652,3 +1851,85 @@ def test_transpose_sharded_rm_width(device, dim0, dim1, input_sharding, output_s
         layout=ttnn.ROW_MAJOR_LAYOUT,
         input_dtype=dtype,
     )
+
+
+# Row-major tensors whose rows span several shards, with a shard row that is not a multiple of the buffer alignment
+# (L1: 16 B; DRAM: 32 B on Wormhole, 64 B on Blackhole). The sharded reads and writes cannot split such rows, so
+# transpose stages these tensors through interleaved memory.
+def _ramp_bf16(shape):
+    # Multiples of 1/8 in [-6, 6], exact in bfloat16, with a period that does not divide the row lengths used here.
+    return ((torch.arange(torch.Size(shape).numel()) % 97 - 48) / 8).reshape(shape).to(torch.bfloat16)
+
+
+def _width_shards(buffer_type, num_shards, shard_shape):
+    # Shards in rows of 8 cores, or on DRAM banks 0 .. num_shards - 1.
+    if buffer_type == ttnn.BufferType.L1 and num_shards > 8:
+        end = ttnn.CoreCoord(7, num_shards // 8 - 1)
+    else:
+        end = ttnn.CoreCoord(num_shards - 1, 0)
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), end)})
+    spec = ttnn.ShardSpec(cores, shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+    return ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, buffer_type, spec)
+
+
+def test_transpose_rm_width_sharded_subaligned_input(device):
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [32, 4])
+    )
+
+    output = ttnn.transpose(t, 2, 3)
+
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_subaligned_input_into_aligned_width_shards(device):
+    # The input moves to interleaved memory; the output keeps its sharded config, with aligned 16-byte shard rows.
+    x = _ramp_bf16([1, 1, 32, 64])
+    t = ttnn.from_torch(
+        x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=_width_shards(ttnn.BufferType.L1, 16, [32, 4])
+    )
+    out_config = _width_shards(ttnn.BufferType.L1, 4, [64, 8])
+
+    output = ttnn.transpose(t, 2, 3, memory_config=out_config)
+
+    assert output.memory_config() == out_config
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_height_input_promoted_to_subaligned_width_shards(device):
+    # transpose gives an N = C = 1 HEIGHT-sharded input a WIDTH-sharded output: [256, 4] shards of 8-byte rows.
+    config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))}),
+            [4, 256],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    x = _ramp_bf16([1, 1, 64, 256])
+    t = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=config)
+
+    output = ttnn.transpose(t, 2, 3)
+
+    out_config = output.memory_config()
+    assert out_config.memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED, out_config
+    assert (out_config.shard_spec.shape[1] * 2) % 16 != 0, out_config
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))
+
+
+def test_transpose_rm_dram_width_sharded_subaligned_input(device):
+    # DRAM shard rows that are 16-byte multiples but not multiples of the DRAM alignment.
+    e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+    x = _ramp_bf16([1, 1, 32, 32])
+    t = ttnn.from_torch(
+        x,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_width_shards(ttnn.BufferType.DRAM, 32 // e, [32, e]),
+    )
+
+    output = ttnn.transpose(t, 2, 3)
+
+    assert_equal(x.transpose(2, 3), ttnn.to_torch(output))

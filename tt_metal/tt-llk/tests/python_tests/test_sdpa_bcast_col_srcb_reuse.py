@@ -41,18 +41,23 @@ from helpers.sdpa_bcast_utils import (
     run_sdpa_bcast_col_srcb_reuse,
 )
 
-
-@blackhole_only
-@parametrize(
+SDPA_BCAST_COL_SRCB_REUSE_SWEEP = dict(
     formats=SDPA_BCAST_FORMATS,
     mathop=[MathOperation.Elwmul, MathOperation.Elwadd, MathOperation.Elwsub],
     num_tiles=SDPA_BCAST_TILE_COUNTS,
 )
-def test_sdpa_bcast_col_srcb_reuse(
+
+
+def _run_sdpa_bcast_col_srcb_reuse(
     formats,
     mathop,
     num_tiles,
     boot_mode=BootMode.DEFAULT,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     run_sdpa_bcast_col_srcb_reuse(
         "sources/sdpa_bcast_col_srcb_reuse_test.cpp",
@@ -60,4 +65,29 @@ def test_sdpa_bcast_col_srcb_reuse(
         mathop,
         num_tiles=num_tiles,
         boot_mode=boot_mode,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+    )
+
+
+@blackhole_only
+@parametrize(**SDPA_BCAST_COL_SRCB_REUSE_SWEEP)
+def test_sdpa_bcast_col_srcb_reuse(
+    formats,
+    mathop,
+    num_tiles,
+    boot_mode=BootMode.DEFAULT,
+):
+    _run_sdpa_bcast_col_srcb_reuse(formats, mathop, num_tiles, boot_mode)
+
+
+@blackhole_only
+def test_sdpa_bcast_col_srcb_reuse_repeat_state():
+    _run_sdpa_bcast_col_srcb_reuse(
+        SDPA_BCAST_FORMATS[0],
+        MathOperation.Elwmul,
+        SDPA_BCAST_TILE_COUNTS[0],
+        loop_factor=2,
     )

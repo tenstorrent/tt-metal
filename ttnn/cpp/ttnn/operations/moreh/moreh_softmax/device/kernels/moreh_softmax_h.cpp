@@ -320,6 +320,12 @@ void kernel_main() {
             ckl::output(dfb::out0, ckl::ReservePolicy::Upfront, ckl::PushPolicy::AtEnd, kDataFormatReconfig)>(
             ckl::IterationShape::tiles(Ht), dfb_exps_obj, dfb_recipsumexps_obj, dfb_out0_obj);
 #endif
+#if defined(ARCH_QUASAR) && !defined(LOG)
+        // TEN-4746: the wait_front above re-armed dfb::x_minus_max, but only the LOG path's final sub
+        // unpacks it again (the softmax path multiplies dfb::exps); Quasar's TDMA guard rejects the
+        // wait -> pop pair with no UNPACR in between, so issue the no-op unpack before the pop.
+        dummy_unpack(dfb::x_minus_max);
+#endif
         dfb_x_m_max_obj.pop_front(Ht);
     }
     // The mask and the two reduce scalers are each a single tile pushed once by the reader and
