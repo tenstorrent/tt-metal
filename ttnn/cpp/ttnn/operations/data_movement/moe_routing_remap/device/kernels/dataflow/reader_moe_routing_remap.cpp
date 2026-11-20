@@ -13,6 +13,7 @@ void kernel_main() {
     constexpr uint32_t routing_weights_dfb_id = get_compile_time_arg_val(0);
     constexpr uint32_t local_weights_idxs_dfb_id = get_compile_time_arg_val(1);
     constexpr uint32_t num_cluster_experts = get_compile_time_arg_val(2);
+    static_assert(num_cluster_experts <= 0xFFFFu, "num_cluster_experts must fit in uint16_t sentinel");
     constexpr uint32_t num_non_zero_per_device = get_compile_time_arg_val(3);
     constexpr uint32_t weight_datum_size_bytes = get_compile_time_arg_val(4);
 
