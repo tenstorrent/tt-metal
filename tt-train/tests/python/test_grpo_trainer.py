@@ -723,6 +723,48 @@ def test_layout_microbatch_rejects_short_prompt(expect_error):
         layout_microbatch([[1]], [[2, 3]], pad_token=0)
 
 
+def test_layout_microbatch_applies_loss_mask():
+    prompts = [[11, 12], [21, 22, 23]]
+    completions = [[101, 102, 103, 104], [201, 202]]
+    loss_mask = np.zeros((2, 6), dtype=np.float32)
+    loss_mask[0, :4] = [1.0, 0.0, 0.0, 1.0]
+    loss_mask[1, :2] = [1.0, 1.0]
+    _, _, mask, _ = layout_microbatch(prompts, completions, 0, loss_mask)
+    np.testing.assert_array_equal(mask[0, :6], [0.0, 1.0, 0.0, 0.0, 1.0, 0.0])
+    np.testing.assert_array_equal(mask[1, :5], [0.0, 0.0, 1.0, 1.0, 0.0])
+
+
+def test_optimize_gives_loss_mask_to_the_loss(monkeypatch):
+    masks = []
+    monkeypatch.setattr(
+        GRPOTrainer, "_compute_loss_and_backward", lambda self, nlog_new, m, old, adv, n: masks.append(m)
+    )
+    monkeypatch.setattr(
+        GRPOTrainer,
+        "_compute_policy_nlog_probs",
+        lambda self, inputs, targets: SimpleNamespace(to_numpy=lambda *a, **k: np.zeros(inputs.shape, np.float32)),
+    )
+    trainer = object.__new__(GRPOTrainer)
+    trainer.config = GRPOConfig(**_HOST_GRPO_CONFIG)
+    trainer.model = SimpleNamespace(get_run_mode=lambda: RunMode.TRAIN)
+    trainer._optimizer = SimpleNamespace(zero_grad=lambda: None)
+    trainer._batch_layout = SimpleNamespace(composer=None)
+    trainer._completions_per_microbatch = 2
+    trainer._pad_token = 0
+    trainer.metrics = {}
+    loss_mask = np.zeros((2, 4), dtype=np.float32)
+    loss_mask[:, :3] = [1.0, 0.0, 1.0]
+    batch = RolloutBatch(
+        weight_version=0,
+        prompts=[[1, 2], [1, 2]],
+        completions=[[3, 4, 5], [3, 4, 5]],
+        logprobs=np.full((2, 4), -0.5, dtype=np.float32),
+        loss_mask=loss_mask,
+    )
+    trainer._optimize(batch, np.zeros(2, dtype=np.float32))
+    np.testing.assert_array_equal(masks[0][:, :5], [[0.0, 1.0, 0.0, 1.0, 0.0]] * 2)
+
+
 def _to_capitals_chat_prompt(tokenizer, user_text: str) -> str:
     return tokenizer.apply_chat_template(
         [
@@ -1544,6 +1586,19 @@ def test_validate_rollout_batch_rejects(expect_error, completions, logprobs, mes
         weight_version=0, prompts=[[1]] * len(completions), completions=completions, logprobs=logprobs
     )
     with expect_error(RuntimeError, message):
+        validate_rollout_batch(rollout, num_prompts=1, num_generations=2, max_completion_length=4)
+
+
+@pytest.mark.parametrize("loss_mask", [np.ones((2, 3), np.float32), np.ones((2, 4), np.float64)])
+def test_validate_rollout_batch_rejects_bad_loss_mask(expect_error, loss_mask):
+    rollout = RolloutBatch(
+        weight_version=0,
+        prompts=[[1], [1]],
+        completions=[[7], [7]],
+        logprobs=np.zeros((2, 4), np.float32),
+        loss_mask=loss_mask,
+    )
+    with expect_error(RuntimeError, "loss_mask must be None or a float32 array"):
         validate_rollout_batch(rollout, num_prompts=1, num_generations=2, max_completion_length=4)
 
 
