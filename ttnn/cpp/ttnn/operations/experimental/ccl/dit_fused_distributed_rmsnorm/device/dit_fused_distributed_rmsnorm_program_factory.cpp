@@ -90,13 +90,14 @@ uint32_t derive_worker_cap(
     uint32_t cap = whole_rows > 0u ? whole_rows : budget;
     // DEV worker-count sweep knob: WAN_RMSNORM_WORKER_CAP overrides the grid-derived cap
     // (still validity-clamped below, and it bypasses the arch knee). Used to re-sweep the
-    // per-shape optimum before finalizing the heuristic.
-    const char* worker_cap_env = std::getenv("WAN_RMSNORM_WORKER_CAP");
-    if (worker_cap_env != nullptr) {
-        const int forced = std::atoi(worker_cap_env);
-        if (forced > 0) {
-            cap = static_cast<uint32_t>(forced);
-        }
+    // per-shape optimum before finalizing the heuristic. Read once per process (sizing runs several times on every
+    // launch), so set it before the first launch; a later change is ignored.
+    static const std::optional<int> forced_worker_cap = []() -> std::optional<int> {
+        const char* worker_cap_env = std::getenv("WAN_RMSNORM_WORKER_CAP");
+        return worker_cap_env != nullptr ? std::optional<int>(std::atoi(worker_cap_env)) : std::nullopt;
+    }();
+    if (forced_worker_cap.has_value() && *forced_worker_cap > 0) {
+        cap = static_cast<uint32_t>(*forced_worker_cap);
     }
     // Validity clamp: a forwarder coalesces at most sticks_per_packet 128 B sticks
     // into one fabric packet, so workers_per_forwarder (= ceil(cap/num_forwarders))
@@ -124,7 +125,7 @@ uint32_t derive_worker_cap(
     // WH's grid-derived budget (64) is already its optimum, so no BH-style knee there.
     // Tuned to the DiT (Wan/LTX/FLUX) shape suite; 48 is the conservative fallback.
     // The WAN_RMSNORM_WORKER_CAP override bypasses this knee so it can sweep BH freely.
-    if (arch == tt::ARCH::BLACKHOLE && worker_cap_env == nullptr) {
+    if (arch == tt::ARCH::BLACKHOLE && !forced_worker_cap.has_value()) {
         constexpr uint32_t kBhContentionKnee = 48u;
         constexpr uint32_t kBhRoundBoundCap = 64u;
         constexpr uint32_t kBhRing4RowThreshold = 448u;  // between Wan sp8 (296, want 64) and sp4 (592, want 48)
