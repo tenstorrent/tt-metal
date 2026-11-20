@@ -774,6 +774,7 @@ class Attention(LightweightModule):
                 chunk_start_idx,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
         else:
@@ -785,6 +786,7 @@ class Attention(LightweightModule):
                 attn_mask=mask,
                 scale=self.scale,
                 compute_kernel_config=self.compute_kernel_config_hifi4,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=self.model_config["SDPA_PROGCFG"](seq_len),
             )
 
