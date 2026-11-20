@@ -223,7 +223,7 @@ m2::Table<m2::TensorParamName, m2::TensorArgument> make_tensor_args(const nb::di
     return tensor_args;
 }
 
-// Points each GlobalSemaphore argument at the GlobalSemaphore of an object that ttnn.create_global_semaphore made.
+// Points each GlobalSemaphore argument at a Python global semaphore, such as ttnn.create_global_semaphore returns.
 m2::Table<m2::GlobalSemaphoreParamName, m2::GlobalSemaphoreArgument> make_global_semaphore_args(
     const nb::dict& semaphores) {
     m2::Table<m2::GlobalSemaphoreParamName, m2::GlobalSemaphoreArgument> global_semaphore_args;
@@ -235,7 +235,9 @@ m2::Table<m2::GlobalSemaphoreParamName, m2::GlobalSemaphoreArgument> make_global
         if (!nb::isinstance<m2::GlobalSemaphore>(value)) {
             throw nb::type_error(
                 fmt::format(
-                    "global_semaphore_args['{}'] must be a global semaphore from ttnn.create_global_semaphore", name)
+                    "global_semaphore_args['{}'] must be a global semaphore, such as ttnn.create_global_semaphore "
+                    "returns",
+                    name)
                     .c_str());
         }
         global_semaphore_args.emplace(
@@ -276,8 +278,8 @@ void check_not_owners(nb::handle self, const nb::str& name) {
 // nb::dynamic_attr()). On an instance of bound_type itself it sets the class's own attributes and rejects any other
 // name with AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own.
 // The attributes that hold the owners (_tensor_args and _global_semaphore_args) and the instance __dict__ that holds
-// them cannot be assigned or deleted, for both: only set_tensor_owners and set_global_semaphore_owners write them. Code
-// that edits these dicts in place can still drop the objects, as with any private Python state.
+// them cannot be assigned or deleted, for both: only set_owners writes them. Code that edits these dicts in place can
+// still drop the objects, as with any private Python state.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
     check_not_owners(self, name);
     if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
@@ -301,20 +303,37 @@ void delete_known_attribute(nb::handle self, const nb::str& name) {
     }
 }
 
-// Stores owners, the Python objects that keep the tensors of a run args object alive, in its _tensor_args attribute.
-// PyObject_GenericSetAttr skips type(self).__setattr__, so a Python subclass's __setattr__ cannot drop them. Call it
-// before the C++ object refers to the new tensors: if it fails, the object is unchanged.
-void set_tensor_owners(nb::handle self, nb::handle owners) {
-    if (PyObject_GenericSetAttr(self.ptr(), nb::str(TENSOR_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
+// The instance __dict__ of a run args object, read without type(self)'s attribute lookup.
+nb::dict instance_dict(nb::handle self) {
+    PyObject* dict = PyObject_GenericGetDict(self.ptr(), nullptr);
+    if (dict == nullptr) {
+        throw nb::python_error();
+    }
+    return nb::steal<nb::dict>(dict);
+}
+
+// Stores owners, the Python objects that keep the tensors or GlobalSemaphores of a run args object alive, under
+// attribute (TENSOR_ARGS_ATTRIBUTE or GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE) in its instance __dict__. Writing the dict
+// itself skips type(self).__setattr__ and any property a Python subclass defines under that name, so neither can drop
+// them. Call it before the C++ object refers to the new objects: if it fails, the object is unchanged.
+void set_owners(nb::handle self, const char* attribute, nb::handle owners) {
+    if (PyDict_SetItemString(instance_dict(self).ptr(), attribute, owners.ptr()) != 0) {
         throw nb::python_error();
     }
 }
 
-// The same for the GlobalSemaphores of a run args object, in its _global_semaphore_args attribute.
-void set_global_semaphore_owners(nb::handle self, nb::handle owners) {
-    if (PyObject_GenericSetAttr(self.ptr(), nb::str(GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE).ptr(), owners.ptr()) != 0) {
-        throw nb::python_error();
+// The owners stored under attribute, or fallback if there are none. It reads the instance __dict__ too, so a Python
+// subclass's __getattribute__ or property cannot hide them.
+nb::object get_owners(nb::handle self, const char* attribute, nb::object fallback) {
+    const nb::dict dict = instance_dict(self);
+    PyObject* owners = PyDict_GetItemWithError(dict.ptr(), nb::str(attribute).ptr());
+    if (owners == nullptr) {
+        if (PyErr_Occurred() != nullptr) {
+            throw nb::python_error();
+        }
+        return fallback;
     }
+    return nb::borrow(owners);
 }
 
 void bind_enums(nb::module_& mod) {
@@ -966,7 +985,8 @@ void bind_program_spec(nb::module_& mod) {
         mod,
         "GlobalSemaphoreParameter",
         "Declares a GlobalSemaphore that the program's kernels use. Each call's run args give the GlobalSemaphore, "
-        "made by ttnn.create_global_semaphore, in global_semaphore_args under this unique_id. See "
+        "such as one from ttnn.create_global_semaphore, in global_semaphore_args under this unique_id. Unlike a "
+        "SemaphoreSpec's, its value is the caller's and carries over from one call to the next. See "
         "global_semaphore_parameter.hpp.")
         .def(
             "__init__",
@@ -1048,7 +1068,7 @@ void bind_program_spec(nb::module_& mod) {
 }
 
 void bind_program_run_args(nb::module_& mod) {
-    // dynamic_attr: the Python object keeps its tensor and GlobalSemaphore arguments alive (see set_tensor_owners).
+    // dynamic_attr: the Python object keeps its tensor and GlobalSemaphore arguments alive (see set_owners).
     // __setattr__ below still rejects names that are not attributes of the class, as for the other classes; Python
     // subclasses may add attributes of their own.
     auto run_args = nb::class_<m2::ProgramRunArgs>(
@@ -1058,8 +1078,8 @@ void bind_program_run_args(nb::module_& mod) {
         "The values of one program run: each kernel's runtime arguments, the tensor for each tensor "
         "parameter, the GlobalSemaphore for each GlobalSemaphore parameter, and DFB size overrides. tensor_args maps "
         "each tensor parameter name to a ttnn.Tensor, and global_semaphore_args each GlobalSemaphore parameter name "
-        "to a global semaphore from ttnn.create_global_semaphore; these run args keep both alive. Lists and dicts are "
-        "copied in and out. See program_run_args.hpp.");
+        "to a global semaphore, such as one from ttnn.create_global_semaphore; these run args keep those objects "
+        "alive. Lists and dicts are copied in and out. See program_run_args.hpp.");
 
     const m2::KernelRunArgs kernel_run_args_defaults{};
     nb::class_<m2::KernelRunArgs>(
@@ -1132,8 +1152,8 @@ void bind_program_run_args(nb::module_& mod) {
                 auto tensor_arg_table = make_tensor_args(tensor_owners);
                 nb::dict semaphore_owners = copy_entries(global_semaphore_args);
                 auto semaphore_arg_table = make_global_semaphore_args(semaphore_owners);
-                set_tensor_owners(self.h, tensor_owners);
-                set_global_semaphore_owners(self.h, semaphore_owners);
+                set_owners(self.h, TENSOR_ARGS_ATTRIBUTE, tensor_owners);
+                set_owners(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, semaphore_owners);
                 new (self.p) m2::ProgramRunArgs{
                     .kernel_run_args = std::move(kernel_run_args),
                     .tensor_args = std::move(tensor_arg_table),
@@ -1160,23 +1180,23 @@ void bind_program_run_args(nb::module_& mod) {
         .def_prop_rw(
             "tensor_args",
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self) {
-                return nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
+                return get_owners(self.h, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
             },
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self, const nb::dict& tensor_args) {
                 nb::dict owners = copy_entries(tensor_args);
                 auto tensor_arg_table = make_tensor_args(owners);
-                set_tensor_owners(self.h, owners);
+                set_owners(self.h, TENSOR_ARGS_ATTRIBUTE, owners);
                 self.p->tensor_args = std::move(tensor_arg_table);
             })
         .def_prop_rw(
             "global_semaphore_args",
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self) {
-                return nb::getattr(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
+                return get_owners(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")();
             },
             [](nb::pointer_and_handle<m2::ProgramRunArgs> self, const nb::dict& global_semaphore_args) {
                 nb::dict owners = copy_entries(global_semaphore_args);
                 auto semaphore_arg_table = make_global_semaphore_args(owners);
-                set_global_semaphore_owners(self.h, owners);
+                set_owners(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, owners);
                 self.p->global_semaphore_args = std::move(semaphore_arg_table);
             })
         .def_rw("dfb_run_overrides", &m2::ProgramRunArgs::dfb_run_overrides, COPY);
@@ -1226,18 +1246,17 @@ void bind_mesh_programs(nb::module_& mod) {
                                          .c_str());
             }
             run_args.emplace_back(range, nb::cast<const ProgramRunArgs&>(program_run_args));
-            tensors.append(nb::getattr(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
-            semaphores.append(
-                nb::getattr(program_run_args, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
+            tensors.append(get_owners(program_run_args, TENSOR_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
+            semaphores.append(get_owners(program_run_args, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::dict()).attr("copy")());
         }
         // The two owner lists change together: if storing the second fails, the first goes back, so the owners always
         // match the programs.
-        nb::object old_tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE, nb::list());
-        set_tensor_owners(self.h, tensors);
+        nb::object old_tensors = get_owners(self.h, TENSOR_ARGS_ATTRIBUTE, nb::list());
+        set_owners(self.h, TENSOR_ARGS_ATTRIBUTE, tensors);
         try {
-            set_global_semaphore_owners(self.h, semaphores);
+            set_owners(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, semaphores);
         } catch (...) {
-            set_tensor_owners(self.h, old_tensors);
+            set_owners(self.h, TENSOR_ARGS_ATTRIBUTE, old_tensors);
             throw;
         }
         self.p->programs = std::move(run_args);
@@ -1274,14 +1293,14 @@ void bind_mesh_programs(nb::module_& mod) {
         .def_prop_rw(
             "programs",
             [](nb::pointer_and_handle<MeshProgramRunArgs> self) {
-                nb::object tensors = nb::getattr(self.h, TENSOR_ARGS_ATTRIBUTE);
-                nb::object semaphores = nb::getattr(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE);
+                nb::object tensors = get_owners(self.h, TENSOR_ARGS_ATTRIBUTE, nb::list());
+                nb::object semaphores = get_owners(self.h, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, nb::list());
                 nb::list programs;
                 for (std::size_t i = 0; i < self.p->programs.size(); ++i) {
                     const auto& [range, run_args] = self.p->programs[i];
                     nb::object run_args_copy = nb::cast(run_args, nb::rv_policy::copy);
-                    set_tensor_owners(run_args_copy, tensors[i].attr("copy")());
-                    set_global_semaphore_owners(run_args_copy, semaphores[i].attr("copy")());
+                    set_owners(run_args_copy, TENSOR_ARGS_ATTRIBUTE, tensors[i].attr("copy")());
+                    set_owners(run_args_copy, GLOBAL_SEMAPHORE_ARGS_ATTRIBUTE, semaphores[i].attr("copy")());
                     programs.append(nb::make_tuple(range, run_args_copy));
                 }
                 return programs;

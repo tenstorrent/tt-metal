@@ -678,6 +678,22 @@ def test_global_semaphores_are_checked_on_every_call(device, cache_hit, expect_e
     assert device.num_program_cache_entries() == entries
 
 
+def test_a_global_semaphore_on_another_mesh_device_is_rejected(device, expect_error):
+    # A submesh of the same chip is another MeshDevice, so this needs one device only.
+    submesh = device.create_submesh(ttnn.MeshShape(1, 1))
+    output = counter_output(submesh)
+    spec, run_args = counter_program(output, global_semaphore(device, 0))
+    try:
+        with expect_error(
+            RuntimeError, "the GlobalSemaphore for 'counter' is on another MeshDevice than the one the program runs on"
+        ):
+            E.generic_op([output], spec, run_args)
+    finally:
+        # As in test_tensors_on_another_mesh_device_are_rejected: close the submesh while the parent is open.
+        ttnn.deallocate(output)
+        ttnn.close_mesh_device(submesh)
+
+
 def test_the_mesh_form_keeps_and_uses_its_global_semaphores(device):
     output = counter_output(device)
     semaphore = global_semaphore(device, 3)
@@ -1386,7 +1402,7 @@ def test_the_two_forms_share_a_cache_entry(device):
     assert_close(expected, ttnn.to_torch(result))
 
 
-def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
+def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_owners(device):
     class MeshRunArgsIgnoringWrites(E.MeshProgramRunArgs):
         def __setattr__(self, name, value):
             pass
@@ -1398,25 +1414,49 @@ def test_a_mesh_run_args_subclass_setattr_cannot_drop_the_tensors(device):
 
     _, a, b, out = inputs(device)
     _, run_args = mul_program(a, b, out)
+    semaphore = global_semaphore(device, 0)
+    run_args.global_semaphore_args = {"counter": semaphore}
     mesh_run_args = MeshRunArgsIgnoringWrites(programs=[(mesh_range(device), run_args)])
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+    assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
 
-    # An assignment to programs reaches the setter, which stores the tensors' owners itself.
+    # An assignment to programs reaches the setter, which stores the owners itself.
     mesh_run_args = MeshRunArgsIgnoringPrivateWrites()
     mesh_run_args.programs = [(mesh_range(device), run_args)]
     assert mesh_run_args.programs[0][1].tensor_args["a"] is a
+    assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
 
 
-def test_a_mesh_run_args_keeps_its_tensor_owners(device, expect_error):
+def test_a_mesh_run_args_keeps_the_owners_of_run_args_that_hide_them(device):
+    # A MeshProgramRunArgs copies each run args' owners from its instance dict, so a ProgramRunArgs subclass that hides
+    # them cannot leave the mesh run args referring to objects that nothing keeps alive.
+    class RunArgsHidingOwners(E.ProgramRunArgs):
+        def __getattribute__(self, name):
+            return {} if name in ("_tensor_args", "_global_semaphore_args") else super().__getattribute__(name)
+
+    output = counter_output(device)
+    semaphore = global_semaphore(device, 0)
+    run_args = RunArgsHidingOwners(tensor_args={"out": output}, global_semaphore_args={"counter": semaphore})
+    references = sys.getrefcount(semaphore)
+    mesh_run_args = E.MeshProgramRunArgs()
+    mesh_run_args.programs = [(mesh_range(device), run_args)]
+    del run_args
+    assert sys.getrefcount(semaphore) == references
+    assert mesh_run_args.programs[0][1].tensor_args["out"] is output
+    assert mesh_run_args.programs[0][1].global_semaphore_args["counter"] is semaphore
+
+
+def test_a_mesh_run_args_keeps_its_owners(device, expect_error):
     _, a, b, out = inputs(device)
     _, run_args = mul_program(a, b, out)
     mesh_run_args = E.MeshProgramRunArgs(programs=[(mesh_range(device), run_args)])
-    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '_tensor_args' is read-only"):
-        del mesh_run_args._tensor_args
+    for attribute in ("_tensor_args", "_global_semaphore_args"):
+        with expect_error(AttributeError, f"'MeshProgramRunArgs' object attribute '{attribute}' is read-only"):
+            delattr(mesh_run_args, attribute)
+        with expect_error(AttributeError, f"'MeshProgramRunArgs' object attribute '{attribute}' is read-only"):
+            setattr(mesh_run_args, attribute, [])
     with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '__dict__' is read-only"):
         mesh_run_args.__dict__ = {}
-    with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '_tensor_args' is read-only"):
-        mesh_run_args._tensor_args = []
     with expect_error(AttributeError, "'MeshProgramRunArgs' object attribute '__dict__' is read-only"):
         del mesh_run_args.__dict__
     with expect_error(AttributeError, "'MeshProgramRunArgs' object has no attribute 'program'"):

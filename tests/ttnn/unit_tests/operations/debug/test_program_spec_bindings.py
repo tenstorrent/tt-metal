@@ -5,7 +5,7 @@
 """Python classes for the Metal 2.0 ProgramSpec and ProgramRunArgs types (ttnn.experimental).
 
 Each class binds the C++ struct with the same name and fields. These tests need no device, apart from
-the ones that bind tensors.
+the ones that bind tensors or GlobalSemaphores.
 """
 
 import pathlib
@@ -657,10 +657,11 @@ def test_run_args_reject_unknown_attributes(expect_error):
     assert subclass_run_args.step == 1
     del subclass_run_args.step
     assert not hasattr(subclass_run_args, "step")
-    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
-        subclass_run_args._tensor_args = {}
-    with expect_error(AttributeError, "'StepRunArgs' object attribute '_tensor_args' is read-only"):
-        del subclass_run_args._tensor_args
+    for attribute in ("_tensor_args", "_global_semaphore_args"):
+        with expect_error(AttributeError, f"'StepRunArgs' object attribute '{attribute}' is read-only"):
+            setattr(subclass_run_args, attribute, {})
+        with expect_error(AttributeError, f"'StepRunArgs' object attribute '{attribute}' is read-only"):
+            delattr(subclass_run_args, attribute)
 
 
 def test_tensor_args_hold_the_tensors(device, expect_error):
@@ -745,7 +746,7 @@ def test_global_semaphore_args_hold_the_semaphores(device, expect_error):
     assert list(run_args.global_semaphore_args) == ["other"]
 
     # A rejected assignment leaves the run args as they were.
-    message = "global_semaphore_args\\['counter'\\] must be a global semaphore from ttnn.create_global_semaphore"
+    message = "global_semaphore_args\\['counter'\\] must be a global semaphore, such as ttnn.create_global_semaphore"
     with expect_error(TypeError, message):
         run_args.global_semaphore_args = {"counter": None}
     with expect_error(TypeError, "global_semaphore_args keys must be GlobalSemaphore parameter names"):
@@ -770,6 +771,42 @@ def test_a_subclass_setattr_cannot_drop_the_global_semaphores(device):
         def __setattr__(self, name, value):
             pass
 
+    class RunArgsIgnoringPrivateWrites(E.ProgramRunArgs):
+        def __setattr__(self, name, value):
+            if not name.startswith("_"):
+                super().__setattr__(name, value)
+
     semaphore = global_semaphore(device)
     run_args = RunArgsIgnoringWrites(global_semaphore_args={"counter": semaphore})
+    assert run_args.global_semaphore_args["counter"] is semaphore
+
+    # An assignment to global_semaphore_args reaches the setter, which stores the semaphores' owners itself.
+    run_args = RunArgsIgnoringPrivateWrites(global_semaphore_args={"counter": semaphore})
+    run_args.global_semaphore_args = {"other": semaphore}
+    assert list(run_args.global_semaphore_args) == ["other"]
+
+
+class RunArgsWithOwnerProperties(E.ProgramRunArgs):
+    _tensor_args = property(lambda self: {}, lambda self, value: None)
+    _global_semaphore_args = property(lambda self: {}, lambda self, value: None)
+
+
+class RunArgsHidingOwners(E.ProgramRunArgs):
+    def __getattribute__(self, name):
+        return {} if name in ("_tensor_args", "_global_semaphore_args") else super().__getattribute__(name)
+
+
+@pytest.mark.parametrize(
+    "run_args_type", [RunArgsWithOwnerProperties, RunArgsHidingOwners], ids=lambda cls: cls.__name__
+)
+def test_a_subclass_cannot_drop_or_hide_the_owners(device, run_args_type):
+    # The run args keep their owners in the instance dict themselves, so a subclass's property or __getattribute__ for
+    # the private names can neither drop them nor hide them from the run args.
+    tensor = ttnn.from_torch(torch.zeros(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    semaphore = global_semaphore(device)
+    tensor_references, semaphore_references = sys.getrefcount(tensor), sys.getrefcount(semaphore)
+    run_args = run_args_type(tensor_args={"input": tensor}, global_semaphore_args={"counter": semaphore})
+    assert sys.getrefcount(tensor) == tensor_references + 1
+    assert sys.getrefcount(semaphore) == semaphore_references + 1
+    assert run_args.tensor_args["input"] is tensor
     assert run_args.global_semaphore_args["counter"] is semaphore
