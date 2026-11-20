@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "llk_unpack_common_api.h"
 #include "llk_unpack_tilize.h"
+#include "llk_size_mode.h"
 
 /*************************************************************************
  * LLK UNPACK TILIZE
@@ -51,7 +52,7 @@ inline void llk_unpack_tilize_impl(
         StateVal<Operand<Exu::Unpack>::NumFacesA>(num_faces),
         StateDiscard<std::uint32_t>(tile_index)));
 
-    _llk_unpack_tilize_<true>(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
+    _llk_unpack_tilize_<LLK_U2D_MAIN_HANDSHAKE>(base_address, tile_index, src_format, dst_format, face_r_dim, num_faces, narrow_tile);
     WAYPOINT("UPTD");
 }
 
