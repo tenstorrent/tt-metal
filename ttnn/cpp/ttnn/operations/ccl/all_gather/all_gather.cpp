@@ -5,14 +5,11 @@
 #include "all_gather.hpp"
 
 #include "device/all_gather_device_operation.hpp"
+#include "device/all_gather_factory_common.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/math.hpp>
-
-#include <numeric>
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 
 namespace ttnn {
 
@@ -24,6 +21,7 @@ std::pair<bool, std::string> use_composite_all_gather(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& persistent_output_tensor,
     std::optional<uint32_t> cluster_axis) {
     const auto& logical_shape = input_tensor.logical_shape();
     const int32_t gather_dim = static_cast<int32_t>(logical_shape.get_normalized_index(dim));
@@ -49,8 +47,11 @@ std::pair<bool, std::string> use_composite_all_gather(
 
     // Keep the padding check above this: building the spec can TT_FATAL on a legacy output config that
     // can't hold the gathered shape, and a gather-dim-padded input should route to composite instead.
-    const auto output_spec =
-        operations::ccl::compute_output_specs_helper(input_tensor, gather_dim_from_end, num_devices, memory_config);
+    // The factories build for the output tensor itself, and a persistent one may live in another memory.
+    const auto output_spec = persistent_output_tensor.has_value()
+                                 ? persistent_output_tensor->tensor_spec()
+                                 : operations::ccl::compute_output_specs_helper(
+                                       input_tensor, gather_dim_from_end, num_devices, memory_config);
 
     // The kernel walks the output page grid as the input's with only the gather dim scaled, so any
     // other difference breaks it -- e.g. an output shard width that doesn't divide the row, which
@@ -65,42 +66,23 @@ std::pair<bool, std::string> use_composite_all_gather(
                 gathered_padded_shape)};
     }
 
-    // Page sizes are UNALIGNED (content) sizes, so a matched-but-padded gather reads as matched, not
-    // concat. The page checks below are no-ops for tile, whose pages are always aligned and equally
-    // sized on both sides.
-    const uint32_t input_page_size = input_tensor.mesh_buffer().page_size();
-    const uint32_t input_aligned_page_size = input_tensor.mesh_buffer().aligned_page_size();
-    const uint32_t output_page_size = output_spec.compute_page_size_bytes();
-
-    // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
-    // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
-    // Resharding (input and output rows differ) cuts rows anywhere on a unit that is a multiple of the NoC write
-    // alignment and of the input's read alignment, so both rows must be multiples of it (then the input is unpadded).
-    constexpr uint32_t noc_write_alignment = 16;
-    const uint32_t unit_alignment = std::lcm(noc_write_alignment, input_tensor.mesh_buffer().alignment());
-    if (input_page_size != output_page_size &&
-        (input_page_size % unit_alignment != 0 || output_page_size % unit_alignment != 0)) {
+    // The native factories cut pages on the NOC write alignment and the read alignment of every buffer they read;
+    // unicast's cut (it may also read the output) exists only where multicast's does.
+    if (!operations::ccl::compute_walk_geometry(
+             input_tensor,
+             output_spec,
+             gather_dim_from_end,
+             num_devices,
+             tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+             /*reads_output=*/false)
+             .has_value()) {
         return {
             true,
             fmt::format(
-                "input and output rows are {} B and {} B; resharding needs both to be multiples of {} B",
-                input_page_size,
-                output_page_size,
-                unit_alignment)};
-    }
-    // matched and concat write a whole *aligned* input page into each output page slot, so the slot
-    // must be at least that large. They differ only across memories with unequal alignments.
-    const uint32_t output_alignment = output_spec.memory_config().is_dram() ? tt::tt_metal::hal::get_dram_alignment()
-                                                                            : tt::tt_metal::hal::get_l1_alignment();
-    const uint32_t output_aligned_page_size = tt::align(output_page_size, output_alignment);
-    if (input_page_size <= output_page_size && output_aligned_page_size < input_aligned_page_size) {
-        return {
-            true,
-            fmt::format(
-                "input rows pad to {} B but the output reserves {} B; use the same buffer type, or a row size "
-                "that is a multiple of both DRAM and L1 alignments",
-                input_aligned_page_size,
-                output_aligned_page_size)};
+                "input and output rows are {} B and {} B; the native kernels cannot cut them on the NOC write and read "
+                "alignments",
+                input_tensor.mesh_buffer().page_size(),
+                output_spec.compute_page_size_bytes())};
     }
 
     return {false, {}};
@@ -134,13 +116,23 @@ ttnn::Tensor all_gather(
             "topology, chunks_per_sync, num_workers_per_link, num_buffers_per_channel, use_l1_small_for_semaphores.");
     }
 
-    auto [use_composite, composite_reason] = use_composite_all_gather(input_tensor, dim, memory_config, cluster_axis);
+    auto [use_composite, composite_reason] =
+        use_composite_all_gather(input_tensor, dim, memory_config, persistent_output_tensor, cluster_axis);
     if (use_composite) {
         log_info(tt::LogOp, "Using slower composite all_gather: {}", composite_reason);
-        // NOTE: persistent_output_tensor and sub_core_grid have no equivalent in the composite
-        // path and are ignored here for now.
-        return composite_common::composite_all_gather(
-            input_tensor, dim, std::nullopt, std::nullopt, memory_config, subdevice_id, cluster_axis);
+        // NOTE: sub_core_grid has no equivalent in the composite path and is ignored here for now.
+        // The composite path allocates its own result, so a persistent output receives a copy of it.
+        const auto composite_memory_config = persistent_output_tensor.has_value()
+                                                 ? std::optional(persistent_output_tensor->memory_config())
+                                                 : memory_config;
+        auto output = composite_common::composite_all_gather(
+            input_tensor, dim, std::nullopt, std::nullopt, composite_memory_config, subdevice_id, cluster_axis);
+        if (!persistent_output_tensor.has_value()) {
+            return output;
+        }
+        auto persistent_output = ttnn::copy(output, *persistent_output_tensor);
+        persistent_output.update_tensor_topology(output.tensor_topology());
+        return persistent_output;
     }
 
     return ttnn::prim::all_gather(

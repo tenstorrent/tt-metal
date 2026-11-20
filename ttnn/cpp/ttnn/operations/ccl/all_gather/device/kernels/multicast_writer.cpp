@@ -32,11 +32,12 @@ namespace ag = ttnn::operations::ccl::all_gather_walk;
 // Multicast writer: CB consumer, owns all fabric. Each packet goes once over every connection (one per direction with
 // a neighbor), and together the connections reach every other device of the collective once.
 //
-// Routes. On an even ring the forward route reaches N/2 devices and the backward route N/2-1, so with alternate_routes
-// the packets alternate between route 0 and route 1, which swaps the two hop counts and so also reaches every other
-// device once. Init rides route 0 only. Done rides every route, each after that route's data on the same connections,
-// so it lands after the data it covers: a device reached by route 0 forward and route 1 backward (the antipode) would
-// otherwise count route 0's done before route 1's data. Every device counts one done per route from every other device.
+// Routes. On an even ring the forward route reaches N/2 devices and the backward route N/2-1, so with
+// load_balance_across_alt_routes the packets alternate between route 0 and route 1, which swaps the two hop counts and
+// so also reaches every other device once. Init rides route 0 only. Done rides every route, each after that route's
+// data on the same connections, so it lands after the data it covers: a device reached by route 0 forward and route 1
+// backward (the antipode) would otherwise count route 0's done before route 1's data. Every device counts one done per
+// route from every other device.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
@@ -47,7 +48,7 @@ void kernel_main() {
     constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
     constexpr uint32_t slot_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_connections = get_compile_time_arg_val(5);
-    constexpr bool alternate_routes = get_compile_time_arg_val(6) != 0;
+    constexpr bool load_balance_across_alt_routes = get_compile_time_arg_val(6) != 0;
 
     // Headers come from the pool, so the slot holds none.
     constexpr ag::SlotLayout lay = ag::checked_slot_layout<packets_per_slot, unit_bytes, 0, packet_cap, slot_bytes>();
@@ -55,8 +56,9 @@ void kernel_main() {
     constexpr uint32_t max_connections = 4;
     static_assert(num_connections >= 1 && num_connections <= max_connections, "no route to the other devices");
     // Both directions of one ring axis.
-    static_assert(!alternate_routes || num_connections == 2, "alternate routes need exactly one ring axis");
-    constexpr uint32_t num_routes = alternate_routes ? 2 : 1;
+    static_assert(
+        !load_balance_across_alt_routes || num_connections == 2, "alternate routes need exactly one ring axis");
+    constexpr uint32_t num_routes = load_balance_across_alt_routes ? 2 : 1;
     // A unicast-write and a scatter-write header set per route, a header per connection in each.
     static_assert(
         2 * num_routes * num_connections <= NUM_PACKET_HEADERS / MaxDMProcessorsPerCoreType,
@@ -119,7 +121,7 @@ void kernel_main() {
         ASSERT(conn == num_connections);
     };
     build_ranges(ranges[0], e_hops, w_hops, n_hops, s_hops);
-    if constexpr (alternate_routes) {
+    if constexpr (load_balance_across_alt_routes) {
         // The ring axis's two hop counts swapped (the host enables this only with both nonzero, so the connections
         // keep their order); the inactive axis's are zero either way.
         build_ranges(ranges[1], w_hops, e_hops, s_hops, n_hops);
@@ -180,7 +182,7 @@ void kernel_main() {
     // MAIN
     ///////////////////////////////////////////////////
 
-    uint32_t route = 0;  // toggled per packet under alternate_routes
+    uint32_t route = 0;  // toggled per packet under load_balance_across_alt_routes
     for (bool iter_end = slice_count == 0; !iter_end;) {
         cb.wait_front(1);
         const uint32_t slot = cb.get_read_ptr();
@@ -209,7 +211,7 @@ void kernel_main() {
                         rec.dst, rec.chunk_bytes, static_cast<uint8_t>(rec.num_chunks)),
                     rec.payload_bytes);
             }
-            if constexpr (alternate_routes) {
+            if constexpr (load_balance_across_alt_routes) {
                 route ^= 1;
             }
         }

@@ -220,9 +220,10 @@ AllGatherDeviceOperation::create_op_performance_model(
 
 namespace {
 
-// A sharded output whose shards go round-robin to the banks puts every device's stripe in one bank when a stripe is
-// within one shard along the gather dim and every other shard-grid dim steps by whole rounds of the banks.
-bool stripe_in_one_bank(const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end, uint32_t num_devices) {
+// A sharded output whose shards go round-robin to the banks puts each device's contribution (all_gather_walk.hpp) in
+// one bank when it lies within one shard along the gather dim and every other shard-grid dim steps by whole rounds of
+// the banks.
+bool contribution_in_one_bank(const tt::tt_metal::TensorSpec& output_spec, int32_t dim_from_end, uint32_t num_devices) {
     const auto& nd_shard_spec = output_spec.memory_config().nd_shard_spec();
     const auto& shape = output_spec.padded_shape();
     if (!nd_shard_spec.has_value() || nd_shard_spec->shard_shape.rank() != shape.rank() ||
@@ -335,8 +336,8 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
             }
             case tt::ARCH::BLACKHOLE: {
                 // Multicast sends each packet once, unicast relays it hop by hop at a higher bandwidth but with more
-                // cores to start (workers and a mux per link-direction): unicast wins once enough bytes cross the
-                // busiest link-direction (a ring splits them over both directions).
+                // cores to start (its workers, and a mux per link-direction from 2 workers): unicast wins once enough
+                // bytes cross the busiest link-direction (a ring splits them over both directions).
                 const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
                 const uint64_t input_bytes = static_cast<uint64_t>(input_tensor.mesh_buffer().num_pages()) *
@@ -345,9 +346,10 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                     input_bytes * (args.num_devices - 1) / ((is_ring ? 2u : 1u) * num_links);
                 constexpr uint64_t line_unicast_bytes = 1'050'000, ring_unicast_bytes = 233'000;
                 use_unicast = busiest_link_bytes >= (is_ring ? ring_unicast_bytes : line_unicast_bytes);
-                // Except when every device's output stripe sits in one bank: the unicast relay's writes and re-reads
+                // Except when each device's contribution sits in one bank: the unicast relay's writes and re-reads
                 // all queue on it.
-                use_unicast = use_unicast && !stripe_in_one_bank(output_spec, args.dim_from_end, args.num_devices);
+                use_unicast =
+                    use_unicast && !contribution_in_one_bank(output_spec, args.dim_from_end, args.num_devices);
                 break;
             }
             default: break;  // uncalibrated arch: multicast
@@ -501,8 +503,8 @@ uint32_t compute_packets_per_slot(
     uint32_t min_slots,
     uint32_t max_packets_per_slot) {
     // A slot's packets are read behind one read barrier: enough of them to keep read_bytes_per_barrier of reads in
-    // flight, at least min_slots slots per worker iteration, and only as many as fit in L1. About 30 KB (two BH
-    // payloads) in flight hides DRAM read latency whatever the fabric payload.
+    // flight, at least min_slots slots per worker iteration, and only as many as fit in L1. Reads in flight hide DRAM
+    // read latency once they cover its bandwidth-latency product; about 30 KB does, whatever the fabric payload.
     constexpr uint32_t read_bytes_per_barrier = 30336;
     const uint32_t num_elements = num_walk_elements(geo, input_tensor);
     const uint64_t iter_packets = tt::div_up(

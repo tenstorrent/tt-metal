@@ -205,12 +205,12 @@ public:
         cross_row_ = s.cross_row;
     }
 
-    // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for `stripe`. The order depends only on
-    // (e0, ne), never on the stripe, so a relay's positions match its upstream's.
+    // Walk positions [skip, skip + take) of elements [e0, e0 + ne), for device `device_index`. The order depends only
+    // on (e0, ne), never on the device, so a relay's positions match its upstream's.
     // When runs stop at the row end, a slice that starts mid-row walks that partial row first (head), then blocks
     // anchored at row starts: blocks anchored mid-row would straddle every row end and split every column in two.
-    FORCE_INLINE void init(uint32_t stripe, uint32_t e0, uint32_t ne, uint32_t skip, uint32_t take) {
-        stripe_offset_units_ = stripe * stripe_units_;
+    FORCE_INLINE void init(uint32_t device_index, uint32_t e0, uint32_t ne, uint32_t skip, uint32_t take) {
+        stripe_offset_units_ = device_index * stripe_units_;
         left_ = take;
         const uint32_t row_elems = stripe_units_ / element_units_;
         const uint32_t into_row = e0 % row_elems;

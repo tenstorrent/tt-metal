@@ -46,9 +46,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     bool writer_on_noc0 = false;  // else the writer is on NOC1; the reader takes the other
     switch (mesh_device->arch()) {
         case tt::ARCH::WORMHOLE_B0:
-        case tt::ARCH::BLACKHOLE:
-            writer_on_noc0 = true;  // faster on BH
-            break;
+        case tt::ARCH::BLACKHOLE: writer_on_noc0 = true; break;
         default: break;  // uncalibrated arch: the default reader/writer NOCs
     }
 
@@ -63,7 +61,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
     uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
     uint32_t num_active_axes = 0;
-    bool balanceable_ring = false;  // an even ring of 4 or more devices
+    bool axis_load_balance = false;  // an even ring of 4 or more devices
 
     for (uint32_t axis = 0; axis < 2; ++axis) {
         const uint32_t axis_size = operation_attributes.axis_num_devices[axis];
@@ -84,7 +82,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         // An even ring's antipode is reached on the forward route (route 0; the alternate route reaches it backward).
         auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             axis_size, axis_index, axis_topology, /*static_alternate=*/false);
-        balanceable_ring = tt::tt_fabric::is_ring_or_torus(axis_topology) && axis_size % 2 == 0 && axis_size >= 4;
+        axis_load_balance = tt::tt_fabric::is_ring_or_torus(axis_topology) && axis_size % 2 == 0 && axis_size >= 4;
         auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, sender_device_coord, 1, axis_topology, axis);
         auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -109,8 +107,8 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     // more. The writer then alternates packets with a route that swaps the two hop counts. Only on one ring axis of 4
     // or more devices: at 2 the swapped backward route has no hop, and two axes' 4 connections would need more packet
     // headers than the writer's RISC has.
-    const bool alternate_routes = balanceable_ring && num_active_axes == 1;
-    const uint32_t num_routes = alternate_routes ? 2 : 1;
+    const bool load_balance_across_alt_routes = axis_load_balance && num_active_axes == 1;
+    const uint32_t num_routes = load_balance_across_alt_routes ? 2 : 1;
 
     // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
@@ -238,7 +236,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         cb0_id,
         slot_bytes,
         num_connections,
-        static_cast<uint32_t>(alternate_routes),
+        static_cast<uint32_t>(load_balance_across_alt_routes),
     };
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -288,7 +286,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
             0u,                  // output tensor address (Buffer* binding)
             slice_start,         // this worker's slice start (elements)
             slice_count,         // this worker's slice length (elements)
-            device_idx,          // this device's index (its stripe)
+            device_idx,          // this device's index
             done_sem.address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
             num_done_credits,    // done credits to wait for
         };

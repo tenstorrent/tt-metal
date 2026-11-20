@@ -7,16 +7,17 @@
 // The all_gather walk geometry and slot layout. The host factories size the CB slots and the packet cap with it; the
 // kernels walk with it (device/kernels/all_gather_common.hpp).
 //
-// Page indexing. The kernels walk this device's stripe of the output in units of unit_bytes and pack the runs that are
-// contiguous in the output into packets of up to kMaxChunksPerPacket chunks. A walk element is one output page, or one
-// unit when a stripe row is not whole output pages; workers split the elements into contiguous slices.
-//   unit:    unit_bytes, the granularity every cut lands on. Local unit u is global unit
-//            (u / stripe_units) * num_devices * stripe_units + stripe * stripe_units + u % stripe_units, which lives in
-//            output page (global unit) / out_page_units.
-//   element: what the walk steps over, element_units units: one output page or one unit.
-//   stripe:  the stripe_units units this device contributes to each output row.
-//   lane:    local elements `step` apart whose output pages are out_page_stride apart (the output's
-//            contiguous_page_stride()), i.e. adjacent in memory.
+// Page indexing. The kernels walk this device's contribution to the output in units of unit_bytes and pack the runs
+// that are contiguous in the output into packets of up to kMaxChunksPerPacket chunks. A walk element is one output
+// page, or one unit when a stripe row is not whole output pages; workers split the elements into contiguous slices.
+//   unit:         unit_bytes, the granularity every cut lands on. Local unit u is global unit
+//                 (u / stripe_units) * num_devices * stripe_units + device_index * stripe_units + u % stripe_units,
+//                 which lives in output page (global unit) / out_page_units.
+//   element:      what the walk steps over, element_units units: one output page or one unit.
+//   stripe:       the stripe_units units this device contributes to each output row.
+//   contribution: all of this device's stripes, one per output row.
+//   lane:         local elements `step` apart whose output pages are out_page_stride apart (the output's
+//                 contiguous_page_stride()), i.e. adjacent in memory.
 
 #include <algorithm>
 #include <cstdint>

@@ -43,6 +43,65 @@ namespace {
 //   antipode -- on a ring, the device N/2 hops away.
 ////////////////////////////////////////////////////////////////
 
+// The unicast cores, flat per link: [dir 0: cores_per_dir][dir 1: cores_per_dir]. Each direction's cores sit on one
+// core row where the grid allows, directions on distinct rows first, then rows double up; otherwise they keep
+// choose_worker_cores' row-major order, which also sets the core count. Much of a direction's traffic runs along its
+// row's NOC links (reads into its workers, packets to its mux and on to ethernet), so directions sharing a row share
+// that bandwidth, and the row-major order can put three on one row. mux_in_middle: each direction's first core (its
+// mux) swaps with its middle one.
+std::vector<CoreCoord> place_unicast_cores(
+    const AllGatherParams& operation_attributes,
+    distributed::MeshDevice* mesh_device,
+    const CoreRangeSet& available_cores,
+    uint32_t num_links,
+    uint32_t cores_per_dir,
+    bool mux_in_middle) {
+    const uint32_t num_cores_per_link = 2 * cores_per_dir;
+    auto cores = std::get<1>(ttnn::ccl::choose_worker_cores(
+        num_links,
+        num_cores_per_link,
+        mesh_device,
+        operation_attributes.subdevice_id,
+        /*core_grid_offset=*/CoreCoord{0, 0},
+        operation_attributes.sub_core_grid));
+    TT_FATAL(
+        cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
+        "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
+        "sub_core_grid.",
+        static_cast<size_t>(num_links) * num_cores_per_link,
+        num_links,
+        num_cores_per_link,
+        cores.size());
+
+    std::map<uint32_t, std::vector<CoreCoord>> free_by_row;
+    for (const auto& core : corerange_to_cores(available_cores, std::nullopt, /*row_wise=*/true)) {
+        free_by_row[core.y].push_back(core);
+    }
+    for (auto& [y, free] : free_by_row) {
+        std::sort(free.begin(), free.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
+    }
+    std::vector<CoreCoord> grouped;
+    for (bool progress = true; progress && grouped.size() < cores.size();) {
+        progress = false;
+        for (auto& [y, free] : free_by_row) {
+            if (grouped.size() < cores.size() && free.size() >= cores_per_dir) {
+                grouped.insert(grouped.end(), free.begin(), free.begin() + cores_per_dir);
+                free.erase(free.begin(), free.begin() + cores_per_dir);
+                progress = true;
+            }
+        }
+    }
+    if (grouped.size() == cores.size()) {
+        cores = std::move(grouped);
+    }
+    if (mux_in_middle) {
+        for (size_t g = 0; g + cores_per_dir <= cores.size(); g += cores_per_dir) {
+            std::swap(cores[g], cores[g + (cores_per_dir / 2)]);
+        }
+    }
+    return cores;
+}
+
 tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const AllGatherParams& operation_attributes,
     const ttnn::MeshCoordinate& sender_device_coord,
@@ -194,7 +253,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
             signals_per_iter = 2;
             break;
         }
-        default: break;  // uncalibrated arch: one worker, the mux first, the default reader/writer NOCs
+        default: break;  // uncalibrated arch: one worker per direction (no mux), the default reader/writer NOCs
     }
 
     // Shrink the workers to fit the available cores.
@@ -223,55 +282,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const uint32_t cores_per_dir = workers_per_dir + mux_per_dir;
     const uint32_t num_cores_per_link = unicast_cores_per_link(workers_per_dir);
 
-    [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
-        num_links,
-        num_cores_per_link,
-        mesh_device,
-        operation_attributes.subdevice_id,
-        /*core_grid_offset=*/CoreCoord{0, 0},
-        operation_attributes.sub_core_grid);
-    TT_FATAL(
-        all_cores.size() == static_cast<size_t>(num_links) * num_cores_per_link,
-        "all_gather needs {} worker cores ({} links x {} cores/link) but only {} are available; provide a larger "
-        "sub_core_grid.",
-        static_cast<size_t>(num_links) * num_cores_per_link,
-        num_links,
-        num_cores_per_link,
-        all_cores.size());
-
-    // Put each direction's mux and its workers on one core row where the grid allows, directions on distinct rows
-    // first, then rows double up; otherwise keep choose_worker_cores' row-major order. Much of a direction's traffic
-    // runs along its row's NOC links (reads into its workers, packets to its mux and on to ethernet), so directions
-    // sharing a row share that bandwidth, and the row-major order can put three on one row.
-    auto group_by_row = [&]() {
-        std::map<uint32_t, std::vector<CoreCoord>> free_by_row;
-        for (const auto& core : corerange_to_cores(available_cores, std::nullopt, /*row_wise=*/true)) {
-            free_by_row[core.y].push_back(core);
-        }
-        for (auto& [y, free] : free_by_row) {
-            std::sort(free.begin(), free.end(), [](const CoreCoord& a, const CoreCoord& b) { return a.x < b.x; });
-        }
-        std::vector<CoreCoord> grouped;
-        for (bool progress = true; progress && grouped.size() < all_cores.size();) {
-            progress = false;
-            for (auto& [y, free] : free_by_row) {
-                if (grouped.size() < all_cores.size() && free.size() >= cores_per_dir) {
-                    grouped.insert(grouped.end(), free.begin(), free.begin() + cores_per_dir);
-                    free.erase(free.begin(), free.begin() + cores_per_dir);
-                    progress = true;
-                }
-            }
-        }
-        if (grouped.size() == all_cores.size()) {
-            all_cores = std::move(grouped);
-        }
-    };
-    group_by_row();
-    if (use_mux && mux_in_middle) {
-        for (size_t g = 0; g + cores_per_dir <= all_cores.size(); g += cores_per_dir) {
-            std::swap(all_cores[g], all_cores[g + (cores_per_dir / 2)]);
-        }
-    }
+    const auto all_cores = place_unicast_cores(
+        operation_attributes, mesh_device, available_cores, num_links, cores_per_dir, use_mux && mux_in_middle);
 
     // Helpers to index into the flat core vector (dir: 0 = forward, 1 = backward).
     auto core_at = [&](uint32_t link, uint32_t dir, uint32_t idx_in_dir) -> const CoreCoord& {
