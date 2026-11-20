@@ -1016,9 +1016,9 @@ inline void _bitonic_topk_phases_steps(
 
     // Fused keys: phases 0..4 run in the 32-datum register window (topk_fused_ph0_to_4_pair), then
     // phase 5 (if requested) runs as a single-phase pass. That pass replays the load16/store16
-    // windows, so they are recorded (without executing) first.
+    // windows, so they are recorded (without executing) first. Other end phases take the stock loop.
     if constexpr (FUSED) {
-        if (i_start_phase == 0 && i_end_phase >= 4) {
+        if (i_start_phase == 0 && (i_end_phase == 4 || i_end_phase == 5)) {
             if (topk_replay_init >= 0) {
                 lltt::record<lltt::NoExec>(0, ldst_count);
                 bitonic_topk_load16<is_fp32_dest_acc_en, FUSED, RANK_STAMPED>(4, 8);
@@ -1038,7 +1038,7 @@ inline void _bitonic_topk_phases_steps(
                 dst_addr_offset = 16;
                 set_dst_write_addr(dst_addr_offset);
             }
-            if (i_end_phase > 4) {
+            if (i_end_phase == 5) {
                 set_dst_write_addr(0);
                 _bitonic_topk_phases_steps<
                     APPROXIMATION_MODE,
