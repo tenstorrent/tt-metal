@@ -256,8 +256,8 @@ tt_metal/tools/profiler/tracy_debug_zones.hpp @mo-tenstorrent @akerteszTT @yusuf
 tt_metal/impl/streaming_profiler/ @mo-tenstorrent @yusufbashiTT
 
 # metal misc
-tt_metal/sfpi-info.sh @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
-tt_metal/sfpi-version @nathan-TT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
+tt_metal/sfpi-info.sh @nathan-TT @kstevensTT @shengxiangjiTT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
+tt_metal/sfpi-version @nathan-TT @kstevensTT @shengxiangjiTT @tenstorrent/metalium-developers-infra @tenstorrent-github-bot
 tt_metal/ttsim-version @mcraigheadTT @tenstorrent-github-bot
 tt_metal/**/profiler/**/CMakeLists.txt @mo-tenstorrent @akerteszTT @yusufbashiTT @tenstorrent/metalium-developers-infra
 tt_metal/**/requirements*.txt @tenstorrent/metalium-developers-infra
