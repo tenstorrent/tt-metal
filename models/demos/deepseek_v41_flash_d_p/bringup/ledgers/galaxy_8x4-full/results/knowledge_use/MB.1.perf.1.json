@@ -1,0 +1,73 @@
+{
+ "used": [
+  {
+   "id": "DS41-206",
+   "how": "fresh walls reuse a serving slot at a new position: under DECODER_SKIP=decode _window_policy truncates instead of refusing, so slots of the adapter's KV cache can be drawn at any AgentX position (tests/test_skip_positions._fresh_kind)",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-208",
+   "how": "same: the untimed real previous chunk at p - chunk in a reused slot restarts its window there; no refusal under decode",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-245",
+   "how": "the gate env sets DS41_ENGRAM_TABLE=resident (shipped default), kept in the 8192 run's command",
+   "traced": null,
+   "cited": false
+  },
+  {
+   "id": "DS41-281",
+   "how": "the fresh walls count builds per timed chunk and name the op: the 'op not identified' of DS41-281 is ttnn.slice at the sites in the MB.1 table",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [
+  {
+   "id": "DS41-281",
+   "evidence": "out of date: 'Cause: some op's program key holds the chunk start (op not identified)'. MB.1 BuildProbe (resident log 20261120-215811.run0.log, smoke) names them: ttnn.slice (slice_start/end in SliceDeviceOperation::compute_program_hash, slice_device_operation.cpp:462) at served.py:155 slice_rows (via history_gather.py:270 _pack), compressor.py:147 _rows (also the table input shape 522240 -> 1044480), rope.py:351 _rows, served.py:215 DeviceScalars.at (via compressor.py:696-698), history_gather.py:290 _tail, attention.py:473 srv_row: ~23 programs a fresh 5120 chunk",
+   "cited": true
+  }
+ ],
+ "missing": [
+  "how to drive the serving runtime (adapter.build_runtime / allocate_kv_cache / prefill_chunk) from a bring-up test on the batch's held model without a second load (tests/test_full_prefill.py does it at all 40 layers; FIX.29's shared loader makes it free)"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "tests only: no kernel, fork or padding change"
+  },
+  {
+   "id": "OV-57",
+   "answer": "done",
+   "evidence": "the audit's build sites reproduced on this branch by the MB.1 BuildProbe at 5120 (results/MB.1_fresh_walls.md: rope.py RoPE rows, compressor.py compressed-row RoPE incl. the table input shape, served.py slice_rows / DeviceScalars, history_gather tail, attention.py srv_row); measured, not fixed (MB.2's task). Host per chunk: the wall includes the runtime's ids readback (adapter._host_ids) as the audit says; its removal is not in this tests-only step"
+  }
+ ],
+ "cited_only": [
+  "DS41-321"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "MB.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-20T22:14:02",
+  "head": "dfff591dfb7",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.1_fresh_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/MB.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/fresh_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}

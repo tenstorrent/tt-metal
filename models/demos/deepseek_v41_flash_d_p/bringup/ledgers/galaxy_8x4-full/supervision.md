@@ -619,3 +619,13 @@
   8192's 0 builds) -> MB.2 (no build in serving: every per-chunk value a runtime value, ids reordered on device,
   POS_DYNAMIC, bit-identical; gate = P.83's 5120 accept units + fresh walls + the permanent test_no_rebuild.py, builds
   == 0, ids uploads == 0; A/B on POS_DYNAMIC). Note OV-* (the audit list) to MB.*. Launch --until MB.2.
+- 22:25 UTC OWNER: POS_DYNAMIC becomes the default once MB.2 passes (its accept makes ab.change the shipped default, F104; no keep_default).
+- 22:15 UTC OWNER: when the model_bringup work is done, start a second overseer tmux session 'overseer_batch' on the batching branch. Prepared: /data/dnijemcevic/bringup/handoff_20261119/overseer_batch_prompt.txt and /data/dnijemcevic/bringup/handoff_20261119/start_overseer_batch.sh (stops the runner, switches the folder back to the batching branch restoring its stashed / moved ledger records, starts claude with the /bringup prompt). Run it after MB.2 is accepted and committed and the orchestrator has stopped (both overseers cannot share the one folder / box at once).
+- 22:20 UTC OWNER asleep: work fully autonomously (this overseer and the batching one; the batch prompt says so: decide pending choices, never idle). Plan: supervise MB.1 -> MB.2 (POS_DYNAMIC default on at accept), then run start_overseer_batch.sh.
+- 22:20 UTC MB.1 done (tests only; gate units PASS; results/MB.1_fresh_walls.md). Fresh vs warm through the serving
+  entry adapter.prefill_chunk: 5120 steady 63.4 -> 53.6k (-15 %, 177 builds after warm-up), resumed 61.6 -> 54.6k
+  (-11 %, 179), partial 17.3 -> 14.4k (-17 %, 156); 8192 steady 72.8 -> 49.4k (-32 %, 161), resumed 72.1 -> 64.0k
+  (-11 %, 175). CORRECTION: PB.9F's "8192 single request 0 builds" was a test artefact; 8192 rebuilds too (MB.2 fixes
+  both). Builders: ttnn.slice @ served.py:155 (history slice_rows), compressor/rope RoPE rows (table input shape too),
+  served.py:211 DeviceScalars, history tail, srv_row. KNOWLEDGE CONTRADICTED DS41-281 (now identified: ttnn.slice keys).
+  DECIDED: accept; MB.2 next.

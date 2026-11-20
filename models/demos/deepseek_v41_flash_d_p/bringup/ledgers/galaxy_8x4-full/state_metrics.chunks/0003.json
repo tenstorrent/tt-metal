@@ -1757,6 +1757,20 @@
   "top5_overlap_limit": 0.994286,
   "unwritten_records_changed_decoder_skip": 0
  },
+ "MB.1": {
+  "program_builds_after_warmup_single5120_partial": 156,
+  "program_builds_after_warmup_single5120_partial_tagentic_cc": 156,
+  "program_builds_after_warmup_single5120_resumed": 179,
+  "program_builds_after_warmup_single5120_resumed_tagentic_cc": 179,
+  "program_builds_after_warmup_single5120_steady": 177,
+  "program_builds_after_warmup_single5120_steady_tagentic_cc": 177,
+  "single5120_partial_fresh_tok_s": 14385.3,
+  "single5120_partial_fresh_tok_s_tagentic_cc": 14385.3,
+  "single5120_resumed_fresh_tok_s": 54646.8,
+  "single5120_resumed_fresh_tok_s_tagentic_cc": 54646.8,
+  "single5120_steady_fresh_tok_s": 53611.2,
+  "single5120_steady_fresh_tok_s_tagentic_cc": 53611.2
+ },
  "P.51": {
   "acks_early": 0,
   "acks_early_decoder_skip": 0,

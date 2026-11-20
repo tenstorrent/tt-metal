@@ -1,0 +1,1185 @@
+{
+ "metrics": {
+  "determinism_chunk_max_abs_diff_code": {
+   "t": "2026-11-20T22:08:55",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunk_max_abs_diff_novel": {
+   "t": "2026-11-20T22:08:55",
+   "value": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ]
+  },
+  "determinism_chunks": {
+   "t": "2026-11-20T22:08:55",
+   "value": 4
+  },
+  "determinism_elements_differ": {
+   "t": "2026-11-20T22:08:55",
+   "value": 0
+  },
+  "determinism_max_abs_diff": {
+   "t": "2026-11-20T22:08:55",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_code": {
+   "t": "2026-11-20T22:08:55",
+   "value": 0.0
+  },
+  "determinism_max_abs_diff_novel": {
+   "t": "2026-11-20T22:08:55",
+   "value": 0.0
+  },
+  "determinism_rows_code": {
+   "t": "2026-11-20T22:08:55",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_rows_novel": {
+   "t": "2026-11-20T22:08:55",
+   "value": [
+    0,
+    0,
+    0,
+    0
+   ]
+  },
+  "determinism_runs": {
+   "t": "2026-11-20T22:08:55",
+   "value": 3
+  },
+  "determinism_s": {
+   "t": "2026-11-20T22:08:55",
+   "value": 93.7
+  },
+  "determinism_state_max_abs_diff": {
+   "t": "2026-11-20T22:08:55",
+   "value": 0.0
+  },
+  "device_ms_chunk_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 85.51
+  },
+  "device_ms_chunk_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 63.4
+  },
+  "device_ms_chunk_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 66.94
+  },
+  "fresh_host_ms_chunk_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 37.61
+  },
+  "fresh_host_ms_chunk_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 26.32
+  },
+  "fresh_host_ms_chunk_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 36.66
+  },
+  "fresh_row_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": {
+    "builds": 156,
+    "case": "single5120_partial",
+    "chunk": 5120,
+    "chunks": 8,
+    "device_ms_chunk": 85.50632356770835,
+    "draws": [
+     {
+      "built": 22,
+      "device_ms": 97.06760328125,
+      "end": 840847,
+      "fresh_ms": 112.1,
+      "new": 591,
+      "prepared": 1,
+      "repeat_ms": 112.5,
+      "seed": 305120,
+      "slot": 29,
+      "start": 840256,
+      "write_start": null
+     },
+     {
+      "built": 17,
+      "device_ms": 80.839931125,
+      "end": 91801,
+      "fresh_ms": 127.9,
+      "new": 729,
+      "prepared": 1,
+      "repeat_ms": 104.3,
+      "seed": 305121,
+      "slot": 16,
+      "start": 91072,
+      "write_start": null
+     },
+     {
+      "built": 18,
+      "device_ms": 78.611436296875,
+      "end": 9393,
+      "fresh_ms": 129.3,
+      "new": 1265,
+      "prepared": 1,
+      "repeat_ms": 92.8,
+      "seed": 305122,
+      "slot": 25,
+      "start": 8128,
+      "write_start": null
+     },
+     {
+      "built": 20,
+      "device_ms": null,
+      "end": 40261,
+      "fresh_ms": 119.9,
+      "new": 3461,
+      "prepared": 1,
+      "repeat_ms": 81.2,
+      "seed": 305123,
+      "slot": 21,
+      "start": 36800,
+      "write_start": null
+     },
+     {
+      "built": 20,
+      "device_ms": null,
+      "end": 100233,
+      "fresh_ms": 121.0,
+      "new": 457,
+      "prepared": 1,
+      "repeat_ms": 104.5,
+      "seed": 305124,
+      "slot": 19,
+      "start": 99776,
+      "write_start": null
+     },
+     {
+      "built": 17,
+      "device_ms": null,
+      "end": 122887,
+      "fresh_ms": 124.4,
+      "new": 1607,
+      "prepared": 1,
+      "repeat_ms": 93.4,
+      "seed": 305125,
+      "slot": 27,
+      "start": 121280,
+      "write_start": null
+     },
+     {
+      "built": 21,
+      "device_ms": null,
+      "end": 286878,
+      "fresh_ms": 136.0,
+      "new": 1694,
+      "prepared": 1,
+      "repeat_ms": 104.5,
+      "seed": 305126,
+      "slot": 22,
+      "start": 285184,
+      "write_start": null
+     },
+     {
+      "built": 21,
+      "device_ms": null,
+      "end": 113723,
+      "fresh_ms": 117.5,
+      "new": 4411,
+      "prepared": 1,
+      "repeat_ms": 127.8,
+      "seed": 305127,
+      "slot": 20,
+      "start": 109312,
+      "write_start": null
+     }
+    ],
+    "fresh_host_ms_chunk": 37.60643443298338,
+    "fresh_tok_s": 14385.313331946805,
+    "fresh_wall_ms_chunk": 123.52007627487183,
+    "fresh_walls": [
+     112.1,
+     127.9,
+     129.3,
+     119.9,
+     121.0,
+     124.4,
+     136.0,
+     117.5
+    ],
+    "new_tokens": 14215,
+    "path": "single (adapter prefill_chunk)",
+    "prepared_builds": 8,
+    "prepared_ms": 1.9,
+    "probe_builds": 54,
+    "probe_chunks": 6,
+    "probe_detail": [
+     [
+      18,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:289:_tail",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 17,
+       "slice_start": 17
+      },
+      "slice_end: [0] 91 -> 92"
+     ],
+     [
+      12,
+      "ttnn.slice",
+      "compressor.py:147:_rows < compressor.py:140:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "input": 11,
+       "slice_end": 11,
+       "slice_start": 11
+      },
+      "input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "rope.py:351:_rows < rope.py:329:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [2] 66368 -> 71488"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:698:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [0] 2075 -> 2145"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:697:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [0] 1915 -> 8581"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "history_gather.py:290:_tail < history_gather.py:217:gather < sparse_attention.py:192:_compressed",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [2] 1040 -> 1120"
+     ],
+     [
+      3,
+      "ttnn.bringup.run_prepared",
+      "snapshot_send.py:415:__call__ < attention.py:1138:write_snapshot < model.py:1974:_snapshot",
+      {
+       "arg0": 3,
+       "arg2": 3
+      },
+      "arg0: [1] -5044779741840228509 -> 75296749426818567"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:232:_full",
+      {
+       "slice_end": 3,
+       "slice_start": 3
+      },
+      "slice_end: [0] 93 -> 52, [2] 2048 -> 6144"
+     ]
+    ],
+    "probe_host": [
+     "bringup.run_prepared 68 ms (3x) @ snapshot_send.py:415:__call__",
+     "slice 13 ms (1x) @ rope.py:351:_rows"
+    ],
+    "probe_ops": [
+     "slice x18 [slice_end, slice_start, (first call at this site); slice_end: [0] 91 -> 92] @ served.py:155:slice_rows",
+     "slice x12 [input, slice_end, slice_start, (first call at this site); input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)] @ compressor.py:147:_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [2] 66368 -> 71488] @ rope.py:351:_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [0] 2075 -> 2145] @ served.py:215:at",
+     "slice x3 [slice_end, slice_start, (first call at this site); slice_end: [0] 1915 -> 8581] @ served.py:215:at",
+     "slice x3 [slice_end, slice_start, (first call at this site); slice_end: [2] 1040 -> 1120] @ history_gather.py:290:_tail",
+     "bringup.run_prepared x3 [arg0, arg2; arg0: [1] -5044779741840228509 -> 75296749426818567] @ snapshot_send.py:415:__call__",
+     "slice x3 [slice_end, slice_start; slice_end: [0] 93 -> 52, [2] 2048 -> 6144] @ served.py:155:slice_rows",
+     "prepare_program x3 (1 ms) @ snapshot_send.py:407:__call__"
+    ],
+    "probe_prepares": 3,
+    "profiled_chunks": 3,
+    "repeat_host_ms_chunk": 17.65668035380044,
+    "repeat_tok_s": 17316.53689194146,
+    "repeat_wall_ms_chunk": 102.61145234107971,
+    "repeat_walls": [
+     112.5,
+     104.3,
+     92.8,
+     81.2,
+     104.5,
+     93.4,
+     104.5,
+     127.8
+    ],
+    "seeds": {
+     "probe": [
+      305620,
+      305621,
+      305622
+     ],
+     "timed": [
+      305120,
+      305121,
+      305122,
+      305123,
+      305124,
+      305125,
+      305126,
+      305127
+     ],
+     "warm": [
+      306020,
+      306021,
+      306022,
+      306023
+     ]
+    }
+   }
+  },
+  "fresh_row_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": {
+    "builds": 179,
+    "case": "single5120_resumed",
+    "chunk": 5120,
+    "chunks": 8,
+    "device_ms_chunk": 63.39737596875,
+    "draws": [
+     {
+      "built": 23,
+      "device_ms": 63.2333809375,
+      "end": 131584,
+      "fresh_ms": 89.7,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 78.5,
+      "seed": 205120,
+      "slot": 16,
+      "start": 126464,
+      "write_start": 126592
+     },
+     {
+      "built": 23,
+      "device_ms": 63.148304296875,
+      "end": 147328,
+      "fresh_ms": 89.9,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 81.6,
+      "seed": 205121,
+      "slot": 24,
+      "start": 142208,
+      "write_start": 142336
+     },
+     {
+      "built": 23,
+      "device_ms": 63.810442671875,
+      "end": 127808,
+      "fresh_ms": 89.6,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 81.7,
+      "seed": 205122,
+      "slot": 26,
+      "start": 122688,
+      "write_start": 122816
+     },
+     {
+      "built": 23,
+      "device_ms": null,
+      "end": 497216,
+      "fresh_ms": 95.0,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 84.0,
+      "seed": 205123,
+      "slot": 31,
+      "start": 492096,
+      "write_start": 492224
+     },
+     {
+      "built": 26,
+      "device_ms": null,
+      "end": 550336,
+      "fresh_ms": 93.4,
+      "new": 4992,
+      "prepared": 1,
+      "repeat_ms": 83.1,
+      "seed": 205124,
+      "slot": 19,
+      "start": 545216,
+      "write_start": 545344
+     },
+     {
+      "built": 23,
+      "device_ms": null,
+      "end": 108992,
+      "fresh_ms": 93.5,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 79.4,
+      "seed": 205125,
+      "slot": 18,
+      "start": 103872,
+      "write_start": 104000
+     },
+     {
+      "built": 19,
+      "device_ms": null,
+      "end": 32000,
+      "fresh_ms": 86.4,
+      "new": 4992,
+      "prepared": 1,
+      "repeat_ms": 77.3,
+      "seed": 205126,
+      "slot": 26,
+      "start": 26880,
+      "write_start": 27008
+     },
+     {
+      "built": 19,
+      "device_ms": null,
+      "end": 437568,
+      "fresh_ms": 93.4,
+      "new": 4992,
+      "prepared": 0,
+      "repeat_ms": 83.1,
+      "seed": 205127,
+      "slot": 31,
+      "start": 432448,
+      "write_start": 432576
+     }
+    ],
+    "fresh_host_ms_chunk": 26.323111625854494,
+    "fresh_tok_s": 54646.82608308417,
+    "fresh_wall_ms_chunk": 91.35022759437561,
+    "fresh_walls": [
+     89.7,
+     89.9,
+     89.6,
+     95.0,
+     93.4,
+     93.5,
+     86.4,
+     93.4
+    ],
+    "new_tokens": 39936,
+    "path": "single (adapter prefill_chunk)",
+    "prepared_builds": 2,
+    "prepared_ms": 0.0,
+    "probe_builds": 69,
+    "probe_chunks": 6,
+    "probe_detail": [
+     [
+      18,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:289:_tail",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 17,
+       "slice_start": 17
+      },
+      "slice_end: [0] 70 -> 71"
+     ],
+     [
+      12,
+      "ttnn.slice",
+      "compressor.py:147:_rows < compressor.py:140:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "input": 11,
+       "slice_end": 11,
+       "slice_start": 11
+      },
+      "input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)"
+     ],
+     [
+      9,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:232:_full",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 8,
+       "slice_start": 8
+      },
+      "slice_end: [0] 70 -> 71"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "rope.py:351:_rows < rope.py:329:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [2] 430080 -> 435200"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:697:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [0] 13281 -> 13445"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:698:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [0] 13441 -> 13601"
+     ],
+     [
+      4,
+      "ttnn.slice",
+      "history_gather.py:290:_tail < history_gather.py:217:gather < sparse_attention.py:192:_compressed",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 3,
+       "slice_start": 3
+      },
+      "slice_end: [2] 6720 -> 6800"
+     ],
+     [
+      2,
+      "ttnn.slice",
+      "attention.py:473:srv_row < compressor.py:712:write < compressor.py:1174:_write_from",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 1,
+       "slice_start": 1
+      },
+      "slice_end: [2] 11 -> 103"
+     ],
+     [
+      2,
+      "ttnn.slice",
+      "attention.py:473:srv_row < compressor.py:712:write < compressor.py:1125:write",
+      {
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [2] 1 -> 7"
+     ],
+     [
+      1,
+      "ttnn.to_layout",
+      "cores.py:154:to_tile < history_gather.py:271:_pack < history_gather.py:289:_tail",
+      {
+       "(first call at this site)": 1
+      },
+      ""
+     ],
+     [
+      1,
+      "ttnn.bringup.run_prepared",
+      "history_gather.py:275:_pack < history_gather.py:289:_tail < history_gather.py:217:gather",
+      {
+       "(first call at this site)": 1
+      },
+      ""
+     ],
+     [
+      1,
+      "ttnn.experimental.high_bw_all_gather",
+      "history_gather.py:296:_tail < history_gather.py:217:gather < sparse_attention.py:192:_compressed",
+      {
+       "(first call at this site)": 1
+      },
+      ""
+     ],
+     [
+      1,
+      "ttnn.bringup.slice_write",
+      "history_gather.py:300:_tail < history_gather.py:217:gather < sparse_attention.py:192:_compressed",
+      {
+       "(first call at this site)": 1
+      },
+      ""
+     ]
+    ],
+    "probe_host": [
+     "bringup.ckv_bfp4 15 ms (1x) @ history_gather.py:275:_pack",
+     "experimental.high_bw_all_gather 12 ms (1x) @ history_gather.py:296:_tail"
+    ],
+    "probe_ops": [
+     "slice x18 [slice_end, slice_start, (first call at this site); slice_end: [0] 70 -> 71] @ served.py:155:slice_rows",
+     "slice x12 [input, slice_end, slice_start, (first call at this site); input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)] @ compressor.py:147:_rows",
+     "slice x9 [slice_end, slice_start, (first call at this site); slice_end: [0] 70 -> 71] @ served.py:155:slice_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [2] 430080 -> 435200] @ rope.py:351:_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [0] 13281 -> 13445] @ served.py:215:at",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [0] 13441 -> 13601] @ served.py:215:at",
+     "slice x4 [slice_end, slice_start, (first call at this site); slice_end: [2] 6720 -> 6800] @ history_gather.py:290:_tail",
+     "slice x2 [(first call at this site), slice_end, slice_start; slice_end: [2] 11 -> 103] @ attention.py:473:srv_row",
+     "prepare_program x1 (0 ms) @ history_gather.py:275:_pack"
+    ],
+    "probe_prepares": 1,
+    "profiled_chunks": 3,
+    "repeat_host_ms_chunk": 17.16195719673665,
+    "repeat_tok_s": 61577.92763228759,
+    "repeat_wall_ms_chunk": 81.0680091381073,
+    "repeat_walls": [
+     78.5,
+     81.6,
+     81.7,
+     84.0,
+     83.1,
+     79.4,
+     77.3,
+     83.1
+    ],
+    "seeds": {
+     "probe": [
+      205620,
+      205621,
+      205622
+     ],
+     "timed": [
+      205120,
+      205121,
+      205122,
+      205123,
+      205124,
+      205125,
+      205126,
+      205127
+     ],
+     "warm": [
+      206020,
+      206021,
+      206022,
+      206023
+     ]
+    }
+   }
+  },
+  "fresh_row_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": {
+    "builds": 177,
+    "case": "single5120_steady",
+    "chunk": 5120,
+    "chunks": 8,
+    "device_ms_chunk": 66.94418859375001,
+    "draws": [
+     {
+      "built": 22,
+      "device_ms": 61.598389078125,
+      "end": 41408,
+      "fresh_ms": 129.2,
+      "new": 5120,
+      "prepared": 1,
+      "repeat_ms": 78.0,
+      "seed": 105120,
+      "slot": 23,
+      "start": 36288,
+      "write_start": null
+     },
+     {
+      "built": 24,
+      "device_ms": 69.836310890625,
+      "end": 407360,
+      "fresh_ms": 94.0,
+      "new": 5120,
+      "prepared": 1,
+      "repeat_ms": 82.4,
+      "seed": 105121,
+      "slot": 20,
+      "start": 402240,
+      "write_start": null
+     },
+     {
+      "built": 19,
+      "device_ms": 69.3978658125,
+      "end": 408832,
+      "fresh_ms": 87.6,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 81.4,
+      "seed": 105122,
+      "slot": 29,
+      "start": 403712,
+      "write_start": null
+     },
+     {
+      "built": 22,
+      "device_ms": null,
+      "end": 229184,
+      "fresh_ms": 88.8,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 78.3,
+      "seed": 105123,
+      "slot": 28,
+      "start": 224064,
+      "write_start": null
+     },
+     {
+      "built": 21,
+      "device_ms": null,
+      "end": 221696,
+      "fresh_ms": 88.2,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 81.0,
+      "seed": 105124,
+      "slot": 25,
+      "start": 216576,
+      "write_start": null
+     },
+     {
+      "built": 22,
+      "device_ms": null,
+      "end": 420160,
+      "fresh_ms": 88.5,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 79.6,
+      "seed": 105125,
+      "slot": 22,
+      "start": 415040,
+      "write_start": null
+     },
+     {
+      "built": 25,
+      "device_ms": null,
+      "end": 141056,
+      "fresh_ms": 93.0,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 80.1,
+      "seed": 105126,
+      "slot": 30,
+      "start": 135936,
+      "write_start": null
+     },
+     {
+      "built": 22,
+      "device_ms": null,
+      "end": 478336,
+      "fresh_ms": 94.7,
+      "new": 5120,
+      "prepared": 0,
+      "repeat_ms": 85.6,
+      "seed": 105127,
+      "slot": 21,
+      "start": 473216,
+      "write_start": null
+     }
+    ],
+    "fresh_host_ms_chunk": 36.663307032063784,
+    "fresh_tok_s": 53611.19784804636,
+    "fresh_wall_ms_chunk": 95.50243616104126,
+    "fresh_walls": [
+     129.2,
+     94.0,
+     87.6,
+     88.8,
+     88.2,
+     88.5,
+     93.0,
+     94.7
+    ],
+    "new_tokens": 40960,
+    "path": "single (adapter prefill_chunk)",
+    "prepared_builds": 2,
+    "prepared_ms": 0.1,
+    "probe_builds": 66,
+    "probe_chunks": 6,
+    "probe_detail": [
+     [
+      18,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:289:_tail",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 17,
+       "slice_start": 17
+      },
+      "slice_end: [0] 52 -> 53"
+     ],
+     [
+      12,
+      "ttnn.slice",
+      "compressor.py:147:_rows < compressor.py:140:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "input": 11,
+       "slice_end": 11,
+       "slice_start": 11
+      },
+      "input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)"
+     ],
+     [
+      9,
+      "ttnn.slice",
+      "served.py:155:slice_rows < history_gather.py:270:_pack < history_gather.py:232:_full",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 8,
+       "slice_start": 8
+      },
+      "slice_end: [0] 52 -> 53"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "rope.py:351:_rows < rope.py:329:<lambda> < rope.py:219:get",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [2] 244352 -> 249472"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:698:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [0] 7637 -> 7797"
+     ],
+     [
+      6,
+      "ttnn.slice",
+      "history_gather.py:290:_tail < history_gather.py:217:gather < sparse_attention.py:192:_compressed",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 5,
+       "slice_start": 5
+      },
+      "slice_end: [2] 3840 -> 3920"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "attention.py:473:srv_row < compressor.py:712:write < compressor.py:1125:write",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [2] 117 -> 41"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:696:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [0] 18 -> 28"
+     ],
+     [
+      3,
+      "ttnn.slice",
+      "served.py:215:at < compressor.py:697:_put_into < compressor.py:600:_put",
+      {
+       "(first call at this site)": 1,
+       "slice_end": 2,
+       "slice_start": 2
+      },
+      "slice_end: [0] 7477 -> 2441"
+     ]
+    ],
+    "probe_host": [],
+    "probe_ops": [
+     "slice x18 [slice_end, slice_start, (first call at this site); slice_end: [0] 52 -> 53] @ served.py:155:slice_rows",
+     "slice x12 [input, slice_end, slice_start, (first call at this site); input: tensor shape (1, 1, 522240, 64) -> (1, 1, 1044480, 64)] @ compressor.py:147:_rows",
+     "slice x9 [slice_end, slice_start, (first call at this site); slice_end: [0] 52 -> 53] @ served.py:155:slice_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [2] 244352 -> 249472] @ rope.py:351:_rows",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [0] 7637 -> 7797] @ served.py:215:at",
+     "slice x6 [slice_end, slice_start, (first call at this site); slice_end: [2] 3840 -> 3920] @ history_gather.py:290:_tail",
+     "slice x3 [slice_end, slice_start, (first call at this site); slice_end: [2] 117 -> 41] @ attention.py:473:srv_row",
+     "slice x3 [slice_end, slice_start, (first call at this site); slice_end: [0] 18 -> 28] @ served.py:215:at"
+    ],
+    "probe_prepares": 0,
+    "profiled_chunks": 3,
+    "repeat_host_ms_chunk": 13.645264785563143,
+    "repeat_tok_s": 63364.2356842947,
+    "repeat_wall_ms_chunk": 80.80267906188965,
+    "repeat_walls": [
+     78.0,
+     82.4,
+     81.4,
+     78.3,
+     81.0,
+     79.6,
+     80.1,
+     85.6
+    ],
+    "seeds": {
+     "probe": [
+      105620,
+      105621,
+      105622
+     ],
+     "timed": [
+      105120,
+      105121,
+      105122,
+      105123,
+      105124,
+      105125,
+      105126,
+      105127
+     ],
+     "warm": [
+      106020,
+      106021,
+      106022,
+      106023
+     ]
+    }
+   }
+  },
+  "fresh_wall_ms_chunk_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 123.52
+  },
+  "fresh_wall_ms_chunk_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 91.35
+  },
+  "fresh_wall_ms_chunk_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 95.5
+  },
+  "gate_model_loads": {
+   "t": "2026-11-20T22:08:59",
+   "value": 2
+  },
+  "model_loads": {
+   "by": "run0",
+   "ns": 1795212440203774238,
+   "pid": 3990890,
+   "t": "2026-11-20T22:07:20",
+   "total": 1,
+   "value": 1
+  },
+  "model_loads_tagentic_cc": {
+   "by": "MB.1.0",
+   "ns": 1795212197864475859,
+   "pid": 3982763,
+   "t": "2026-11-20T22:03:17",
+   "total": 1,
+   "value": 1
+  },
+  "model_shared": {
+   "t": "2026-11-20T22:07:20",
+   "value": 0
+  },
+  "model_shared_tagentic_cc": {
+   "t": "2026-11-20T22:03:17",
+   "value": 0
+  },
+  "pos_text_tagentic_cc": {
+   "n": 1076193,
+   "repeats": 1,
+   "sha256": "bffdee742ae2d1dffe91f6fde8388d87fc2d47c0cbbbff48a9e4d82d90340eaa",
+   "source": "38 sessions of claudecode_sample.parquet (nvidia/Open-SWE-Traces, CC-BY-4.0), slice 0, chat template",
+   "t": "2026-11-20T22:03:18",
+   "value": "agentic_cc"
+  },
+  "prepared_builds_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 8
+  },
+  "prepared_builds_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 2
+  },
+  "prepared_builds_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 2
+  },
+  "prepared_ms_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 1.9
+  },
+  "prepared_ms_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 0.0
+  },
+  "prepared_ms_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 0.1
+  },
+  "probe_builds_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 54
+  },
+  "probe_builds_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 69
+  },
+  "probe_builds_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 66
+  },
+  "program_builds_after_warmup_single5120_partial": {
+   "t": "2026-11-20T22:04:26",
+   "value": 156
+  },
+  "program_builds_after_warmup_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 156
+  },
+  "program_builds_after_warmup_single5120_resumed": {
+   "t": "2026-11-20T22:04:17",
+   "value": 179
+  },
+  "program_builds_after_warmup_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 179
+  },
+  "program_builds_after_warmup_single5120_steady": {
+   "t": "2026-11-20T22:04:08",
+   "value": 177
+  },
+  "program_builds_after_warmup_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 177
+  },
+  "repeat_host_ms_chunk_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 17.66
+  },
+  "repeat_host_ms_chunk_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 17.16
+  },
+  "repeat_host_ms_chunk_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 13.65
+  },
+  "repeat_tok_s_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 17316.54
+  },
+  "repeat_tok_s_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 61577.93
+  },
+  "repeat_tok_s_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 63364.24
+  },
+  "repeat_wall_ms_chunk_single5120_partial_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 102.61
+  },
+  "repeat_wall_ms_chunk_single5120_resumed_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 81.07
+  },
+  "repeat_wall_ms_chunk_single5120_steady_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 80.8
+  },
+  "resident_first_chunk_s": {
+   "t": "2026-11-20T22:08:56",
+   "value": 139.01
+  },
+  "resident_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:28",
+   "value": 91.17
+  },
+  "resident_model_loaded": {
+   "t": "2026-11-20T22:08:56",
+   "value": 1
+  },
+  "resident_model_loaded_tagentic_cc": {
+   "t": "2026-11-20T22:04:28",
+   "value": 1
+  },
+  "resident_model_s": {
+   "t": "2026-11-20T22:08:56",
+   "value": 137.91
+  },
+  "resident_model_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:28",
+   "value": 90.14
+  },
+  "resident_request_first_chunk_s": {
+   "t": "2026-11-20T22:08:56",
+   "value": 139.17
+  },
+  "resident_request_first_chunk_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:28",
+   "value": 91.32
+  },
+  "single5120_partial_fresh_tok_s": {
+   "t": "2026-11-20T22:04:26",
+   "value": 14385.3
+  },
+  "single5120_partial_fresh_tok_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:26",
+   "value": 14385.3
+  },
+  "single5120_resumed_fresh_tok_s": {
+   "t": "2026-11-20T22:04:17",
+   "value": 54646.8
+  },
+  "single5120_resumed_fresh_tok_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:17",
+   "value": 54646.8
+  },
+  "single5120_steady_fresh_tok_s": {
+   "t": "2026-11-20T22:04:08",
+   "value": 53611.2
+  },
+  "single5120_steady_fresh_tok_s_tagentic_cc": {
+   "t": "2026-11-20T22:04:08",
+   "value": 53611.2
+  }
+ },
+ "task": "MB.1"
+}

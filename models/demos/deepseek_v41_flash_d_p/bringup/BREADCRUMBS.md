@@ -1271,3 +1271,50 @@
   bounds wo_a now: ~320 GB/s of its 42.6 MB a call (DRAM floor at 410 GB/s: 0.104 ms) vs 0.133 measured. Accuracy:
   `--part test_ladder` has no run on the A/B side (F285); the change is bit-identical at the op level (wo_a's shape and
   dtypes, tests/test_grouped_matmul_wo_a.py); the accept gate runs the frozen tests. No `gate --check` run.
+
+## MB.1 perf (attempt 1): honest 5120 fresh walls on the shipped branch (WALLS_FRESH=1): a measurement, tests only
+
+- Read first: OV-3, OV-57, rule 20, the skill's standing decisions of 2026-11-20, perf_guide. A MEASUREMENT task (owner):
+  no tt/ or fork change; a path that builds on fresh positions is recorded, not fixed (MB.2 fixes it).
+- Expected saving per chunk (perf_guide, written before any code change): device 0 ms, host 0 ms (nothing in the model
+  changes). What it should SHOW (OV-57, PB.9F5 on the packed branch with its switches off: ~22 builds a fresh 5120
+  chunk, fresh 37-51k vs repeated 61-63k tok/s): builds after warm-up > 0 on every kind, from ttnn.slice keys
+  (served.py slice_rows / DeviceScalars._pick, rope.py RoPE rows, compressor.py compressed-row RoPE incl. the table
+  INPUT shape, history_gather tail, attention.py srv_row), and a fresh-vs-repeated host gap of the builds' cost.
+- Port: tests/fresh_common.py (PB.9F a72c8c6918d tests/packed/fresh_common.py without the lane / glued parts:
+  agentx_mix dropped; `Slots` now = the adapter's engine-owned KV cache + runtime.state(kv, slot), every slot's state
+  built untimed). tests/test_skip_positions.py WALLS_FRESH=1: the timed call is `runtime.prefill_chunk(inp, kv,
+  slot_id, actual_start, actual_end, global_write_start)` of the adapter's runtime (built as prefill_runner builds it,
+  adapter.build_runtime -> allocate_kv_cache(WALLS_FRESH_SLOTS) -> compile), not PB.9F's packed run_chunk (this
+  branch has no tt/packed*). The runtime loads through adapter.load_model (FIX.29), so the batch's held model, never
+  a second copy; the engine's device input (server_rules.server_payload -> caches.payload_tensor) is made before the
+  clock.
+- Load reason: "needs the gate's perf load (layers 0-20, decode, 5120, resident engram table, position tables to
+  1,044,480) because the walls are whole-chunk walls through every executed layer at AgentX positions up to ~1M; one
+  smoke (1 warm / 1 timed / 1 probe draw a kind) then the gate units on the same held model; 8192 once (report only)".
+- Smoke (resident, 1 draw a kind, task MB.1.smoke, results /tmp): every kind ran on the adapter runtime and the held
+  model (no second load: the runtime's adapter.load_model got the batch's model, FIX.29); probe names the sites.
+- Gate check (`gate MB.1 --check`, after the last test edit, hooks clean): PASS (470 s; determinism 0.0). Results
+  (results/MB.1_fresh_walls.md), 5120, mean of 8 timed chunks, fresh vs repeated:
+  | case | fresh ms | repeated ms | builds (8 iterations, prev + timed chunk) + prepared | host ms fresh (rep) | device ms |
+  | single5120_steady | 95.5 | 80.8 | 177 + 2 | 36.7 (13.6) | 66.9 |
+  | single5120_resumed | 91.4 | 81.1 | 179 + 2 | 26.3 (17.2) | 63.4 |
+  | single5120_partial | 123.5 | 102.6 | 156 + 8 | 37.6 (17.7) | 85.5 |
+  ~11 builds a fresh chunk, all ttnn.slice (slice_start / slice_end in the program hash) + snapshot_send prepares on
+  last chunks; sites in DS41-321 and the results file. Fresh tok/s 53.6k / 54.6k / 14.4k (repeated 63.4k / 61.6k /
+  17.3k). The numbers match PB.9F5 (packed branch, switches off, same seeds) within ~2 ms.
+- 8192 (report only, task MB.1.c8192, results in /tmp, copied into MB.1_fresh_walls.md): builds 161 / 175 / 154, same
+  sites. PB.9F's 0 at 8192 came from its command's DS41_PACKED_GLUED_DYNAMIC=on (a72c8c6918d tasks.yaml): on that branch
+  page_copy.dyn() covers every non-lane chunk, single-request included, at exactly these sites (rope / compressor
+  "rows", served "pick", history_gather "hist", attention "pages"). This branch has none of it.
+- Rule 20 per-chunk values: no model change. The test passes per chunk only what the engine sends (the [sp, 1, chunk /
+  sp] uint32 payload made before the clock, and prefill_chunk's slot_id / actual_start / actual_end /
+  global_write_start). The values that reach a program key today (found, not fixed): start (RoPE rows, compressed-row
+  RoPE start // r, DeviceScalars k = start // 32, ceil(end / 32)), slot (slab batch row slot x layers + row), the
+  history length (slice_rows / _tail rows), end of a last chunk (snapshot owner patterns).
+- Known issues: DS41-206 / DS41-208 used (decode truncates a reused slot's window instead of refusing, so slots can be
+  drawn at any position); DS41-281 out of date (the op is now named: knowledge_use report); new DS41-321.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate MB.1 --spec $BRINGUP_SPEC --check` (devjob); one
+  case: the gate's env + WALLS_FRESH_WARM / _RUNS / _PROBE / _PROF / _SLOTS / _CASES through `resident submit`;
+  8192: the same command with BRINGUP_CHUNK=8192 and `--task MB.1.c8192 --results <dir>`.
+- Final `orchestrator measure --task MB.1`: not run (no switch: tests only; nothing in tt/ or a fork changed).
