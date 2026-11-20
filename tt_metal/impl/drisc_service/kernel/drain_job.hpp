@@ -759,6 +759,12 @@ uint32_t state;  // kIdle until start()
 volatile uint32_t* owner_exit;
 uint32_t owner_exit_word;
 FORCE_INLINE bool owner_gone() { return *owner_exit == owner_exit_word; }
+
+// The service's heartbeat, which its slot scans bump and a joining client reads twice abi::ALIVE_PROBE_MS apart to
+// tell a running kernel from a hung one. A hold keeps the service from scanning, and one that waits on the host can
+// outlast the probe, so the job bumps it once per sweep and on every pass of a wait on the host.
+volatile uint32_t* service_heartbeat;
+FORCE_INLINE void beat() { *service_heartbeat = *service_heartbeat + 1; }
 FORCE_INLINE void drop_ready_bounces() {
     for (uint32_t i = 0; i < 2; i++) {
         if (pump.b[i].state == SpoolPump::kReady) {
@@ -789,6 +795,7 @@ static FORCE_INLINE void emit_slots(uint32_t base, uint32_t count) {
         if (owner_gone()) {
             return;
         }
+        beat();
         pump.pass_cold();
         pump.notify();
     }
@@ -830,6 +837,7 @@ static void seed_heads() {
 __attribute__((noinline)) static void sweep() {
     sweeps++;
     ctrl()->heartbeat = sweeps;
+    beat();
     const uint32_t relieved_at_sweep_start = relieved;
     sweep_live = false;
     n_demote = 0;
@@ -951,6 +959,7 @@ static void leave_clean() {
         if (owner_gone()) {
             drop_ready_bounces();
         }
+        beat();
         pump.flush_pass();
         pump.notify();
     }
@@ -969,6 +978,7 @@ static void finish() {
     retire_gen(0);
     retire_gen(1);
     while (!pump.drained() && !owner_gone()) {
+        beat();
         pump.pass_cold();
         pump.notify();
     }
@@ -976,6 +986,7 @@ static void finish() {
     ctrl()->done = kernel_profiler::kResidentAwaitingAcksWord;
     volatile tt_l1_ptr uint32_t* acked = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr);
     while (sender.bytes_sent != *acked && !owner_gone()) {
+        beat();
         invalidate_l1_cache();
     }
     while (!ncrisc_noc_nonposted_writes_flushed(kEgressNoc)) {
@@ -990,10 +1001,11 @@ static void finish() {
 // ---- The service's interface ----
 
 // Reads the job block; the service calls it once the owner word names an attached client, passing that client's
-// exit mailbox and the word that marks its exit.
-inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word) {
+// exit mailbox, the word that marks its exit, and the service heartbeat the job bumps during holds.
+inline void start(volatile uint32_t* exit_mailbox, uint32_t exit_word, volatile uint32_t* heartbeat) {
     owner_exit = exit_mailbox;
     owner_exit_word = exit_word;
+    service_heartbeat = heartbeat;
     volatile abi::DrainJobBlock* job = job_block();
     num_cores = job->num_cores < kMaxCores ? job->num_cores : kMaxCores;
     cv_src = job->cv_src;

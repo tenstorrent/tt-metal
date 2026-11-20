@@ -55,3 +55,21 @@ copies then take more of the PCIe link.
 - The 64 B probe's median stays 9-15 µs, but single holds reach 9-37 ms. A hold waits for its bounces to reach the
   host before it hands the seat back, so a slow host holds the seat.
 - Every copy completes. `SteadyLoad` checks completion, not bytes; `stress_with_knee.sh` checks bytes.
+
+### Knee with copies, and byte-verified copies
+
+The knee is the first delay at which all 3 reps show 0 stalls (`knee_search.sh`, M = 1, one delay above it also run).
+
+| Scenario | Knee | Copy rate at the knee |
+|---|---|---|
+| Baseline, main | above 100 (stalls in 2 of 3 reps at 100) | |
+| Drain jobs, no copies | 100 or below | |
+| + local copies, N = 1 | 150 | 85-88 GB/s of ≈223 |
+| + local copies, N = 16 | 150 | 194-220 GB/s of ≈223 |
+| + d2h copies, N = 1 | 300 | about the copy load's own rate |
+| + d2h copies, N = 16 | none up to 1200 (~2.9k stalls there) | about the copy load's own rate |
+
+`stress_with_knee.sh` (180 s of `DriscService.Stress`, about 27k byte-verified commands, while knee runs at delays
+100, 50 and 25 come and go) passes at N = 1 and N = 16 with no mismatches. Before the drain job bumped the service
+heartbeat during its holds, 1-2 stress clients per run refused to attach: a client reads the heartbeat twice 20 ms
+apart and takes a still one for a hung kernel, and a hold that waits on the host can outlast that.

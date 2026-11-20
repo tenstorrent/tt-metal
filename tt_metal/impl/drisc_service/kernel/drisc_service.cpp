@@ -442,7 +442,10 @@ void try_start_drain() {
     }
     for (uint32_t s = 0; s < abi::MAX_CLIENTS; s++) {
         if (clients[s].state == SLOT_ATTACHED && owner == abi::slot_word(abi::SLOT_ATTACH, clients[s].gen)) {
-            drain::start(&command_block->slots[s].exit_mailbox, abi::slot_word(abi::SLOT_DETACH, clients[s].gen));
+            drain::start(
+                &command_block->slots[s].exit_mailbox,
+                abi::slot_word(abi::SLOT_DETACH, clients[s].gen),
+                &command_block->header.heartbeat);
             drain_owner = s;
             drain_turns = 0;
             drain_handover = false;
