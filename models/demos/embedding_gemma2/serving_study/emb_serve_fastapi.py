@@ -171,6 +171,9 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores
     logs = os.environ.get("TT_METAL_LOGS_PATH") or os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated")
     os.environ["TT_METAL_LOGS_PATH"] = os.path.join(logs, "emb_workers", f"chip{CHIPS[chip_id]}")
     os.makedirs(os.environ["TT_METAL_LOGS_PATH"], exist_ok=True)
+    # Inspector off unless asked for: with it on, its real-time profiler thread hit a bus error under DP=32 load in the
+    # tt-media-server image (RealtimeProfilerManager::run_receiver_loop). Serving does not need it.
+    os.environ.setdefault("TT_METAL_INSPECTOR", "0")
     if worker_cores:
         try:
             os.sched_setaffinity(0, set(worker_cores))

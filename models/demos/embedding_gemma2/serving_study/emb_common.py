@@ -16,9 +16,16 @@ _PASSAGE = (
 
 
 def load_tokenizer():
+    """Tokenizer from the cached snapshot (huggingface_hub >= 1.0 refuses a hub id under HF_HUB_OFFLINE=1)."""
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
     from transformers import AutoTokenizer
 
-    return AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
+    try:
+        path = snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True)
+    except LocalEntryNotFoundError:
+        path = snapshot_download(MODEL_ID, revision=REVISION)
+    return AutoTokenizer.from_pretrained(path)
 
 
 def make_texts(tokenizer, n_tokens: int, count: int, seed: int = 0) -> list[str]:
