@@ -346,6 +346,15 @@ if(WITH_PYTHON_BINDINGS)
             SKIP_UNITY_BUILD_INCLUSION
                 ON
     )
+    # moe_block_main_ttnn is a copy of moe_block_ttnn whose headers define the same namespaces (moe_block_plan_words,
+    # ...); a unity batch holding files of both redefines them.
+    file(GLOB_RECURSE MOE_BLOCK_MAIN_NANOBIND CONFIGURE_DEPENDS ttnn/bringup/moe_block_main_ttnn/*_nanobind.cpp)
+    set_source_files_properties(
+        ${MOE_BLOCK_MAIN_NANOBIND}
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
+    )
     target_include_directories(
         ttnn
         PUBLIC

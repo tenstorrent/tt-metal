@@ -9,8 +9,8 @@
 #include "tt-metalium/shape.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 
 #include <map>
@@ -24,29 +24,29 @@ namespace ttnn::operations::experimental::matmul_decode {
 using namespace tt;
 using namespace tt::tt_metal;
 
-using tt::tt_metal::experimental::AddRuntimeArgsForNode;
-using tt::tt_metal::experimental::ComputeHardwareConfig;
-using tt::tt_metal::experimental::ConsumerOf;
-using tt::tt_metal::experimental::DataflowBufferSpec;
-using tt::tt_metal::experimental::DataMovementHardwareConfig;
-using tt::tt_metal::experimental::DFBSpecName;
-using tt::tt_metal::experimental::Group;
-using tt::tt_metal::experimental::KernelRunArgs;
-using tt::tt_metal::experimental::KernelSpec;
-using tt::tt_metal::experimental::KernelSpecName;
+using tt::tt_metal::AddRuntimeArgsForNode;
+using tt::tt_metal::ComputeHardwareConfig;
+using tt::tt_metal::ConsumerOf;
+using tt::tt_metal::DataflowBufferSpec;
+using tt::tt_metal::DataMovementHardwareConfig;
+using tt::tt_metal::DFBSpecName;
+using tt::tt_metal::Group;
+using tt::tt_metal::KernelRunArgs;
+using tt::tt_metal::KernelSpec;
+using tt::tt_metal::KernelSpecName;
+using tt::tt_metal::ProducerOf;
+using tt::tt_metal::ProgramRunArgs;
+using tt::tt_metal::ProgramSpec;
+using tt::tt_metal::SemaphoreBinding;
+using tt::tt_metal::SemaphoreSpec;
+using tt::tt_metal::SemaphoreSpecName;
+using tt::tt_metal::TensorBinding;
+using tt::tt_metal::TensorParameter;
+using tt::tt_metal::TensorParamName;
+using tt::tt_metal::WorkUnitSpec;
 using tt::tt_metal::experimental::PrefetcherPipeArgument;
 using tt::tt_metal::experimental::PrefetcherPipeParameter;
 using tt::tt_metal::experimental::PrefetcherPipeParamName;
-using tt::tt_metal::experimental::ProducerOf;
-using tt::tt_metal::experimental::ProgramRunArgs;
-using tt::tt_metal::experimental::ProgramSpec;
-using tt::tt_metal::experimental::SemaphoreBinding;
-using tt::tt_metal::experimental::SemaphoreSpec;
-using tt::tt_metal::experimental::SemaphoreSpecName;
-using tt::tt_metal::experimental::TensorBinding;
-using tt::tt_metal::experimental::TensorParameter;
-using tt::tt_metal::experimental::TensorParamName;
-using tt::tt_metal::experimental::WorkUnitSpec;
 
 namespace {
 // Batched width-sharded: weights folded along batch and N; block-diagonal, no cross-core reduction.

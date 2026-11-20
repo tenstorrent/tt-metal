@@ -93,11 +93,11 @@ std::vector<CoreCoord> update_cache_cores(const PagedUpdateCacheInputs& tensor_a
 // user i's rows, update_idxs[i * rows_per_user, (i + 1) * rows_per_user). The values are excluded from the
 // program hash, so both the cache-miss build and the cache-hit override set them through this helper.
 // Empty with an index tensor, whose positions the kernels read on device.
-Table<NodeCoord, AdvancedKernelRunArgs::Varargs> update_cache_position_varargs(
+Table<NodeCoord, tt::tt_metal::experimental::AdvancedKernelRunArgs::Varargs> update_cache_position_varargs(
     const PagedUpdateCacheParams& operation_attributes,
     const PagedUpdateCacheInputs& tensor_args,
     const std::vector<CoreCoord>& cores) {
-    Table<NodeCoord, AdvancedKernelRunArgs::Varargs> varargs;
+    Table<NodeCoord, tt::tt_metal::experimental::AdvancedKernelRunArgs::Varargs> varargs;
     if (tensor_args.update_idxs_tensor.has_value()) {
         return varargs;
     }
@@ -105,7 +105,8 @@ Table<NodeCoord, AdvancedKernelRunArgs::Varargs> update_cache_position_varargs(
     const auto& update_idxs = operation_attributes.update_idxs;
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto first = update_idxs.begin() + (i * rows_per_user);
-        varargs.emplace(cores.at(i), AdvancedKernelRunArgs::Varargs(first, first + rows_per_user));
+        varargs.emplace(
+            cores.at(i), tt::tt_metal::experimental::AdvancedKernelRunArgs::Varargs(first, first + rows_per_user));
     }
     return varargs;
 }
