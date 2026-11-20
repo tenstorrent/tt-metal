@@ -240,8 +240,10 @@ def _lay_out(row_sets, queries, rng):
     return idx
 
 
-def _pattern(name, rng, *, sc, end, start):
-    """Row sets per chip for the synthetic pattern `name`; rows are below `end` (the populated cache)."""
+def _pattern(name, rng, *, sc, end, start, owner_of_rank=None):
+    """Row sets per chip (in row-major rank order) for the synthetic pattern `name`; rows are below `end` (the populated
+    cache). `owner_of_rank` maps a rank to the stripe its chip holds (the rank itself when omitted)."""
+    owner_of_rank = np.arange(N_DEV) if owner_of_rank is None else owner_of_rank
     pick = lambda pool, k: rng.choice(pool, size=min(k, len(pool)), replace=False)
     if name == "random":
         return [pick(np.arange(end), 3000) for _ in range(N_DEV)]
@@ -249,9 +251,9 @@ def _pattern(name, rng, *, sc, end, start):
         centers = rng.integers(0, end, size=(N_DEV, 8))
         return [np.unique((c[:, None] + np.arange(400)) % end) for c in centers]
     if name == "one_owner":
-        return [pick(_owner_rows((d + 1) % N_DEV, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(_owner_rows((owner_of_rank[d] + 1) % N_DEV, sc, end), 3000) for d in range(N_DEV)]
     if name == "local_only":
-        return [pick(_owner_rows(d, sc, end), 3000) for d in range(N_DEV)]
+        return [pick(_owner_rows(owner_of_rank[d], sc, end), 3000) for d in range(N_DEV)]
     if name == "routing_ties":
         # The chip opposite on both rings of the 8x4 torus: both directions are equally short on each axis.
         opposite = lambda d: ((d // 4 + 4) % 8) * 4 + (d % 4 + 2) % 4
@@ -400,7 +402,7 @@ def test_sparse_kv_push_xy4(mesh_device, monkeypatch, sp_axis, pattern):
     sc, page_bytes, max_rows = 160, 704, 92160
     rng = np.random.default_rng(zlib.crc32(f"{pattern}{sp_axis}".encode()))
     start = max_rows - sc * 16
-    rows = _pattern(pattern, rng, sc=sc, end=max_rows, start=start)
+    rows = _pattern(pattern, rng, sc=sc, end=max_rows, start=start, owner_of_rank=_owner_of_rank(mesh_device, sp_axis))
     idx = _mask(_lay_out(rows, sc, rng), rng)
     cache = _cache(mesh_device, 2, max_rows, sc, page_bytes // 4)
     push = Push(mesh_device, cache, idx, max_rows=max_rows, sc=sc, page_bytes=page_bytes, chunk_start=start)
