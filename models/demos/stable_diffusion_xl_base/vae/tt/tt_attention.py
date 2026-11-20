@@ -148,6 +148,7 @@ class TtAttention(LightweightModule):
             attn_mask=None,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         hidden_states = ttnn.experimental.nlp_concat_heads(hidden_states, memory_config=ttnn.L1_MEMORY_CONFIG)
 
