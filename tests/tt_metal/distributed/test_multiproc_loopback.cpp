@@ -326,8 +326,17 @@ protected:
     void SetUp() override {
         ASSERT_EQ(g_world_size, 2) << "This test requires exactly 2 MPI ranks";
         rank_ = g_world_rank;
+        // Rank 0 decides for both ranks: a skip on rank 0 alone leaves rank 1 waiting in connect().
+        uint8_t runs = 0;
         if (rank_ == 0) {
             MeshDeviceFixtureBase::SetUp();
+            runs = !IsSkipped() && experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc;
+        }
+        DistributedContext::get_world_context()->broadcast(
+            ttsl::Span<std::byte>(reinterpret_cast<std::byte*>(&runs), sizeof(runs)), Rank{0});
+        if (!runs && !IsSkipped()) {
+            GTEST_SKIP() << (rank_ == 0 ? "Mapping host memory to NOC is not supported on this system"
+                                        : "Rank 0 skipped this test");
         }
     }
 
@@ -341,12 +350,6 @@ protected:
 };
 
 TEST_F(MultiProcLoopbackFixture, CrossProcessLoopback) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
         for (const auto& cfg : loopback_configs) {
             if (rank_ == 0) {
@@ -365,12 +368,6 @@ TEST_F(MultiProcLoopbackFixture, CrossProcessLoopback) {
 // Without state persistence, the second connector's counters would reset to
 // zero, desyncing it from the device-resident pointers and hanging.
 TEST_F(MultiProcLoopbackFixture, BackToBackConnectorPersistence) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     // Uneven-wrap config is the most stressing for connector handoff: the FIFO
     // pointer is at an arbitrary offset when the prior connector destructs.
     const LoopbackConfig cfg = {4096, 1088, 78336};
@@ -396,12 +393,6 @@ TEST_F(MultiProcLoopbackFixture, BackToBackConnectorPersistence) {
 // completes the remaining iterations using only the state the child flushed
 // per-op.
 TEST_F(MultiProcLoopbackFixture, CrashSafeConnectorPersistence) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     const LoopbackConfig cfg = {4096, 1088, 78336};
     constexpr uint32_t CHILD_ITERS = 100;
     constexpr uint32_t TOTAL_ITERS = 200;
@@ -422,12 +413,6 @@ TEST_F(MultiProcLoopbackFixture, CrashSafeConnectorPersistence) {
 // the persisted write_ptr / read_ptr / bytes_sent / bytes_acked are sufficient
 // regardless of where the previous connector stopped.
 TEST_F(MultiProcLoopbackFixture, UnevenIterDistribution) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     const LoopbackConfig cfg = {4096, 1088, 78336};
     const std::vector<uint32_t> iters_per_connector = {1, 47, 391, 161};  // 600 total
     const uint32_t total_iters = std::accumulate(iters_per_connector.begin(), iters_per_connector.end(), 0u);
@@ -447,12 +432,6 @@ TEST_F(MultiProcLoopbackFixture, UnevenIterDistribution) {
 // Its barrier() must leave every counter current: a stale write_ptr puts pages in a slot the device does not read,
 // and a stale acked or sent count lets a write or read go ahead without waiting.
 TEST_F(MultiProcLoopbackFixture, LauncherResumesAfterConnector) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     // 144 pages per iteration on a 15-page ring, so 7 connector iterations end 3 pages into the ring.
     const LoopbackConfig cfg = {16512, 1088, 156672};
     constexpr uint32_t CONNECTOR_ITERS = 7;
@@ -577,12 +556,6 @@ void run_multi_process_connectors(
 // Stress repeated attach/detach to catch accumulated drift or per-attach
 // leakage. Uses many short-lived connectors over the same launcher kernel.
 TEST_F(MultiProcLoopbackFixture, ManyShortConnectors) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     const LoopbackConfig cfg = {4096, 1088, 78336};
     constexpr uint32_t NUM_CONNECTORS = 30;
     constexpr uint32_t ITERS_PER_CONNECTOR = 10;
@@ -606,12 +579,6 @@ TEST_F(MultiProcLoopbackFixture, ManyShortConnectors) {
 // scenario the persistent state mechanism was added for ("process 1 drives
 // the socket, exits, process 2 launches and connects, etc.").
 TEST_F(MultiProcLoopbackFixture, MultiProcessConnectorReuse) {
-    if (rank_ == 0) {
-        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
-            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
-        }
-    }
-
     const LoopbackConfig cfg = {4096, 1088, 78336};
     constexpr uint32_t NUM_CONNECTORS = 4;
     constexpr uint32_t ITERS_PER_CONNECTOR = 50;
