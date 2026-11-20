@@ -1499,11 +1499,15 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // types are affected: a SCALAR broadcast is exact there, so it keeps the LLK path.
     if (use_llk_bcast && fp32_dest_acc_en) {
         const auto sbt = operation_attributes.subtile_broadcast_type;
+        // Only sources narrower than 32 bits are affected; is_llk_bcast requires a_dtype == b_dtype, so checking
+        // a_dtype is enough. 32-bit inputs keep the LLK path.
+        const bool sub32_src =
+            a_dtype != DataType::FLOAT32 && a_dtype != DataType::INT32 && a_dtype != DataType::UINT32;
         const bool row_bcast =
             (sbt == SubtileBroadcastType::ROW_A || sbt == SubtileBroadcastType::ROW_B ||
              sbt == SubtileBroadcastType::ROW_A_COL_B || sbt == SubtileBroadcastType::ROW_B_COL_A);
         const bool scalar_bcast = (sbt == SubtileBroadcastType::SCALAR_A || sbt == SubtileBroadcastType::SCALAR_B);
-        if (row_bcast || (scalar_bcast && arch == tt::ARCH::BLACKHOLE)) {
+        if (sub32_src && (row_bcast || (scalar_bcast && arch == tt::ARCH::BLACKHOLE))) {
             use_llk_bcast = false;
         }
     }
