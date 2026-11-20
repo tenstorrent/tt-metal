@@ -69,18 +69,21 @@ class TtKimiK3Transformer(LightweightModule):
         """
         from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
         from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import layer_is_cached, layer_is_stale
+        from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheChecker
 
         if cache_path is None:
             return False
         model_cfg = model_cfg if model_cfg is not None else KimiK3Config
         layers = range(first_layer_idx, first_layer_idx + num_layers)
-        stale = [idx for idx in layers if layer_is_stale(Path(cache_path), idx, model_cfg)]
+        root = Path(cache_path)
+        listing = FastCacheChecker(root)  # one directory listing for the whole slice; nothing writes during the check
+        stale = [idx for idx in layers if layer_is_stale(root, idx, model_cfg, listing=listing)]
         if stale:
             logger.warning(
                 f"Kimi-K3 cache at {cache_path}: layers {stale} lack current-format attention weights (KDA or "
                 f"indexer); rebuild them from the checkpoint (load_layer_state_dict_cached rebuilds only those)"
             )
-        return all(layer_is_cached(Path(cache_path), idx, model_cfg) for idx in layers)
+        return all(layer_is_cached(root, idx, model_cfg, listing=listing) for idx in layers)
 
     def __init__(
         self,
@@ -141,7 +144,7 @@ class TtKimiK3Transformer(LightweightModule):
         # `reduce_scatter_minimal_async` validates `topology == Ring or Linear` and a None is a
         # TT_FATAL eight frames deep in `all_reduce_async`. Everything below wants the per-axis pair
         # the fabric actually opened, which is what `MLAPrefillAdapter.build_runtime` passes too.
-        topology = topology if topology is not None else per_axis_topology()
+        topology = topology if topology is not None else per_axis_topology(mesh_device=mesh_device)
         self.topology = topology
         self.schedule = KimiK3LayerSchedule.build(model_cfg, first_layer_idx, num_layers)
         self.first_layer_idx = first_layer_idx
@@ -433,6 +436,7 @@ class TtKimiK3Transformer(LightweightModule):
         provided_levels: int = 0,
         mtp_geometry=None,
         chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """Run this rank's layers. Returns the post-norm hidden state, or the raw one mid-pipeline.
 

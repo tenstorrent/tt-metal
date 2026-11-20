@@ -51,17 +51,13 @@ static_assert(
 // first) and routers on a mesh's edge (an exit may leave in any direction) can. In 1D, downstream 0.
 template <size_t VC>
 constexpr uint32_t live_downstreams() {
-    constexpr bool east_west =
-        is_2d && (my_direction == eth_chan_directions::EAST || my_direction == eth_chan_directions::WEST);
-    constexpr bool turns = is_intermesh_router || is_intramesh_router_on_edge;
-    uint32_t live = 0;
-    for (size_t entry = 0; entry < DOWNSTREAM_EDM_COUNT_BY_VC[VC]; entry++) {
-        const size_t name = downstream_name(entry);
-        if (!(east_west && !turns && (name == eth_chan_directions::NORTH || name == eth_chan_directions::SOUTH))) {
-            live |= 1u << name;
-        }
+    if constexpr (is_2d) {
+        return Routing2DCodec::live_downstreams<static_cast<eth_chan_directions>(my_direction)>(
+            DOWNSTREAM_EDM_COUNT_BY_VC[VC], is_intermesh_router, is_intramesh_router_on_edge);
+    } else {
+        // In 1d, we either have one downstream or none
+        return DOWNSTREAM_EDM_COUNT_BY_VC[VC] > 0 ? 1u : 0u;
     }
-    return live;
 }
 
 // Whether VC's forwards can use the destination preset of their forward buffer pair: no receiver channel here

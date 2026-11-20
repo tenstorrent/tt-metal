@@ -38,6 +38,14 @@ class GLM53Adapter(MLAPrefillAdapter):
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"
     passes_indexer_indices = True
+    # Packed forwards (PREFILL_FORWARD_TOKENS_BUDGET > PREFILL_CHUNK_SIZE): TtPrefillRuntime.prefill_forward, traced
+    # or eager, with D2H layer acks, on any pipeline rank, carrying every chunk's indexer indices across a boundary.
+    supports_packed_forward = True
+    supports_packed_forward_trace = True
+    supports_packed_forward_d2h_acks = True
+    supports_packed_forward_indexer_indices = True
+    # MTP over a packed forward, eager or traced: one lookahead block and one provided-levels count per chunk.
+    supports_packed_forward_mtp = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
@@ -65,6 +73,37 @@ class GLM53Adapter(MLAPrefillAdapter):
         config is consistent."""
         max_seq = int(os.environ.get("PREFILL_MAX_SEQ_LEN", 8192))
         return glm_5_3_hf_config(max_seq=max_seq)
+
+    def moe_block_nonrouted_weights(self, layer_idx: int, hf_config=None) -> dict:
+        """The layer's gate and shared expert for the MoE block, from $GLM53_HF_MODEL (else the prefill runner's
+        $PREFILL_HF_MODEL, else hf_model_default), fp8 dequantized to float32."""
+        import json
+        import types
+        from pathlib import Path
+
+        import torch
+
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import load_tensors
+        from models.demos.deepseek_v3_d_p.utils.test_utils import dequantize_state_dict
+
+        ckpt = Path(os.environ.get(self.env_var) or os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default)
+        p = f"model.layers.{layer_idx}.mlp."
+        with (ckpt / "model.safetensors.index.json").open(encoding="utf-8") as f:
+            names = [k for k in json.load(f)["weight_map"] if k.startswith((p + "gate.", p + "shared_experts."))]
+        assert names, f"MoE block: no {p}gate / shared_experts keys in {ckpt}"
+        t = load_tensors(ckpt, {k: k for k in names})
+        if hf_config is None or getattr(hf_config, "quantization_config", None) is None:
+            with (ckpt / "config.json").open(encoding="utf-8") as f:  # (only its quantization_config is read)
+                hf_config = types.SimpleNamespace(quantization_config=json.load(f).get("quantization_config"))
+        t = dequantize_state_dict(t, hf_config, dtype=torch.float32)
+        sp = p + "shared_experts."
+        return {
+            "router_weight": t[p + "gate.weight"].float(),
+            "router_bias": t[p + "gate.e_score_correction_bias"].float(),
+            "gate": t[sp + "gate_proj.weight"].float(),
+            "up": t[sp + "up_proj.weight"].float(),
+            "down": t[sp + "down_proj.weight"].float(),
+        }
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params) -> MlaKvCaches:
         """GLM is sparse (DSA), so it owns TWO device caches, returned as a KvCaches tuple (the runner
@@ -103,7 +142,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             tp_axis=kv_tp_axis,
             bank_aligned=True,
         )
@@ -118,7 +157,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             mesh_shape=list(params.mesh_shape),
             sp_axis=params.sp_axis,
             num_kvpe_cache_layers=num_index_layers,
-            num_users=params.num_users,
+            num_users=self.kv_cache_slots(params),
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
             bank_aligned=True,

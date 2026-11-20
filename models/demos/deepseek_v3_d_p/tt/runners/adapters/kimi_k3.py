@@ -31,6 +31,7 @@ is correct but not yet tuned at their 6144 / 33792 widths. One deliberate limit 
 from __future__ import annotations
 
 import functools
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -351,6 +352,47 @@ class KimiK3Adapter(MLAPrefillAdapter):
         # The window depends on the global head count only; any legal mesh gives the same value.
         return 0, kda_window(kimi_k3_kda_geometry((1, 1), sp_axis=0, tp_axis=1))
 
+    def moe_block_checkpoint(self) -> Path:
+        """The checkpoint the MoE block's non-routed weights and routed-expert cache key come from: $KIMI_K3_CKPT, else the
+        prefill runner's $PREFILL_HF_MODEL (its K3 runs set only that)."""
+        return Path(os.environ.get("KIMI_K3_CKPT") or os.environ.get("PREFILL_HF_MODEL") or "")
+
+    def moe_block_nonrouted_weights(self, layer_idx: int, hf_config=None) -> dict:
+        """The layer's gate, shared expert and latent pair for the MoE block, from moe_block_checkpoint (float32)."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import (
+            GATE_KEYS,
+            LATENT_KEYS,
+            SHARED_EXPERT_KEYS,
+            layer_prefix,
+            load_tensors,
+        )
+
+        ckpt = self.moe_block_checkpoint()
+        assert (ckpt / "model.safetensors.index.json").is_file(), f"MoE block: no {self.name} checkpoint at {ckpt}"
+        p = layer_prefix(ckpt, layer_idx)
+        keys = {f"g.{k}": p + v for k, v in GATE_KEYS.items()}
+        keys.update({f"s.{k}": p + v for k, v in SHARED_EXPERT_KEYS.items()})
+        keys.update({f"l.{k}": p + v for k, v in LATENT_KEYS.items()})
+        t = load_tensors(ckpt, keys)
+        return {
+            "router_weight": t["g.weight"].float(),
+            "router_bias": t["g.e_score_correction_bias"].float(),
+            "gate": t["s.gate_proj"].float(),
+            "up": t["s.up_proj"].float(),
+            "down": t["s.down_proj"].float(),
+            "latent_down": t["l.down_proj"].float(),
+            "latent_up": t["l.up_proj"].float(),
+            "latent_norm": t["l.norm"].float(),
+        }
+
+    def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0):
+        """K3's TtMoe tensorbin cache for this mesh (weights.cache_root), keyed by moe_block_checkpoint."""
+        from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
+
+        path = cache_root(self.moe_block_checkpoint(), tuple(mesh_shape), 1 - sp_axis)
+        assert path is not None, "MoE block: the routed experts come from the TtMoe cache, and it is off"
+        return path
+
     def load_hf_config(self):
         """The Kimi-K3 config, hand-built rather than loaded through `AutoConfig`.
 
@@ -377,7 +419,7 @@ class KimiK3Adapter(MLAPrefillAdapter):
         from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
         from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntimeConfig
 
-        topology = per_axis_topology()
+        topology = per_axis_topology(mesh_device=mesh_device)
         logger.info(f"Kimi-K3 per-axis CCL topology (sp, tp) = {topology}")
 
         runtime_config = TtPrefillRuntimeConfig(
