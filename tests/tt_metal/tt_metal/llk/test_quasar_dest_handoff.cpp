@@ -22,7 +22,8 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "impl/program/program_impl.hpp"
 
@@ -83,13 +84,13 @@ void append(std::vector<uint32_t>& to, const std::vector<uint32_t>& tile) {
 }
 
 bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
-    const experimental::NodeCoord node{0, 0};
-    const experimental::DFBSpecName IN_A{"in_a_dfb"};
-    const experimental::DFBSpecName IN_B{"in_b_dfb"};
-    const experimental::DFBSpecName IN_FP32{"in_fp32_dfb"};
-    const experimental::DFBSpecName OUT{"out_dfb"};
-    const experimental::KernelSpecName WRITER{"writer"};
-    const experimental::KernelSpecName COMPUTE{"compute"};
+    const NodeCoord node{0, 0};
+    const DFBSpecName IN_A{"in_a_dfb"};
+    const DFBSpecName IN_B{"in_b_dfb"};
+    const DFBSpecName IN_FP32{"in_fp32_dfb"};
+    const DFBSpecName OUT{"out_dfb"};
+    const KernelSpecName WRITER{"writer"};
+    const KernelSpecName COMPUTE{"compute"};
 
     const uint32_t fp32_tile_bytes = tt::tile_size(tt::DataFormat::Float32);
     auto has_copy = [&](uint32_t s) { return !v.handoff_every_section || (s % 2) == 0; };
@@ -131,12 +132,12 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
     auto fp32_buffer = make_dram(fp32_all.size() * sizeof(uint32_t));
     auto out_buffer = make_dram(golden.size() * sizeof(uint32_t));
 
-    experimental::ProgramSpec spec{.name = "quasar_dest_handoff"};
-    experimental::WorkUnitSpec wu{.name = "main", .target_nodes = node};
+    ProgramSpec spec{.name = "quasar_dest_handoff"};
+    WorkUnitSpec wu{.name = "main", .target_nodes = node};
 
     struct InputSpec {
-        experimental::DFBSpecName dfb;
-        experimental::KernelSpecName reader;
+        DFBSpecName dfb;
+        KernelSpecName reader;
         const char* accessor;
         tt::DataFormat format;
         uint32_t num_entries;
@@ -147,7 +148,7 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
     InputSpec inputs[] = {
         // non-const: EnqueueWriteMeshBuffer takes the buffer by non-const reference
         {IN_A,
-         experimental::KernelSpecName{"reader_a"},
+         KernelSpecName{"reader_a"},
          "in_a",
          tt::DataFormat::Float16_b,
          2 * kSrcTiles,
@@ -155,7 +156,7 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
          a_buffer,
          &a_all},
         {IN_B,
-         experimental::KernelSpecName{"reader_b"},
+         KernelSpecName{"reader_b"},
          "in_b",
          tt::DataFormat::Float16_b,
          2 * kSrcTiles,
@@ -163,7 +164,7 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
          b_buffer,
          &b_all},
         {IN_FP32,
-         experimental::KernelSpecName{"reader_fp32"},
+         KernelSpecName{"reader_fp32"},
          "in_fp32",
          tt::DataFormat::Float32,
          2,
@@ -172,18 +173,18 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
          &fp32_all},
     };
 
-    experimental::KernelSpec::CompilerOptions::Defines compute_defines;
+    KernelSpec::CompilerOptions::Defines compute_defines;
     if (v.handoff_every_section) {
         compute_defines.emplace("HANDOFF_EVERY_SECTION", "1");
     }
-    experimental::KernelSpec compute_spec{
+    KernelSpec compute_spec{
         .unique_id = COMPUTE,
         .source = "tests/tt_metal/tt_metal/test_kernels/compute/unpack_to_dest_handoff_mixed_section.cpp",
         .num_threads = 1,
         .compiler_options = {.defines = compute_defines},
         .compile_time_args = {{"num_sections", kSections}, {"num_src_tiles", kSrcTiles}},
         .hw_config =
-            experimental::ComputeHardwareConfig{
+            ComputeHardwareConfig{
                 .enable_32_bit_dest = true,
                 .double_buffer_dest = !v.dst_full_sync_en,
                 .unpack_modes = {{IN_FP32, UnpackMode::UnpackToDest}},
@@ -200,11 +201,11 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
             .unique_id = in.reader,
             .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_reader_unary_2_0.cpp",
             .num_threads = 1,
-            .dfb_bindings = {experimental::ProducerOf(in.dfb, "out")},
+            .dfb_bindings = {ProducerOf(in.dfb, "out")},
             .runtime_arg_schema = {.runtime_arg_names = {"src_addr", "src_bank_id", "num_tiles", "dram_page_stride"}},
-            .hw_config = experimental::DataMovementHardwareConfig{},
+            .hw_config = DataMovementHardwareConfig{},
         });
-        compute_spec.dfb_bindings.push_back(experimental::ConsumerOf(in.dfb, in.accessor));
+        compute_spec.dfb_bindings.push_back(ConsumerOf(in.dfb, in.accessor));
         wu.kernels.push_back(in.reader);
     }
     spec.dataflow_buffers.push_back({
@@ -217,25 +218,25 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
         .unique_id = WRITER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/dram/direct_writer_unary_2_0.cpp",
         .num_threads = 1,
-        .dfb_bindings = {experimental::ConsumerOf(OUT, "in")},
+        .dfb_bindings = {ConsumerOf(OUT, "in")},
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "dst_bank_id", "num_tiles", "dram_page_stride"}},
-        .hw_config = experimental::DataMovementHardwareConfig{},
+        .hw_config = DataMovementHardwareConfig{},
     });
-    compute_spec.dfb_bindings.push_back(experimental::ProducerOf(OUT, "out"));
+    compute_spec.dfb_bindings.push_back(ProducerOf(OUT, "out"));
     spec.kernels.push_back(std::move(compute_spec));
     wu.kernels.push_back(WRITER);
     wu.kernels.push_back(COMPUTE);
     spec.work_units = {wu};
 
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     auto& cq = mesh_device.mesh_command_queue();
-    experimental::ProgramRunArgs params;
+    ProgramRunArgs params;
     for (InputSpec& in : inputs) {
         distributed::EnqueueWriteMeshBuffer(cq, in.buffer, *in.data, /*blocking=*/true);
         params.kernel_run_args.push_back({
             .kernel = in.reader,
-            .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
                 node,
                 {{"src_addr", in.buffer->address()},
                  {"src_bank_id", 0u},
@@ -245,7 +246,7 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
     }
     params.kernel_run_args.push_back({
         .kernel = WRITER,
-        .runtime_arg_values = experimental::MakeRuntimeArgsForSingleNode(
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(
             node,
             {{"dst_addr", out_buffer->address()},
              {"dst_bank_id", 0u},
@@ -253,7 +254,7 @@ bool run(distributed::MeshDevice& mesh_device, const Variant& v) {
              {"dram_page_stride", fp32_tile_bytes}}),
     });
     params.kernel_run_args.push_back({.kernel = COMPUTE});
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     LaunchProgram(mesh_device, std::move(program));
 
