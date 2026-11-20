@@ -129,3 +129,40 @@ def test_quasar_tilize_sharded(mesh_device, h_tiles, w_tiles, tid):
     assert torch.isfinite(tt_out).all(), f"{tid}: tilize produced NaN/Inf"
     assert_with_pcc(torch_in.reshape(tt_out.shape), tt_out, pcc=0.999)
     print(f"sharded tilize {tid} (h={h_tiles} w={w_tiles} cores={num_cores}) PASSED")
+
+
+@pytest.mark.parametrize("out_sharded", [False, True], ids=["l1_interleaved_out", "height_sharded_out"])
+def test_quasar_tilize_non_tile_aligned_shard(mesh_device, out_sharded):
+    """(48, 32) HEIGHT_SHARDED input shards are not whole tiles, so the output cannot reuse the input shard spec
+    and the op must take the default factory with the requested tile-aligned output memory config."""
+    device = mesh_device
+    grid = device.compute_with_storage_grid_size()
+    if grid.x * grid.y < 3:
+        pytest.skip(f"needs 3 cores; grid has {grid.x * grid.y}")
+    torch.manual_seed(0)
+    torch_in = torch.randn((1, 1, 96, 32), dtype=torch.bfloat16)
+    in_mem = ttnn.create_sharded_memory_config(
+        shape=(1, 1, 48, 32),
+        core_grid=ttnn.num_cores_to_corerangeset(2, grid, row_wise=True),
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    if out_sharded:
+        out_mem = ttnn.create_sharded_memory_config(
+            shape=(1, 1, 32, 32),
+            core_grid=ttnn.num_cores_to_corerangeset(3, grid, row_wise=True),
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+    else:
+        out_mem = ttnn.L1_MEMORY_CONFIG
+    tt_in = ttnn.from_torch(
+        torch_in, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=in_mem
+    )
+    tt_tiled = ttnn.experimental.quasar.tilize(tt_in, memory_config=out_mem)
+    assert tt_tiled.layout == ttnn.TILE_LAYOUT
+    assert tt_tiled.memory_config() == out_mem
+    assert list(tt_tiled.shape) == [1, 1, 96, 32]
+    assert torch.equal(ttnn.to_torch(tt_tiled), torch_in)

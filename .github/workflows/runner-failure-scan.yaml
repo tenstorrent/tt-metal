@@ -49,10 +49,12 @@ env:
         exclude_exact:
           - preflight
           - build-artifact
+          - build-artifact-vllm
           - check-farbot
           - check-harbor
         exclude_prefixes:
           - "build-artifact /"
+          - "build-artifact-vllm /"
           - "check-farbot /"
           - "check-harbor /"
 

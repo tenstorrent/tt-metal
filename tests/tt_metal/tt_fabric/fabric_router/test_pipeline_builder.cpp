@@ -267,7 +267,7 @@ void check_graph_capacity(const ControlPlane& control_plane, uint32_t capacity, 
     }
     const auto chips = to_submesh_chips(layouts);
     const auto started = std::chrono::steady_clock::now();
-    const auto result = resolve_graph_layout(nodes, edges, chips, stage_chip_counts, {}, capacity);
+    const auto result = resolve_graph_layout(control_plane, nodes, edges, chips, stage_chip_counts, {}, capacity);
     const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
     fmt::print(
         "PIPELINE_SWEEP graph={} stages={} submeshes={} capacity={} fabric={} outcome=feasible "
@@ -372,7 +372,7 @@ TEST_F(ControlPlaneFixture, TestPipelineBuilderCheck) {
     }
 
     const GraphLayoutResult result = resolve_graph_layout(
-        build_ring_nodes(layouts.size()), build_ring_edges(layouts.size()), to_submesh_chips(layouts));
+        control_plane, build_ring_nodes(layouts.size()), build_ring_edges(layouts.size()), to_submesh_chips(layouts));
 
     for (const auto& edge : result.resolved_edges) {
         const std::size_t src_sub = result.node_to_submesh.at(edge.src);

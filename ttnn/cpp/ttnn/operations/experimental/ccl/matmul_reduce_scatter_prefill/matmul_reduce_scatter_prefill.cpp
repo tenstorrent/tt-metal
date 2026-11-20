@@ -106,7 +106,7 @@ size_t usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster
     using Key = std::tuple<int, int32_t, bool, tt::tt_fabric::FabricConfig>;
     static ttsl::Indestructible<std::map<Key, size_t>> counts;
     static std::mutex counts_mutex;
-    const Key key{mesh->id(), cluster_axis, ring, tt::tt_fabric::GetFabricConfig()};
+    const Key key{mesh->id(), cluster_axis, ring, tt::tt_fabric::GetFabricConfig(*mesh)};
     const std::lock_guard<std::mutex> lock(counts_mutex);
     auto it = counts.get().find(key);
     if (it == counts.get().end()) {
@@ -156,6 +156,7 @@ MatmulReduceScatterPrefillParams resolve_params(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<uint32_t>& l1_headroom,
+    bool use_column_major_ccl,
     bool output_preallocated) {
     using tt::constants::TILE_HEIGHT;
     using tt::constants::TILE_WIDTH;
@@ -181,10 +182,10 @@ MatmulReduceScatterPrefillParams resolve_params(
         !ring ? detail::ScheduleKind::Line
               : (G % 2 == 0 ? detail::ScheduleKind::RingBalanced : detail::ScheduleKind::RingUnbalanced);
     TT_FATAL(
-        !ring || config_wraps(tt::tt_fabric::GetFabricConfig(), cluster_axis),
+        !ring || config_wraps(tt::tt_fabric::GetFabricConfig(*mesh), cluster_axis),
         "matmul_reduce_scatter_prefill: Ring along axis {} needs a fabric config that wraps it (active: {})",
         cluster_axis,
-        static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig()));
+        static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig(*mesh)));
     const size_t avail = usable_links(mesh, cluster_axis, ring);
     TT_FATAL(avail > 0, "matmul_reduce_scatter_prefill: a hop of the group has no usable fabric link (no wrap link?)");
     uint32_t L = static_cast<uint32_t>(std::min<size_t>(avail, kMaxLinks));  // the default: every link the op supports
@@ -224,6 +225,7 @@ MatmulReduceScatterPrefillParams resolve_params(
         .tW = static_cast<uint32_t>(weight.mesh_buffer().aligned_page_size()),
         .scatter_dim = canonical_dim,
         .budget = l1_bank - headroom,
+        .column_major_ccl = use_column_major_ccl,
     };
     // L1 tensors fill from the top; the CBs (staging included) and an L1 output share the free L1 below them
     const uint64_t output = output_preallocated ? 0 : l1_output_bytes_per_bank(mesh, out_mem, Mt, Nt, G);
@@ -263,7 +265,8 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     const std::optional<tt::tt_metal::ComputeConfigDescriptor>& compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
-    const std::optional<uint32_t>& l1_headroom) {
+    const std::optional<uint32_t>& l1_headroom,
+    bool use_column_major_ccl) {
     using namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill;
     const MatmulReduceScatterPrefillParams params = resolve_params(
         input_tensor,
@@ -275,6 +278,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         compute_kernel_config,
         memory_config,
         l1_headroom,
+        use_column_major_ccl,
         output_tensor.has_value());
     record_last_plan(params);
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);

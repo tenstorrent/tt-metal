@@ -98,9 +98,8 @@ add_library(TTNN::Core ALIAS ttnn_core)
 # Enable unity builds for faster compilation
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
-# These declare ttnn::experimental and include tt-metalium/experimental/command_list.hpp, which declares
-# tt::tt_metal::experimental::detail. Either changes unqualified `experimental::` / `detail::` lookup in files that
-# share a unity translation unit with them.
+# These include tt-metalium/experimental/command_list.hpp, which declares tt::tt_metal::experimental::detail. That
+# changes unqualified `detail::` lookup in files that share a unity translation unit with them.
 set_source_files_properties(
     core/command_list.cpp
     cpp/ttnn-nanobind/operations/command_list.cpp
@@ -335,6 +334,15 @@ if(WITH_PYTHON_BINDINGS)
         PRIVATE
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
+    )
+    # program_spec.cpp converts std::vector<uint32_t> to and from Python lists, while program_descriptors.cpp binds it
+    # as the opaque VectorUInt32. Building it on its own keeps it out of that unity batch and leaves the other files'
+    # batches as they were.
+    set_source_files_properties(
+        cpp/ttnn-nanobind/program_spec.cpp
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
     )
     target_include_directories(
         ttnn

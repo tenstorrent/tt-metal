@@ -12,7 +12,7 @@ from tests.ttnn.nightly.unit_tests.operations.eltwise.backward.utility_funcs imp
 )
 from itertools import product
 from tt_py_test_utils_common.utility_functions import comp_pcc, is_wormhole_b0
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 TEST_PADDING_VALUE = -42
 pytestmark = pytest.mark.use_module_device
@@ -473,24 +473,23 @@ def test_batch_norm_output_Default(input_shapes, device):
     assert_numeric_metrics(torch_result, tt_output, pcc_threshold=0.99, rtol=0.1, atol=4.0, frobenius_threshold=0.15)
 
 
+# Shape [1, 8, 24, 42], training with weight and bias, bf16/bf16 and fp32/fp32.
 @pytest.mark.parametrize(
-    "input_shapes",
-    [
-        torch.Size([3, 17, 47, 32]),
-        torch.Size([1, 8, 24, 42]),
-    ],
-)
-@pytest.mark.parametrize(
-    "training, weight, bias",
-    [
-        (True, True, True),
-        (True, False, False),
-        (False, True, True),
-        (False, False, False),
-    ],
-)
-@pytest.mark.parametrize(
-    "input_dtype, param_dtype", [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")]
+    *merge_gate_subset(
+        {
+            "input_dtype, param_dtype": [("bfloat16", "bfloat16"), ("bfloat16", "float32"), ("float32", "float32")],
+            "training, weight, bias": [
+                (True, True, True),
+                (True, False, False),
+                (False, True, True),
+                (False, False, False),
+            ],
+            "input_shapes": [torch.Size([3, 17, 47, 32]), torch.Size([1, 8, 24, 42])],
+        },
+        keep=lambda input_shapes, training, weight, bias, input_dtype, param_dtype: (
+            input_shapes == torch.Size([1, 8, 24, 42]) and training and weight and bias and input_dtype == param_dtype
+        ),
+    )
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_dtype, param_dtype, device):
     N, H, W, C = input_shapes
@@ -564,12 +563,13 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
             pccs.append(pcc)
         return pccs
 
-    # Execute low-accuracy groupnorm
+    # float32 tensors require fp32_dest_acc_en=True; only all-bfloat16 runs with fp32_dest_acc_en=False.
+    has_float32 = "float32" in (input_dtype, param_dtype)
     config_low = ttnn.init_device_compute_kernel_config(
         device.arch(),
         math_fidelity=ttnn.MathFidelity.LoFi,
         math_approx_mode=False,
-        fp32_dest_acc_en=False,
+        fp32_dest_acc_en=has_float32,
     )
     torch_tensors_low, tt_tensors_low = do_batch_norm_for_config(config_low)
     pccs_low = compute_pccs_for_tensors(torch_tensors_low, tt_tensors_low)
@@ -585,6 +585,13 @@ def test_batch_norm_compute_config(input_shapes, training, weight, bias, input_d
     pccs_high = compute_pccs_for_tensors(torch_tensors_high, tt_tensors_high)
 
     print(f"pccs_low={pccs_low}, pccs_high={pccs_high}")
+
+    assert all(
+        low >= 0.99 for low in pccs_low
+    ), f"Low-accuracy config produced invalid output PCC (< 0.99): pccs_low={pccs_low}"
+    assert all(
+        high >= 0.99 for high in pccs_high
+    ), f"High-accuracy config produced invalid output PCC (< 0.99): pccs_high={pccs_high}"
 
     # HiFi4 + fp32 accumulation should be at least as accurate as LoFi.
     # Strict high > low is numerically unstable; allow a small tolerance.
@@ -811,6 +818,7 @@ def test_batch_norm_aliased_running_and_affine_tensors(device):
     assert_numeric_metrics(torch_output, tt_output, pcc_threshold=1.0, rtol=0.0, atol=0.0, frobenius_threshold=0.0)
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_program_cache_shape_collision(device):
     """Covers #46018: program cache collision in BatchNormOperation.
 
@@ -878,6 +886,7 @@ def test_batch_norm_program_cache_shape_collision(device):
         device.disable_and_clear_program_cache()
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_training_avoids_variance_cancellation(device):
     """Regression test for #45968: avoid bf16 E[x^2] - E[x]^2 cancellation in training mode."""
 
@@ -1124,14 +1133,19 @@ def test_batch_norm_fpu_running_statistics(input_shapes, weight, bias, check_mea
         )
 
 
+# Gate the var-only row, with fp32 acc on and off.
 @pytest.mark.parametrize(
-    "check_mean, check_var",
-    [
-        (True, False),  # mean-only: batch_var must still be drained
-        (False, True),  # var-only: batch_mean must still be drained (FPU)
-    ],
+    *merge_gate_subset(
+        {
+            "fp32_dest_acc_en": [False, True],
+            "check_mean, check_var": [
+                (True, False),  # mean-only: batch_var must still be drained
+                (False, True),  # var-only: batch_mean must still be drained (FPU)
+            ],
+        },
+        keep=lambda check_mean, check_var, **_: check_var and not check_mean,
+    )
 )
-@pytest.mark.parametrize("fp32_dest_acc_en", [False, True])
 def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_acc_en, device):
     """Regression for CB drain hangs when a running stat is absent.
 
@@ -1154,9 +1168,11 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
 
     compute_config = ttnn.init_device_compute_kernel_config(
         device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi
-        if not fp32_dest_acc_en
-        else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4),
+        math_fidelity=(
+            ttnn.MathFidelity.LoFi
+            if not fp32_dest_acc_en
+            else (ttnn.MathFidelity.HiFi3 if is_wormhole_b0() else ttnn.MathFidelity.HiFi4)
+        ),
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc_en,
     )
@@ -1236,6 +1252,7 @@ def test_batch_norm_running_statistics_drain(check_mean, check_var, fp32_dest_ac
         )
 
 
+@pytest.mark.merge_gate
 def test_batch_norm_running_var_bessel_correction(device):
     """
     Test that ttnn.batch_norm training mode applies Bessel's correction factor m / (m - 1)
@@ -1293,3 +1310,84 @@ def test_batch_norm_running_var_bessel_correction(device):
         atol=1e-3,
         check_pcc=False,
     )
+
+
+@pytest.mark.parametrize(
+    "training, use_affine, check_mean, check_var",
+    [
+        (False, True, True, True),
+        (False, False, True, True),
+        (True, True, True, True),
+        (True, False, True, True),
+        (True, False, True, False),
+        (True, False, False, True),
+    ],
+)
+@pytest.mark.parametrize(
+    "input_dtype, param_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.float32),
+    ],
+)
+def test_batch_norm_float32_rejects_fp32_dest_acc_disabled(
+    device, expect_error, training, use_affine, check_mean, check_var, input_dtype, param_dtype
+):
+    shape = (2, 4, 32, 32)
+    channels = shape[1]
+    torch.manual_seed(0)
+
+    x_torch = torch.randn(shape, dtype=torch.float32) * 2.0 + 3.0
+    mean_torch = torch.randn(1, channels, 1, 1, dtype=torch.float32)
+    var_torch = torch.rand(1, channels, 1, 1, dtype=torch.float32) + 0.5
+
+    x_tt = ttnn.from_torch(x_torch, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    mean_tt = (
+        ttnn.from_torch(mean_torch, dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device) if check_mean else None
+    )
+    var_tt = (
+        ttnn.from_torch(var_torch, dtype=param_dtype, layout=ttnn.TILE_LAYOUT, device=device) if check_var else None
+    )
+    weight_tt = (
+        ttnn.from_torch(
+            torch.rand(1, channels, 1, 1, dtype=torch.float32) + 0.5,
+            dtype=param_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        if use_affine
+        else None
+    )
+    bias_tt = (
+        ttnn.from_torch(
+            torch.randn(1, channels, 1, 1, dtype=torch.float32),
+            dtype=param_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+        )
+        if use_affine
+        else None
+    )
+
+    cfg = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+    with expect_error(
+        RuntimeError, "batch_norm with float32 tensors requires fp32_dest_acc_en=True in compute_kernel_config"
+    ):
+        ttnn.batch_norm(
+            x_tt,
+            running_mean=mean_tt,
+            running_var=var_tt,
+            weight=weight_tt,
+            bias=bias_tt,
+            training=training,
+            eps=1e-5,
+            momentum=0.1,
+            compute_kernel_config=cfg,
+        )

@@ -4,13 +4,17 @@
 
 #pragma once
 
+#include <functional>
 #include <string>
+#include <variant>
 
 #include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt_stl/strong_type.hpp>
 
 namespace tt::tt_metal {
+
+class MeshTensor;
 
 // ============================================================================
 //  TensorParameter API
@@ -44,5 +48,9 @@ struct TensorParameter {
     ////////////////////////////////////////////////
     TensorSpecRelaxations relaxations;
 };
+
+// The actual MeshTensor argument supplied for a TensorParameter at Program execution time
+// (Non-owning reference. Will also permit MeshTensorView when it becomes available.)
+using TensorArgument = std::variant<std::reference_wrapper<const MeshTensor>>;
 
 }  // namespace tt::tt_metal
