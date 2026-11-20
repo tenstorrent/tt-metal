@@ -16,6 +16,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
+#include "ttnn/per_device_program_merge.hpp"
 #include "ttnn/operation.hpp"
 #include "dit_fused_distributed_rmsnorm_device_operation_types.hpp"
 
@@ -56,9 +57,14 @@ struct DitFusedDistributedRmsnormDescriptorAdapterOperation {
 
 }  // namespace detail
 
+// The per-chip program descriptors. Local normalization (ring_size == 1 or per_head_norm) shares one ProgramDescriptor
+// per range; the all-gather path builds one per coordinate, and a range's merge into one program with per-device
+// runtime args (the device index, fabric routes and connections).
 struct DitFusedDistributedRmsnormProgramFactory {
-    // Local normalization (ring_size == 1 or per_head_norm) shares one ProgramDescriptor per range; the
-    // all-gather path builds one per coordinate (device index and fabric neighbors depend on it).
+    static constexpr bool merge_per_device_programs = true;
+    // A Linear end has no fabric connection towards the missing neighbour, so its forwarder args are shorter. The
+    // forwarder parses them in order behind a has-connection flag, so the zero padding is never read.
+    static constexpr bool pad_per_device_runtime_args = true;
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const DitFusedDistributedRmsnormParams& operation_attributes,
         const DitFusedDistributedRmsnormInputs& tensor_args,
@@ -98,7 +104,7 @@ struct DitFusedDistributedRmsnormMeshWorkloadFactory {
     // address by role. Buffer* bindings alone are not enough: when two tensor arguments share a buffer (for
     // example weight and bias, or rope_cos and rope_sin), binding resolution yields no bindings, and the
     // workload path has no rebuild fallback. Since every bound slot is rewritten here, a hit skips the adapter's
-    // binding re-apply.
+    // binding re-apply. All of these values are the same on every chip, so one patch serves a merged range.
     static void override_runtime_arguments(
         cached_mesh_workload_t& cached_workload,
         const DitFusedDistributedRmsnormParams& operation_attributes,
