@@ -16,9 +16,9 @@
 #pragma once
 
 #include "resolver/plan.h" // Broadcast
-#include "tensor/tensor.h" // Thread
+#include "tensor/tensor.h" // OwnerThread
 
-namespace llk2
+namespace llk
 {
 
 /// Modifiers of matmul.
@@ -49,7 +49,7 @@ struct copy_modifiers
 struct vec_modifiers
 {
     bool fast     = false;        ///< approximate mode: today's fast_and_approx / APPROX template argument
-    Thread thread = Thread::Math; ///< the thread that drives the SFPU: Thread::Math or Thread::Pack (the target kernel's choice)
+    OwnerThread thread = OwnerThread::Compute1; ///< the thread that drives the SFPU: OwnerThread::Compute1 or OwnerThread::Compute2 (the target kernel's choice)
 };
 
 /// Modifiers of pack.
@@ -60,4 +60,4 @@ struct pack_modifiers
     bool untilize = false;       ///< write rows instead of tiles; not ported yet, rejected at compile time
 };
 
-} // namespace llk2
+} // namespace llk

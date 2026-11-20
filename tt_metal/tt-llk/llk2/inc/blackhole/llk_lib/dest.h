@@ -45,7 +45,7 @@
 #include "tensix_types.h" // DEST_REGISTER_HALF_SIZE, DEST_REGISTER_FULL_SIZE
 #include "tensor/tensor.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 using hal::sync::SemaphoreCondition;
@@ -68,9 +68,9 @@ struct ring_params
 };
 
 /// Rows a Dest tensor spans: its offset plus its outermost dim times that dim's stride, in 16-datum rows.
-constexpr std::uint32_t dest_rows(const TensorSpec<tensor_rank>& t)
+constexpr std::uint32_t dest_rows(const TileLayout& t)
 {
-    return (t.shape.offset + t.shape.sizes[TileY] * t.shape.strides[TileY]) / dest_row_datums;
+    return (t.offset() + t.size(0) * t.stride(0)) / dest_row_datums;
 }
 
 /// Rows a tensor may use in one section of p's ring: all of it with 16-bit datums, half of it with 32-bit ones.
@@ -80,7 +80,7 @@ constexpr std::uint32_t ring_capacity_rows(std::uint32_t section_rows, bool dest
 }
 
 /// The ring parameters for Sections sections of tensors with spec t, in the kernel's Dest mode.
-constexpr ring_params ring_params_from(const TensorSpec<tensor_rank>& t, std::uint32_t sections, const KernelSettings& s)
+constexpr ring_params ring_params_from(const TileLayout& t, std::uint32_t sections, const KernelSettings& s)
 {
     return {sections, DEST_REGISTER_FULL_SIZE / sections, dest_rows(t), s.dest_fp32};
 }
@@ -103,10 +103,10 @@ inline __attribute__((always_inline)) void ring_next()
 }
 
 /// Math thread: wait until a section is free, then take it. Sets dest_ring_sync up on the first call.
-template <Thread On, ring_params P>
+template <OwnerThread On, ring_params P>
 inline __attribute__((always_inline)) void ring_reserve()
 {
-    static_assert(On == Thread::Math, "only the math thread waits for a free Dest section");
+    static_assert(On == OwnerThread::Compute1, "only the math thread waits for a free Dest section");
     static_assert(P.sections == 1 || P.sections == 2, "a Dest ring has 1 or 2 sections");
     static_assert(P.rows <= ring_capacity_rows(P.section_rows, P.dest_fp32), "the Dest tensor does not fit one section of the ring: use fewer tiles");
     if constexpr (runs_on<On>)
@@ -119,10 +119,10 @@ inline __attribute__((always_inline)) void ring_reserve()
 }
 
 /// Pack thread: once the packer has read the section, zero it and give it back to math.
-template <Thread On, ring_params P>
+template <OwnerThread On, ring_params P>
 inline __attribute__((always_inline)) void ring_release()
 {
-    static_assert(On == Thread::Pack, "only the pack thread frees a Dest section");
+    static_assert(On == OwnerThread::Compute2, "only the pack thread frees a Dest section");
     if constexpr (runs_on<On>)
     {
         // ZEROACC is a matrix-unit instruction: hold it until the packer is idle. The SEMGET behind it waits too.
@@ -140,4 +140,4 @@ inline __attribute__((always_inline)) void ring_release()
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

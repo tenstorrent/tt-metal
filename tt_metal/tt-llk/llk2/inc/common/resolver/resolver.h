@@ -24,7 +24,7 @@
 #include "kernel_settings.h"
 #include "resolver/plan.h"
 
-namespace llk2
+namespace llk
 {
 
 /// An op's four Resolver steps. Mods is what the op's Compute API call hands over: its modifier struct (vec_call
@@ -33,13 +33,13 @@ template <class Mods>
 struct OpApi
 {
     /// Whether the op can run on in0 and in1 with these modifiers and settings.
-    bool (*accepts)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings);
+    bool (*accepts)(const TileLayout& in0, const TileLayout& in1, const Mods& mods, const KernelSettings& settings);
     /// Negotiation: the unit, the register formats, the fidelity and the result spec.
-    OpConfig (*options)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings);
+    OpConfig (*options)(const TileLayout& in0, const TileLayout& in1, const Mods& mods, const KernelSettings& settings);
     /// Allocation: loop counts and tile geometry.
-    Work (*work)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const OpConfig& config);
+    Work (*work)(const TileLayout& in0, const TileLayout& in1, const OpConfig& config);
     /// Planning: what each unit does.
-    Plan (*plan)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const OpConfig& config, const Work& work);
+    Plan (*plan)(const TileLayout& in0, const TileLayout& in1, const Mods& mods, const OpConfig& config, const Work& work);
 };
 
 /// The three results of resolving one call.
@@ -53,7 +53,7 @@ struct Resolved
 /// Runs options, work and plan of api on the call's tensors, modifiers and settings. Does not check accepts.
 template <class Mods>
 constexpr Resolved resolve(
-    const OpApi<Mods>& api, const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings)
+    const OpApi<Mods>& api, const TileLayout& in0, const TileLayout& in1, const Mods& mods, const KernelSettings& settings)
 {
     const OpConfig config = api.options(in0, in1, mods, settings);
     const Work work       = api.work(in0, in1, config);
@@ -61,11 +61,11 @@ constexpr Resolved resolve(
 }
 
 /// Whether Api accepts A and B with Mods under the kernel's settings, as a compile-time object.
-template <const auto& Api, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, auto Mods>
+template <const auto& Api, const TileLayout& A, const TileLayout& B, auto Mods>
 inline constexpr bool accepted = Api.accepts(A, B, Mods, kernel_settings);
 
 /// The resolved call of Api on A and B with Mods under the kernel's settings, as a compile-time object.
-template <const auto& Api, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, auto Mods>
+template <const auto& Api, const TileLayout& A, const TileLayout& B, auto Mods>
 inline constexpr Resolved resolved = resolve(Api, A, B, Mods, kernel_settings);
 
-} // namespace llk2
+} // namespace llk

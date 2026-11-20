@@ -48,7 +48,7 @@ from llk2_paths import cpp_source, kernel_test_include_dirs
 
 HARDTANH_MIN, HARDTANH_MAX = -1.0, 1.0  # the harness golden's CLAMP_MIN / CLAMP_MAX
 
-# Activation: (llk2::VecFunction enumerator, harness op, param0, param1); params as FP32 values.
+# Activation: (llk::VecFunction enumerator, harness op, param0, param1); params as FP32 values.
 ACTIVATIONS = {
     "none": ("None", None, 0.0, 0.0),
     "silu": ("Silu", MathOperation.Silu, 0.0, 0.0),
@@ -95,7 +95,7 @@ class LLK2_BMM_FUSED(TemplateParameter):
             f"constexpr std::uint32_t OUT_BLOCKS = {self.out_blocks};\n"
             + "".join(f"#define {d}\n" for d in defines)
             + '#include "resolver/vec_function.h"\n'
-            f"constexpr auto ACTIVATION = llk2::VecFunction::{function};\n"
+            f"constexpr auto ACTIVATION = llk::VecFunction::{function};\n"
             f"constexpr std::uint32_t ACTIVATION_P0 = {hex(_fp32_bits(p0))};\n"
             f"constexpr std::uint32_t ACTIVATION_P1 = {hex(_fp32_bits(p1))};"
         )

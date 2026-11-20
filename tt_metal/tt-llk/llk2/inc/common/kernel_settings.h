@@ -23,7 +23,7 @@
 #define LLK2_MATH_FIDELITY 0
 #endif
 
-namespace llk2
+namespace llk
 {
 
 /// The settings every Compute API call of a kernel shares.
@@ -45,4 +45,4 @@ constexpr DataFormat dest_format_for(const KernelSettings& s)
 /// The kernel's Dest format: what its dst_specs are in.
 inline constexpr DataFormat kernel_dest_format = dest_format_for(kernel_settings);
 
-} // namespace llk2
+} // namespace llk

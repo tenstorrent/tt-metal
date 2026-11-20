@@ -9,7 +9,7 @@
 
 #include "tensor/tensor.h"
 
-namespace llk2
+namespace llk
 {
 
 /// The register format the unpacker writes to SrcA/SrcB for an L1 format, or DataFormat::Invalid if it cannot.
@@ -72,4 +72,4 @@ constexpr bool is_b_format(DataFormat f)
            f == DataFormat::Bfp2_b;
 }
 
-} // namespace llk2
+} // namespace llk

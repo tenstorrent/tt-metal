@@ -20,7 +20,7 @@
 #include "resolver/formats.h"
 #include "resolver/resolver.h"
 
-namespace llk2
+namespace llk
 {
 
 inline constexpr std::uint32_t eltwise_binary_tile_dim = default_tile_dim; ///< eltwise binary is ported for 32x32 tiles only
@@ -37,55 +37,54 @@ constexpr DataFormat eltwise_binary_dest_format(DataFormat in, bool dest_fp32)
 }
 
 /// in1 is one row of tiles spread over every row of in0's tiles.
-constexpr bool is_eltwise_binary_bias_row(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1)
+constexpr bool is_eltwise_binary_bias_row(const TileLayout& in0, const TileLayout& in1)
 {
-    return in1.shape.sizes[TileY] == 1 && in1.shape.sizes[TileX] == in0.shape.sizes[TileX];
+    return in1.size(0) == 1 && in1.size(1) == in0.size(1);
 }
 
 /// t is in L1 in 32x32 tiles.
-constexpr bool is_eltwise_binary_tile(const TensorSpec<tensor_rank>& t)
+constexpr bool is_eltwise_binary_tile(const TileLayout& t)
 {
-    return t.storage == Storage::L1 && tile_rows(t.shape) == eltwise_binary_tile_dim && tile_cols(t.shape) == eltwise_binary_tile_dim;
+    return t.storage() == Storage::L1 && (t.size(2) * t.size(4)) == eltwise_binary_tile_dim && (t.size(3) * t.size(5)) == eltwise_binary_tile_dim;
 }
 
 /// accepts: 32x32 float tiles in L1, in1 shaped as Mods.bcast needs, both operands of one exponent width.
 template <class Mods>
-constexpr bool eltwise_binary_accepts(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& m, const KernelSettings& s)
+constexpr bool eltwise_binary_accepts(const TileLayout& in0, const TileLayout& in1, const Mods& m, const KernelSettings& s)
 {
     const bool tiles = is_eltwise_binary_tile(in0) && is_eltwise_binary_tile(in1);
     // No broadcast: the same tiles. Row: in1 is one row of tiles, its top row broadcast down each tile.
     const bool shapes =
-        m.bcast == Broadcast::None ? equal(in0.shape.sizes, in1.shape.sizes) : m.bcast == Broadcast::Row && is_eltwise_binary_bias_row(in0, in1);
+        m.bcast == Broadcast::None ? stdx::ranges::equal(in0.sizes(), in1.sizes()) : m.bcast == Broadcast::Row && is_eltwise_binary_bias_row(in0, in1);
     // Both operands are read in SrcA's style (ELWADD.md): same exponent width, floats only for now.
-    const bool formats = src_register_format(in0.format, s.dest_fp32) != DataFormat::Invalid &&
-                         src_register_format(in1.format, s.dest_fp32) != DataFormat::Invalid && !is_integer_format(in0.format) &&
-                         !is_integer_format(in1.format) && has_5bit_exponent(in0.format) == has_5bit_exponent(in1.format);
+    const bool formats = src_register_format(in0.format(), s.dest_fp32) != DataFormat::Invalid &&
+                         src_register_format(in1.format(), s.dest_fp32) != DataFormat::Invalid && !is_integer_format(in0.format()) &&
+                         !is_integer_format(in1.format()) && has_5bit_exponent(in0.format()) == has_5bit_exponent(in1.format());
     return tiles && shapes && formats;
 }
 
 /// options: in0 to SrcA, in1 to SrcB, one fidelity phase, the result in Dest with in0's shape.
 template <class Mods>
-constexpr OpConfig eltwise_binary_options(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods&, const KernelSettings& s)
+constexpr OpConfig eltwise_binary_options(const TileLayout& in0, const TileLayout& in1, const Mods&, const KernelSettings& s)
 {
     return {
-        Exu::Fpu,
-        {Where::SrcA, src_register_format(in0.format, s.dest_fp32)},
-        {Where::SrcB, src_register_format(in1.format, s.dest_fp32)},
+        OwnerExu::Fpu,
+        {Where::SrcA, src_register_format(in0.format(), s.dest_fp32)},
+        {Where::SrcB, src_register_format(in1.format(), s.dest_fp32)},
         eltwise_binary_lofi, // ELWADD and ELWSUB run one fidelity phase, whatever the kernel's fidelity is
-        laid_out(in0.shape.sizes, eltwise_binary_dest_format(in0.format, s.dest_fp32), Storage::Dest),
+        laid_out(in0.sizes(), eltwise_binary_dest_format(in0.format(), s.dest_fp32), Storage::Dest),
     };
 }
 
 /// work: one output tile per in0 tile, rt_dim x ct_dim of them.
-constexpr Work eltwise_binary_work(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>&, const OpConfig& c)
+constexpr Work eltwise_binary_work(const TileLayout& in0, const TileLayout&, const OpConfig& c)
 {
-    const Dims& out = c.result.shape.sizes;
-    return {out[TileY], out[TileX], no_k_steps, in0.shape.sizes[DatumY], faces_per_tile(in0.shape)}; // one input tile pair per output tile
+    return work_over(c.result, no_k_steps); // one input tile pair per output tile; the result has in0's tiles
 }
 
 /// plan: the unpack walk described at the top of this file, and math running F.
 template <class Mods, BinaryFunction F>
-constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& m, const OpConfig& c, const Work& k)
+constexpr Plan eltwise_binary_plan(const TileLayout& in0, const TileLayout& in1, const Mods& m, const OpConfig& c, const Work& k)
 {
     const std::uint32_t next_tile     = 1;        // tiles from (r, c) to (r, c + 1)
     const std::uint32_t next_tile_row = k.ct_dim; // tiles from (r, c) to (r + 1, c)
@@ -93,11 +92,11 @@ constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const Ten
 
     const UnpackPlan in0_plan {
         Where::SrcA,
-        in0.format,
+        in0.format(),
         c.in0.format,
         k.face_r_dim,
         k.num_faces,
-        tile_bytes(in0),
+        tile_bytes(in0.format(), in0.tile_elements()),
         Layout::Tilized,
         Broadcast::None,
         false, // no transpose
@@ -107,11 +106,11 @@ constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const Ten
     };
     const UnpackPlan in1_plan {
         Where::SrcB,
-        in1.format,
+        in1.format(),
         c.in1.format,
-        in1.shape.sizes[DatumY],
-        faces_per_tile(in1.shape),
-        tile_bytes(in1),
+        in1.size(4),
+        (in1.size(2) * in1.size(3)),
+        tile_bytes(in1.format(), in1.tile_elements()),
         Layout::Tilized,
         m.bcast,
         false, // no transpose
@@ -121,9 +120,9 @@ constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const Ten
     };
     const UnpackWalk walk {1 /* steps */, k.rt_dim, k.ct_dim, Where::None};
     const MathPlan math {
-        Exu::Fpu,
+        OwnerExu::Fpu,
         c.math_fidelity,
-        is_32bit_format(c.result.format),
+        is_32bit_format(c.result.format()),
         c.in0.format,
         false, // no transpose
         static_cast<std::uint32_t>(F),
@@ -147,4 +146,4 @@ inline constexpr OpApi<sub_modifiers> sub_op {
     &eltwise_binary_plan<sub_modifiers, BinaryFunction::Sub>,
 };
 
-} // namespace llk2
+} // namespace llk

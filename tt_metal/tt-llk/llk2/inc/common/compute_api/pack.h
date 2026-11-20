@@ -34,49 +34,49 @@
 #include "llk_lib/sync.h"
 #include "resolver/pack.h"
 
-namespace llk2
+namespace llk
 {
 
 namespace detail
 {
 /// The checks and the per-thread call both pack forms share.
-template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, const TensorSpec<tensor_rank>& O>
-inline __attribute__((always_inline)) void pack_checked(std::uint32_t src_address, std::uint32_t dst_address, bool l1_acc)
+template <pack_modifiers Mods, class D, class RD, class O, class RO>
+inline __attribute__((always_inline)) void pack_checked(const Tensor<D, RD>& src, const Tensor<O, RO>& dst, bool l1_acc)
 {
-    static_assert(D.storage == Storage::Dest, "pack reads a Dest tensor");
-    static_assert(O.storage == Storage::L1, "pack writes an L1 tensor");
+    static_assert(D::storage() == Storage::Dest, "pack reads a Dest tensor");
+    static_assert(O::storage() == Storage::L1, "pack writes an L1 tensor");
     static_assert(!Mods.untilize, "pack: untilize is not ported yet");
     static_assert(
-        accepted<pack_op, D, O, Mods>,
+        accepted<pack_op, layout_of<D>, layout_of<O>, Mods>,
         "pack takes a Dest tensor and a dense L1 tensor of the same shape in 32x32 tiles, a Dest format that matches the kernel's Dest "
         "mode, an L1 format the packer can convert to, and l1_acc (On or Runtime) only into Float32, Float16_b or Float16");
 
-    constexpr const Resolved& r = resolved<pack_op, D, O, Mods>;
-    llk_lib::acquire<Thread::Pack, Exu::Packer, D>();
-    llk_lib::acquire<Thread::Pack, Exu::Packer, O>();
-    llk_lib::pack<Thread::Pack, r.plan>(src_address, dst_address, l1_acc);
+    constexpr const Resolved& r = resolved<pack_op, layout_of<D>, layout_of<O>, Mods>;
+    llk_lib::acquire<OwnerThread::Compute2, OwnerExu::Pack>(src);
+    llk_lib::acquire<OwnerThread::Compute2, OwnerExu::Pack>(dst);
+    llk_lib::pack<OwnerThread::Compute2, r.plan>(src.address(), dst.address(), l1_acc);
 }
 } // namespace detail
 
 /// src (with Mods' ReLU, or added into dst with l1_acc = Toggle::On): every tile of the Dest tensor src to the L1
 /// tensor dst, returned as the packers'. Mods.l1_acc must not be Toggle::Runtime here: that form takes the l1_acc
 /// argument (below).
-template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
+template <pack_modifiers Mods = pack_modifiers {}, class D, class RD, class O, class RO>
 inline __attribute__((always_inline)) auto pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
 {
     static_assert(Mods.l1_acc != Toggle::Runtime, "pack: l1_acc = Toggle::Runtime needs the run-time l1_acc argument");
-    detail::pack_checked<Mods, D, O>(src.address, dst.address, false /* unused: l1_acc is Off or On */);
-    return as_owned<Thread::Pack, Exu::Packer>(dst);
+    detail::pack_checked<Mods>(src, dst, false /* unused: l1_acc is Off or On */);
+    return dst.with_owner(OwnerThread::Compute2, OwnerExu::Pack);
 }
 
 /// As above, with the run-time l1_acc argument. With l1_acc = Toggle::Runtime, src is added into dst when l1_acc is true
 /// and written over dst when it is false. With Toggle::Off or Toggle::On the modifier decides and the argument is
 /// ignored (no code reads it), so a kernel can pick Off or Runtime from a compile-time setting and keep one call.
-template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
+template <pack_modifiers Mods, class D, class RD, class O, class RO>
 inline __attribute__((always_inline)) auto pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst, bool l1_acc)
 {
-    detail::pack_checked<Mods, D, O>(src.address, dst.address, l1_acc);
-    return as_owned<Thread::Pack, Exu::Packer>(dst);
+    detail::pack_checked<Mods>(src, dst, l1_acc);
+    return dst.with_owner(OwnerThread::Compute2, OwnerExu::Pack);
 }
 
-} // namespace llk2
+} // namespace llk

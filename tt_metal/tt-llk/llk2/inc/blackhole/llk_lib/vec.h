@@ -68,7 +68,7 @@
 #include "sfpu/ckernel_sfpu_load_config.h"
 #endif
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -275,10 +275,10 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
 }
 
 /// The driving thread's part of a Compute API vec_ call: configure, then the function on every tile from dest_row.
-template <Thread On, Plan Pl, class... Scalars>
+template <OwnerThread On, Plan Pl, class... Scalars>
 inline __attribute__((always_inline)) void vec(std::uint32_t dest_row, Scalars... scalars)
 {
-    static_assert(On == Thread::Math || On == Thread::Pack, "the SFPU is driven from the math or the pack thread");
+    static_assert(On == OwnerThread::Compute1 || On == OwnerThread::Compute2, "the SFPU is driven from the math or the pack thread");
     constexpr vec_params p = vec_params_from(Pl);
     if constexpr (runs_on<On>)
     {
@@ -287,4 +287,4 @@ inline __attribute__((always_inline)) void vec(std::uint32_t dest_row, Scalars..
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

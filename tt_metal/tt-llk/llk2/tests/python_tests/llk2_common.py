@@ -9,9 +9,9 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import DestAccumulation
 from helpers.tilize_untilize import tilize_block
 
-TILE_DIM = 32  # llk2::default_tile_dim
+TILE_DIM = 32  # llk::default_tile_dim
 TILE_DATUMS = TILE_DIM * TILE_DIM
-FACES_PER_TILE = 4  # llk2::faces_per_full_tile: a 32x32 tile is 2 x 2 faces of 16 x 16
+FACES_PER_TILE = 4  # llk::faces_per_full_tile: a 32x32 tile is 2 x 2 faces of 16 x 16
 
 # Output tiles that fit one Dest section (the tests use half sync): 8 with a 16-bit Dest, 4 with a 32-bit one.
 DEST_HALF_TILES = {DestAccumulation.No: 8, DestAccumulation.Yes: 4}

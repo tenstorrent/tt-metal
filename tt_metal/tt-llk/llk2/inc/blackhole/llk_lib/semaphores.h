@@ -22,7 +22,7 @@
 
 #include "hal/sync.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 /// ckernel::semaphore::UNPACK_SYNC: config contexts handed to the unpackers and not yet finished.
@@ -65,4 +65,4 @@ inline __attribute__((always_inline)) void semaphore_setup_once()
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

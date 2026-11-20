@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute API test: Tensors at dataflow buffer pointers feeding llk2::matmul, one kernel body for all three threads.
+// Compute API test: Tensors at dataflow buffer pointers feeding llk::matmul, one kernel body for all three threads.
 // The buffers are the harness's stand-in for tt-metal's DataflowBuffer (tests/helpers/test_dataflow_buffer.h). The
 // kernel gets Tensors from them with compute_api/dataflow.h (wait_front, reserve_back) and gives the pages back with
 // release(). A pointer is valid only on its owner (read: unpack, write: pack), which is where llk2 reads the Tensors'
@@ -47,35 +47,35 @@ constexpr std::uint32_t in0_block_tiles = RT_DIM * KB_DIM;
 constexpr std::uint32_t in1_block_tiles = KB_DIM * CT_DIM;
 constexpr std::uint32_t out_block_tiles = RT_DIM * CT_DIM;
 
-inline constexpr auto& x_spec   = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, KB_DIM * llk2::default_tile_dim, in0_format>;                // [RT, KB] tiles
-inline constexpr auto& w_spec   = llk2::l1_spec<KB_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, in1_format>;                // [KB, CT] tiles
-inline constexpr auto& out_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, out_format>;                // [RT, CT] tiles
-inline constexpr auto& acc_spec = llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, llk2::kernel_dest_format>; // [M, N] in Dest
+inline constexpr auto& x_spec   = llk::l1_spec<RT_DIM * llk::default_tile_dim, KB_DIM * llk::default_tile_dim, in0_format>;                // [RT, KB] tiles
+inline constexpr auto& w_spec   = llk::l1_spec<KB_DIM * llk::default_tile_dim, CT_DIM * llk::default_tile_dim, in1_format>;                // [KB, CT] tiles
+inline constexpr auto& out_spec = llk::l1_spec<RT_DIM * llk::default_tile_dim, CT_DIM * llk::default_tile_dim, out_format>;                // [RT, CT] tiles
+inline constexpr auto& acc_spec = llk::dst_spec<RT_DIM * llk::default_tile_dim, CT_DIM * llk::default_tile_dim, llk::kernel_dest_format>; // [M, N] in Dest
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
     // Pages of one tile. Ids as tt-metal names its CBs: c_0 and c_1 for the inputs, c_16 for the output.
-    llk2_test::DataflowBuffer in0(0, params.buffer_A[0], llk2::tile_bytes(in0_format, llk2::default_tile_datums), OUT_BLOCKS * K_BLOCKS * in0_block_tiles);
-    llk2_test::DataflowBuffer in1(1, params.buffer_B[0], llk2::tile_bytes(in1_format, llk2::default_tile_datums), OUT_BLOCKS * K_BLOCKS * in1_block_tiles);
-    llk2_test::DataflowBuffer out(16, params.buffer_Res[0], llk2::tile_bytes(out_format, llk2::default_tile_datums), OUT_BLOCKS * out_block_tiles);
+    llk2_test::DataflowBuffer in0(0, params.buffer_A[0], llk::tile_bytes(in0_format, llk::default_tile_datums), OUT_BLOCKS * K_BLOCKS * in0_block_tiles);
+    llk2_test::DataflowBuffer in1(1, params.buffer_B[0], llk::tile_bytes(in1_format, llk::default_tile_datums), OUT_BLOCKS * K_BLOCKS * in1_block_tiles);
+    llk2_test::DataflowBuffer out(16, params.buffer_Res[0], llk::tile_bytes(out_format, llk::default_tile_datums), OUT_BLOCKS * out_block_tiles);
     // TEST ONLY: the reader kernels' pushes, and the firmware's counter reset for the output.
     in0.preload(OUT_BLOCKS * K_BLOCKS * in0_block_tiles);
     in1.preload(OUT_BLOCKS * K_BLOCKS * in1_block_tiles);
     out.zero_counters();
 
-    using AccRing = llk2::DestRing<acc_spec>;
+    using AccRing = llk::DestRing<decltype(acc_spec)>;
     for (std::uint32_t block = 0; block < OUT_BLOCKS; ++block)
     {
-        const auto acc = llk2::reserve_back<AccRing>(); // a zeroed Dest section, math's
+        const auto acc = llk::reserve_back<AccRing>(); // a zeroed Dest section, math's
         for (std::uint32_t k = 0; k < K_BLOCKS; ++k)
         {
-            const auto x = llk2::wait_front<x_spec>(in0);
-            const auto w = llk2::wait_front<w_spec>(in1);
-            llk2::matmul(x, w, acc); // acc += x * w; still math's
-            llk2::release(x);
-            llk2::release(w);
+            const auto x = llk::wait_front(in0, x_spec);
+            const auto w = llk::wait_front(in1, w_spec);
+            llk::matmul(x, w, acc); // acc += x * w; still math's
+            llk::release(x);
+            llk::release(w);
         }
-        llk2::release(llk2::pack(acc, llk2::reserve_back<out_spec>(out))); // pack takes acc from math, then pushes
-        llk2::release(acc);                                                 // the section back to the ring
+        llk::release(llk::pack(acc, llk::reserve_back(out, out_spec))); // pack takes acc from math, then pushes
+        llk::release(acc);                                                 // the section back to the ring
     }
 }

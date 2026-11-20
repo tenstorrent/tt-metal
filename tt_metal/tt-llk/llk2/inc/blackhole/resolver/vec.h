@@ -9,7 +9,7 @@
 //   vec_accepts   the operand is in Dest, in the kernel's Dest format, in 32x32 tiles, driven from math or pack
 //   vec_options   the SFPU reads and writes Dest in the Dest format; the result is the operand itself
 //   vec_work      tiles along y and x, faces per tile
-//   vec_plan      Exu::Sfpu, the function, approximate mode, the Dest mode
+//   vec_plan      OwnerExu::Sfpu, the function, approximate mode, the Dest mode
 //
 // in1 is not used: the Compute API passes the operand twice.
 
@@ -18,26 +18,26 @@
 #include "resolver/resolver.h"
 #include "resolver/vec_function.h"
 
-namespace llk2
+namespace llk
 {
 
 inline constexpr std::uint32_t vec_tile_dim = default_tile_dim; ///< the SFPU activations are ported for 32x32 tiles only
 
 /// accepts: see the file comment.
-constexpr bool vec_accepts(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call& call, const KernelSettings& s)
+constexpr bool vec_accepts(const TileLayout& acc, const TileLayout&, const vec_call& call, const KernelSettings& s)
 {
-    const bool storage = acc.storage == Storage::Dest && acc.format == dest_format_for(s);
-    const bool tiles   = tile_rows(acc.shape) == vec_tile_dim && tile_cols(acc.shape) == vec_tile_dim;
-    const bool thread  = call.mods.thread == Thread::Math || call.mods.thread == Thread::Pack;
+    const bool storage = acc.storage() == Storage::Dest && acc.format() == dest_format_for(s);
+    const bool tiles   = (acc.size(2) * acc.size(4)) == vec_tile_dim && (acc.size(3) * acc.size(5)) == vec_tile_dim;
+    const bool thread  = call.mods.thread == OwnerThread::Compute1 || call.mods.thread == OwnerThread::Compute2;
     return storage && tiles && call.function != VecFunction::None && thread;
 }
 
 /// options: the SFPU reads and writes Dest in the Dest format; the result is acc itself.
-constexpr OpConfig vec_options(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call&, const KernelSettings& s)
+constexpr OpConfig vec_options(const TileLayout& acc, const TileLayout&, const vec_call&, const KernelSettings& s)
 {
     return {
-        Exu::Sfpu,
-        {Where::Dest, acc.format},
+        OwnerExu::Sfpu,
+        {Where::Dest, acc.format()},
         {Where::None, DataFormat::Invalid},
         s.math_fidelity, // unused: the SFPU has no fidelity phases
         acc,             // in place
@@ -45,18 +45,18 @@ constexpr OpConfig vec_options(const TensorSpec<tensor_rank>& acc, const TensorS
 }
 
 /// work: the tile grid and the tile geometry; no K.
-constexpr Work vec_work(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const OpConfig&)
+constexpr Work vec_work(const TileLayout& acc, const TileLayout&, const OpConfig&)
 {
-    return {acc.shape.sizes[TileY], acc.shape.sizes[TileX], no_k_steps, acc.shape.sizes[DatumY], faces_per_tile(acc.shape)};
+    return work_over(acc, no_k_steps);
 }
 
 /// plan: nothing unpacked, the function and its mode on the SFPU.
-constexpr Plan vec_plan(const TensorSpec<tensor_rank>&, const TensorSpec<tensor_rank>&, const vec_call& call, const OpConfig& c, const Work& k)
+constexpr Plan vec_plan(const TileLayout&, const TileLayout&, const vec_call& call, const OpConfig& c, const Work& k)
 {
     const MathPlan math {
-        Exu::Sfpu,
+        OwnerExu::Sfpu,
         c.math_fidelity,
-        is_32bit_format(c.result.format),
+        is_32bit_format(c.result.format()),
         c.in0.format,
         false, // no transpose
         static_cast<std::uint32_t>(call.function),
@@ -67,4 +67,4 @@ constexpr Plan vec_plan(const TensorSpec<tensor_rank>&, const TensorSpec<tensor_
 
 inline constexpr OpApi<vec_call> vec_op {&vec_accepts, &vec_options, &vec_work, &vec_plan};
 
-} // namespace llk2
+} // namespace llk

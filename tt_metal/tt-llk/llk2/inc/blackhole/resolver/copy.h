@@ -23,7 +23,7 @@
 #include "resolver/formats.h" // src_register_format, is_integer_format, has_5bit_exponent
 #include "resolver/resolver.h"
 
-namespace llk2
+namespace llk
 {
 
 inline constexpr std::uint32_t copy_tile_dim = default_tile_dim; ///< copy is ported for 32x32 tiles only
@@ -49,46 +49,46 @@ constexpr DataFormat copy_dest_format(DataFormat l1, const copy_modifiers& m, co
 }
 
 /// accepts: one 32x32-tiled L1 tensor in a float format the unpacker can write to Src, or straight to Dest.
-constexpr bool copy_accepts(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
+constexpr bool copy_accepts(const TileLayout& src, const TileLayout&, const copy_modifiers& m, const KernelSettings& s)
 {
-    const bool shape = src.storage == Storage::L1 && tile_rows(src.shape) == copy_tile_dim && tile_cols(src.shape) == copy_tile_dim;
+    const bool shape = src.storage() == Storage::L1 && (src.size(2) * src.size(4)) == copy_tile_dim && (src.size(3) * src.size(5)) == copy_tile_dim;
     // Integer data is not ported yet: through SrcA it needs the integer datapath, to Dest only INT32 / UINT32 work.
     const bool format =
-        !is_integer_format(src.format) && (copy_unpacks_to_dest(src.format, m, s) || src_register_format(src.format, s.dest_fp32) != DataFormat::Invalid);
+        !is_integer_format(src.format()) && (copy_unpacks_to_dest(src.format(), m, s) || src_register_format(src.format(), s.dest_fp32) != DataFormat::Invalid);
     return shape && format;
 }
 
 /// options: unpacker 0 to SrcA (math moves the tiles) or straight to Dest; the result is src's shape in Dest.
-constexpr OpConfig copy_options(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const KernelSettings& s)
+constexpr OpConfig copy_options(const TileLayout& src, const TileLayout&, const copy_modifiers& m, const KernelSettings& s)
 {
-    const bool to_dest = copy_unpacks_to_dest(src.format, m, s);
+    const bool to_dest = copy_unpacks_to_dest(src.format(), m, s);
     return {
-        to_dest ? Exu::Unpacker : Exu::Fpu, // straight to Dest, the unpacker does all the work
-        {to_dest ? Where::Dest : Where::SrcA, to_dest ? src.format : src_register_format(src.format, s.dest_fp32)},
+        to_dest ? OwnerExu::Unpack : OwnerExu::Fpu, // straight to Dest, the unpacker does all the work
+        {to_dest ? Where::Dest : Where::SrcA, to_dest ? src.format() : src_register_format(src.format(), s.dest_fp32)},
         {Where::None, DataFormat::Invalid},
         s.math_fidelity,
-        laid_out(src.shape.sizes, copy_dest_format(src.format, m, s), Storage::Dest),
+        laid_out(src.sizes(), copy_dest_format(src.format(), m, s), Storage::Dest),
     };
 }
 
 /// work: one output tile per src tile; no K.
-constexpr Work copy_work(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const OpConfig&)
+constexpr Work copy_work(const TileLayout& src, const TileLayout&, const OpConfig&)
 {
-    return {src.shape.sizes[TileY], src.shape.sizes[TileX], no_k_steps, src.shape.sizes[DatumY], faces_per_tile(src.shape)};
+    return work_over(src, no_k_steps);
 }
 
 /// plan: the unpack walk of one copy: one step, one run, every tile of src streamed in L1 order, each one tile further
 /// on. Tile i of src lands in tile i of acc.
-constexpr Plan copy_plan(const TensorSpec<tensor_rank>& src, const TensorSpec<tensor_rank>&, const copy_modifiers& m, const OpConfig& c, const Work& k)
+constexpr Plan copy_plan(const TileLayout& src, const TileLayout&, const copy_modifiers& m, const OpConfig& c, const Work& k)
 {
     constexpr std::uint32_t next_tile = 1; // tiles from src tile i to tile i + 1
     const UnpackPlan src_plan {
         c.in0.where,
-        src.format,
+        src.format(),
         c.in0.format,
         k.face_r_dim,
         k.num_faces,
-        tile_bytes(src),
+        tile_bytes(src.format(), src.tile_elements()),
         Layout::Tilized,
         Broadcast::None,
         m.transpose,
@@ -98,10 +98,10 @@ constexpr Plan copy_plan(const TensorSpec<tensor_rank>& src, const TensorSpec<te
     };
     const UnpackPlan unused {}; // to = Where::None: unpacker 1 idles
     const UnpackWalk walk {1 /* steps */, 1 /* runs */, k.rt_dim * k.ct_dim, Where::None};
-    const MathPlan math {c.unit, c.math_fidelity, is_32bit_format(c.result.format), c.in0.format, m.transpose, 0 /* no function */};
+    const MathPlan math {c.unit, c.math_fidelity, is_32bit_format(c.result.format()), c.in0.format, m.transpose, 0 /* no function */};
     return {Op::Copy, src_plan, unused, walk, math, PackPlan {}, k};
 }
 
 inline constexpr OpApi<copy_modifiers> copy_op {&copy_accepts, &copy_options, &copy_work, &copy_plan};
 
-} // namespace llk2
+} // namespace llk

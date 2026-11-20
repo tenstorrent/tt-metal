@@ -26,26 +26,26 @@
 #include "llk_lib/unpack.h"
 #include "resolver/copy.h"
 
-namespace llk2
+namespace llk
 {
 
 /// src, tile i to tile i, each tile transposed when Mods.transpose is set, written to acc and returned as math's.
-template <copy_modifiers Mods = copy_modifiers {}, const TensorSpec<tensor_rank>& S, class RS, const TensorSpec<tensor_rank>& D, class RD>
+template <copy_modifiers Mods = copy_modifiers {}, class S, class RS, class D, class RD>
 inline __attribute__((always_inline)) auto copy(const Tensor<S, RS>& src, const Tensor<D, RD>& acc)
 {
-    static_assert(D.storage == Storage::Dest, "copy writes Dest");
-    static_assert(accepted<copy_op, S, S, Mods>, "copy takes 32x32 tiles in L1, in a float format the unpacker can write to Src or Dest");
+    static_assert(D::storage() == Storage::Dest, "copy writes Dest");
+    static_assert(accepted<copy_op, layout_of<S>, layout_of<S>, Mods>, "copy takes 32x32 tiles in L1, in a float format the unpacker can write to Src or Dest");
 
-    constexpr const Resolved& r = resolved<copy_op, S, S, Mods>;
+    constexpr const Resolved& r = resolved<copy_op, layout_of<S>, layout_of<S>, Mods>;
     static_assert(
-        equal(r.config.result.shape.sizes, D.shape.sizes) && r.config.result.format == D.format,
+        stdx::ranges::equal(r.config.result.sizes(), layout_of<D>.sizes()) && r.config.result.format() == D::format(),
         "acc must have src's shape and the format copy writes to Dest (FP32 with a 32-bit Dest, else BF16 or FP16)");
 
-    llk_lib::acquire<Thread::Unpack, Exu::Unpacker, S>();
-    llk_lib::acquire<Thread::Math, Exu::Fpu, D>();
-    llk_lib::unpack<Thread::Unpack, r.plan>(src.address);
-    llk_lib::copy<Thread::Math, r.plan>(acc.address);
-    return as_owned<Thread::Math, Exu::Fpu>(acc);
+    llk_lib::acquire<OwnerThread::Compute0, OwnerExu::Unpack>(src);
+    llk_lib::acquire<OwnerThread::Compute1, OwnerExu::Fpu>(acc);
+    llk_lib::unpack<OwnerThread::Compute0, r.plan>(src.address());
+    llk_lib::copy<OwnerThread::Compute1, r.plan>(acc.address());
+    return acc.with_owner(OwnerThread::Compute1, OwnerExu::Fpu);
 }
 
-} // namespace llk2
+} // namespace llk

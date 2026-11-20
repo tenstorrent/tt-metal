@@ -21,7 +21,7 @@
 
 #include "tensor/tensor.h"
 
-namespace llk2
+namespace llk
 {
 
 /// Where an operand goes, or where math reads it from.
@@ -82,11 +82,11 @@ struct Rep
 /// Negotiation's result for one op.
 struct OpConfig
 {
-    Exu unit;                       ///< the unit that does the op's work
+    OwnerExu unit;                       ///< the unit that does the op's work
     Rep in0;                        ///< the first operand
     Rep in1;                        ///< the second operand
     std::uint32_t math_fidelity;    ///< ckernel::MathFidelity value the op runs with
-    TensorSpec<tensor_rank> result; ///< what the op produces
+    TileLayout result; ///< what the op produces
 };
 
 /// Work allocation's result for one op.
@@ -98,6 +98,17 @@ struct Work
     std::uint32_t face_r_dim; ///< rows per face
     std::uint32_t num_faces;  ///< faces per tile
 };
+
+/// The Work of an op with one output tile per tile of t (in tile-layout dims) and kt_dim input tiles folded into each.
+constexpr Work work_over(const TileLayout& t, std::uint32_t kt_dim)
+{
+    return {
+        static_cast<std::uint32_t>(t.size(0)),
+        static_cast<std::uint32_t>(t.size(1)),
+        kt_dim,
+        static_cast<std::uint32_t>(t.size(4)),
+        static_cast<std::uint32_t>(t.size(2) * t.size(3))};
+}
 
 /// One operand as an unpacker reads it: formats, geometry, and how its L1 address moves through the walk.
 /// Address steps are in tiles of this operand.
@@ -143,7 +154,7 @@ enum class BinaryFunction : std::uint32_t
 /// What math (the FPU or the SFPU) does.
 struct MathPlan
 {
-    Exu unit;                    ///< the unit doing the math: Fpu or Sfpu; Unpacker for a copy straight to Dest (math only waits)
+    OwnerExu unit;                    ///< the unit doing the math: Fpu or Sfpu; Unpacker for a copy straight to Dest (math only waits)
     std::uint32_t math_fidelity; ///< ckernel::MathFidelity value
     bool dest_fp32;              ///< 32-bit Dest mode
     DataFormat format;           ///< the math (Src) format
@@ -180,4 +191,4 @@ struct Plan
     Work work;       ///< loop counts and tile geometry
 };
 
-} // namespace llk2
+} // namespace llk

@@ -6,16 +6,19 @@
 // tt-llk-lab llk-tensor, report 2 section 7 and report 4 sections 4 and 5:
 // https://github.com/tenstorrent/tt-llk-lab/tree/lpremovic/llk-tensor/experiments/llk-tensor
 //
-// A tensor's owner is the (thread, unit) in its spec (tensor/tensor.h). An op on (T, E) that touches a tensor with
-// spec S calls acquire<T, E, S>() first, on every thread:
-//   S nobody's               nothing: no one has written it
-//   S's thread is T          the same thread: if S's unit is not E, a STALLWAIT on T until S's unit is idle, holding
+// A tensor's owner is the (thread, unit) the Tensor carries at run time (tensor/tensor.h). An op on (T, E) that
+// touches a tensor t calls acquire<T, E>(t) first, on every thread:
+//   t nobody's               nothing: no one has written it
+//   t's thread is T          the same thread: if t's unit is not E, a STALLWAIT on T until t's unit is idle, holding
 //                            E's instructions
-//   S's thread is another    S's thread waits until S's unit is idle and posts the pair's semaphore; T waits on it
+//   t's thread is another    t's thread waits until t's unit is idle and posts the pair's semaphore; T waits on it
 //                            (every instruction class held) and takes it. Other threads do nothing
+// Every thread computes the same owners (they all run the same kernel body), and the owners of a kernel's tensors are
+// constants after inlining, so the compiler usually folds these branches away; a hand-off with no semaphore yet is an
+// LLK_ASSERT.
 // Every TRISC runs the same kernel body, so the owner's thread meets the call too: the producer never needs to know
 // its consumer. Read after write is implicit this way. Write after read is explicit: complete<T>(t) (compute_api/
-// sync.h) is acquire<T, Exu::None>, so T waits until t is written, which, units working in order, also means its
+// sync.h) is acquire<T, OwnerExu::None>, so T waits until t is written, which, units working in order, also means its
 // writer is done reading its inputs.
 //
 // The pairs and their semaphores (semaphores.h):
@@ -37,7 +40,7 @@
 #include "llk_lib/thread.h"
 #include "tensor/tensor.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 using hal::sync::Semaphore;
@@ -49,35 +52,35 @@ using hal::sync::StallTarget;
 inline constexpr std::uint32_t handoff_max_pending = 15;
 
 /// The stall condition under which unit e has finished everything its thread gave it.
-constexpr StallCondition idle(Exu e)
+constexpr StallCondition idle(OwnerExu e)
 {
     switch (e)
     {
-        case Exu::Unpacker:
+        case OwnerExu::Unpack:
             return StallCondition::Unpacker0Idle | StallCondition::Unpacker1Idle;
-        case Exu::Fpu:
+        case OwnerExu::Fpu:
             return StallCondition::MathIdle;
-        case Exu::Sfpu:
+        case OwnerExu::Sfpu:
             return StallCondition::SfpuIdle;
-        case Exu::Packer:
+        case OwnerExu::Pack:
             return StallCondition::PackerIdle;
         default:
             return StallCondition::All;
     }
 }
 
-/// The instruction classes unit e runs: what a hand-off to e holds back. Exu::None (complete): every class.
-constexpr StallTarget issued_to(Exu e)
+/// The instruction classes unit e runs: what a hand-off to e holds back. OwnerExu::None (complete): every class.
+constexpr StallTarget issued_to(OwnerExu e)
 {
     switch (e)
     {
-        case Exu::Unpacker:
+        case OwnerExu::Unpack:
             return StallTarget::Unpack;
-        case Exu::Fpu:
+        case OwnerExu::Fpu:
             return StallTarget::Math;
-        case Exu::Sfpu:
+        case OwnerExu::Sfpu:
             return StallTarget::Sfpu;
-        case Exu::Packer:
+        case OwnerExu::Pack:
             return StallTarget::Pack;
         default:
             return StallTarget::All;
@@ -85,23 +88,47 @@ constexpr StallTarget issued_to(Exu e)
 }
 
 /// Whether thread from can hand a tensor to thread to.
-constexpr bool has_handoff(Thread from, Thread to)
+constexpr bool has_handoff(OwnerThread from, OwnerThread to)
 {
-    return (from == Thread::Math && to == Thread::Pack) || (from == Thread::Pack && to == Thread::Math);
+    return (from == OwnerThread::Compute1 && to == OwnerThread::Compute2) || (from == OwnerThread::Compute2 && to == OwnerThread::Compute1);
 }
 
 /// The semaphore from hands tensors to `to` on.
-constexpr Semaphore handoff_semaphore(Thread from, Thread to)
+constexpr Semaphore handoff_semaphore(OwnerThread from, OwnerThread to)
 {
-    return from == Thread::Math && to == Thread::Pack ? math_pack_sync : pack_math_sync;
+    return from == OwnerThread::Compute1 && to == OwnerThread::Compute2 ? math_pack_sync : pack_math_sync;
 }
 
-/// The posting thread: wait until unit Owner is idle, then post semaphore Sem (setting it up on the first post).
-template <Exu Owner, Semaphore Sem>
-inline __attribute__((always_inline)) void handoff_post()
+/// Holds Target's instructions until unit `unit` is idle: a STALLWAIT, with the unit known only at run time.
+template <StallTarget Target>
+inline __attribute__((always_inline)) void wait_idle(OwnerExu unit)
+{
+    switch (unit)
+    {
+        case OwnerExu::Unpack:
+            hal::sync::wait::stall<Target, idle(OwnerExu::Unpack)>();
+            break;
+        case OwnerExu::Fpu:
+            hal::sync::wait::stall<Target, idle(OwnerExu::Fpu)>();
+            break;
+        case OwnerExu::Sfpu:
+            hal::sync::wait::stall<Target, idle(OwnerExu::Sfpu)>();
+            break;
+        case OwnerExu::Pack:
+            hal::sync::wait::stall<Target, idle(OwnerExu::Pack)>();
+            break;
+        default:
+            hal::sync::wait::stall<Target, idle(OwnerExu::None)>();
+            break;
+    }
+}
+
+/// The posting thread: wait until unit `owner` is idle, then post semaphore Sem (setting it up on the first post).
+template <Semaphore Sem>
+inline __attribute__((always_inline)) void handoff_post(OwnerExu owner)
 {
     semaphore_setup_once<Sem, handoff_max_pending>();
-    hal::sync::wait::stall<StallTarget::Sync, idle(Owner)>();
+    wait_idle<StallTarget::Sync>(owner);
     hal::sync::semaphore::post<Sem>();
 }
 
@@ -113,46 +140,78 @@ inline __attribute__((always_inline)) void handoff_take()
     hal::sync::semaphore::get<Sem>();
 }
 
-/// Hands a tensor with spec S to unit E on thread T, on every thread: see the top of this file.
-template <Thread T, Exu E, const TensorSpec<tensor_rank>& S>
-inline __attribute__((always_inline)) void acquire()
+/// A tensor owned by unit `unit` on thread From goes to thread To: From posts, To takes. Nothing for a pair with no
+/// semaphore (acquire asserts on that).
+template <OwnerThread From, OwnerThread To>
+inline __attribute__((always_inline)) void handoff(OwnerExu unit)
 {
-    if constexpr (S.thread == Thread::None)
+    if constexpr (has_handoff(From, To))
     {
-        // Nobody's: nothing to wait for.
-    }
-    else if constexpr (S.thread == T)
-    {
-        if constexpr (S.exu != E && runs_on<T>)
+        constexpr Semaphore sem = handoff_semaphore(From, To);
+        if constexpr (runs_on<From>)
         {
-            hal::sync::wait::stall<issued_to(E), idle(S.exu)>(); // the same thread, another unit
+            handoff_post<sem>(unit); // the owner's thread hands the tensor over
         }
-    }
-    else
-    {
-        static_assert(has_handoff(S.thread, T), "this hand-off has no semaphore yet: only math -> pack and pack -> math");
-        constexpr Semaphore sem = handoff_semaphore(S.thread, T);
-        if constexpr (runs_on<S.thread>)
-        {
-            handoff_post<S.exu, sem>(); // the owner's thread hands the tensor over
-        }
-        if constexpr (runs_on<T>)
+        if constexpr (runs_on<To>)
         {
             handoff_take<sem>(); // the op's thread takes it
         }
     }
 }
 
+/// Hands a tensor owned by (thread, unit) to unit E on thread T, on every thread: see the top of this file.
+template <OwnerThread T, OwnerExu E>
+inline __attribute__((always_inline)) void acquire(OwnerThread thread, OwnerExu unit)
+{
+    if (thread == OwnerThread::None)
+    {
+        return; // nobody's: nothing to wait for
+    }
+    if (thread == T)
+    {
+        if constexpr (runs_on<T>)
+        {
+            if (unit != E)
+            {
+                wait_idle<issued_to(E)>(unit); // the same thread, another unit
+            }
+        }
+        return;
+    }
+    LLK_ASSERT(has_handoff(thread, T), "this hand-off has no semaphore yet: only math -> pack and pack -> math");
+    switch (thread)
+    {
+        case OwnerThread::Compute0:
+            handoff<OwnerThread::Compute0, T>(unit);
+            break;
+        case OwnerThread::Compute1:
+            handoff<OwnerThread::Compute1, T>(unit);
+            break;
+        case OwnerThread::Compute2:
+            handoff<OwnerThread::Compute2, T>(unit);
+            break;
+        default:
+            break;
+    }
+}
+
+/// Hands tensor t to unit E on thread T: acquire with t's owner.
+template <OwnerThread T, OwnerExu E, class S, class R>
+inline __attribute__((always_inline)) void acquire(const Tensor<S, R>& t)
+{
+    acquire<T, E>(t.thread(), t.exu());
+}
+
 /// Hands unit E from thread From to thread To: see the top of this file.
-template <Exu E, Thread From, Thread To>
+template <OwnerExu E, OwnerThread From, OwnerThread To>
 inline __attribute__((always_inline)) void migrate()
 {
-    static_assert(E == Exu::Sfpu, "only the SFPU can be driven from more than one thread");
+    static_assert(E == OwnerExu::Sfpu, "only the SFPU can be driven from more than one thread");
     static_assert(has_handoff(From, To), "the SFPU moves between the math and the pack thread");
     constexpr Semaphore sem = handoff_semaphore(From, To);
     if constexpr (runs_on<From>)
     {
-        handoff_post<E, sem>();
+        handoff_post<sem>(E);
     }
     if constexpr (runs_on<To>)
     {
@@ -160,4 +219,4 @@ inline __attribute__((always_inline)) void migrate()
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

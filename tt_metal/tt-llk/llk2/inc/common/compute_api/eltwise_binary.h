@@ -30,40 +30,41 @@
 #include "llk_lib/unpack.h"
 #include "resolver/eltwise_binary.h"
 
-namespace llk2
+namespace llk
 {
 
 /// What add and sub share. Runs one resolved eltwise binary op: checks acc against the Resolver's result, takes the tensors over, then unpack
 /// and math. Returns acc as the FPU's.
-template <const auto& Api, auto Mods, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
+template <const auto& Api, auto Mods, class A, class RA, class B, class RB, class D, class RD>
 inline __attribute__((always_inline)) auto eltwise_binary(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
-    static_assert(D.storage == Storage::Dest, "an eltwise binary op writes Dest");
+    static_assert(D::storage() == Storage::Dest, "an eltwise binary op writes Dest");
     static_assert(
-        accepted<Api, A, B, Mods>,
+        accepted<Api, layout_of<A>, layout_of<B>, Mods>,
         "eltwise binary takes 32x32 float tiles in L1 with the same exponent width; b has a's shape, or with Broadcast::Row is one row of a's tile "
         "columns");
 
-    constexpr const Resolved& r = resolved<Api, A, B, Mods>;
+    constexpr const Resolved& r = resolved<Api, layout_of<A>, layout_of<B>, Mods>;
     static_assert(
-        equal(r.config.result.shape.sizes, D.shape.sizes) && r.config.result.format == D.format, "acc must have a's shape and the kernel's Dest format");
+        stdx::ranges::equal(r.config.result.sizes(), layout_of<D>.sizes()) && r.config.result.format() == D::format(),
+        "acc must have a's shape and the kernel's Dest format");
 
-    llk_lib::acquire<Thread::Unpack, Exu::Unpacker, A>();
-    llk_lib::acquire<Thread::Unpack, Exu::Unpacker, B>();
-    llk_lib::acquire<Thread::Math, Exu::Fpu, D>();
-    llk_lib::unpack<Thread::Unpack, r.plan>(a.address, b.address);
-    llk_lib::eltwise_binary<Thread::Math, r.plan>(acc.address);
-    return as_owned<Thread::Math, Exu::Fpu>(acc);
+    llk_lib::acquire<OwnerThread::Compute0, OwnerExu::Unpack>(a);
+    llk_lib::acquire<OwnerThread::Compute0, OwnerExu::Unpack>(b);
+    llk_lib::acquire<OwnerThread::Compute1, OwnerExu::Fpu>(acc);
+    llk_lib::unpack<OwnerThread::Compute0, r.plan>(a.address(), b.address());
+    llk_lib::eltwise_binary<OwnerThread::Compute1, r.plan>(acc.address());
+    return acc.with_owner(OwnerThread::Compute1, OwnerExu::Fpu);
 }
 
 /// a + b (b broadcast as Mods.bcast says), written to acc and returned as the FPU's.
 template <
     add_modifiers Mods = add_modifiers {},
-    const TensorSpec<tensor_rank>& A,
+    class A,
     class RA,
-    const TensorSpec<tensor_rank>& B,
+    class B,
     class RB,
-    const TensorSpec<tensor_rank>& D,
+    class D,
     class RD>
 inline __attribute__((always_inline)) auto add(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
@@ -73,15 +74,15 @@ inline __attribute__((always_inline)) auto add(const Tensor<A, RA>& a, const Ten
 /// a - b (b broadcast as Mods.bcast says), written to acc and returned as the FPU's.
 template <
     sub_modifiers Mods = sub_modifiers {},
-    const TensorSpec<tensor_rank>& A,
+    class A,
     class RA,
-    const TensorSpec<tensor_rank>& B,
+    class B,
     class RB,
-    const TensorSpec<tensor_rank>& D,
+    class D,
     class RD>
 inline __attribute__((always_inline)) auto sub(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
     return eltwise_binary<sub_op, Mods>(a, b, acc);
 }
 
-} // namespace llk2
+} // namespace llk

@@ -14,7 +14,7 @@
 #include "ckernel_defs.h"
 #include "tensix_types.h" // DataFormat
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 /// The format id a THCON or ALU format field takes for f: its DataFormat value with the high flag bits masked off
@@ -24,4 +24,4 @@ constexpr std::uint32_t reg_fmt(DataFormat f)
     return ckernel::masked_data_format(static_cast<std::uint32_t>(f));
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

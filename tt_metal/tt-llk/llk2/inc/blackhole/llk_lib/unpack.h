@@ -82,7 +82,7 @@
 #include "hal/scalar.h"
 #pragma GCC diagnostic pop
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -554,10 +554,10 @@ constexpr std::uint32_t unpacked_inputs(const Plan& p)
 
 /// The unpack thread's part of a Compute API call: in0's and, for a two-input op, in1's byte address, one per input
 /// the Plan unpacks (copy: one; matmul, add, sub: two).
-template <Thread On, Plan Pl, class... Addresses>
+template <OwnerThread On, Plan Pl, class... Addresses>
 inline __attribute__((always_inline)) void unpack(Addresses... input_addresses)
 {
-    static_assert(On == Thread::Unpack, "the unpackers are driven from the unpack thread");
+    static_assert(On == OwnerThread::Compute0, "the unpackers are driven from the unpack thread");
     static_assert(sizeof...(Addresses) == unpacked_inputs(Pl), "pass one L1 address per input the op unpacks");
     constexpr unpack_params p = unpack_params_from(Pl);
     // Every TRISC compiles this call; only the unpack thread's build keeps its body (llk_lib/thread.h, runs_on).
@@ -584,4 +584,4 @@ inline __attribute__((always_inline)) void unpack(Addresses... input_addresses)
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

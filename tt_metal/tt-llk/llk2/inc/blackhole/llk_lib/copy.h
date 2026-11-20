@@ -51,7 +51,7 @@
 #include "llk_lib/thread.h"
 #include "resolver/plan.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -208,10 +208,10 @@ inline __attribute__((always_inline)) void copy_execute(std::uint32_t dest_row)
 }
 
 /// The math thread's part of a Compute API copy: configure, then every tile into Dest from dest_row.
-template <Thread On, Plan Pl>
+template <OwnerThread On, Plan Pl>
 inline __attribute__((always_inline)) void copy(std::uint32_t dest_row)
 {
-    static_assert(On == Thread::Math, "copy's math side runs on the math thread");
+    static_assert(On == OwnerThread::Compute1, "copy's math side runs on the math thread");
     constexpr copy_params p = copy_params_from(Pl);
     if constexpr (runs_on<On>)
     {
@@ -220,4 +220,4 @@ inline __attribute__((always_inline)) void copy(std::uint32_t dest_row)
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

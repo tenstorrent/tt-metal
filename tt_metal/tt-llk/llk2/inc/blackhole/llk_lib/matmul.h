@@ -43,7 +43,7 @@
 #include "llk_lib/thread.h"
 #include "resolver/plan.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -207,10 +207,10 @@ inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row
 }
 
 /// The math thread's part of a Compute API matmul: configure, then all K steps into Dest from dest_row.
-template <Thread On, Plan Pl>
+template <OwnerThread On, Plan Pl>
 inline __attribute__((always_inline)) void matmul(std::uint32_t dest_row)
 {
-    static_assert(On == Thread::Math, "the FPU is driven from the math thread");
+    static_assert(On == OwnerThread::Compute1, "the FPU is driven from the math thread");
     constexpr matmul_params p = matmul_params_from(Pl);
     if constexpr (runs_on<On>)
     {
@@ -222,4 +222,4 @@ inline __attribute__((always_inline)) void matmul(std::uint32_t dest_row)
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

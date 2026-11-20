@@ -13,29 +13,29 @@
 
 #include "tensor/tensor.h"
 
-namespace llk2
+namespace llk
 {
 
 /// The thread this build is for, from the TRISC define the build sets (tt-llk harness: LLK_TRISC_*; tt-metal:
-/// TRISC_*). Thread::None on host builds: plan only, nothing executes.
+/// TRISC_*). OwnerThread::None on host builds: plan only, nothing executes.
 #if defined(LLK_TRISC_UNPACK) || defined(TRISC_UNPACK)
-inline constexpr Thread current_thread = Thread::Unpack;
+inline constexpr OwnerThread current_thread = OwnerThread::Compute0;
 #elif defined(LLK_TRISC_MATH) || defined(TRISC_MATH)
-inline constexpr Thread current_thread = Thread::Math;
+inline constexpr OwnerThread current_thread = OwnerThread::Compute1;
 #elif defined(LLK_TRISC_PACK) || defined(TRISC_PACK)
-inline constexpr Thread current_thread = Thread::Pack;
+inline constexpr OwnerThread current_thread = OwnerThread::Compute2;
 #else
-inline constexpr Thread current_thread = Thread::None;
+inline constexpr OwnerThread current_thread = OwnerThread::None;
 #endif
 
 /// True when this build is for thread On: the per-thread calls configure and execute only then.
 ///
 /// Every per-thread call has both of these, and they check different things:
-///   static_assert(On == Thread::Math, ...)   the call: this unit is driven from that thread (a kernel bug otherwise)
+///   static_assert(On == OwnerThread::Compute1, ...)   the call: this unit is driven from that thread (a kernel bug otherwise)
 ///   if constexpr (runs_on<On>) { ... }        the build: every TRISC compiles the call, and only thread On's build
 ///                                            keeps the body. Elsewhere the branch is discarded and never instantiated,
 ///                                            so each TRISC's ELF carries only its own thread's code
-template <Thread On>
+template <OwnerThread On>
 inline constexpr bool runs_on = current_thread == On;
 
-} // namespace llk2
+} // namespace llk

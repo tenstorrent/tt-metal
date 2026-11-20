@@ -31,7 +31,7 @@
 #include "hal/tensix_counters.h"
 #include "tensix_types.h" // DataFormat
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 /// Rows of SrcB and Dest one MVMUL covers, and rows of SrcA, SrcB and Dest one ELWADD, ELWSUB or MOVA2D (its
@@ -147,4 +147,4 @@ inline __attribute__((always_inline)) void configure_math_formats()
     math::src_zero_flag_hw = zero_flag;
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute API test: llk2::copy on Tensors, one kernel body for all three threads. Only Tensors, the Compute API
+// Compute API test: llk::copy on Tensors, one kernel body for all three threads. Only Tensors, the Compute API
 // (copy, pack) and a Dest ring: no LLK, init or per-thread code.
 //
 // The input is copied SECTIONS times, each time into the next Dest section (the Dest ring alternates them), and
@@ -28,28 +28,28 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr DataFormat src_format = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat out_format = static_cast<DataFormat>(PACK_OUT);
-constexpr llk2::copy_modifiers mods {.transpose = TRANSPOSE};
+constexpr llk::copy_modifiers mods {.transpose = TRANSPOSE};
 
-inline constexpr auto& src_spec = llk2::l1_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, src_format>;
-inline constexpr auto& out_spec = llk2::l1_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, out_format>;
+inline constexpr auto& src_spec = llk::l1_spec<TILES_Y * llk::default_tile_dim, TILES_X * llk::default_tile_dim, src_format>;
+inline constexpr auto& out_spec = llk::l1_spec<TILES_Y * llk::default_tile_dim, TILES_X * llk::default_tile_dim, out_format>;
 inline constexpr auto& acc_spec =
-    llk2::dst_spec<TILES_Y * llk2::default_tile_dim, TILES_X * llk2::default_tile_dim, llk2::kernel_dest_format>; // every format here is a B format
+    llk::dst_spec<TILES_Y * llk::default_tile_dim, TILES_X * llk::default_tile_dim, llk::kernel_dest_format>; // every format here is a B format
 
 // The Resolver must make the choice the harness made for the same test: the register format, and whether the
 // tiles go straight to Dest.
-inline constexpr const llk2::Plan& plan = llk2::resolved<llk2::copy_op, src_spec, src_spec, mods>.plan;
+inline constexpr const llk::Plan& plan = llk::resolved<llk::copy_op, llk::layout_of<decltype(src_spec)>, llk::layout_of<decltype(src_spec)>, mods>.plan;
 static_assert(plan.in0.writes == static_cast<DataFormat>(UNPACK_A_OUT));
-static_assert((plan.in0.to == llk2::Where::Dest) == unpack_to_dest);
+static_assert((plan.in0.to == llk::Where::Dest) == unpack_to_dest);
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    using AccRing  = llk2::DestRing<acc_spec>;
-    const auto src = llk2::Tensor<src_spec>(params.buffer_A[0]);
+    using AccRing  = llk::DestRing<decltype(acc_spec)>;
+    const auto src = llk::Tensor(src_spec, params.buffer_A[0]);
     for (std::uint32_t round = 0; round < SECTIONS; round++)
     {
-        const auto out = llk2::Tensor<out_spec>(params.buffer_Res[round * TILES_Y * TILES_X]);
-        const auto y   = llk2::copy<mods>(src, llk2::reserve_back<AccRing>()); // y = src, or src with each tile transposed
-        llk2::pack(y, out);                                                    // pack takes y from math
-        llk2::release(y);
+        const auto out = llk::Tensor(out_spec, params.buffer_Res[round * TILES_Y * TILES_X]);
+        const auto y   = llk::copy<mods>(src, llk::reserve_back<AccRing>()); // y = src, or src with each tile transposed
+        llk::pack(y, out);                                                    // pack takes y from math
+        llk::release(y);
     }
 }

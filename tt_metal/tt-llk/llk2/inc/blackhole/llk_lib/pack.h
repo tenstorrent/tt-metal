@@ -60,7 +60,7 @@
 #include "hal/scalar.h"
 #pragma GCC diagnostic pop
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -357,10 +357,10 @@ inline __attribute__((always_inline)) void pack_execute(std::uint32_t dest_row, 
 /// The pack thread's part of a Compute API pack. dest_row is the Dest tensor's first row (absolute), l1_address the
 /// byte address of the L1 tensor, l1_acc the run-time L1 accumulation (read only when the Plan's l1_acc is
 /// Toggle::Runtime).
-template <Thread On, Plan Pl>
+template <OwnerThread On, Plan Pl>
 inline __attribute__((always_inline)) void pack(std::uint32_t dest_row, std::uint32_t l1_address, bool l1_acc = false)
 {
-    static_assert(On == Thread::Pack, "the packer is driven from the pack thread");
+    static_assert(On == OwnerThread::Compute2, "the packer is driven from the pack thread");
     constexpr pack_params p = pack_params_from(Pl);
     if constexpr (runs_on<On>)
     {
@@ -369,4 +369,4 @@ inline __attribute__((always_inline)) void pack(std::uint32_t dest_row, std::uin
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib

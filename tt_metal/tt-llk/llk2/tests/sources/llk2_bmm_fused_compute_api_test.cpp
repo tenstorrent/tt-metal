@@ -46,7 +46,7 @@ namespace
 
 constexpr DataFormat in_format      = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat out_format     = static_cast<DataFormat>(PACK_OUT);
-constexpr DataFormat partial_format = llk2::kernel_dest_format; // mm_partials and bias: the intermediate format, as the host picks it
+constexpr DataFormat partial_format = llk::kernel_dest_format; // mm_partials and bias: the intermediate format, as the host picks it
 
 // Ids as the tt-metal host names the CBs: c_0 in0, c_1 in1, c_2 bias, c_16 out, c_24 intermed0.
 constexpr std::uint16_t in0_id = 0, in1_id = 1, bias_id = 2, out_id = 16, partials_id = 24;
@@ -57,11 +57,11 @@ constexpr ttnn::operations::matmul::KernelActivation activation_type_arg()
     using ttnn::operations::matmul::KernelActivation;
     switch (ACTIVATION)
     {
-        case llk2::VecFunction::Silu:
+        case llk::VecFunction::Silu:
             return KernelActivation::SILU;
-        case llk2::VecFunction::ReluMax:
+        case llk::VecFunction::ReluMax:
             return KernelActivation::RELU6;
-        case llk2::VecFunction::Hardtanh:
+        case llk::VecFunction::Hardtanh:
             return KernelActivation::HARDTANH;
         default:
             return KernelActivation::NONE;
@@ -127,7 +127,7 @@ constexpr std::uint32_t out_block_tiles = RT_DIM * CT_DIM;
 /// Bytes of one tile (a page) in format f.
 constexpr std::uint32_t page_bytes(DataFormat f)
 {
-    return llk2::tile_bytes(f, llk2::default_tile_datums);
+    return llk::tile_bytes(f, llk::default_tile_datums);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)

@@ -12,7 +12,7 @@
 
 #include "compute_api/modifiers.h"
 
-namespace llk2
+namespace llk
 {
 
 /// One SFPU activation. The value is what MathPlan.function holds; 0 is no function.
@@ -38,4 +38,4 @@ struct vec_call
     vec_modifiers mods;   ///< the caller's modifiers
 };
 
-} // namespace llk2
+} // namespace llk

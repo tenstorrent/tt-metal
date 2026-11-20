@@ -52,11 +52,11 @@ its (thread, unit), and the next op hands it over, so a kernel writes no math ->
 an SFPU call to the pack thread changes only its modifier:
 
 ```
-const auto x   = llk2::wait_front<x_spec>(in0);                           // dataflow buffer -> Tensor
-const auto y   = llk2::matmul(x, w, llk2::reserve_back<AccRing>());       // a Dest ring section, math's
-const auto z   = llk2::vec_silu<{.thread = llk2::Thread::Pack}>(y);       // math hands y to the pack thread
-const auto out = llk2::pack(z, llk2::reserve_back<out_spec>(out_buf));    // a STALLWAIT for the SFPU
-llk2::release(out); llk2::release(z); llk2::release(x);                   // push, free the section, pop
+const auto x   = llk::wait_front(in0, x_spec);                           // dataflow buffer -> Tensor
+const auto y   = llk::matmul(x, w, llk::reserve_back<AccRing>());       // a Dest ring section, math's
+const auto z   = llk::vec_silu<{.thread = llk::OwnerThread::Compute2}>(y);       // math hands y to the pack thread
+const auto out = llk::pack(z, llk::reserve_back(out_buf, out_spec));    // a STALLWAIT for the SFPU
+llk::release(out); llk::release(z); llk::release(x);                   // push, free the section, pop
 ```
 
 Dataflow buffers stay tt-metal's: `compute_api/dataflow.h` calls their `wait_front` / `pop_front` / `reserve_back` /

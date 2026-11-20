@@ -37,37 +37,37 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr DataFormat in_format  = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat out_format = static_cast<DataFormat>(PACK_OUT);
 
-inline constexpr auto& in_spec  = llk2::l1_spec<ROWS, COLS, in_format>;
-inline constexpr auto& out_spec = llk2::l1_spec<ROWS, COLS, out_format>;
+inline constexpr auto& in_spec  = llk::l1_spec<ROWS, COLS, in_format>;
+inline constexpr auto& out_spec = llk::l1_spec<ROWS, COLS, out_format>;
 
 constexpr std::uint32_t row_a      = 0;                       // Dest tensor A: the first half of Dest
 constexpr std::uint32_t row_b      = DEST_REGISTER_HALF_SIZE; // Dest tensor B: the second half
-constexpr std::uint32_t out_tiles  = (ROWS / llk2::default_tile_dim) * (COLS / llk2::default_tile_dim);
-constexpr llk2::vec_modifiers on_math {.thread = llk2::Thread::Math};
-constexpr llk2::vec_modifiers on_pack {.thread = llk2::Thread::Pack};
+constexpr std::uint32_t out_tiles  = (ROWS / llk::default_tile_dim) * (COLS / llk::default_tile_dim);
+constexpr llk::vec_modifiers on_math {.thread = llk::OwnerThread::Compute1};
+constexpr llk::vec_modifiers on_pack {.thread = llk::OwnerThread::Compute2};
 
 /// The Dest tensor at row, nobody's: the first op on it waits for no one.
 inline auto dest_at(std::uint32_t row)
 {
-    return llk2::dst_tensor<ROWS, COLS, llk2::kernel_dest_format>(row);
+    return llk::dst_tensor<ROWS, COLS, llk::kernel_dest_format>(row);
 }
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
-    using llk2::Exu;
-    using llk2::Thread;
-    const auto x = llk2::Tensor<in_spec>(params.buffer_A[0]);
-    const auto out_at = [&](std::uint32_t round) { return llk2::Tensor<out_spec>(params.buffer_Res[round * out_tiles]); };
+    using llk::OwnerExu;
+    using llk::OwnerThread;
+    const auto x = llk::Tensor(in_spec, params.buffer_A[0]);
+    const auto out_at = [&](std::uint32_t round) { return llk::Tensor(out_spec, params.buffer_Res[round * out_tiles]); };
 
-    const auto out0 = llk2::pack(llk2::vec_silu<on_math>(llk2::copy(x, dest_at(row_a))), out_at(0));
+    const auto out0 = llk::pack(llk::vec_silu<on_math>(llk::copy(x, dest_at(row_a))), out_at(0));
 
-    llk2::migrate<Exu::Sfpu, Thread::Math, Thread::Pack>();
-    const auto out1 = llk2::pack(llk2::vec_silu<on_pack>(llk2::copy(x, dest_at(row_b))), out_at(1));
+    llk::migrate<OwnerExu::Sfpu, OwnerThread::Compute1, OwnerThread::Compute2>();
+    const auto out1 = llk::pack(llk::vec_silu<on_pack>(llk::copy(x, dest_at(row_b))), out_at(1));
 
-    llk2::complete<Thread::Math>(out0); // A has been packed: math may write it again
-    llk2::pack(llk2::vec_silu<on_pack>(llk2::copy(x, dest_at(row_a))), out_at(2));
+    llk::complete<OwnerThread::Compute1>(out0); // A has been packed: math may write it again
+    llk::pack(llk::vec_silu<on_pack>(llk::copy(x, dest_at(row_a))), out_at(2));
 
-    llk2::migrate<Exu::Sfpu, Thread::Pack, Thread::Math>();
-    llk2::complete<Thread::Math>(out1); // B has been packed
-    llk2::pack(llk2::vec_silu<on_math>(llk2::copy(x, dest_at(row_b))), out_at(3));
+    llk::migrate<OwnerExu::Sfpu, OwnerThread::Compute2, OwnerThread::Compute1>();
+    llk::complete<OwnerThread::Compute1>(out1); // B has been packed
+    llk::pack(llk::vec_silu<on_math>(llk::copy(x, dest_at(row_b))), out_at(3));
 }

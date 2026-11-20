@@ -24,7 +24,7 @@
 #include "resolver/formats.h" // is_b_format
 #include "resolver/resolver.h"
 
-namespace llk2
+namespace llk
 {
 
 inline constexpr std::uint32_t pack_tile_dim = default_tile_dim; ///< pack is ported for 32x32 tiles only
@@ -137,56 +137,56 @@ constexpr bool l1_accumulates(DataFormat out)
 }
 
 /// accepts: see the file comment.
-constexpr bool pack_accepts(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const KernelSettings& s)
+constexpr bool pack_accepts(const TileLayout& d, const TileLayout& o, const pack_modifiers& m, const KernelSettings& s)
 {
-    const bool storage = d.storage == Storage::Dest && o.storage == Storage::L1;
+    const bool storage = d.storage() == Storage::Dest && o.storage() == Storage::L1;
     // The same tile grid and tile geometry; Dest tiles in Dest's layout and the L1 tensor dense, both from offset 0,
     // so Dest tile i (row-major) goes to L1 tile i.
-    const bool shapes = equal(d.shape.sizes, o.shape.sizes) && equal(d.shape.strides, dest_strides(d.shape.sizes)) && is_contiguous(o.shape) &&
-                        d.shape.offset == 0 && o.shape.offset == 0 && tile_rows(d.shape) == pack_tile_dim && tile_cols(d.shape) == pack_tile_dim;
-    const DataFormat in  = pack_in_format(d.format, o.format, s.dest_fp32);
-    const bool formats   = fits_dest_mode(d.format, s.dest_fp32) && datum_bits(o.format) != 0 && packer_converts(in, o.format);
-    const bool modifiers = (m.l1_acc == Toggle::Off || l1_accumulates(o.format)) && !m.untilize;
+    const bool shapes = stdx::ranges::equal(d.sizes(), o.sizes()) && stdx::ranges::equal(d.strides(), dest_strides(d.sizes())) && o.is_contiguous() &&
+                        d.offset() == 0 && o.offset() == 0 && (d.size(2) * d.size(4)) == pack_tile_dim && (d.size(3) * d.size(5)) == pack_tile_dim;
+    const DataFormat in  = pack_in_format(d.format(), o.format(), s.dest_fp32);
+    const bool formats   = fits_dest_mode(d.format(), s.dest_fp32) && datum_bits(o.format()) != 0 && packer_converts(in, o.format());
+    const bool modifiers = (m.l1_acc == Toggle::Off || l1_accumulates(o.format())) && !m.untilize;
     return storage && shapes && formats && modifiers;
 }
 
 /// options: the packer's input format (pack_in_format) and the L1 tensor, owned by the packer, as the result.
-constexpr OpConfig pack_options(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers&, const KernelSettings& s)
+constexpr OpConfig pack_options(const TileLayout& d, const TileLayout& o, const pack_modifiers&, const KernelSettings& s)
 {
     return {
-        Exu::Packer,
-        {Where::Dest, pack_in_format(d.format, o.format, s.dest_fp32)}, // in0: read from Dest, converted to this
-        {Where::None, o.format},                                        // in1: the L1 tensor, written, not read
+        OwnerExu::Pack,
+        {Where::Dest, pack_in_format(d.format(), o.format(), s.dest_fp32)}, // in0: read from Dest, converted to this
+        {Where::None, o.format()},                                        // in1: the L1 tensor, written, not read
         0,                                                              // no math fidelity
-        with_owner(o, Thread::Pack, Exu::Packer),
+        o,
     };
 }
 
 /// work: the tile grid and the tile geometry; no K.
-constexpr Work pack_work(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>&, const OpConfig&)
+constexpr Work pack_work(const TileLayout& d, const TileLayout&, const OpConfig&)
 {
-    return {d.shape.sizes[TileY], d.shape.sizes[TileX], no_k_steps, d.shape.sizes[DatumY], faces_per_tile(d.shape)};
+    return work_over(d, no_k_steps);
 }
 
 /// plan: PackPlan from the tensors and modifiers; unpack, walk and math stay empty.
-constexpr Plan pack_plan(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const OpConfig& c, const Work& k)
+constexpr Plan pack_plan(const TileLayout& d, const TileLayout& o, const pack_modifiers& m, const OpConfig& c, const Work& k)
 {
     const PackPlan pack {
-        d.format,
-        o.format,
+        d.format(),
+        o.format(),
         k.face_r_dim,
         k.num_faces,
-        tile_bytes(o),
-        tile_count(d.shape),
+        tile_bytes(o.format(), o.tile_elements()),
+        (d.size(0) * d.size(1)),
         m.relu,
         m.l1_acc,
         m.untilize,
         c.in0.format,
-        is_32bit_format(d.format),
+        is_32bit_format(d.format()),
     };
     return {Op::Pack, UnpackPlan {}, UnpackPlan {}, UnpackWalk {}, MathPlan {}, pack, k};
 }
 
 inline constexpr OpApi<pack_modifiers> pack_op {&pack_accepts, &pack_options, &pack_work, &pack_plan};
 
-} // namespace llk2
+} // namespace llk

@@ -77,7 +77,7 @@
 namespace
 {
 
-using namespace llk2;
+using namespace llk;
 
 /// CB name's data format, from the host's named compile-time arg <name>_format.
 #define LLK2_CB_FORMAT(name) static_cast<DataFormat>(get_named_compile_time_arg_val(name "_format"))
@@ -151,19 +151,20 @@ constexpr const auto& partials_spec = l1_spec<tile_rows, tile_cols, LLK2_CB_FORM
 constexpr const auto& out_spec      = l1_spec<tile_rows, tile_cols, LLK2_CB_FORMAT("cb_out")>;        // [RT, CT] tiles
 constexpr const auto& acc_spec      = dst_spec<tile_rows, tile_cols, kernel_dest_format>;             // [RT, CT] tiles in Dest
 // The last K block packs to the output, or with FUSE_BIAS to the partials the bias stage reads (1.0's mm_out_dfb).
-constexpr const auto& mm_out_spec = fuse_bias ? partials_spec : out_spec;
+// The two specs differ in type (their formats), so the choice is by index and not with ?:
+constexpr const auto& mm_out_spec = std::get<fuse_bias ? 0 : 1>(std::tie(partials_spec, out_spec));
 constexpr bool relu_on_matmul_out = pack_relu && !fuse_bias;
 
 /// Two Dest sections: math writes one block while pack reads the other.
-using AccRing = DestRing<acc_spec>;
+using AccRing = DestRing<decltype(acc_spec)>;
 
 /// The activation on y, driven from the pack thread, as the 1.0 kernel's apply_activation_from_pack: math moves on to
-/// the next block while pack runs it. Without one, y. The thread is per call: .thread = Thread::Math here would run it
+/// the next block while pack runs it. Without one, y. The thread is per call: .thread = OwnerThread::Compute1 here would run it
 /// on math instead, and a kernel can switch between calls with migrate (compute_api/sync.h).
-template <const TensorSpec<tensor_rank>& D, class R>
+template <class D, class R>
 inline __attribute__((always_inline)) auto activation(const Tensor<D, R>& y)
 {
-    constexpr vec_modifiers mods {.thread = Thread::Pack};
+    constexpr vec_modifiers mods {.thread = OwnerThread::Compute2};
     if constexpr (activation_function == VecFunction::Silu)
     {
         return vec_silu<mods>(y);
@@ -200,12 +201,12 @@ void kernel_main()
         for (std::uint32_t block = 0; block < k_blocks; ++block)
         {
             const bool last_k_block = block == k_blocks - 1;
-            const auto x            = wait_front<x_spec>(in0);
-            const auto w            = wait_front<w_spec>(in1);
+            const auto x            = wait_front(in0, x_spec);
+            const auto w            = wait_front(in1, w_spec);
             const auto acc          = reserve_back<AccRing>();
             if (reload)
             {
-                const auto partial = wait_front<partials_spec>(partials);
+                const auto partial = wait_front(partials, partials_spec);
                 copy(partial, acc); // acc = the sum of the earlier K blocks
                 release(partial);
             }
@@ -215,7 +216,7 @@ void kernel_main()
 
             if (last_k_block)
             {
-                const auto slot = reserve_back<mm_out_spec>(mm_out);
+                const auto slot = reserve_back(mm_out, mm_out_spec);
                 if constexpr (fuse_bias)
                 {
                     // kernel_main is not a template, so this branch is compiled even without FUSE_BIAS: its modifiers
@@ -229,7 +230,7 @@ void kernel_main()
             }
             else
             {
-                const auto slot = reserve_back<partials_spec>(partials);
+                const auto slot = reserve_back(partials, partials_spec);
                 release(pack<pack_modifiers {.l1_acc = l1_acc ? Toggle::Runtime : Toggle::Off}>(y, slot, block > 0)); // add from the second K block on
             }
             release(y); // the Dest section back to the ring
@@ -244,7 +245,7 @@ void kernel_main()
                 const bool pop = fuse_bias ? !last_k_block : before_next_to_last;
                 if (pop)
                 {
-                    release(wait_front<partials_spec>(partials));
+                    release(wait_front(partials, partials_spec));
                 }
                 reload = !fuse_bias && next_to_last;
             }
@@ -257,16 +258,16 @@ void kernel_main()
         if constexpr (fuse_bias)
         {
             // The reader pushes the bias once; the kernel keeps it for every output block and pops it at the end.
-            const auto bias_row = peek_front<bias_spec>(bias);
-            const auto partial  = wait_front<partials_spec>(partials);
+            const auto bias_row = peek_front(bias, bias_spec);
+            const auto partial  = wait_front(partials, partials_spec);
             const auto y        = add<add_modifiers {.bcast = Broadcast::Row}>(partial, bias_row, reserve_back<AccRing>()); // y = partial + bias's row 0
             release(partial);
-            release(pack<pack_modifiers {.relu = pack_relu}>(activation(y), reserve_back<out_spec>(out)));
+            release(pack<pack_modifiers {.relu = pack_relu}>(activation(y), reserve_back(out, out_spec)));
             release(y);
         }
     }
     if constexpr (fuse_bias)
     {
-        pop_front<bias_spec>(bias); // balance the one push of the bias (1.0, num_blocks_w_dim == 1)
+        pop_front(bias, bias_spec); // balance the one push of the bias (1.0, num_blocks_w_dim == 1)
     }
 }

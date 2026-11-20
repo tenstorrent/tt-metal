@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""LLK 2.0 dataflow buffer (DM) API: Tensors from wait_front / reserve_back feeding llk2::matmul.
+"""LLK 2.0 dataflow buffer (DM) API: Tensors from wait_front / reserve_back feeding llk::matmul.
 
 The kernel walks OUT_BLOCKS output blocks of [RT, CT] tiles, each the sum over K_BLOCKS of an in0 block [RT, KB]
 times an in1 block [KB, CT]. There are no data movement cores in the harness, so this host side plays the reader

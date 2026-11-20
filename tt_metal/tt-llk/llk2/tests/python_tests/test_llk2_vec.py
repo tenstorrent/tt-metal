@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""LLK 2.0 SFPU activations (llk2::vec_*) through the Compute API.
+"""LLK 2.0 SFPU activations (llk::vec_*) through the Compute API.
 
 One kernel (llk2_vec_compute_api_test.cpp) picks the activation from a compile-time parameter; only the golden
 changes per activation. Stimuli domains, goldens and tolerances are the ones test_eltwise_unary_sfpu.py uses.
@@ -27,7 +27,7 @@ from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
 from helpers.utils import passed_test
 from llk2_paths import cpp_source, include_dirs
 
-# The llk2::VecFunction enumerator (resolver/vec_function.h) for each activation, and the harness op whose golden,
+# The llk::VecFunction enumerator (resolver/vec_function.h) for each activation, and the harness op whose golden,
 # domain and tolerance it uses.
 VEC_FUNCTIONS = {
     "silu": ("Silu", MathOperation.Silu),
@@ -49,8 +49,8 @@ HAS_FAST_FORM = {"tanh", "gelu", "gelu_tanh", "sigmoid"}
 FAST_FORM_OP = {"sigmoid": MathOperation.SigmoidAppx}
 
 
-# The llk2::Thread enumerator (tensor/tensor.h) for the thread that drives the SFPU.
-VEC_THREADS = {"math": "Math", "pack": "Pack"}
+# The llk::OwnerThread enumerator (tensor/tensor.h) for the thread that drives the SFPU.
+VEC_THREADS = {"math": "Compute1", "pack": "Compute2"}
 
 
 @dataclass
@@ -64,9 +64,9 @@ class LLK2_VEC(TemplateParameter):
     def convert_to_cpp(self) -> str:
         return (
             '#include "resolver/vec_function.h"\n'
-            f"constexpr auto VEC_FUNCTION = llk2::VecFunction::{self.function};\n"
+            f"constexpr auto VEC_FUNCTION = llk::VecFunction::{self.function};\n"
             f"constexpr bool VEC_FAST = {str(self.fast).lower()};\n"
-            f"constexpr auto VEC_THREAD = llk2::Thread::{self.thread};\n"
+            f"constexpr auto VEC_THREAD = llk::OwnerThread::{self.thread};\n"
             f"constexpr std::uint32_t ROWS = {self.rows};\n"
             f"constexpr std::uint32_t COLS = {self.cols};"
         )

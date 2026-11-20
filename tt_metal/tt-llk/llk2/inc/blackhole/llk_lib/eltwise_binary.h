@@ -43,7 +43,7 @@
 #include "llk_lib/thread.h"
 #include "resolver/plan.h"
 
-namespace llk2::llk_lib
+namespace llk::llk_lib
 {
 
 namespace cfg = hal::cfg;
@@ -177,10 +177,10 @@ inline __attribute__((always_inline)) void eltwise_binary_execute(std::uint32_t 
 }
 
 /// The math thread's part of a Compute API eltwise binary op: configure, then every output tile into Dest from dest_row.
-template <Thread On, Plan Pl>
+template <OwnerThread On, Plan Pl>
 inline __attribute__((always_inline)) void eltwise_binary(std::uint32_t dest_row)
 {
-    static_assert(On == Thread::Math, "the FPU is driven from the math thread");
+    static_assert(On == OwnerThread::Compute1, "the FPU is driven from the math thread");
     constexpr eltwise_binary_params p = eltwise_binary_params_from(Pl);
     if constexpr (runs_on<On>)
     {
@@ -189,4 +189,4 @@ inline __attribute__((always_inline)) void eltwise_binary(std::uint32_t dest_row
     }
 }
 
-} // namespace llk2::llk_lib
+} // namespace llk::llk_lib
