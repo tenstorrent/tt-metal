@@ -558,6 +558,7 @@ class HunyuanTtSiglip2Attention(LightweightModule):
             scale=self.scale,
             program_config=sdpa_program_config,
             compute_kernel_config=self.compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         qh.deallocate(True)

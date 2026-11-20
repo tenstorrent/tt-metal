@@ -505,6 +505,7 @@ class HunyuanTtAttention(LightweightModule):
             is_causal=is_causal,
             attn_mask=attention_mask,
             compute_kernel_config=self.compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             program_config=sdpa_program_config,
             memory_config=attn_mc,
         )
