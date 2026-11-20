@@ -824,3 +824,8 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   of 31.83 (headroom 8.8): fits. Per extra segment +2.4 ms wall / +3.3 ms device (4x2k vs one 8192 request 102.5 ms).
   OPEN for the owner: 4 x ~1M histories run at 40k tok/s with the gathers exposed (not a stated target; AgentX p90
   history is 547k).
+- 08:15 UTC PB.5C gate PASS -> 59afa79d528 (test-only: padded and 4 x ~1M cases, DRAM with all histories resident,
+  the walls table). results/packed_20261120.md written (targets, all cases, vs projection, correctness, steps, open
+  items). tt-d-gen ask draft copied next to the 2026-11-18 asks:
+  /data/dnijemcevic/bringup/handoff_20261118/drafts/tt_d_gen_packed_ask.md (not sent). The plan's queue is done; the
+  orchestrator has exited; the runner holds the box idle. Nothing pushed.
