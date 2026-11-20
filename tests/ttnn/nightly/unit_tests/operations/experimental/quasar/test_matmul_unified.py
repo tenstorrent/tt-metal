@@ -1691,10 +1691,11 @@ def test_auto_config_block_sharded_caps_per_core_to_output(device, a_shape, b_sh
     _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
 
 
-def test_auto_config_block_sharded_fp32_dest_acc_needs_partials_unpack_mode(device, expect_error):
-    """fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4), but the Quasar 2D factory gives the
-    fp32 partials DFB no unpack_modes entry, so the kernel config is rejected (#61018). Once this stops raising, fold
-    the case back into test_auto_config_block_sharded_caps_per_core_to_output."""
+def test_auto_config_block_sharded_fp32_dest_acc(device, expect_error):
+    """fp32 accumulation takes the fp32 branch of the subblock search (h * w <= 4). Quasar runs it on the unified
+    matmul. Off Quasar the 2D factory gives the fp32 partials DFB no unpack_modes entry, so the kernel config is
+    rejected (#61018); once that stops raising, fold the case back into
+    test_auto_config_block_sharded_caps_per_core_to_output."""
     torch.manual_seed(0)
     a, b = _randn(1, 128, 32), _randn(1, 32, 128)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
@@ -1708,10 +1709,19 @@ def test_auto_config_block_sharded_fp32_dest_acc_needs_partials_unpack_mode(devi
             ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
-    with expect_error(RuntimeError, "provides no unpack_modes entry for this DFB"):
-        ttnn.experimental.quasar.matmul(
-            a_t, b_t, memory_config=out_mem, compute_kernel_config=_hifi4(device, fp32_dest_acc_en=True)
-        )
+    compute_kernel_config = _hifi4(device, fp32_dest_acc_en=True)
+    if not _on_quasar(device):
+        with expect_error(RuntimeError, "provides no unpack_modes entry for this DFB"):
+            ttnn.experimental.quasar.matmul(
+                a_t, b_t, memory_config=out_mem, compute_kernel_config=compute_kernel_config
+            )
+        return
+    out = ttnn.experimental.quasar.matmul(a_t, b_t, memory_config=out_mem, compute_kernel_config=compute_kernel_config)
+
+    mem = out.memory_config()
+    assert mem.memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert tuple(mem.shard_spec.shape) == (128, 128)
+    _check(ttnn.to_torch(out), _golden(a, b), rtol=0.05, pcc=0.999)
 
 
 def test_auto_config_block_sharded_keeps_l1_sharded_b_width(device):
