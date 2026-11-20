@@ -88,8 +88,10 @@ Forwarded options (see diag_runner.py --help for details):
   --output PATH          Write JSON report to PATH (default: ./diag_report.json)
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
   --mode MODE            galaxy tier: run the bus-bar and links phases at this length (plain, full, smoke)
-  --steps LIST           With --mode: run only these bus-bar steps (qb, mix, step, heavy, code; comma-separated,
-                         plan order). Not given: all of them
+  --steps LIST           With --mode: run only these parts (qb, mix, step, heavy, code, links; comma-separated):
+                         the bus-bar steps and the links phase. Not given: all of them
+  --no-reset             With --mode: the links sweep does not run tt-smi -glx_reset first; for --steps links
+                         right after the caller's own reset
   --heavy-s N, --heavy-ops OPS, --heavy-x-s N, --heavy-x-ops OPS
                          With --mode: the heavy step's seconds, DIDT ops, seconds of extra ops and extra ops
   --heavy-n N, --burst-gap-ms N, --trays LIST, --mm-throttle 1-5
