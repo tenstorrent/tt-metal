@@ -1102,9 +1102,11 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
     };
 
     // Patch every per-node RTA section that the framework (not the user) fills: the per-node
-    // TensorBinding section. Shared by the main kernel_run_args loop and the binding-only second pass.
+    // TensorBinding section, then the fabric connection section. Shared by the main kernel_run_args loop and the
+    // binding-only second pass.
     auto patch_framework_rtas = [&tensor_by_param](Kernel& kernel, std::string_view kernel_name) {
         PatchPerNodeBindingRtas(kernel, tensor_by_param, kernel_name, /*require_all=*/true);
+        kernel.write_fabric_connection_runtime_args();
     };
 
     // Install a kernel's assembled CRTA buffer. set_common_runtime_args allocates storage but fatals
@@ -1136,13 +1138,13 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
     //
     // Layout:
     //   RTA per-node:  [named_rta_0 ... named_rta_N-1, RTA arrays, per_node_ta_addr_0 ... per_node_ta_addr_P-1,
-    //                   vararg_0 ... vararg_M-1]
+    //                   fabric_connection_words, vararg_0 ... vararg_M-1]
     //   CRTA:          [named_crta_0 ... named_crta_K-1, CRTA arrays, ta_addr_0 ... ta_addr_B-1, scratch_addr_0 ...
     //   scratch_addr_S-1,
     //                   vararg_0 ... vararg_L-1]
     //
-    // RTA layout has three sections: named RTAs (scalars, then arrays), per-node TensorBinding addresses, and RTA
-    // varargs.
+    // RTA layout has four sections: named RTAs (scalars, then arrays), per-node TensorBinding addresses, fabric
+    // connection words, and RTA varargs.
     // CRTA layout has four sections: named CRTAs (scalars, then arrays), TensorBinding addresses, Scratchpad
     // addresses, and CRTA varargs.
     //
@@ -1160,7 +1162,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
         const auto& array_slots_of = schema->runtime_array_arg_slots;
 
         // RTA layout per node: [named_rta_0 ... named_rta_{N-1}, RTA arrays, per-node TensorBinding
-        // addresses, vararg_0 ... vararg_{M-1}].
+        // addresses, fabric connection words, vararg_0 ... vararg_{M-1}].
         // Named RTAs (scalar and array) are scattered to their declaration slots via the schema's
         // name->slot indexes (one hash lookup per supplied arg, O(N)/node — matching how
         // Program::update_program_run_args serializes); varargs are positional and follow the named section.
@@ -1282,7 +1284,7 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
                 const size_t num_varargs = has_varargs ? vararg_it->second->size() : 0;
 
                 // Value-initialized to the exact combined width so the scatter can assign by slot.
-                // The per-node TensorBinding section is filled by PatchPerNodeBindingRtas below.
+                // The per-node TensorBinding and fabric connection sections are filled by patch_framework_rtas below.
                 std::vector<uint32_t> combined(rta_vararg_offset + num_varargs, 0u);
                 if (has_named) {
                     for (const auto& [slot, value] : named_it->second) {
@@ -1340,12 +1342,12 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
         install_crtas(kernel, combined_crtas, kernel_name.get());
     }
 
-    // Second pass: kernels that bind tensors, a scratchpad and/or a GlobalSemaphore but were omitted from
-    // kernel_run_args. A kernel whose only per-enqueue state is binding addresses (no named
-    // RTAs/CRTAs and no varargs — a scratchpad's address is framework-supplied, not user-supplied) is
-    // allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above only visits
-    // kernels present in kernel_run_args, so such a kernel's binding + scratchpad CRTA sections would
-    // never be written. Fill them here. Kernels with neither need no CRTA buffer.
+    // Second pass: kernels that bind tensors, a scratchpad, a GlobalSemaphore and/or a fabric connection but were
+    // omitted from kernel_run_args. A kernel whose only per-enqueue state is binding addresses (no named
+    // RTAs/CRTAs and no varargs — a scratchpad's address and the fabric connection words are framework-supplied,
+    // not user-supplied) is allowed to be absent from kernel_run_args (see ValidateProgramRunArgs). The loop above
+    // only visits kernels present in kernel_run_args, so such a kernel's binding, scratchpad and fabric connection
+    // sections would never be written. Fill them here. Kernels with none of these need no RTA or CRTA buffer.
     std::unordered_set<std::string> kernels_in_run_args;
     kernels_in_run_args.reserve(params.kernel_run_args.size());
     for (const auto& kernel_params : params.kernel_run_args) {
@@ -1359,7 +1361,8 @@ void Program::set_program_run_args(const ProgramRunArgs& params, ValidationMode 
         const auto& binding_handles = kernel->tensor_binding_handles();
         const auto& scratchpad_handles = kernel->scratchpad_binding_handles();
         const auto& global_semaphore_handles = kernel->global_semaphore_binding_handles();
-        if (binding_handles.empty() && scratchpad_handles.empty() && global_semaphore_handles.empty()) {
+        if (binding_handles.empty() && scratchpad_handles.empty() && global_semaphore_handles.empty() &&
+            kernel->fabric_connection_binding_handles().empty()) {
             continue;  // No bindings => nothing to supply; no CRTA dispatch buffer needed.
         }
         // Binding-only kernel: its CRTA buffer is exactly the binding sections (it has
