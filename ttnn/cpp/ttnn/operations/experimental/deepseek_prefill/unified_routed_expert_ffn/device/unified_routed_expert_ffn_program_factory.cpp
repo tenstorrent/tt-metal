@@ -640,6 +640,14 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             fit_w = wide_w;
         }
     }
+    // weights_from_pages (gpt-oss tensor-parallel experts): the narrow N slice leaves L1 for twice the rows at the
+    // SAME K-block width, so the doubling costs no extra K-blocks; it halves the chunk count of the experts that need
+    // more than one chunk (an uneven 8K prefill: some experts take several thousand tokens, and a chunk just past a
+    // boundary paid a whole chunk's fixed cost for a few rows). Measured: skewed loads cost the 24-tile TP slice
+    // 2.74 -> 3.5 ms per layer at 1024 tokens per expert on average, the full-width experts only 2.02 -> 2.35.
+    else if (from_pages && wide_M == per_core_M * 2 && wide_w == fit_w) {
+        fit_M = wide_M;
+    }
 
     per_core_M = fit_M;
     in0_block_w_gu = fit_w;

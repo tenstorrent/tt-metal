@@ -522,8 +522,11 @@ FORCE_INLINE void matmul_phase_fused_gu(
 #else
         8;
 #endif
-    constexpr bool kFullM = out_subblock_h == 1 && in1_num_subblocks == 1 && in0_num_subblocks * out_subblock_w <= kGuDst;
-    const uint32_t gu_rt = kFullM ? EFF_M : out_subblock_h;
+    // Rows per matmul: as many as DST holds (kGuDst / out_subblock_w), in groups when per_core_M is larger.
+    constexpr bool kFullM = out_subblock_h == 1 && in1_num_subblocks == 1 && 2 * out_subblock_w <= kGuDst;
+    constexpr uint32_t kRowGroup = kFullM ? kGuDst / out_subblock_w : 1;
+    const uint32_t gu_rt = kFullM ? (EFF_M < kRowGroup ? EFF_M : kRowGroup) : out_subblock_h;
+    uint32_t cur_rt = gu_rt;  // rt_dim of the last matmul_block_init (a tail row group re-inits)
     if constexpr (kFullM) {
         matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, gu_rt, in0_block_w);
     }
@@ -592,7 +595,7 @@ FORCE_INLINE void matmul_phase_fused_gu(
             x_tilized_cb.push_back(x_pad);
         }
         reconfig_data_format_srca(gate_cb_id);
-        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, gu_rt, in0_block_w);
+        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, cur_rt, in0_block_w);
         pack_reconfig_data_format(x_tilized_cb_id, partials_gu_cb_id);
 #ifdef PACKER_L1_ACC
         PACK((llk_pack_reconfig_l1_acc(mm_block == 0 ? 0 : 1)));
@@ -626,21 +629,36 @@ FORCE_INLINE void matmul_phase_fused_gu(
         if constexpr (kFullM) {
             // Phantom-column cores (n_subblocks 0) skip both matmuls and packs, as below.
             if (n_subblocks > 0) {
-                const uint32_t n_out = EFF_M * out_subblock_w;
-                for (uint32_t which = 0; which < 2; ++which) {
-                    const uint32_t w_cb = which == 0 ? gate_cb_id : up_cb_id;
-                    const uint32_t p_cb = which == 0 ? partials_gu_cb_id : partials_up_cb_id;
-                    tile_regs_acquire();
-                    for (uint32_t k = 0; k < in0_block_w; ++k) {
-                        matmul_block(
-                            x_cb_id, w_cb, k, k * in1_per_core_w, 0, kWeightsTranspose, out_subblock_w, EFF_M, in0_block_w);
+                for (uint32_t rg = 0; rg < EFF_M; rg += kRowGroup) {
+                    const uint32_t rt = EFF_M - rg < kRowGroup ? EFF_M - rg : kRowGroup;
+                    if (rt != cur_rt) {
+                        matmul_block_init(x_cb_id, gate_cb_id, kWeightsTranspose, out_subblock_w, rt, in0_block_w);
+                        cur_rt = rt;
                     }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < n_out; ++i) {
-                        pack_tile<true>(i, p_cb, i);
+                    const uint32_t n_out = rt * out_subblock_w;
+                    for (uint32_t which = 0; which < 2; ++which) {
+                        const uint32_t w_cb = which == 0 ? gate_cb_id : up_cb_id;
+                        const uint32_t p_cb = which == 0 ? partials_gu_cb_id : partials_up_cb_id;
+                        tile_regs_acquire();
+                        for (uint32_t k = 0; k < in0_block_w; ++k) {
+                            matmul_block(
+                                x_cb_id,
+                                w_cb,
+                                rg * in0_block_w + k,
+                                k * in1_per_core_w,
+                                0,
+                                kWeightsTranspose,
+                                out_subblock_w,
+                                rt,
+                                in0_block_w);
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t i = 0; i < n_out; ++i) {
+                            pack_tile<true>(i, p_cb, rg * out_subblock_w + i);
+                        }
+                        tile_regs_release();
                     }
-                    tile_regs_release();
                 }
             }
         } else {
