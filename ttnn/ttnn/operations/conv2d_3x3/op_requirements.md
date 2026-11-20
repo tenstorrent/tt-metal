@@ -1,7 +1,7 @@
 # Operation Requirements: conv2d_3x3
 
 ## Definition
-- **Formula**: `out[h_out*W_out + w_out, n] = act( bias[n] + sum_{kh,kw in 0..2, c < C_in} in[h_in*W + w_in, c] * w[n, c, kh, kw] )`, with `h_in = h_out*s + kh*d - p` and `w_in = w_out*s + kw*d - p`. `in = 0` outside `[0,H) x [0,W)`. `act in {identity, relu}`. `H_out = (H + 2p - 2d - 1)//s + 1` (same for W).
+- **Formula**: `out[h_out*W_out + w_out, n] = act( bias[n] + sum_{kh,kw in 0..2, c < C_in} in[h_in*W + w_in, c] * w[n, c, kh, kw] )`, with `h_in = h_out*s + kh*d - top` and `w_in = w_out*s + kw*d - left`. `in = 0` outside `[0,H) x [0,W)`. `act in {identity, relu}`. Padding is an int `p` (= `(p, p, p, p)`) or `(top, bottom, left, right)`. `H_out = (H + top + bottom - 2d - 1)//s + 1`, `W_out = (W + left + right - 2d - 1)//s + 1`.
 - **PyTorch Reference**: `eval/golden_tests/conv2d_3x3/helpers.py:pytorch_conv2d_3x3`:
   ```python
   def pytorch_conv2d_3x3(x, w, *, input_height, input_width, bias=None, padding=0, stride=1, dilation=1, activation=None):
@@ -19,7 +19,8 @@
              weight_tensor: ttnn.Tensor,           # prepare_conv2d_weights output, [1, 1, K_p, C_out] TILE
              *, input_height: int, input_width: int,
              bias: ttnn.Tensor | None = None,      # prepare_conv2d_bias output, [1, 1, 1, C_out], dtype = weight dtype
-             padding: int = 0, stride: int = 1, dilation: int = 1,
+             padding: int | tuple[int, int, int, int] = 0,   # int p or (top, bottom, left, right)
+             stride: int = 1, dilation: int = 1,
              activation: str | None = None,        # None | "relu"
              compute_kernel_config: ttnn.ComputeConfigDescriptor | None = None) -> ttnn.Tensor
              # -> [1, 1, H_out*W_out, C_out], TILE, dtype = input dtype
@@ -254,3 +255,46 @@
   - Compute is 24.0 us with the face reads stubbed: HiFi4 matmul ~11 us, bias add 3.3 us, ~0.36 us fixed cost per streamed matmul call.
   - The gather is ~17 us on two RISCs at ~84 cycles per 512 B face read, plus ~4 us of exposed slab fill.
 - **Next, not taken**: a progressive per-subblock in0 wait inside one `matmul_block` call (a shared-helper change) plus a bias fold into the matmul. Each alone moves the wall by at most ~2 us, because the other half then binds.
+
+### [ ] Refinement 7 — Per-side padding (padding_mode "asymmetric") for FLUX.2, interleaved path
+
+**Goal**:
+- Add `"asymmetric"` to `SUPPORTED["padding_mode"]`: padding given as `(top, bottom, left, right)` whose sides differ, each side 0 or `dilation`. The tagger and `output_hw` already classify and size it (`conv2d_3x3.py`: `padding_sides`, `canonical_padding`, `tag_padding_mode`); the kernels do not handle it yet, so every such cell is refused today.
+- Required: every asymmetric cell on DRAM-interleaved input, i.e. what FLUX.2 runs:
+  - 72 interleaved `test_op` cells from three INPUTS:
+    - `(18, 32, 32) -> 32, (0, 0, 1, 1)`;
+    - `(34, 64, 64) -> 128, (0, 0, 1, 1)`;
+    - `(32, 32, 64) -> 64, (0, 1, 0, 1)`, stride 2.
+  - 20 FLUX.2 LOOSE_CASES:
+    - the 3 encoder downsamplers (`(0, 1, 0, 1)`, stride 2, up to 1024x1024 x 128);
+    - the 17 Blackhole (2, 4) per-device decoder convs (`(0, 0, 1, 1)`, H/2 + 2 rows, bf16 TILE, HiFi4, bias), which are FLUX.2's `[perf]` cases.
+- Sharded x asymmetric (144 `test_op` cells): optional. No model needs it; EXCLUSIONS are allowed (prompt rule). If excluded, say so in the result and tick `[x]` — the goal is the interleaved path.
+
+**Implementation skill**: /padding-in-ttnn (only for the tile / page padding it disambiguates; this padding is algorithmic)
+
+**Verifier notes**:
+- **Where padding enters**: `Conv3x3Geometry.padding` (an int today) feeds the tap coordinates, the path gates and the slab layout in `conv2d_3x3_program_descriptor.py`:
+  - coordinates: `_block_first_tap` (`(ho*s - p)*W + wo*s - p`) and the in-image row checks near lines 693 and 1353;
+  - slab gaps: `slab_direct_layout` (`over` / `gap`);
+  - path gates on `padding == dilation`: `padded_slab_capable`, the s2-taps, kw-fold and slab-direct eligibility, around lines 934-1029 and 1985;
+  - kernel CT args / defines: `PAD_SLAB_PAD`, `SD_PAD`, and the positional padding args around lines 3027 and 3186.
+- **The algebra**:
+  - Per-side padding changes the coordinates only through `top` (rows) and `left` (columns): `h_in = h_out*s + kh*d - top`, `w_in = w_out*s + kw*d - left`.
+  - `bottom` and `right` change only `H_out` / `W_out` (already right in `output_hw`) and how far the last row's / column's taps reach past the image edge (the right-edge zero reach in `slab_direct_layout`'s `over`).
+  - Zero fill stays "outside `[0, H) x [0, W)`".
+  - `(0, 0, 1, 1)` is "valid" vertically and "same" horizontally.
+- **Shape it into the geometry**: carry `pad_top` / `pad_left` (and the bottom / right reach where a layout needs it) instead of one `padding`. Keep every int-padding call on exactly today's path.
+- **Path selection**: a fast path whose gate is `padding == dilation` may either learn the per-side form (preferred where it is only coordinate algebra) or stay closed for asymmetric calls. The general path must be correct for any side in `{0, d}`.
+- **Performance bar** (so step 4 does not start from a slow fallback):
+  - Each FLUX.2 `[perf]` case must run within ~5% of its `measured_ns_blackhole` in `feature_spec.py`. That number is the same conv on the H/2 interior rows with symmetric padding 1 — same output, same MACs — so asymmetric padding must reuse the symmetric path's speed, not a per-pixel fallback.
+  - The harness that produced those numbers is `tests/ttnn/unit_tests/operations/conv2d_3x3_vs_ttnn/test_flux_conv3x3_compare.py` (run with `scripts/run_safe_pytest.sh --profile --run-all`, select cases with `FLUX_CMP_CASES`). Its conv2d_3x3 side currently runs the symmetric proxy; switch it to the real `(0, 0, 1, 1)` / `(0, 1, 0, 1)` call once supported.
+- **Panoptic must not move**: every Panoptic call is int padding.
+  - Its 45 LOOSE_CASES must stay green and their outputs bit-identical.
+  - Their device time must stay within noise (±2%). Measure the 22 cases with `tests/ttnn/unit_tests/operations/conv2d_3x3_vs_ttnn/test_panoptic_conv3x3_compare.py` before and after (`--profile`, `CONV_CMP_CASES` 0-10 and 11-21).
+  - In a worktree, `export TT_METAL_HOME=$PWD PYTHONPATH=$PWD` first, or the run silently tests the main checkout.
+
+**Done when**:
+- The 72 interleaved asymmetric `test_op` cells and the 20 asymmetric FLUX.2 LOOSE_CASES pass, both dispatches, with a program-cache hit.
+- Every previously passing cell still passes (golden was 1604 passed / 236 xfailed / 576 skipped before this refinement).
+- The FLUX.2 `[perf]` cases meet the performance bar.
+- The Panoptic `[perf]` cases are within noise.

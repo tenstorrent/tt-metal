@@ -172,7 +172,8 @@ void kernel_main() {
     constexpr uint32_t num_out_px = get_compile_time_arg_val(6);
     constexpr uint32_t c_in = get_compile_time_arg_val(7);
     constexpr uint32_t c_in_p = get_compile_time_arg_val(8);
-    constexpr int32_t padding = get_compile_time_arg_val(9);
+    // Per-side padding: rows shift by the top side, columns by the left; bottom / right only set the output extent.
+    constexpr int32_t pad_top = get_compile_time_arg_val(9);
     constexpr int32_t stride = get_compile_time_arg_val(10);
     constexpr int32_t dilation = get_compile_time_arg_val(11);
     constexpr uint32_t block_m_tiles = get_compile_time_arg_val(12);
@@ -287,7 +288,8 @@ void kernel_main() {
     // tile-rows.
     constexpr bool rt_valid = get_compile_time_arg_val(75) != 0;
     static_assert(!rt_valid || nslice_outer, "valid-row sizing is the N-slice walk's");
-    constexpr auto input_args = TensorAccessorArgs<76>();
+    constexpr int32_t pad_left = get_compile_time_arg_val(76);
+    constexpr auto input_args = TensorAccessorArgs<77>();
     static_assert(!alias_slab_combine || nslice_outer, "only the N-slice-outer walk aliases the slab");
 
     const uint32_t input_addr = get_arg_val<uint32_t>(0);
@@ -406,8 +408,8 @@ void kernel_main() {
         "tap-major rows are whole taps read in unit-stride pixel runs");
     static_assert(
         !center_direct || (tile_input && tap_major && !face_direct && !row_split && !channel_slice &&
-                           block_k_tiles == (center_mode == 1 ? 1 : 3) * (c_in_p / TILE_DIM) && padding == dilation &&
-                           input_width % TILE_DIM == 0 && output_width == input_width &&
+                           block_k_tiles == (center_mode == 1 ? 1 : 3) * (c_in_p / TILE_DIM) && pad_top == dilation &&
+                           pad_left == dilation && input_width % TILE_DIM == 0 && output_width == input_width &&
                            (center_mode == 1 || (block_m_tiles >= 2 && im2col_rm_depth_rows <= block_m_tiles))),
         "center-tap direct: K-blocked walk, whole taps, and the kw = 1 tap is a whole-tile-row vertical shift");
 
@@ -416,7 +418,8 @@ void kernel_main() {
         input_height,
         input_width,
         stride,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in_p,
         tensor_kkh_tiles,
@@ -427,31 +430,41 @@ void kernel_main() {
         input_height,
         input_width,
         stride,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in,
         c_in_p,
         block_k_tiles,
         zero_im2col_once>;
-    using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, padding, c_in_p>;
+    using WindowT = conv2d_3x3::WindowGather<output_width, input_height, input_width, pad_top, pad_left, c_in_p>;
     // N-slice center taps: the tap-direct units leave tap 1 to cb_center_tiles.
     constexpr int32_t unit_skip_kw = nslice_center ? 1 : -1;
-    using TapDirectT = conv2d_3x3::
-        TapDirect<output_width, input_height, input_width, padding, dilation, c_in_p, block_k_tiles, unit_skip_kw>;
+    using TapDirectT = conv2d_3x3::TapDirect<
+        output_width,
+        input_height,
+        input_width,
+        pad_top,
+        pad_left,
+        dilation,
+        c_in_p,
+        block_k_tiles,
+        unit_skip_kw>;
     using TapPlannedT = conv2d_3x3::TapDirectPlanned<
         output_width,
         input_height,
         input_width,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in_p,
         block_k_tiles,
         unit_skip_kw>;
     static_assert(
         !nslice_center ||
-            (tap_direct && tile_input && channel_slice && padding == dilation && input_width % TILE_DIM == 0 &&
-             output_width == input_width && block_k_tiles == 3 * (c_in_p / TILE_DIM) && fill_window >= 1 &&
-             input_ring_batches * untilize_batch_rows >= slab_tile_rows),
+            (tap_direct && tile_input && channel_slice && pad_top == dilation && pad_left == dilation &&
+             input_width % TILE_DIM == 0 && output_width == input_width && block_k_tiles == 3 * (c_in_p / TILE_DIM) &&
+             fill_window >= 1 && input_ring_batches * untilize_batch_rows >= slab_tile_rows),
         "N-slice center taps: tap-direct units of one kernel row, the kw = 1 tap a whole-tile-row shift, and the whole "
         "slab in the input ring");
     // Tap-direct on the K-blocked walk (TapDirectFifo); the N-slice prelude keeps the slot-indexed table.
@@ -465,7 +478,8 @@ void kernel_main() {
         output_width,
         input_height,
         input_width,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in_p,
         block_k_tiles,
@@ -569,7 +583,8 @@ void kernel_main() {
         input_width,
         output_width,
         stride,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         SD_GAP,
         SD_PITCH,
@@ -623,8 +638,8 @@ void kernel_main() {
     }
     [[maybe_unused]] const uint32_t zero_src_l1 = tap_major ? get_write_ptr(cb_zero_src) : 0;
     static_assert(
-        !padded_slab ||
-            (nslice_center && tile_input && padding == dilation && input_width % static_cast<int32_t>(TILE_DIM) == 0),
+        !padded_slab || (nslice_center && tile_input && pad_top == dilation && pad_left == dilation &&
+                         input_width % static_cast<int32_t>(TILE_DIM) == 0),
         "padded slab: N-slice center taps, stride 1, p == d, whole-tile image rows");
 
     // Input pages [page, end_page) into consecutive L1 page slots from l1. With the split fill, runs of higher
@@ -710,7 +725,7 @@ void kernel_main() {
         [[maybe_unused]] const uint32_t walk_rows = rt_valid ? block_valid_tiles : block_m_tiles;
 
         const conv2d_3x3::SlabFootprint footprint =
-            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
                 o_first, o_end);
         int32_t slab_x_base[3];
         [[maybe_unused]] uint32_t slab_ready_pages[3];  // TILE: slab pages that hold band kh once compute pushed them
@@ -734,7 +749,8 @@ void kernel_main() {
                 output_width,
                 input_width,
                 stride,
-                padding,
+                pad_top,
+                pad_left,
                 dilation,
                 band_last_tap,
                 num_in_px,
@@ -1221,11 +1237,11 @@ void kernel_main() {
             // rt_valid: rows past the block's valid ones are never multiplied, so they are not written.
             const uint32_t center_rows = rt_valid ? block_valid_tiles : block_m_tiles;
             for (int32_t kh = 0; kh < 3; ++kh) {
-                const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
+                const int32_t shift_rows = (kh * dilation - pad_top) * tile_rows_per_image_row;
                 uint32_t l1 = center_l1 + kh * block_m_tiles * row_bytes;
                 for (uint32_t r = 0; r < center_rows;) {
                     const uint32_t t = t_first + r;
-                    const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                    const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - pad_top;
                     if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
                         reads.read(zero_src_noc, l1, row_bytes);
                         l1 += row_bytes;
@@ -1345,13 +1361,13 @@ void kernel_main() {
             constexpr uint32_t row_tile_bytes = c_in_tiles * input_page_bytes;
             // Compiled on every path; it only runs with input_width % 32 == 0 (center_direct's static_assert).
             constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
-            const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
+            const int32_t shift_rows = (kh * dilation - pad_top) * tile_rows_per_image_row;
             const uint32_t t_first = m_tile_start + block_tiles_done;
             uint32_t l1 = l1_first;
             reads.begin(TRID_CENTER);
             for (uint32_t r = 0; r < block_m_tiles;) {
                 const uint32_t t = t_first + r;
-                const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                const int32_t h_in = static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - pad_top;
                 if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
                     reads.read(zero_src_noc, l1, row_tile_bytes);
                     l1 += l1_row_stride;
@@ -1562,7 +1578,7 @@ void kernel_main() {
                     constexpr uint32_t row_tile_pages = c_in_tiles;
                     constexpr uint32_t row_tile_bytes = row_tile_pages * input_page_bytes;
                     constexpr int32_t tile_rows_per_image_row = input_width >= TILE_DIM ? input_width / TILE_DIM : 1;
-                    const int32_t shift_rows = (kh * dilation - padding) * tile_rows_per_image_row;
+                    const int32_t shift_rows = (kh * dilation - pad_top) * tile_rows_per_image_row;
                     cb_reserve_back(cb_center_tiles, block_m_tiles * block_k_tiles);
                     uint32_t l1 = get_write_ptr(cb_center_tiles);
                     const uint32_t t_first = m_tile_start + block_tiles_done;
@@ -1570,7 +1586,7 @@ void kernel_main() {
                     for (uint32_t r = 0; r < block_m_tiles;) {
                         const uint32_t t = t_first + r;
                         const int32_t h_in =
-                            static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - padding;
+                            static_cast<int32_t>(t / tile_rows_per_image_row) + kh * dilation - pad_top;
                         if (r >= block_valid_tiles || h_in < 0 || h_in >= input_height) {
                             reads.read(zero_src_noc, l1, row_tile_bytes);
                             l1 += row_tile_bytes;

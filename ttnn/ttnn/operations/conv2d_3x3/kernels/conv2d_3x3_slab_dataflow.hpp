@@ -13,7 +13,7 @@
 namespace conv2d_3x3 {
 
 struct SlabFootprint {
-    int32_t f;         // flat input index of tap (0, 0) of the block's first output pixel; negative in the padding
+    int32_t f;  // flat input index of tap (0, 0) of the block's first output pixel; negative in the top/left padding
     int32_t band_len;  // input pixels one kernel row of the block touches
 };
 
@@ -22,7 +22,8 @@ template <
     uint32_t output_width,
     int32_t input_width,
     int32_t stride,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     int32_t band_last_tap>
 FORCE_INLINE SlabFootprint block_footprint(uint32_t o_first, uint32_t o_end) {
@@ -31,7 +32,7 @@ FORCE_INLINE SlabFootprint block_footprint(uint32_t o_first, uint32_t o_end) {
     const int32_t ho_last = (o_end - 1) / output_width;
     const int32_t wo_last = (o_end - 1) % output_width;
     return {
-        (ho_first * stride - padding) * input_width + wo_first * stride - padding,
+        (ho_first * stride - pad_top) * input_width + wo_first * stride - pad_left,
         (ho_last - ho_first) * stride * input_width + (wo_last - wo_first) * stride + band_last_tap * dilation + 1};
 }
 
@@ -135,7 +136,8 @@ template <
     uint32_t output_width,
     int32_t input_width,
     int32_t stride,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     int32_t band_last_tap,
     int32_t num_in_px,
@@ -151,8 +153,9 @@ ring_keep_lo(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m_first, u
         const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
         const uint32_t o_first = (m_tile_start + done) * 32;
         const uint32_t o_end_tiles = o_first + valid * 32;
-        const SlabFootprint fp = block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
-            o_first, o_end_tiles < num_out_px ? o_end_tiles : num_out_px);
+        const SlabFootprint fp =
+            block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
+                o_first, o_end_tiles < num_out_px ? o_end_tiles : num_out_px);
         if ((fp.f > 0 ? fp.f : 0) / 32 >= lo) {
             break;
         }

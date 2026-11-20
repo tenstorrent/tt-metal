@@ -22,6 +22,7 @@ across each grid row on device.
 from __future__ import annotations
 
 import dataclasses
+import numbers
 
 import ttnn
 
@@ -58,11 +59,28 @@ def _round_up(value, multiple):
     return -(-value // multiple) * multiple
 
 
+def padding_sides(padding):
+    """(top, bottom, left, right) from an int p (all four sides) or a (top, bottom, left, right) tuple."""
+    if isinstance(padding, numbers.Integral):
+        return (int(padding),) * 4
+    sides = tuple(int(p) for p in padding)
+    if len(sides) != 4:
+        raise ValueError(f"conv2d_3x3: padding must be an int or (top, bottom, left, right), got {padding!r}")
+    return sides
+
+
+def canonical_padding(padding):
+    """The int p when all four sides are equal (the form every kernel path takes), else the 4-tuple."""
+    sides = padding_sides(padding)
+    return sides[0] if len(set(sides)) == 1 else sides
+
+
 def output_hw(input_height, input_width, *, padding=0, stride=1, dilation=1):
+    top, bottom, left, right = padding_sides(padding)
     eff_k = 2 * dilation + 1
     return (
-        (input_height + 2 * padding - eff_k) // stride + 1,
-        (input_width + 2 * padding - eff_k) // stride + 1,
+        (input_height + top + bottom - eff_k) // stride + 1,
+        (input_width + left + right - eff_k) // stride + 1,
     )
 
 
@@ -132,7 +150,11 @@ def tag_dilation_mode(inputs, axes):
 
 
 def tag_padding_mode(inputs, axes):
-    padding, dilation = inputs[2], inputs[4]
+    padding, dilation = canonical_padding(inputs[2]), inputs[4]
+    if isinstance(padding, tuple):
+        # Per-side padding where each edge is either valid (0) or same (dilation): FLUX.2's halo-exchanged rows
+        # (0, 0, 1, 1) and its stride-2 downsamplers (0, 1, 0, 1).
+        return "asymmetric" if set(padding) <= {0, dilation} else "other"
     if padding == 0:
         return "valid"
     if padding == dilation:
@@ -167,7 +189,7 @@ SUPPORTED = {
     "hw_alignment": ["hw_aligned"],
     "stride_mode": ["unit", "strided"],
     "dilation_mode": ["unit", "dilated"],
-    "padding_mode": ["valid", "same"],
+    "padding_mode": ["valid", "same", "asymmetric"],
 }
 
 
@@ -175,7 +197,12 @@ SUPPORTED = {
 # 3. EXCLUSIONS
 # ---------------------------------------------------------------------------
 
-EXCLUSIONS = []
+# Per-side padding is implemented on the interleaved path only: the sharded paths' fast gathers (center taps, kw-fold,
+# padded slab, the K split's cost model) are built on `padding == dilation`, and no model runs per-side padding sharded.
+EXCLUSIONS = [
+    {"memory_layout": _ML.HEIGHT_SHARDED, "padding_mode": "asymmetric"},
+    {"memory_layout": _ML.BLOCK_SHARDED, "padding_mode": "asymmetric"},
+]
 
 
 PROPERTIES = {
@@ -438,8 +465,8 @@ def _check_contract(
         )
     if stride not in (1, 2):
         raise ValueError(f"conv2d_3x3: stride must be 1 or 2, got {stride}")
-    if padding < 0:
-        raise ValueError(f"conv2d_3x3: padding must be >= 0, got {padding}")
+    if min(padding_sides(padding)) < 0:
+        raise ValueError(f"conv2d_3x3: padding must be >= 0 on every side, got {padding}")
     if dilation < 1:
         raise ValueError(f"conv2d_3x3: dilation must be >= 1, got {dilation}")
     if activation not in (None, "relu"):
@@ -537,6 +564,7 @@ def conv2d_3x3(
     activation=None,
     compute_kernel_config=None,
 ):
+    padding = canonical_padding(padding)
     validate(
         input_tensor,
         weight_tensor,

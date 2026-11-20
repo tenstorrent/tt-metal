@@ -492,7 +492,10 @@ class Conv3x3Geometry:
     input_width: int
     c_in_p: int
     c_out: int
-    padding: int
+    # int p (all four sides), or per-side (top, bottom, left, right) when the sides differ. Coordinates move only with
+    # pad_top (rows) and pad_left (columns); bottom / right only set the output extent. The fast paths gated on
+    # `padding == dilation` (or == 1) take the int form only.
+    padding: int | tuple
     stride: int
     dilation: int
     output_height: int
@@ -517,6 +520,19 @@ class Conv3x3Geometry:
     # Spare-column M-groups (SPARE_MGROUPS): M-groups on grid rows, the others transposed in the spare columns
     # (spare_m_indices, block_spare_core). 0: every group is a grid row.
     block_rows: int = 0
+
+    @property
+    def pad_sides(self):
+        """(top, bottom, left, right)."""
+        return self.padding if isinstance(self.padding, tuple) else (self.padding,) * 4
+
+    @property
+    def pad_top(self):
+        return self.pad_sides[0]
+
+    @property
+    def pad_left(self):
+        return self.pad_sides[2]
 
     @property
     def k_split(self):
@@ -690,7 +706,7 @@ def _nslice_kh_masks(g: Conv3x3Geometry, bm, sb_h, m_tile_start, actual_m_tiles,
                     continue
                 for oy in range(o_a // g.output_width, (o_b - 1) // g.output_width + 1):
                     for kh in range(3):
-                        if 0 <= oy * g.stride + kh * g.dilation - g.padding < g.input_height:
+                        if 0 <= oy * g.stride + kh * g.dilation - g.pad_top < g.input_height:
                             mask |= 1 << kh
             mask = mask or 0b010
             mask = 0b111 if mask == 0b101 else mask
@@ -731,7 +747,7 @@ def _block_band_len(g: Conv3x3Geometry, o_first, o_last):
 def _block_first_tap(g: Conv3x3Geometry, o_first):
     """Flat input index of tap (0, 0) of output pixel o_first (negative inside the top/left padding)."""
     ho0, wo0 = divmod(o_first, g.output_width)
-    return (ho0 * g.stride - g.padding) * g.input_width + wo0 * g.stride - g.padding
+    return (ho0 * g.stride - g.pad_top) * g.input_width + wo0 * g.stride - g.pad_left
 
 
 def _higher_shard_rows(g: Conv3x3Geometry, core_m_tiles, block_m_tiles, m_index, shard_rows):
@@ -873,8 +889,8 @@ def slab_direct_layout(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
     pixels per slot, and one more gap after the last slot. The gap covers both the left padding of its row and what
     the last im2col runs of the previous row read past that row's end (its right padding, and the K-padding run's
     pixels against zero weight rows), so no gap pixel is an image pixel: zone == gap."""
-    over = g.stride * (g.output_width - 1) - g.padding + 3 * g.dilation - (g.input_width - 1)
-    gap = max(g.padding, over, 0)
+    over = g.stride * (g.output_width - 1) - g.pad_left + 3 * g.dilation - (g.input_width - 1)
+    gap = max(g.pad_left, over, 0)
     pitch = g.input_width + gap
     zone = gap
     slots_max = 0
@@ -931,7 +947,7 @@ def strided_window_capable(g: Conv3x3Geometry):
     if not (g.c_in == g.k_cols * g.c_in_p or short_slice_lanes_zeroed(g)):
         return False
     if g.output_width % TILE != 0:
-        return g.padding >= 1 and 2 * (g.output_width - 1) + 2 - g.padding >= g.input_width
+        return g.pad_left >= 1 and 2 * (g.output_width - 1) + 2 - g.pad_left >= g.input_width
     return True
 
 
@@ -1350,7 +1366,7 @@ def _balance_cost_table(g: Conv3x3Geometry, cap, sb_h, sb_w, ct_rows):
         m = 0
         for oy in range(o_a // g.output_width, (o_b - 1) // g.output_width + 1):
             for kh in range(3):
-                if 0 <= oy * g.stride + kh * g.dilation - g.padding < g.input_height:
+                if 0 <= oy * g.stride + kh * g.dilation - g.pad_top < g.input_height:
                     m |= 1 << kh
         tile_mask.append(m)
     ns = g.out_n_tiles
@@ -3024,7 +3040,7 @@ def create_program_descriptor(
             g.num_out_px,
             slice_channels,
             g.c_in_p,
-            g.padding,
+            g.pad_top,
             g.stride,
             g.dilation,
             bm,
@@ -3101,6 +3117,7 @@ def create_program_descriptor(
             int(tap_direct_windows),
             int(nslice_center),
             int(rt_valid),
+            g.pad_left,
         ]
         args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
         return args
@@ -3183,7 +3200,7 @@ def create_program_descriptor(
         g.input_width,
         g.output_width,
         g.num_out_px,
-        g.padding,
+        g.pad_top,
         g.stride,
         g.dilation,
         b.band_stride_px,
@@ -3229,6 +3246,7 @@ def create_program_descriptor(
         int(g.remote_output),
     ]
     writer_zero_lanes_arg = len(writer_ct_args) - 7
+    writer_ct_args.append(g.pad_left)
 
     def writer_ct_args_for(slice_channels, split_core=None):
         args = list(writer_ct_args)
@@ -3629,7 +3647,8 @@ def create_program_descriptor(
             ("SD_IN_W", str(g.input_width)),
             ("SD_OUT_W", str(g.output_width)),
             ("SD_STRIDE", str(g.stride)),
-            ("SD_PAD", str(g.padding)),
+            ("SD_PAD_TOP", str(g.pad_top)),
+            ("SD_PAD_LEFT", str(g.pad_left)),
             ("SD_DIL", str(g.dilation)),
             ("SD_PIXEL_BYTES", str(pixel_bytes)),
             ("SD_KKH", str(g.tensor_kkh_tiles)),

@@ -12,10 +12,10 @@
 // in0 tile straight from the slab as those two runs (conv2d_3x3_compute.cpp, slab_direct): nothing is gathered.
 //
 // The slab is padded: slot r holds image row ih_lo + r behind GAP zero pixels, PITCH = GAP + W pixels per slot, and
-// one more gap follows the last slot. GAP = max(padding, overreach): a gap is both its row's left padding and what the
-// previous row's last im2col runs read past that row's end (its right padding, and the K-padding run's pixels against
-// zero weight rows), so no gap pixel is an image pixel. The reader zeroes the gaps once at kernel start (the fill never
-// writes them, so they never race it); a kernel row outside the image reads the zero block instead.
+// one more gap follows the last slot. GAP = max(left padding, overreach): a gap is both its row's left padding and
+// what the previous row's last im2col runs read past that row's end (its right padding, and the K-padding run's pixels
+// against zero weight rows), so no gap pixel is an image pixel. The reader zeroes the gaps once at kernel start (the
+// fill never writes them, so they never race it); a kernel row outside the image reads the zero block instead.
 //
 // Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bf8_b weights, bias + ReLU, unzoned, median of 3):
 // 22787 ns with the face-direct gather -> 11153 ns (14041 ns with the bias-add pass instead of the fused bias K-step).
@@ -31,7 +31,8 @@ template <
     int32_t in_w,
     uint32_t out_w,
     int32_t stride,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     int32_t gap,
     int32_t pitch,
@@ -40,7 +41,7 @@ template <
 struct Geom {
     // Image row of slot 0 for the M-block whose first output pixel is o_first.
     static inline __attribute__((always_inline)) int32_t row_lo(uint32_t o_first) {
-        return stride * static_cast<int32_t>(o_first / out_w) - padding;
+        return stride * static_cast<int32_t>(o_first / out_w) - pad_top;
     }
 
     // In-image pixels of the block's three bands (kernel row kh: from tap (kh, 0) of o_first to tap
@@ -54,11 +55,11 @@ struct Geom {
         const int32_t wo_first = o_first % out_w;
         const int32_t ho_last = (o_end - 1) / out_w;
         const int32_t wo_last = (o_end - 1) % out_w;
-        const int32_t f = (ho_first * stride - padding) * in_w + wo_first * stride - padding;
+        const int32_t f = (ho_first * stride - pad_top) * in_w + wo_first * stride - pad_left;
         const int32_t band_len =
             (ho_last - ho_first) * stride * in_w + (wo_last - wo_first) * stride + band_last_tap * dilation + 1;
-        const int32_t ih_lo = ho_first * stride - padding;
-        const int32_t ih_last = ho_last * stride - padding + 2 * dilation;
+        const int32_t ih_lo = ho_first * stride - pad_top;
+        const int32_t ih_last = ho_last * stride - pad_top + 2 * dilation;
         const int32_t slot_lo = (ih_lo > 0 ? ih_lo : 0) * in_w;
         const int32_t slot_hi = (ih_last + 1 < in_h ? ih_last + 1 : in_h) * in_w;
         int32_t prev_end = -0x7FFFFFFF;
@@ -87,11 +88,11 @@ struct Geom {
     in0_addr(uint32_t slab, uint32_t zero, int32_t ih_lo, uint32_t o, int32_t kh, uint32_t j) {
         const int32_t oh = o / out_w;
         const int32_t ow0 = o % out_w;
-        const int32_t ih = stride * oh + kh * dilation - padding;
+        const int32_t ih = stride * oh + kh * dilation - pad_top;
         if (ih < 0 || ih >= in_h) {
             return zero;
         }
-        return slab + static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * pixel_bytes) +
+        return slab + static_cast<uint32_t>(((ih - ih_lo) * pitch + gap + stride * ow0 - pad_left) * pixel_bytes) +
                j * 2 * half_bytes;
     }
 
@@ -103,11 +104,11 @@ struct Geom {
         const int32_t oh = o / out_w;
         const int32_t ow0 = o % out_w;
         for (int32_t kh = 2; kh >= 0; --kh) {
-            const int32_t ih = stride * oh + kh * dilation - padding;
+            const int32_t ih = stride * oh + kh * dilation - pad_top;
             if (ih >= 0 && ih < in_h) {
                 const uint32_t end =
                     static_cast<uint32_t>(
-                        ((ih - ih_lo) * pitch + gap + stride * ow0 - padding) * static_cast<int32_t>(pixel_bytes)) +
+                        ((ih - ih_lo) * pitch + gap + stride * ow0 - pad_left) * static_cast<int32_t>(pixel_bytes)) +
                     (kkh - 1) * 2 * half_bytes + half_bytes + 1024;
                 return (end + pixel_bytes - 1) / pixel_bytes;
             }

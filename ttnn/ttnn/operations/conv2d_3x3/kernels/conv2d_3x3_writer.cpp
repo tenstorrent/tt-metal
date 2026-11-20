@@ -162,7 +162,8 @@ void kernel_main() {
     constexpr int32_t input_width = get_compile_time_arg_val(24);
     constexpr uint32_t output_width = get_compile_time_arg_val(25);
     constexpr uint32_t num_out_px = get_compile_time_arg_val(26);
-    constexpr int32_t padding = get_compile_time_arg_val(27);
+    // Per-side padding: rows shift by the top side (here), columns by the left (arg 74).
+    constexpr int32_t pad_top = get_compile_time_arg_val(27);
     constexpr int32_t stride = get_compile_time_arg_val(28);
     constexpr int32_t dilation = get_compile_time_arg_val(29);
     constexpr int32_t band_stride_px = get_compile_time_arg_val(30);
@@ -223,7 +224,8 @@ void kernel_main() {
     // K split on more grid rows than the output has shard rows (see the file comment).
     constexpr bool remote_output = get_compile_time_arg_val(73) != 0;
     static_assert(!remote_output || (k_split && output_sharded));
-    constexpr auto weight_args = TensorAccessorArgs<74>();
+    constexpr int32_t pad_left = get_compile_time_arg_val(74);
+    constexpr auto weight_args = TensorAccessorArgs<75>();
     [[maybe_unused]] constexpr auto bias_args = TensorAccessorArgs<weight_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto output_args = TensorAccessorArgs<bias_args.next_compile_time_args_offset()>();
     [[maybe_unused]] constexpr auto input_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
@@ -629,14 +631,20 @@ void kernel_main() {
                     const uint32_t end_tiles = first + block_valid_tiles * 32;
                     const conv2d_3x3::RingWindow win =
                         conv2d_3x3::ring_window<input_width, input_height * input_width, dilation>(
-                            conv2d_3x3::
-                                block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
-                                    first, end_tiles < num_out_px ? end_tiles : num_out_px));
+                            conv2d_3x3::block_footprint<
+                                output_width,
+                                input_width,
+                                stride,
+                                pad_top,
+                                pad_left,
+                                dilation,
+                                band_last_tap>(first, end_tiles < num_out_px ? end_tiles : num_out_px));
                     const int32_t keep_lo = conv2d_3x3::ring_keep_lo<
                         output_width,
                         input_width,
                         stride,
-                        padding,
+                        pad_top,
+                        pad_left,
                         dilation,
                         band_last_tap,
                         input_height * input_width,
@@ -674,8 +682,9 @@ void kernel_main() {
                 const uint32_t end_tiles = first + block_valid_tiles * 32;
                 int32_t unused_x_base[3];
                 conv2d_3x3::tile_slab_plan<input_width, input_height * input_width, dilation, c_in_p / 32>(
-                    conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
-                        first, end_tiles < num_out_px ? end_tiles : num_out_px),
+                    conv2d_3x3::
+                        block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
+                            first, end_tiles < num_out_px ? end_tiles : num_out_px),
                     unused_x_base,
                     fill_plan);
                 fill_sfx = conv2d_3x3::slab_rows_from(fill_plan, fill_hi_row);
@@ -2239,7 +2248,8 @@ void kernel_main() {
                 input_width,
                 output_width,
                 stride,
-                padding,
+                pad_top,
+                pad_left,
                 dilation,
                 SD_GAP,
                 SD_PITCH,
@@ -2271,7 +2281,8 @@ void kernel_main() {
             input_width,
             output_width,
             stride,
-            padding,
+            pad_top,
+            pad_left,
             dilation,
             SD_GAP,
             SD_PITCH,
@@ -2294,7 +2305,7 @@ void kernel_main() {
         }
 #endif
         conv2d_3x3::slab_bands<input_width, input_height * input_width, dilation, band_stride_px>(
-            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
                 o_first, o_end),
             slab_x_base,
             [&](int32_t, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
@@ -2320,7 +2331,8 @@ void kernel_main() {
         input_height,
         input_width,
         stride,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in_p,
         tensor_kkh_tiles,
@@ -2363,7 +2375,8 @@ void kernel_main() {
         input_height,
         input_width,
         stride,
-        padding,
+        pad_top,
+        pad_left,
         dilation,
         c_in,
         c_in_p,
@@ -2384,7 +2397,7 @@ void kernel_main() {
         const uint32_t o_end_tiles = o_first + block_valid_tiles * 32;
         o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
         const auto footprint =
-            conv2d_3x3::block_footprint<output_width, input_width, stride, padding, dilation, band_last_tap>(
+            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
                 o_first, o_end);
         if constexpr (tile_input) {
             conv2d_3x3::TileSlabPlan plan;

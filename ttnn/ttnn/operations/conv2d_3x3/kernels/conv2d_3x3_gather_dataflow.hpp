@@ -109,7 +109,8 @@ template <
     int32_t input_height,
     int32_t input_width,
     int32_t stride,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     uint32_t c_in,
     uint32_t c_in_p,
@@ -221,9 +222,9 @@ struct RowGather {
         // The fixed window needs a combined read and no per-row K-padding zero fill between two reads.
         const bool fixed_ok = kw_first <= kw_last && (zero_im2col_once || col_hi <= tap_cols);
         // Output columns wo whose combined read lies in the image row: [wo_lo, wo_hi) (d = 1).
-        const int32_t left = padding - kw_first;
+        const int32_t left = pad_left - kw_first;
         const int32_t wo_lo = left <= 0 ? 0 : (left + stride - 1) / stride;
-        const int32_t right = input_width - 1 + padding - kw_last;
+        const int32_t right = input_width - 1 + pad_left - kw_last;
         const int32_t wo_hi = right < 0 ? 0 : right / stride + 1;
         const uint32_t slab_l1 = static_cast<uint32_t>(slab_noc);
         const uint32_t row_end = o + TILE_DIM < o_end ? o + TILE_DIM : o_end;
@@ -232,9 +233,9 @@ struct RowGather {
         uint32_t row_l1 = rows_l1;
         for (uint32_t p = o; p < row_end;) {
             const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
-            const int32_t h_in = ho * stride + kh * dilation - padding;
+            const int32_t h_in = ho * stride + kh * dilation - pad_top;
             const bool row_in_image = h_in >= 0 && h_in < input_height;
-            const int32_t w_in0 = wo * stride - padding;
+            const int32_t w_in0 = wo * stride - pad_left;
             const int32_t slab_x0 = slab_x_base_kh + h_in * input_width + w_in0;
             if (!row_in_image) {
                 // Every column of every row of the run is zero.
@@ -314,7 +315,8 @@ template <
     uint32_t output_width,
     int32_t input_height,
     int32_t input_width,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     uint32_t c_in_p,
     uint32_t block_k_tiles,
@@ -349,14 +351,14 @@ struct TapDirect {
         const int32_t wo0 = o % output_width;
         const int32_t n = static_cast<int32_t>(row_end) - static_cast<int32_t>(o);
         const bool one_run = n > 0 && wo0 + n <= static_cast<int32_t>(output_width);
-        const int32_t h_in0 = ho0 + kh * dilation - padding;
+        const int32_t h_in0 = ho0 + kh * dilation - pad_top;
         const bool row_out = h_in0 < 0 || h_in0 >= input_height;
         for (int32_t kw = kw_first; kw <= kw_last; ++kw) {
             if (kw == skip_kw) {
                 continue;  // N-slice center taps: compute reads this tap from cb_center_tiles
             }
             const uint32_t dst = rows_l1 + (kw - kw_first) * TILE_DIM * pixel_bytes;
-            const int32_t w_lo0 = wo0 - padding + kw * dilation;
+            const int32_t w_lo0 = wo0 - pad_left + kw * dilation;
             uint32_t src = dst;
             if (n <= 0 || (one_run && row_out)) {
                 src = zero_l1;
@@ -373,8 +375,8 @@ struct TapDirect {
             int32_t wo = wo0;
             for (uint32_t p = o; p < row_end;) {
                 const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
-                const int32_t h_in = ho + kh * dilation - padding;
-                const int32_t w_lo = wo - padding + kw * dilation;
+                const int32_t h_in = ho + kh * dilation - pad_top;
+                const int32_t w_lo = wo - pad_left + kw * dilation;
                 int32_t in_lo = w_lo < 0 ? (-w_lo < run ? -w_lo : run) : 0;
                 int32_t in_hi = input_width - w_lo < run ? input_width - w_lo : run;
                 if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
@@ -409,7 +411,7 @@ struct TapEdgeCanon {
     int32_t hi;
     bool on;
 };
-template <uint32_t output_width, int32_t input_width, int32_t padding, int32_t dilation, bool enabled>
+template <uint32_t output_width, int32_t input_width, int32_t pad_left, int32_t dilation, bool enabled>
 constexpr TapEdgeCanon tap_edge_canon(int32_t kw) {
     constexpr int32_t TILE_DIM = 32;
     TapEdgeCanon c{0, TILE_DIM, false};
@@ -418,7 +420,7 @@ constexpr TapEdgeCanon tap_edge_canon(int32_t kw) {
     }
     bool any = false;
     for (int32_t wo0 = 0; wo0 < static_cast<int32_t>(output_width); wo0 += TILE_DIM) {
-        const int32_t w_lo = wo0 - padding + kw * dilation;
+        const int32_t w_lo = wo0 - pad_left + kw * dilation;
         if (w_lo >= 0 && w_lo + TILE_DIM <= input_width) {
             continue;
         }
@@ -459,7 +461,8 @@ template <
     uint32_t output_width,
     int32_t input_height,
     int32_t input_width,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     uint32_t c_in_p,
     uint32_t block_k_tiles,
@@ -474,11 +477,11 @@ struct TapDirectPlanned {
     static constexpr TapEdgeCanon canon_kw[3] = {
         tap_edge_canon < output_width,
         input_width,
-        padding,
+        pad_left,
         dilation,
         taps == 3 > (0),
-        tap_edge_canon<output_width, input_width, padding, dilation, taps == 3>(1),
-        tap_edge_canon<output_width, input_width, padding, dilation, taps == 3>(2)};
+        tap_edge_canon<output_width, input_width, pad_left, dilation, taps == 3>(1),
+        tap_edge_canon<output_width, input_width, pad_left, dilation, taps == 3>(2)};
     static constexpr bool zero_once = canon_kw[0].on || canon_kw[1].on || canon_kw[2].on;
     // The stateful read is one packet: the edge run of tap kw must fit one burst.
     static constexpr uint32_t edge_bytes(uint32_t kw) {
@@ -513,7 +516,7 @@ struct TapDirectPlanned {
             return false;
         }
         for (int32_t kw = 0; kw < 3; ++kw) {
-            const int32_t w_lo = wo0 - padding + kw * dilation;
+            const int32_t w_lo = wo0 - pad_left + kw * dilation;
             r.off[kw] = w_lo * static_cast<int32_t>(pixel_bytes);
             if (w_lo >= 0 && w_lo + r.n <= input_width) {
                 r.cls[kw] = DIRECT;
@@ -564,7 +567,7 @@ struct TapDirectPlanned {
         uint32_t& zeroed,
         uint32_t slot,
         uint32_t& fixed_state) {
-        const int32_t h_in0 = r.ho0 + kh * dilation - padding;
+        const int32_t h_in0 = r.ho0 + kh * dilation - pad_top;
         if (r.n <= 0 || h_in0 < 0 || h_in0 >= input_height) {
             for (uint32_t t = 0; t < taps; ++t) {
                 srcs[t] = zero_l1;
@@ -656,7 +659,8 @@ template <
     uint32_t output_width,
     int32_t input_height,
     int32_t input_width,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     uint32_t c_in_p,
     uint32_t block_k_tiles,
@@ -676,9 +680,9 @@ struct TapDirectFifo {
     static constexpr uint32_t taps = block_k_tiles * TILE_DIM / c_in_p;
     static constexpr bool canon_enabled = taps == 3;
     static constexpr TapEdgeCanon canon_kw[3] = {
-        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(0),
-        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(1),
-        tap_edge_canon<output_width, input_width, padding, dilation, canon_enabled>(2)};
+        tap_edge_canon<output_width, input_width, pad_left, dilation, canon_enabled>(0),
+        tap_edge_canon<output_width, input_width, pad_left, dilation, canon_enabled>(1),
+        tap_edge_canon<output_width, input_width, pad_left, dilation, canon_enabled>(2)};
     static constexpr bool zero_once = canon_kw[0].on || canon_kw[1].on || canon_kw[2].on;
     static constexpr uint32_t edge_bytes(uint32_t kw) {
         return canon_kw[kw].on &&
@@ -820,8 +824,8 @@ struct TapDirectFifo {
         int32_t wo = o % output_width;
         for (uint32_t p = o; p < row_end;) {
             const int32_t n = row_end - p < output_width - wo ? row_end - p : output_width - wo;
-            const int32_t h_in = ho + kh * dilation - padding;
-            const int32_t w_lo = wo - padding + kw * dilation;
+            const int32_t h_in = ho + kh * dilation - pad_top;
+            const int32_t w_lo = wo - pad_left + kw * dilation;
             int32_t in_lo = w_lo < 0 ? (-w_lo < n ? -w_lo : n) : 0;
             int32_t in_hi = input_width - w_lo < n ? input_width - w_lo : n;
             if (h_in < 0 || h_in >= input_height || in_hi < in_lo) {
@@ -867,7 +871,7 @@ struct TapDirectFifo {
         const int32_t n = n_all < TILE_DIM ? n_all : TILE_DIM;
         const int32_t ho0 = o / output_width;
         const int32_t wo0 = o % output_width;
-        const int32_t h_in0 = ho0 + kh * dilation - padding;
+        const int32_t h_in0 = ho0 + kh * dilation - pad_top;
         const bool one_run = wo0 + n <= static_cast<int32_t>(output_width);
         uint32_t pages = 0;
         if (n <= 0 || (one_run && (h_in0 < 0 || h_in0 >= input_height))) {
@@ -892,7 +896,7 @@ struct TapDirectFifo {
         } else {
             const int32_t row_x = slab_x_base_kh + h_in0 * input_width;
             if constexpr (windows) {
-                const int32_t w_lo0 = wo0 - padding;
+                const int32_t w_lo0 = wo0 - pad_left;
                 if (w_lo0 >= 0 && w_lo0 + n + 2 <= input_width) {
                     const int32_t x = ring_x(row_x + w_lo0);
                     if (!crosses(x, n + 2)) {
@@ -912,7 +916,7 @@ struct TapDirectFifo {
                 if (kw == skip_kw) {
                     continue;
                 }
-                const int32_t w_lo = wo0 - padding + kw * dilation;
+                const int32_t w_lo = wo0 - pad_left + kw * dilation;
                 if (w_lo >= 0 && w_lo + n <= input_width) {
                     const int32_t x = ring_x(row_x + w_lo);
                     if (!crosses(x, n)) {
@@ -997,13 +1001,20 @@ struct TapDirectFifo {
 };
 
 // Strided window (stride 2, d 1, C_in_p whole tiles, one K-block per kernel row): im2col row i of a tile-row is the 3
-// consecutive input pixels from 2 * wo_i - padding, and inside one output-row run row i + 1 starts two pixels after row
-// i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel
-// 2 * wo_first - padding + j, and compute tilizes row i from slot 2 * i (row stride 2 pixels, row width 3 pixels), in
-// place. One read per output-row run (plus zero fills at the image edges) replaces one read per output pixel. Two runs
-// of one tile-row share one slot, which the host guarantees is zero for both (left padding / out-of-image right tap).
-// The unit's last 16 B carry the L1 address compute tilizes it from: the unit itself, or (slab-direct) the slab run.
-template <uint32_t output_width, int32_t input_height, int32_t input_width, int32_t padding, uint32_t c_in_p>
+// consecutive input pixels from 2 * wo_i - pad_left, and inside one output-row run row i + 1 starts two pixels after
+// row i. So the run's rows are overlapping windows of one input run: pixel slot j of the unit holds input pixel
+// 2 * wo_first - pad_left + j, and compute tilizes row i from slot 2 * i (row stride 2 pixels, row width 3 pixels),
+// in place. One read per output-row run (plus zero fills at the image edges) replaces one read per output pixel. Two
+// runs of one tile-row share one slot, which the host guarantees is zero for both (left padding / out-of-image right
+// tap). The unit's last 16 B carry the L1 address compute tilizes it from: the unit itself, or (slab-direct) the slab
+// run.
+template <
+    uint32_t output_width,
+    int32_t input_height,
+    int32_t input_width,
+    int32_t pad_top,
+    int32_t pad_left,
+    uint32_t c_in_p>
 struct WindowGather {
     static constexpr uint32_t TILE_DIM = 32;
     static constexpr uint32_t pixel_bytes = c_in_p * 2;
@@ -1018,8 +1029,8 @@ struct WindowGather {
         }
         const int32_t ho = o / output_width;
         const int32_t wo = o % output_width;
-        const int32_t h_in = ho * 2 + kh - padding;
-        const int32_t w0 = wo * 2 - padding;
+        const int32_t h_in = ho * 2 + kh - pad_top;
+        const int32_t w0 = wo * 2 - pad_left;
         if (wo + static_cast<int32_t>(TILE_DIM) > static_cast<int32_t>(output_width) || h_in < 0 ||
             h_in >= input_height || w0 < 0 || w0 + 2 * static_cast<int32_t>(TILE_DIM) >= input_width) {
             return 0;
@@ -1042,13 +1053,13 @@ struct WindowGather {
         uint32_t slot_l1 = dst_l1;
         for (uint32_t p = o; p < row_end;) {
             const int32_t run = row_end - p < output_width - wo ? row_end - p : output_width - wo;
-            const int32_t h_in = ho * 2 + kh - padding;
+            const int32_t h_in = ho * 2 + kh - pad_top;
             const int32_t n_px = 2 * run + 1;
             if (h_in < 0 || h_in >= input_height) {
                 reads.zero_fill(slot_l1, n_px * pixel_bytes);
             } else {
                 // Slots [lo, hi) of the run are inside the image row.
-                const int32_t w0 = wo * 2 - padding;
+                const int32_t w0 = wo * 2 - pad_left;
                 const int32_t lo = w0 < 0 ? -w0 : 0;
                 int32_t hi = input_width - w0 < n_px ? input_width - w0 : n_px;
                 hi = hi > lo ? hi : lo;
@@ -1078,7 +1089,8 @@ template <
     int32_t input_height,
     int32_t input_width,
     int32_t stride,
-    int32_t padding,
+    int32_t pad_top,
+    int32_t pad_left,
     int32_t dilation,
     uint32_t c_in_p,
     uint32_t tensor_kkh_tiles,
@@ -1111,12 +1123,12 @@ struct FaceGather {
         int32_t wo = o_lo % output_width;
         for (uint32_t p = o_lo; p < o_hi;) {
             const int32_t run = o_hi - p < output_width - wo ? o_hi - p : output_width - wo;
-            const int32_t h_in = ho * stride + kh * dilation - padding;
+            const int32_t h_in = ho * stride + kh * dilation - pad_top;
             if (h_in < 0 || h_in >= input_height) {
                 reads.zero_fill(dst, run * face_row_bytes);
             } else {
                 // Pixel i of the run reads its first tap at w0 + i * stride, its last at w0 + i * stride + last.
-                const int32_t w0 = wo * stride - padding + tap0 * dilation;
+                const int32_t w0 = wo * stride - pad_left + tap0 * dilation;
                 constexpr int32_t last = (face_taps - 1) * dilation;
                 int32_t in_lo = w0 >= 0 ? 0 : (stride - 1 - w0) / stride;
                 const int32_t room = input_width - 1 - last - w0;
@@ -1184,8 +1196,8 @@ struct FaceGather {
                 const uint32_t faces_l1 = tile_row_l1 + half * 2 * face_bytes;
                 const int32_t ho = f_lo / output_width;
                 const int32_t wo = f_lo % output_width;
-                const int32_t h_in0 = ho * stride - padding;
-                const int32_t w_in0 = wo * stride - padding;
+                const int32_t h_in0 = ho * stride - pad_top;
+                const int32_t w_in0 = wo * stride - pad_left;
                 // 16 pixels of one output row whose every tap read lies inside the image row: each face is one
                 // run, or all zero when its kernel row is outside the image.
                 const bool full_row = f_hi - f_lo == FACE_DIM && wo + FACE_DIM <= output_width && w_in0 >= 0 &&
