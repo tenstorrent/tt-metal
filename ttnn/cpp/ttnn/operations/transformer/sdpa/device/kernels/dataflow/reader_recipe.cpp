@@ -99,6 +99,8 @@ constexpr uint32_t shared_read_barrier_tiles = get_named_compile_time_arg_val("s
 // Attention sink (0: none): its page CB, the sink tensor's heads and accessor args offset.
 constexpr uint32_t sink_cb = get_named_compile_time_arg_val("sink_cb");
 constexpr uint32_t sink_heads = get_named_compile_time_arg_val("sink_heads");
+// A BFP sink's value bits (8: BFP8, 4: BFP4; 0: BF16 or FP32, read as is).
+constexpr uint32_t sink_bfp_bits = get_named_compile_time_arg_val("sink_bfp_bits");
 constexpr uint32_t sink_cta = get_named_compile_time_arg_val("sink_cta");
 constexpr bool has_sink = sink_cb != 0;
 static_assert(!(has_mask && has_joint), "SDPA recipe masks are dense-only");
@@ -365,12 +367,37 @@ struct RecipeNoKvShare {
     void forward(const Noc&, uint32_t, uint32_t) const {}
 };
 
-// The head's sink logit: the first value of its [1, H, 1, 1] tile (compute reads word 0).
+// A BFP tile's first value as FP32 bits: face 0 row 0's shared exponent (byte 0) and the value's sign-magnitude
+// bits (data byte 0 after the 64 B exponent section; BFP4: its low nibble). The magnitude holds the leading one
+// explicitly: value = magnitude * 2^(exponent - 127 - (bits - 2)).
+FORCE_INLINE uint32_t bfp_first_value_to_fp32(uint32_t address) {
+    const auto* bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(address);
+    const uint32_t exponent = bytes[0];
+    const uint32_t value = sink_bfp_bits == 8 ? bytes[64] : bytes[64] & 0xf;
+    const uint32_t sign = (value >> (sink_bfp_bits - 1)) & 1;
+    const uint32_t magnitude = value & ((1u << (sink_bfp_bits - 1)) - 1);
+    if (magnitude == 0) {
+        return sign << 31;
+    }
+    const int32_t lead = 31 - __builtin_clz(magnitude);
+    const int32_t biased = static_cast<int32_t>(exponent) - static_cast<int32_t>(sink_bfp_bits - 2) + lead;
+    if (biased <= 0) {
+        return sign << 31;  // below FP32's normal range: no sink weight
+    }
+    return (sign << 31) | (static_cast<uint32_t>(biased) << 23) | ((magnitude << (23 - lead)) & 0x7fffff);
+}
+
+// The head's sink logit: the first value of its [1, H, 1, 1] tile (compute reads word 0; a BFP sink's value is
+// converted to FP32 there).
 template <typename Accessor>
 FORCE_INLINE void read_sink_page(const Noc& noc, const Accessor& sink, CircularBuffer& cb, uint32_t head) {
     cb.reserve_back(1);
-    noc.async_read(sink, CoreLocalMem<uint32_t>(cb.get_write_ptr()), 64, {.page_id = head % sink_heads}, {});
+    const uint32_t page = cb.get_write_ptr();
+    noc.async_read(sink, CoreLocalMem<uint32_t>(page), sink_bfp_bits ? 128 : 64, {.page_id = head % sink_heads}, {});
     noc.async_read_barrier();
+    if constexpr (sink_bfp_bits != 0) {
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page) = bfp_first_value_to_fp32(page);
+    }
     cb.push_back(1);
 }
 

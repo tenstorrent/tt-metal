@@ -160,7 +160,8 @@ ProgramDescriptor recipe_compute_program(
     uint32_t d_tiles,
     std::optional<float> scale,
     uint32_t vd_tiles,
-    std::optional<KVStorage> v_storage) {
+    std::optional<KVStorage> v_storage,
+    tt::DataFormat q_format) {
     TT_FATAL(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1, "SDPA recipes require tile-aligned chunks and head dims");
     // V, the numerator state and the output are vd tiles wide; Q and K d tiles (MLA: vd < d).
     const uint32_t vd = vd_tiles ? vd_tiles : d_tiles;
@@ -190,7 +191,8 @@ ProgramDescriptor recipe_compute_program(
         program.cbs.push_back(std::move(cb));
     };
     // Q double-buffered; K/V one slot for FP32, two for BF16. Q-row buffers scale with the Q chunk.
-    add_cb(0, 2 * q_tiles * d_tiles, 2048, tt::DataFormat::Float16_b);
+    const uint32_t q_bytes = tt::tile_size(q_format);
+    add_cb(0, 2 * q_tiles * d_tiles, q_bytes, q_format);
     add_cb(1, k_tiles * d_tiles * (fp32 ? 1 : 2), kv_bytes, kv_format);
     add_cb(2, k_tiles * vd * (fp32 ? 1 : 2), tt::tile_size(v_format), v_format);
     add_cb(3, 1, 2048, tt::DataFormat::Float16_b);
@@ -227,7 +229,7 @@ ProgramDescriptor recipe_compute_program(
         // CB 29: QK-subblock-width copies of -e0 in K's format (the fused chunks subtract m_ref in the QK).
         add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
     }
-    add_cb(16, (fp32 ? 2 : 4) * vd, 2048, tt::DataFormat::Float16_b);
+    add_cb(16, (fp32 ? 2 : 4) * vd, q_bytes, q_format);
     ComputeConfigDescriptor compute_config{
         .math_fidelity = policy.pv_fidelity,
         .fp32_dest_acc_en = fp32,
@@ -400,7 +402,8 @@ constexpr uint32_t kRecipeKeyMaskPage = 576;
 
 // The attention sink: one page per Q chunk with the head's sink logit (dataflow/reader_recipe.cpp).
 constexpr uint8_t kRecipeSinkCb = 20;
-constexpr uint32_t kRecipeSinkPage = 64;
+// 128 B: a BFP sink's first value needs the tile's exponent section (64 B) and its first data bytes.
+constexpr uint32_t kRecipeSinkPage = 128;
 
 namespace {
 // Two halves (reader, writer) of 64 B slots for the Q offset, then cu_window_seqlens
@@ -511,7 +514,8 @@ TensorSpec recipe_output_spec_impl(
     if (output_concat_heads) {
         shape = ttnn::Shape({shape[0], 1, shape[2], shape[1] * shape[3]});
     }
-    return TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), output_memory_config));
+    // Stored in Q's type (BF16, BFP8 or BFP4), as the packer writes the output CB.
+    return TensorSpec(shape, TensorLayout(q.dtype(), PageConfig(Layout::TILE), output_memory_config));
 }
 
 TensorSpec recipe_output_spec(
@@ -618,11 +622,14 @@ ProgramDescriptor recipe_program(
         TT_FATAL(qshape[2] > 0 && kshape[2] > 0, "SDPA recipe segments require positive sequence lengths");
         // V may be stored differently from K (Qwen-VL vision: K BF16, V BFP8): CB 2 takes V's format.
         TT_FATAL(
-            sq.dtype() == DataType::BFLOAT16 && sk.dtype() == kv_type && sv.dtype() == v.dtype() &&
+            sq.dtype() == q.dtype() &&
+                (sq.dtype() == DataType::BFLOAT16 || sq.dtype() == DataType::BFLOAT8_B ||
+                 sq.dtype() == DataType::BFLOAT4_B) &&
+                sk.dtype() == kv_type && sv.dtype() == v.dtype() &&
                 (sv.dtype() == DataType::BFLOAT16 || sv.dtype() == DataType::BFLOAT8_B ||
                  sv.dtype() == DataType::BFLOAT4_B),
-            "SDPA input types do not match the selected recipe: Q {} (BF16), K {} ({}), V {} (BF16, BFP8 or BFP4, the "
-            "same in every segment)",
+            "SDPA input types do not match the selected recipe: Q {} (BF16, BFP8 or BFP4), K {} ({}), V {} (BF16, BFP8 "
+            "or BFP4); each the same in every segment",
             sq.dtype(),
             sk.dtype(),
             kv_type,
@@ -638,8 +645,10 @@ ProgramDescriptor recipe_program(
             "SDPA recipe attention_sink must be on Q's device");
         TT_FATAL(
             sink.layout() == Layout::TILE && sink.tensor_spec().tile() == Tile({32, 32}) &&
-                (sink.dtype() == DataType::BFLOAT16 || sink.dtype() == DataType::FLOAT32) && !sink.is_sharded(),
-            "SDPA recipe attention_sink must be an interleaved BF16 or FP32 32x32-tiled tensor");
+                (sink.dtype() == DataType::BFLOAT16 || sink.dtype() == DataType::FLOAT32 ||
+                 sink.dtype() == DataType::BFLOAT8_B || sink.dtype() == DataType::BFLOAT4_B) &&
+                !sink.is_sharded(),
+            "SDPA recipe attention_sink must be an interleaved BF16, FP32, BFP8 or BFP4 32x32-tiled tensor");
         const auto& shape = sink.logical_shape();
         TT_FATAL(
             shape.rank() == 4 && shape[0] == 1 && shape[1] == qs[1] && shape[2] == 1 && shape[3] == 1,
@@ -711,7 +720,16 @@ ProgramDescriptor recipe_program(
     const uint32_t compute_q_tiles =
         recipe_compute_q_tiles(policy, q_tiles, k_tiles, attn_mask.has_value() || keyed, keyed);
     auto program = recipe_compute_program(
-        policy, grid, k_chunks, compute_q_tiles, k_tiles, d_tiles, scale, vd_tiles, recipe_kv_storage(v.dtype()));
+        policy,
+        grid,
+        k_chunks,
+        compute_q_tiles,
+        k_tiles,
+        d_tiles,
+        scale,
+        vd_tiles,
+        recipe_kv_storage(v.dtype()),
+        datatype_to_dataformat_converter(q.dtype()));
     if (attn_mask) {
         // The fused chunks run without an attn_mask (recipe_config.hpp: fused_active), so a masked build drops their
         // CBs and clears recipe_fused.
@@ -842,6 +860,7 @@ ProgramDescriptor recipe_program(
              {"read_barrier_tiles", 16},
              {"shared_read_barrier_tiles", 16},
              {"sink_cb", 0},
+             {"sink_bfp_bits", 0},
              {"sink_heads", 1},
              {"sink_cta", 0}},
         .config = ReaderConfigDescriptor{}};
@@ -961,6 +980,14 @@ ProgramDescriptor recipe_program(
     if (options.attention_sink) {
         // The sink tensor's accessor comes last (its address: common arg kReaderSink).
         set_named_arg(reader_args, "sink_cb", kRecipeSinkCb);
+        // A BFP8 / BFP4 sink: the reader converts its first value to FP32 (compute then reads an FP32 word).
+        const auto sink_dtype = options.attention_sink->dtype();
+        set_named_arg(
+            reader_args,
+            "sink_bfp_bits",
+            sink_dtype == DataType::BFLOAT8_B   ? 8u
+            : sink_dtype == DataType::BFLOAT4_B ? 4u
+                                                : 0u);
         set_named_arg(reader_args, "sink_heads", qs[1]);
         set_named_arg(reader_args, "sink_cta", reader.compile_time_args.size());
         TensorAccessorArgs(options.attention_sink->buffer()).append_to(reader.compile_time_args);

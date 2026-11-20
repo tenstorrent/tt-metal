@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_dense.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -162,29 +161,18 @@ Tensor sdpa(
             .precision = precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD),
         };
     OperationType::tensor_args_t tensor_args{
-            .q = input_tensor_q,
-            .k = input_tensor_k,
-            .v = input_tensor_v,
-            .attn_mask = attn_mask,
-            .page_table = page_table_tensor,
-            .chunk_start_idx_tensor = chunk_start_idx_tensor,
-            .attention_sink = attention_sink,
-            .cu_window_seqlens = cu_window_seqlens,
-            .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
-            .attn_mask_block_map = attn_mask_block_map,
-        };
-    // The recipe kernels read Q as BF16: a BFP8 / BFP4 Q is widened (exactly) and the output narrowed back to Q's
-    // type, as the legacy op returned it.
-    const auto q_dtype = input_tensor_q.dtype();
-    if (q_dtype != DataType::BFLOAT16) {
-        tensor_args.q = ttnn::typecast(input_tensor_q, DataType::BFLOAT16);
-    }
-    // The reader takes the sink logit from a BF16 or FP32 tile; a BFP8 / BFP4 sink [1, H, 1, 1] is widened.
-    if (attention_sink && attention_sink->dtype() != DataType::BFLOAT16 && attention_sink->dtype() != DataType::FLOAT32) {
-        tensor_args.attention_sink = ttnn::typecast(*attention_sink, DataType::BFLOAT16);
-    }
+        .q = input_tensor_q,
+        .k = input_tensor_k,
+        .v = input_tensor_v,
+        .attn_mask = attn_mask,
+        .page_table = page_table_tensor,
+        .chunk_start_idx_tensor = chunk_start_idx_tensor,
+        .attention_sink = attention_sink,
+        .cu_window_seqlens = cu_window_seqlens,
+        .windowed_q_token_offset_tensor = windowed_q_token_offset_tensor,
+        .attn_mask_block_map = attn_mask_block_map,
+    };
     ttnn::operations::transformer::sdpa::detail::resolve_dense_recipe(attrs, tensor_args);
-    auto output = ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
-    return q_dtype == DataType::BFLOAT16 ? output : ttnn::typecast(output, q_dtype, output_mem_config);
+    return ttnn::device_operation::launch<OperationType>(attrs, tensor_args);
 }
 }  // namespace ttnn::prim

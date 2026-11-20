@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_joint.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -126,20 +125,8 @@ JointSDPAResult joint_scaled_dot_product_attention(
         .joint_k = joint_tensor_k,
         .joint_v = joint_tensor_v};
 
-    // The recipe kernels read Q as BF16: a BFP8 / BFP4 Q is widened (exactly) and the outputs narrowed back.
-    const auto q_dtype = input_tensor_q.dtype();
-    if (q_dtype != DataType::BFLOAT16) {
-        tensor_args.input_q = ttnn::typecast(input_tensor_q, DataType::BFLOAT16);
-        tensor_args.joint_q = ttnn::typecast(joint_tensor_q, DataType::BFLOAT16);
-    }
     ttnn::operations::transformer::sdpa::detail::resolve_joint_recipe(operation_attributes, tensor_args);
-    auto outputs = ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
-    if (q_dtype != DataType::BFLOAT16) {
-        for (auto& output : outputs) {
-            output = ttnn::typecast(output, q_dtype, operation_attributes.output_memory_config);
-        }
-    }
-    return outputs;
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim

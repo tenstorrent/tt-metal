@@ -360,7 +360,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             }
             normalize_row_streaming<vDHt, dst_size, cb_col_identity, cb_recip_scratch, cb_normalized_out, scale_fp32>(
                 cur.sum, out_cb, h);
-            srca = cb_normalized_out;
+            srca = cb_col_identity;  // normalize_row_streaming leaves srcA in BF16
             pack_cb = cb_recip_scratch;
             arm_exp();
         }

@@ -79,6 +79,8 @@ std::optional<tt::tt_metal::KernelBuildOptLevel> recipe_opt_level(tt::tt_metal::
 // `vd_tiles`: V / output head dim in tiles when it differs from the QK head dim `d_tiles` (MLA; 0: the same).
 // `v_storage`: V's storage when it differs from K's (the policy's); the unpacker expands either into the same BF16
 // source registers, so only CB 2's format changes.
+// `q_format`: Q's format (BF16, BFP8 or BFP4): CB 0 holds Q as stored, and the output CB 16 is packed in it (the
+// output keeps Q's type). The unpacker expands Q into the same BF16 source registers.
 tt::tt_metal::ProgramDescriptor recipe_compute_program(
     const PrecisionPolicy& policy,
     const CoreRangeSet& grid,
@@ -88,7 +90,8 @@ tt::tt_metal::ProgramDescriptor recipe_compute_program(
     uint32_t d_tiles,
     std::optional<float> scale = std::nullopt,
     uint32_t vd_tiles = 0,
-    std::optional<KVStorage> v_storage = std::nullopt);
+    std::optional<KVStorage> v_storage = std::nullopt,
+    tt::DataFormat q_format = tt::DataFormat::Float16_b);
 
 // K/V storage of a K/V tensor dtype (BF16, BFP8, BFP4; anything else is rejected by the recipe's validation).
 KVStorage recipe_kv_storage(DataType dtype);

@@ -14,6 +14,8 @@
 namespace recipe_writer {
 // Joint SDPA: the joint output's accessor follows the primary one.
 constexpr bool has_joint = get_named_compile_time_arg_val("joint") != 0;
+// Output tile bytes: the output is stored in Q's type (BF16, BFP8 or BFP4).
+constexpr uint32_t out_bytes = get_tile_size(16);
 constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
 // Zero Q rows padding a paired recipe's odd chunk (host: recipe_compute_q_tiles).
 constexpr uint32_t q_pad_tiles = get_named_compile_time_arg_val("q_pad_tiles");
@@ -88,13 +90,14 @@ FORCE_INLINE void write_output_chunk(const Noc& noc, DataflowBuffer& cb, const O
             if (tile_row < row_tiles) {
                 const uint32_t page = ((head / heads * row_tiles + tile_row) * heads + head % heads) * d_tiles;
                 for (uint32_t col = 0; col < d_tiles; ++col) {
-                    noc.async_write(cb, out.primary, 2048, {.offset_bytes = col * 2048}, {.page_id = page + col});
+                    noc.async_write(
+                        cb, out.primary, out_bytes, {.offset_bytes = col * out_bytes}, {.page_id = page + col});
                 }
             }
         } else {
             for (uint32_t col = 0; col < d_tiles; ++col) {
                 out.visit(job * q_tiles * d_tiles + row * d_tiles + col, [&](const auto& destination, uint32_t page) {
-                    noc.async_write(cb, destination, 2048, {.offset_bytes = col * 2048}, {.page_id = page});
+                    noc.async_write(cb, destination, out_bytes, {.offset_bytes = col * out_bytes}, {.page_id = page});
                 });
             }
         }

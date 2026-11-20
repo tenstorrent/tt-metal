@@ -601,7 +601,9 @@ ALWI void normalize_row_streaming_body(uint32_t cur_sum_cb, uint32_t cur_out_cb,
                 } else {
                     matmul_block_init(norm_sum_cb, col_identity_cb, 0, N, 1, N);
                 }
-                sdpa_maybe_reconfig_data_format<normalized_out_cb, col_identity_cb, normalized_out_cb, scratch_cb>();
+                // Unpack format hints name the BF16 col_identity_cb, never the output CB: the output is packed in
+                // Q's type (BF16, BFP8 or BFP4), which no unpack reads.
+                sdpa_maybe_reconfig_data_format<col_identity_cb, col_identity_cb, col_identity_cb, scratch_cb>();
                 // Pack format follows scratch_cb for the reciprocal intermediate. The old/new form folds away
                 // when scratch and normalized output formats match, and reconfigures after rows that packed output.
                 sdpa_maybe_pack_reconfig_data_format<normalized_out_cb, scratch_cb>();
@@ -677,7 +679,8 @@ ALWI void normalize_row_streaming_body(uint32_t cur_sum_cb, uint32_t cur_out_cb,
 
                 CircularBuffer(scratch_cb).pop_front(1);
                 CircularBuffer(cur_out_cb).pop_front(head_dim_t_ * sdpa_out_stride);
-                reconfig_data_format_srca(normalized_out_cb);
+                // Leave srcA in BF16 (the format the next step's folded reconfigs assume).
+                reconfig_data_format_srca(col_identity_cb);
             }
         }
         // Restore pack format to scratch_cb (im_df = Float16_b) so that subsequent ops
@@ -1403,7 +1406,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     }
                     {
                         uint32_t v_index_offset = 0;
-                        sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
+                        sdpa_maybe_reconfig_data_format<cb_col_identity, cb_v_in, cb_col_identity, cb_qkt_im>(
                             out_cb, out_cb);
                         // cb_qkt_im rows are laid out at KT_stride even when this kt_sub only consumes a
                         // narrower logical width. Keep unpack init on the physical stride; inner_dim below
@@ -1640,8 +1643,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     REF_MAX_PV_BEGIN(out_cb, pv_accumulates(q_subblock));
                 }
                 uint32_t v_index_offset = 0;
-                sdpa_maybe_reconfig_data_format<cb_normalized_out, cb_v_in, cb_normalized_out, cb_qkt_im>(
-                    out_cb, out_cb);
+                sdpa_maybe_reconfig_data_format<cb_col_identity, cb_v_in, cb_col_identity, cb_qkt_im>(out_cb, out_cb);
                 // See the q_subblock-0 V matmul above: active_Sk can be narrower than the physical
                 // cb_qkt_im row stride, but the unpacker is configured for the physical layout.
                 recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, cur_h, KT_stride);
