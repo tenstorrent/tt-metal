@@ -25,6 +25,7 @@ Result lines start with HY4_SCAN; the latency table also goes to $HY4_SCAN_RESUL
 
 import json
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,12 @@ one_chip = pytest.mark.parametrize(
 )
 
 
+# The AgentX decode batch (fused/README.md): 8 users, context at decode time, cache capacity 1M
+# per user = stripes of 32,768 rows per chip of which 1,408 to 16,768 are visible.
+AGENTX_CONTEXTS = [45609, 71284, 92682, 115666, 144011, 175480, 215110, 535958]
+AGENTX_ROWS = 32768
+
+
 def stripe_positions(rows):
     return isc.row_position(torch.arange(rows), CHIP, NUM_CHIPS, CHIP_BLOCK)
 
@@ -101,6 +108,8 @@ def contexts_for(users, rows, kind):
     whole = int(stripe_positions(rows)[-1]) + 1
     if kind == "full":
         return [whole] * users
+    if kind == "agentx":
+        return AGENTX_CONTEXTS[:users]
     at_row = lambda r: int(stripe_positions(rows)[r]) + 1  # row r is the last visible one
     picks = [
         at_row(rows - 1 - 77),  # ends inside the last 32-row block of a bank, part of a block visible
@@ -204,7 +213,7 @@ def fused_order_topk(scores, stamps, visible, k):
 DRY = bool(os.environ.get("HY4_SCAN_DRY"))
 if DRY:  # the mock cannot capture a trace
 
-    def _dry_traced_ms(mesh_device, fn, repeats=20, rounds=3):
+    def _dry_traced_ms(mesh_device, fn, repeats=20, rounds=3, calls=1):
         fn()
         return {"replay_ms": 0.1, "rounds_ms": [0.1] * rounds}
 
@@ -259,6 +268,7 @@ CASES = {
     "u8-r4096-random-ragged": (8, 4096, "random", "ragged"),
     "u8-r32768-random-full": (8, 32768, "random", "full"),
     "u8-r32768-random-ragged": (8, 32768, "random", "ragged"),
+    "u8-r32768-random-agentx": (8, AGENTX_ROWS, "random", "agentx"),
     "u1-r32768-checkpoint-full": (1, 32768, "checkpoint", "full"),
     "u8-r4096-checkpoint-ragged": (8, 4096, "checkpoint", "ragged"),
 }
@@ -804,3 +814,148 @@ def test_host_arithmetic():
     assert isc.cut_by_count(64) == (1 << 31) | 64
     assert isc.cut_by_threshold(1.5, 3) == (3 << 16) | 0x3FC0
     assert isc.cut_by_threshold(isc.NEG) & 0xFFFF == 0xF180
+
+
+@one_chip
+@pytest.mark.parametrize("chip", [0, 16], ids=["chip0", "chip16"])
+@board_only
+def test_agentx(mesh_device, chip, monkeypatch):
+    """Scores, exact ids (per bank and per chip), the reference's selection and the cut at the AgentX shape, on
+    the first chip of the 32 and on one in the middle (where one user's context ends inside a 32-row block)."""
+    monkeypatch.setattr(sys.modules[__name__], "CHIP", chip)
+    case = "u8-r32768-random-agentx"
+    rows = [isc.visible_rows(c, chip, NUM_CHIPS, CHIP_BLOCK, AGENTX_ROWS) for c in AGENTX_CONTEXTS]
+    logger.info(f"HY4_SCAN agentx chip {chip}: visible rows {rows}, {sum(rows)} of {8 * AGENTX_ROWS}")
+    scans = check_case(mesh_device, case)
+    check_cut(mesh_device, scans["tree"], f"{case} chip {chip}")
+
+
+# name: (contexts by user, ScanConfig overrides, variants)
+def agentx_configs():
+    c = AGENTX_CONTEXTS
+    every = list(VARIANTS)
+    some = ["all", "stream_only", "no_stream"]
+    return {
+        "shape": (c, {}, every),  # the batch as it is: user u = the u-th shortest, the longest on the farthest cores
+        "longest_first": (c[::-1], {}, some),  # the longest user on the cores nearest each bank's DRAM endpoint
+        "grid": (c, {"placement": "grid"}, every),  # one 8 x 8 rectangle of cores: the cheapest launch
+        "grid_longest_first": (c[::-1], {"placement": "grid"}, some),
+        "grid_hifi3": (c, {"placement": "grid", "fidelity": "hifi3"}, ["all", "no_stream"]),
+        "grid_long_only": ([0] * 7 + c[7:], {"placement": "grid"}, some),
+        "long_only": ([0] * 7 + c[7:], {}, some),  # what the longest user costs with the other seven absent
+        "long_only_first": (c[7:] + [0] * 7, {}, some),
+        "short_only": (c[:7] + [0], {}, some),  # the seven short users with the longest absent
+        "one_user_long": (c[7:], {"users": 1}, some),  # a one-user program for the longest user
+        "hifi3": (c, {"fidelity": "hifi3"}, ["all", "no_stream"]),
+    }
+
+
+# the launch floor: every kernel returns at once
+FLOORS = {
+    "floor": {"ablate": 4},
+    "floor_no_semaphores": {"ablate": 12},
+    "floor_grid": {"ablate": 4, "placement": "grid"},
+    "floor_1user_rows": {"ablate": 4, "users": 1},
+    "floor_1user_grid": {"ablate": 4, "users": 1, "placement": "grid"},
+}
+AGENTX_CALLS = (1, 8)
+
+
+@one_chip
+@board_only
+def test_agentx_latency(mesh_device, monkeypatch):
+    """Traced latency at the AgentX shape (20 replays, one synchronize; 1 and 8 calls per trace), with the stream /
+    scoring / top-k split, variations that show what the uneven stripes cost, and the program's launch floor."""
+    chips = [int(x) for x in os.environ.get("HY4_SCAN_AGENTX_CHIPS", "0,16").split(",")]
+    only = os.environ.get("HY4_SCAN_AGENTX_CONFIGS")
+    keys, q, w = random_case(8, AGENTX_ROWS, seed=13)
+    keys_tensor = isc.keys_to_device(mesh_device, keys)
+    qt, s = isc.device_query(q, w)
+    table = []
+
+    def measure(row, contexts, overrides, mode, ablate):
+        users = overrides.get("users", 8)
+        kwargs = {k: v for k, v in overrides.items() if k != "users"}
+        kwargs["ablate"] = kwargs.get("ablate", 0) | ablate
+        scan = build(mesh_device, users, AGENTX_ROWS, mode, keys_tensor, **kwargs)
+        scan.set_query(qt[:users], s[:users])
+        scan.set_contexts(contexts)
+        return {
+            calls: round(1e3 * tracing.traced_ms(mesh_device, lambda: scan(), calls=calls)["replay_ms"], 1)
+            for calls in AGENTX_CALLS
+        }
+
+    for chip in chips:
+        monkeypatch.setattr(sys.modules[__name__], "CHIP", chip)
+        for name, (contexts, overrides, variants) in agentx_configs().items():
+            if (only and name not in only.split(",")) or (chip != chips[0] and name != "shape"):
+                continue
+            rows = [isc.visible_rows(c, chip, NUM_CHIPS, CHIP_BLOCK, AGENTX_ROWS) for c in contexts]
+            row = {"shape": "agentx", "config": name, "chip": chip, "visible_rows": rows, "key_bytes": sum(rows) * 136}
+            for variant in variants if chip == chips[0] else ["all", "stream_only"]:
+                mode, ablate = VARIANTS[variant]
+                row[variant + "_us"] = measure(row, contexts, overrides, mode, ablate)
+            for variant in ("all", "stream_only"):
+                if variant + "_us" in row:
+                    row[variant + "_gb_per_s"] = round(row["key_bytes"] / (row[variant + "_us"][1] * 1e-6) / 1e9, 1)
+            table.append(row)
+            logger.info("HY4_SCAN agentx latency " + json.dumps(row))
+    monkeypatch.setattr(sys.modules[__name__], "CHIP", chips[0])
+    for name, overrides in FLOORS.items():
+        if only and "floor" not in only.split(","):
+            continue
+        users = overrides.get("users", 8)
+        probe = build(
+            mesh_device, users, AGENTX_ROWS, "tree", keys_tensor, **{k: v for k, v in overrides.items() if k != "users"}
+        )
+        row = {
+            "shape": "agentx",
+            "config": name,
+            "users": users,
+            "core_ranges": len(isc._core_set(probe.cores).ranges()),
+        }
+        del probe
+        row["all_us"] = measure(row, AGENTX_CONTEXTS[-users:], overrides, "tree", 0)
+        table.append(row)
+        logger.info("HY4_SCAN agentx latency " + json.dumps(row))
+    if table:
+        previous = json.loads(RESULTS.read_text()) if RESULTS.is_file() else []
+        RESULTS.write_text(json.dumps(previous + table, indent=1))
+
+
+@one_chip
+@pytest.mark.parametrize("case", ["u8-r4096-random-ragged", "u8-r32768-random-agentx", "u1-r32768-checkpoint-full"])
+@board_only
+def test_query_rows(mesh_device, case):
+    """ScanConfig(query_rows=True): the query's tiles as [32 heads x 32 dims], transposed by the unpacker
+    (scan_compute.cpp under HY4_SCAN_QT_ROWS; what a query assembled on the chips from per-head pieces is,
+    layer_attn/PLAN.md section 21). The same inputs through both forms in one process: the score tiles (mode
+    "scores": every BF16 score of the visible rows) and the chip's top-2048 (mode "tree": the fused words, score and
+    stamp) must be bit-equal."""
+    users, rows, kind, ctx_kind = CASES[case]
+    keys, q, w = (random_case if kind == "random" else checkpoint_case)(users, rows, seed=len(case) + rows)
+    contexts = contexts_for(users, rows, ctx_kind)
+    keys_tensor = isc.keys_to_device(mesh_device, keys)
+    visible = torch.stack(
+        [torch.arange(rows) < isc.visible_rows(c, CHIP, NUM_CHIPS, CHIP_BLOCK, rows) for c in contexts]
+    )
+    qt, s = isc.device_query(q, w)
+    got = {}
+    for query_rows in (False, True):
+        for mode in ("scores", "tree"):
+            scan = build(mesh_device, users, rows, mode, keys_tensor, query_rows=query_rows)
+            scan.set_query(qt, s)
+            scan.set_contexts(contexts, torch.zeros(users))
+            scan()
+            ttnn.synchronize_device(mesh_device)
+            got[(query_rows, mode)] = scan.read_scores() if mode == "scores" else scan.read()
+    a, b = got[(False, "scores")], got[(True, "scores")]
+    differ = int((a.bfloat16().view(torch.int16) != b.bfloat16().view(torch.int16))[visible].sum())
+    words = int((got[(False, "tree")]["word"] != got[(True, "tree")]["word"]).sum())
+    valid = int(got[(False, "tree")]["valid"].sum())
+    logger.info(
+        f"HY4_SCAN {case} query as rows against query as columns: {differ} of {int(visible.sum())} visible scores "
+        f"differ in their BF16 bits (largest difference {float((a - b)[visible].abs().max()) if int(visible.sum()) else 0.0:.3e}); "
+        f"{words} of {got[(False, 'tree')]['word'].numel()} words of the top-2048 differ ({valid} valid picks)"
+    )
+    assert differ == 0 and words == 0, (case, differ, words)

@@ -45,6 +45,18 @@ SWEEPS = {
     "tp32_f16_timing": ("tp32", 64, [8, 64], {"finishers": 16}, ("timing",)),
     "tp8_f16": ("tp8", 64, [1, 8, 16, 32, 64], {"finishers": 16}, ()),
     "ep_f16": ("ep", 8, [1, 2, 3, 4, 5, 6], {"max_slots": 8, "finishers": 16}, ()),
+    "tp32_launch": ("tp32", 64, [1], {"finishers": 16}, ("launch",)),
+    "tp32_launch_sem5": ("tp32", 64, [1], {"finishers": 16, "dummy_semaphores": 5}, ("launch",)),
+    "tp32_sem5": ("tp32", 64, [1, 64], {"finishers": 16, "dummy_semaphores": 5}, ()),
+    # launch cost against the shape of the core sets: every role as whole rows, whatever the banks
+    # bank-local and rectangular (program.py place_rect): 6 gate|up and 4 down cores a bank
+    "tp32_launch_rect": ("tp32", 64, [1], {"mode": "rect", "down_per_bank": 4}, ("launch",)),
+    "tp32_rect": ("tp32", 64, [1, 8, 16, 32, 64], {"mode": "rect", "down_per_bank": 4}, ()),
+    "tp32_rect_f9": ("tp32", 64, [8, 32, 64], {"mode": "rect", "down_per_bank": 4, "finishers": 9}, ()),
+    "tp8_rect": ("tp8", 64, [1, 8, 64], {"mode": "rect", "down_per_bank": 4}, ()),
+    "ep_rect": ("ep", 8, [1, 6], {"max_slots": 8, "mode": "rect", "down_per_bank": 4}, ()),
+    "tp32_launch_block": ("tp32", 64, [1], {"mode": "block"}, ("launch",)),
+    "tp32_block": ("tp32", 64, [1, 8, 64], {"mode": "block"}, ()),
     "tp8": ("tp8", 64, [1, 8, 16, 32, 64], {}, ()),
     "ep": ("ep", 8, [1, 2, 3, 4, 5, 6], {"max_slots": 8}, ()),
     # what bounds it: no DRAM reads, no matmuls, per-core times
@@ -80,7 +92,12 @@ SWEEPS = {
     "tp8_g8d3": ("tp8", 64, [8, 64], {"gate_up_per_bank": 8, "down_per_bank": 3}, ()),
 }
 SHARES = {"tp32": L.tp_share(32), "tp8": L.tp_share(8), "ep": L.ep_share()}
-VARIANTS = {"noread": ("HY4_NO_READ", "1"), "nomath": ("HY4_NO_MATH", "1"), "timing": ("HY4_TIMING", "1")}
+VARIANTS = {
+    "noread": ("HY4_NO_READ", "1"),
+    "nomath": ("HY4_NO_MATH", "1"),
+    "timing": ("HY4_TIMING", "1"),
+    "launch": ("HY4_LAUNCH_ONLY", "1"),  # every kernel returns at once: what launching the program costs
+}
 CYCLE_NS = 1e3 / 1350  # the wall clock counts AICLK cycles (1350 MHz)
 
 _selected = [s for s in os.environ.get("HY4_RATE_CASES", ",".join(SWEEPS)).split(",") if s]
@@ -144,7 +161,8 @@ def test_rate(device, sweep):
             f"HY4_MK5 rate {tag} U={U}: {ms * 1e3:.1f} us per replay, {nbytes / 1e6:.2f} MB read, "
             f"{gbs:.1f} GB/s whole program, status {[hex(v) for v in status[1:6]]}"
         )
-        assert status[1:6] == [0, 0, 0, 0, 0], f"a core timed out: {[hex(v) for v in status[:6]]}"
+        if "launch" not in _variant:
+            assert status[1:6] == [0, 0, 0, 0, 0], f"a core timed out: {[hex(v) for v in status[:6]]}"
         if "timing" in _variant:
             t = op.read_timing()
             us = lambda cycles: cycles * CYCLE_NS / 1e3

@@ -24,6 +24,13 @@ SHARES = {"tp32": L.tp_share(32), "tp8": L.tp_share(8), "ep": L.ep_share()}
 # of 2026-11-19) gave 0.9982 with gain 0.979; test_stage_accuracy shows where the difference comes from.
 ROUNDED_PCC = 0.997
 
+# RoutedExperts(fidelity=...) of these tests: "custom_mm" (the kernels as they were) or a hifi_mm pass schedule
+# ("p02"). With a hifi_mm fidelity the random-weight streams are packed on the host (one rounding: what the goldens'
+# bfp4_round is), see layout.to_device_stream.
+FID = os.environ.get("HY4_MOE_FIDELITY", "custom_mm")
+FID_KW = {} if FID == "custom_mm" else {"fidelity": FID}
+HOST_ROUND = FID != "custom_mm"
+
 
 def random_share_weights(share, experts, seed=0):
     """gate, up [E, 32 P, 6144] and down [E, 6144, 32 P] with the reference's init (std 0.006)."""
@@ -76,9 +83,9 @@ def test_routed_tp_random(device, share, U):
     sh = SHARES[share]
     experts = 64
     gate, up, down = random_share_weights(sh, experts)
-    op = RoutedExperts(device, sh)
-    w_gu = L.to_device_stream(device, L.gate_up_stream(gate, up, sh))
-    w_dn = L.to_device_stream(device, L.down_stream(down, sh))
+    op = RoutedExperts(device, sh, **FID_KW)
+    w_gu = L.to_device_stream(device, L.gate_up_stream(gate, up, sh), host_round=HOST_ROUND)
+    w_dn = L.to_device_stream(device, L.down_stream(down, sh), host_round=HOST_ROUND)
     g = torch.Generator().manual_seed(3)
     x = torch.randn(L.ROWS, L.HIDDEN, generator=g)
     ids, w = random_routing(experts, U)
@@ -87,6 +94,7 @@ def test_routed_tp_random(device, share, U):
     if MOCK:
         return
     out, status = op.read_output()
+    share = share if FID == "custom_mm" else f"{share} [{FID}]"
     logger.info(f"HY4_MK5 routed {share} U={U} status {status[:6]}")
     assert status[1:6] == [0, 0, 0, 0, 0], f"a core timed out: {[hex(v) for v in status[:6]]}"
     xb = x.to(torch.bfloat16).float()
@@ -151,8 +159,10 @@ def test_routed_ep_random(device, n):
         dict(gate_up_ring=(6, 3), mode="row"),
         dict(banks=[0, 5]),
         dict(bias_correction=TRUNCATION_CORRECTION),
+        dict(mode="block"),
+        dict(mode="rect", down_per_bank=4),
     ],
-    ids=["timing", "noread-nomath", "g8d3", "g8d4", "ring63-row", "banks05", "correction"],
+    ids=["timing", "noread-nomath", "g8d3", "g8d4", "ring63-row", "banks05", "correction", "block", "rect"],
 )
 def test_variants_compile(device, kwargs):
     """The measurement variants (tests/test_rate.py) compile and fit; nothing runs."""
@@ -197,7 +207,10 @@ def test_routed_gain(device, share):
             check(f"gain {share} correction {correction[0]:.5f}/{correction[1]:.5f}, {label}", golden, out, 0.999)
 
 
-@pytest.mark.parametrize("stage", ["gate", "up", "silu", "act"])
+@pytest.mark.parametrize(
+    "stage",
+    ["gate", "up", "silu", "act", "gate_w1", "gate_x4", "gate_x4_w1", "gate_sparse", "gate_dense16", "gate_onehot"],
+)
 def test_stage_accuracy(device, stage):
     """Where the device's arithmetic differs from exact arithmetic on the same BFP4 weights (tp32, one expert, row
     weights 1): the down weights are the identity on the chip's 64 intermediate channels, so output columns 0..63
@@ -207,12 +220,33 @@ def test_stage_accuracy(device, stage):
     gate, up, _ = random_share_weights(sh, 4)
     down = torch.zeros(4, L.HIDDEN, sh.channels)
     down[:, : sh.channels] = torch.eye(sh.channels)
+    # probes of the gate matmul: weights of one significant bit (+-2^-7), x of 4 significant bits, both: products
+    # that LoFi multiplies exactly, so what is left is not the operands' precision
+    probe = stage.split("_")[1:]
+    stage = stage.split("_")[0]
+    if "w1" in probe:
+        gate = torch.sign(gate) * 2.0**-7
     debug = {"gate": 1, "up": 2, "silu": 3, "act": 0}[stage]
     op = RoutedExperts(device, sh, defines=[("FIN_DEBUG", str(debug))] if debug else [])
     w_gu = L.to_device_stream(device, L.gate_up_stream(gate, up, sh))
     w_dn = L.to_device_stream(device, L.down_stream(down, sh))
     g = torch.Generator().manual_seed(3)
     x = torch.randn(L.ROWS, L.HIDDEN, generator=g).to(torch.bfloat16).float()
+    if "x4" in probe:
+        x = round_bits(x, 4)
+    if "sparse" in probe:  # one non-zero x per 16 columns: every MVMUL row sums a single product
+        keep = torch.zeros(L.HIDDEN)
+        keep[::16] = 1
+        x = x * keep * 4
+    if "onehot" in probe:  # row r is 1.0 at one K index: the output is the weight row the device multiplied with
+        x = torch.zeros(L.ROWS, L.HIDDEN)
+        for r in range(L.ROWS):
+            x[r, 37 * r + 5] = 1.0
+    if "dense16" in probe:  # x non-zero only in the first K tile: 2 MVMULs per output, 16 products each
+        keep = torch.zeros(L.HIDDEN)
+        keep[:32] = 1
+        x = x * keep * 8
+    stage_name = "_".join([stage] + probe)
     ids, w = [2], torch.ones(L.ROWS, 1)
     op.set_inputs(x, ids, w)
     op(w_gu, w_dn)
@@ -226,13 +260,46 @@ def test_stage_accuracy(device, stage):
     want = {"gate": pg, "up": pu, "silu": torch.nn.functional.silu(pg), "act": L.swiglu(pg, pu)}[stage].float()
     got = out[:, : sh.channels]
     rel = ((got - want).abs() / want.abs().clamp(min=1e-3)).median().item()
+    stage = stage_name
     logger.info(
         f"HY4_MK5 stage {stage}: median relative error {rel:.3e}, rest of the output max {out[:, sh.channels:].abs().max().item():.3e}"
     )
     dump = os.environ.get("HY4_MOE_DUMP")
     if dump:  # for offline analysis of the error
-        torch.save({"x": x, "gate": gate[2], "up": up[2], "out": out, "want": want}, f"{dump}/stage_{stage}.pt")
+        torch.save({"x": x, "gate": gate[2], "up": up[2], "out": out, "want": want}, f"{dump}/stage_{stage_name}.pt")
     logger.info(
         f"HY4_MK5 stage {stage}: row 0 device {[round(v, 4) for v in got[0, :6].tolist()]} exact {[round(v, 4) for v in want[0, :6].tolist()]}"
     )
     check(f"stage {stage} (tp32, one expert) vs exact arithmetic on the BFP4 weights", want, got, 0.9)  # a diagnostic
+
+
+@pytest.mark.parametrize("U", [8, 64], ids=lambda u: f"U{u}")
+@pytest.mark.parametrize("share", ["tp32", "tp8"])
+def test_routed_rect_placement(device, share, U):
+    """The rectangular bank-local placement (program.py place_rect: 6 gate|up and 4 down cores a bank, idle cores
+    completing the rectangles) computes the same thing."""
+    sh = SHARES[share]
+    experts = 64
+    gate, up, down = random_share_weights(sh, experts)
+    op = RoutedExperts(device, sh, mode="rect", down_per_bank=4, **FID_KW)
+    w_gu = L.to_device_stream(device, L.gate_up_stream(gate, up, sh), host_round=HOST_ROUND)
+    w_dn = L.to_device_stream(device, L.down_stream(down, sh), host_round=HOST_ROUND)
+    g = torch.Generator().manual_seed(3)
+    x = torch.randn(L.ROWS, L.HIDDEN, generator=g)
+    ids, w = random_routing(experts, U)
+    op.set_inputs(x, ids, w)
+    op(w_gu, w_dn)
+    if MOCK:
+        return
+    out, status = op.read_output()
+    share = share if FID == "custom_mm" else f"{share} [{FID}]"
+    assert status[1:6] == [0, 0, 0, 0, 0], f"a core timed out: {[hex(v) for v in status[:6]]}"
+    rounded = L.partial_golden(
+        x.to(torch.bfloat16).float(),
+        ids,
+        w.to(torch.bfloat16).float(),
+        *[L.bfp4_round(t.transpose(1, 2)).transpose(1, 2) for t in (gate, up, down)],
+    )
+    check(
+        f"routed {share} U={U}, rectangular placement, vs golden with BFP4-rounded weights", rounded, out, ROUNDED_PCC
+    )

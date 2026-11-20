@@ -18,6 +18,11 @@
 //            (kept in DEST for the mix and packed to the state tensor for the post-mix that follows the sublayer)
 //   mix      y = sum_j pre_j * stream j, SFPU fp32, packed to the rows tensor; y^2 summed
 //   stat     every core sends its sum of y^2 (256 B) to the root core, which leaves 1 / RMS(y) per token row
+//   norm     (norm_out, the layer program's form; needs root_exchange) the root core multicasts 1 / RMS(y) to the
+//            site cores; every core leaves x = y * (1 / RMS(y) of the row) * gamma, fp32 in the SFPU and packed as
+//            BF16, in its shard of the xn tensor, writes that shard into the staging buffer of the chip's sender
+//            core and counts itself in a persistent word of the root core; the root core, once all K are in, makes
+//            the sender's op ready (fused/layer_common: the broadcast of the layer input to every chip)
 //
 // Waits (who produces what each wait needs):
 //   compute  tensor-backed input CBs: this core's reader pushes them unconditionally at start;
@@ -33,6 +38,12 @@
 //            reader waits for one increment of sem_coef (that multicast) and presents cb_coef2 to its compute. The
 //            multicast is the only one in the program and nothing else is on the NoC while it runs: every partial
 //            has arrived, and no core sends its sum of y^2 before it holds the coefficients.
+//   norm_out: every reader but the root's waits for a second increment of sem_coef (the root's multicast of the
+//            statistic, which follows the root's compute packing it, which needs only sem_stat); compute then waits
+//            for cb_stat_in (its reader, after that), cb_gamma (presented at once) and its own cb_y; the writer for
+//            cb_xn (its compute); the root's writer for K counts in the gather word (one from every writer, its own
+//            included), bounded: when the bound runs out it leaves a code in the status word and makes the op ready
+//            all the same, so the program ends.
 
 #include <cstdint>
 
@@ -75,6 +86,13 @@ constexpr uint32_t cb_coef_out = get_named_compile_time_arg_val("cb_coef_out");
 constexpr uint32_t cb_stat = get_named_compile_time_arg_val("cb_stat");
 constexpr uint32_t cb_dbg = get_named_compile_time_arg_val("cb_dbg");
 constexpr uint32_t cb_coef2 = get_named_compile_time_arg_val("cb_coef2");
+constexpr uint32_t cb_stat_in = get_named_compile_time_arg_val("cb_stat_in");
+constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
+constexpr uint32_t cb_xn = get_named_compile_time_arg_val("cb_xn");
+// the layer program's form of the pre-mix: the norm on the site cores and the hand-over of its result to the chip's
+// sender core (see "norm" above)
+constexpr bool norm_out = get_named_compile_time_arg_val("norm_out") == 1;
+constexpr uint32_t norm_wait_limit = get_named_compile_time_arg_val("norm_wait_limit");
 constexpr uint32_t K = get_named_compile_time_arg_val("num_cores");
 constexpr uint32_t px = get_named_compile_time_arg_val("x_pages");  // streams pages of this core
 constexpr uint32_t py = px / 4;                                     // rows pages of this core
@@ -106,6 +124,9 @@ constexpr uint32_t w_tiles = sfpu_proj ? 4 * px : mm_tiles;
 // fn^T and the constants of the site come from DRAM tensors that hold every site (the reader fetches this core's
 // pages of the site given by its runtime args) instead of from L1 tensors of one site
 constexpr bool site_dram = get_named_compile_time_arg_val("site_dram") == 1;
+// norm_out with the norm's weight in a third DRAM tensor of all sites (its rows pages, per site): the reader fetches
+// this core's pages into cb_gamma, which is then a buffer of the program instead of an L1 tensor of one norm
+constexpr bool gamma_dram = get_named_compile_time_arg_val("gamma_dram") == 1;
 // latency breakdown only: every kernel returns at once, which leaves the cost of launching the program on the
 // site cores
 constexpr bool empty_program = get_named_compile_time_arg_val("empty_program") == 1;
@@ -119,6 +140,8 @@ constexpr uint32_t STAT_BYTES = 256;  // face 2, rows 4..7 of the scratch page
 constexpr uint32_t STAT_OFFSET = 2048 + 256;
 constexpr uint32_t stat_pages = (K + 15) / 16;  // 16 cores' sums of y^2 per exchange page
 constexpr uint32_t COEF_BYTES = 2048;           // faces 0, 1 of the coefficient page
+constexpr uint32_t STAT_FACE_BYTES = 1024;      // face 0 of the statistic page: 1 / RMS(y) of the 8 token rows
+constexpr uint32_t ROW_PAGE_BF16 = 2048;        // a rows page as BF16
 }  // namespace
 
 #if defined(COMPILE_FOR_NCRISC)
@@ -134,7 +157,8 @@ FORCE_INLINE void present(uint32_t cb, uint32_t pages) {
 // position of the tensor accessor arguments, so that it is only compiled into a program that has them.
 // Runtime args 5..8: address of the fn^T tensor, of the constants tensor, this core's first fn^T page of the site,
 // the site's constants page. The constants first (the compute starts with them); fn^T is not needed before the
-// projection.
+// projection. gamma_dram: runtime args 9, 10: address of the gamma tensor, this core's first gamma page of the site;
+// its py pages are read with fn^T (the norm is the last stage).
 template <uint32_t Base>
 FORCE_INLINE void fetch_site() {
     constexpr uint32_t w_page = sfpu_proj ? 4096 : 2048;
@@ -153,8 +177,21 @@ FORCE_INLINE void fetch_site() {
     for (uint32_t i = 0; i < w_pages; ++i) {
         noc_async_read(weights.get_noc_addr(page0 + i), dst + i * w_page, w_page);
     }
+    if constexpr (gamma_dram) {
+        constexpr auto g_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
+        const auto gammas = TensorAccessor(g_args, get_arg_val<uint32_t>(9), 4096);
+        const uint32_t g0 = get_arg_val<uint32_t>(10);
+        cb_reserve_back(cb_gamma, py);
+        const uint32_t g_dst = get_write_ptr(cb_gamma);
+        for (uint32_t i = 0; i < py; ++i) {
+            noc_async_read(gammas.get_noc_addr(g0 + i), g_dst + i * 4096, 4096);
+        }
+    }
     noc_async_read_barrier();
     cb_push_back(cb_w, w_tiles);
+    if constexpr (gamma_dram) {
+        cb_push_back(cb_gamma, py);
+    }
 }
 
 void kernel_main() {
@@ -217,12 +254,37 @@ void kernel_main() {
                 cb_push_back(cb_xchg2, stat_pages);
             }
         }
+        if constexpr (norm_out && stop_after == 0) {
+            if constexpr (!gamma_dram) {
+                present(cb_gamma, py);
+            }
+            if (is_root) {
+                cb_wait_front(cb_stat, 1);  // the root's compute packed 1 / RMS(y)
+                if constexpr (K > 1) {
+                    const uint32_t page = get_read_ptr(cb_stat);  // same address on every site core
+                    const uint32_t xs = get_arg_val<uint32_t>(1);
+                    const uint32_t ys = get_arg_val<uint32_t>(2);
+                    const uint32_t xe = get_arg_val<uint32_t>(3);
+                    const uint32_t ye = get_arg_val<uint32_t>(4);
+                    noc_async_write_multicast(
+                        page, get_noc_multicast_addr(xs, ys, xe, ye, page), STAT_FACE_BYTES, K - 1);
+                    noc_async_write_barrier();
+                    noc_semaphore_inc_multicast(
+                        get_noc_multicast_addr(xs, ys, xe, ye, get_semaphore(sem_coef)), 1, K - 1);
+                    noc_async_atomic_barrier();
+                }
+            } else {
+                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_coef)), 2);
+            }
+            present(cb_stat_in, 1);
+        }
     }
 }
 
 #elif defined(COMPILE_FOR_BRISC)
 
 void kernel_main() {
+    [[maybe_unused]] const uint32_t started = norm_out ? get_timestamp_32b() : 0;
     if constexpr (do_pre && !probe && !empty_program && (stop_after == 0 || stop_after >= 3)) {
         // runtime args: [index of this core, root noc x, root noc y, (noc x, noc y) of every site core]
         const uint32_t index = get_arg_val<uint32_t>(0);
@@ -264,6 +326,51 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(rx, ry, get_semaphore(sem_stat)), 1);
             noc_async_atomic_barrier();
             cb_pop_front(cb_part, 1);
+        }
+        if constexpr (norm_out && stop_after == 0) {
+            // runtime args from 3 + 2 K: sender core NoC x | y << 16, this core's place in its staging, the sender's
+            // ready word, the op's ready bit, the gather word (on the root core), the status word (on the root core),
+            // where the root core leaves two stamps (0: nowhere)
+            constexpr uint32_t base = 3 + 2 * K;
+            const uint32_t sender = get_arg_val<uint32_t>(base);
+            const uint32_t sx = sender & 0xFFFF;
+            const uint32_t sy = sender >> 16;
+            const uint32_t rx = get_arg_val<uint32_t>(1);
+            const uint32_t ry = get_arg_val<uint32_t>(2);
+            const uint32_t gather = get_arg_val<uint32_t>(base + 4);
+            cb_wait_front(cb_xn, py);
+            noc_async_write(
+                get_read_ptr(cb_xn), get_noc_addr(sx, sy, get_arg_val<uint32_t>(base + 1)), py * ROW_PAGE_BF16);
+            noc_async_write_barrier();
+            noc_semaphore_inc(get_noc_addr(rx, ry, gather), 1);
+            noc_async_atomic_barrier();
+            cb_pop_front(cb_xn, py);
+            if (index == 0) {
+                volatile tt_l1_ptr uint32_t* gathered = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather);
+                uint32_t seen = 0;
+                bool all = false;
+                for (uint32_t polls = 0; polls < norm_wait_limit && !all; ++polls) {
+                    invalidate_l1_cache();
+                    seen = gathered[0];
+                    all = seen >= K;
+                }
+                if (all) {
+                    noc_semaphore_inc(get_noc_addr(gather), 0u - K);  // taken off: zero again for the next launch
+                } else {
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(base + 5))[0] =
+                        (0xC5u << 24) | (seen & 0xFFFFFF);
+                }
+                noc_semaphore_inc(
+                    get_noc_addr(sx, sy, get_arg_val<uint32_t>(base + 2)), get_arg_val<uint32_t>(base + 3));
+                noc_async_atomic_barrier();
+                // measurement: this kernel's start and the moment the op was made ready (wall clock, low words)
+                const uint32_t stamps = get_arg_val<uint32_t>(base + 6);
+                if (stamps != 0) {
+                    volatile tt_l1_ptr uint32_t* t = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stamps);
+                    t[0] = started;
+                    t[1] = get_timestamp_32b();
+                }
+            }
         }
     }
 }
@@ -591,6 +698,33 @@ void kernel_main() {
         tile_regs_acquire();
         tile_regs_commit();
         pack_page(5, cb_dbg);
+    }
+    if constexpr (do_pre && norm_out && stop_after == 0) {
+        // ---- x = y * (1 / RMS(y) of the row) * gamma, fp32, packed as BF16: what the layer broadcasts
+        cb_wait_front(cb_stat_in, 1);
+        cb_wait_front(cb_gamma, py);
+        cb_wait_front(cb_y, py);
+        cb_reserve_back(cb_xn, py);
+        sfpu_setup();
+        for (uint32_t b = 0; b < py; ++b) {
+            tile_regs_acquire();
+            copy_from(cb_y);
+            if (b == 0) {
+                copy_tile(cb_stat_in, 0, 5);  // stays in DEST for the other pages
+            }
+            copy_tile(cb_y, b, 4);
+            copy_tile(cb_gamma, b, 0);
+            IHC_SFPU(ihc::norm_rows<0>);
+            IHC_SFPU(ihc::norm_rows<1>);
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_reconfig_data_format(cb_xn);
+            pack_tile<true>(4, cb_xn, b);
+            IHC_RELEASE();
+        }
+        cb_push_back(cb_xn, py);
+        cb_pop_front(cb_stat_in, 1);
+        cb_pop_front(cb_gamma, py);
     }
     cb_pop_front(cb_x, px);
     if constexpr (do_pre) {

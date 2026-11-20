@@ -11,9 +11,9 @@
 //    ((slot / NF) * P + p) * S + q of its partial buffer), then the counter of unit u = slot * P + p on the finisher
 //    is incremented.
 //
-// runtime args: [residue, modulus, logical_bank]
+// The core's bank and its index among the bank's gate|up cores (the residue) are its sync words.
 // compile-time args: [cb_x, cb_meta, cb_ctl, cb_part, cb_out, x_tiles, pb, banks, S, P, NF, hub_x, hub_y, status_addr,
-//                     (finisher noc x, y) * NF]
+//                     modulus, (finisher noc x, y) * NF]
 
 #include <stdint.h>
 
@@ -23,9 +23,12 @@
 #include "moe_dm.hpp"
 
 void kernel_main() {
-    const uint32_t residue = get_arg_val<uint32_t>(0);
-    const uint32_t modulus = get_arg_val<uint32_t>(1);
-    const uint32_t bank = get_arg_val<uint32_t>(2);
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
+    invalidate_l1_cache();
+    const uint32_t residue = hy4moe::cfg(hy4moe::CFG_INDEX);
+    const uint32_t bank = hy4moe::cfg(hy4moe::CFG_BANK);
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_meta = get_compile_time_arg_val(1);
@@ -41,7 +44,8 @@ void kernel_main() {
     constexpr uint32_t hub_x = get_compile_time_arg_val(11);
     constexpr uint32_t hub_y = get_compile_time_arg_val(12);
     constexpr uint32_t status_addr = get_compile_time_arg_val(13);
-    constexpr uint32_t fin_ct = 14;
+    constexpr uint32_t modulus = get_compile_time_arg_val(14);
+    constexpr uint32_t fin_ct = 15;
     constexpr uint32_t part_bytes = 2 * hy4moe::ROW_TILE_BYTES_F32;
 
     const uint32_t meta_l1 = get_write_ptr(cb_meta);
@@ -49,8 +53,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
 
     uint32_t U = 0;
-    const bool released =
-        hy4moe::wait_ge(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_GO)), 1);
+    const bool released = hy4moe::wait_release();
     if (released) {
         U = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(meta_l1)[0];
         if (U > hy4moe::MAX_SLOTS) {
@@ -64,7 +67,7 @@ void kernel_main() {
     const uint32_t first_plain = U > n_plain ? U - n_plain : 0;
     ctl[0] = U;
     ctl[1] = first_plain;
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_LOCAL)), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_LOCAL)), 1);
     for (const auto thread :
          {ckernel::ThreadId::UnpackThreadId, ckernel::ThreadId::MathThreadId, ckernel::ThreadId::PackThreadId}) {
         ckernel::mailbox_write(thread, n_items);

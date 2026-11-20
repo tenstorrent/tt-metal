@@ -11,7 +11,7 @@
 // cb_part: entry n = unit n's S partials, each [gate tile, up tile] (FP32). cb_sc: one FP32 tile per slot, row r
 // filled with w[r][slot] (the writer builds it).
 //
-// runtime args: [f] (this core finishes the slots f, f + NF, ..., P units each)
+// This core finishes the slots f, f + NF, ..., P units each; f is its sync word CFG_INDEX.
 // compile-time args: [cb_part, cb_sc, cb_act, S, limit, -limit, -big (float bits), P, NF, k_in, k_act (float bits)]
 
 #include <cstdint>
@@ -26,6 +26,7 @@
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 #include "api/compute/pack.h"
 #include "api/compute/tile_move_copy.h"
+#include "moe_common.hpp"
 
 #ifndef FIN_DEBUG
 #define FIN_DEBUG 0
@@ -63,6 +64,9 @@ ALWI void mul_rows(uint32_t a, uint32_t b, uint32_t out) {
 }
 
 void kernel_main() {
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
     constexpr uint32_t cb_part = get_compile_time_arg_val(0);
     constexpr uint32_t cb_sc = get_compile_time_arg_val(1);
     constexpr uint32_t cb_act = get_compile_time_arg_val(2);
@@ -81,7 +85,7 @@ void kernel_main() {
 
     compute_kernel_hw_startup(cb_part, cb_sc, cb_act);
 
-    const uint32_t f = get_arg_val<uint32_t>(0);
+    const uint32_t f = hy4moe::cfg(hy4moe::CFG_INDEX);
     uint32_t n_units = 0;
     uint32_t first_plain = 0;  // slots from here on are plain SwiGLU (no clamp)
     UNPACK(n_units = ckernel::mailbox_read(ckernel::ThreadId::BriscThreadId));

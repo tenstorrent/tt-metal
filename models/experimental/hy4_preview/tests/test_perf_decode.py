@@ -67,7 +67,7 @@ Jobs (one case per job; the weights load in seconds from the weight cache):
 its labelled top-k being 0.26 to 0.52 s a call).
 ``128K-8users`` and the two ``one-million`` cases read stripes of 32,768 rows or more: they run
 last and alone. Every case writes its numbers to $HY4_PERF_RESULTS/<case>.json (default
-/mnt/data/zni/hy4/logs/perf) and logs them as "MEASURED perf ..." lines.
+generated/hy4_preview/logs/perf) and logs them as "MEASURED perf ..." lines.
 """
 
 import gc
@@ -95,8 +95,8 @@ from models.experimental.hy4_preview.tt.indexer import Picks
 from models.experimental.hy4_preview.tt.kv_cache import INDEX_KEY, KvCacheConfig, TtHy4KvCache, append_index_table
 from models.experimental.hy4_preview.tt.model import WEIGHT_CACHE_ENV, Checkpoint, ModelConfig, TtHy4Model
 
-WEIGHT_CACHE = os.environ.get(WEIGHT_CACHE_ENV, "/mnt/data/zni/hy4/decode-cache/weights")
-RESULTS = Path(os.environ.get("HY4_PERF_RESULTS", "/mnt/data/zni/hy4/logs/perf"))
+WEIGHT_CACHE = os.environ.get(WEIGHT_CACHE_ENV, "generated/hy4_preview/decode-cache/weights")
+RESULTS = Path(os.environ.get("HY4_PERF_RESULTS", "generated/hy4_preview/logs/perf"))
 TARGET_USERS = 8
 TARGET_LAYER_MS = 1e3 / 75 / 78  # 8 users x 1M context at 75 tokens per second per user
 # DRAM kept for trace buffers on every chip; a traced layer of 8 users is some 2000 programs.

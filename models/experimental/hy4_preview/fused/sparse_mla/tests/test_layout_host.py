@@ -82,3 +82,25 @@ def test_row_location_matches_the_accessor_rule():
         assert off // cfg.row_stride == (page // 256) * 32 + page % 32
         seen.add((bank, off))
     assert len(seen) == 8 and cfg.row_stride == 704 and cfg.row_bytes == 656
+
+
+def test_frame_identity_addresses():
+    """The row reader's two address forms give the same (bank, offset) for every row of today's slot-major store:
+    the slot arithmetic (kernels/sm_common.hpp kv_row_bank / kv_row_offset; lo.kv_row_location) and fused/kv_store's
+    frame table with identity tables (kernels/sm_reader.cpp SM_FRAMES; kv_frames.locate)."""
+    from models.experimental.hy4_preview.fused.kv_store import frames as kv_frames
+
+    for rows_per_slot, layers in ((256, 1), (1024, 1), (4096, 2), (17408, 1), (32768, 3)):
+        cfg = lo.SparseMlaConfig(rows_per_slot=rows_per_slot, num_layers=layers)
+        kind = kv_frames.Kind("latent", cfg.num_layers, cfg.row_bytes, cfg.shard_rows * cfg.row_stride, cfg.row_stride)
+        g = kv_frames.Geometry.contiguous(kind, rows_per_slot // kv_frames.FRAME_ROWS)
+        checked = 0
+        for user in (0, 3, cfg.users - 1):
+            table = g.identity_table(user)
+            for layer in range(layers):
+                for row in list(range(0, rows_per_slot, 37)) + [rows_per_slot - 1]:
+                    want = lo.kv_row_location(cfg, cfg.slot(user, layer), row, 8)
+                    got = kv_frames.locate(table, g.slot_bytes(layer), row, cfg.row_stride)
+                    assert tuple(got) == tuple(want), (rows_per_slot, user, layer, row, got, want)
+                    checked += 1
+        assert checked

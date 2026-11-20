@@ -26,6 +26,8 @@ constexpr bool scores_only = get_compile_time_arg_val(0) != 0;
 constexpr uint32_t score_tiles_max = get_compile_time_arg_val(1);
 constexpr uint32_t credit_id = get_compile_time_arg_val(2) + sem_credit;  // program semaphore ids
 constexpr uint32_t data_id = get_compile_time_arg_val(2) + sem_data;
+// Measurement only: return at once (the launch floor of the program).
+constexpr bool return_at_once = (get_compile_time_arg_val(3) & 4) != 0;
 constexpr uint32_t max_levels = 3;
 constexpr uint32_t survivor_bytes = survivor_tiles * word_tile_bytes;
 
@@ -36,6 +38,9 @@ FORCE_INLINE uint64_t interleaved_page(uint32_t base, uint32_t page, uint32_t pa
 }  // namespace
 
 void kernel_main() {
+    if constexpr (return_at_once) {
+        return;
+    }
     const uint32_t num_receives = get_arg_val<uint32_t>(0);
     const bool sends = get_arg_val<uint32_t>(1) != 0;
     // args 2..7: (noc x, noc y) of the partner whose survivor lands here at level 0, 1, 2

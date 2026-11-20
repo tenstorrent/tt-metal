@@ -17,13 +17,18 @@
 #include "api/compute/pack.h"
 
 void kernel_main() {
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
     constexpr uint32_t cb_out = get_compile_time_arg_val(2);
     constexpr uint32_t x_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t kb = get_compile_time_arg_val(4);
 
-    compute_kernel_hw_startup(cb_x, cb_w, cb_out);
+    // (a matmul's operands go to the source registers in reverse order: in0 to SrcB, in1 to SrcA; with the regular
+    // order the weights were unpacked with x's [8, 32] geometry and the scores came out wrong, log mk5_board_7)
+    compute_kernel_hw_startup<SrcOrder::Reverse>(cb_x, cb_w, cb_out);
     matmul_block_init(cb_x, cb_w, false, 1, 1, kb);
 
     uint32_t go = 0;

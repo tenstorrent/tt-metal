@@ -472,7 +472,7 @@ def test_decode_needs_the_prefilled_rows(mesh_device):
     golden = _golden(prompt_len)
     ids = golden["input_ids"]
     label = "control P1022"
-    weight_cache = os.environ.get(WEIGHT_CACHE_ENV, "/mnt/data/zni/hy4/decode-cache/weights")
+    weight_cache = os.environ.get(WEIGHT_CACHE_ENV, "generated/hy4_preview/decode-cache/weights")
     engine = Hy4Engine(mesh_device, num_layers=LAYERS, max_context=MAX_SEQ, weight_cache=weight_cache)
     try:
         n = engine.prefill({0: ids[:prompt_len]})[0]

@@ -21,7 +21,14 @@ from loguru import logger
 from models.experimental.hy4_preview.fused.moe import layout as L
 from models.experimental.hy4_preview.fused.moe.program import MOCK, RoutedExperts
 from models.experimental.hy4_preview.fused.moe.tests.test_rate import CYCLE_NS, TRACE_REGION, replay_ms
-from models.experimental.hy4_preview.fused.moe.tests.test_routed import check, random_share_weights
+from models.experimental.hy4_preview.fused.moe.tests.test_routed import (
+    FID,
+    FID_KW,
+    HOST_ROUND,
+    ROUNDED_PCC,
+    check,
+    random_share_weights,
+)
 
 E = 256
 TTNN_MS = {"router": 0.17, "experts": 0.85, "shared expert": 0.10}
@@ -44,18 +51,36 @@ def crafted(U, seed=0):
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": TRACE_REGION}], indirect=True)
+@pytest.mark.parametrize("candidates", [True, False], ids=["candidates", "scan"])
 @pytest.mark.parametrize("share", ["tp32", "tp8"])
-def test_chip_latency(device, share):
+def test_chip_latency(device, share, candidates):
     if MOCK:
         pytest.skip("timing needs the board")
     sh = L.tp_share(int(share[2:]))
     gate, up, down = random_share_weights(sh, E + 1)
     defines = [("HY4_TIMING", "1")] if _timing else []
-    op = RoutedExperts(device, sh, router=True, num_experts=E, n_plain=1, plain_id0=E, plain_terms=2, defines=defines)
+    op = RoutedExperts(
+        device,
+        sh,
+        router=True,
+        num_experts=E,
+        n_plain=1,
+        plain_id0=E,
+        plain_terms=2,
+        defines=defines,
+        mode="rect",
+        down_per_bank=4,
+        router_candidates=candidates,
+        **FID_KW,
+    )
+    share = f"{share} {'candidates' if candidates else 'scan'}" + ("" if FID == "custom_mm" else f" [{FID}]")
     terms = lambda w: torch.cat((w[:E], L.two_terms(w[E:])), dim=0)
     value = lambda w: torch.cat((L.bfp4_round(w[:E].transpose(1, 2)).transpose(1, 2), L.two_terms_value(w[E:])), dim=0)
-    w_gu = L.to_device_stream(device, L.gate_up_stream(terms(gate), terms(up), sh))
-    w_dn = L.to_device_stream(device, L.down_stream(terms(down), sh))
+    if HOST_ROUND:  # the two terms as their own BFP4 values: what layout.two_terms_value is
+        q1 = lambda w: L.bfp4_round(w.transpose(1, 2)).transpose(1, 2)
+        terms = lambda w: torch.cat((w[:E], q1(w[E:]), q1(w[E:] - q1(w[E:]))), dim=0)
+    w_gu = L.to_device_stream(device, L.gate_up_stream(terms(gate), terms(up), sh), host_round=HOST_ROUND)
+    w_dn = L.to_device_stream(device, L.down_stream(terms(down), sh), host_round=HOST_ROUND)
     g_gate, g_up, g_down = value(gate), value(up), value(down)
     op.set_router(torch.eye(E, L.HIDDEN), torch.zeros(E))
     ttnn_ms = sum(TTNN_MS.values())
@@ -87,4 +112,4 @@ def test_chip_latency(device, share):
         rounded = L.partial_golden(
             x, union + [E], torch.cat((w, torch.ones(L.ROWS, 1)), dim=1), g_gate, g_up, g_down, n_plain=1
         )
-        check(f"latency chip {share} U={U} output vs golden with BFP4-rounded weights", rounded, out, 0.999)
+        check(f"latency chip {share} U={U} output vs golden with BFP4-rounded weights", rounded, out, ROUNDED_PCC)

@@ -9,8 +9,8 @@
 // With ROUTER_CANDIDATES this core also cuts its 32 experts to the 8 best of every row (score + bias) and sends the
 // lists to the hub, which then only merges.
 //
-// runtime args: [column, scores_addr, bias_addr, candidates_addr]
-// compile-time args: [cb_x, cb_ctl, cb_out, x_tiles, hub_x, hub_y]
+// This core's column is its sync word CFG_INDEX.
+// compile-time args: [cb_x, cb_ctl, cb_out, x_tiles, hub_x, hub_y, scores_addr, bias_addr, candidates_addr]
 
 #include <stdint.h>
 
@@ -20,8 +20,12 @@
 #include "moe_dm.hpp"
 
 void kernel_main() {
-    const uint32_t column = get_arg_val<uint32_t>(0);
-    const uint32_t scores_addr = get_arg_val<uint32_t>(1);
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
+    invalidate_l1_cache();
+    const uint32_t column = hy4moe::cfg(hy4moe::CFG_INDEX);
+    constexpr uint32_t scores_addr = get_compile_time_arg_val(6);
 
     constexpr uint32_t cb_x = get_compile_time_arg_val(0);
     constexpr uint32_t cb_ctl = get_compile_time_arg_val(1);
@@ -31,11 +35,14 @@ void kernel_main() {
     constexpr uint32_t hub_y = get_compile_time_arg_val(5);
 
     volatile tt_l1_ptr uint32_t* ctl = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(cb_ctl));
-    const uint32_t released =
-        hy4moe::wait_ge(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_X)), 1) ? 1 : 0;
+    volatile tt_l1_ptr uint32_t* start = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_X));
+    const uint32_t released = hy4moe::wait_ge(start, 1) ? 1 : 0;
+    if (released) {
+        start[0] = 0;  // seen: cleared for the next launch
+    }
     ctl[0] = released;    // the streamer's item count
     ctl[1] = 0xFFFFFFFF;  // no plain slots
-    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_LOCAL)), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_LOCAL)), 1);
     ckernel::mailbox_write(ckernel::ThreadId::UnpackThreadId, released);
     ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, released);
     ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, released);
@@ -47,15 +54,16 @@ void kernel_main() {
         // hub's table while compute ran): best first, ties to the lower id
         {
             constexpr uint32_t K = 8;
-            const uint32_t bias_addr = get_arg_val<uint32_t>(2);
-            const uint32_t cand_addr = get_arg_val<uint32_t>(3);
-            const uint32_t scratch = get_write_ptr(cb_ctl);  // [8 control | 128 bias | candidates]
-            noc_async_read(get_noc_addr(hub_x, hub_y, bias_addr + column * 128), scratch + 8, 128);
+            constexpr uint32_t bias_addr = get_compile_time_arg_val(7);
+            constexpr uint32_t cand_addr = get_compile_time_arg_val(8);
+            const uint32_t scratch =
+                get_write_ptr(cb_ctl);  // [16 control | 128 bias | candidates], all on 16-byte words
+            noc_async_read(get_noc_addr(hub_x, hub_y, bias_addr + column * 128), scratch + 16, 128);
             noc_async_read_barrier();
             invalidate_l1_cache();
-            const int32_t* bias = reinterpret_cast<const int32_t*>(scratch + 8);
+            const int32_t* bias = reinterpret_cast<const int32_t*>(scratch + 16);
             const uint32_t* tile = reinterpret_cast<const uint32_t*>(get_read_ptr(cb_out));
-            hy4moe::Candidate* cand = reinterpret_cast<hy4moe::Candidate*>(scratch + 136);
+            hy4moe::Candidate* cand = reinterpret_cast<hy4moe::Candidate*>(scratch + 144);
             for (uint32_t r = 0; r < ROWS; ++r) {
                 hy4moe::Candidate* best = cand + r * K;
                 for (uint32_t j = 0; j < K; ++j) {
@@ -73,7 +81,7 @@ void kernel_main() {
             }
             constexpr uint32_t cand_bytes = ROWS * K * sizeof(hy4moe::Candidate);
             if (hy4moe::write_buf_free()) {
-                noc_async_write(scratch + 136, get_noc_addr(hub_x, hub_y, cand_addr + column * cand_bytes), cand_bytes);
+                noc_async_write(scratch + 144, get_noc_addr(hub_x, hub_y, cand_addr + column * cand_bytes), cand_bytes);
             }
         }
 #endif
@@ -88,7 +96,7 @@ void kernel_main() {
     }
     // counted either way: the hub does not wait for a core that gave up
     if (hy4moe::atomic_buf_free()) {
-        noc_semaphore_inc(get_noc_addr(hub_x, hub_y, get_semaphore(hy4moe::SEM_SCORES)), 1);
+        noc_semaphore_inc(get_noc_addr(hub_x, hub_y, hy4moe::sem(hy4moe::SEM_SCORES)), 1);
         hy4moe::atomics_flushed();
     }
 }

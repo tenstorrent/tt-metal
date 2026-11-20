@@ -9,13 +9,14 @@
 // 2. Unit u = slot * P + pair is ready when its counter in the meta page reached S (the gate|up cores wrote its S
 //    partials into the partial buffer and incremented it). Then its partials, and with a slot's first unit the
 //    slot's scale tile (row r = w[r][slot], FP32), are handed to compute.
-// 3. A slot's P activation tiles are multicast together to every core of the chip (tiles slot * P .. of the
-//    activation buffer, the same address everywhere), then the slot's activation counter is incremented by P by
-//    multicast: the down cores start on a slot when it reached P.
+// 3. The activation tiles of every slot compute has finished are multicast together to every core of the chip
+//    (this finisher's n-th slot is tiles (f * SL + n) * P .. of the activation buffer, the same address everywhere),
+//    then this finisher's delivery counter in the meta page is incremented by the tile count, by multicast: the
+//    down cores start on slot f + n * NF when it reached (n + 1) * P.
 //
-// runtime args: [f]
+// This core's finisher index f is its sync word CFG_INDEX.
 // compile-time args: [cb_meta, cb_part, cb_sc, cb_act_out, cb_act, S, P, NF, mc_x0, mc_y0, mc_x1, mc_y1, mc_dests,
-//                     hub_x, hub_y, status_addr]
+//                     hub_x, hub_y, status_addr, SL, ring_slots]
 
 #include <stdint.h>
 
@@ -25,7 +26,11 @@
 #include "moe_dm.hpp"
 
 void kernel_main() {
-    const uint32_t f = get_arg_val<uint32_t>(0);
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
+    invalidate_l1_cache();
+    const uint32_t f = hy4moe::cfg(hy4moe::CFG_INDEX);
 
     constexpr uint32_t cb_meta = get_compile_time_arg_val(0);
     constexpr uint32_t cb_part = get_compile_time_arg_val(1);
@@ -43,6 +48,9 @@ void kernel_main() {
     constexpr uint32_t hub_x = get_compile_time_arg_val(13);
     constexpr uint32_t hub_y = get_compile_time_arg_val(14);
     constexpr uint32_t status_addr = get_compile_time_arg_val(15);
+    constexpr uint32_t SL =
+        get_compile_time_arg_val(16);  // slots a finisher can own (its part of the activation buffer)
+    constexpr uint32_t ring_slots = get_compile_time_arg_val(17);  // slots of activation tiles cb_act_out holds
 
     const uint32_t meta_l1 = get_write_ptr(cb_meta);
     const uint32_t act_l1 = get_write_ptr(cb_act);  // the same address on every core
@@ -52,8 +60,7 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_l1 + hy4moe::META_CTR_PART);
 
     uint32_t U = 0;
-    const bool released =
-        hy4moe::wait_ge(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_GO)), 1);
+    const bool released = hy4moe::wait_release();
     if (released) {
         U = meta16[0];
         if (U > hy4moe::MAX_SLOTS) {
@@ -85,7 +92,16 @@ void kernel_main() {
     // Unit n of this core is pair n % P of slot f + (n / P) * NF. A slot's P activation tiles go out together.
     while (sent < n_units) {
         if (sent < pushed && cb_pages_available_at_front(cb_act_out, P)) {
-            const uint32_t slot = f + (sent / P) * NF;
+            // Every slot compute has finished goes out in one multicast (as far as the tiles are contiguous in the
+            // ring), so a busy NOC makes the batches larger instead of the queue longer. This finisher's n-th slot
+            // is slot f + n * NF; its tiles are tiles (f * SL + n) * P .. of the activation buffer.
+            const uint32_t n0 = sent / P;
+            uint32_t k = 1;
+            const uint32_t k_max =
+                ring_slots - n0 % ring_slots < (pushed - sent) / P ? ring_slots - n0 % ring_slots : (pushed - sent) / P;
+            while (k < k_max && cb_pages_available_at_front(cb_act_out, (k + 1) * P)) {
+                ++k;
+            }
             // (bounded: a finisher that cannot send stops sending; the down cores give up on their own. The
             // increment follows the tiles on the same NOC and virtual channel, so it lands after them.)
             if (!send_failed) {
@@ -95,19 +111,19 @@ void kernel_main() {
                                   mc_y0,
                                   mc_x1,
                                   mc_y1,
-                                  act_l1 + slot * P * hy4moe::ROW_TILE_BYTES,
-                                  P * hy4moe::ROW_TILE_BYTES,
+                                  act_l1 + (f * SL + n0) * P * hy4moe::ROW_TILE_BYTES,
+                                  k * P * hy4moe::ROW_TILE_BYTES,
                                   mc_dests) ||
                               !hy4moe::grid_mcast_inc(
-                                  mc_x0, mc_y0, mc_x1, mc_y1, meta_l1 + hy4moe::META_CTR_ACT + 4 * slot, P, mc_dests);
+                                  mc_x0, mc_y0, mc_x1, mc_y1, meta_l1 + hy4moe::META_CTR_ACT + 4 * f, k * P, mc_dests);
             }
-            cb_pop_front(cb_act_out, P);
+            cb_pop_front(cb_act_out, k * P);
 #ifdef HY4_TIMING
             if (sent == 0) {
                 t_first = hy4moe::now();
             }
 #endif
-            sent += P;
+            sent += k * P;
             continue;
         }
         if (pushed < n_units && (pushed % P != 0 || cb_pages_reservable_at_back(cb_sc, 1))) {

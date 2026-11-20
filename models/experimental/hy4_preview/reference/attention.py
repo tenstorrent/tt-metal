@@ -69,12 +69,35 @@ class AttentionConfig:
         return self.qk_head_dim**-0.5
 
 
-def rope_cos_sin(positions: torch.Tensor, cfg: AttentionConfig):
-    """HYV4RotaryEmbedding: positions [S] -> (cos, sin), each [S, qk_rope_head_dim], fp32."""
+# Which dims of the roped part form a rotated pair. ONE switch for the reference, the frames (tt/frames.py) and so
+# for everything built on them:
+#   "half_split"   pairs (i, i + d / 2): HF's modeling_hy_v4.py as it runs here; every golden recorded so far
+#   "interleaved"  pairs (2 i, 2 i + 1): vLLM's hy_v4 and what the checkpoint's rows say (the reference-health probes,
+#                  fused/README.md section 49)
+# The default stays "half_split" until the goldens are recorded again: the two must change together.
+ROPE_PAIRING_ENV = "HY4_ROPE_PAIRING"
+ROPE_PAIRINGS = ("half_split", "interleaved")
+
+
+def rope_pairing(pairing: str | None = None) -> str:
+    """``pairing`` if given, else the process's (HY4_ROPE_PAIRING, read at every call)."""
+    import os
+
+    value = pairing or os.environ.get(ROPE_PAIRING_ENV) or "half_split"
+    assert value in ROPE_PAIRINGS, f"{ROPE_PAIRING_ENV}={value!r}: one of {ROPE_PAIRINGS}"
+    return value
+
+
+def rope_cos_sin(positions: torch.Tensor, cfg: AttentionConfig, pairing: str | None = None):
+    """HYV4RotaryEmbedding: positions [S] -> (cos, sin), each [S, qk_rope_head_dim], fp32: every frequency on both
+    dims of its pair (half_split: cat(freqs, freqs); interleaved: each frequency twice in a row)."""
     dim = cfg.qk_rope_head_dim
     inv_freq = 1.0 / (cfg.rope_theta ** (torch.arange(0, dim, 2, dtype=torch.float) / dim))
     freqs = positions[..., None].float() * inv_freq
-    emb = torch.cat((freqs, freqs), dim=-1)
+    if rope_pairing(pairing) == "half_split":
+        emb = torch.cat((freqs, freqs), dim=-1)
+    else:
+        emb = freqs.repeat_interleave(2, dim=-1)
     return emb.cos(), emb.sin()
 
 
@@ -83,9 +106,16 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
-def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.Tensor:
-    """Half-split (non-interleaved) RoPE. x: [..., S, dim]; cos / sin: [S, dim]."""
-    return x * cos + rotate_half(x) * sin
+def rotate_pairs(x: torch.Tensor) -> torch.Tensor:
+    """(-x1, x0, -x3, x2, ...): the quarter turn of every pair (2 i, 2 i + 1)."""
+    return torch.stack((-x[..., 1::2], x[..., 0::2]), dim=-1).flatten(-2)
+
+
+def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, pairing: str | None = None) -> torch.Tensor:
+    """RoPE in the process's pairing (rope_pairing; cos / sin from rope_cos_sin in the same). x: [..., S, dim];
+    cos / sin: [S, dim]."""
+    rotated = rotate_half(x) if rope_pairing(pairing) == "half_split" else rotate_pairs(x)
+    return x * cos + rotated * sin
 
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:

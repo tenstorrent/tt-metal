@@ -18,6 +18,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "scan_common.hpp"
+#ifdef HY4_SCAN_FRAMES
+#include "kv_frames.hpp"  // fused/kv_store/kernels: the frame tables of a paged key cache
+#endif
 
 namespace {
 
@@ -38,8 +41,18 @@ constexpr bool selectors_in_l1 = get_compile_time_arg_val(7) != 0;
 // (the pattern of models/demos/gpt_oss/tt/fused_decode/kernels/stream_down_reader.cpp).
 constexpr uint32_t stream_depth = get_compile_time_arg_val(8);
 constexpr uint32_t k_capacity_blocks = get_compile_time_arg_val(9);  // key blocks cb_k holds
+#ifdef HY4_SCAN_FRAMES
+// HY4_SCAN_FRAMES (fused/kv_store/PATCH.md 2.3): block j of this core's (user, bank) stream is the bank's one shard
+// of frame j of the user, at table[j] (the frame tables: an L1 tensor under cb_frames, 128 frame bases per user),
+// and runtime argument 2 is the layer's slot step in a bank, the same for every user. A packet holds only frames
+// that lie back to back in the bank. With identity tables on a slot-major cache: the same bytes, the same packets.
+constexpr uint32_t cb_frames = 7;
+static_assert(stream_depth > 0, "the paged key stream is the pipelined one");
+#endif
 // Measurement only: push the key pages without reading them from DRAM.
 constexpr bool skip_key_reads = (get_compile_time_arg_val(6) & 1) != 0;
+// Measurement only: return at once (the launch floor of the program).
+constexpr bool return_at_once = (get_compile_time_arg_val(6) & 4) != 0;
 
 // Page `page` of an interleaved DRAM tensor at `base`.
 FORCE_INLINE uint64_t interleaved_page(uint32_t base, uint32_t page, uint32_t page_bytes) {
@@ -51,6 +64,9 @@ FORCE_INLINE uint32_t min_u32(uint32_t a, uint32_t b) { return a < b ? a : b; }
 }  // namespace
 
 void kernel_main() {
+    if constexpr (return_at_once) {
+        return;
+    }
     const uint32_t key_addr = get_arg_val<uint32_t>(0);
     const uint32_t bank = get_arg_val<uint32_t>(1);
     const uint32_t slot_offset = get_arg_val<uint32_t>(2);  // bytes from the buffer address to this slot, in a bank
@@ -60,6 +76,10 @@ void kernel_main() {
     const uint32_t qt_addr = get_arg_val<uint32_t>(6);
     const uint32_t sel_addr = get_arg_val<uint32_t>(7);
     const uint32_t stream_vc = get_arg_val<uint32_t>(8);  // response virtual channel of the pipelined key stream
+#ifdef HY4_SCAN_FRAMES
+    volatile tt_l1_ptr uint32_t* frame_table =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_frames)) + user * kv_frames::TABLE_FRAMES;
+#endif
 
     // The user's step page: context length, score centre, head multipliers (a device tensor, so a trace follows).
     cb_reserve_back(cb_meta, 1);
@@ -113,7 +133,21 @@ void kernel_main() {
         if (issued == padded_blocks || issued_packets - landed_packets == depth) {
             return false;
         }
+#ifndef HY4_SCAN_FRAMES
         const uint32_t blocks = min_u32(blocks_per_read, padded_blocks - issued);
+#else
+        // a packet holds frames that lie back to back in this bank, and does not run over the end of cb_k
+        uint32_t blocks = min_u32(blocks_per_read, padded_blocks - issued);
+        blocks = min_u32(blocks, (k_end - k_write) / key_block_bytes);
+        if (issued < num_blocks) {
+            uint32_t run = 1;
+            while (run < blocks && issued + run < num_blocks &&
+                   frame_table[issued + run] == frame_table[issued] + run * key_block_bytes) {
+                ++run;
+            }
+            blocks = run;
+        }
+#endif
         if (!cb_pages_reservable_at_back(cb_k, (issued - landed + blocks) * key_block_tiles)) {
             if (issued_packets != landed_packets) {
                 return false;
@@ -129,7 +163,11 @@ void kernel_main() {
             }
             noc_async_read_set_trid(slot + 1);
             noc_async_read_one_packet_with_state_with_trid(
+#ifndef HY4_SCAN_FRAMES
                 static_cast<uint32_t>(bank_base), issued * key_block_bytes, k_write, slot + 1);
+#else
+                static_cast<uint32_t>(bank_base), frame_table[issued], k_write, slot + 1);
+#endif
         }
         packet_blocks[slot] = blocks;
         k_write += blocks * key_block_bytes;

@@ -14,6 +14,9 @@
 #include "moe_dm.hpp"
 
 void kernel_main() {
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t meta_in_addr = get_arg_val<uint32_t>(1);
     const uint32_t status_addr = get_arg_val<uint32_t>(2);
@@ -37,6 +40,8 @@ void kernel_main() {
         status[i] = 0;
     }
     status[hy4moe::ST_RUNS] = runs + 1;
+    // the down cores count themselves here at the end; whoever consumes the output takes the count from zero
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_OUT))[0] = 0;
 #ifdef HY4_TIMING
     const uint32_t t0 = hy4moe::now();
 #endif
@@ -59,7 +64,7 @@ void kernel_main() {
         failed = 2;
     } else if (!hy4moe::writes_flushed()) {
         failed = 4;
-    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, get_semaphore(hy4moe::SEM_GO), 1, mc_dests)) {
+    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, hy4moe::sem(hy4moe::SEM_GO), 1, mc_dests)) {
         failed = 3;
     } else if (!hy4moe::atomics_flushed()) {
         failed = 4;

@@ -97,13 +97,28 @@ inline bool grid_mcast_inc(
     return true;
 }
 
+// Wait (bounded) for the hub's release and clear this core's release words for the next launch.
+inline bool wait_release() {
+    volatile tt_l1_ptr uint32_t* go = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem(SEM_GO));
+    const bool released = wait_ge(go, 1);
+    if (released) {
+        go[0] = 0;
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem(SEM_X))[0] = 0;  // (the router's start, sent before)
+    }
+    return released;
+}
+
 // Write (my noc x, y, code) into status word `word` of the hub (scratch: 4 writable bytes of this core's L1).
 inline void report(
     uint32_t hub_x, uint32_t hub_y, uint32_t status_addr, uint32_t word, uint32_t code, uint32_t scratch) {
-    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    s[0] = (static_cast<uint32_t>(my_x[noc_index]) << 24) | (static_cast<uint32_t>(my_y[noc_index]) << 16) | code;
+    // (a NOC write takes its data at the destination's offset within the 16-byte word: source and destination are
+    // kept congruent mod 16)
+    const uint32_t dst = status_addr + 4 * word;
+    const uint32_t src = (scratch & ~15u) + (dst & 15u);
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src)[0] =
+        (static_cast<uint32_t>(my_x[noc_index]) << 24) | (static_cast<uint32_t>(my_y[noc_index]) << 16) | code;
     if (write_buf_free()) {
-        noc_async_write(scratch, get_noc_addr(hub_x, hub_y, status_addr + 4 * word), 4);
+        noc_async_write(src, get_noc_addr(hub_x, hub_y, dst), 4);
         writes_flushed();
     }
 }
@@ -150,13 +165,15 @@ FORCE_INLINE void insert_candidate(Candidate* list, int32_t key, int32_t score, 
 FORCE_INLINE uint32_t now() { return *reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L); }
 inline void report_timing(
     uint32_t hub_x, uint32_t hub_y, uint32_t status_addr, uint32_t first, uint32_t done, uint32_t scratch) {
-    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch);
-    s[0] = first;
-    s[1] = done;
     // (NOC0 coordinates, the ones the host knows the core by; NOC1 numbers the cores the other way round)
     const uint32_t id = (static_cast<uint32_t>(my_y[0]) - 2) * 16 + static_cast<uint32_t>(my_x[0]);
+    const uint32_t dst = status_addr + 4 * (ST_TIMING + 2 * id);
+    const uint32_t src = (scratch & ~15u) + (dst & 15u);  // congruent mod 16 with the destination (see report)
+    volatile tt_l1_ptr uint32_t* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src);
+    s[0] = first;
+    s[1] = done;
     if (id < 160 && write_buf_free()) {
-        noc_async_write(scratch, get_noc_addr(hub_x, hub_y, status_addr + 4 * (ST_TIMING + 2 * id)), 8);
+        noc_async_write(src, get_noc_addr(hub_x, hub_y, dst), 8);
         writes_flushed();
     }
 }

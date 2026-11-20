@@ -66,6 +66,7 @@ PAGE = 4096  # fp32 page
 # CB ids
 CB_X, CB_XMM, CB_W, CB_F, CB_COEF, CB_CONST, CB_XCHG, CB_XCHG2, CB_COEF2 = 0, 1, 2, 3, 4, 5, 6, 7, 8
 CB_XOUT, CB_Y, CB_PART, CB_COEF_OUT, CB_STAT, CB_DBG = 16, 17, 18, 19, 20, 21
+CB_STAT_IN, CB_GAMMA, CB_XN = 9, 10, 22  # norm_out
 SEM_PART, SEM_STAT, SEM_COEF = 0, 1, 2
 
 _BYTES = {ttnn.float32: 4, ttnn.bfloat16: 2}
@@ -96,6 +97,9 @@ class SiteTable:
     w: object
     const: object
     sites: int
+    gamma: object = (
+        None  # the norms' weights, one per site (site_table(gammas=...)); None: NormOut.gamma is an L1 tensor
+    )
 
 
 @dataclass
@@ -104,6 +108,29 @@ class SiteRef:
 
     table: SiteTable
     index: int
+
+
+@dataclass
+class NormOut:
+    """The layer program's form of a pre-mix (IhcSite.program norm_out): the site cores also apply the sublayer's
+    RMSNorm, x = y * (1 / RMS(y) of the row) * gamma, fp32 in the SFPU, leave it as BF16 in ``xn`` and hand it to the
+    chip's sender core: core k writes its shard (the bytes of the [8, C / K] slice as [8, 32] BF16 row tiles) to
+    ``staging + k * shard bytes`` on the sender core, and site core 0, once all K are there, adds ``ready_bit`` to
+    the word at ``ready`` on the sender core. ``gather`` / ``status``: two persistent host-zeroed L1 words on site
+    core 0 (the count of shards; a code when the bounded wait for them ran out)."""
+
+    # fp32 rows pages of the norm's weight (IhcSite.gamma_to_device), or None: the site table holds it
+    # (IhcSite.site_table(gammas=...)) and every site core fetches its pages with fn^T
+    gamma: object
+    xn: object  # BF16 rows tensor (IhcSite.empty_rows(ttnn.bfloat16))
+    sender: int  # NoC x | y << 16
+    staging: int
+    ready: int
+    ready_bit: int
+    gather: int
+    status: int
+    wait_limit: int = 30_000_000
+    stamps: int = 0  # measurement: two L1 words on site core 0 for (writer start, op made ready), wall clock; 0: none
 
 
 def site_cores(num_cores: int, origin=(0, 0), per_row: int = 8):
@@ -139,8 +166,15 @@ class IhcSite:
         low_unpack: bool = False,
         mm32: bool = False,
         sfpu_proj: bool = True,
+        per_row: int = 8,
+        cb_base: int = 0,
+        sem_base: int = 0,
     ):
+        """per_row: site cores per grid row (the site is a rectangle of cores, row major). cb_base / sem_base: added
+        to every CB id (0..10, 16..22) and semaphore id (0..2) of the site's programs, for a program that has other
+        kernels' buffers on the site cores."""
         self.device = device
+        self.cb_base, self.sem_base = cb_base, sem_base
         # The 4 streams pages of a batch in one unpacker run (16 faces) rather than one run per page: bit-equal
         # and 5 to 16 % faster on the board (tests/test_ihc_site.py test_latency).
         self.block_unpack = block_unpack
@@ -172,7 +206,7 @@ class IhcSite:
         # a core's streams, its y and F shards and one site's fn pages against its L1 (about 1.4 MB)
         core_bytes = self.px * (PAGE + 2 * 1024) + self.px * (4 * PAGE if sfpu_proj else 2048)
         assert core_bytes < 1300 * 1024, f"{num_cores} cores: {core_bytes >> 10} KB per core do not fit L1; use more"
-        self.grid, self.cores = site_cores(num_cores, origin)
+        self.grid, self.cores = site_cores(num_cores, origin, per_row)
         self.noc = [device.worker_core_from_logical_core(c) for c in self.cores]
         self.y_dtype, self.f_dtype = y_dtype, f_dtype
         self.lanes = lanes or layout.SFPU_LANES
@@ -228,8 +262,10 @@ class IhcSite:
             return layout.fn_to_row_pages(fn, self.cfg.n, self.lanes), ttnn.float32
         return layout.fn_to_pages(fn, self.cfg.n, self.lanes, self.mm32), ttnn.bfloat16
 
-    def site_table(self, sites) -> SiteTable:
-        """[(fn, base, scale), ...] -> the DRAM tensors of all those sites; site s of it is SiteRef(table, s)."""
+    def site_table(self, sites, gammas=None) -> SiteTable:
+        """[(fn, base, scale), ...] -> the DRAM tensors of all those sites; site s of it is SiteRef(table, s).
+        gammas: per site the weight [C] of the RMSNorm that follows its pre-mix (NormOut(gamma=None) then takes it
+        from here: no L1 tensor per norm)."""
         w_dtype = self._fn_pages(sites[0][0])[1]
         w = torch.cat([self._fn_pages(fn)[0] for fn, _, _ in sites], dim=1)
         const = torch.cat([layout.const_page(base, scale, self.cfg, self.lanes) for _, base, scale in sites], dim=1)
@@ -243,7 +279,16 @@ class IhcSite:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
 
-        return SiteTable(w=dram(w, w_dtype), const=dram(const, ttnn.float32), sites=len(sites))
+        gamma = None
+        if gammas is not None:
+            assert len(gammas) == len(sites)
+            rows = [layout.rows_to_pages(g.float().reshape(1, -1).expand(layout.ROWS, -1)) for g in gammas]
+            gamma = dram(torch.cat(rows, dim=1), ttnn.float32)
+        return SiteTable(w=dram(w, w_dtype), const=dram(const, ttnn.float32), sites=len(sites), gamma=gamma)
+
+    def gamma_to_device(self, weight: torch.Tensor):
+        """An RMSNorm weight [C] -> its fp32 rows pages (NormOut.gamma)."""
+        return self._pages(layout.rows_to_pages(weight.float().reshape(1, -1).expand(layout.ROWS, -1)), ttnn.float32)
 
     def coef_to_torch(self, T: int = layout.ROWS, core: int = 0):
         """(pre [T, 4], post [T, 4]) as core ``core`` holds them."""
@@ -276,15 +321,35 @@ class IhcSite:
         return ttnn.CBDescriptor(total_size=pages * PAGE, core_ranges=self.grid, format_descriptors=[fmt])
 
     def program(
-        self, streams, f=None, params: SiteParams = None, y=None, probe=False, stop_after=0, debug=False, empty=False
+        self,
+        streams,
+        f=None,
+        params: SiteParams = None,
+        y=None,
+        probe=False,
+        stop_after=0,
+        debug=False,
+        empty=False,
+        norm_out: NormOut = None,
     ):
         """The program descriptor and its io tensors. f: post-mix; params (and y): pre-mix. debug (tests): every
-        core also leaves its scratch page in self.dbg (layout.debug_from_page)."""
+        core also leaves its scratch page in self.dbg (layout.debug_from_page). norm_out: the pre-mix also applies
+        the norm and hands the result to the chip's sender core (NormOut)."""
         do_post, do_pre = f is not None, params is not None
         assert do_post or do_pre
         K = self.K
+        b = self.cb_base
+        CB_X, CB_XMM, CB_W, CB_F, CB_COEF, CB_CONST, CB_XCHG, CB_XCHG2, CB_COEF2, CB_STAT_IN, CB_GAMMA = (
+            b + i for i in range(11)
+        )
+        CB_XOUT, CB_Y, CB_PART, CB_COEF_OUT, CB_STAT, CB_DBG, CB_XN = (b + i for i in range(16, 23))
+        SEM_PART, SEM_STAT, SEM_COEF = (self.sem_base + i for i in range(3))
         site_dram = isinstance(params, SiteRef)
         table = params.table if site_dram else None
+        gamma_dram = do_pre and norm_out is not None and norm_out.gamma is None
+        assert not gamma_dram or (
+            site_dram and table.gamma is not None
+        ), "NormOut(gamma=None) needs site_table(gammas=...)"
         io = [streams, self.coef, self.stat]
         cbs = [self._cb(CB_X, streams), self._cb(CB_COEF_OUT, self.coef), self._cb(CB_STAT, self.stat)]
         fp32_copies = [CB_X]
@@ -330,6 +395,16 @@ class IhcSite:
             if not probe:
                 cbs.append(self._cb(CB_Y, y, dtype=y.dtype))
                 io.append(y)
+            if norm_out is not None:
+                assert self.root_exchange and not probe and stop_after == 0 and not empty
+                assert y.dtype == ttnn.float32, "the norm reads y back as fp32"
+                cbs += [
+                    self._cb(CB_STAT_IN, self.stat),
+                    self._scratch_cb(CB_GAMMA, self.py) if gamma_dram else self._cb(CB_GAMMA, norm_out.gamma),
+                    self._cb(CB_XN, norm_out.xn, dtype=ttnn.bfloat16),
+                ]
+                io += [table.gamma if gamma_dram else norm_out.gamma, norm_out.xn]
+                fp32_copies += [CB_STAT_IN, CB_GAMMA, CB_Y]
             if debug:
                 if self.dbg is None:
                     self.dbg = self._pages(torch.zeros(32, 32 * K), ttnn.float32)
@@ -369,6 +444,12 @@ class IhcSite:
             ("site_dram", int(site_dram)),
             ("sfpu_proj", int(self.sfpu_proj)),
             ("empty_program", int(empty)),
+            ("norm_out", int(norm_out is not None)),
+            ("gamma_dram", int(gamma_dram)),
+            ("cb_stat_in", CB_STAT_IN),
+            ("cb_gamma", CB_GAMMA),
+            ("cb_xn", CB_XN),
+            ("norm_wait_limit", norm_out.wait_limit if norm_out is not None else 0),
         ]
         config = ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -387,19 +468,36 @@ class IhcSite:
             assert 0 <= params.index < table.sites
             reader_ct = list(ttnn.TensorAccessorArgs(table.w).get_compile_time_args())
             reader_ct += list(ttnn.TensorAccessorArgs(table.const).get_compile_time_args())
+            if gamma_dram:
+                reader_ct += list(ttnn.TensorAccessorArgs(table.gamma).get_compile_time_args())
             per_page = 4 if self.sfpu_proj else 1  # fn pages per streams page
             pages = per_page * self.C // 32  # fn pages of one site
+            g_pages = self.C // 4 // 32  # rows pages of one site's gamma
             site_args = lambda k: [
                 table.w.buffer_address(),
                 table.const.buffer_address(),
                 params.index * pages + k * per_page * self.px,
                 params.index,
+            ] + ([table.gamma.buffer_address(), params.index * g_pages + k * self.py] if gamma_dram else [])
+        shard = self.py * 2048  # a core's BF16 shard of the rows
+        norm_args = lambda k: (
+            []
+            if norm_out is None or not do_pre
+            else [
+                norm_out.sender,
+                norm_out.staging + k * shard,
+                norm_out.ready,
+                norm_out.ready_bit,
+                norm_out.gather,
+                norm_out.status,
+                norm_out.stamps,
             ]
+        )
         per_core = PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[
                 (c, [int(k == 0), first.x, first.y, last.x, last.y] + site_args(k)) for k, c in enumerate(self.cores)
             ],
-            brisc_args=[(c, [k, root.x, root.y] + peers) for k, c in enumerate(self.cores)],
+            brisc_args=[(c, [k, root.x, root.y] + peers + norm_args(k)) for k, c in enumerate(self.cores)],
             trisc_args=[(c, [int(k == 0)]) for k, c in enumerate(self.cores)],
         )
         kernel = UnifiedKernelDescriptor(
@@ -413,9 +511,9 @@ class IhcSite:
             per_core_runtime_args_descriptor=per_core,
         )
         semaphores = [
-            ttnn.SemaphoreDescriptor(SEM_PART, ttnn.CoreType.WORKER, self.grid, 0),
-            ttnn.SemaphoreDescriptor(SEM_STAT, ttnn.CoreType.WORKER, self.grid, 0),
-            ttnn.SemaphoreDescriptor(SEM_COEF, ttnn.CoreType.WORKER, self.grid, 0),
+            ttnn.SemaphoreDescriptor(int(SEM_PART), ttnn.CoreType.WORKER, self.grid, 0),
+            ttnn.SemaphoreDescriptor(int(SEM_STAT), ttnn.CoreType.WORKER, self.grid, 0),
+            ttnn.SemaphoreDescriptor(int(SEM_COEF), ttnn.CoreType.WORKER, self.grid, 0),
         ]
         descriptor = ttnn.ProgramDescriptor(
             kernels=kernel.get_kernel_descriptors().kernels, semaphores=semaphores, cbs=cbs

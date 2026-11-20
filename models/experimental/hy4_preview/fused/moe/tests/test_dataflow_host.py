@@ -113,6 +113,13 @@ def test_addressing(name, share, cores, terms):
         got = sorted(entries_seen.get(f, set()))
         assert got == sorted((n * S + q, u) for n, u in enumerate(units) for q in range(S)), (name, f)
 
+    # ---- activation buffer: finish_writer.cpp writes its n-th slot at tile (f * SL + n) * P, down_compute.cpp reads
+    # slot i at ((i % NF) * SL + i // NF) * P: every slot has its own P tiles
+    SL = -(-U // NF)
+    written = {f + n * NF: (f * SL + n) * P for f in range(NF) for n in range(len(range(f, U, NF)))}
+    read = {i: ((i % NF) * SL + i // NF) * P for i in range(U)}
+    assert written == read and len({t for t in read.values()}) == U and max(read.values()) + P <= NF * SL * P
+
     # ---- down: stream_reader.cpp (pb = 1, one block per term) + down_compute.cpp (read_transposed)
     seen_cols = {}
     for b, d in itertools.product(range(L.BANKS), range(D)):

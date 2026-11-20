@@ -11,8 +11,8 @@
 // With PLAIN_TERMS = 2 the item of a plain slot is followed by its second BFP4 term (the same K range again),
 // accumulated into the same partial sums.
 //
-// runtime args: [k0, residue, modulus] (the first K tile of this core's items; its share of the bank's items)
-// compile-time args: [cb_x, cb_w, cb_out, x_tiles, kb, item_blocks, pb]
+// The core's bank and index are its sync words (moe_common.hpp CFG_*).
+// compile-time args: [cb_x, cb_w, cb_out, x_tiles, kb, item_blocks, pb, S, piece_k, modulus]
 
 #include <cstdint>
 
@@ -20,16 +20,23 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
+#include "moe_common.hpp"
 
 #ifndef PLAIN_TERMS
 #define PLAIN_TERMS 1
 #endif
 
 void kernel_main() {
-    const uint32_t k0 = get_arg_val<uint32_t>(0);
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
+    constexpr uint32_t S = get_compile_time_arg_val(7);
+    constexpr uint32_t piece_k = get_compile_time_arg_val(8);
+    // the first K tile of this core's items: its bank's K range of a pair
+    const uint32_t k0 = (hy4moe::cfg(hy4moe::CFG_BANK) % S) * piece_k;
 #if PLAIN_TERMS > 1
-    const uint32_t residue = get_arg_val<uint32_t>(1);
-    const uint32_t modulus = get_arg_val<uint32_t>(2);
+    const uint32_t residue = hy4moe::cfg(hy4moe::CFG_INDEX);
+    constexpr uint32_t modulus = get_compile_time_arg_val(9);
     constexpr uint32_t pb = get_compile_time_arg_val(6);
 #endif
 

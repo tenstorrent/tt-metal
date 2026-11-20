@@ -11,9 +11,9 @@
 // With PLAIN_TERMS = 2 a plain slot (ctl[1] = the first one) is stored as two consecutive entries (the weight as
 // two BFP4 terms, layout.py two_terms): its item is followed by the same item of the next entry.
 //
-// runtime args: [w_addr, bank_id, vc, residue, modulus, core_offset_bytes]
+// The core's constants (stream address, bank, virtual channel, index) are its sync words (moe_common.hpp CFG_*).
 // compile-time args: [cb_w, cb_ctl, cb_meta, pb, item_bytes, item_blocks, block_tiles, block_bytes, n_pk, ring_blocks,
-//                     extra_in_flight, expert_stride_bytes]
+//                     extra_in_flight, expert_stride_bytes, modulus, residue_is_index, offset_per_index]
 
 #include <stdint.h>
 
@@ -25,12 +25,23 @@
 #endif
 
 void kernel_main() {
-    const uint32_t w_addr = get_arg_val<uint32_t>(0);
-    const uint32_t bank_id = get_arg_val<uint32_t>(1);
-    const uint32_t vc = get_arg_val<uint32_t>(2);
-    const uint32_t residue = get_arg_val<uint32_t>(3);
-    const uint32_t modulus = get_arg_val<uint32_t>(4);
-    const uint32_t core_offset = get_arg_val<uint32_t>(5);
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
+    constexpr uint32_t modulus = get_compile_time_arg_val(12);
+    constexpr uint32_t residue_is_index = get_compile_time_arg_val(13);  // gate|up: the core's share of the items
+    constexpr uint32_t offset_per_index = get_compile_time_arg_val(14);  // down: the core's columns in the bank
+    invalidate_l1_cache();
+#ifdef HY4_STREAM_RT  // the stream's address is this launch's common runtime argument 0 (one program for many layers)
+    const uint32_t w_addr = get_common_arg_val<uint32_t>(0);
+#else
+    const uint32_t w_addr = hy4moe::cfg(hy4moe::CFG_W_ADDR) << 5;  // (stored >> 5)
+#endif
+    const uint32_t bank_id = hy4moe::cfg(hy4moe::CFG_BANK);
+    const uint32_t vc = hy4moe::cfg(hy4moe::CFG_VC);
+    const uint32_t index = hy4moe::cfg(hy4moe::CFG_INDEX);
+    const uint32_t residue = residue_is_index ? index : 0;
+    const uint32_t core_offset = index * offset_per_index;
 
     constexpr uint32_t cb_w = get_compile_time_arg_val(0);
     constexpr uint32_t cb_ctl = get_compile_time_arg_val(1);
@@ -56,10 +67,11 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_write_ptr(cb_meta) + hy4moe::META_IDS);
 
     // BRISC saw the hub's release (or gave up): ctl[0] = U
-    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_LOCAL)), 1);
+    noc_semaphore_wait(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_LOCAL)), 1);
+    noc_semaphore_set(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_LOCAL)), 0);
     invalidate_l1_cache();
     const uint32_t total = ctl[0] * pb;
-    if (residue >= total) {
+    if (residue >= total || index == hy4moe::CFG_IDLE) {
         return;
     }
 #if PLAIN_TERMS > 1

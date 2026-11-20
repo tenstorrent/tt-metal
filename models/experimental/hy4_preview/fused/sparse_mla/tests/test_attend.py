@@ -47,7 +47,7 @@ def run_attend(device, cfg, kv, rows, lists, q_lat, layer, fidelity, op=None):
     out = hs.to_dev(torch.zeros(1, 1, cfg.users * cfg.head_groups, op.out_page_values), device, ttnn.bfloat16)
     if hs.MOCK:
         ttnn.experimental.prepare_generic_op(
-            [kv, sel, q, out], op.attend_program(kv, sel, q, out, layer, fidelity=fidelity)
+            [kv, sel, q, out] + op.io_extra(), op.attend_program(kv, sel, q, out, layer, fidelity=fidelity)
         )
         return None
     op.attend(kv, sel, q, out, layer, fidelity=fidelity)
@@ -110,6 +110,92 @@ def test_attend_random(device, counts, fidelity):
     got = run_attend(device, cfg, kv, rows, lists, q_lat, layer, FIDELITY[fidelity], op)
     if got is not None:
         check_partials(cfg, got, rows, lists, q_lat, sink, layer, f"random {counts} {fidelity}", floor=0.99, op=op)
+
+
+# 16 token rows on the 8 S-blocks (PLAN.md of layer_attn, section 19): rows u and u + 8 queue on the same S-blocks
+ROWS16 = {
+    "all_64": [64] * 16,
+    "live4": [64, 0, 0, 64, 0, 0, 0, 0, 0, 64, 0, 0, 0, 0, 64, 0],  # 4 live rows, each alone on its S-block
+    "pairs": [64, 0, 300, 1, 0, 128, 37, 2048, 200, 64, 0, 0, 5, 129, 2048, 1],  # every way two rows meet on a root
+    "mixed": [1, 37, 512, 2048, 0, 64, 129, 300, 64, 0, 128, 1, 2048, 0, 37, 200],
+}
+
+
+@pytest.mark.parametrize("fidelity", ["lofi"])
+@pytest.mark.parametrize("counts", list(ROWS16))
+def test_attend_rows16(device, counts, fidelity):
+    """16 users on one chip: every user's partial against the torch partial of its rows, as with 8."""
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096, num_layers=1, users=16)
+    layer = 0
+    latent, rope = hs.random_latents(cfg.users, cfg.rows_per_slot, cfg, seed=3)
+    kv, rows = hs.make_storage(device, cfg, cfg.users, latent, rope)
+    lists = [hs.spread_ids(cfg, n, seed=20 + u) for u, n in enumerate(ROWS16[counts])]
+    gen = torch.Generator().manual_seed(7)
+    q_lat = torch.randn(cfg.users, cfg.heads, cfg.width, generator=gen)
+    sink = torch.randn(cfg.heads, generator=gen)
+    op = SparseMla(cfg, device)
+    got = run_attend(device, cfg, kv, rows, lists, q_lat, layer, FIDELITY[fidelity], op)
+    if got is not None:
+        check_partials(cfg, got, rows, lists, q_lat, sink, layer, f"rows16 {counts} {fidelity}", floor=0.99, op=op)
+
+
+# what a selection that went wrong could leave in the count row: one above the capacity, the largest count the
+# 16-bit copy for the compute kernel holds, the first it does not, and all ones; then four ordinary users
+CLAMP_COUNTS = [2049, 65535, 65536, 0xFFFFFFFF, 64, 0, 300, 2048]
+
+
+@pytest.mark.parametrize("fidelity", ["lofi"])
+def test_count_clamp(device, fidelity):
+    """Every kernel that reads the count row clamps it to topk (kernels/sm_dm.hpp): a table whose counts exceed the
+    capacity ends like the table with those counts at 2048, bit for bit, with no wait expired; before the clamp a
+    count of 65,536 or more gave the row reader and the compute kernel different numbers of chunks."""
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096, num_layers=2)
+    layer = 1
+    slots = cfg.users * cfg.num_layers
+    latent, rope = hs.random_latents(slots, cfg.rows_per_slot, cfg, seed=3)
+    kv, rows = hs.make_storage(device, cfg, slots, latent, rope)
+    lists = [hs.spread_ids(cfg, min(n, cfg.topk), seed=20 + u) for u, n in enumerate(CLAMP_COUNTS)]
+    good = lo.selection_table(cfg, lists)
+    bad = good.clone()
+    over = torch.tensor(CLAMP_COUNTS, dtype=torch.int64)
+    bad[0, : cfg.users] = torch.where(over >= 1 << 31, over - (1 << 32), over).to(torch.int32)
+    gen = torch.Generator().manual_seed(7)
+    q_lat = torch.randn(cfg.users, cfg.heads, cfg.width, generator=gen)
+    sink = torch.randn(cfg.heads, generator=gen)
+    op = SparseMla(cfg, device)
+    q = hs.to_dev(op.queries_to_pages(q_lat), device, ttnn.bfloat16)
+    results = {}
+    for name, table in (("good", good), ("bad", bad), ("good again", good)):
+        sel = hs.to_dev(table[None, None], device, ttnn.uint32)
+        out = hs.to_dev(torch.zeros(1, 1, cfg.users * cfg.head_groups, op.out_page_values), device, ttnn.bfloat16)
+        if hs.MOCK:
+            ttnn.experimental.prepare_generic_op(
+                [kv, sel, q, out] + op.io_extra(),
+                op.attend_program(kv, sel, q, out, layer, fidelity=FIDELITY[fidelity]),
+            )
+            return
+        back = ttnn.to_torch(sel).to(torch.int64).reshape(1 + cfg.users, cfg.topk)[0, : cfg.users] & 0xFFFFFFFF
+        assert back.tolist() == (
+            CLAMP_COUNTS if name == "bad" else [min(n, cfg.topk) for n in CLAMP_COUNTS]
+        ), back.tolist()
+        op.attend(kv, sel, q, out, layer, fidelity=FIDELITY[fidelity])
+        results[name] = op.pages_to_partials(ttnn.to_torch(out))
+        o, m, s_, status = results[name]
+        assert (status[:, :, 0] == STATUS_MAGIC).all(), f"count row {name}: a root core did not write its status page"
+        assert (status[:, :, 1] == 0).all(), f"count row {name}: a wait expired on a core: {status[:, :, 1].tolist()}"
+        assert (
+            status[:, :, 2] == 3 * cfg.users
+        ).all(), f"count row {name}: receive slots published {status[:, :, 2].tolist()}"
+        logger.info(
+            f"HY4_MK3 count clamp, count row {name} {back.tolist()}: every root core wrote its status page, no wait expired"
+        )
+    check_partials(cfg, results["good"], rows, lists, q_lat, sink, layer, f"count clamp good {fidelity}", floor=0.99)
+    for name in ("bad", "good again"):
+        same = [torch.equal(a, b) for a, b in zip(results[name][:3], results["good"][:3])]
+        logger.info(
+            f"HY4_MK3 count clamp: O, max, sum of the run with the count row '{name}' bit-equal to the first run: {same}"
+        )
+        assert all(same), f"count row {name}: the partials differ from the run with the counts at {cfg.topk}"
 
 
 def _checkpoint_reference(layer):

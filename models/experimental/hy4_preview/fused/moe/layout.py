@@ -158,9 +158,19 @@ def stream_memory_config(rows: int):
     )
 
 
-def to_device_stream(device, stream, cache_file_name=None):
-    """A [rows, 256] stream (or None to load ``cache_file_name``) -> the BFP4 DRAM tensor, one shard per bank."""
+def to_device_stream(device, stream, cache_file_name=None, host_round=False):
+    """A [rows, 256] stream (or None to load ``cache_file_name``) -> the BFP4 DRAM tensor, one shard per bank.
+
+    Created directly with the sharded memory config (the default, and the cache), ttnn rounds float32 to BF16
+    before it packs BFP4 (ttnn/core/tensor/py_to_tt_tensor.cpp compute_host_dtype), so the tensor holds
+    BFP4(BF16(w)), not bfp4_round(w): the two differ in under 1 % of the entries of a random float32 weight, by one
+    BFP4 step, which is 3 % rms (fused/fidelity/GUIDE.md section 3). host_round=True packs on the host first (one
+    rounding, what bfp4_round and fused/moe/prepare.py's files hold) and moves the result to the device."""
     rows = stream.shape[0] if stream is not None else None
+    if host_round:
+        assert cache_file_name is None
+        host = ttnn.from_torch(stream[None, None], dtype=ttnn.bfloat4_b, layout=ttnn.TILE_LAYOUT)
+        return ttnn.to_device(host, device, memory_config=stream_memory_config(rows))
     if cache_file_name is None:
         return ttnn.from_torch(
             stream[None, None],

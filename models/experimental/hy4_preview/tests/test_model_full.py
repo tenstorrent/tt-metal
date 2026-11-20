@@ -70,14 +70,14 @@ from models.experimental.hy4_preview.tt.model import (
     layer_group,
 )
 
-WEIGHT_CACHE = os.environ.get(WEIGHT_CACHE_ENV, "/mnt/data/zni/hy4/decode-cache/weights")
+WEIGHT_CACHE = os.environ.get(WEIGHT_CACHE_ENV, "generated/hy4_preview/decode-cache/weights")
 ROPE = 64
 TARGET_LAYER_MS = 1e3 / 75 / 78  # 8 users x 1M context at 75 tokens per second per user
 # The chat prompt of test_generate and the demo.
 PROMPT = DEFAULT_PROMPT
 GENERATE_STEPS = DEFAULT_STEPS
 # The 78-layer fp32 reference of an 8192-token prompt (the prefill stack's golden tooling, PR 65936).
-LONG_GOLDEN = "/mnt/data/zni/hy4/prefill-cache/golden/hy4-bf16-llms-8192"
+LONG_GOLDEN = "generated/hy4_preview/prefill-cache/golden/hy4-bf16-llms-8192"
 
 galaxy = pytest.mark.parametrize(
     "device_params, mesh_device", [(pb.device_params(), GALAXY_MESH)], indirect=True, ids=["8x4-torus"]

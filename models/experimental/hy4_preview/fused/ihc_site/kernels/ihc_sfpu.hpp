@@ -218,6 +218,26 @@ inline void mix_rows() {
     sfpi::dst_reg[U_ACCY + G] = acc;
 }
 
+// The RMSNorm of the collapsed sublayer input for token rows 4 G .. (norm_out in ihc_site.cpp): y (slot 4, face k) *=
+// 1 / RMS(y) of its token row (the statistic page in the scratch slot: unit 2 G, every lane) * gamma (slot 0, a rows
+// page of the norm's weight, the same on every token row). fp32 throughout: reference.attention.rms_norm's
+// (x * rsqrt(mean(x^2) + eps)) * weight.
+template <int G>
+inline void norm_rows() {
+    sfpi::vFloat s = sfpi::dst_reg[U_SCR + 2 * G];
+#pragma GCC unroll 4
+    for (int k = 0; k < 4; k++) {
+#pragma GCC unroll 4
+        for (int hp = 0; hp < 4; hp++) {
+            const int c = cell(G, hp >> 1, hp & 1);
+            sfpi::vFloat y = sfpi::dst_reg[U_ROWS + FACE * k + c];
+            sfpi::vFloat w = sfpi::dst_reg[FACE * k + c];
+            y = y * s;
+            sfpi::dst_reg[U_ROWS + FACE * k + c] = y * w;
+        }
+    }
+}
+
 // This core's partial sums for the exchange. The projection of token row r onto output o is DEST [r][.] (first
 // column half of every chunk) + DEST [8 + r][.] (second half) of the projection face, and fn^T is laid out
 // (layout.py fn_to_pages) so that output o of half h is lane o of lane set h: the two blocks are lane aligned.

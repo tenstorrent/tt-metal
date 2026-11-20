@@ -75,9 +75,9 @@ def test_attend_latency(device, fidelity):
         out = hs.to_dev(torch.zeros(1, 1, cfg.users * cfg.head_groups, op.out_page_values), device, ttnn.bfloat16)
         program = op.attend_program(kv, sel, q, out, 0, fidelity=FIDELITY[fidelity])
         if hs.MOCK:
-            ttnn.experimental.prepare_generic_op([kv, sel, q, out], program)
+            ttnn.experimental.prepare_generic_op([kv, sel, q, out] + op.io_extra(), program)
             continue
-        us = replay_us(device, lambda: ttnn.generic_op([kv, sel, q, out], program))
+        us = replay_us(device, lambda: ttnn.generic_op([kv, sel, q, out] + op.io_extra(), program))
         got = op.pages_to_partials(ttnn.to_torch(out))
         check_partials(cfg, got, rows, lists, q_lat, sink, 0, f"latency {users}x{n}", floor=0.99)
         results.append((users, n, us))
@@ -210,3 +210,104 @@ def test_launch_shapes(device):
             continue
         us = replay_us(device, lambda: ttnn.generic_op(anchor, program))
         logger.info(f"HY4_MK3 launch shape {name}: {us:6.1f} us per program (traced, kernels return at once)")
+
+
+def test_mcast_timing(device):
+    """Measurement only: are the K sender's multicasts slow to be acknowledged when several reader cores issue them
+    at the same time (fused/README.md, lesson of 2026-11-20 on multicasts)? One chip, 64 selected rows per user, the K
+    sender built with stamps (SparseMla.mcast_timing): per launch and reader core the time from the first slab's
+    multicast to "left this core", from there to "acknowledged", the counter multicast's call, and its
+    acknowledgement. 20 launches with 8 users (8 reader cores issue side by side) and 20 with 1 user (one core)."""
+    import statistics
+
+    cfg = lo.SparseMlaConfig(rows_per_slot=4096, num_layers=1)
+    op = SparseMla(cfg, device)
+    op.mcast_timing()
+    kv, rows = _storage(device, cfg)
+    gen = torch.Generator().manual_seed(7)
+    q_lat = torch.randn(cfg.users, cfg.heads, cfg.width, generator=gen)
+    q = hs.to_dev(op.queries_to_pages(q_lat), device, ttnn.bfloat16)
+    us = lambda ticks: float(ticks) / 1350.0
+    names = [
+        "slabs: issue -> left the core",
+        "slabs: left -> acknowledged",
+        "counter multicast: the call",
+        "counter multicast: call -> acknowledged",
+    ]
+    for users in (8, 1):
+        lists = [hs.spread_ids(cfg, 64 if u < users else 0, seed=30 + u) for u in range(cfg.users)]
+        sel = hs.make_selection(device, cfg, lists)
+        out = hs.to_dev(torch.zeros(1, 1, cfg.users * cfg.head_groups, op.out_page_values), device, ttnn.bfloat16)
+        program = op.attend_program(kv, sel, q, out, 0)
+        io = [kv, sel, q, out] + op.io_extra() + [op.timing]
+        if hs.MOCK:
+            ttnn.experimental.prepare_generic_op(io, program)
+            continue
+        samples = {k: [] for k in range(4)}  # (us, launch, core)
+        ends = []
+        for launch in range(20):
+            ttnn.generic_op(io, program)
+            ttnn.synchronize_device(device)
+            words = op.read_mcast_timing()
+            for core in range(words.shape[0]):
+                if int(words[core, 0]) == 0:
+                    continue
+                for k in range(4):
+                    samples[k].append((us(words[core, 2 + 2 * k]), launch, core))
+                ends.append((us((int(words[core, 11]) - int(words[core, 9])) & 0xFFFFFFFF), launch, core))
+        for k in range(4):
+            v = sorted(x[0] for x in samples[k])
+            late = sorted((x for x in samples[k] if x[0] > 2.0), key=lambda x: -x[0])[:6]
+            logger.info(
+                f"HY4_MK3 mcast timing, {users} user(s) x 64 rows, 20 launches, {len(v)} core-launches: {names[k]}: min {v[0]:.2f} "
+                f"median {statistics.median(v):.2f} max {v[-1]:.2f} us; above 2 us: {sum(1 for x in v if x > 2.0)} "
+                f"(us, launch, core) {[(round(a, 1), b, c) for a, b, c in late]}"
+            )
+        e = sorted(x[0] for x in ends)
+        logger.info(
+            f"HY4_MK3 mcast timing, {users} user(s): the K sender's kernel start to end: min {e[0]:.1f} median {statistics.median(e):.1f} max {e[-1]:.1f} us"
+        )
+
+
+@trace_device
+def test_rows16_latency(device):
+    """16 token rows on the 8 S-blocks against 8 (layer_attn PLAN.md section 19, rung a): the attend program traced
+    with 64 selected rows per live row: 8 live of 8 (today), 16 of 16, 8 of 16 (rows 0..7), 4 of 16 (each alone on its
+    S-block), 4 of 16 as two pairs on two S-blocks, and nothing live."""
+    results = []
+    # (the old form twice, first and last: the first traced program of a process has measured slow here)
+    for users, live in (
+        (8, list(range(8))),
+        (16, list(range(16))),
+        (16, list(range(8))),
+        (16, [0, 3, 9, 14]),
+        (16, [0, 8, 3, 11]),
+        (16, []),
+        (8, list(range(8))),
+        (8, [0]),
+    ):
+        cfg = lo.SparseMlaConfig(rows_per_slot=4096, num_layers=1, users=users)
+        op = SparseMla(cfg, device)
+        kv, rows = _storage(device, cfg)
+        gen = torch.Generator().manual_seed(7)
+        q_lat = torch.randn(cfg.users, cfg.heads, cfg.width, generator=gen)
+        q = hs.to_dev(op.queries_to_pages(q_lat), device, ttnn.bfloat16)
+        lists = [hs.spread_ids(cfg, 64 if u in live else 0, seed=30 + u) for u in range(cfg.users)]
+        sel = hs.make_selection(device, cfg, lists)
+        out = hs.to_dev(torch.zeros(1, 1, cfg.users * cfg.head_groups, op.out_page_values), device, ttnn.bfloat16)
+        program = op.attend_program(kv, sel, q, out, 0)
+        io = [kv, sel, q, out] + op.io_extra()
+        if hs.MOCK:
+            ttnn.experimental.prepare_generic_op(io, program)
+        else:
+            us = replay_us(device, lambda: ttnn.generic_op(io, program))
+            _, _, _, status = op.pages_to_partials(ttnn.to_torch(out))
+            assert (status[:, :, 1] == 0).all(), f"a wait expired: {status[:, :, 1].tolist()}"
+            results.append((users, live, us))
+            logger.info(
+                f"HY4_MK3 rows16 latency: {users} token rows, live rows {live} x 64 selected rows: {us:.1f} us per program (traced, {REPLAYS} replays)"
+            )
+        for t in (kv, sel, q, out):
+            ttnn.deallocate(t)
+    if results:
+        logger.info("HY4_MK3 rows16 latency: " + "; ".join(f"{len(l)} live of {u}: {t:.1f} us" for u, l, t in results))

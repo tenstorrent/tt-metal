@@ -64,6 +64,15 @@ void kernel_main() {
     const uint32_t slab_bytes = DHt * get_tile_size(cb_kout);
     const uint32_t k_base = get_write_ptr(cb_k);  // nothing is ever pushed to cb_k on this core
 
+#ifdef SM_MCAST_TIMING
+    // Measurement only (the define is the L1 address of 16 words per reader core): per chunk, the clock at the first
+    // slab's multicast, when the last slab has left this core, when every slab's write is acknowledged, after the
+    // call of the counter multicast and when that one is acknowledged (the timing build waits for it per chunk).
+    // Words: chunks | sum, max of: write issue -> left | left -> acknowledged | the atomic's call | call ->
+    // acknowledged | kernel start, first issue, end.
+    uint32_t tm_sum[4] = {0, 0, 0, 0}, tm_max[4] = {0, 0, 0, 0}, tm_first = 0;
+    const uint32_t tm_start = get_timestamp_32b();
+#endif
     uint32_t chunks = 0;
     sm::for_each_chunk<USERS, GROUPS, CHUNK>(counts, role.block, [&](uint32_t, uint32_t, uint32_t valid) {
         const uint32_t slabs = sm::ceil_div(valid, sm::TILE_ROWS);
@@ -76,9 +85,20 @@ void kernel_main() {
         }
         // One slab at a time, as the converter delivers them: cb_kout is a FIFO of slabs, and the slabs of one
         // chunk need not be contiguous in it (they may straddle its wrap).
+#ifdef SM_MCAST_TIMING
+        uint32_t tm[5] = {0, 0, 0, 0, 0};
+#endif
         for (uint32_t i = 0; i < own; ++i) {
             cb_wait_front(cb_kout, DHt);
             const uint32_t src = get_read_ptr(cb_kout);
+#ifdef SM_MCAST_TIMING
+            if (i == 0) {
+                tm[0] = get_timestamp_32b();
+                if (chunks == 1) {
+                    tm_first = tm[0];
+                }
+            }
+#endif
             noc_async_write_multicast(src, rect | (dst + (conv + i * NCONV) * slab_bytes), slab_bytes, DESTS);
             if (i == 0) {
                 for (uint32_t slab = slabs; slab < SLABS; ++slab) {
@@ -93,9 +113,40 @@ void kernel_main() {
             noc_async_writes_flushed();  // the slab has left this core: the converter may reuse its memory
             cb_pop_front(cb_kout, DHt);
         }
+#ifdef SM_MCAST_TIMING
+        tm[1] = get_timestamp_32b();
+#endif
         noc_async_write_barrier();  // every slab has landed before the receivers are told
+#ifdef SM_MCAST_TIMING
+        tm[2] = get_timestamp_32b();
+#endif
         noc_semaphore_inc_multicast(rect | sem_data, 1u, DESTS);
+#ifdef SM_MCAST_TIMING
+        tm[3] = get_timestamp_32b();
+        noc_async_atomic_barrier();
+        tm[4] = get_timestamp_32b();
+        if (own) {
+            for (uint32_t k = 0; k < 4; ++k) {
+                const uint32_t d = tm[k + 1] - tm[k];
+                tm_sum[k] += d;
+                tm_max[k] = d > tm_max[k] ? d : tm_max[k];
+            }
+        }
+#endif
     });
     noc_async_atomic_barrier();
     noc_semaphore_set(ready, 0);  // every increment has been waited for: zero again for the next launch
+#ifdef SM_MCAST_TIMING
+    {
+        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SM_MCAST_TIMING);
+        w[0] = chunks;
+        for (uint32_t k = 0; k < 4; ++k) {
+            w[1 + 2 * k] = tm_sum[k];
+            w[2 + 2 * k] = tm_max[k];
+        }
+        w[9] = tm_start;
+        w[10] = tm_first;
+        w[11] = get_timestamp_32b();
+    }
+#endif
 }

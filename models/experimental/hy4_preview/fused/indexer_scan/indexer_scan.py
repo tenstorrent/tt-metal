@@ -45,6 +45,9 @@ import torch
 import ttnn
 
 KERNEL_DIR = Path(__file__).parent / "kernels"
+KV_STORE_KERNELS = str(Path(__file__).parent.parent / "kv_store" / "kernels")
+CB_FRAMES = 7  # the frame tables under the key reader (free in kernels/scan_common.hpp)
+FRAMES_DEFAULT = os.environ.get("HY4_SCAN_FRAMES") == "1"  # tests: every Scan reads its keys through frame tables
 KERNELS = "models/experimental/hy4_preview/fused/indexer_scan/kernels"
 
 TILE = 32
@@ -125,15 +128,25 @@ class ScanConfig:
     blocks_per_read: int | None = None  # default: 3 per packet, or 16 per awaited read
     k_depth_reads: int = 2  # awaited reads the key CB holds (stream_depth 0)
     reader_noc: int = 0  # NoC the key stream arrives on
-    # "rows": a bank's cores on the worker row of its NOC0 DRAM endpoint (best at 8 users); "grid": core
-    # (user, bank), one rectangle per user (cheaper to launch for one user); "bank_rows": an earlier row heuristic
-    placement: str = "rows"
+    # "grid": core (user, bank), one rectangle of cores: the cheapest launch (3.9 us for 64 cores against 11.2 us
+    # for the 9 ranges of "rows") and the best at the AgentX shape. "rows": a bank's cores on the worker row of
+    # its NOC0 DRAM endpoint: the fastest stream, 10 us better at 8 users x 32,768 positions. "bank_rows": an
+    # earlier row heuristic.
+    placement: str = "grid"
     selectors: str = "l1"  # head-sum selector tiles: "l1" resident, rewritten in place | "dram": read from a tensor
-    ablate: int = 0  # measurement only: 1 = no key reads from DRAM, 2 = no scoring arithmetic (results are garbage)
+    # the query's 4 tiles as [32 heads x 32 dims] (a head a row), transposed by the unpacker, instead of
+    # [32 dims x 32 heads]: what a query assembled on the chips from per-head pieces is (layer_attn/PLAN.md section
+    # 21). Default (None): off, unless HY4_SCAN_QT_ROWS=1 (tests: every case of the piece in this form).
+    query_rows: bool | None = None
+    # measurement only (results are garbage): 1 = no key reads from DRAM, 2 = no scoring arithmetic, 4 = every
+    # kernel returns at once (the program's launch floor), 8 = with 4: the program carries no semaphores
+    ablate: int = 0
 
     def __post_init__(self):
         assert self.mode in ("scores", "local", "tree"), self.mode
         assert self.selectors in ("dram", "l1"), self.selectors
+        if self.query_rows is None:
+            self.query_rows = os.environ.get("HY4_SCAN_QT_ROWS") == "1"
         assert 1 <= self.users <= 8
         assert self.stripe_rows % (TILE * BANKS) == 0, "every slot must start on DRAM bank 0"
         assert self.num_chips & (self.num_chips - 1) == 0 and self.chip_block & (self.chip_block - 1) == 0
@@ -250,10 +263,14 @@ def keys_to_device(mesh_device, keys: torch.Tensor):
     )
 
 
-def device_query(q: torch.Tensor, w: torch.Tensor, fold: bool = True):
+def device_query(q: torch.Tensor, w: torch.Tensor, fold: bool = None):
     """Queries [U, 32 heads, 128] (the cache's frame: Hadamard basis) and head weights [U, 32] -> what the scan
     cores take: (qt [U, 128, 32] the query the FPU sees, in fp32 holding BF16 values; s [U, 32] the head-sum
-    multipliers). ``fold``: |w| goes into the query head and s = sign(w); otherwise the query is q and s = w."""
+    multipliers). ``fold``: |w| goes into the query head and s = sign(w); otherwise the query is q and s = w.
+    Default: folded, unless HY4_SCAN_FOLD=0 (tests: the unfolded form everywhere the caller does not say; it is
+    what a query assembled on the chips can have, layer_attn/PLAN.md section 21)."""
+    if fold is None:
+        fold = os.environ.get("HY4_SCAN_FOLD", "1") != "0"
     q, w = q.float(), w.float()
     if fold:
         qd = (q * w.abs()[:, :, None]).bfloat16().float()
@@ -284,7 +301,9 @@ class Scan:
         "equal scores by stamp"
     )
 
-    def __init__(self, mesh_device, cfg: ScanConfig, keys, slots, coords=None, chip_index=None, core_of=None):
+    def __init__(
+        self, mesh_device, cfg: ScanConfig, keys, slots, coords=None, chip_index=None, core_of=None, frames=None
+    ):
         self.mesh_device, self.cfg, self.keys = mesh_device, cfg, keys
         self.reader_noc = ttnn.NOC.NOC_1 if cfg.reader_noc else ttnn.NOC.NOC_0
         if core_of is None:
@@ -306,11 +325,34 @@ class Scan:
         assert len(set(self.cores)) == len(self.cores) and all(
             x < grid.x and y < grid.y for x, y in self.cores
         ), f"scan cores do not fit the {grid.x}x{grid.y} worker grid"
+        # frames: the key reader takes its block addresses from fused/kv_store's frame tables (kernels/scan_reader.cpp
+        # HY4_SCAN_FRAMES). (layers, rank): today's slot-major cache with ``layers`` slots per user, this scan on slot
+        # user * layers + rank, identity tables (the same bytes, the same packets). (Geometry, rank): that layout
+        # (a frame-major pool), tables from set_frames.
+        if frames is None and FRAMES_DEFAULT and cfg.stream_depth > 0 and cfg.stripe_rows % 256 == 0:
+            frames = (shape[0] // cfg.users, self.slots[0])  # (the awaited-read form and odd stripes stay as they are)
+        self.geometry = self.frame_tables = None
+        if frames is not None:
+            from models.experimental.hy4_preview.fused.kv_store import device as kv_device
+            from models.experimental.hy4_preview.fused.kv_store import frames as kv_frames
+
+            geometry, self.rank = frames
+            assert cfg.stream_depth > 0, "the paged key stream is the pipelined one"
+            if isinstance(geometry, int):
+                layers = geometry
+                assert self.slots == [u * layers + self.rank for u in range(cfg.users)], (self.slots, layers, self.rank)
+                assert cfg.stripe_rows % kv_frames.FRAME_ROWS == 0, "a frame is 256 stripe rows"
+                kind = kv_frames.Kind("index", layers, KEY_DIM, KEY_BLOCK_BYTES, 0)
+                geometry = kv_frames.Geometry.contiguous(kind, cfg.stripe_rows // kv_frames.FRAME_ROWS)
+            self.geometry = geometry
+            self.frame_tables = kv_device.FrameTables(mesh_device, self.cores, rows=cfg.users)
+            if geometry.frame_stride == 1:
+                self.set_frames([geometry.identity_table(u) for u in range(cfg.users)])
 
         U = cfg.users
         dram = ttnn.DRAM_MEMORY_CONFIG
         self.qt = ttnn.from_torch(
-            torch.zeros(U, 1, KEY_DIM, HEADS),
+            torch.zeros((U, 1, HEADS, KEY_DIM) if cfg.query_rows else (U, 1, KEY_DIM, HEADS)),
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
@@ -367,6 +409,10 @@ class Scan:
         self._descriptor = None
 
     # inputs -------------------------------------------------------------------------------------
+    def set_frames(self, tables):
+        """tables: one table of 128 frame bases per user (kv_store's KvStore.table). In place."""
+        self.frame_tables.write([v for t in tables for v in t])
+
     def _write(self, tensor, value: torch.Tensor, dtype, layout):
         host = ttnn.from_torch(value.contiguous(), dtype=dtype, layout=layout)
         ttnn.copy_host_to_device_tensor(host, tensor)
@@ -378,7 +424,15 @@ class Scan:
         """qt [U, 128, 32], s [U, 32] from device_query. Rewrites the device tensors in place (a trace follows)."""
         U = self.cfg.users
         assert tuple(qt.shape) == (U, KEY_DIM, HEADS) and tuple(s.shape) == (U, HEADS)
-        self._write(self.qt, qt.reshape(U, 1, KEY_DIM, HEADS).float(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
+        if self.cfg.query_rows:  # (tile t: the heads' dims 32 t .., a head a row)
+            self._write(
+                self.qt,
+                qt.transpose(1, 2).reshape(U, 1, HEADS, KEY_DIM).float().contiguous(),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+            )
+        else:
+            self._write(self.qt, qt.reshape(U, 1, KEY_DIM, HEADS).float(), ttnn.bfloat16, ttnn.TILE_LAYOUT)
         bits = s.bfloat16().view(torch.int16).to(torch.int32) & 0xFFFF
         packed = bits[:, 0::2] | (bits[:, 1::2] << 16)
         self._step[:U, 16:32] = torch.where(packed >= 1 << 31, packed - (1 << 32), packed).to(torch.int32)
@@ -415,12 +469,17 @@ class Scan:
         low = (bank & -bank).bit_length() - 1
         return low, bank - (1 << low)
 
-    def append_to(self, desc, coord, semaphore_base: int = 0):
+    def append_to(self, desc, coord, semaphore_base: int = 0, slots=None, rank=None):
         """Append this piece to ``desc``, the ProgramDescriptor of chip ``coord`` (a layer program that also holds
         other pieces): 3 kernels on the 64 scan cores, their circular buffers and 2 program semaphores with ids
         ``semaphore_base`` and ``semaphore_base + 1``. The scan cores must not carry other kernels. The caller
-        passes ``io_tensors()`` to generic_op along with its own."""
+        passes ``io_tensors()`` to generic_op along with its own.
+        slots (default: the object's): the users' slots in the key cache for THIS descriptor; rank (with frame
+        tables): the layer's rank. One Scan (one query tensor, one step tensor, one survivor tensor) then serves
+        every full-indexer layer of a step, a descriptor per layer."""
         cfg, mesh = self.cfg, self.mesh_device
+        slots = self.slots if slots is None else list(slots)
+        assert len(slots) == cfg.users and max(slots) < tuple(self.keys.shape)[0], slots
         scores_only = 1 if cfg.mode == "scores" else 0
         cores = _core_set(self.cores)
         noc = {core: mesh.worker_core_from_logical_core(ttnn.CoreCoord(*core)) for core in self.cores}
@@ -453,6 +512,8 @@ class Scan:
             cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_SEL, on_chip(self.sel_l1)))
         else:
             cbs.append(cb(CB_SEL, ttnn.bfloat16, BF16_TILE_BYTES, 32))
+        if self.geometry is not None:
+            cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_FRAMES, on_chip(self.frame_tables.tensor)))
         semaphores = [
             ttnn.SemaphoreDescriptor(id=semaphore_base + i, core_ranges=cores, initial_value=0) for i in range(2)
         ]
@@ -476,7 +537,9 @@ class Scan:
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         pages_per_core = cfg.score_tiles if scores_only else 2
         for user in range(cfg.users):
-            slot_offset = self.slots[user] * (cfg.bank_blocks * KEY_BLOCK_BYTES)
+            slot_offset = slots[user] * (cfg.bank_blocks * KEY_BLOCK_BYTES)
+            if self.geometry is not None:  # the layer's slot step; the user's part is in its frame table
+                slot_offset = self.geometry.slot_bytes(self.rank if rank is None else rank)
             for bank in range(BANKS):
                 x, y = self.core_of(user, bank)
                 reader_rt[x][y] = [
@@ -509,15 +572,16 @@ class Scan:
                 core_ranges=cores,
                 compile_time_args=reader_ct,
                 runtime_args=reader_rt,
+                defines=[("HY4_SCAN_FRAMES", "1")] if self.geometry is not None else [],
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=self.reader_noc
                 ),
-                compiler_include_paths=[str(KERNEL_DIR)],
+                compiler_include_paths=[str(KERNEL_DIR)] + ([KV_STORE_KERNELS] if self.geometry is not None else []),
             ),
             ttnn.KernelDescriptor(
                 kernel_source=f"{KERNELS}/scan_writer.cpp",
                 core_ranges=cores,
-                compile_time_args=[scores_only, cfg.score_tiles, semaphore_base],
+                compile_time_args=[scores_only, cfg.score_tiles, semaphore_base, cfg.ablate],
                 runtime_args=writer_rt,
                 config=ttnn.WriterConfigDescriptor(),
                 compiler_include_paths=[str(KERNEL_DIR)],
@@ -527,20 +591,24 @@ class Scan:
                 core_ranges=cores,
                 compile_time_args=[cfg.blocks_per_pass, scores_only, cfg.score_tiles, cfg.ablate],
                 runtime_args=compute_rt,
+                defines=[("HY4_SCAN_QT_ROWS", "1")] if cfg.query_rows else [],
                 config=compute_config,
                 compiler_include_paths=[str(KERNEL_DIR)],
             ),
         ]
         desc.kernels = list(desc.kernels) + kernels
         desc.cbs = list(desc.cbs) + cbs
-        desc.semaphores = list(desc.semaphores) + semaphores
+        desc.semaphores = list(desc.semaphores) + ([] if cfg.ablate & 8 else semaphores)
         return desc
 
-    def descriptor(self):
-        """The MeshProgramDescriptor of the piece on its own: one program per chip of ``coords``."""
+    def descriptor(self, slots=None, rank=None):
+        """The MeshProgramDescriptor of the piece on its own: one program per chip of ``coords`` (slots, rank: see
+        append_to)."""
         mesh_desc = ttnn.MeshProgramDescriptor()
         for coord in self.coords:
-            desc = self.append_to(ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[]), coord)
+            desc = self.append_to(
+                ttnn.ProgramDescriptor(kernels=[], semaphores=[], cbs=[]), coord, slots=slots, rank=rank
+            )
             mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = desc
         return mesh_desc
 
@@ -550,6 +618,7 @@ class Scan:
 
     def _io(self):
         extra = [self.sel_l1] if self.sel_l1 is not None else []
+        extra += [self.frame_tables.tensor] if self.geometry is not None else []
         return [self.keys, self.qt, self.sel, self.step] + extra + [self.out]
 
     def compile(self):

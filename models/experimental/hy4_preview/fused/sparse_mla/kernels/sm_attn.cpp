@@ -38,6 +38,12 @@ void kernel_main() {
     constexpr uint32_t cb_send_ms = get_named_compile_time_arg_val("cb_send_ms");
     constexpr uint32_t cb_final_o = get_named_compile_time_arg_val("cb_final_o");
     constexpr uint32_t cb_final_ms = get_named_compile_time_arg_val("cb_final_ms");
+#ifdef SM_LAYER_ROWS
+    // a layer program with 16 token rows: the final partial of user b goes into the first pair of buffers and the
+    // one of user b + GROUPS into a second pair, so each stays at a fixed address until it has been fetched
+    constexpr uint32_t cb_final2_o = get_named_compile_time_arg_val("cb_final2_o");
+    constexpr uint32_t cb_final2_ms = get_named_compile_time_arg_val("cb_final2_ms");
+#endif
     constexpr uint32_t cb_part_o = get_named_compile_time_arg_val("cb_part_o");
     constexpr uint32_t cb_part_ms = get_named_compile_time_arg_val("cb_part_ms");
     constexpr uint32_t cb_tmp_o = get_named_compile_time_arg_val("cb_tmp_o");
@@ -96,8 +102,15 @@ void kernel_main() {
         const uint32_t r = sm::rel<GROUPS>(block, u);
         const uint32_t n_act = sm::active_blocks<GROUPS, CHUNK>(counts[u]);
         const bool merges = sm::num_receives(r, n_act) != 0;
+#ifdef SM_LAYER_ROWS
+        const uint32_t root_o = u < GROUPS ? cb_final_o : cb_final2_o;
+        const uint32_t root_ms = u < GROUPS ? cb_final_ms : cb_final2_ms;
+        const uint32_t o_cb = merges ? cb_part_o : (r == 0 ? root_o : cb_send_o);
+        const uint32_t ms_cb = merges ? cb_part_ms : (r == 0 ? root_ms : cb_send_ms);
+#else
         const uint32_t o_cb = merges ? cb_part_o : (r == 0 ? cb_final_o : cb_send_o);
         const uint32_t ms_cb = merges ? cb_part_ms : (r == 0 ? cb_final_ms : cb_send_ms);
+#endif
         const uint32_t last_here = sm::first_chunk<GROUPS>(block, u) + (here - 1) * GROUPS;
         const bool mask_last = last_here == sm::ceil_div(counts[u], CHUNK) - 1 && (counts[u] % CHUNK) != 0;
 
@@ -174,6 +187,20 @@ void kernel_main() {
     }
     reconfig_full_operand_srca(cb_ms_in);
     exp_tile_init<exp_approx_mode, scale_fp32>();
+#ifdef SM_ROWS
+    // one merge per receive slot, in the order of the S-block's list of due pairs (sm_common.hpp DueList): the io
+    // kernel publishes exactly these slots in exactly this order
+    const sm::DueList<USERS, GROUPS, CHUNK> due(counts, block);
+    uint32_t done = 0;
+    for (uint32_t k = 0; k < due.n; ++k) {
+        const uint32_t u = due.user[k];
+        if (k == 0 || due.user[k - 1] != u) {
+            done = 0;
+        }
+        const uint32_t r = sm::rel<GROUPS>(block, u);
+        const uint32_t total = sm::num_receives(r, sm::active_blocks<GROUPS, CHUNK>(counts[u]));
+        {
+#else
     for (uint32_t u = 0; u < USERS; ++u) {
         const uint32_t r = sm::rel<GROUPS>(block, u);
         const uint32_t n_act = sm::active_blocks<GROUPS, CHUNK>(counts[u]);
@@ -187,12 +214,19 @@ void kernel_main() {
                 cb_pop_front(cb_out_in, vDHt);
                 continue;
             }
+#endif
             const bool first = done == 0;
             const bool last = done == total - 1;
             const uint32_t prev_o = first ? cb_part_o : cb_tmp_o;
             const uint32_t prev_ms = first ? cb_part_ms : cb_tmp_ms;
+#ifdef SM_LAYER_ROWS
+            const uint32_t cur_o = last ? (r == 0 ? (u < GROUPS ? cb_final_o : cb_final2_o) : cb_send_o) : cb_tmp_o;
+            const uint32_t cur_ms =
+                last ? (r == 0 ? (u < GROUPS ? cb_final_ms : cb_final2_ms) : cb_send_ms) : cb_tmp_ms;
+#else
             const uint32_t cur_o = last ? (r == 0 ? cb_final_o : cb_send_o) : cb_tmp_o;
             const uint32_t cur_ms = last ? (r == 0 ? cb_final_ms : cb_send_ms) : cb_tmp_ms;
+#endif
             sdpa_tail<exp_approx_mode, false, block_size, num_blocks, scale_fp32, VectorMode::C>(
                 cb_ms_in, prev_ms, cur_ms, cb_out_in, prev_o, cur_o);
             ++done;

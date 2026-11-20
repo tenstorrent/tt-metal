@@ -8,8 +8,8 @@
 
 One command (through the lock every device job on this machine takes; ``-s`` shows the text):
 
-    HY4_DECODE_WEIGHT_CACHE=/mnt/data/zni/hy4/decode-cache/weights \
-        /mnt/data/zni/hy4/tools/run_device_tests.sh demo models/experimental/hy4_preview/demo/demo.py -s
+    HY4_DECODE_WEIGHT_CACHE=generated/hy4_preview/decode-cache/weights \
+        run_device_tests.sh demo models/experimental/hy4_preview/demo/demo.py -s
 
 or, where pytest's fixtures are not wanted, ``python -m models.experimental.hy4_preview.demo.demo``
 (opens the 8x4 mesh itself). Environment:

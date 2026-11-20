@@ -59,9 +59,10 @@ from pathlib import Path
 
 import torch
 
+from models.experimental.hy4_preview.reference.attention import ROPE_PAIRING_ENV, rope_pairing
 from models.experimental.hy4_preview.reference.decoder import STAGES
 
-GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "/mnt/data/zni/hy4/golden"))
+GOLDEN_ROOT = Path(os.environ.get("HY4_GOLDEN_DIR", "generated/hy4_preview/golden"))
 HY4_HF_MODEL_ENV = "HY4_HF_MODEL"
 
 # The default prompt: a little over 128 tokens through the chat template, cut to the first 128.
@@ -107,8 +108,14 @@ def _first(value):
     return value[0] if isinstance(value, (tuple, list)) else value
 
 
+# Rows of the batch a recorded pass runs (the prompt repeated; row 0 is recorded). 1 everywhere but in a recording
+# made to see the reference's own spread: the BF16 CPU model does not reproduce itself across batch shapes
+# (REFERENCE_HEALTH.md), so a golden says in its meta which shapes it was recorded with.
+_RECORD = {"rows": 1}
+
+
 def _unbatch(t: torch.Tensor) -> torch.Tensor:
-    assert t.shape[0] == 1, f"the recorder takes one prompt at a time, got a batch of {t.shape[0]}"
+    assert t.shape[0] == _RECORD["rows"], f"the recorder expects a batch of {_RECORD['rows']}, got {t.shape[0]}"
     return t[0].detach().clone()
 
 
@@ -154,9 +161,9 @@ def record_layer(layer, first_row: int = 0):
     if hasattr(layer.mlp, "gate"):  # HYV4TopkRouter returns (logits, weights, indices), tokens flattened
         handles.append(
             layer.mlp.gate.register_forward_hook(
-                lambda m, args, out: rec.update(
-                    router_weights=out[1][first_row:].detach().clone(),
-                    router_indices=out[2][first_row:].detach().clone(),
+                lambda m, args, out: rec.update(  # (tokens flattened batch-major: row 0 is the first S of them)
+                    router_weights=out[1][: out[1].shape[0] // _RECORD["rows"]][first_row:].detach().clone(),
+                    router_indices=out[2][: out[2].shape[0] // _RECORD["rows"]][first_row:].detach().clone(),
                 )
             )
         )
@@ -230,8 +237,58 @@ def truncated_config(path=None, num_layers: int = DEFAULT_NUM_LAYERS):
     return config
 
 
-def load_truncated_model(path=None, num_layers: int = DEFAULT_NUM_LAYERS, dtype=torch.bfloat16):
-    """HYV4Model with the checkpoint's weights for layers 0 .. num_layers-1 (and the embedding).
+def _apply_rotary_pos_emb_interleaved(q, k, cos, sin, unsqueeze_dim=1):
+    """transformers' hy_v4 apply_rotary_pos_emb with the pairs (2i, 2i + 1) (vLLM's hy_v4, is_neox_style=False) in
+    place of HF's (i, i + d/2), at the same frequencies. HF hands cos / sin as cat(freqs, freqs) [B, S, d]: the first
+    half holds the d/2 frequencies."""
+    half = cos.shape[-1] // 2
+    cos = cos[..., :half].unsqueeze(unsqueeze_dim)
+    sin = sin[..., :half].unsqueeze(unsqueeze_dim)
+
+    def rot(x):
+        x1, x2 = x[..., 0::2], x[..., 1::2]
+        return torch.stack((x1 * cos - x2 * sin, x2 * cos + x1 * sin), dim=-1).flatten(-2)
+
+    return rot(q), rot(k)
+
+
+_HF_ROTARY = {}
+
+
+def set_hf_rope_pairing(pairing: str | None = None) -> str:
+    """Make transformers' hy_v4 IN THIS PROCESS rotate in ``pairing`` (default: the process's, HY4_ROPE_PAIRING;
+    reference/attention.py rope_pairing). Nothing on disk is edited: the module's apply_rotary_pos_emb, which both
+    HYV4Attention and HYV4Indexer call, is replaced ("interleaved") or put back ("half_split": HF as it is). The
+    model's weights are the same either way. Returns the pairing now in force for every hy_v4 model of the process."""
+    from transformers.models.hy_v4 import modeling_hy_v4 as M
+
+    pairing = rope_pairing(pairing)
+    original = _HF_ROTARY.setdefault("original", M.apply_rotary_pos_emb)
+    M.apply_rotary_pos_emb = original if pairing == "half_split" else _apply_rotary_pos_emb_interleaved
+    _HF_ROTARY["pairing"] = pairing
+    return pairing
+
+
+def golden_pairing(golden: dict) -> str:
+    """The RoPE pairing a golden was recorded with (files from before the field existed: HF as it is)."""
+    return golden["meta"].get("rope_pairing", "half_split")
+
+
+def _check_pairing(golden: dict, file) -> dict:
+    """A golden recorded under the other pairing is refused: its rows, streams and tokens belong to another model."""
+    have, want = golden_pairing(golden), rope_pairing()
+    assert have == want, (
+        f"{file} was recorded with RoPE pairing {have!r}; this process runs {want!r} "
+        f"(HY4_ROPE_PAIRING and HY4_GOLDEN_DIR must change together)"
+    )
+    return golden
+
+
+def load_truncated_model(
+    path=None, num_layers: int = DEFAULT_NUM_LAYERS, dtype=torch.bfloat16, pairing: str | None = None
+):
+    """HYV4Model with the checkpoint's weights for layers 0 .. num_layers-1 (and the embedding), rotating in
+    ``pairing`` (set_hf_rope_pairing; ``model.rope_pairing`` says which).
 
     The tensors are memory-mapped, so this returns at once; the pages are read when a layer runs.
     The checkpoint's keys for the layers above are reported as unexpected and ignored.
@@ -242,6 +299,7 @@ def load_truncated_model(path=None, num_layers: int = DEFAULT_NUM_LAYERS, dtype=
     model = HYV4Model.from_pretrained(str(model_dir(path)), config=config, dtype=dtype).eval()
     assert model.config._attn_implementation == "eager", model.config._attn_implementation
     assert len(model.layers) == num_layers
+    model.rope_pairing = set_hf_rope_pairing(pairing)
     return model
 
 
@@ -300,7 +358,7 @@ def record_golden(
     input_ids = tokenize(prompt, path, seq_len)
     target = golden_path(num_layers, input_ids, dtype, root)
     if target.is_file() and not recompute:
-        return torch.load(target, weights_only=False)
+        return _check_pairing(torch.load(target, weights_only=False), target)
 
     model = load_truncated_model(path, num_layers, dtype)
     golden = record_model(model, input_ids=input_ids)
@@ -310,6 +368,7 @@ def record_golden(
         "dtype": str(dtype),
         "prompt": prompt,
         "seq_len": int(input_ids.numel()),
+        "rope_pairing": model.rope_pairing,
         "mlp_layer_types": list(model.config.mlp_layer_types),
         "indexer_types": list(model.config.indexer_types),
         "index_topk": int(model.config.index_topk),
@@ -331,7 +390,7 @@ def find_golden(num_layers: int = DEFAULT_NUM_LAYERS, seq_len: int = DEFAULT_SEQ
     found = sorted(Path(root or GOLDEN_ROOT).glob(pattern), key=lambda p: p.stat().st_mtime)
     if not found:
         return None
-    golden = torch.load(found[-1], weights_only=False)
+    golden = _check_pairing(torch.load(found[-1], weights_only=False), found[-1])
     golden["meta"]["file"] = str(found[-1])
     return golden
 
@@ -358,7 +417,7 @@ def find_decode_golden(num_layers: int, prompt_len: int, steps: int | None = Non
     found = sorted(Path(root or GOLDEN_ROOT).glob(pattern), key=lambda p: p.stat().st_mtime)
     if not found:
         return None
-    golden = torch.load(found[-1], weights_only=False)
+    golden = _check_pairing(torch.load(found[-1], weights_only=False), found[-1])
     golden["meta"]["file"] = str(found[-1])
     return golden
 
@@ -371,6 +430,7 @@ def record_decode_golden(
     dtype=torch.bfloat16,
     root=None,
     recompute: bool = False,
+    batch_rows: int = 1,
 ) -> dict:
     """What HF computes for a prompt of N tokens and ``steps`` decode steps after it, with the model
     cut to ``num_layers`` layers (the head, the final norm and the LM head applied to the cut stack).
@@ -385,13 +445,18 @@ def record_decode_golden(
         cache        per layer {"latent" [S, kv_lora + rope], "index_key" [S, 128] (full layers)}, the
                      rows of HF's own DynamicCache after it generated the continuation: positions
                      [0, N) from its prefill pass, [N, S) from its cached decode steps; S = N + steps - 1.
-                     HF frame: (k_pass | k_rope after RoPE, half-split), index key [pass | rope].
+                     HF frame: (k_pass | k_rope after RoPE in the golden's pairing, meta["rope_pairing"]), index
+                     key [pass | rope].
         layers       per layer, the DECODE_STAGES tensors of positions N - 1 .. S - 1 ([steps, ...]) from
                      ONE full-sequence pass over the S tokens (no cache), which is what a cached step
                      must reproduce; ``topk_indices`` are the DSA picks of those rows.
         hc_head, hidden, logits   [steps, hidden] x 2 and [steps, vocab] fp32: the stream-collapsing
                      head, the final norm, and lm_head (fp32, as HYV4ForCausalLM applies it).
         cached_logits_argmax      [steps] what HF's cached generation picked (= input_ids[N:]).
+
+    Batch shapes (meta["batch"]): the generation runs [1, N] and then [1, 1] cached steps; the recorded pass runs
+    [batch_rows, S] (the sequence repeated, row 0 recorded). batch_rows = 1 is the golden; another value is a second
+    recording of the same tokens that shows the reference's own spread across batch shapes.
     """
     import time
 
@@ -402,7 +467,7 @@ def record_decode_golden(
     assert steps >= 1 and N >= 2, (steps, N)
     target = decode_golden_path(num_layers, N, steps, prompt_ids, dtype, root)
     if target.is_file() and not recompute:
-        return torch.load(target, weights_only=False)
+        return _check_pairing(torch.load(target, weights_only=False), target)
 
     t0 = time.perf_counter()
     model = load_truncated_model(path, num_layers, dtype)
@@ -447,8 +512,10 @@ def record_decode_golden(
         with torch.no_grad(), ExitStack() as stack:
             # Only the decode positions are kept as the pass runs (record_layer first_row).
             records = [stack.enter_context(record_layer(layer, N - 1)) for layer in model.layers[:num_layers]]
-            model(input_ids=ids[None, :S], use_cache=False)
+            _RECORD["rows"] = int(batch_rows)
+            model(input_ids=ids[None, :S].repeat(int(batch_rows), 1), use_cache=False)
     finally:
+        _RECORD["rows"] = 1
         for hook in hooks:
             hook.remove()
     layers = []
@@ -472,6 +539,9 @@ def record_decode_golden(
             "dtype": str(dtype),
             "prompt_len": N,
             "steps": steps,
+            "rope_pairing": model.rope_pairing,
+            "batch": {"generate": [1, N], "cached_steps": [1, 1], "record_pass": [int(batch_rows), S]},
+            "threads": torch.get_num_threads(),
             "positions": list(range(N - 1, S)),
             "mlp_layer_types": list(model.config.mlp_layer_types),
             "indexer_types": list(model.config.indexer_types),
@@ -520,11 +590,47 @@ def main():
     parser.add_argument(
         "--prompt-file", default=None, help="text file the long prompt is cut from (with --decode-steps)"
     )
+    parser.add_argument(
+        "--prompt-golden",
+        default=None,
+        help="a decode golden whose prompt (its first --seq-len ids) is used again (with --decode-steps): the same "
+        "tokens under another pairing; it is read whatever pairing it was recorded with",
+    )
+    parser.add_argument(
+        "--batch-rows",
+        type=int,
+        default=1,
+        help="rows of the recorded pass (the sequence repeated, row 0 recorded): 1 for a golden; another value "
+        "records the same tokens with another batch shape (give another --root)",
+    )
+    parser.add_argument("--threads", type=int, default=None, help="torch threads (recorded in the meta)")
+    parser.add_argument(
+        "--pairing",
+        default=None,
+        help="RoPE pairing of this run: half_split | interleaved (default: $HY4_ROPE_PAIRING)",
+    )
     args = parser.parse_args()
+    if args.pairing:
+        os.environ[ROPE_PAIRING_ENV] = args.pairing
+    if args.threads:
+        torch.set_num_threads(args.threads)
+    print(f"RoPE pairing: {rope_pairing()}; goldens under {args.root or GOLDEN_ROOT}")
     if args.decode_steps:
-        ids = prompt_ids_from_text(args.prompt_file, args.seq_len, args.model)
+        if args.prompt_golden:
+            old = torch.load(args.prompt_golden, weights_only=False)
+            assert old["meta"]["prompt_len"] == args.seq_len, (old["meta"]["prompt_len"], args.seq_len)
+            ids = old["input_ids"][: args.seq_len].clone()
+            del old
+        else:
+            ids = prompt_ids_from_text(args.prompt_file, args.seq_len, args.model)
         golden = record_decode_golden(
-            ids, args.decode_steps, args.layers, args.model, root=args.root, recompute=args.recompute
+            ids,
+            args.decode_steps,
+            args.layers,
+            args.model,
+            root=args.root,
+            recompute=args.recompute,
+            batch_rows=args.batch_rows,
         )
         print(decode_golden_path(args.layers, args.seq_len, args.decode_steps, ids, root=args.root))
         print(f"seconds: {golden['meta']['seconds']}")

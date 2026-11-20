@@ -5,11 +5,12 @@
 // models/demos/gpt_oss/tt/fused_decode/kernels/stream_down_union_compute.cpp.
 //
 // This core owns `cols` output tile columns. One DST acquire holds them for the whole union: for union slot i the
-// slot's P activation tiles ([ROWS, 32] BF16, tiles i * P .. of the activation buffer) times this core's columns of
+// slot's P activation tiles ([ROWS, 32] BF16; slot i is the (i / NF)-th slot of finisher i % NF, whose tiles start
+// at tile (i % NF) * SL * P of the activation buffer) times this core's columns of
 // the expert's down weights (one block, column-major) accumulate into DST 0 .. cols - 1 (custom_mm, LoFi, FP32
 // accumulation; split accumulators merged with the last slot).
 //
-// compile-time args: [cb_act, cb_w, cb_out, P, cols]
+// compile-time args: [cb_act, cb_w, cb_out, P, cols, NF, SL]
 
 #include <cstdint>
 
@@ -23,11 +24,16 @@
 #endif
 
 void kernel_main() {
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
     constexpr uint32_t cb_act = get_compile_time_arg_val(0);
     constexpr uint32_t cb_w = get_compile_time_arg_val(1);
     constexpr uint32_t cb_out = get_compile_time_arg_val(2);
     constexpr uint32_t P = get_compile_time_arg_val(3);
     constexpr uint32_t cols = get_compile_time_arg_val(4);
+    constexpr uint32_t NF = get_compile_time_arg_val(5);
+    constexpr uint32_t SL = get_compile_time_arg_val(6);
 
     constexpr bool transpose = false;
     constexpr bool read_transposed = true;  // column-major weights
@@ -52,7 +58,8 @@ void kernel_main() {
     if (U > 0) {
         tile_regs_acquire();
         for (uint32_t i = 0; i < U; ++i) {
-            cb_wait_front(cb_act, (i + 1) * P);  // filled in slot order by the finishers, never popped
+            cb_wait_front(cb_act, (i + 1) * P);  // the writer counts the slots in; the buffer is never popped
+            const uint32_t act0 = ((i % NF) * SL + i / NF) * P;  // the slot's tiles: by finisher, then in its order
 #if PLAIN_TERMS > 1
             const uint32_t terms = i >= first_plain ? PLAIN_TERMS : 1;
 #else
@@ -62,9 +69,9 @@ void kernel_main() {
                 cb_wait_front(cb_w, cols * P);
 #ifndef HY4_NO_MATH
                 if (i + 1 == U && term + 1 == terms) {
-                    custom_mm_block<dest_layout, true, read_transposed>(cb_act, cb_w, i * P, 0, 0, P, cols);
+                    custom_mm_block<dest_layout, true, read_transposed>(cb_act, cb_w, act0, 0, 0, P, cols);
                 } else {
-                    custom_mm_block<dest_layout, false, read_transposed>(cb_act, cb_w, i * P, 0, 0, P, cols);
+                    custom_mm_block<dest_layout, false, read_transposed>(cb_act, cb_w, act0, 0, 0, P, cols);
                 }
 #endif
                 cb_pop_front(cb_w, cols * P);

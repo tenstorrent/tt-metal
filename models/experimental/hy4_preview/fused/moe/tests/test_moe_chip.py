@@ -8,13 +8,16 @@ Checks: the router's scores, the picks as exact ids per row against reference/mo
 the BF16 weights, and the partial output against the golden for the device's own picks. On the mock Galaxy
 (HY4_MOCK=1) the kernels are compiled and the buffers checked; nothing runs. Log lines start with HY4_MK5."""
 
+import os
+
 import pytest
 import torch
 from loguru import logger
 
+import ttnn
 from models.experimental.hy4_preview.fused.moe import layout as L
 from models.experimental.hy4_preview.fused.moe.program import MOCK, RoutedExperts
-from models.experimental.hy4_preview.fused.moe.tests.test_routed import check, random_share_weights
+from models.experimental.hy4_preview.fused.moe.tests.test_routed import ROUNDED_PCC, check, random_share_weights
 
 E = 256
 
@@ -31,6 +34,18 @@ def check_router(op, x, weight, bias, label):
     scores, ids, weights = op.read_router()
     r_scores, r_ids, r_weights = L.route_golden(x, weight, bias)
     err = (scores - r_scores).abs().max().item()
+    dump = os.environ.get("HY4_MOE_DUMP")
+    if dump:  # for offline analysis
+        torch.save(
+            {"x": x, "weight": weight, "bias": bias, "scores": scores, "ids": ids, "weights": weights},
+            f"{dump}/router_{label.replace(' ', '_')}.pt",
+        )
+    logit = lambda s: torch.log(s.clamp(1e-6, 1 - 1e-6) / (1 - s.clamp(1e-6, 1 - 1e-6)))
+    lerr = (logit(scores) - logit(r_scores)).abs()
+    logger.info(
+        f"HY4_MK5 router {label}: logit error per row {[round(v, 3) for v in lerr.mean(dim=1).tolist()]}, per column "
+        f"tile {[round(v, 3) for v in lerr.reshape(lerr.shape[0], -1, 32).mean(dim=(0, 2)).tolist()]}"
+    )
     same = sum(set(ids[r].tolist()) == set(r_ids[r].tolist()) for r in range(L.ROWS))
     ordered = sum(ids[r].tolist() == r_ids[r].tolist() for r in range(L.ROWS))
     biased = r_scores + bias
@@ -53,19 +68,48 @@ def check_router(op, x, weight, bias, label):
     return ids, weights
 
 
+@pytest.mark.parametrize("args", ["sync", "launch"])
+@pytest.mark.parametrize("mode", ["side", "rect"])
 @pytest.mark.parametrize("candidates", [False, True], ids=["scan", "candidates"])
 @pytest.mark.parametrize("share", ["tp32"])
-def test_chip_router_and_experts_random(device, share, candidates):
+def test_chip_router_and_experts_random(device, share, candidates, mode, args):
+    """args "launch": the streams' addresses and the router's bias travel as runtime arguments of the launch
+    (RoutedExperts(stream_rt, bias_rt): one program for many layers). To show that nothing else is read, the cores'
+    sync words are written for zero decoy streams and the hub's bias buffer is zeroed before the run."""
+    launch = args == "launch"
     sh = L.tp_share(int(share[2:]))
     gate, up, down = random_share_weights(sh, E + 1)  # the shared expert: stream entries E and E + 1 (two terms)
     weight, bias = random_router()
     op = RoutedExperts(
-        device, sh, router=True, num_experts=E, n_plain=1, plain_id0=E, plain_terms=2, router_candidates=candidates
+        device,
+        sh,
+        router=True,
+        num_experts=E,
+        n_plain=1,
+        plain_id0=E,
+        plain_terms=2,
+        router_candidates=candidates,
+        mode=mode,
+        down_per_bank=4 if mode == "rect" else 6,
+        stream_rt=launch,
+        bias_rt=launch,
     )
     terms = lambda w: torch.cat((w[:E], L.two_terms(w[E:])), dim=0)
-    w_gu = L.to_device_stream(device, L.gate_up_stream(terms(gate), terms(up), sh))
-    w_dn = L.to_device_stream(device, L.down_stream(terms(down), sh))
+    s_gu, s_dn = L.gate_up_stream(terms(gate), terms(up), sh), L.down_stream(terms(down), sh)
+    w_gu = L.to_device_stream(device, s_gu)
+    w_dn = L.to_device_stream(device, s_dn)
     op.set_router(weight, bias)
+    if launch:
+        real_router = op.w_router
+        op.set_router(torch.zeros_like(weight), bias)  # a decoy router stream ...
+        decoys = (
+            L.to_device_stream(device, torch.zeros_like(s_gu)),
+            L.to_device_stream(device, torch.zeros_like(s_dn)),
+        )
+        op._write_core_words(*decoys)  # ... and decoy expert streams in the cores' sync words (written once)
+        op.w_router = real_router
+        zero = ttnn.from_torch(torch.zeros(1, E, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        ttnn.copy_host_to_device_tensor(zero, op.bias)
     g = torch.Generator().manual_seed(3)
     x = torch.randn(L.ROWS, L.HIDDEN, generator=g).to(torch.bfloat16).float()
     op.set_x(x)
@@ -87,7 +131,7 @@ def test_chip_router_and_experts_random(device, share, candidates):
     s_dev = L.partial_golden(x, *shared_only, value(gate), value(up), value(down), n_plain=1)
     s_ref = L.partial_golden(x, *shared_only, gate, up, down, n_plain=1)
     check(f"chip {share}: what two BFP4 terms cost the shared expert (host arithmetic)", s_ref, s_dev, 0.999)
-    check(f"chip {share} routed + shared vs golden with BFP4-rounded weights", rounded, out, 0.999)
+    check(f"chip {share} routed + shared vs golden with BFP4-rounded weights", rounded, out, ROUNDED_PCC)
     check(f"chip {share} routed + shared vs golden with exact weights", exact, out, 0.97)
 
 
@@ -123,4 +167,4 @@ def test_chip_router_and_experts_ep_random(device, base):
         L.bfp4_round(up.transpose(1, 2)).transpose(1, 2),
         L.bfp4_round(down.transpose(1, 2)).transpose(1, 2),
     )
-    check(f"chip ep experts {base}.. vs golden with BFP4-rounded weights", rounded, out, 0.999)
+    check(f"chip ep experts {base}.. vs golden with BFP4-rounded weights", rounded, out, ROUNDED_PCC)

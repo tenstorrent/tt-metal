@@ -40,6 +40,8 @@ constexpr bool scores_only = get_compile_time_arg_val(1) != 0;     // stop after
 constexpr uint32_t score_tiles_max = get_compile_time_arg_val(2);  // score tiles of a whole bank stream
 // Measurement only: consume the keys and push score tiles without computing them.
 constexpr bool skip_scoring = (get_compile_time_arg_val(3) & 2) != 0;
+// Measurement only: return at once (the launch floor of the program).
+constexpr bool return_at_once = (get_compile_time_arg_val(3) & 4) != 0;
 constexpr uint32_t K = topk;
 constexpr uint32_t blocks_per_tile = 32;
 constexpr uint32_t survivor_slot = 0;
@@ -50,7 +52,13 @@ static_assert(blocks_per_pass >= 1 && blocks_per_pass <= 8 && blocks_per_tile % 
 // srcB <- keys, srcA <- query; relu(K @ Qt) leaves through the packer.
 FORCE_INLINE void enter_qk() {
     reconfig_data_format(cb_sel, cb_qt, cb_p, cb_k);
+#ifdef HY4_SCAN_QT_ROWS
+    // the query's tiles hold [32 heads x 32 dims] (a head a row, as a landing of per-head pieces has it): the
+    // unpacker transposes them
+    matmul_block_init(cb_k, cb_qt, 1, 1, blocks_per_pass, key_block_tiles);
+#else
     matmul_block_init(cb_k, cb_qt, 0, 1, blocks_per_pass, key_block_tiles);
+#endif
     pack_relu_config(ReluConfig::zero());
 }
 
@@ -86,7 +94,11 @@ FORCE_INLINE void score_tile(uint32_t blocks, bool masked, bool centred) {
             // rt_dim > ct_dim: the query tile stays in srcA while the pass's key tiles go through srcB, and
             // block i accumulates in DEST tile i.
             for (uint32_t kt = 0; kt < key_block_tiles; ++kt) {
+#ifdef HY4_SCAN_QT_ROWS
+                matmul_block(cb_k, cb_qt, kt, kt, 0, true, 1, blocks_per_pass, key_block_tiles);
+#else
                 matmul_block(cb_k, cb_qt, kt, kt, 0, false, 1, blocks_per_pass, key_block_tiles);
+#endif
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -177,6 +189,9 @@ FORCE_INLINE void settle_next_program() {
 }  // namespace
 
 void kernel_main() {
+    if constexpr (return_at_once) {
+        return;
+    }
     const uint32_t first_chunk = get_arg_val<uint32_t>(0);   // this bank's first chunk id in the user's stamps
     const uint32_t num_receives = get_arg_val<uint32_t>(1);  // tree levels at which a partner's survivor lands here
     const bool sends = get_arg_val<uint32_t>(2) != 0;        // not a root: the survivor leaves for a partner

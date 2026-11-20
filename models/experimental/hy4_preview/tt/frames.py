@@ -25,11 +25,18 @@ from __future__ import annotations
 
 import torch
 
+from models.experimental.hy4_preview.reference.attention import rope_pairing
 
-def interleave_perm(d: int) -> torch.Tensor:
-    """``x[..., perm]`` turns a half-split RoPE vector into an interleaved one at the same
-    frequencies: ``perm = [0, d/2, 1, d/2 + 1, ...]``."""
+
+def interleave_perm(d: int, pairing: str | None = None) -> torch.Tensor:
+    """``x[..., perm]`` turns a RoPE vector in the reference's order into the device's interleaved one at the same
+    frequencies. The reference's pairing is the process's (reference/attention.py rope_pairing, HY4_ROPE_PAIRING):
+    "half_split" (pairs ``(i, i + d/2)``): ``perm = [0, d/2, 1, d/2 + 1, ...]``; "interleaved" (pairs ``(2i, 2i + 1)``
+    already): the identity. Every frame conversion of this module goes through this one function, so the switch moves
+    the projections' row order, the cached ``k_rope``'s order, the index key's and the cos / sin tables together."""
     assert d % 2 == 0, f"RoPE width must be even, got {d}"
+    if rope_pairing(pairing) == "interleaved":
+        return torch.arange(d)
     h = d // 2
     return torch.stack([torch.arange(h), torch.arange(h) + h], dim=-1).reshape(d)
 

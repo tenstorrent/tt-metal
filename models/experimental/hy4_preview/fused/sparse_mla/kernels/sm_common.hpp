@@ -17,7 +17,11 @@
 namespace sm {
 
 constexpr uint32_t TILE_ROWS = 32;
+#ifndef SM_ROWS
 constexpr uint32_t MAX_USERS = 8;
+#else
+constexpr uint32_t MAX_USERS = 16;  // token rows; rows u and u + GROUPS queue on the same S-blocks
+#endif
 constexpr uint32_t MERGE_STEPS = 3;  // log2(GROUPS), GROUPS == 8
 
 constexpr uint32_t ceil_div(uint32_t a, uint32_t b) { return (a + b - 1) / b; }
@@ -127,6 +131,48 @@ constexpr bool any_receive(const uint32_t* n, uint32_t b) {
     }
     return false;
 }
+
+#ifdef SM_ROWS
+// The receive slots of S-block b: the (user, step) pairs in which a merge partial is due there, users ascending,
+// steps ascending (at most 7 per 8 users with 8 S-blocks: 3 + 1 + 2 + 1 over the relative indices 0, 2, 4, 6). ONE
+// list for the three places that must agree on it: the io kernel publishes the slots in this order (publishable),
+// the compute kernel consumes them in this order, and a sender numbers its partner's slot by it (slot).
+// tests/test_due_slots.py compiles this header on the host and checks the three against each other.
+template <uint32_t USERS, uint32_t GROUPS, uint32_t CHUNK>
+struct DueList {
+    uint8_t user[MAX_USERS * MERGE_STEPS];
+    uint8_t step[MAX_USERS * MERGE_STEPS];
+    uint32_t n = 0;
+
+    DueList(const uint32_t* counts, uint32_t b) {
+        for (uint32_t u = 0; u < USERS; ++u) {
+            const uint32_t r = rel<GROUPS>(b, u);
+            const uint32_t n_act = active_blocks<GROUPS, CHUNK>(counts[u]);
+            for (uint32_t s = 0; s < MERGE_STEPS; ++s) {
+                if (receives(r, n_act, s)) {
+                    user[n] = static_cast<uint8_t>(u);
+                    step[n] = static_cast<uint8_t>(s);
+                    ++n;
+                }
+            }
+        }
+    }
+    // The slot of (u, s); n when nothing is due in it.
+    uint32_t slot(uint32_t u, uint32_t s) const {
+        for (uint32_t k = 0; k < n; ++k) {
+            if (user[k] == u && step[k] == s) {
+                return k;
+            }
+        }
+        return n;
+    }
+    // May slot k be published now? Its partial has arrived (bit `user` of the step's arrival word), or the io
+    // kernel has given up waiting (the slot is then published as it is, so that the compute kernel ends).
+    bool publishable(uint32_t k, const uint32_t* arrived, bool gave_up) const {
+        return gave_up || ((arrived[step[k]] >> user[k]) & 1u) != 0;
+    }
+};
+#endif
 
 // Counts are handed to the compute kernels two per word (a count is at most TOPK < 65536).
 constexpr uint32_t COUNT_WORDS = MAX_USERS / 2;

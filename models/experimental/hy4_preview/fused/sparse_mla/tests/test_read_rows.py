@@ -49,10 +49,10 @@ def test_read_rows(device, rows_per_slot, counts, fidelity):
     op = SparseMla(cfg, device)
     if hs.MOCK:
         ttnn.experimental.prepare_generic_op(
-            [kv, sel, out], op.read_rows_program(kv, sel, out, layer, fidelity=fidelity)
+            [kv, sel, out] + op.io_extra(), op.read_rows_program(kv, sel, out, layer, fidelity=fidelity)
         )
         return
-    ttnn.generic_op([kv, sel, out], op.read_rows_program(kv, sel, out, layer, fidelity=fidelity))
+    ttnn.generic_op([kv, sel, out] + op.io_extra(), op.read_rows_program(kv, sel, out, layer, fidelity=fidelity))
     got = ttnn.to_torch(out)[0, 0].to(torch.bfloat16)
 
     subnormal = hs.fp8_subnormal(kv, device, cfg)

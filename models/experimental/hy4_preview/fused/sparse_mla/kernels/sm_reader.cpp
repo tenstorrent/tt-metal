@@ -20,6 +20,10 @@
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 #include "sm_common.hpp"
+#include "sm_dm.hpp"
+#ifdef SM_FRAMES
+#include "kv_frames.hpp"  // fused/kv_store/kernels: where a stripe row of a paged conversation is
+#endif
 
 void kernel_main() {
 #ifdef SM_NOP
@@ -36,10 +40,18 @@ void kernel_main() {
     constexpr uint32_t STRIDE = get_named_compile_time_arg_val("row_stride");
     constexpr uint32_t LATENT = get_named_compile_time_arg_val("latent");
     constexpr uint32_t SCALE_BLOCKS = get_named_compile_time_arg_val("scale_blocks");
+#ifndef SM_FRAMES
     constexpr uint32_t ROWS_PER_SLOT = get_named_compile_time_arg_val("rows_per_slot");
     constexpr uint32_t SLOT_STRIDE = get_named_compile_time_arg_val("slot_stride");
     constexpr uint32_t BANKS = get_named_compile_time_arg_val("banks");
     constexpr uint32_t SHARD_ROWS = get_named_compile_time_arg_val("shard_rows");
+#else
+    // SM_FRAMES: a row's address comes from the frame table of its user (an L1 tensor under cb_frames, 128 frame
+    // bases per user; fused/kv_store) instead of the slot arithmetic above; with identity tables the same bytes
+    constexpr uint32_t cb_frames = get_named_compile_time_arg_val("cb_frames");
+    constexpr uint32_t SLOT_BYTES = get_named_compile_time_arg_val("slot_bytes");  // bank bytes per layer step
+    static_assert(get_named_compile_time_arg_val("banks") == 8 && get_named_compile_time_arg_val("shard_rows") == 32);
+#endif
     static_assert(USERS <= sm::MAX_USERS && CHUNK % sm::TILE_ROWS == 0 && STRIDE % 64 == 0);
 
     constexpr auto sel_args = TensorAccessorArgs<0>();
@@ -58,6 +70,10 @@ void kernel_main() {
     const uint32_t kv_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t sel_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t layer = get_common_arg_val<uint32_t>(2);
+#ifdef SM_FRAMES
+    volatile tt_l1_ptr uint32_t* frame_bases = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_frames));
+    const uint32_t frame_layer_bytes = layer * SLOT_BYTES;
+#endif
 
     const auto sel = TensorAccessor(sel_args, sel_addr);
     Noc noc;
@@ -77,10 +93,15 @@ void kernel_main() {
         noc_async_read(sel.get_noc_addr(1 + block), reinterpret_cast<uint32_t>(early_ids), CHUNK * sizeof(uint32_t));
     }
     noc_async_read_barrier();
+    // (clamped to the table's capacity like every other reader of the count row: sm_dm.hpp COUNT_CAP)
+    static_assert(get_named_compile_time_arg_val("topk") == sm::COUNT_CAP);
     uint32_t counts[sm::MAX_USERS];
     for (uint32_t u = 0; u < USERS; ++u) {
-        counts[u] = header[u];
+        counts[u] = sm::clamp_count(header[u]);
     }
+#ifdef SM_MASK
+    sm::apply_row_mask<USERS>(counts);
+#endif
 
     sm::for_each_chunk<USERS, GROUPS, CHUNK>(counts, block, [&](uint32_t u, uint32_t c, uint32_t valid) {
         const uint32_t own = sm::own_slabs<NCONV>(sm::ceil_div(valid, sm::TILE_ROWS), conv);
@@ -102,7 +123,11 @@ void kernel_main() {
         cb_push_back(cb_ctrl, 1);
 #endif
 
+#ifndef SM_FRAMES
         const uint32_t page_base = (u * SLOT_STRIDE + layer) * ROWS_PER_SLOT;
+#else
+        volatile tt_l1_ptr uint32_t* frame_table = frame_bases + u * kv_frames::TABLE_FRAMES;
+#endif
         for (uint32_t i = 0; i < own; ++i) {
             const uint32_t first = (conv + i * NCONV) * sm::TILE_ROWS;
             const uint32_t rows = (valid - first) < sm::TILE_ROWS ? (valid - first) : sm::TILE_ROWS;
@@ -111,10 +136,15 @@ void kernel_main() {
             cb_reserve_back(cb_scale, SCALE_BLOCKS);
             const uint32_t dst = get_write_ptr(cb_rows);
             for (uint32_t r = 0; r < rows; ++r) {
+#ifndef SM_FRAMES
                 const uint32_t page = page_base + idx[first + r];
                 const uint64_t src = get_noc_addr_from_bank_id<true>(
                     sm::kv_row_bank<BANKS, SHARD_ROWS>(page),
                     kv_addr + sm::kv_row_offset<BANKS, SHARD_ROWS>(page, STRIDE));
+#else
+                const kv_frames::Loc at = kv_frames::locate(frame_table, frame_layer_bytes, idx[first + r], STRIDE);
+                const uint64_t src = get_noc_addr_from_bank_id<true>(at.bank, kv_addr + at.offset);
+#endif
                 noc_async_read_one_packet(src, dst + r * STRIDE, STRIDE);
             }
             noc_async_read_barrier();

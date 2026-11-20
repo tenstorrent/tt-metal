@@ -45,6 +45,9 @@ inline uint16_t to_bf16(uint64_t v, int32_t frac) {
 }  // namespace
 
 void kernel_main() {
+#ifdef HY4_LAUNCH_ONLY  // measurement only: what launching this program costs
+    return;
+#endif
     const uint32_t x_addr = get_arg_val<uint32_t>(0);
     const uint32_t status_addr = get_arg_val<uint32_t>(1);
     const uint32_t scores_addr = get_arg_val<uint32_t>(2);
@@ -67,6 +70,16 @@ void kernel_main() {
     constexpr uint32_t K = get_compile_time_arg_val(10);
     constexpr uint32_t scale_q16 = get_compile_time_arg_val(11);
     constexpr uint32_t expert_base = get_compile_time_arg_val(12);
+#ifdef HY4_BIAS_ARG
+    // The layer's selection bias as E runtime arguments (Q30 words) from this index on: copied into the bias buffer
+    // before x goes out, so before the router cores or this core read it (one program for many layers).
+    {
+        volatile tt_l1_ptr uint32_t* bias_words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(bias_addr);
+        for (uint32_t e = 0; e < E; ++e) {
+            bias_words[e] = get_arg_val<uint32_t>(HY4_BIAS_ARG + e);
+        }
+    }
+#endif
     constexpr uint32_t expert_count = get_compile_time_arg_val(13);
     constexpr uint32_t n_plain = get_compile_time_arg_val(14);
     constexpr uint32_t plain_id0 = get_compile_time_arg_val(15);
@@ -82,6 +95,8 @@ void kernel_main() {
         status[i] = 0;
     }
     status[hy4moe::ST_RUNS] = runs + 1;
+    // the down cores count themselves here at the end; whoever consumes the output takes the count from zero
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_OUT))[0] = 0;
 #ifdef HY4_TIMING
     const uint32_t t0 = hy4moe::now();
 #endif
@@ -94,7 +109,7 @@ void kernel_main() {
         failed = 1;
     } else if (!hy4moe::writes_flushed()) {
         failed = 4;
-    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, get_semaphore(hy4moe::SEM_X), 1, mc_dests)) {
+    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, hy4moe::sem(hy4moe::SEM_X), 1, mc_dests)) {
         failed = 3;
     }
     if (failed) {
@@ -106,10 +121,12 @@ void kernel_main() {
     status[hy4moe::ST_HUB_TIMING] = hy4moe::now() - t0;
 #endif
     // 2. the scores
-    if (!hy4moe::wait_ge(
-            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(hy4moe::SEM_SCORES)), router_cores)) {
+    volatile tt_l1_ptr uint32_t* delivered =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(hy4moe::sem(hy4moe::SEM_SCORES));
+    if (!hy4moe::wait_ge(delivered, router_cores)) {
         status[hy4moe::ST_ROUTER] = 1;
     }
+    delivered[0] = 0;  // seen: cleared for the next launch
 #ifdef HY4_TIMING
     status[hy4moe::ST_HUB_TIMING + 1] = hy4moe::now() - t0;
 #endif
@@ -228,7 +245,7 @@ void kernel_main() {
         failed = 2;
     } else if (!hy4moe::writes_flushed()) {
         failed = 4;
-    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, get_semaphore(hy4moe::SEM_GO), 1, mc_dests)) {
+    } else if (!hy4moe::grid_mcast_inc(mc_x0, mc_y0, mc_x1, mc_y1, hy4moe::sem(hy4moe::SEM_GO), 1, mc_dests)) {
         failed = 3;
     } else if (!hy4moe::atomics_flushed()) {
         failed = 4;

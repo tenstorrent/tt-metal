@@ -9,8 +9,8 @@ of context each, 75 output tokens per second per user. That is one decode step f
 
 Measured on one Blackhole Galaxy on 2026-11-19 with `tests/test_perf_decode.py` (8x4 mesh, torus fabric, the mesh
 `tt/prefill_bridge.device_params()` opens, plus a 128 MB trace region; checkpoint weights from the decode weight
-cache, BFP8 weights, BFP4 routed experts, BFP8 decode cache). Raw numbers: `/mnt/data/zni/hy4/logs/perf/*.json`,
-logs `/mnt/data/zni/hy4/logs/perf_*.log`.
+cache, BFP8 weights, BFP4 routed experts, BFP8 decode cache). Raw numbers: `generated/hy4_preview/logs/perf/*.json`,
+logs `generated/hy4_preview/logs/perf_*.log`.
 
 Every number below is marked: **(M)** measured on the device, **(A)** arithmetic on measured numbers (for example a
 step of 78 layers from the three kinds of layer), **(E)** an estimate, with how it was made.
