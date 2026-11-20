@@ -1,0 +1,28 @@
+{
+  "op": "moreh_dot",
+  "cases": {
+    "78c6412933a7": {
+      "label": "w2048",
+      "inputs": [[1, 1, 1, 2048]],
+      "axes": {"dtype": "DataType.BFLOAT16", "output_dtype": "DataType.BFLOAT16", "layout": "Layout.TILE"},
+      "placement": {"a": "DRAM_INTERLEAVED", "b": "DRAM_INTERLEAVED", "out": "DRAM_INTERLEAVED"},
+      "compute": {"compute_kernel_config": "op_default"},
+      "data": {"dist": "rand", "seed": 0},
+      "pass": {}
+    }
+  },
+  "results": [
+    {
+      "case": "78c6412933a7",
+      "date": "2026-11-20",
+      "board": {"arch": "blackhole", "dram_channels": 7, "grid": [11, 10]},
+      "method": "device_kernel",
+      "k": 5,
+      "ns_median": 39263.5,
+      "ns_min": 39037.3,
+      "ns_max": 39350.8,
+      "pcc": 1.0,
+      "sol_ns": null
+    }
+  ]
+}
