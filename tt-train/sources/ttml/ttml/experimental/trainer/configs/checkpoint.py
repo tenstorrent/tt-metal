@@ -8,21 +8,18 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class StepSave(BaseModel):
-    """Save every ``frequency`` optimizer steps."""
+    """Save every ``frequency`` optimizer steps, and the final checkpoint on the run's last step."""
 
     model_config = ConfigDict(extra="forbid")
 
     type: Literal["step"] = "step"
+    # A multiple of metrics.train.frequency, and of metrics.validation.frequency when the run validates, so
+    # every checkpoint carries the metrics of its own step. `CheckpointCallback` checks it when training starts.
     frequency: int = Field(default=100, ge=1)
-
-
-class EpochSave(BaseModel):
-    """Save at the end of every ``frequency``-th epoch."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    type: Literal["epoch"] = "epoch"
-    frequency: int = Field(default=1, ge=1)
+    # Checkpoints go to <project_dir>/checkpoints/.
+    project_dir: str = "runs"
+    # The name of the checkpoint of the run's last step.
+    final_checkpoint_name: str = "final"
 
 
 class NoSave(BaseModel):
@@ -49,7 +46,8 @@ class BestRotation(BaseModel):
 
     type: Literal["best"] = "best"
     keep_n: int = Field(default=3, ge=1)
-    # Checkpoints carry the "val/loss" of the latest validation.
+    # Checkpoints carry the metrics MetricsCallback logs, of their own step: "val/loss" needs "loss" in
+    # metrics.validation.metric_names, and a run that validates.
     metric: str = "val/loss"
     # "min" keeps the lowest values, "max" the highest.
     mode: Literal["min", "max"] = "min"
@@ -89,7 +87,7 @@ class CheckpointFormat(BaseModel):
 
 
 # `type` picks one, and with it the other fields it takes.
-SaveStrategy = Annotated[Union[StepSave, EpochSave, NoSave], Field(discriminator="type")]
+SaveStrategy = Annotated[Union[StepSave, NoSave], Field(discriminator="type")]
 RotationStrategy = Annotated[Union[LastRotation, BestRotation, NoRotation], Field(discriminator="type")]
 
 
@@ -108,8 +106,3 @@ class CheckpointConfig(BaseModel):
     # Unset starts from the pretrained weights.
     init_strategy: Optional[InitStrategy] = None
     format: CheckpointFormat = Field(default_factory=CheckpointFormat)
-
-    # Checkpoints go to <project_dir>/checkpoints/.
-    project_dir: str = "runs"
-    # Saved at the end of the run unless save_strategy is "none".
-    final_checkpoint_name: str = "final"

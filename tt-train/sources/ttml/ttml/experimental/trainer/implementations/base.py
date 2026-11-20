@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import gc
 import itertools
+import math
 import random
 import sys
 import traceback
@@ -17,8 +18,7 @@ import numpy as np
 from tqdm import tqdm
 
 from ..callbacks.callback import CallbackHandler
-from ..configs import CheckpointConfig, TrainerConfig
-from ..managers.checkpoint import CheckpointManager
+from ..configs import TrainerConfig
 from ..managers.logging import TrainingLogger
 
 
@@ -69,6 +69,7 @@ class Trainer(ABC):
             self._seed()
             self.train_dataloader, self.val_dataloader = self._load_dataloaders()
             self._check_train_data()
+            self._check_val_data()
             self.device_manager = self._create_device_manager()
             self.model = self._load_model()
             self.optimizer = self._load_optimizer()
@@ -102,9 +103,10 @@ class Trainer(ABC):
 
         accumulation_steps = self.config.gradient_accumulation_steps
         total_batches = self._total_batches()
+        total_steps = self.total_steps()
         with self._train_lifecycle():
             self.step_loss = None
-            if self._validation_enabled():
+            if self.validation_enabled:
                 self.validate()
 
             self._train_mode()
@@ -148,7 +150,10 @@ class Trainer(ABC):
                     window_start = index + 1
                     window = min(accumulation_steps, total_batches - window_start)
                     self.global_step += 1
-                    if self._validation_enabled() and self.global_step % self._validation_steps_freq() == 0:
+                    # Also on the last step, so the final checkpoint carries the loss of the weights it holds.
+                    if self.validation_enabled and (
+                        self.global_step % self._validation_frequency() == 0 or self.global_step == total_steps
+                    ):
                         self.validate()
                     self.callback_handler("on_step_end", self.global_step)
 
@@ -172,16 +177,24 @@ class Trainer(ABC):
                 self.callback_handler("on_validation_batch_end", batch, loss)
                 self._clean_graph_state()
 
-        # 0.0 when the validation set has no full batch.
-        val_loss = total_loss / num_batches if num_batches else 0.0
+        # `_check_val_data` rejected a validation split without a full batch.
+        val_loss = total_loss / num_batches
         self.callback_handler("on_validation_end", val_loss)
         self._train_mode()
 
-    def _validation_enabled(self) -> bool:
-        return self.val_dataloader is not None and self._validation_steps_freq() > 0
+    @property
+    def validation_enabled(self) -> bool:
+        """Whether the run validates: ``metrics.validation.frequency`` is set. ``setup`` rejects a run that sets it
+        without a validation batch to run."""
+        return self.val_dataloader is not None and self._validation_frequency() > 0
 
-    def _validation_steps_freq(self) -> int:
-        return self.config.metrics.validation.steps_freq
+    def _validation_frequency(self) -> int:
+        return self.config.metrics.validation.frequency
+
+    def total_steps(self) -> int:
+        """The optimizer steps the run makes, as the stopping criterion sets them; the last one is
+        ``global_step == total_steps()``."""
+        return math.ceil(self._total_batches() / self.config.gradient_accumulation_steps)
 
     def _total_batches(self) -> int:
         """The batches the run trains on, as the stopping criterion sets them: ``limit`` epochs of
@@ -199,6 +212,19 @@ class Trainer(ABC):
         """Raise if the train data has no batch: the batch stream would never yield one."""
         if len(self.train_dataloader) == 0:
             raise ValueError("dataset: the train split has no full batch")
+
+    def _check_val_data(self) -> None:
+        """Raise if validation is asked for but there is no validation batch to run."""
+        frequency = self._validation_frequency()
+        if frequency == 0:
+            return
+        if self.val_dataloader is None:
+            reason = "the dataset has no validation split"
+        elif len(self.val_dataloader) == 0:
+            reason = "the validation split has no full batch"
+        else:
+            return
+        raise ValueError(f"metrics.validation.frequency: it is {frequency}, but {reason}; set it to 0 to not validate")
 
     def _batch_stream(self) -> Iterator[tuple[int, Any]]:
         """``(epoch, batch)`` for every batch of every epoch, from epoch 0, without end; the loop takes as many as
@@ -298,7 +324,7 @@ class Trainer(ABC):
 
     @abstractmethod
     def loss_to_float(self, loss: Any) -> float:
-        """Read a loss from ``_accumulate_loss`` (or the ``0.0`` of an empty validation set) as a float."""
+        """Read a loss from ``_accumulate_loss`` as a float."""
 
     @abstractmethod
     def parameter_counts(self) -> tuple[int, int]:
@@ -314,11 +340,6 @@ class Trainer(ABC):
 
         ``metadata`` (step, epoch, metrics) is stored alongside.
         """
-
-    def create_checkpoint_manager(
-        self, config: CheckpointConfig, logger: Optional[TrainingLogger] = None
-    ) -> CheckpointManager:
-        return CheckpointManager(config, save=self.save_checkpoint, logger=logger)
 
     # ------------------------------------------------------------------ teardown
 

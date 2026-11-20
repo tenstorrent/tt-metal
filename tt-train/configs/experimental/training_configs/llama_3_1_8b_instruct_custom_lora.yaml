@@ -48,4 +48,4 @@ checkpoint:
   save_strategy:
     type: step
     frequency: 200
-  project_dir: runs/llama_3_1_8b_instruct_custom_lora
+    project_dir: runs/llama_3_1_8b_instruct_custom_lora

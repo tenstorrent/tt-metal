@@ -129,7 +129,7 @@ Unknown fields are errors, so a typo fails instead of being ignored. Required fi
 | `max_grad_norm` | `0.0` | Clip the global gradient norm to this before every optimizer step; 0 disables clipping. |
 | `seed` | `0` | Seeds initialization, LoRA dropout and data shuffling. |
 | `stopping_criteria` | `type: epoch`, `limit: 1` | When the run ends; see [Stopping criteria](#stopping-criteria). |
-| `metrics` | | Two sections, `train` and `validation`, each with `steps_freq` and `metric_names`; see [Metrics and validation](#metrics-and-validation). |
+| `metrics` | | Two sections, `train` and `validation`, each with `frequency` and `metric_names`; see [Metrics and validation](#metrics-and-validation). |
 | `logging` | | `log_level` (`INFO`), `use_wandb` (false), `wandb_project`, `wandb_run_name`, `wandb_tags`. |
 | `checkpoint` | | See [Checkpoints](#checkpoints). |
 
@@ -160,19 +160,25 @@ The `metrics` section has a `train` and a `validation` section with the same fie
 ```yaml
 metrics:
   train:
-    steps_freq: 10
+    frequency: 10
     metric_names: [loss, learning_rate]
   validation:
-    steps_freq: 50
+    frequency: 50
     metric_names: [loss]
 ```
 
 | Field | `train` | `validation` |
 |---|---|---|
-| `steps_freq` | `10`. The metrics are averaged over and logged every this many optimizer steps. | `0`. The run validates before training and every this many optimizer steps; 0 disables validation. |
+| `frequency` | `10`. The metrics are averaged over and logged every this many optimizer steps, and on the last step. | `0`. The run validates before training, every this many optimizer steps, and on the last step; 0 disables validation. |
 | `metric_names` | `[loss]`; `learning_rate` also works. | `[loss]`. |
 
-Train metrics are logged as `train/<name>` and validation metrics as `val/<name>`.
+Train metrics are logged as `train/<name>` and validation metrics as `val/<name>`. Every train log also has
+`train/epoch`, the epoch the step is in (0-based, as checkpoints record it). On the last step the train metrics are
+averaged over the steps since the previous log, which may be fewer than `frequency`.
+
+A run with a validation `frequency` but no validation data fails in `setup`, before the device is opened. That is a
+`custom` dataset without `val_dataset_path`, or a validation split with fewer examples than one batch; set the
+validation `frequency` to 0 to train without validation.
 
 ### Several optimizers
 
@@ -231,42 +237,49 @@ The `checkpoint` section:
 
 | Field | Default | Description |
 |---|---|---|
-| `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved at the end. |
+| `save_strategy` | `type: none` | When to save; see below. Unless `none`, the final checkpoint is also saved on the last step. |
 | `rotation_strategy` | `type: last` | Which checkpoints to keep; see below. |
 | `init_strategy` | unset | A checkpoint to start from; see [Starting from a checkpoint](#starting-from-a-checkpoint). Unset starts from the pretrained weights. |
 | `format` | `type: hf` | How a checkpoint stores the model; see above. |
-| `project_dir` | `runs` | Checkpoints go in `<project_dir>/checkpoints/`. |
-| `final_checkpoint_name` | `final` | |
 
 Each strategy is a section whose `type` picks it, and with it the other fields it takes:
 
 ```yaml
 metrics:
   validation:
-    steps_freq: 50
+    frequency: 50
 checkpoint:
   save_strategy:
     type: step
     frequency: 100
+    project_dir: runs/my_run
   rotation_strategy:
     type: best
     keep_n: 2
-  project_dir: runs/my_run
 ```
 
 A field another `type` doesn't take is an error, so to change the type with `--set`, replace the whole section:
-`--set "checkpoint.save_strategy={type: epoch}"`.
+`--set "checkpoint.save_strategy={type: none}"`.
 
 | `save_strategy` | Saves |
 |---|---|
-| `step` | Every `frequency` (100) optimizer steps. |
-| `epoch` | At the end of every `frequency`-th (1) epoch. |
+| `step` | Every `frequency` (100) optimizer steps, and the final checkpoint on the last step, named `final_checkpoint_name` (`final`). Checkpoints go in `<project_dir>/checkpoints/`, `project_dir` defaulting to `runs`. |
 | `none` | Nothing, not even the final checkpoint. |
+
+Every checkpoint carries the metrics of its own step, as `trainer_state.json` and `checkpoint_history.json` record
+them: the latest value of every metric `MetricsCallback` logged, such as `train/loss` and `val/loss`. The step and
+epoch are recorded next to them, as `step` and `epoch`.
+`MetricsCallback` must come before `CheckpointCallback` in the callbacks; without it, checkpoints carry no metrics.
+So `save_strategy.frequency` must be a multiple of `metrics.train.frequency`, and of `metrics.validation.frequency`
+when the run validates; otherwise the job stops when training starts, before the first step.
+The run's last step always logs and validates, so the final checkpoint's metrics are its own too, whether or not the
+stopping limit is a multiple of `frequency`. A step that is both a multiple of `frequency` and the last step saves
+one checkpoint, the final one.
 
 | `rotation_strategy` | Keeps |
 |---|---|
 | `last` | The `keep_n` (3) most recent checkpoints. |
-| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, from the latest validation, so it needs `metrics.validation.steps_freq`): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
+| `best` | The `keep_n` (3) with the best `metric` (`val/loss`, so it needs `metrics.validation.frequency` and validation data; without them the job stops when training starts): the lowest with `mode: min` (the default), the highest with `mode: max`. And the latest checkpoint. |
 | `none` | Every checkpoint. |
 
 Rotation never deletes the checkpoint just saved, and only deletes checkpoints of the same run: an earlier run's in the
@@ -326,8 +339,9 @@ finally:
 - **Stopping.** An exception from a callback ends the run: `on_train_error` sees it, then `train` raises it. To
   cancel a job, raise an exception of your own and catch it around `train`.
 - **Reading the run.** `trainer.loss_to_float(loss)`, `trainer.current_learning_rate()` (a list, one LR per
-  optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step` and
-  `trainer.epoch`.
+  optimizer in `optimizer` order), `trainer.parameter_counts()` (total, trainable), `trainer.global_step`,
+  `trainer.epoch`, `trainer.total_steps()` (the last step is `global_step == total_steps()`) and
+  `trainer.validation_enabled`.
 - **Saving on your own schedule.** `trainer.save_checkpoint(path, metadata)` writes a checkpoint as the run saves
   them.
 

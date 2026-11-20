@@ -3,7 +3,7 @@
 #   python -m ttml.experimental.trainer \
 #     --config tt-train/configs/experimental/training_configs/llama_3_2_1b_instruct_sst2_lora.yaml
 #
-# Checkpoints are PEFT adapter directories under <project_dir>/checkpoints/.
+# Checkpoints are PEFT adapter directories under <checkpoint.save_strategy.project_dir>/checkpoints/.
 model:
   name: meta-llama/Llama-3.2-1B-Instruct
   lora:
@@ -38,4 +38,4 @@ checkpoint:
   save_strategy:
     type: step
     frequency: 100
-  project_dir: runs/llama_3_2_1b_instruct_sst2_lora
+    project_dir: runs/llama_3_2_1b_instruct_sst2_lora

@@ -19,17 +19,19 @@ HISTORY_FILE = "checkpoint_history.json"
 class CheckpointManager:
     """When a run saves checkpoints, and which of them it keeps.
 
-    Owns ``<project_dir>/checkpoints/``: the history file and the rotation ``rotation_strategy`` picks. Writing a
-    checkpoint directory is delegated to ``save(path, metadata)``, which ``Trainer.create_checkpoint_manager`` binds
-    to the trainer's ``save_checkpoint``.
+    Owns ``<save_strategy.project_dir>/checkpoints/``: the history file and the rotation ``rotation_strategy`` picks.
+    Writing a checkpoint directory is delegated to ``save(path, metadata)``, which ``CheckpointCallback`` binds to the
+    trainer's ``save_checkpoint``. Only a run that saves, with a "step" ``save_strategy``, has one.
     """
 
     def __init__(self, config: CheckpointConfig, save: Callable[..., None], logger: Any = None) -> None:
+        if config.save_strategy.type != "step":
+            raise ValueError(f"checkpoint.save_strategy: a {config.save_strategy.type!r} run saves no checkpoints")
         self.config = config
         self._save = save
         self.logger = logger if logger is not None else logging.getLogger(__name__)
 
-        self.checkpoint_dir = os.path.join(config.project_dir, "checkpoints")
+        self.checkpoint_dir = os.path.join(config.save_strategy.project_dir, "checkpoints")
         os.makedirs(self.checkpoint_dir, exist_ok=True)
         self.history_file = os.path.join(self.checkpoint_dir, HISTORY_FILE)
         # A run only rotates away the checkpoints it saved itself: an earlier run's in the same project_dir, such as
@@ -39,12 +41,9 @@ class CheckpointManager:
         # The checkpoints of this run that rotation kept, oldest first.
         self.history: list[dict] = []
 
-    def should_save_checkpoint(self, current_count: int) -> bool:
-        """Whether to save once ``current_count`` steps or epochs are done, whichever ``save_strategy`` counts."""
-        strategy = self.config.save_strategy
-        if strategy.type == "none":
-            return False
-        return current_count % strategy.frequency == 0
+    def should_save_checkpoint(self, global_step: int) -> bool:
+        """Whether ``save_strategy`` saves once ``global_step`` optimizer steps are done."""
+        return global_step % self.config.save_strategy.frequency == 0
 
     def save_checkpoint(
         self,

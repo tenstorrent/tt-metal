@@ -11,18 +11,31 @@ from .callback import Callback
 
 
 class MetricsCallback(Callback):
-    """Logs the model size, and the metrics ``config.metrics`` asks for, through ``trainer.logger``."""
+    """Logs the model size, and the metrics ``config.metrics`` asks for, through ``trainer.logger``.
+
+    ``values`` keeps the latest value of every metric logged in the run, by its logged name, for other callbacks
+    to read, as ``CheckpointCallback`` does. ``train/epoch`` is logged too, but is the run's progress, not a metric,
+    so ``values`` leaves it out. A callback that reads ``values`` comes after this one in the callbacks, so a step's
+    metrics are in it when its own hooks for that step run.
+
+    TODO: once more callbacks track metrics, move ``values`` to one tracker the trainer owns: every metrics callback
+    writes into it, ``CallbackHandler`` runs those callbacks before the others, and the others read from it.
+    """
 
     def __init__(self) -> None:
-        # Sum of the step losses since the last log, and their number: `steps_freq`, or fewer before the first
-        # log of a resumed run.
+        self.values: dict[str, Any] = {}
+        # Sum of the step losses since the last log, and their number: `frequency`, or fewer for the run's last
+        # log, on its last step.
         self._running_loss: Any = None
         self._running_steps = 0
+        self._total_steps = 0
 
     def on_train_start(self, trainer: Any) -> None:
         # A callback outlives the run; drop what a failed run left behind.
+        self.values = {}
         self._running_loss = None
         self._running_steps = 0
+        self._total_steps = trainer.total_steps()
         total, trainable = trainer.parameter_counts()
         trainer.logger.log_model_info(
             {
@@ -40,14 +53,15 @@ class MetricsCallback(Callback):
 
     def on_step_end(self, trainer: Any, global_step: int) -> None:
         config = trainer.config.metrics.train
-        if global_step % config.steps_freq == 0:
+        if global_step % config.frequency == 0 or global_step == self._total_steps:
             available = {
                 "loss": trainer.loss_to_float(self._running_loss) / self._running_steps,
                 "learning_rate": trainer.current_learning_rate(),
             }
             metrics = _select(available, config.metric_names, "train")
-            if metrics:
-                trainer.logger.log_metrics(metrics, step=global_step, commit=False)
+            self.values.update(metrics)
+            # The trainer's 0-based epoch, as checkpoints record it.
+            trainer.logger.log_metrics({**metrics, "train/epoch": trainer.epoch}, step=global_step, commit=False)
             self._running_loss = None
             self._running_steps = 0
         # Commit once per step, so validation metrics logged during the step land on it too.
@@ -58,6 +72,17 @@ class MetricsCallback(Callback):
         metrics = _select({"loss": trainer.loss_to_float(val_loss)}, names, "val")
         if metrics:
             trainer.logger.log_metrics(metrics, step=trainer.global_step, commit=False)
+            self.values.update(metrics)
+
+    def tracked_names(self, trainer: Any) -> list[str]:
+        """The names ``values`` keys the run's metrics by. ``trainer`` is set up."""
+        config = trainer.config.metrics
+        # Placeholder values: only the names, and how many values a metric has, matter here.
+        train = {"loss": 0.0, "learning_rate": trainer.current_learning_rate()}
+        names = list(_select(train, config.train.metric_names, "train"))
+        if trainer.validation_enabled:
+            names += _select({"loss": 0.0}, config.validation.metric_names, "val")
+        return names
 
     def on_setup_error(self, trainer: Any, exception: BaseException) -> None:
         if trainer.logger is not None:

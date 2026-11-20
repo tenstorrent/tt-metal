@@ -38,4 +38,4 @@ checkpoint:
   save_strategy:
     type: step
     frequency: 100
-  project_dir: runs/llama_3_1_8b_instruct_alpaca_lora
+    project_dir: runs/llama_3_1_8b_instruct_alpaca_lora
