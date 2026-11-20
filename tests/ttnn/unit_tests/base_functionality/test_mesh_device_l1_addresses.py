@@ -2,8 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""MeshDevice.l1_allocator_base and MeshDevice.lowest_occupied_compute_l1_address: where a program's circular buffers
-start, and the lowest L1 buffer they must end below."""
+"""MeshDevice.lowest_occupied_compute_l1_address: the lowest L1 buffer a program's circular buffers must end below, above
+the L1 allocator base (ttnn.get_allocator_base_address)."""
 
 import torch
 
@@ -21,7 +21,7 @@ def _l1_tensor(device, width):
 
 
 def test_l1_allocator_base(device):
-    base = device.l1_allocator_base()
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
     assert base > 0
     t = _l1_tensor(device, 32 * 64)
     assert t.buffer_address() >= base  # every L1 buffer is above the allocator base
@@ -29,7 +29,7 @@ def test_l1_allocator_base(device):
 
 
 def test_lowest_occupied_compute_l1_address(device):
-    base = device.l1_allocator_base()
+    base = ttnn.get_allocator_base_address(device, ttnn.BufferType.L1)
     before = device.lowest_occupied_compute_l1_address()
 
     a = _l1_tensor(device, 32 * 64)
