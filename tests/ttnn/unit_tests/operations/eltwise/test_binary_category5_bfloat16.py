@@ -182,6 +182,37 @@ def test_divide_round_modes_near_integer(device, rounding_mode, layout):
 
 
 @pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
+@pytest.mark.parametrize("placement", ["row_major_sub_core_grids", "sharded_output_tensor"])
+def test_divide_round_modes_narrowing_placement(device, rounding_mode, placement):
+    """The float32 quotient is narrowed to bfloat16 after rounding; that step
+    has to accept a row-major tensor on a restricted grid and a sharded
+    preallocated output without an explicit memory_config.
+    """
+    torch.manual_seed(0)
+    input_a = (torch.randn(1, 1, 64, 64) * 100).bfloat16()
+    input_b = (torch.rand(1, 1, 64, 64) * 9 + 1).bfloat16()
+    layout = ttnn.ROW_MAJOR_LAYOUT if placement == "row_major_sub_core_grids" else ttnn.TILE_LAYOUT
+    tt_a = ttnn.from_torch(input_a, layout=layout, device=device)
+    tt_b = ttnn.from_torch(input_b, layout=layout, device=device)
+
+    for rhs, torch_rhs in [(tt_b, input_b.float()), (3.0, 3.0)]:
+        if placement == "row_major_sub_core_grids":
+            grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+            result = ttnn.divide(tt_a, rhs, rounding_mode=rounding_mode, sub_core_grids=grid)
+        else:
+            sharded = ttnn.create_sharded_memory_config(
+                (64, 64), ttnn.CoreGrid(y=1, x=2), ttnn.ShardStrategy.WIDTH, use_height_and_width_as_shard_shape=False
+            )
+            result = ttnn.from_torch(
+                torch.zeros(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=sharded
+            )
+            ttnn.divide(tt_a, rhs, rounding_mode=rounding_mode, output_tensor=result)
+            assert result.memory_config() == sharded
+        golden = torch.div(input_a.float(), torch_rhs, rounding_mode=rounding_mode).bfloat16()
+        assert_equal(golden.float(), ttnn.to_torch(result).float())
+
+
+@pytest.mark.parametrize("rounding_mode", ["trunc", "floor"])
 def test_divide_trunc_floor_ignore_fast_mode(device, rounding_mode):
     """fast_and_approximate_mode is suppressed on bfloat16 for rounding_mode
     in {trunc, floor} (workaround for #43209): fast_and_approximate_mode=True

@@ -107,6 +107,35 @@ PromotedScalarInput promote_int32_scalar_input(
     return {std::move(operation_input), std::move(operation_sub_core_grids), std::move(operation_mem_config)};
 }
 
+// The float32 quotient lives in the destination's memory layout, because the narrowing typecast requires its
+// input and output layouts to match.
+std::optional<MemoryConfig> rounded_quotient_mem_config(
+    const std::optional<MemoryConfig>& output_mem_config, const std::optional<Tensor>& output_tensor) {
+    if (output_mem_config.has_value() || !output_tensor.has_value()) {
+        return output_mem_config;
+    }
+    return output_tensor->memory_config();
+}
+
+Tensor narrow_rounded_quotient(
+    const Tensor& rounded,
+    DataType dtype,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    // Standalone typecast rejects a row-major tensor on a restricted grid; unary TYPECAST stages it in full tiles.
+    if (rounded.layout() == Layout::ROW_MAJOR && sub_core_grids.has_value()) {
+        return unary::detail::unary_impl(
+            rounded,
+            {unary::EltwiseUnaryWithParam{
+                unary::UnaryOpType::TYPECAST, {static_cast<float>(rounded.dtype()), static_cast<float>(dtype)}}},
+            output_mem_config,
+            output_tensor,
+            sub_core_grids);
+    }
+    return ttnn::typecast(rounded, dtype, output_mem_config, output_tensor, sub_core_grids);
+}
+
 Tensor restore_scalar_output_layout(
     const Tensor& input,
     Layout operation_layout,
@@ -417,6 +446,8 @@ Tensor div_scalar_impl(
     const std::optional<const DataType> quotient_dtype =
         cast_after_rounding ? std::optional<const DataType>{DataType::FLOAT32} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
+    const std::optional<MemoryConfig> quotient_mem_config =
+        cast_after_rounding ? rounded_quotient_mem_config(output_mem_config, output_tensor) : output_mem_config;
 
     // ttnn::divide's tensor-scalar overload takes no scalar_is_lhs, so go straight to the
     // primitive here to forward it.
@@ -425,7 +456,7 @@ Tensor div_scalar_impl(
         value,
         binary::BinaryOpType::DIV,
         quotient_dtype,
-        output_mem_config,
+        quotient_mem_config,
         quotient_output,
         post_activations,
         lhs_activations,
@@ -436,12 +467,12 @@ Tensor div_scalar_impl(
         scalar_is_lhs);
 
     Tensor rounded = (rounding_mode == "trunc")
-                         ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
-                         : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+                         ? ttnn::trunc(divided.value(), quotient_mem_config, quotient_output, sub_core_grids)
+                         : ttnn::floor(divided.value(), quotient_mem_config, quotient_output, sub_core_grids);
     if (!cast_after_rounding) {
         return rounded;
     }
-    return ttnn::typecast(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
+    return narrow_rounded_quotient(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 }  // namespace
@@ -627,12 +658,14 @@ Tensor div(
     const std::optional<const DataType> quotient_dtype =
         cast_after_rounding ? std::optional<const DataType>{DataType::FLOAT32} : output_dtype;
     const std::optional<Tensor> quotient_output = cast_after_rounding ? std::optional<Tensor>{} : output_tensor;
+    const std::optional<MemoryConfig> quotient_mem_config =
+        cast_after_rounding ? rounded_quotient_mem_config(output_mem_config, output_tensor) : output_mem_config;
 
     std::optional<Tensor> divided = ttnn::divide(
         input_a,
         input_b,
         quotient_dtype,
-        output_mem_config,
+        quotient_mem_config,
         quotient_output,
         post_activations,
         lhs_activations,
@@ -642,12 +675,12 @@ Tensor div(
         sub_device_id);
 
     Tensor rounded = (rounding_mode == "trunc")
-                         ? ttnn::trunc(divided.value(), output_mem_config, quotient_output, sub_core_grids)
-                         : ttnn::floor(divided.value(), output_mem_config, quotient_output, sub_core_grids);
+                         ? ttnn::trunc(divided.value(), quotient_mem_config, quotient_output, sub_core_grids)
+                         : ttnn::floor(divided.value(), quotient_mem_config, quotient_output, sub_core_grids);
     if (!cast_after_rounding) {
         return rounded;
     }
-    return ttnn::typecast(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
+    return narrow_rounded_quotient(rounded, result_dtype, output_mem_config, output_tensor, sub_core_grids);
 }
 
 Tensor div_no_nan(
