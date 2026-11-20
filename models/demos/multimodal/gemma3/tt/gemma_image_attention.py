@@ -269,6 +269,7 @@ class TtGemmaImageAttention(LightweightModule):
             attn_mask=mask,
             program_config=sdpa_cfg,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
 
         # deallocate keys and values
