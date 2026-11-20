@@ -777,7 +777,11 @@
   # prefill on the 8192-token bucket grid (one bucket plus a decode token per slot per step), 16 resident users at 128 K (the served 128 K profile of tt-inference-server). The
   # caches live under $TT_CACHE_PATH (the adapter's default): the tile cache glm53_tile_cache_v3 is the e2e row's,
   # built on its first run (mlperf write access); the permuted expert copies glm53_fused_experts_cache.
-  tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "prefill_chunk_alignment": 8192, "decode_interleave_enabled": false}'
+  # seeded_sampling_policy host: a request with an API seed is sampled on the host in prefill and decode, so its random
+  # stream does not depend on its companions (the plugin picks one sampler per forward, and a GLM forward goes to the
+  # host when any companion has top_k > max_device_top_k, 10 on the 8x4, or a penalty). Unseeded requests, the
+  # benchmark included, keep their route.
+  tt-config: '{"fabric_config": "FABRIC_1D", "fabric_reliability_mode": "RELAXED_INIT", "trace_region_size": 3221225472, "l1_small_size": 32768, "worker_l1_size": 1280896, "sample_on_device_mode": "all", "seeded_sampling_policy": "host", "prefill_chunk_alignment": 8192, "decode_interleave_enabled": false}'
   # No JSON-valued arguments here: the workflow embeds the matrix in a single-quoted bash literal, so quotes break it.
   # No --reasoning-parser: the plugin's sampling suite reads message.content (bad_words, structured output with an
   # 8-token cap), which a reasoning parser empties into reasoning_content; no other entry here runs one
