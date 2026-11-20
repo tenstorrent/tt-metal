@@ -228,17 +228,17 @@ else
       "$probe" >"$sig_log" 2>&1 &
   ttrun_pid=$!
   for _ in $(seq 1 60); do [ "$(ranks_still_alive)" = "$num_hosts" ] && break; sleep 1; done  # all ranks up first
-  kill -INT "$ttrun_pid" 2>/dev/null  # the interrupt tt-run relays to the launcher, which fans it out to the ranks
+  kill -INT "$ttrun_pid" 2>/dev/null  # tt-run sends SIGTERM to every rank on every host through PRRTE job control
   for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
   kill -9 "$ttrun_pid" 2>/dev/null || true
   wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
-  caught=$(grep -c "caught signal" "$sig_log" 2>/dev/null || echo 0)
+  caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null || echo 0)
   sleep 2; sig_alive=$(ranks_still_alive)
   grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
   if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then
-    echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught the forwarded signal, nothing left; exit $sig_rc)"
+    echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught SIGTERM, nothing left; exit $sig_rc)"
   else
-    echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving the signal, or a leftover remains)"
+    echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught SIGTERM=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving SIGTERM, or a leftover remains)"
     echo "---- tt-run output ----"; tail -40 "$sig_log"
     failures=$((failures + 1)); kill_stragglers
   fi

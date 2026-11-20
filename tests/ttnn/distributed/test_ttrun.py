@@ -1338,13 +1338,25 @@ class TestJobOwnership:
     """tt-run owns the job (teardown plan P5, P6, P7, P19): the wall clock on the mpirun line when asked for, signals
     forwarded to the launcher, leftovers ended and reported."""
 
-    def test_ttrun_adds_no_timeout_of_its_own(self, sample_rank_binding_yaml):
-        from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
+    def test_ttrun_adds_no_timeout_or_signal_forwarding_of_its_own(self, sample_rank_binding_yaml, tmp_path):
+        from ttnn.distributed.ttrun import (
+            build_generate_rank_bindings_mpi_cmd,
+            build_mpi_command,
+            parse_binding_config,
+        )
 
         # The overall wall clock is PRRTE's own --timeout, reached only through --mpi-args; tt-run never adds one.
+        # A stop reaches the ranks through PRRTE job control (tt-run-signal), so neither launch line asks PRRTE to
+        # forward a signal (the SIGUSR1 relay is gone).
         config = parse_binding_config(sample_rank_binding_yaml)
         cmd = build_mpi_command(config, ["echo"], mpi_args=["--oversubscribe"])
         assert "--timeout" not in cmd
+        executable, mgd_path = tmp_path / "generate_rank_bindings", tmp_path / "mesh.textproto"
+        executable.touch()
+        mgd_path.touch()
+        discovery = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, ["node1"], tmp_path / "output")
+        for line in (cmd, discovery):
+            assert not any("forward_signals" in a for a in line), line
 
     def test_user_timeout_in_mpi_args_is_passed_through(self, sample_rank_binding_yaml):
         from ttnn.distributed.ttrun import build_mpi_command, parse_binding_config
@@ -1359,37 +1371,150 @@ class TestJobOwnership:
         from ttnn.distributed.ttrun import PRTE_TIMEOUT_EXIT_CODE, run_launcher
 
         # A launcher that exits with PRRTE's timeout code and leaves nothing: tt-run returns it unchanged, never
-        # reclassified as 0 or as a tt-run failure.
-        rc = run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        # reclassified as 0 or as a tt-run failure. The wall clock killed every rank, so tt-run says the job was
+        # forced down and that the devices may need a reset.
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", f"exit {PRTE_TIMEOUT_EXIT_CODE}"], cwd=Path.cwd())
+        )
         assert rc == PRTE_TIMEOUT_EXIT_CODE
+        assert "job forced down" in text and "PRRTE --timeout" in text and "tt-smi -r" in text, text
+        assert f"job end: outcome=forced exit={PRTE_TIMEOUT_EXIT_CODE}" in text, text
 
-    def test_run_launcher_passes_a_rank_failure_code_through(self):
+    # prterun's own banners, captured from Open MPI 5.0.7 / PRRTE 3.0.8 (line wrapping as printed).
+    _BANNER_SIGKILL = "prterun noticed that process rank 1 with PID 4242 on node nodeB exited on\nsignal 9 (Killed).\n"
+    _BANNER_EXIT_CODE = (
+        "prterun detected that one or more processes exited with non-zero status,\n"
+        "thus causing the job to be terminated. The first process to do so was:\n\n"
+        "   Process name: [prterun-nodeA-897012@1,1]\n   Exit code:    7\n"
+    )
+    _BANNER_MPI_ABORT = (
+        "MPI_ABORT was invoked on rank 1 in communicator MPI_COMM_WORLD\n  Proc: [[20522,1],1]\n  Errorcode: 7\n"
+        'prterun has exited due to process rank 1 with PID 0 on node nodeB calling\n"abort".\n'
+    )
+    _BANNER_NO_FINALIZE = (
+        "prterun has exited due to process rank 1 with PID 4242 on node nodeB exiting\nimproperly. There are three "
+        'reasons this could occur:\n2. this process called "init", but exited without calling "finalize".\n'
+    )
+
+    @pytest.mark.parametrize(
+        "banner,code,expected",
+        [
+            (_BANNER_SIGKILL, 137, r"rank 1 on nodeB \(pid 4242\) was killed by signal 9 \(SIGKILL\)"),
+            (_BANNER_EXIT_CODE, 7, r"rank 1 exited with code 7"),
+            (_BANNER_MPI_ABORT, 7, r"rank 1 on nodeB called MPI_Abort \(error code 7\)"),
+            (_BANNER_NO_FINALIZE, 1, r"rank 1 on nodeB \(pid 4242\) exited without calling MPI_Finalize"),
+            ("", 7, r"a rank failed \(launcher exit 7\)"),
+        ],
+        ids=["signal", "exit_code", "mpi_abort", "no_finalize", "no_banner"],
+    )
+    def test_run_launcher_passes_a_rank_failure_code_through_and_names_the_rank(self, banner, code, expected):
+        import re
+
         from ttnn.distributed.ttrun import run_launcher
 
-        # A launcher that reports a rank's non-zero code with nothing left: the code is the truth, returned as is.
-        rc = run_launcher(["bash", "-c", "exit 7"], cwd=Path.cwd())
-        assert rc == 7
+        # A launcher that reports a rank's failure with nothing left: the code is the truth, returned as is. tt-run
+        # reads prterun's banner and says which rank failed (and where, when prterun says), how, and what happened
+        # to the others; with no banner it still says a rank failed and points at the launcher's output.
+        script = f"printf %s {shlex.quote(banner)} >&2; exit {code}"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == code
+        assert re.search(expected, text), text
+        if banner:
+            assert "the launcher then killed the other ranks" in text and "tt-smi -r" in text, text
+        assert f"job end: outcome=failed exit={code}" in text, text
 
-    def test_run_launcher_forwards_sigterm_and_reports_it(self):
+    # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
+    # (<TMPDIR>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>, URI on the first line), then runs until its
+    # "ranks" are gone (the fake helper creates REC/ranks_gone) or it is signalled. Every signal it gets is
+    # recorded in REC/launcher.signals; IGNORE_TERM=1 makes it ignore SIGTERM like a wedged launcher.
+    _FAKE_PRTERUN = (
+        'd="$TMPDIR/prterun.fakehost.$$.$(id -u)"; mkdir -p "$d"; '
+        'printf "fake-uri-%s\\n5.0.5\\n%s\\n" $$ $$ > "$d/pmix.fakehost.tool.$$"; '
+        'if [ "$IGNORE_TERM" = 1 ]; then trap "echo TERM >> $REC/launcher.signals" TERM; '
+        'else trap "echo TERM >> $REC/launcher.signals; exit 143" TERM; fi; '
+        'while [ ! -e "$REC/ranks_gone" ]; do sleep 0.1; done; exit 143'
+    )
+
+    @pytest.mark.parametrize(
+        "case",
+        ["graceful", "no_helper", "grace_expired", "second_signal", "launcher_ignores_force"],
+    )
+    def test_run_launcher_stops_the_ranks_with_sigterm(self, case, tmp_path, monkeypatch):
         import signal
+        import tempfile
         import threading
         import time
 
-        from ttnn.distributed.ttrun import run_launcher
+        from ttnn.distributed import ttrun as m
 
-        # A SIGTERM at tt-run is relayed to the launcher as SIGUSR1 (which PRRTE forwards to the ranks for a
-        # graceful teardown). This launcher models that: it traps SIGUSR1 and exits 0 as prterun would once its
-        # ranks finalize. tt-run must still report the stop as 128 + SIGTERM (the original signal).
-        def later():
-            time.sleep(0.5)
-            os.kill(os.getpid(), signal.SIGTERM)
+        # A stop at tt-run (here SIGTERM) sends SIGTERM to every rank through PRRTE job control (the
+        # tt-run-signal helper, given the URI from prterun's rendezvous file) and never signals the launcher, so
+        # PRRTE's 250 ms SIGKILL clock is not started. If the helper cannot reach prterun, the ranks do not exit
+        # within the stop grace, or a second signal arrives, tt-run forces: SIGTERM to the launcher (PRRTE kills
+        # every rank), then SIGKILL if the launcher ignores that too. tt-run reports 128 + the original signal.
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        helper = tmp_path / "tt-run-signal"
+        delivers = case == "graceful"  # the "ranks" exit on the SIGTERM only in the graceful case
+        helper.write_text(
+            "#!/bin/bash\n" f'echo "$@" >> "{rec}/helper.args"\n' + (f'touch "{rec}/ranks_gone"\n' if delivers else "")
+        )
+        helper.chmod(0o755)
+        monkeypatch.setenv("REC", str(rec))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setenv(
+            "TT_RUN_SIGNAL_HELPER",
+            "/nonexistent/tt-run-signal" if case in ("no_helper", "launcher_ignores_force") else str(helper),
+        )
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1" if case == "grace_expired" else "60")
+        monkeypatch.setenv("IGNORE_TERM", "1" if case == "launcher_ignores_force" else "0")
+        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
 
-        threading.Thread(target=later, daemon=True).start()
+        running = threading.Event()  # signals go to this process only while run_launcher has its handlers installed
+
+        def stop():
+            for delay in (0.5, 1.0) if case == "second_signal" else (0.5,):
+                time.sleep(delay)
+                if running.is_set():
+                    os.kill(os.getpid(), signal.SIGTERM)
+
+        def launch():
+            running.set()
+            try:
+                return m.run_launcher(["bash", "-c", self._FAKE_PRTERUN], cwd=Path.cwd())
+            finally:
+                running.clear()
+
+        threading.Thread(target=stop, daemon=True).start()
         t0 = time.time()
-        # short sleeps so the USR1 trap runs promptly (bash defers a trap until the running command returns)
-        rc = run_launcher(["bash", "-c", "trap 'exit 0' USR1; while :; do sleep 0.2; done"], cwd=Path.cwd())
-        assert time.time() - t0 < 5
-        assert rc == 128 + signal.SIGTERM
+        text, rc = self._logged_rc(launch)
+        elapsed = time.time() - t0
+        args = (rec / "helper.args").read_text() if (rec / "helper.args").exists() else ""
+        launcher_signals = (rec / "launcher.signals").read_text() if (rec / "launcher.signals").exists() else ""
+
+        assert rc == 128 + signal.SIGTERM, text
+        assert elapsed < 10, f"stop took {elapsed:.1f}s\n{text}"
+        if case in ("graceful", "grace_expired", "second_signal"):
+            assert "--signal 15" in args and "--uri fake-uri-" in args, f"helper not called with SIGTERM: {args!r}"
+            assert "sent SIGTERM to all ranks" in text, text
+        if case == "graceful":
+            assert launcher_signals == "", "a graceful stop must not signal the launcher (PRRTE's kill path)"
+            assert "job end: outcome=stopped exit=143" in text, text
+            return
+        # every other case ends in a force: the launcher is signalled and the user is told the devices may be unhealthy
+        assert "TERM" in launcher_signals, "the force path did not signal the launcher"
+        assert "job forced down" in text and "tt-smi -r" in text, text
+        assert "job end: outcome=forced exit=143" in text, text
+        why = {
+            "no_helper": "could not reach prterun",
+            "grace_expired": "ranks did not exit within 1 s",
+            "second_signal": "second SIGTERM",
+            "launcher_ignores_force": "could not reach prterun",
+        }[case]
+        assert why in text, text
+        if case == "launcher_ignores_force":
+            assert "did not exit" in text and "SIGKILL" in text, text
 
     def test_run_launcher_ends_leftovers_and_fails_the_job(self):
         import time
@@ -1400,9 +1525,12 @@ class TestJobOwnership:
         # OUTLASTS the settle window -> a genuine leak -> ended and the job failed. Bound allows the full settle
         # (SURVIVOR_SETTLE_S) plus the SIGTERM/SIGKILL grace.
         t0 = time.time()
-        rc = run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+        )
         assert rc != 0
         assert time.time() - t0 < 20
+        assert "a leak" in text and "job end: outcome=failed" in text, text
 
     def test_run_launcher_does_not_fail_when_a_rank_exits_just_after_the_launcher(self):
         import time
@@ -1412,9 +1540,10 @@ class TestJobOwnership:
         # The SC4 case: a child still in the launcher's session but already on its way out when the launcher
         # returns is a graceful finish, not a leak. tt-run's settle lets it leave, and the clean code is forwarded.
         t0 = time.time()
-        rc = run_launcher(["bash", "-c", "sleep 1 & disown; exit 0"], cwd=Path.cwd())
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", "sleep 1 & disown; exit 0"], cwd=Path.cwd()))
         assert rc == 0
         assert time.time() - t0 < 10
+        assert "job end: outcome=clean exit=0" in text, text
 
     @staticmethod
     def _logged(fn):
@@ -1428,6 +1557,13 @@ class TestJobOwnership:
         finally:
             logger.remove(sink)
         return "".join(lines)
+
+    @classmethod
+    def _logged_rc(cls, fn):
+        """Like _logged, but also return fn's result (run_launcher's exit code)."""
+        out = {}
+        text = cls._logged(lambda: out.setdefault("rc", fn()))
+        return text, out.get("rc")
 
     def test_log_phase2_exit_reason_names_a_signal_death_and_skips_the_generic_hint(self):
         import signal
@@ -1525,51 +1661,27 @@ class TestJobOwnership:
             for p in (dead, live):
                 shutil.rmtree(p, ignore_errors=True)
 
-    def test_wait_forces_down_a_launcher_that_ignores_a_forwarded_signal(self, monkeypatch):
-        import signal
-        import subprocess
-        import time
-
-        from ttnn.distributed import ttrun as m
-
-        # Bounded cancellation: after tt-run forwards a stop signal, a launcher that ignores it must be forced
-        # down, not waited on forever. Use a launcher that ignores SIGTERM; wait() should SIGKILL it after the
-        # grace and return non-zero.
-        monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
-        job = m.LaunchedJob(["ignorer"], Path("."))
-        job.proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-c",
-                "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(600)",
-            ],
-            start_new_session=True,
-        )
-        try:
-            job.forwarded = [signal.SIGTERM]  # pretend _relay already forwarded a stop signal
-            t0 = time.time()
-            rc = job.wait()
-            assert job.proc.poll() is not None, "an unresponsive launcher was not forced down"
-            assert rc != 0, "a launcher that had to be force-killed must not report success"
-            assert time.time() - t0 < 20, "force-down took too long"
-        finally:
-            if job.proc.poll() is None:
-                job.proc.kill()
-                job.proc.wait()
-
-    def test_wait_does_not_force_down_a_running_job_with_no_forwarded_signal(self, monkeypatch):
+    def test_wait_does_not_force_down_a_running_job_with_no_forwarded_signal(self, monkeypatch, tmp_path):
         import subprocess
 
         from ttnn.distributed import ttrun as m
 
-        # The safety property: with no signal forwarded, wait() never force-kills — it just returns the launcher's
-        # own code. A healthy job (multi-host included) that nobody asked to stop is never touched.
+        # The safety property: with no stop requested, wait() never force-kills and never sends a SIGTERM to the
+        # ranks — it just returns the launcher's own code. A healthy job (multi-host included) that nobody asked
+        # to stop is never touched, even past the stop grace.
+        calls = tmp_path / "helper.args"
+        helper = tmp_path / "tt-run-signal"
+        helper.write_text(f'#!/bin/bash\necho "$@" >> "{calls}"\n')
+        helper.chmod(0o755)
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
         monkeypatch.setattr(m, "SIGNAL_FORWARD_GRACE_S", 1.0)
         job = m.LaunchedJob(["true"], Path("."))
-        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own; job.forwarded == []
+        job.proc = subprocess.Popen(["sleep", "3"], start_new_session=True)  # exits on its own; no stop requested
         try:
             rc = job.wait()
             assert rc == 0, "a job nobody asked to stop must return the launcher's own code"
+            assert not calls.exists(), "the ranks were sent a SIGTERM although nobody asked to stop the job"
         finally:
             if job.proc.poll() is None:
                 job.proc.kill()

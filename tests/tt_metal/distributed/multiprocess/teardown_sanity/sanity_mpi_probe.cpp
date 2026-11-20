@@ -150,12 +150,10 @@ int main(int argc, char** argv) {
 
     const int is_victim = (g_rank == victim);
     if (!strcmp(scenario, "all_hang")) {
-        // Catch the forwarded stop ONLY in this scenario, so a rank can prove it RECEIVED the signal rather than
-        // being killed outright. Every other scenario keeps the default disposition (SIGTERM ends the rank).
-        // SIGUSR1/SIGUSR2 is what tt-run relays through PRRTE for a graceful Ctrl-C (ess_hnp_forward_signals);
-        // SIGINT/SIGTERM are caught too for a signal delivered straight to the rank.
-        std::signal(SIGUSR1, on_terminate_signal);
-        std::signal(SIGUSR2, on_terminate_signal);
+        // Catch the stop ONLY in this scenario, so a rank can prove it RECEIVED the signal (and which one) rather
+        // than being killed outright. Every other scenario keeps the default disposition (SIGTERM ends the rank).
+        // A stop at tt-run reaches every rank as SIGTERM through PRRTE job control; SIGINT is caught too for a
+        // signal delivered straight to the rank.
         std::signal(SIGINT, on_terminate_signal);
         std::signal(SIGTERM, on_terminate_signal);
         // Poll on a short granularity: sleep_for does not return early on a signal, so a long sleep would let the

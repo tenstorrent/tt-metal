@@ -304,6 +304,43 @@ if(ENABLE_DISTRIBUTED)
 
     target_link_libraries(run_mpi_stress_test PRIVATE OpenMPI::MPI)
 
+    # tt-run-signal: the PMIx tool tt-run uses to stop a job (SIGTERM to every rank through PRRTE job control).
+    # Built only when the MPI install provides PMIx's tool API (the ULFM Open MPI 5 / PRRTE install); with another
+    # MPI it is skipped and tt-run stops a job through the launcher instead.
+    # The ULFM install tt_metal/distributed links (its ULFM_PREFIX); OpenMPI::MPI is not defined yet at this point
+    # of the configure, so its properties cannot be read here.
+    set(_tt_run_signal_ulfm_prefix /opt/openmpi-v5.0.7-ulfm)
+    find_path(TT_RUN_SIGNAL_PMIX_INCLUDE pmix_tool.h PATHS ${_tt_run_signal_ulfm_prefix}/include NO_DEFAULT_PATH)
+    find_library(TT_RUN_SIGNAL_PMIX_LIB pmix PATHS ${_tt_run_signal_ulfm_prefix}/lib NO_DEFAULT_PATH)
+    if(TT_RUN_SIGNAL_PMIX_INCLUDE AND TT_RUN_SIGNAL_PMIX_LIB)
+        add_executable(tt-run-signal)
+        target_sources(tt-run-signal PRIVATE src/tt_run_signal.cpp)
+        target_include_directories(tt-run-signal SYSTEM PRIVATE ${TT_RUN_SIGNAL_PMIX_INCLUDE})
+        target_link_libraries(tt-run-signal PRIVATE ${TT_RUN_SIGNAL_PMIX_LIB})
+        get_filename_component(_tt_run_signal_pmix_dir ${TT_RUN_SIGNAL_PMIX_LIB} DIRECTORY)
+        set_target_properties(
+            tt-run-signal
+            PROPERTIES
+                RUNTIME_OUTPUT_DIRECTORY
+                    ${Metalium_BINARY_DIR}/tools/scaleout
+                BUILD_RPATH
+                    "${_tt_run_signal_pmix_dir}"
+                INSTALL_RPATH
+                    "${_tt_run_signal_pmix_dir}"
+        )
+        if(TT_INSTALL)
+            install(
+                TARGETS
+                    tt-run-signal
+                RUNTIME
+                    DESTINATION ${CMAKE_INSTALL_BINDIR}
+                    COMPONENT metalium-runtime
+            )
+        endif()
+    else()
+        message(STATUS "tt-run-signal not built: no PMIx tool API in the MPI install (tt-run will force a stop)")
+    endif()
+
     # Generate rank bindings tool
     add_executable(generate_rank_bindings)
     target_sources(generate_rank_bindings PRIVATE ${GENERATE_RANK_BINDINGS_SRCS})

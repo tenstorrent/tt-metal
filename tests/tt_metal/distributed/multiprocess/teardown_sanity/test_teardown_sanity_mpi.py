@@ -36,6 +36,8 @@ from sanity_common import (
     ended,
     fault_delivered,
     mpi_cmd,
+    mpi_install_id,
+    mpi_installs,
     mpirun_path,
     nonzero,
     run_case,
@@ -63,7 +65,9 @@ def test_ttrun_dead_rank():
     ended(r)
     nonzero(r)
     clean(r)
-    assert "died by signal 9 (SIGKILL)" in r.log, r.log[-2000:]  # tt-run says why, not the stale-cache hint
+    # tt-run names the rank, where it ran, how it ended and what happened to the others, not the stale-cache hint
+    assert re.search(r"rank 1 on \S+ \(pid \d+\) was killed by signal 9 \(SIGKILL\)", r.log), r.log[-2000:]
+    assert "the launcher then killed the other ranks" in r.log and "outcome=failed" in r.log, r.log[-2000:]
 
 
 def test_ttrun_hang_timeout():
@@ -161,37 +165,57 @@ def test_scripts_tcp_only():
 # ---------------------------------------------------------------------------------------------------------------
 # the signal cases: a signal at tt-run is forwarded to the launcher and leaves nothing (this PR's fix)
 # ---------------------------------------------------------------------------------------------------------------
-def test_ttrun_ctrl_c():
-    """A rank hangs, then SIGINT is sent to tt-run. tt-run forwards it to the launcher, which kills every rank;
-    nothing is left (this PR forwards the signal to the launcher)."""
+@pytest.mark.parametrize(
+    "sig,case",
+    [(signal.SIGINT, "delivered"), (signal.SIGTERM, "delivered"), (signal.SIGINT, "no_helper")],
+    ids=["ctrl_c", "sigterm", "ctrl_c_no_helper"],
+)
+def test_ttrun_stop(sig, case):
+    """The ranks hang, then tt-run gets a stop signal. tt-run sends SIGTERM to every rank through PRRTE job
+    control: in all_hang every rank records the signal it caught, so each must report signal 15; the job reports
+    128 + the signal and nothing is left. Without the helper tt-run forces at once through the launcher and says
+    the devices may be unhealthy. (What a rank does with the SIGTERM is the rank's business, not tt-run's.)"""
+    _ttrun_stop(sig, case)
+
+
+@pytest.mark.parametrize("prefix", mpi_installs(), ids=lambda p: p.strip("/").replace("/", "_") or "path")
+def test_ttrun_stop_on_each_mpi_install(prefix):
+    """The stop relies on PRRTE internals (prterun's tool rendezvous file, the job-control signal path), and the
+    MPI build differs by machine: Open MPI 5.0.7 built from source in the CI images, the openmpi-ulfm .deb on bare
+    metal, the distribution's own on every host. Run the delivery check against every install on this host and say
+    which build it was; an install tt-run does not support (Open MPI < 5, no PRRTE) is skipped with that reason."""
+    ident, major = mpi_install_id(prefix)
+    print(f"\n[sanity] MPI install {prefix or '(PATH)'}: {ident}")
+    if major < 5:
+        pytest.skip(f"{prefix or '(PATH)'} is {ident}: tt-run needs Open MPI 5+ (PRRTE)")
+    _ttrun_stop(signal.SIGINT, "delivered", mpi_prefix=prefix)
+
+
+def _ttrun_stop(sig, case, mpi_prefix=None):
+    env = {**NP, "PROBE_SCENARIO": "all_hang" if case == "delivered" else "victim_hang"}
+    if case == "no_helper":
+        env["TT_RUN_SIGNAL_HELPER"] = "/nonexistent/tt-run-signal"
     r = run_case(
-        "ttrun_ctrl_c",
-        {**NP, "PROBE_SCENARIO": "victim_hang"},
+        f"ttrun_stop_{signal.Signals(sig).name}_{case}",
+        env,
         DEADLINE_HANG,
-        cmd=ttrun_mpi_cmd(),
-        launcher_signal=signal.SIGINT,
-        launcher_ready=(0, "ready"),  # the ranks are up and hanging before we interrupt, not still starting
+        cmd=ttrun_mpi_cmd(mpi_prefix=mpi_prefix),
+        launcher_signal=sig,
+        launcher_ready=(0, "ready"),  # the ranks are up and hanging before we stop them, not still starting
         signal_after=1,
+        mpi_prefix=mpi_prefix,
     )
     fault_delivered(r)
     ended(r)
     clean(r)
-
-
-def test_ttrun_sigterm():
-    """A rank hangs, then SIGTERM is sent to tt-run. tt-run forwards it and waits; nothing is left."""
-    r = run_case(
-        "ttrun_sigterm",
-        {**NP, "PROBE_SCENARIO": "victim_hang"},
-        DEADLINE_HANG,
-        cmd=ttrun_mpi_cmd(),
-        launcher_signal=signal.SIGTERM,
-        launcher_ready=(0, "ready"),
-        signal_after=1,
-    )
-    fault_delivered(r)
-    ended(r)
-    clean(r)
+    assert r.exit == 128 + sig, r
+    if case == "delivered":
+        got = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] caught signal 15\b", r.log)}
+        assert got == {0, 1, 2}, f"every rank must receive SIGTERM (signal 15); got it: {sorted(got)}\n{r.log[-3000:]}"
+        assert "sent SIGTERM to all ranks" in r.log and "outcome=stopped" in r.log, r.log[-3000:]
+        return
+    assert "could not reach prterun" in r.log and "job forced down" in r.log, r.log[-3000:]
+    assert "tt-smi -r" in r.log and "outcome=forced" in r.log, r.log[-3000:]
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -207,6 +231,7 @@ def test_ttrun_abort_ends():
     nonzero(r)
     clean(r)  # every surviving rank is gone, nothing left on any host
     assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
+    assert re.search(r"rank 1 on \S+ \(pid \d+\) was killed by signal 6 \(SIGABRT\)", r.log), r.log[-2000:]
 
 
 def test_ttrun_dead_peer_survivors_abort():

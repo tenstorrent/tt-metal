@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import functools
 import glob
+import hashlib
 import os
 import re
 import shutil
@@ -190,15 +191,60 @@ def mpirun_path() -> str:
     return shutil.which("mpirun") or "mpirun"
 
 
-def mpi_probe_path() -> str:
-    """The probe: the build's binary, or one compiled now with the chosen install's mpicxx; skips if neither."""
-    if "path" in _MPI_PROBE_CACHE:
-        return _MPI_PROBE_CACHE["path"]
-    if not MPI_PREFIX and MPI_PROBE_BUILT.exists():
-        _MPI_PROBE_CACHE["path"] = str(MPI_PROBE_BUILT)
-        return _MPI_PROBE_CACHE["path"]
+def mpi_installs() -> list:
+    """The MPI installs to run the per-install rows against: ``TT_SANITY_MPI_PREFIXES`` (comma-separated) when set,
+    else ``TT_SANITY_MPI_PREFIX``, else every ``/opt/openmpi*`` install plus the system one (``/usr``) found on this
+    host. The builds differ by machine (source build in the CI images, the openmpi-ulfm .deb on bare metal, the
+    distribution's own on every host), so a lane run on each machine type covers each build."""
+    listed = os.environ.get("TT_SANITY_MPI_PREFIXES") or MPI_PREFIX
+    if listed:
+        return [p for p in listed.split(",") if p]
+    found = sorted(str(p.parent.parent) for p in Path("/opt").glob("openmpi*/bin/mpirun"))
+    if Path("/usr/bin/mpirun").exists():
+        found.append("/usr")
+    return found or [""]
+
+
+def mpi_install_id(prefix: str) -> tuple:
+    """(one line naming the build, Open MPI major version) for an install, so a row says exactly which build it ran."""
+    bindir = Path(prefix) / "bin" if prefix else None
+
+    def first_line(tool: str) -> str:
+        exe = str(bindir / tool) if bindir else (shutil.which(tool) or tool)
+        try:
+            r = subprocess.run([exe, "--version"], capture_output=True, text=True, timeout=30)
+            return ((r.stdout or "") + (r.stderr or "")).strip().splitlines()[0]
+        except (OSError, subprocess.TimeoutExpired, IndexError):
+            return ""
+
+    mpirun = first_line("mpirun")
+    m = re.search(r"Open MPI[)\s]+v?(\d+)\.", mpirun)
+    parts = [mpirun or "no mpirun"]
+    prterun = first_line("prterun")
+    if prterun:
+        parts.append(prterun)
+    libs = sorted((Path(prefix) / "lib").glob("libprrte.so.*.*.*")) if prefix else []
+    if libs:
+        parts.append(f"libprrte md5 {hashlib.md5(libs[0].read_bytes()).hexdigest()[:12]}")
+    conf = Path(prefix) / "etc" / "openmpi-mca-params.conf" if prefix else None
+    if conf and conf.exists():
+        pml = [line.split("=", 1)[1].strip() for line in conf.read_text().splitlines() if re.match(r"\s*pml\s*=", line)]
+        parts.append(f"default pml {pml[-1] if pml else 'unset'}")
+    return ", ".join(parts), int(m.group(1)) if m else 0
+
+
+def mpi_probe_path(prefix: str | None = None) -> str:
+    """The probe: the build's binary, or one compiled now with the chosen install's mpicxx; skips if neither.
+    ``prefix`` picks an install for this call (default: ``TT_SANITY_MPI_PREFIX``)."""
+    prefix = MPI_PREFIX if prefix is None else prefix
+    key = f"path:{prefix}"
+    if key in _MPI_PROBE_CACHE:
+        return _MPI_PROBE_CACHE[key]
+    if not prefix and MPI_PROBE_BUILT.exists():
+        _MPI_PROBE_CACHE[key] = str(MPI_PROBE_BUILT)
+        return _MPI_PROBE_CACHE[key]
     mpicxx = os.environ.get("TT_SANITY_MPICXX") or (
-        str(Path(MPI_PREFIX) / "bin" / "mpicxx") if MPI_PREFIX else shutil.which("mpicxx")
+        str(Path(prefix) / "bin" / "mpicxx") if prefix else shutil.which("mpicxx")
     )
     if not mpicxx or not Path(mpicxx).exists():
         pytest.skip(
@@ -206,8 +252,8 @@ def mpi_probe_path() -> str:
         )
     out = Path(tempfile.mkdtemp(prefix="sanity_mpi_")) / "teardown_mpi_probe"
     subprocess.run([mpicxx, "-O2", "-o", str(out), str(MPI_PROBE_SRC)], check=True)
-    _MPI_PROBE_CACHE["path"] = str(out)
-    return _MPI_PROBE_CACHE["path"]
+    _MPI_PROBE_CACHE[key] = str(out)
+    return _MPI_PROBE_CACHE[key]
 
 
 def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int = 3) -> list:
@@ -227,7 +273,7 @@ def mpi_cmd(ulfm: bool = True, extra: str = "", btl: str = "self,tcp", np: int =
 MPI_BINDING = HERE / "sanity_mpi_binding.yaml"
 
 
-def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
+def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3, mpi_prefix: str | None = None) -> list:
     """Launch the raw C++ probe THROUGH tt-run (legacy mode, np local ranks), so the row tests tt-run's own teardown:
     its exit code, signal handling and cleanup. tt-run picks the plain launcher and adds --mca btl self,tcp; extra
     group-E settings (a transport, a component, an interface) go through --mpi-args."""
@@ -237,7 +283,7 @@ def ttrun_mpi_cmd(mpi_extra: str = "", np: int = 3) -> list:
         str(MPI_BINDING),
         "--mpi-args",
         ("--allow-run-as-root --oversubscribe " + mpi_extra).strip(),
-        mpi_probe_path(),
+        mpi_probe_path(mpi_prefix),
     ]
 
 
@@ -261,16 +307,18 @@ def run_case(
     rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank is ready)
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
+    mpi_prefix: str | None = None,  # the MPI install for this run (default: TT_SANITY_MPI_PREFIX)
 ) -> Result:
     cmd = cmd or legacy_cmd()
     piddir = tempfile.mkdtemp(prefix="sanity_pids_")
     env = dict(os.environ, PROBE_PIDDIR=piddir, **env_over)
-    if MPI_PREFIX:
+    prefix = MPI_PREFIX if mpi_prefix is None else mpi_prefix
+    if prefix:
         # Keep the whole stack on the one MPI install TT_SANITY_MPI_PREFIX selects: the probe is compiled with
         # MPI_PREFIX/bin/mpicxx and the direct mpirun is MPI_PREFIX/bin/mpirun, so tt-run must resolve its own
         # launcher (get_mpi_launcher, which looks on PATH) from there too. Prepend its bin so the probe is not
         # compiled against one install and then run through another.
-        env["PATH"] = f"{Path(MPI_PREFIX) / 'bin'}:{env.get('PATH', '')}"
+        env["PATH"] = f"{Path(prefix) / 'bin'}:{env.get('PATH', '')}"
     before_shm = _shm()
     t0 = time.time()
     proc = subprocess.Popen(
