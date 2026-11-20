@@ -75,7 +75,7 @@ def test_linear_oft_program_config(ttnn_mesh_device, reset_seeds, shape):
     x, tt_w, tt_b, ref = _inputs(mesh, m)
     tt_x = U.to_tt_mem(x, mesh, ("hs", (U.TILE, K)), dtype=ttnn.float32)
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = (ttnn.experimental.quasar if U.is_quasar() else ttnn).MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(U.MODEL_GRID_X, U.MODEL_GRID_Y),
         in0_block_w=8,
         out_subblock_h=1,
@@ -160,7 +160,7 @@ def test_linear_oft2_program_config(ttnn_mesh_device, reset_seeds, shape):
     x, tt_w, tt_b, ref = _inputs2(mesh, m)
     tt_x = U.to_tt_mem(x, mesh, ("hs", (per_core_m * U.TILE, K)))
 
-    program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+    program_config = (ttnn.experimental.quasar if U.is_quasar() else ttnn).MatmulMultiCoreReuseMultiCast1DProgramConfig(
         compute_with_storage_grid_size=(U.MODEL_GRID_X, U.MODEL_GRID_Y),
         in0_block_w=8,
         out_subblock_h=1,
