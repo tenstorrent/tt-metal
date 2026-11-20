@@ -9,6 +9,8 @@
 #
 # Tiers (what each one runs is defined in tiers.py; keep the case below and the
 # --help text in step with it):
+#   flash           quick ETH link health, the unit read as found: snapshot validate
+#                   + two tt-triage check_eth_status reads 30 s apart. No resets, no tests
 #   daily           snapshot validate + 2 resets (-r, -glx_reset) + GDDR fast-pattern stress
 #                   + eth link_up + eth bandwidth
 #                   + post-test -glx_reset + triage (host_side + device_side)
@@ -36,9 +38,11 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 
 show_help() {
     cat <<EOF
-Usage: $0 {daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
+Usage: $0 {flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot} [diag_runner.py options]
 
 Tiers:
+  flash           Quick ETH link health, the unit read as found: snapshot validate + two
+                  tt-triage check_eth_status reads 30 s apart. No resets, no tests.
   daily           2 resets + GDDR fast-pattern stress + eth link_up + eth bandwidth
                   + post-test reset + triage + QSFP tests
   weekly          3 resets + full GDDR pattern set + eth link_up + eth bandwidth
@@ -51,8 +55,13 @@ Tiers:
 The old names still work and print a deprecation warning: light and medium run daily,
 deploy runs weekly, pre_reboot runs pre_bmc_reboot.
 
+The ETH status read (flash) runs tools/triage/triage.py from this checkout under
+python_env/bin/python (create_venv.sh installs the triage requirements there), else
+the python running this script. It checks PCIe in sysfs first and does not open the
+chips if one has dropped off; the raw reads land in <output dir>/logs/eth_status_read_*.
+
 The QSFP tests check ETH link training, cabling and module state across all 448
-ports. They run on every tier when \`tt-bh-glx-cluster-debug\` is on PATH
+ports. They run on every tier but flash when \`tt-bh-glx-cluster-debug\` is on PATH
 (it ships in the syseng cluster-debug .deb); a host without the package skips the
 phase and says so. Nothing needs configuring to turn them on.
 
@@ -71,6 +80,7 @@ Forwarded options (see diag_runner.py --help for details):
   --triage-dir PATH      Triage scripts dir (default: \$HC_TRIAGE_DIR, else tools/scaleout/kmd_triage)
   --skip-triage          Skip the post-test reset and the triage phase
   --triage-gating        Let triage FAILs gate the run (default: held at WARN)
+  --skip-eth-status      Skip the ETH status read
   --skip-qsfp-tests      Skip the QSFP tests. Named for the phase, not the collector's own
                          --skip-qsfp, which drops the cage sweep but still collects ETH
   --qsfp-tool-path PATH  Override the tt-bh-glx-cluster-debug binary
@@ -93,13 +103,13 @@ EOF
 
 TIER="${1:-}"
 case "$TIER" in
-    daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
+    flash|daily|weekly|full|pre_bmc_reboot|post_bmc_reboot|light|medium|deploy|pre_reboot) ;;
     -h|--help|"")
         show_help
         exit 0
         ;;
     *)
-        echo "Error: unknown tier '$TIER'. Expected: daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" >&2
+        echo "Error: unknown tier '$TIER'. Expected: flash, daily, weekly, full, pre_bmc_reboot, post_bmc_reboot" >&2
         show_help
         exit 1
         ;;

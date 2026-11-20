@@ -857,6 +857,8 @@ class PerfConfig(TestConfig):
     @staticmethod
     def _dataclass_name_and_values(obj):
         """Return (name, value) pairs for dataclass fields, used as columns for the report."""
+        if getattr(obj, "perf_report_compile_only", False):
+            return []
         return [(f.name, getattr(obj, f.name)) for f in fields(obj)]
 
     @staticmethod

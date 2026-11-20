@@ -39,9 +39,9 @@ from helpers.param_config import (
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     SDPA_REDUCE_ROW_POOL,
     TILE_COUNT,
@@ -63,21 +63,16 @@ ROW_WIDTH = 32
 FILL_CONSTANTS = (1.5, 12.0)
 
 
-@skip_for_coverage
-@parametrize(
-    formats=input_output_formats(
-        [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce row
-        same=True,
-    ),
-    dest_acc=[DestAccumulation.No],  # Only Float16_b / non-fp32 dest is supported
-    pool_type=[ReducePool.Max, ReducePool.Sum],
-    fill_constant=list(FILL_CONSTANTS),
-)
-def test_sdpa_reduce_row(
+def _run_sdpa_reduce_row(
     formats,
     dest_acc,
     pool_type,
     fill_constant,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     if pool_type == ReducePool.Sum:
         # The Sum-pool golden (fill_constant * ROW_WIDTH) passed pre-promotion but mismatches
@@ -121,29 +116,38 @@ def test_sdpa_reduce_row(
     golden_column = torch.full((TILE_DIM,), reduced_value, dtype=torch_format)
     # *******************************************************
 
-    configuration = TestConfig(
-        "sources/sdpa_reduce_row_test.cpp",
-        formats,
-        templates=[
-            SDPA_REDUCE_ROW_POOL(reduce_pool=pool_type),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/sdpa_reduce_row_test.cpp",
+            formats=formats,
+            templates=[
+                SDPA_REDUCE_ROW_POOL(reduce_pool=pool_type),
+            ],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+            ),
+            # This pipeline always stages SrcA through the MATH A2D datacopy.
+            unpack_to_dest=False,
+            dest_acc=dest_acc,
         ),
-        unpack_to_dest=False,  # MATH kernel does an A2D datacopy, so the input must land in SrcA
-        dest_acc=dest_acc,
     )
-    res_from_L1 = configuration.run().result
+    if is_perf:
+        return
+    res_from_L1 = outcome.result
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
     res_tensor = untilize_block(res_tensor, formats.output_format, input_dimensions)
@@ -154,3 +158,17 @@ def test_sdpa_reduce_row(
         res_tensor[:, 0],
         formats.output_format,
     )
+
+
+@skip_for_coverage
+@parametrize(
+    formats=input_output_formats(
+        [DataFormat.Float16_b],  # Only Float16_b is supported for SDPA reduce row
+        same=True,
+    ),
+    dest_acc=[DestAccumulation.No],  # Only Float16_b / non-fp32 dest is supported
+    pool_type=[ReducePool.Max, ReducePool.Sum],
+    fill_constant=list(FILL_CONSTANTS),
+)
+def test_sdpa_reduce_row(formats, dest_acc, pool_type, fill_constant):
+    _run_sdpa_reduce_row(formats, dest_acc, pool_type, fill_constant)

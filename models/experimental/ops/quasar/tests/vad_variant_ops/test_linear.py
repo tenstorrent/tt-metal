@@ -65,9 +65,13 @@ def _program_config(spec, mesh):
         per_core_N=pn,
         fused_activation=_activation(act),
     )
+    # Quasar linear takes the experimental.quasar config types, not the mainline ones.
+    backend = ttnn.experimental.quasar if U.is_quasar() else ttnn
     if kind == "1d":
-        return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(**common, fuse_batch=fuse_batch, mcast_in0=mcast_in0)
-    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
+        return backend.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+            **common, fuse_batch=fuse_batch, mcast_in0=mcast_in0
+        )
+    return backend.MatmulMultiCoreReuseMultiCastProgramConfig(**common, transpose_mcast=True)
 
 
 def _run_linear(
@@ -116,7 +120,7 @@ def _run_linear(
         kwargs["compute_kernel_config"] = ttnn.init_device_compute_kernel_config(
             mesh.arch(), math_fidelity=fidelity, math_approx_mode=approx, fp32_dest_acc_en=fp32, packer_l1_acc=l1_acc
         )
-    out = ttnn.linear(a, w, **kwargs)
+    out = U.op("linear")(a, w, **kwargs)
 
     # Reference on the (bfp8-quantized) values the device saw.
     a_seen = U.from_tt(a, mesh).reshape(-1)[: a_torch.numel()].reshape(a_shape)

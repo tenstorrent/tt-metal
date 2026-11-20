@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from PIL import Image
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision_processing import KimiK3VisionProcessor
 from models.experimental.kimi_k3_moonvit_v2.reference.media_utils import navit_resize_image
 from models.experimental.kimi_k3_moonvit_v2.tt import host_prep, image_prep
+from models.experimental.kimi_k3_moonvit_v2.tt.model_config import IN_PATCH_LIMIT, MAX_PROCESSOR_PATCHES, RING_SIZE
 
 PREPROCESSOR_CONFIG = Path(__file__).parents[1] / "reference" / "preprocessor_config.json"
 
@@ -67,9 +69,9 @@ def hf_plan(width: int, height: int, cfg: dict) -> image_prep.ResizePlan:
 # (width, height) -> padded grid (h, w)
 KNOWN_GRIDS = {
     (1889, 7377): (510, 132),  # the largest HF grid, 67,320 patches
-    (3590, 3590): (258, 258),  # over the limit from padding alone
-    (6000, 4000): (210, 316),  # area-limited, over the limit
-    (4662, 4662): (256, 256),  # area-limited, fits
+    (3590, 3590): (258, 258),  # over `in_patch_limit` from padding alone
+    (6000, 4000): (210, 316),  # area-limited, over `in_patch_limit`
+    (4662, 4662): (256, 256),  # area-limited, within `in_patch_limit`
     (4032, 3024): (216, 288),
     (3840, 2160): (156, 276),
     (1920, 1080): (78, 138),
@@ -90,8 +92,21 @@ def test_resize_plan_matches_hf(config, media_proc_cfg):
         assert (plan.grid_h, plan.grid_w) == grid, (width, height)
 
 
+def test_max_patches_holds_the_largest_grid(config):
+    """The default `max_patches` holds the largest grid HF makes for any image size, with the least
+    padding `resolve_parallel` allows."""
+    plan = image_prep.resize_plan(1889, 7377, config)
+    assert plan.grid_h * plan.grid_w == MAX_PROCESSOR_PATCHES
+    assert all(h * w <= MAX_PROCESSOR_PATCHES for h, w in KNOWN_GRIDS.values())
+    row_multiple = RING_SIZE * config.merge_area * 32
+    assert config.max_patches % row_multiple == 0
+    assert 0 <= config.max_patches - MAX_PROCESSOR_PATCHES < row_multiple
+
+
 @pytest.mark.parametrize("size, grid", [((6000, 4000), "210x316"), ((3590, 3590), "258x258")], ids=["area", "padding"])
 def test_rejects_over_limit(config, expect_error, monkeypatch, size, grid):
+    """With a `max_patches` under the processor's largest grid, an image over it is rejected before the resize."""
+    config = dataclasses.replace(config, max_patches=IN_PATCH_LIMIT)
     image = Image.new("RGB", size)
 
     def no_resize(*args, **kwargs):
@@ -102,13 +117,13 @@ def test_rejects_over_limit(config, expect_error, monkeypatch, size, grid):
         image_prep.image_to_patches(image, config)
 
 
-UNDER_LIMIT = ((4032, 3024), (3584, 3584), (4662, 4662), (8000, 300))
+UNDER_LIMIT = ((4032, 3024), (3584, 3584), (4662, 4662), (8000, 300), (6000, 4000), (3590, 3590), (1889, 7377))
 
 
 @pytest.mark.parametrize("size", UNDER_LIMIT, ids=[f"{w}x{h}" for w, h in UNDER_LIMIT])
 def test_accepts_under_limit(config, size):
     pixel_values, grid_thws = image_prep.image_to_patches(Image.new("RGB", size), config)
-    (_, h, w) = grid_thws[0].tolist()
+    _, h, w = grid_thws[0].tolist()
     assert h * w <= config.max_patches
     assert pixel_values.shape == (h * w, 3, config.patch_size, config.patch_size)
 
