@@ -45,7 +45,7 @@ static std::array<uint32_t, 12> packed_coeffs(const YUVCoefficients& c) {
 
 RgbToYuvProgramFactory::cached_program_t RgbToYuvProgramFactory::create(
     const RgbToYuvParams& op_attrs, const RgbToYuvInputs& tensor_args, std::tuple<Tensor, Tensor, Tensor>& output) {
-    Program program{};
+    Program program = CreateProgram(*tensor_args.input.device());
 
     const auto& input = tensor_args.input;
     auto& [y_out, u_out, v_out] = output;

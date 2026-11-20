@@ -43,6 +43,11 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/neighborhood_plan.cpp
     sdpa/device/neighborhood_sdpa_device_operation.cpp
     sdpa/device/neighborhood_sdpa_program_factory.cpp
+    # Keep last: inserting earlier shifts the unity-build batches and puts the gated-delta-rule sources, which share
+    # file-scope names, into one batch.
+    sdpa/sparse_ring_sdpa.cpp
+    sdpa/device/sparse_ring_sdpa_device_operation.cpp
+    sdpa/device/sparse_ring_sdpa_program_factory.cpp
 )
 
 # Registered on the shared `ttnn` Python module target from

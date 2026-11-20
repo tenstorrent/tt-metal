@@ -19,6 +19,7 @@ from ....parallel.manager import CCLManager
 from ....utils.matmul import get_matmul_config, get_matmul_core_grid
 from ....utils.tensor import from_torch, pad_single
 from ....utils.tracing import StateTensor, traced_function
+from .agmm_config import AgmmMode
 from .token_refiner_minimax_h3 import MiniMaxH3TokenRefiner
 from .transformer_block_minimax_h3 import (
     MODALITY_NUM,
@@ -153,7 +154,7 @@ class MiniMaxH3AdaLayerNormOut(Module):
             activated = ttnn.silu(temb)
             if activated.dtype != ttnn.bfloat16:
                 activated = ttnn.typecast(activated, ttnn.bfloat16)
-            projected = self.linear(activated)  # [1, 1, num_timesteps, 2 * hidden_local]
+            projected = self.linear(activated)  # [1, 1, num_slots, 2 * hidden_local]
 
         rows = projected.shape[2]
         tables = []
@@ -238,9 +239,11 @@ class MiniMaxH3Transformer3DModel(Module):
         kv_gather_capacity: int | None = None,
         use_persistent_ccl_buffers: bool = True,
         dynamic_length: bool = False,
+        agmm_mode: AgmmMode | str | None = None,
     ) -> None:
         """`dynamic_length`: every length-keyed program choice is frozen at construction and the fused norms
-        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour."""
+        are sized for `kv_gather_capacity / sp` rows per device. Defaults to the legacy, length-keyed behaviour.
+        `agmm_mode` picks that path's all-gather matmul pins (`resolve_agmm_mode`)."""
         super().__init__()
 
         self.hidden_size = hidden_size
@@ -362,6 +365,7 @@ class MiniMaxH3Transformer3DModel(Module):
                     use_persistent_ccl_buffers=use_persistent_ccl_buffers,
                     dynamic_length=dynamic_length,
                     norm_row_capacity=norm_row_capacity,
+                    agmm_mode=agmm_mode,
                 )
                 for _ in range(num_layers)
             ]
@@ -485,6 +489,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_step_selector: ttnn.Tensor | None = None,
+        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Every stream is a fixed-capacity buffer, true rows leading; `prepare_static_sources` must run first.
@@ -509,6 +514,8 @@ class MiniMaxH3Transformer3DModel(Module):
             their modulation through the tile-row map. `None` (no map for this request) means the per-token gather.
         adaln_step_selector: `[slots * 3, capacity]` bf16 one-hot (`AdalnRowPlan.selector`): the blocks take this
             step's modulation tables from the resident schedule tables instead of projecting `temb`. Keys the trace.
+        modulation_row_indices: [1, 1, 1, num_slots] uint32, this step's rows of `prepare_modulation`'s projection, one
+            per slot: the blocks take their adaLN tables from there instead of projecting `temb` (the untraced path).
 
         Returns `(video_velocity, audio_velocity)` as [1, 1, V_cap, .] / [1, 1, A_cap, .], target rows only.
         """
@@ -609,6 +616,9 @@ class MiniMaxH3Transformer3DModel(Module):
             adaln_selector=adaln_step_selector,
             traced=traced,
             tracer_trace_key=(pad_to, adaln_tile_map is not None, adaln_step_selector is not None),
+            **(
+                {} if modulation_row_indices is None else {"modulation_row_indices": as_indices(modulation_row_indices)}
+            ),
         )
 
         hidden = self.norm_out(
@@ -642,6 +652,40 @@ class MiniMaxH3Transformer3DModel(Module):
 
         return select(video_all, video_out_indices), select(audio_all, audio_out_indices)
 
+    def _temb(self, timestep: ttnn.Tensor, endpoint_timestep: ttnn.Tensor | None) -> ttnn.Tensor:
+        # One temb for main's callers and ours: `time_embedding` also takes the ComfyUI curve embedding.
+        return self.time_embedding(timestep, endpoint_timestep)
+
+    def prepare_modulation(self, timesteps: ttnn.Tensor, endpoint_timesteps: ttnn.Tensor | None = None) -> None:
+        """Project every block's adaLN tables for a whole denoise at once (see the block's `prepare_modulation`).
+
+        timesteps / endpoint_timesteps: [1, 1, rows, 1] float32, replicated: the `timestep` (and
+        `endpoint_timestep`) forward inputs of every step stacked, plus any padding rows. A forward then passes
+        the row numbers of its step as `modulation_row_indices`. Release with `release_modulation`.
+        """
+        # temb a tile row at a time: the fp32 time-embedder linears are configured for a step's few rows (at 256 rows
+        # their buffers overflow L1), and a step's own shape keeps each row's temb that of the step's forward.
+        tile = ttnn.TILE_SIZE
+        chunks = []
+        for r in range(0, timesteps.shape[2], tile):
+            end = min(r + tile, timesteps.shape[2])
+            ts = ttnn.slice(timesteps, [0, 0, r, 0], [1, 1, end, timesteps.shape[3]])
+            ep = None if endpoint_timesteps is None else ttnn.slice(endpoint_timesteps, [0, 0, r, 0], [1, 1, end, endpoint_timesteps.shape[3]])
+            chunks.append(self._temb(ts, ep))
+        temb = ttnn.concat(chunks, dim=2) if len(chunks) > 1 else chunks[0]
+        try:
+            for block in self.transformer_blocks:
+                block.prepare_modulation(temb)
+        except BaseException:
+            self.release_modulation()
+            raise
+        finally:
+            ttnn.deallocate(temb)
+
+    def release_modulation(self) -> None:
+        for block in self.transformer_blocks:
+            block.release_modulation()
+
     @traced_function(device=lambda self: self.mesh_device, clone_prep_inputs=False, prep_run=False)
     def run_blocks(
         self,
@@ -655,6 +699,7 @@ class MiniMaxH3Transformer3DModel(Module):
         adaln_tile_map: ttnn.Tensor | None = None,
         adaln_expanded_indices: ttnn.Tensor | None = None,
         adaln_selector: ttnn.Tensor | None = None,
+        modulation_row_indices: ttnn.Tensor | None = None,
     ) -> ttnn.Tensor:
         onehot = self.transformer_blocks[0].onehot_table(adaln_indices, temb.shape[2], eye)
         tilerow = self.transformer_blocks[0].tilerow_tables(adaln_tile_map, adaln_expanded_indices, temb.shape[2], eye)
@@ -667,13 +712,14 @@ class MiniMaxH3Transformer3DModel(Module):
             hidden = block(
                 hidden,
                 logical_n,
-                temb=temb,
+                temb=temb if modulation_row_indices is None else None,
                 adaln_indices=adaln_indices,
                 rope_cos=rope_cos,
                 rope_sin=rope_sin,
                 onehot=onehot,
                 tilerow=tilerow,
                 modulation_tables=modulation_tables,
+                modulation_row_indices=modulation_row_indices,
             )
         ttnn.deallocate(onehot)
         if tilerow is not None:
@@ -737,7 +783,7 @@ class MiniMaxH3Transformer3DModel(Module):
         for block, resident in zip(self.transformer_blocks, self._adaln_tables):
             content: list[ttnn.Tensor | None] = [None] * NUM_MODULATION_PARAMS
             for temb, placement in tembs:
-                for param, table in enumerate(block._modulation_tables(temb)):
+                for param, table in enumerate(block._modulation_tables(block._compute_adaln_projection(temb))):
                     placed = block._gather_rows(table, placement)
                     ttnn.deallocate(table)
                     if content[param] is None:

@@ -11,7 +11,8 @@ import ttnn
 from ...layers.linear import ColParallelLinear, Linear, RowParallelLinear
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
-from ...utils.tensor import bf16_tensor
+from ...utils.matmul import get_matmul_config, get_matmul_core_grid
+from ...utils.tensor import bf16_tensor, to_torch
 from ...utils.test import mesh_device_config_to_string
 
 
@@ -356,3 +357,45 @@ def test_row_parallel_linear_input_rank(
             assert_quality(torch_output, composed[i], pcc=0.999_500)
         if not use_persistent_buffer:
             ttnn.deallocate(tt_output)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("layer", "in_features", "out_features"),
+    [(ColParallelLinear, 5120, 2560), (RowParallelLinear, 6400, 5120)],
+    ids=["qkv", "down"],
+)
+def test_pinned_projection(mesh_device: ttnn.MeshDevice, layer, in_features: int, out_features: int) -> None:
+    """A pinned config keeps one program on both sides of the 128-row switch to `ttnn.linear`."""
+    torch.manual_seed(0)
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    torch_model = torch.nn.Linear(in_features, out_features, bias=False)
+    tt_model = layer(
+        in_features,
+        out_features,
+        bias=False,
+        mesh_device=mesh_device,
+        mesh_axis=None,
+        compute_kernel_config=compute_kernel_config,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+    row_capacity = 640
+    pin = get_matmul_config(row_capacity, in_features, out_features, get_matmul_core_grid(mesh_device))
+
+    added = 0
+    # Long, short, long: a program compiled at one row count must serve a larger and a smaller one.
+    for rows in (320, 32, 64, 96, row_capacity, 128, 160):
+        x = torch.randn(1, rows, in_features)
+        tt_x = bf16_tensor(x, device=mesh_device)
+        entries = mesh_device.num_program_cache_entries()
+        actual = to_torch(tt_model.forward(tt_x, matmul_config=pin))
+        added += mesh_device.num_program_cache_entries() - entries
+        with torch.no_grad():
+            assert_quality(torch_model(x), actual, pcc=0.9999)
+    assert added == 1, f"{added} projection programs"
