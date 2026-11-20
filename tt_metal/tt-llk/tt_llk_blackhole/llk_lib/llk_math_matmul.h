@@ -898,11 +898,20 @@ inline void _llk_math_matmul_init_(
 /**
  * @brief Uninitialize/cleanup after matmul operations, restoring any modified state to defaults.
  *
- * @note Reverses @ref _llk_math_matmul_init_; currently a no-op since all state is transient.
+ * @note Reverses @ref _llk_math_matmul_init_; template args must match the init's. With the row
+ *       MOP they restore the ADDR_MOD_6 invariant (dest += 2) that the init's next-tile modifier
+ *       displaced: the execute leaves slot 6 alone so its replays keep stepping DEST, so a kernel
+ *       that interleaves SFPU ops with the matmuls must call this between the last matmul and
+ *       the first SFPU op (matching template args), or the SFPU op reads a stale stride.
  */
+template <int THROTTLE_LEVEL = 0, bool ROW_MOP = false>
 inline void _llk_math_matmul_uninit_()
 {
-    // No state to restore - all states are transient or default
+    if constexpr (matmul_runs_row_mop<THROTTLE_LEVEL, ROW_MOP>())
+    {
+        // Restore the ADDR_MOD_6 invariant (dest += 2) for the next op.
+        addr_mod_t {.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
 }
 
 /**
