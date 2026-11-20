@@ -110,7 +110,10 @@ constexpr const char* kSenderFromRoutingPlaneSource = R"(
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/global_semaphore.h"
 #include "experimental/kernel_args.h"
+#include "tt_metal/fabric/hw/inc/edm_fabric/routing_plane_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/api_common.h"
+
+using namespace tt::tt_fabric::common::experimental;
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 
 void kernel_main() {
