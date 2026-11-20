@@ -491,10 +491,7 @@ void MeshWorkloadImpl::clear_per_device_runtime_args(
     }
 }
 
-namespace {
-// Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to its
-// per-device args.
-void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
+void MeshWorkloadImpl::apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
     auto& drops = program.impl().per_device_run_arg_drops();
     if (!drops.any_pending()) {
         return;
@@ -510,6 +507,7 @@ void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program) {
     drops.pending.clear();
 }
 
+namespace {
 // Whether the field's effective values (which devices have one, and theirs) equal its last commit.
 bool equals_committed(const PerDeviceRuntimeArgsField& field) {
     if (field.present != field.committed_present) {

@@ -196,6 +196,9 @@ private:
     std::optional<FinalizedMetadata> finalized_metadata_;
     // Per-device runtime args per program range (see PerDeviceRuntimeArgs); empty for almost every workload.
     std::unordered_map<MeshCoordinateRange, PerDeviceRuntimeArgs> per_device_runtime_args_;
+    // Applies `program`'s pending drops (Metal 2.0 Program::set_program_run_args / Program::update_program_run_args) to
+    // `per_device`.
+    void apply_run_arg_drops(PerDeviceRuntimeArgs& per_device, Program& program);
     PerDeviceRuntimeArgsField& per_device_runtime_args_field(
         const MeshCoordinateRange& program_range,
         KernelHandle kernel,
