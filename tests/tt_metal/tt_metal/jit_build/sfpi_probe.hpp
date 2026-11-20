@@ -29,9 +29,8 @@ inline std::string sfpi_gxx_path(const std::string& root_dir) {
 }
 
 // True when the sfpi g++ exists and exits 0 on `flags`. Runs through the JIT build's shell-free launcher
-// (posix_spawn with a fixed argv) in a scratch directory that is removed afterwards. Throws when the
-// scratch directory cannot be made, so a broken TMPDIR fails the caller instead of reading as a toolchain
-// that rejects the flags (callers skip on false).
+// (posix_spawn with a fixed argv). Throws when the scratch directory cannot be made, so a broken TMPDIR
+// fails the caller instead of reading as a toolchain that rejects the flags (callers skip on false).
 inline bool sfpi_gxx_accepts(const std::string& root_dir, const std::vector<std::string>& flags) {
     const std::string gxx = sfpi_gxx_path(root_dir);
     if (gxx.empty()) {
