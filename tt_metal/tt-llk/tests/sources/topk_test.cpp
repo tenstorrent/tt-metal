@@ -277,20 +277,24 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // After Datacopy, we do topk SFPU.
     // These two calls are essentially the same as calling ckernel::llk_math_eltwise_unary_sfpu_topk_init<APPROX>(); from metal.
     _llk_math_eltwise_unary_sfpu_init_<SfpuType::topk_local_sort>();
-    if constexpr (TOPK_FUSED_STABLE)
+    const auto topk_init = []()
     {
-        // Fused keys carry the index inside the packed word: index tracking stays OFF.
-        ckernel::sfpu::_init_topk_fused_();
-    }
-    else if constexpr (TOPK_RANK_STAMPED)
-    {
-        // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
-        ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
-    }
-    else
-    {
-        ckernel::sfpu::_init_topk();
-    }
+        if constexpr (TOPK_FUSED_STABLE)
+        {
+            // Fused keys carry the index inside the packed word: index tracking stays OFF.
+            ckernel::sfpu::_init_topk_fused_();
+        }
+        else if constexpr (TOPK_RANK_STAMPED)
+        {
+            // Rank tags ride the value words' low TOPK_TAG_BITS bits; the true indices keep riding index tracking.
+            ckernel::sfpu::_init_topk_rank_stamped_<TOPK_TAG_BITS>();
+        }
+        else
+        {
+            ckernel::sfpu::_init_topk();
+        }
+    };
+    topk_init();
 
     for (int current_tile_row = 0; current_tile_row < NUM_TOPK_PIPELINE_EXECUTIONS; ++current_tile_row) // Iterates over tile_rows.
     {
@@ -375,18 +379,60 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         SFPU_UNARY_CALL(
                             dest_sync, is_fp32_dest_acc_en, calculate_topk_canonicalize_negzero, (APPROX, is_fp32_dest_acc_en), dst_index, vector_mode);
                     }
-                    SFPU_UNARY_CALL(
-                        dest_sync,
-                        is_fp32_dest_acc_en,
-                        calculate_bitonic_topk_phases_steps,
-                        (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
-                        dst_index,
-                        vector_mode,
-                        TOPK_SORT_DIRECTION,
-                        end_phase,
-                        start_phase,
-                        end_step,
-                        start_step);
+                    if constexpr (TOPK_SPLIT_PHASE > 0)
+                    {
+                        // Phases [0, TOPK_SPLIT_PHASE) and [TOPK_SPLIT_PHASE, end_phase] as two calls. The second call's
+                        // step range (steps ph+1 down to 1) only applies when it covers a single phase.
+                        // Fill the replay buffer with NOPs first, so every window the two calls replay must be recorded by them.
+                        lltt::record<lltt::NoExec>(0, 32);
+                        for (int slot = 0; slot < 32; ++slot)
+                        {
+                            TTI_SFPNOP;
+                        }
+                        SFPU_UNARY_CALL(
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            calculate_bitonic_topk_phases_steps,
+                            (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
+                            dst_index,
+                            vector_mode,
+                            TOPK_SORT_DIRECTION,
+                            TOPK_SPLIT_PHASE - 1,
+                            start_phase,
+                            end_step,
+                            start_step);
+                        if constexpr (TOPK_SPLIT_REINIT)
+                        {
+                            topk_init();
+                        }
+                        SFPU_UNARY_CALL(
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            calculate_bitonic_topk_phases_steps,
+                            (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
+                            dst_index,
+                            vector_mode,
+                            TOPK_SORT_DIRECTION,
+                            end_phase,
+                            TOPK_SPLIT_PHASE,
+                            4 /* end_step */,
+                            end_phase + 1 /* start_step */);
+                    }
+                    else
+                    {
+                        SFPU_UNARY_CALL(
+                            dest_sync,
+                            is_fp32_dest_acc_en,
+                            calculate_bitonic_topk_phases_steps,
+                            (APPROX, is_fp32_dest_acc_en, NETWORK_STABLE_SORT, TOPK_FUSED_STABLE, TOPK_RANK_STAMPED, TOPK_TIE_ORDER),
+                            dst_index,
+                            vector_mode,
+                            TOPK_SORT_DIRECTION,
+                            end_phase,
+                            start_phase,
+                            end_step,
+                            start_step);
+                    }
                 }
                 else
                 {
