@@ -32,16 +32,13 @@ void bind_gather_operation(nb::module_& mod) {
             index (ttnn.Tensor): A tensor containing the indices of elements to gather, with the same number of dimensions as the input tensor.
 
         Keyword Args:
-            sparse_grad (bool, optional): Not supported: it must be `False`, and `True` raises an error. Defaults to `False`.
+            sparse_grad (bool, optional): Must be `False`. Defaults to `False`.
             memory_config (ttnn.MemoryConfig, optional): Specifies the memory configuration for the output tensor. Defaults to `None`.
             out (ttnn.Tensor, optional): A preallocated tensor to store the gathered values. Defaults to `None`.
             sub_core_grids (ttnn.CoreRangeSet, optional): Custom core range set for operation execution. Allows specification of which cores should be used for the operation. Defaults to `None`.
 
         Returns:
             ttnn.Tensor: the gathered values, with the same shape as `index`.
-
-        Additional Information:
-            * Currently, the `sparse_grad` argument is not supported.
 
         Note:
 

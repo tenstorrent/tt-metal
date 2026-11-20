@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import re
 import math
 
 import pytest
@@ -11,6 +12,13 @@ import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def random_torch_tensor(dtype, shape):
@@ -823,6 +831,19 @@ def test_permute_cache_miss_different_factory_row_major(device, isolate_program_
     assert device.cache_entries_counter.total == 2
 
 
+@pytest.mark.parametrize("shape", [(1, 16, 160, 400), (1, 16, 64, 96), (1, 48, 40, 72), (2, 24, 20, 33)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
+@pytest.mark.parametrize("memory_config", [ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG])
+def test_permute_row_major_channels_last_exact(device, shape, dtype, memory_config):
+    torch.manual_seed(0)
+    torch_input = random_torch_tensor(dtype, shape)
+    input_tensor = ttnn.from_torch(
+        torch_input, dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=memory_config
+    )
+    output_tensor = ttnn.permute(input_tensor, (0, 2, 3, 1))
+    assert_equal(torch.permute(torch_input, (0, 2, 3, 1)), ttnn.to_torch(output_tensor))
+
+
 def _height_sharded_l1(shard_shape):
     grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
     return ttnn.MemoryConfig(
@@ -905,3 +926,67 @@ def test_permute_nchw_to_nhwc_tiled_route(device, isolate_program_cache, channel
     ref, out = run_permute(device, shape, (0, 2, 3, 1))
     assert torch.equal(out, ref)
     assert device.cache_entries_counter.total == expected_programs
+
+
+_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+
+
+def _one_exponent_input(shape, seed=0):
+    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
+    tile come back exactly."""
+    torch.manual_seed(seed)
+    magnitude = 1 + torch.rand(shape)
+    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
+
+
+def _docstring_pad_value_dtypes():
+    """Dtypes the ``pad_value`` line of the ttnn.permute docstring says it fills."""
+    line = next(line for line in ttnn.permute.__doc__.splitlines() if line.strip().startswith("pad_value ("))
+    return {getattr(ttnn.DataType, name) for name in re.findall(r"``(\w+)``", line)}
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.permute))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.permute))
+def test_permute_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.permute docstring lists.
+
+    Each one also permutes with negative dims and with a permutation that moves the last dimension, and checks
+    ``pad_value``: a TILE output fills the tile padding the permute exposes for the dtypes the docstring's
+    ``pad_value`` line names, and a ROW_MAJOR output has no padding.
+    """
+    check_readable(dtype, layout, buffer_type)
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((2, 3, 32, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    # (0, 2, 1, 3) keeps the last dimension in place, so block-float values come back unchanged.
+    expected = ttnn.to_torch(input_tensor).permute(0, 2, 1, 3)
+    output = ttnn.permute(input_tensor, (0, 2, 1, 3), memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(expected, ttnn.to_torch(output))
+
+    assert_exact(expected, ttnn.to_torch(ttnn.permute(input_tensor, (0, -2, 1, -1), memory_config=memory_config)))
+
+    # The output's second-to-last dim is 3, so a TILE output has 29 rows of tile padding to fill.
+    output = ttnn.permute(input_tensor, (0, 2, 1, 3), memory_config=memory_config, pad_value=7.0)
+    assert_exact(expected, ttnn.to_torch(output))
+    if layout == ttnn.ROW_MAJOR_LAYOUT:
+        assert list(output.padded_shape) == list(output.shape)
+    elif dtype in _docstring_pad_value_dtypes():
+        padded = ttnn.from_device(output).to_torch_with_padded_shape()
+        assert torch.all(padded[..., 3:, :] == 7)
+
+    # (0, 1, 3, 2) moves the last dimension, which runs a compute kernel that holds BFLOAT16 zeros by value: a
+    # BFLOAT16 input leaves out NaN, as the docstring requires, and its zeros are compared by value. Values also move
+    # into new blocks, so block floats get values with one exponent.
+    if dtype in _BLOCK_FLOATS:
+        x = _one_exponent_input((2, 3, 32, 64))
+    else:
+        x = full_range_input((2, 3, 32, 64), dtype, nan=dtype != ttnn.bfloat16)
+    input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
+    output = ttnn.permute(input_tensor, (0, 1, 3, 2), memory_config=memory_config)
+    expected = ttnn.to_torch(input_tensor).permute(0, 1, 3, 2)
+    assert_exact(expected, ttnn.to_torch(output), signed_zeros=dtype != ttnn.bfloat16)

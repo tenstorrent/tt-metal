@@ -17,6 +17,7 @@
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
@@ -200,12 +201,21 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
             input_tensor_a.dtype() == DataType::UINT16 or input_tensor_a.dtype() == DataType::UINT8 or
             input_tensor_a.dtype() == DataType::FP8_E4M3,
         "data type must be bfloat16, float32, uint32, int32, uint16, uint8, or fp8_e4m3");
-    // Quasar tilizes FLOAT32 straight into DEST, a path that handles 32x32 tiles only.
+    // Quasar tilizes FLOAT32 and INT32 straight into DEST, a path that handles 32x32 tiles only.
+    // A retile always has a non-32x32 tile on one side.
     TT_FATAL(
-        !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR && input_tensor_a.dtype() == DataType::FLOAT32 &&
-          tile_height < tt::constants::TILE_HEIGHT),
-        "FLOAT32 tilize into tiny tiles ({} rows) is not supported on Quasar",
+        !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR &&
+          (input_tensor_a.dtype() == DataType::FLOAT32 || input_tensor_a.dtype() == DataType::INT32) &&
+          (retile || tile_height < tt::constants::TILE_HEIGHT)),
+        "{} tilize into tiny tiles ({} rows) or retile is not supported on Quasar",
+        input_tensor_a.dtype(),
         tile_height);
+    // Quasar's packer cannot convert Int32 in DEST to a float format.
+    TT_FATAL(
+        !(input_tensor_a.device()->arch() == tt::ARCH::QUASAR && input_tensor_a.dtype() == DataType::INT32 &&
+          operation_attributes.output_dtype != DataType::INT32),
+        "INT32 tilize to {} is not supported on Quasar; the output must be INT32",
+        operation_attributes.output_dtype);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     {
@@ -270,7 +280,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                                                          // factory, the output has the same shard spec as the input.
         return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE, operation_attributes.tile),
                 mem_config,

@@ -45,10 +45,13 @@ struct SlidingHaloConfig {
     uint32_t link_base = 0;
     // Every exchange delivers its per-link ready-increment to the hop-1 exchange's workers
     // (rendezvous_noc[link]), and only that exchange waits and signals the SDPA: one signaller per
-    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Each collecting worker
-    // expects one arrival per remote predecessor. Empty rendezvous_noc: each worker's own core.
-    uint32_t arrivals_expected = 1;
+    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Empty rendezvous_noc:
+    // each worker's own core.
     std::vector<CoreCoord> rendezvous_noc;
+    // The writer increments semaphores[kHaloArrivalSemaphoreBase + arrival_key] on its receivers; the
+    // collector waits for one arrival on each of collected_keys (one distinct key per predecessor).
+    uint32_t arrival_key = 0;
+    std::vector<uint32_t> collected_keys;
     // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
     // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
     // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
@@ -83,9 +86,11 @@ struct SlidingHaloConfig {
 
 // Halo reader/writer runtime-arg layout (sliding_halo_{reader,writer}.cpp).
 namespace halo_rt {
-constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
-// The halo GlobalSemaphore's address: not in the program hash, so re-patched on every dispatch.
-constexpr uint32_t kNeighborReaderSemaphoreArg = 0;
+// semaphores[0]/[1] are the all-gather directions; halo arrival semaphores start here.
+constexpr uint32_t kHaloArrivalSemaphoreBase = 2;
+// Reader header: the link index. The collector's arrival semaphores close its args.
+constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
+// The writer's arrival semaphore address: not in the program hash, so re-patched on every dispatch.
 constexpr uint32_t kNeighborWriterSemaphoreArg = 2;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
 constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;

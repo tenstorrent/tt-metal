@@ -14,6 +14,7 @@
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 using namespace tt::tt_metal;
 
 namespace ttnn::prim::qsr {
@@ -95,6 +96,10 @@ bool can_use_sharded_optimized_factories(
     // widens the 64-entry field. tiles-per-shard is layout-independent: shard_h * shard_w / TILE_HW.
     if (memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
         const auto& in_shard_shape = input_tensor.shard_spec().value().shape;
+        // The output reuses the input shard spec, so the shard must be whole tiles.
+        if (in_shard_shape[0] % tt::constants::TILE_HEIGHT != 0 || in_shard_shape[1] % tt::constants::TILE_WIDTH != 0) {
+            return false;
+        }
         const uint32_t in_tiles_per_shard =
             (in_shard_shape[0] * in_shard_shape[1]) / (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         if (in_tiles_per_shard > 64) {
@@ -172,7 +177,7 @@ TilizeDeviceOperation::spec_return_value_t TilizeDeviceOperation::compute_output
                                                          // factory, the output has the same shard spec as the input.
         return {tt::tt_metal::TensorSpec(
             input_tensor.logical_shape(),
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
                 mem_config,

@@ -1,0 +1,121 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/buffer.hpp>
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
+#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
+#include <tt-metalium/global_semaphore.hpp>
+#include "ttnn/global_semaphore.hpp"
+
+#include "ttnn/operation.hpp"
+
+#include <optional>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace ttnn::experimental::prim::qsr {
+
+struct RingAttentionAllGatherAsyncParams {
+    int32_t dim = 0;
+    uint32_t num_links = 1;
+    uint32_t ring_size = 0;
+    MemoryConfig output_mem_config;
+    ttnn::ccl::Topology topology;
+    std::vector<GlobalSemaphore> semaphore;
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    std::optional<uint32_t> cluster_axis;
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
+    bool full_mesh = false;
+    ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row;
+    uint32_t mesh_rows = 0;
+    uint32_t mesh_cols = 0;
+    std::optional<uint64_t> route_plan_hash;
+    // Full mesh only: tensor ranks run down the mesh columns (split KV with SP on mesh axis 1).
+    bool column_major_ranks = false;
+
+    RingAttentionAllGatherAsyncParams(
+        int32_t dim,
+        uint32_t num_links,
+        uint32_t ring_size,
+        MemoryConfig output_mem_config,
+        ttnn::ccl::Topology topology,
+        std::vector<GlobalSemaphore> semaphore,
+        std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+        std::optional<uint32_t> cluster_axis,
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        bool full_mesh = false,
+        ttnn::ccl::snake_ring::Orientation snake_orientation = ttnn::ccl::snake_ring::Orientation::Row,
+        uint32_t mesh_rows = 0,
+        uint32_t mesh_cols = 0,
+        std::optional<uint64_t> route_plan_hash = std::nullopt,
+        bool column_major_ranks = false) :
+        dim(dim),
+        num_links(num_links),
+        ring_size(ring_size),
+        output_mem_config(std::move(output_mem_config)),
+        topology(topology),
+        semaphore(std::move(semaphore)),
+        sub_device_id(sub_device_id),
+        cluster_axis(cluster_axis),
+        core_allocation_strategy(core_allocation_strategy),
+        full_mesh(full_mesh),
+        snake_orientation(snake_orientation),
+        mesh_rows(mesh_rows),
+        mesh_cols(mesh_cols),
+        route_plan_hash(route_plan_hash),
+        column_major_ranks(column_major_ranks) {}
+
+    // Restrict program-cache hashing and the canonical key to structure-affecting fields only.
+    // Excludes `semaphore` (GlobalSemaphore objects whose addresses are passed to runtime args).
+    // `sub_device_id` is the structural source of the worker-core range set the previous custom hash
+    // encoded, and `core_allocation_strategy` picks the worker cores within it (row- vs column-major).
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "dim",
+        "num_links",
+        "ring_size",
+        "output_mem_config",
+        "topology",
+        "sub_device_id",
+        "cluster_axis",
+        "core_allocation_strategy",
+        "full_mesh",
+        "snake_orientation",
+        "mesh_rows",
+        "mesh_cols",
+        "route_plan_hash",
+        "column_major_ranks");
+    auto attribute_values() const {
+        return std::forward_as_tuple(
+            dim,
+            num_links,
+            ring_size,
+            output_mem_config,
+            topology,
+            sub_device_id,
+            cluster_axis,
+            core_allocation_strategy,
+            full_mesh,
+            snake_orientation,
+            mesh_rows,
+            mesh_cols,
+            route_plan_hash,
+            column_major_ranks);
+    }
+};
+
+struct RingAttentionAllGatherAsyncInputs {
+    std::vector<Tensor> input_tensor;
+    std::vector<std::optional<Tensor>> persistent_output_buffer;
+};
+
+}  // namespace ttnn::experimental::prim::qsr

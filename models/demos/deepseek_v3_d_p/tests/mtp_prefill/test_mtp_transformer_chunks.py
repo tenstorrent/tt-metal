@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTran
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat, init_kvpe_cache, init_mla_kv_cache
 from models.tt_transformers.tt.load_checkpoints import load_hf_state_dict_filtered
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 SP_AXIS, TP_AXIS = 0, 1
 

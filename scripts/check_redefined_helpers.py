@@ -20,10 +20,16 @@ import argparse
 import bisect
 import os
 import re
-import subprocess
 import sys
 
-from precommit_common import REPO_ROOT, blank_noncode, safe_git_rev, safe_repo_path
+from precommit_common import (
+    REPO_ROOT,
+    blank_noncode,
+    git_output,
+    name_status_entries,
+    precommit_revisions,
+    safe_repo_path,
+)
 
 # Files that are the source of truth. Definitions inside them are the API.
 ALLOWLIST = {
@@ -731,36 +737,66 @@ def added_lines_by_path(diff_text):
     return found
 
 
-def _git_diff(args):
-    try:
-        return subprocess.check_output(
-            ["git", "diff", "-U0", "--no-ext-diff", *args, "--"],
-            cwd=REPO_ROOT,
-            stderr=subprocess.DEVNULL,
-            text=True,
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return None
+def _diff_paths(paths):
+    """Repo-relative paths safe to place after ``--`` in a git diff.
 
-
-def commit_added_lines():
-    """Added lines for every file in this commit. None when git cannot answer.
-
-    The diff is of the whole commit. Caller-supplied paths are not command arguments.
-    ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
+    ``--literal-pathspecs`` stops a name such as ``:(exclude)*`` from becoming a pathspec.
+    ``safe_repo_path`` rejects a path that leaves the repository.
     """
-    from_ref = os.environ.get("PRE_COMMIT_FROM_REF")
-    to_ref = os.environ.get("PRE_COMMIT_TO_REF")
-    if from_ref or to_ref:
-        safe_from = safe_git_rev(from_ref)
-        safe_to = safe_git_rev(to_ref)
-        if safe_from is None or safe_to is None:
-            return None
-        diff = _git_diff([safe_from, safe_to])
+    scoped = []
+    for path in paths or []:
+        resolved = safe_repo_path(path)
+        if resolved is None:
+            continue
+        rel = os.path.relpath(resolved, REPO_ROOT).replace("\\", "/")
+        if rel == ".." or rel.startswith("../"):
+            continue
+        scoped.append(rel)
+    return scoped
+
+
+def _git_diff(args, paths=None):
+    return git_output(["--literal-pathspecs", "diff", "-U0", "-M", "--no-ext-diff", *args, "--", *(paths or [])])
+
+
+def _rename_sources(revisions, paths):
+    """Old paths of the given files that this change renames.
+
+    git pairs a rename only when both paths are in the pathspec. With the new path alone,
+    the whole moved file reads as added and its existing helpers would be reported.
+    The local lookup reads the index only, so it does not stat the work tree.
+    """
+    if not paths:
+        return []
+    payload = git_output(
+        ["diff", "--name-status", "-z", "-M", "--no-ext-diff", "--diff-filter=R", *(revisions or ["--cached"])]
+    )
+    if not payload:
+        return []
+    wanted = set(paths)
+    return [old for _status, (old, new) in name_status_entries(payload) if new in wanted]
+
+
+def commit_added_lines(paths=None):
+    """Added lines for the given files, or the whole commit when no path is usable.
+
+    ``git diff HEAD -- <files>`` sees staged and unstaged edits in those files and does not
+    stat the rest of the work tree. ``PRE_COMMIT`` is also set for ``pre-commit run --files``,
+    which does not stash unstaged changes, so the index alone would hide them.
+    ``PRE_COMMIT_FROM_REF`` and ``PRE_COMMIT_TO_REF`` are passed only after ``safe_git_rev``.
+    None when git cannot answer.
+    """
+    scoped = _diff_paths(paths)
+    revisions = precommit_revisions()
+    if revisions is None:
+        return None
+    scoped += _rename_sources(revisions, scoped)
+    if revisions:
+        diff = _git_diff(revisions, scoped)
     else:
-        diff = _git_diff(["HEAD"])
+        diff = _git_diff(["HEAD"], scoped)
         if diff is None:
-            diff = _git_diff(["--cached"])
+            diff = _git_diff(["--cached"], scoped)
     return None if diff is None else added_lines_by_path(diff)
 
 
@@ -783,7 +819,7 @@ def main(argv=None):
 
     added = None
     if not args.all_lines:
-        added = commit_added_lines()
+        added = commit_added_lines(args.files)
         if added is None:
             print(
                 "check_redefined_helpers: git diff failed or the revision was rejected; skipping (fail open)",
