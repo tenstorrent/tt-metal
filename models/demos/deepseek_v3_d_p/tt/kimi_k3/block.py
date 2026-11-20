@@ -23,6 +23,7 @@ from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -67,8 +68,12 @@ class TtKimiK3Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         forward_chunks: int = 1,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
+        # The attention and FFN norms as one fused distributed op (USE_FUSED_PREFILL_RMSNORM), as GLM-5.3 and K2.7.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
         # attention runs per chunk at the per-chunk size; the FFN (ffn_norm, MoE / dense FFN) runs once over
         # all forward_chunks * seq_len tokens, so the MoE is sized for them.
@@ -101,6 +106,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -120,6 +126,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if self.is_moe:
