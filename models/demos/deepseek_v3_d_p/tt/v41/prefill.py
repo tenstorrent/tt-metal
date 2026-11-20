@@ -72,6 +72,23 @@ DEVICE_EMBED_CHECK = int(os.environ.get("V41_PREFILL_DEVICE_EMBED_CHECK", "0"))
 # kernel and FW duration (slowest chip), core count and chip 0's FW start / end: the chunk's device work vs its wall time.
 DEVPROF = os.environ.get("V41_PREFILL_DEVPROF", "")
 DEVPROF_STARTS = {int(v) for v in os.environ.get("V41_PREFILL_DEVPROF_STARTS", "").split(",") if v.strip()}
+# DS41F-0169 bisect (diagnostic, default off): V41_PREFILL_STREAM_DIGEST=<chunk indices, comma list> -- on the island path, each
+# listed chunk reads every block's output streams + pre row back (a blocking read per layer: the chunk is serialized) and logs
+# one CRC per chip per layer, "[v41 0169] stream start=S <tag>:<crc chip 0>.<crc chip 1>...", tags e<L> (Engram output = block
+# L's input), b<L> (block L's output), k20 (layer 20's KV-only input, = b19 on the island path)
+STREAM_DIGEST = {int(v) for v in os.environ.get("V41_PREFILL_STREAM_DIGEST", "").split(",") if v.strip()}
+
+
+def _stream_crcs(ts) -> str:
+    import zlib
+
+    per = None
+    for t in ts:
+        devs = ttnn.get_device_tensors(t)
+        per = per or [0] * len(devs)
+        for k, d in enumerate(devs):
+            per[k] = zlib.crc32(ttnn.to_torch(d).contiguous().view(torch.uint8).numpy().tobytes(), per[k]) & 0xFFFFFFFF
+    return ".".join(f"{c:08x}" for c in per)
 
 
 class DevProf:
@@ -646,6 +663,7 @@ class V41Prefill:
             rows = _fetch()
             mark("engram.host")
         owned = True
+        sd = [] if (start // self.chunk) in STREAM_DIGEST else None
         for blk in self.blocks:
             L = blk.layer
             if L in self.engrams:
@@ -661,7 +679,11 @@ class V41Prefill:
                         ttnn.deallocate(t)
                 streams, owned = new, not isl
                 mark("engram.dev")
+                if sd is not None:
+                    sd.append(f"e{L}:" + _stream_crcs(streams))
             if kv_only20 and L >= self.cfg.first_decoder_layer:
+                if sd is not None:
+                    sd.append(f"k{L}:" + _stream_crcs(list(streams) + [pre]))
                 blk.kv_only_islands(streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0])
                 mark("kv_only")
                 break
@@ -670,12 +692,16 @@ class V41Prefill:
             )
             owned = False
             mark(f"block.{type(blk.attn).__name__}")
+            if sd is not None:
+                sd.append(f"b{L}:" + _stream_crcs(list(streams) + [pre]))
         if self.kv_attn is not None:
             h = self.kv_norm(self.kv_hc.collapse(streams, pre))
             self.kv_attn.kv_only(h, seq_len_actual=real_len, state=self.kv_state)
             ttnn.deallocate(h)
             mark("kv_only")
         self.kv_actual += real_len
+        if sd is not None:
+            logger.info(f"[v41 0169] stream start={start} " + ";".join(sd))
         if prof is not None:
             self.last_profile = prof.report(f"chunk [{start}, {start + real_len}) slot {self.slot} (islands)")
 
