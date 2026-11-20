@@ -167,6 +167,10 @@ class GraniteDecoder(LightweightModule):
             fp32_dest_acc_en=policy.get("sdpa_prefill_fp32", policy.get("sdpa_fp32", True)),
             packer_l1_acc=True,
         )
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        obj.prefill_attention_precision = (
+            ttnn.SDPAPrecision.ACCURATE if obj.prefill_attention_compute.fp32_dest_acc_en else None
+        )
         prefix = f"model.layers.{layer_idx}."
 
         def get(key):
@@ -513,6 +517,7 @@ class GraniteDecoder(LightweightModule):
                 exp_approx_mode=False,
             ),
             compute_kernel_config=self.prefill_attention_compute,
+            precision=self.prefill_attention_precision,
         )
         return self.finish(x, ttnn.experimental.nlp_concat_heads(a))
 
