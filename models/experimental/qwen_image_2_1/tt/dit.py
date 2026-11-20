@@ -574,6 +574,7 @@ class QwenImageDiT:
                 scale=self.sdpa_scale,
                 program_config=self._sdpa_cfg(TILE, TILE, exp_approx_mode=True),
                 compute_kernel_config=self.ck_sdpa,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
@@ -726,6 +727,7 @@ class QwenImageDiT:
                 scale=self.sdpa_scale,
                 program_config=self._sdpa_cfg(qchunk, chunk, exp_approx_mode=True),
                 compute_kernel_config=self.ck_sdpa,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(q)
@@ -831,6 +833,7 @@ class QwenImageDiT:
                         self.prec.sdpa_mask_q_chunk, self.prec.sdpa_mask_k_chunk, exp_approx_mode=True
                     ),
                     compute_kernel_config=self.ck_sdpa,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 ttnn.deallocate(q)
@@ -883,6 +886,7 @@ class QwenImageDiT:
                         self.prec.sdpa_q_chunk, self.prec.sdpa_k_chunk, exp_approx_mode=False
                     ),
                     compute_kernel_config=self.ck_sdpa,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                 )
                 ttnn.deallocate(_joint)
                 ttnn.deallocate(q)
@@ -906,6 +910,7 @@ class QwenImageDiT:
                         self.prec.sdpa_mask_q_chunk, self.prec.sdpa_mask_k_chunk, exp_approx_mode=True
                     ),
                     compute_kernel_config=self.ck_sdpa,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 ttnn.deallocate(q)

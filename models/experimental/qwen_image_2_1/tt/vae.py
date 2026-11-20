@@ -333,6 +333,7 @@ class TTAttention:
                 scale=self.scale,
                 program_config=self.sdpa_program_config,
                 compute_kernel_config=self.sdpa_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
             scores = ttnn.matmul(

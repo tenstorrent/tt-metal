@@ -212,6 +212,7 @@ class Qwen3VLTextEncoder:
                 scale=1.0 / math.sqrt(c.head_dim),
                 program_config=sdpa_cfg,
                 compute_kernel_config=self.ck_sdpa,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(qr)
