@@ -104,8 +104,8 @@ def _glm_reference(x, sd):
 
 
 def _k3_weights(chips):
-    """test_kimi_k3_moe's creators and seeds; the routed experts one chip's worth repeated on every chip (896 distinct
-    experts would take the host ~120 GB)."""
+    """K3's weights from init_helpers' creators and seeds (as TtMoe's K3 test made them); the routed experts one chip's
+    worth repeated on every chip (896 distinct experts would take the host ~120 GB)."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
         create_gate_weights,
         create_latent_weights,

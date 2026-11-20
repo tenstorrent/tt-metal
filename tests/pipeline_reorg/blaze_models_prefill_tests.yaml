@@ -221,30 +221,6 @@
   sp_config: sc1
 
 
-- name: "(Kimi-K3-2.8T) MoE perf 5k"
-  fabric_profile: torus_xy
-  cmd: |
-
-    mpirun --bind-to none --pernode --tag-output bash -lc '
-      export OMP_NUM_THREADS=$(nproc)
-      export TT_METAL_SHM_TRACKING_DISABLED=1
-      export LOGURU_LEVEL=INFO
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/perf/test_kimi_moe_perf.py -k galaxy -vvv --tb=short
-    '
-  test_type: kimi_moe_perf
-  test_tags: [kimi_k3, moe]
-  test_group: module
-  skus:
-    bh_sc1_high_power:
-      timeout: 32
-      tier: 2
-      release_ready: false
-  owner_id: U08RL15T4N8 # Danilo Djekic
-  team: models
-  budget_type: demo
-  sp_config: sc1
-
-
 - name: "Distributed fused RMSNorm accuracy and trace replay"
   fabric_profile: torus_xy
   cmd: |
@@ -483,8 +459,9 @@
   cmd: |
 
     mpirun --bind-to none --pernode --tag-output bash -lc '
+      set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_moe.py::test_kimi_k3_moe -k "torus-xy-8x4 and kimi_k3-5k-pcc" -vvv --tb=short
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager" -vvv --tb=short
     '
   test_type: kimi_k3_moe
   test_tags: [kimi_k3, moe]
@@ -506,8 +483,10 @@
   # descriptor -- so three allocations bought nothing. Measured test-step times on run 36717057668:
   # 479 / 725 / 368 s.
   #
-  # No fabric_profile, as before: the fabric comes from each test's own device_params, and adding
-  # the key here would swap the mesh descriptor and change nothing else.
+  # fabric_profile torus_xy: K3's MoE is the MoE block (tt/moe_impl.py), which runs on the XY torus
+  # (on the 2D mesh fabric its first call hangs) - the certified TorusXY allocation, and each section
+  # exports the torus-XY descriptor (each test opens its mesh FABRIC_2D_TORUS_XY).
+  fabric_profile: torus_xy
   #
   # [3/4] is the only K3 PCC gate on the captured-trace path rather than eager, and its
   # TT_KIMI_K3_PREFILL_TTNN_CACHE export is load-bearing: conftest's `weight_cache_path` fixture
@@ -522,8 +501,8 @@
   # cold JIT (2026-11-16). In CI the K3 sections [1/4]-[3/4] ran 22-25 min (test step; 31-34 min job with
   # runner setup, 5 runs 2026-11-05..08) against ~22 min locally, so ~25-30 min is expected here; its 45 min
   # bound covers that. The test is
-  # TorusXY-only and this row has no fabric_profile, so the section exports what the impl's TorusXY step
-  # would set. Weights, TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a missing cache
+  # TorusXY-only, as the K3 sections: the section exports the torus-XY descriptor like them. Weights,
+  # TTNN cache and goldens are KimiK31Adapter's defaults on /mnt/weka; a missing cache
   # skips, so the section fails unless its one test passed.
   cmd: |
     # Sections run in order and the suite stops at the FIRST failure: a failed test can leave the
@@ -545,7 +524,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       timeout -k 2m 70m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_transformer_depth.py::test_depth_ladder_matches_golden -k "L24" -vvv --tb=short
@@ -559,7 +538,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       # Measured 10m01s in CI (main, 2026-11-18); 75 min leaves headroom for a cold weight load and JIT cache.
       timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -574,7 +553,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       # Ten replays of the captured prefill, each KV cache compared on device with the first (~30 s per replay).
       timeout -k 2m 50m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -603,13 +582,16 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       # Several users' chunks on a 4-layer Kimi-K3 (every layer kind; TTNN cache weights): interleaved users vs
-      # each user alone, packed forwards (two chunks per forward, one MoE call) vs one chunk per forward, and
-      # traced vs eager packed forwards. Measured 10m39s as CI runs it.
+      # each user alone, packed forwards (two chunks per forward, one MoE block call) vs one chunk per forward, and
+      # traced vs eager packed forwards. Measured 10m39s as CI runs it (TtMoe on the 2D mesh); on the MoE block
+      # it opens the torus-XY mesh, as the other K3 sections. The 4x4-stage cases skip on the full Galaxy.
       timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -eo pipefail
         export OMP_NUM_THREADS=$(nproc)
-        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline and not perf" -vvv --tb=short
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/kimi_k3/test_k3_prefill_multiuser.py -k "not pipeline and not perf" -vvv --tb=short | tee /tmp/k3_multiuser.out
+        grep -qE "[0-9]+ passed" /tmp/k3_multiuser.out || { echo "::error::k3_multiuser: no test passed (skipped?): check the TorusXY exports and the K3 TTNN cache"; exit 1; }
       '
     )
 
@@ -735,7 +717,7 @@
       export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
       export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
       export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
-      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_mesh_graph_descriptor.textproto
+      export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
       export PREFILL_DFLASH_GOLDEN_TAPS_DIR=/mnt/models/deepseek-prefill-cache/golden/structured_traces/k3_dspark_trace_55k/taps
       timeout -k 2m 60m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
@@ -2304,7 +2286,8 @@
   test_group: disagg_prefill
   skus:
     bh_sc4:
-      # The test step takes about 14 min warm (run 41911365787); 25 leaves 1.7x for a slower Weka cache.
+      # The test step takes about 14 min warm on TtMoe (run 41911365787) and 17.5 min on the MoE block (run
+      # 44391995127: each rank also reads the routed experts' bfp4 tensorbins from the TTNN cache); 25 leaves 1.4x.
       timeout: 25
       tier: 1
       release_ready: false
