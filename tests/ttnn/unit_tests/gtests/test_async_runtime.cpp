@@ -86,7 +86,7 @@ TEST_F(MultiCommandQueueSingleDeviceFixture, TestAsyncPreallocatedOutputs) {
         input_tensor,
         3,
         /*keepdim=*/true,
-        /*memory_config=*/std::nullopt,
+        /*memory_config_arg=*/std::nullopt,
         /*compute_kernel_config=*/std::nullopt,
         /*scalar=*/1.0f,
         /*sub_core_grids=*/std::nullopt,

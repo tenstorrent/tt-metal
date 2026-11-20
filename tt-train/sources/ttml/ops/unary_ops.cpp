@@ -119,6 +119,9 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
     auto shape = ttnn::Shape({1, 1, 1, 1});
     auto out =
         autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), tensor->get_value().memory_config()));
+    // ttnn::mean keeps the input's rank, so write through a same-rank view of the 4D result.
+    const auto keepdim_shape =
+        ttnn::Shape(ttsl::SmallVector<uint32_t>(tensor->get_value().logical_shape().rank(), 1U));
     ttnn::mean(
         tensor->get_value(),
         /* dim */ std::nullopt,
@@ -129,7 +132,7 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
         /* sub_core_grids */ std::nullopt,
         /* fast_and_approximate_mode */ false,
         /* output_layout */ std::nullopt,
-        /* output */ out->get_value());
+        /* output */ out->get_value().reshape(keepdim_shape));
     autograd::GradFunction grad = [tensor, out]() {
         auto resulting_shape = tensor->get_value().logical_shape();
         auto res = ttnn::moreh_mean_backward(

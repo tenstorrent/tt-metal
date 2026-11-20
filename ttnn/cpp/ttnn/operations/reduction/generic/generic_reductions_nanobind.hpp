@@ -52,7 +52,7 @@ inline std::string get_generic_reduction_doc(
                                                                          : R"doc(
             fast_and_approximate_mode (bool, optional): FLOAT32 only. `False` (default) uses the accurate SFPU path (full float32 accumulation); `True` uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with `fp32_dest_acc_en=True` and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.)doc";
     const char* output_kwarg = has_output ? R"doc(
-            output (ttnn.Tensor, optional): preallocated tensor to write the result into. Its shape and layout must match the result; its memory config is used when `memory_config` is not given. Defaults to `None`.)doc"
+            output (ttnn.Tensor, optional): preallocated tensor to write the result into. Its shape and layout must match the result; its memory config is used when `memory_config` is not given. Not supported together with `sub_core_grids`. Defaults to `None`.)doc"
                                           : "";
     return fmt::format(
         R"doc(
