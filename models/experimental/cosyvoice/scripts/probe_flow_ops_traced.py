@@ -123,7 +123,7 @@ def main() -> int:
         qkv = ttnn.linear(n1, at.wqkv, bias=at.bqkv, compute_kernel_config=at.cc)
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=at.h, transpose_key=False)
         ctx = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc
+            q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc, precision=at.sdpa_precision
         )
         ctx2 = ttnn.transformer.concatenate_heads(ctx)
         ff1 = ttnn.linear(n1, tb1.wf1, bias=tb1.bf1, compute_kernel_config=tb1.cc)
@@ -151,7 +151,7 @@ def main() -> int:
             "attn: sdpa",
             lambda: ttnn.deallocate(
                 ttnn.transformer.scaled_dot_product_attention(
-                    q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc
+                    q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc, precision=at.sdpa_precision
                 )
             ),
         )

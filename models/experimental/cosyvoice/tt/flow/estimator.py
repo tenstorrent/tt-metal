@@ -292,6 +292,8 @@ class TtAttention:
 
     def __init__(self, device, bag, heads: int, dim_head: int, cc=None, dtype=ttnn.bfloat16):
         self.device, self.h, self.d, self.cc = device, heads, dim_head, cc
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.sdpa_precision = ttnn.SDPAPrecision.ACCURATE if cc is not None and cc.fp32_dest_acc_en else None
         self.scale = dim_head**-0.5
         # q, k and v project the same activation, so they are one matmul over a
         # concatenated weight. This block runs 64 times per Euler step and there are
@@ -335,7 +337,7 @@ class TtAttention:
                 k = ttnn.fill_implicit_tile_padding(k, 0.0)
                 v = ttnn.fill_implicit_tile_padding(v, 0.0)
             ctx = ttnn.transformer.scaled_dot_product_attention(
-                q, k, v, is_causal=False, scale=1.0, compute_kernel_config=self.cc
+                q, k, v, is_causal=False, scale=1.0, compute_kernel_config=self.cc, precision=self.sdpa_precision
             )
             ttnn.deallocate(q)
             ttnn.deallocate(k)

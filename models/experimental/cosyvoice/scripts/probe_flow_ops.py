@@ -139,7 +139,7 @@ def main() -> int:
                 "attn: sdpa",
                 bench(
                     lambda: ttnn.transformer.scaled_dot_product_attention(
-                        q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc
+                        q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc, precision=at.sdpa_precision
                     ),
                     args.reps,
                     device,
@@ -147,7 +147,7 @@ def main() -> int:
             )
         )
         ctx = ttnn.transformer.scaled_dot_product_attention(
-            q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc
+            q, k, v, is_causal=False, scale=1.0, compute_kernel_config=at.cc, precision=at.sdpa_precision
         )
         fine.append(("attn: concat heads", bench(lambda: ttnn.transformer.concatenate_heads(ctx), args.reps, device)))
         ctx2 = ttnn.transformer.concatenate_heads(ctx)
