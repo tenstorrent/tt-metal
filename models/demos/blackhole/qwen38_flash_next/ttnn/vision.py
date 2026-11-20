@@ -395,6 +395,7 @@ class VisionTower:
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=EXACT_COMPUTE,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             memory_config=DRAM,
             cu_window_seqlens=windows,
         )
