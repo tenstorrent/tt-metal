@@ -56,6 +56,7 @@ def test_moreh_fold_l1_short_row(device):
     assert passing, output_pcc
 
 
+@pytest.mark.merge_gate
 def test_moreh_fold_rejects_other_output_dtype(device, expect_error):
     # Element size and format come from the input, so an fp32 output would be written as bf16 data.
     x = ttnn.from_torch(torch.randn(1, 9, 32), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)

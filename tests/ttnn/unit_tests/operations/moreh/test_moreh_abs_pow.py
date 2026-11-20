@@ -71,6 +71,7 @@ def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_outpu
     run_moreh_abs_pow_test(input_shape, 2.5, device, fp32_dest_acc_en=fp32_dest_acc_en, provide_output=provide_output)
 
 
+@pytest.mark.merge_gate
 def test_moreh_abs_pow_rejects_other_output_dtype(device, expect_error):
     # Every buffer, including the output, uses the input's data format.
     x = ttnn.from_torch(torch.randn(1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
