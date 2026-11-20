@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
 
 constexpr uint32_t cb_gin0 = get_compile_time_arg_val(0);
@@ -18,5 +19,6 @@ constexpr auto gate_fidelity = static_cast<ckernel::MathFidelity>(get_compile_ti
 // A head's helper: g of the chunks of the head's first core (see the helper's data movement).
 void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_gin0, cb_gin1, cb_gate);
+    DeviceZoneScopedN("HELPER-MM");
     kda_gate::matmul<gate_fidelity>(cb_gin0, cb_gin1, cb_gate, rows, columns, gate_kb, blocks);
 }

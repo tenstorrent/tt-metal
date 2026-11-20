@@ -4,115 +4,60 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
-#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/gate_matmul_dataflow.hpp"
 
-constexpr uint32_t cb_gin0 = get_compile_time_arg_val(0);
-constexpr uint32_t cb_gin1 = get_compile_time_arg_val(1);
-constexpr uint32_t cb_gate = get_compile_time_arg_val(2);
-constexpr uint32_t kt = get_compile_time_arg_val(3);
-constexpr uint32_t core_chunks = get_compile_time_arg_val(4);
-constexpr uint32_t gate_kb = get_compile_time_arg_val(5);
-constexpr uint32_t gate_k = get_compile_time_arg_val(6);
-constexpr uint32_t local_k = get_compile_time_arg_val(7);
-constexpr uint32_t gate_columns = get_compile_time_arg_val(8);
-constexpr uint32_t heads = get_compile_time_arg_val(9);
-constexpr uint32_t num_chunks = get_compile_time_arg_val(10);
-constexpr uint32_t cores_per_head = get_compile_time_arg_val(11);
-constexpr uint32_t gate_groups = get_compile_time_arg_val(12);
-constexpr uint32_t gate_table = get_compile_time_arg_val(13);
-// What this kernel moves: x (and it writes the head's g), W, or both, where a sender leaves the helper one RISC.
-constexpr bool moves_x = get_compile_time_arg_val(14);
-constexpr bool moves_w = get_compile_time_arg_val(15);
-constexpr uint32_t cb_progress = get_compile_time_arg_val(16);
-constexpr auto gate_input_args = TensorAccessorArgs<17>();
-constexpr auto gate_local_args = TensorAccessorArgs<gate_input_args.next_compile_time_args_offset()>();
-constexpr auto gate_weight_args = TensorAccessorArgs<gate_local_args.next_compile_time_args_offset()>();
+constexpr uint32_t cb_gate = get_compile_time_arg_val(0);
+constexpr uint32_t num_chunks = get_compile_time_arg_val(1);
+constexpr uint32_t cores_per_head = get_compile_time_arg_val(2);
+// What this kernel moves: x (on RISC 1, NoC 1), W (on RISC 0, NoC 0), or both where a sender leaves the helper one
+// RISC.
+constexpr bool moves_x = get_compile_time_arg_val(3);
+constexpr bool moves_w = get_compile_time_arg_val(4);
+// The output gate's operands (gate_matmul_dataflow.hpp), whose args follow the landed count in the common args.
+using Gate = kda_gate::Operands<5>;
 
 // A head's helper forms g for the chunks of the head's first core, which runs the relay's hop instead: it takes the
 // rows of x of those chunks from the group of the helpers of the head's batch and the head's columns of W from the
 // group of the head's cores (gate_matmul_dataflow.hpp), then writes the g compute forms into the head core's cb_gate
-// (at the same address) and counts it there.
+// (at the same address) and counts it there, on the NoC that runs towards the head core.
 void kernel_main() {
     const uint32_t head = get_arg_val<uint32_t>(0);
     const uint32_t head_xy = get_arg_val<uint32_t>(1);
-    const uint32_t tp_rank = get_common_arg_val<uint32_t>(3);
-    const uint32_t blocks = gate_k / gate_kb;
-
-    const auto input = TensorAccessor(gate_input_args, get_common_arg_val<uint32_t>(0));
-    const auto local = TensorAccessor(gate_local_args, get_common_arg_val<uint32_t>(1));
-    const uint32_t x_tile = get_tile_size(cb_gin0);
-    const uint32_t first_row = head / heads * num_chunks;
-    const uint32_t local_begin = tp_rank * local_k;
-    const auto read_x = [&](uint32_t b, uint32_t slot) {
-        for (uint32_t m = 0; m < core_chunks; ++m) {
-            for (uint32_t i = 0; i < gate_kb; ++i) {
-                const uint32_t k = b * gate_kb + i;
-                const uint32_t destination = slot + (m * gate_kb + i) * x_tile;
-                if (k - local_begin < local_k) {
-                    noc_async_read_page((first_row + m) * local_k + k - local_begin, local, destination);
-                } else {
-                    noc_async_read_page((first_row + m) * gate_k + k, input, destination);
-                }
-            }
-        }
-    };
-    const auto weight = TensorAccessor(gate_weight_args, get_common_arg_val<uint32_t>(2));
-    const uint32_t w_tile = get_tile_size(cb_gin1);
-    const uint32_t first_column = head % heads * kt;
-    const auto read_w = [&](uint32_t b, uint32_t slot) {
-        for (uint32_t i = 0; i < gate_kb; ++i) {
-            for (uint32_t j = 0; j < kt; ++j) {
-                noc_async_read_page(
-                    (b * gate_kb + i) * gate_columns + first_column + j, weight, slot + (i * kt + j) * w_tile);
-            }
-        }
-    };
-    // Only the RISC that moves an operand takes its share: a leader clears its receivers' words as it starts.
-    const auto share_x = [&]() {
-        return kda_gate::Share(
-            gate_table,
-            head / heads * cores_per_head,
-            cb_gin0,
-            core_chunks * gate_kb,
-            core_chunks * gate_kb * x_tile,
-            4,
-            get_write_ptr(cb_progress));
-    };
-    const auto share_w = [&]() {
-        return kda_gate::Share(
-            gate_table,
-            gate_groups + head,
-            cb_gin1,
-            gate_kb * kt,
-            gate_kb * kt * w_tile,
-            5,
-            get_write_ptr(cb_progress) + kda_gate::w_progress);
-    };
+    const uint32_t x_group = head / Gate::heads * cores_per_head;
+    const uint32_t first_row = head / Gate::heads * num_chunks;
+    // The head core is below a helper whose head's W moves north, above one whose W moves south.
+    const bool north = Gate::w_north(head);
     if constexpr (moves_x && moves_w) {
         // Each operand as far as its group lets it.
-        auto x = share_x();
-        auto w = share_w();
+        auto x = Gate::x_share(x_group);
+        auto w = Gate::w_share(head);
+        const auto read_x = Gate::x_read(first_row);
+        const auto read_w = Gate::w_read(head);
         bool x_done = false;
         bool w_done = false;
         while (!(x_done && w_done)) {
-            x_done = x.step(blocks, read_x);
-            w_done = w.step(blocks, read_w);
+            x_done = x.step(Gate::blocks, read_x);
+            w_done = w.step(Gate::blocks, read_w);
         }
-        x.finish(blocks);
-        w.finish(blocks);
+        x.finish(Gate::blocks);
+        w.finish(Gate::blocks);
     } else if constexpr (moves_x) {
-        share_x().all(blocks, read_x);
+        Gate::move_x(x_group, first_row);
+        if (north) {
+            return;
+        }
     } else {
-        share_w().all(blocks, read_w);
-        return;
+        Gate::move_w(head);
+        if (!north) {
+            return;
+        }
     }
 
-    cb_wait_front(cb_gate, core_chunks * kt);
+    cb_wait_front(cb_gate, Gate::rows * Gate::columns);
     const uint32_t gate = get_read_ptr(cb_gate);
-    noc_async_write(gate, kda_gate::noc_address(head_xy, gate), core_chunks * kt * get_tile_size(cb_gate));
+    noc_async_write(gate, kda_gate::noc_address(head_xy, gate), Gate::rows * Gate::columns * get_tile_size(cb_gate));
     noc_async_write_barrier();
-    noc_semaphore_inc(kda_gate::noc_address(head_xy, get_common_arg_val<uint32_t>(6)), 1);
-    cb_pop_front(cb_gate, core_chunks * kt);
+    noc_semaphore_inc(kda_gate::noc_address(head_xy, get_common_arg_val<uint32_t>(0)), 1);
+    cb_pop_front(cb_gate, Gate::rows * Gate::columns);
     noc_async_atomic_barrier();
 }

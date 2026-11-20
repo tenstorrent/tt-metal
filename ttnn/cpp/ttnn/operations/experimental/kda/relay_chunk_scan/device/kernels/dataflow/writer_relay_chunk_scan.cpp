@@ -33,17 +33,8 @@ constexpr uint32_t slab_scale = get_compile_time_arg_val(slab_ct + 2);
 constexpr uint32_t slab_offset = get_compile_time_arg_val(slab_ct + 3);
 constexpr uint32_t entry_tiles = get_compile_time_arg_val(slab_ct + 4);
 constexpr uint32_t slab_index_word = get_compile_time_arg_val(slab_ct + 5);
-// The output gate's W: kt tile columns of the head per K block of gate_kb tiles of the [X, H*V] weight, shared in the
-// group of the head's cores and its helper (gate_matmul_dataflow.hpp).
-constexpr uint32_t gate_ct = slab_ct + 6;
-constexpr uint32_t cb_gin1 = get_compile_time_arg_val(gate_ct);
-constexpr uint32_t gate_kb = get_compile_time_arg_val(gate_ct + 1);
-constexpr uint32_t gate_k = get_compile_time_arg_val(gate_ct + 2);
-constexpr uint32_t gate_columns = get_compile_time_arg_val(gate_ct + 3);
-constexpr uint32_t gate_groups = get_compile_time_arg_val(gate_ct + 4);
-constexpr uint32_t gate_table = get_compile_time_arg_val(gate_ct + 5);
-constexpr uint32_t cb_progress = get_compile_time_arg_val(gate_ct + 6);
-constexpr auto gate_weight_args = TensorAccessorArgs<gate_ct + 7>();
+// The output gate's operands (gate_matmul_dataflow.hpp), whose args follow the senders' in the common args.
+using Gate = kda_gate::Operands<slab_ct + 6>;
 constexpr uint32_t state_tiles = kt * kt;
 
 // Every core of a head writes its chunk outputs, and every other core of a head first shares the output gate's W. The
@@ -62,26 +53,15 @@ void kernel_main() {
     const uint32_t back_sender_xy = get_common_arg_val<uint32_t>(3 + num_links + head % num_links);
     const uint32_t notify_semaphore = get_semaphore(head / num_links);
 
+    // The output gate's operand this kernel moves for the core's matmul: the head's W when it moves north on this
+    // NoC 1, else x of its chunks (in the group of the head batch's cores at this place).
     if (!relay_head) {
-        const auto weight = TensorAccessor(gate_weight_args, get_common_arg_val<uint32_t>(3 + 2 * num_links));
-        const uint32_t tile = get_tile_size(cb_gin1);
-        const uint32_t first_column = head % heads * kt;
-        kda_gate::Share(
-            gate_table,
-            gate_groups + head,
-            cb_gin1,
-            gate_kb * kt,
-            gate_kb * kt * tile,
-            4 + 2 * num_links,
-            get_write_ptr(cb_progress) + kda_gate::w_progress)
-            .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
-                for (uint32_t i = 0; i < gate_kb; ++i) {
-                    for (uint32_t j = 0; j < kt; ++j) {
-                        noc_async_read_page(
-                            (b * gate_kb + i) * gate_columns + first_column + j, weight, slot + (i * kt + j) * tile);
-                    }
-                }
-            });
+        if (Gate::w_north(head)) {
+            Gate::move_w(head);
+        } else {
+            Gate::move_x(
+                (head / heads) * cores_per_head + core % cores_per_head, (head / heads) * num_chunks + first_chunk);
+        }
     }
 
     // The reader's chronology: this rank's position and this core's chunk counts.

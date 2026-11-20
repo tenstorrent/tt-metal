@@ -270,13 +270,18 @@ tt::tt_metal::ProgramDescriptor build_program(
     const std::vector<CoreCoord> helper_cores(attrs.cores.end() - batch_heads, attrs.cores.end());
     // The output gate x @ W: each head's other cores form their chunks' rows of it, the helpers the head cores'. The
     // cores at a place of a batch's heads (at place 0, the helpers) need the same rows of x: each run of them along a
-    // row or column reads x and multicasts it along the run. A head's cores and helper need its columns of W: its
-    // second core reads them and sends them to the head's other cores and its helper.
+    // row or column reads x and multicasts it along the run. A head's cores and helper need its columns of W: one of
+    // them reads them and sends them to the others. Each multicast runs one way on its NoC (NoC 0 east and south,
+    // NoC 1 west and north), so it starts from the end of its run that way. A head's W moves north on NoC 1 (the
+    // writer's) from its last core when its helper is above it, else south on NoC 0 (the reader's) from its second
+    // core; its cores' x moves on the other kernel. The helpers move x on NoC 1.
     const uint32_t batches = batch_heads / attrs.num_heads;
     const uint32_t gate_x_groups = batches * cores_per_head;
-    const auto is_sender = [&](const CoreCoord& core) {
-        return std::ranges::find(sender_cores, core) != sender_cores.end();
-    };
+    std::vector<uint32_t> w_north((batch_heads + 31) / 32);
+    const auto north = [&](uint32_t h) { return helper_cores[h].y < head_cores[h].y; };
+    for (uint32_t h = 0; h < batch_heads; ++h) {
+        w_north[h / 32] |= uint32_t{north(h)} << (h % 32);
+    }
     std::vector<std::vector<GateSet>> gate_groups;
     for (uint32_t b = 0; b < batches; ++b) {
         for (uint32_t place = 0; place < cores_per_head; ++place) {
@@ -284,17 +289,14 @@ tt::tt_metal::ProgramDescriptor build_program(
             for (uint32_t h = b * attrs.num_heads; h < (b + 1) * attrs.num_heads; ++h) {
                 members.push_back(place == 0 ? helper_cores[h] : correction_cores[h * cores_per_head + place]);
             }
-            // Each run is led by a core at a different place in it (rows apart from the other runs' leaders, and not a
-            // sender).
             const auto runs = core_runs(members);
             std::vector<CoreCoord> leaders;
-            for (size_t r = 0; r < runs.size(); ++r) {
-                const auto& run = runs[r];
-                size_t at = (place + r * run.size() / runs.size()) % run.size();
-                for (size_t tries = 1; tries < run.size() && is_sender(run[at]); ++tries) {
-                    at = (at + 1) % run.size();
-                }
-                leaders.push_back(run[at]);
+            for (const auto& run : runs) {
+                const auto head_of = [&](const CoreCoord& core) {
+                    return static_cast<uint32_t>(std::ranges::find(correction_cores, core) - correction_cores.begin()) /
+                           cores_per_head;
+                };
+                leaders.push_back(place == 0 || !north(head_of(run.front())) ? run.back() : run.front());
             }
             auto& sets = gate_groups.emplace_back();
             for (size_t r = 0; r < runs.size(); ++r) {
@@ -312,7 +314,8 @@ tt::tt_metal::ProgramDescriptor build_program(
             sets.push_back({helper_cores[h], {}});
             continue;
         }
-        auto& set = sets.emplace_back(GateSet{*first, {first + 1, last}});
+        auto& set =
+            sets.emplace_back(north(h) ? GateSet{*(last - 1), {first, last - 1}} : GateSet{*first, {first + 1, last}});
         set.receivers.push_back(helper_cores[h]);
     }
     const auto gate_table = gate_set_table(*mesh, gate_groups);
@@ -469,6 +472,28 @@ tt::tt_metal::ProgramDescriptor build_program(
 
     // sp_rank and the per-chip routing are runtime args, so a range's per-chip programs merge into one.
     const std::vector<uint32_t> chronology = {sp_size, attrs.local_rows};
+    // The output gate's operand args (kda_gate::Operands), the same in each kernel that moves them: compile-time, then
+    // where its common args start, which append_gate_args appends, the group table last.
+    const auto append_gate_ct = [&](std::vector<uint32_t>& ct, uint32_t common) {
+        ct.insert(
+            ct.end(),
+            {cb_gin0,
+             cb_gin1,
+             cb_progress,
+             core_chunks,
+             kt,
+             gate_kb,
+             gate_k,
+             local_k,
+             gate_columns,
+             attrs.num_heads,
+             gate_x_groups,
+             common + 6 + static_cast<uint32_t>(w_north.size()),
+             common});
+        tt::tt_metal::TensorAccessorArgs(in.gate_input.buffer()).append_to(ct);
+        tt::tt_metal::TensorAccessorArgs(gate_local.buffer()).append_to(ct);
+        tt::tt_metal::TensorAccessorArgs(in.gate_weight.buffer()).append_to(ct);
+    };
     std::vector<uint32_t> reader_ct = {cb_e, cb_b, cb_ein, cb_chron};
     reader_ct.insert(reader_ct.end(), chronology.begin(), chronology.end());
     reader_ct.push_back(kt);
@@ -508,18 +533,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::TensorAccessorArgs(in.terms.buffer()).append_to(reader_ct);
     reader_ct.insert(reader_ct.end(), {cb_scaler, cb_gate, cb_weight, attrs.num_heads});
     tt::tt_metal::TensorAccessorArgs(in.norm_weight.buffer()).append_to(reader_ct);
-    // The output gate's x, then where the group table starts in the common args (after the cores' NoC coordinates).
-    constexpr uint32_t reader_core_args = 18;
-    reader_ct.insert(
-        reader_ct.end(),
-        {cb_gin0,
-         gate_kb,
-         gate_k,
-         local_k,
-         reader_core_args + static_cast<uint32_t>(correction_cores.size()),
-         cb_progress});
-    tt::tt_metal::TensorAccessorArgs(in.gate_input.buffer()).append_to(reader_ct);
-    tt::tt_metal::TensorAccessorArgs(gate_local.buffer()).append_to(reader_ct);
+    // The output gate's operands, whose common args follow the cores' NoC coordinates.
+    append_gate_ct(reader_ct, 14 + static_cast<uint32_t>(correction_cores.size()));
     std::vector<uint32_t> writer_ct = {
         cb_eout,
         cb_chron,
@@ -536,10 +551,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(writer_ct);
     writer_ct.insert(writer_ct.end(), slab_ct.begin(), slab_ct.end());
-    // The output gate's W, then where the group table starts in the common args (after W and its counters).
-    writer_ct.insert(
-        writer_ct.end(), {cb_gin1, gate_kb, gate_k, gate_columns, gate_x_groups, 5 + 2 * attrs.num_links, cb_progress});
-    tt::tt_metal::TensorAccessorArgs(in.gate_weight.buffer()).append_to(writer_ct);
+    // The output gate's operands, whose common args follow the senders'.
+    append_gate_ct(writer_ct, 3 + 2 * attrs.num_links);
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
@@ -622,31 +635,10 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto& core : helper_cores) {
         helper_kinds[std::ranges::find(sender_cores, core) != sender_cores.end()].push_back(core);
     }
-    std::vector<uint32_t> helper_ct = {
-        cb_gin0,
-        cb_gin1,
-        cb_gate,
-        kt,
-        core_chunks,
-        gate_kb,
-        gate_k,
-        local_k,
-        gate_columns,
-        attrs.num_heads,
-        num_chunks,
-        cores_per_head,
-        gate_x_groups,
-        7,
-        0,
-        0,
-        cb_progress};
-    tt::tt_metal::TensorAccessorArgs(in.gate_input.buffer()).append_to(helper_ct);
-    tt::tt_metal::TensorAccessorArgs(gate_local.buffer()).append_to(helper_ct);
-    tt::tt_metal::TensorAccessorArgs(in.gate_weight.buffer()).append_to(helper_ct);
     const auto helper_kernel = [&](const CoreRangeSet& cores, bool moves_x, bool moves_w) {
-        auto ct = helper_ct;
-        ct[14] = moves_x;
-        ct[15] = moves_w;
+        // The operands' common args follow the landed count.
+        std::vector<uint32_t> ct = {cb_gate, num_chunks, cores_per_head, moves_x, moves_w};
+        append_gate_ct(ct, 1);
         const bool riscv_1 = moves_x;
         return tt::tt_metal::KernelDescriptor{
             .kernel_source = std::string(kernel_dir) + "dataflow/helper_relay_chunk_scan.cpp",
@@ -699,6 +691,16 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t x_valid = semaphores[3];
     const uint32_t w_valid = semaphores[4];
     const uint32_t gate_landed = semaphores[5];
+    const auto append_gate_args = [&](tt::tt_metal::KernelDescriptor::RTArgList& args) {
+        args.push_back(in.gate_input.buffer());
+        args.push_back(gate_local.buffer());
+        args.push_back(in.gate_weight.buffer());
+        args.push_back(tp_rank);
+        args.push_back(x_valid);
+        args.push_back(w_valid);
+        args.append(w_north);
+        args.append(gate_table);
+    };
     // The heads' cores take no per-core args (their dispatch would cost more than the work): each kernel finds its
     // head and share from its place in the grid, the rest is common per device.
     tt::tt_metal::KernelDescriptor::RTArgList reader_args;
@@ -712,21 +714,17 @@ tt::tt_metal::ProgramDescriptor build_program(
           actual_end.buffer(),
           in.terms.buffer(),
           in.landing.buffer(),
-          in.gate_input.buffer(),
           in.norm_weight.buffer()}) {
         reader_args.push_back(buffer);
     }
     reader_args.push_back(arrival_address);
     reader_args.push_back(final_address);
     reader_args.push_back(sp_rank);
-    reader_args.push_back(gate_local.buffer());
-    reader_args.push_back(tp_rank);
-    reader_args.push_back(x_valid);
     reader_args.push_back(gate_landed);
     for (const auto& core : correction_cores) {
         reader_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
-    reader_args.append(gate_table);
+    append_gate_args(reader_args);
     reader.emplace_common_runtime_args(reader_args);
     tt::tt_metal::KernelDescriptor::RTArgList writer_args;
     writer_args.push_back(output.buffer());
@@ -735,19 +733,11 @@ tt::tt_metal::ProgramDescriptor build_program(
     for (const auto& core : sender_cores) {
         writer_args.push_back(xy(mesh->worker_core_from_logical_core(core)));
     }
-    writer_args.push_back(in.gate_weight.buffer());
-    writer_args.push_back(w_valid);
-    writer_args.append(gate_table);
+    append_gate_args(writer_args);
     writer.emplace_common_runtime_args(writer_args);
     tt::tt_metal::KernelDescriptor::RTArgList helper_args;
-    helper_args.push_back(in.gate_input.buffer());
-    helper_args.push_back(gate_local.buffer());
-    helper_args.push_back(in.gate_weight.buffer());
-    helper_args.push_back(tp_rank);
-    helper_args.push_back(x_valid);
-    helper_args.push_back(w_valid);
     helper_args.push_back(gate_landed);
-    helper_args.append(gate_table);
+    append_gate_args(helper_args);
     for (auto& helper : helpers) {
         helper.emplace_common_runtime_args(helper_args);
     }

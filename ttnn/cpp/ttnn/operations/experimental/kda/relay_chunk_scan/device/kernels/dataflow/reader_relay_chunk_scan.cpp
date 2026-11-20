@@ -72,18 +72,8 @@ constexpr uint32_t cb_gate = get_compile_time_arg_val(norm_ct + 1);
 constexpr uint32_t cb_weight = get_compile_time_arg_val(norm_ct + 2);
 constexpr uint32_t heads = get_compile_time_arg_val(norm_ct + 3);
 constexpr auto weight_args = TensorAccessorArgs<norm_ct + 4>();
-// The output gate's x: core_chunks tile rows of the [B, T, X] input per K block of gate_kb tiles, the K tiles of this
-// rank's TP slice [local_k * tp_rank, local_k * (tp_rank + 1)) from the [B, T, X / TP] local input when there is one
-// (local_k != 0). They are shared in the group of the cores with the same chunks (gate_matmul_dataflow.hpp).
-constexpr uint32_t gate_ct = weight_args.next_compile_time_args_offset();
-constexpr uint32_t cb_gin0 = get_compile_time_arg_val(gate_ct);
-constexpr uint32_t gate_kb = get_compile_time_arg_val(gate_ct + 1);
-constexpr uint32_t gate_k = get_compile_time_arg_val(gate_ct + 2);
-constexpr uint32_t local_k = get_compile_time_arg_val(gate_ct + 3);
-constexpr uint32_t gate_table = get_compile_time_arg_val(gate_ct + 4);
-constexpr uint32_t cb_progress = get_compile_time_arg_val(gate_ct + 5);
-constexpr auto gate_input_args = TensorAccessorArgs<gate_ct + 6>();
-constexpr auto gate_local_args = TensorAccessorArgs<gate_input_args.next_compile_time_args_offset()>();
+// The output gate's operands (gate_matmul_dataflow.hpp).
+using Gate = kda_gate::Operands<weight_args.next_compile_time_args_offset()>;
 constexpr uint32_t num_chunks = local_rows / tt::constants::TILE_HEIGHT;
 
 // Every core of a head corrects its chunks of the head from the head's seeds; the head's first core is also the
@@ -100,16 +90,13 @@ void kernel_main() {
     // The landing buffer's slots, at the same address on every head core: the entry state (cb_ein's storage), then the
     // relayed final state.
     const uint32_t landing = get_common_arg_val<uint32_t>(8);
-    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(11);
-    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(12);
-    const uint32_t sp_rank = get_common_arg_val<uint32_t>(13);
-    const uint32_t tp_rank = get_common_arg_val<uint32_t>(15);
-    // Then x's count of blocks (gate_matmul_dataflow.hpp), and on a head core its helper's count of the head's g landed
-    // in cb_gate.
-    constexpr uint32_t x_valid = 16;
-    const uint32_t gate_landed = get_common_arg_val<uint32_t>(x_valid + 1);
+    const uint32_t arrival_semaphore = get_common_arg_val<uint32_t>(10);
+    const uint32_t final_semaphore = get_common_arg_val<uint32_t>(11);
+    const uint32_t sp_rank = get_common_arg_val<uint32_t>(12);
+    // On a head core, its helper's count of the head's g landed in cb_gate.
+    const uint32_t gate_landed = get_common_arg_val<uint32_t>(13);
     // Then every core's NoC x | y << 16, in order: this head's from head * cores_per_head.
-    const size_t head_core_args = x_valid + 2 + head * cores_per_head;
+    const size_t head_core_args = 14 + head * cores_per_head;
 
     // The bounds, each into its own page (a DRAM read keeps its source's alignment).
     cb_reserve_back(cb_chron, 1);
@@ -212,35 +199,14 @@ void kernel_main() {
     ctl[3] = group_chunks;
     cb_push_back(cb_ctl, 1);
 
-    // The output gate's x for this core's matmul: its chunks' rows, K block by K block. The group is the head batch's
-    // cores at this place.
+    // The output gate's operand this kernel moves for the core's matmul: x of its chunks (in the group of the head
+    // batch's cores at this place) when the head's W moves north on the writer's NoC 1, else W, south on this NoC 0.
     if (!relay_head) {
-        const auto input = TensorAccessor(gate_input_args, get_common_arg_val<uint32_t>(9));
-        const auto local = TensorAccessor(gate_local_args, get_common_arg_val<uint32_t>(14));
-        const uint32_t tile = get_tile_size(cb_gin0);
-        const uint32_t first_row = (head / heads) * num_chunks + first_chunk;
-        const uint32_t local_begin = tp_rank * local_k;
-        kda_gate::Share(
-            gate_table,
-            (head / heads) * cores_per_head + place,
-            cb_gin0,
-            core_chunks * gate_kb,
-            core_chunks * gate_kb * tile,
-            x_valid,
-            get_write_ptr(cb_progress))
-            .all(gate_k / gate_kb, [&](uint32_t b, uint32_t slot) {
-                for (uint32_t m = 0; m < core_chunks; ++m) {
-                    for (uint32_t i = 0; i < gate_kb; ++i) {
-                        const uint32_t k = b * gate_kb + i;
-                        const uint32_t destination = slot + (m * gate_kb + i) * tile;
-                        if (k - local_begin < local_k) {
-                            noc_async_read_page((first_row + m) * local_k + k - local_begin, local, destination);
-                        } else {
-                            noc_async_read_page((first_row + m) * gate_k + k, input, destination);
-                        }
-                    }
-                }
-            });
+        if (Gate::w_north(head)) {
+            Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk);
+        } else {
+            Gate::move_w(head);
+        }
     }
 
     // The head's first core copies each landed tile column of a K x K state (column-major by tile) into a seed buffer
@@ -292,7 +258,7 @@ void kernel_main() {
             ckernel::PoolType::AVG,
             ckernel::ReduceDim::REDUCE_ROW,
             kt * tt::constants::TILE_WIDTH>();
-        const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(10));
+        const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(9));
         const uint32_t tile = get_tile_size(cb_weight);
         cb_reserve_back(cb_weight, kt);
         for (uint32_t j = 0; j < kt; ++j) {

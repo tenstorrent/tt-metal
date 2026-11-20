@@ -179,11 +179,30 @@ class RelayChunkScan:
         if first + batch_heads * cores_per_head > len(cores):
             first = senders
         correction = cores[first : first + batch_heads * cores_per_head]
-        # The helpers: the cores the relay leaves free, then the senders (their second RISC and compute are free).
-        free = [core for core in cores[senders:] if core not in correction]
-        helpers = (free + cores[:senders])[:batch_heads]
-        if len(helpers) < batch_heads:
-            raise ValueError(f"relay prefix needs {batch_heads} helper cores, the grid leaves {len(helpers)}")
+        # The helpers: cores the relay leaves free, or senders (their second RISC and compute are free). A head's W
+        # reaches its helper on one NoC: north (NoC 1, west then north) from the head's last core to a helper above,
+        # or south (NoC 0, east then south) from its second core to one below. Each head takes the nearest that way,
+        # the nearest pairs first; a helper the wrong way across costs a wrap of the row.
+        free = [core for core in cores[senders:] if core not in correction] + cores[:senders]
+        if len(free) < batch_heads:
+            raise ValueError(f"relay prefix needs {batch_heads} helper cores, the grid leaves {len(free)}")
+
+        def hops(head, helper):
+            first, last = correction[head * cores_per_head], correction[(head + 1) * cores_per_head - 1]
+            if helper.y < first.y:
+                dx = last.x - helper.x
+                return (dx if dx >= 0 else dx + 2 * grid.x) + first.y - helper.y
+            second = correction[head * cores_per_head + min(1, cores_per_head - 1)]
+            dx = helper.x - second.x
+            return (dx if dx >= 0 else dx + 2 * grid.x) + abs(helper.y - first.y)
+
+        pairs = sorted((hops(h, c), h, i) for h in range(batch_heads) for i, c in enumerate(free))
+        helpers = [None] * batch_heads
+        taken = set()
+        for _, h, i in pairs:
+            if helpers[h] is None and i not in taken:
+                helpers[h] = free[i]
+                taken.add(i)
         self.cores = correction + cores[:senders] + helpers
         gate_cores = correction + helpers
 

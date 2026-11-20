@@ -9,11 +9,10 @@
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
 
 // The output gate's operands, shared in sets: a set's leader reads each K block of the operand from DRAM into its own
-// buffer, or receives it as a member of another set, and sends it into its receivers', at the same address on each, a
-// multicast per rectangle of them. The sets are a table in the common runtime args from `table`: per group of cores an
-// offset to its record, then the records: the sets, then per set its leader's NoC x | y << 16, its receivers and their
-// rectangles, then per rectangle its lowest and highest cores' NoC x | y << 16 and its cores. A core of the group is in
-// a rectangle of one set, or leads one, or both.
+// buffer and sends it into its receivers', at the same address on each, a multicast per rectangle of them. The sets
+// are a table in the common runtime args from `table`: per group of cores an offset to its record, then the records:
+// the sets, then per set its leader's NoC x | y << 16, its receivers and their rectangles, then per rectangle its
+// lowest and highest cores' NoC x | y << 16 and its cores. A core of the group leads a set or is in a rectangle of one.
 //
 // The leader counts the blocks it sends on the receivers, in the persistent counter (persistent_counter.hpp) at common
 // arg `valid`. Each receiver tells the leader how many of its slots it has taken, in its own word of the leader's
@@ -77,12 +76,12 @@ public:
         }
     }
 
-    // Take every free slot (reading its block, or announcing the slot to the leader of the set it receives in), push
-    // each block to compute as it lands, and send it on as the receivers of the set it leads free their slots; a slot
-    // is taken again only once its block has been sent. True once `blocks` blocks have moved.
+    // Take every free slot (a leader reads its block, a receiver tells its leader), and push each block to compute: a
+    // receiver's as it lands, a leader's once it has sent it, as its receivers free their slots. True once `blocks`
+    // blocks have moved.
     template <typename Read>
     FORCE_INLINE bool step(uint32_t blocks, const Read& read) {
-        while (reserved_ < blocks && reserved_ - (out_ ? sent_ : pushed_) < slots_ &&
+        while (reserved_ < blocks && reserved_ - pushed_ < slots_ &&
                cb_pages_reservable_at_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_)) {
             cb_reserve_back(cb_, (reserved_ - pushed_ + 1) * block_tiles_);
             if (in_) {
@@ -101,16 +100,20 @@ public:
                 cb_push_back(cb_, block_tiles_);
                 ++pushed_;
             }
-        } else if (pushed_ < reserved_) {
-            noc_async_read_barrier();
-            cb_push_back(cb_, (reserved_ - pushed_) * block_tiles_);
-            pushed_ = reserved_;
+        } else {
+            if (loaded_ < reserved_) {
+                noc_async_read_barrier();
+                loaded_ = reserved_;
+            }
+            // A block goes to compute once it has been sent: compute then never reuses a slot's storage (the CB's
+            // aliases) while a block is still being sent from it.
+            while (pushed_ < loaded_ && taken(pushed_ + 1)) {
+                send(slot(pushed_));
+                cb_push_back(cb_, block_tiles_);
+                ++pushed_;
+            }
         }
-        while (out_ && sent_ < pushed_ && taken(sent_ + 1)) {
-            send(slot(sent_));
-            ++sent_;
-        }
-        return pushed_ == blocks && (!out_ || sent_ == blocks);
+        return pushed_ == blocks;
     }
 
     // After the last of `blocks` blocks: retire the counts and take this call's off the counter.
@@ -207,8 +210,94 @@ private:
     uint32_t index_ = 0;
     uint32_t nodes_ = 0;
     uint32_t reserved_ = 0;
-    uint32_t sent_ = 0;
+    uint32_t loaded_ = 0;
     uint32_t pushed_ = 0;
+};
+
+// The output gate's operands as a kernel moves them. Compile-time args from `ct`: x's, W's and the progress CBs, the
+// rows and columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0: none), W's
+// tile columns, the heads per batch, the x groups (W's follow, one per head), where the group table and the gate's
+// common args start, then the input's, the local input's and W's accessor args. Common args: the input, the local
+// input, W, the TP rank, x's and W's block counts, then a bit per head: whether its W moves north (on NoC 1, from the
+// head's last core, its helper above) rather than south (on NoC 0, from its second core, its helper below).
+template <uint32_t ct>
+struct Operands {
+    static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
+    static constexpr uint32_t cb_w = get_compile_time_arg_val(ct + 1);
+    static constexpr uint32_t cb_progress = get_compile_time_arg_val(ct + 2);
+    static constexpr uint32_t rows = get_compile_time_arg_val(ct + 3);
+    static constexpr uint32_t columns = get_compile_time_arg_val(ct + 4);
+    static constexpr uint32_t kb = get_compile_time_arg_val(ct + 5);
+    static constexpr uint32_t k = get_compile_time_arg_val(ct + 6);
+    static constexpr uint32_t local_k = get_compile_time_arg_val(ct + 7);
+    static constexpr uint32_t width = get_compile_time_arg_val(ct + 8);
+    static constexpr uint32_t heads = get_compile_time_arg_val(ct + 9);
+    static constexpr uint32_t x_groups = get_compile_time_arg_val(ct + 10);
+    static constexpr uint32_t table = get_compile_time_arg_val(ct + 11);
+    static constexpr uint32_t common = get_compile_time_arg_val(ct + 12);
+    static constexpr auto input_args = TensorAccessorArgs<ct + 13>();
+    static constexpr auto local_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+    static constexpr auto weight_args = TensorAccessorArgs<local_args.next_compile_time_args_offset()>();
+    static constexpr uint32_t blocks = k / kb;
+
+    // x of a correction core's chunks, or its head's W: whichever the other kernel leaves it.
+    static void move_x(uint32_t group, uint32_t first_row) { x_share(group).all(blocks, x_read(first_row)); }
+    static void move_w(uint32_t head) { w_share(head).all(blocks, w_read(head)); }
+
+    static bool w_north(uint32_t head) {
+        return (get_common_arg_val<uint32_t>(common + 6 + head / 32) >> head % 32) & 1;
+    }
+
+    // x's tile rows [first_row, first_row + rows), in the x group `group`.
+    static Share x_share(uint32_t group) {
+        return Share(
+            table, group, cb_x, rows * kb, rows * kb * get_tile_size(cb_x), common + 4, get_write_ptr(cb_progress));
+    }
+    static auto x_read(uint32_t first_row) {
+        const auto input = TensorAccessor(input_args, get_common_arg_val<uint32_t>(common));
+        const auto local = TensorAccessor(local_args, get_common_arg_val<uint32_t>(common + 1));
+        const uint32_t tile = get_tile_size(cb_x);
+        // The K tiles of this rank's TP slice come from the local input.
+        const uint32_t local_begin = get_common_arg_val<uint32_t>(common + 3) * local_k;
+        return [=](uint32_t b, uint32_t slot) {
+            for (uint32_t m = 0; m < rows; ++m) {
+                for (uint32_t i = 0; i < kb; ++i) {
+                    const uint32_t kk = b * kb + i;
+                    const uint32_t destination = slot + (m * kb + i) * tile;
+                    if (kk - local_begin < local_k) {
+                        noc_async_read_page((first_row + m) * local_k + kk - local_begin, local, destination);
+                    } else {
+                        noc_async_read_page((first_row + m) * k + kk, input, destination);
+                    }
+                }
+            }
+        };
+    }
+
+    // The head's W columns, in its W group.
+    static Share w_share(uint32_t head) {
+        return Share(
+            table,
+            x_groups + head,
+            cb_w,
+            kb * columns,
+            kb * columns * get_tile_size(cb_w),
+            common + 5,
+            get_write_ptr(cb_progress) + w_progress);
+    }
+    static auto w_read(uint32_t head) {
+        const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(common + 2));
+        const uint32_t tile = get_tile_size(cb_w);
+        const uint32_t first_column = head % heads * columns;
+        return [=](uint32_t b, uint32_t slot) {
+            for (uint32_t i = 0; i < kb; ++i) {
+                for (uint32_t j = 0; j < columns; ++j) {
+                    noc_async_read_page(
+                        (b * kb + i) * width + first_column + j, weight, slot + (i * columns + j) * tile);
+                }
+            }
+        };
+    }
 };
 
 }  // namespace kda_gate
