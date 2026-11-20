@@ -7,8 +7,7 @@ namespace ckernel::sfpu {
 struct HardshrinkBf16Config {
     static constexpr uint32_t kKind = 0x00000001u;
     static constexpr uint32_t kThresholdBits = 0x3f000000u;
-    static constexpr uint32_t kComparatorBf16 = 0x00003f00u;
-    static constexpr uint32_t kBodySlots = 0x0000000du;
+    static constexpr uint32_t kBodySlots = 0x0000000bu;
     static constexpr uint32_t kRowsPerReplay = 0x00000002u;
 };
 }  // namespace ckernel::sfpu
@@ -29,7 +28,8 @@ inline bool bf16_dest_hardshrink() {
     return false;
 #endif
 }
-// Each call records replay slots 0-12, below replay_buf_offset = 16.
+// Each call records replay slots 0-10, below replay_buf_offset = 16.
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_hardshrink_bf16() {
     ckernel::sfpu::bf16::hardshrink::calculate_simple_forward<ckernel::sfpu::HardshrinkBf16Config, ITERATIONS>();

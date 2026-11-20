@@ -17,8 +17,8 @@ inline void calculate_simple_forward() {
         constexpr bool folds = Config::kKind == 1;
         constexpr uint32_t step = folds ? 0u : 2u * Config::kRowsPerReplay;
         {
-            constexpr uint32_t pin =
-                Config::kBodySlots != 16 ? Config::kThresholdBits : (Config::kComparatorBf16 << 16) ^ 0x80000000u;
+            // The WH pair compares |x| as an integer: LREG7 = -(bits(|threshold|) + 1).
+            constexpr uint32_t pin = 0u - ((Config::kThresholdBits & 0x7fffffffu) + 1u);
             TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_UPPER, pin >> 16);
             TTI_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_LOWER, pin & 65535);
         }
