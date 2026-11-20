@@ -19,6 +19,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 
+#include "fabric/fabric_context.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/metal2_host_api/helpers.hpp"
 
@@ -472,6 +473,11 @@ LoweredKernel LowerKernel(
             for (const auto& [name, value] :
                  MetalContext::instance(context_id).get_control_plane().get_fabric_kernel_defines()) {
                 config.defines.emplace(name, value);
+            }
+            // A kernel that binds a fabric connection compiles its 2D fabric code exactly when the fabric is 2D.
+            if (!kernel_spec.fabric_connection_bindings.empty() &&
+                MetalContext::instance(context_id).get_control_plane().get_fabric_context().is_2D_routing_enabled()) {
+                config.defines.emplace("FABRIC_2D", "1");
             }
             kernel = std::make_shared<DataMovementKernel>(
                 context_id,
