@@ -117,7 +117,8 @@ models/demos/metal_BERT_large_11/
     ├── mha.py              # Self-attention
     ├── ffn.py              # Feed-forward block
     ├── embeddings.py       # Word, position and token-type embeddings
-    ├── custom_matmuls.py   # Matmuls and their program configs, from the device's grid
+    ├── custom_matmuls.py   # Matmuls and their program configs
+    ├── grid.py             # Which hand-sized plans fit the device's grid, and their fallbacks
     ├── model_config.py     # Memory configs and dtypes per model config, BERT_NUM_LAYERS
     └── tensor_utils.py     # Weight caching
 ```
