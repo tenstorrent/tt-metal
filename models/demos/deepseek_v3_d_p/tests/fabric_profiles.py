@@ -9,7 +9,10 @@ Return a fresh dictionary for every ``pytest.param`` so cases cannot share mutab
 import re
 from pathlib import Path
 
+import pytest
+
 import ttnn
+from models.demos.common.prefill.runners.runner_utils import stage_sp_axis
 from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
@@ -160,6 +163,12 @@ def assert_torus_xy_descriptor(path: str) -> None:
         topology == ("8", "4", "RING", "RING") for topology in topologies
     ), f"{descriptor_path}: TorusXY requires every device topology to be 8x4 Ring/Ring; found {topologies}"
 
+
+# The 8x4 stage runs SP on axis 0 only: SP on its axis 1 (SP=4, TP=8) has no chunk, slot count or weight cache yet,
+# so an 8x4 row carries this mark and skips when the SP-axis knob ($PREFILL_SP_AXIS) asks for axis 1.
+SKIP_8X4_SP_AXIS_1 = pytest.mark.skipif(
+    stage_sp_axis((8, 4)) != 0, reason="SP on axis 1 of the 8x4 stage is not supported yet"
+)
 
 # One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
 STAGE_4X4_TOPOLOGY = ("4", "4", "LINE", "RING")

@@ -16,7 +16,7 @@ from pathlib import Path
 import pytest
 
 from models.demos.common.prefill.adapter import get_adapter
-from models.demos.common.prefill.runners.runner_utils import compute_layer_split
+from models.demos.common.prefill.runners.runner_utils import compute_layer_split, default_sp_axis
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import (
     CHUNK_4X4,
@@ -25,7 +25,6 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.k31_stage import (
     NUM_STAGES,
     NUM_STAGES_4X4,
     PP4_MAX_USERS,
-    SP_AXIS_4X4,
     STAGE0_4X4_MAX_USERS,
 )
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
@@ -114,7 +113,8 @@ def test_kimi_k3_1_manifest_deploys_k31_as_k3_is_deployed(monkeypatch):
     assert {k: k31.get(k) for k in layout} == {k: k3[k] for k in layout}, "K3.1 declares K3's 4x4 layout"
     sp, tp = int(k31["PREFILL_SP"]), int(k31["PREFILL_TP"])
     sp_axis = int(k31["PREFILL_SP_AXIS"])
-    assert (sp_axis, int(k31["PREFILL_CHUNK_SIZE"])) == (SP_AXIS_4X4, CHUNK_4X4)
+    # The manifest holds the stage's default axis; the SP-axis knob, not the manifest, moves it.
+    assert (sp_axis, int(k31["PREFILL_CHUNK_SIZE"])) == (default_sp_axis(MESH_4X4), CHUNK_4X4)
     assert tuple(sp if axis == sp_axis else tp for axis in (0, 1)) == MESH_4X4
     # PREFILL_HF_MODEL: K3 names its checkpoint (it keys K3's weight cache); K3.1's is the adapter default.
     own = {"PREFILL_MODEL", "PREFILL_HF_MODEL", "PREFILL_NUM_USERS", "PREFILL_SCALED_FP8_KV_CACHE"}

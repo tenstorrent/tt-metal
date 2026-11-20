@@ -111,3 +111,75 @@ def test_mesh_cache_key_separates_sp_axes():
     # A square mesh must not share a cache between the two SP placements.
     assert mesh_cache_key((4, 4), 0) != mesh_cache_key((4, 4), 1)
     assert mesh_cache_key((4, 4), 1) == "4x4_sp1"
+
+
+def test_stage_sp_axis_is_the_knob_over_the_stage_default(monkeypatch, expect_error):
+    from models.demos.common.prefill.runners.runner_utils import SP_AXIS_ENV, default_sp_axis, stage_sp_axis
+
+    monkeypatch.delenv(SP_AXIS_ENV, raising=False)
+    # A 4x4 tray half rings only axis 1; every other stage keeps SP on axis 0.
+    assert (default_sp_axis((4, 4)), default_sp_axis((8, 4))) == (1, 0)
+    assert (stage_sp_axis((4, 4)), stage_sp_axis((8, 4))) == (1, 0)
+    monkeypatch.setenv(SP_AXIS_ENV, "0")
+    assert (stage_sp_axis((4, 4)), default_sp_axis((4, 4))) == (0, 1)
+    monkeypatch.setenv(SP_AXIS_ENV, "")
+    assert stage_sp_axis((4, 4)) == 1
+    monkeypatch.setenv(SP_AXIS_ENV, "2")
+    with expect_error(AssertionError, "must be 0 or 1"):
+        stage_sp_axis((4, 4))
+
+
+def test_kimi_k3_weight_cache_key_follows_the_sp_axis(monkeypatch, tmp_path):
+    from models.demos.common.prefill.adapter import get_adapter
+
+    checkpoint = tmp_path / "Kimi-K3.1-Test"
+    checkpoint.mkdir()
+    (checkpoint / "model.safetensors.index.json").write_text("{}")
+    monkeypatch.setenv("PREFILL_HF_MODEL", str(checkpoint))
+    adapter = get_adapter("kimi_k3_1")
+    default, flipped = adapter.weight_cache_key((4, 4), 1), adapter.weight_cache_key((4, 4), 0)
+    # One checkpoint directory; the TP axis (the other one) picks the placement.
+    assert default.parent == flipped.parent and len(default.parent.name) == 16
+    assert (default.name, flipped.name) == ("mesh4x4.tpaxis0", "mesh4x4.tpaxis1")
+    assert adapter.weight_cache_key((8, 4), 0).name == "mesh8x4.tpaxis1"
+    # A different checkpoint never shares a directory.
+    other = tmp_path / "Kimi-K3.1-Other"
+    other.mkdir()
+    (other / "model.safetensors.index.json").write_text("{}")
+    monkeypatch.setenv("PREFILL_HF_MODEL", str(other))
+    assert adapter.weight_cache_key((4, 4), 1).parent != default.parent
+
+
+def test_kimi_k3_weight_cache_key_needs_the_checkpoint(monkeypatch, expect_error):
+    from models.demos.common.prefill.adapter import get_adapter
+
+    # K3's hf_model_default is a config-only directory: no index to key the cache by, so the runner must be told.
+    monkeypatch.delenv("PREFILL_HF_MODEL", raising=False)
+    with expect_error(AssertionError, "set PREFILL_HF_MODEL"):
+        get_adapter("kimi_k3").weight_cache_key((4, 4), 1)
+
+
+@pytest.mark.parametrize(
+    "fabric_mode, descriptor, sp_axis, expected",
+    [
+        # An explicit mode wins over the descriptor.
+        ("2d_torus_y", "some_mgd.textproto", 0, "FABRIC_2D_TORUS_Y"),
+        # A descriptor: the control plane wraps its RING axes, on either SP axis.
+        ("", "some_mgd.textproto", 0, "MGD_DEFAULT"),
+        ("", "some_mgd.textproto", 1, "MGD_DEFAULT"),
+        # No descriptor: torus XY with SP on axis 0, torus X (the tray half's ring) with SP on axis 1.
+        ("", "", 0, "FABRIC_2D_TORUS_XY"),
+        ("", "", 1, "FABRIC_2D_TORUS_X"),
+    ],
+)
+def test_open_mesh_device_fabric_follows_mode_then_descriptor(monkeypatch, fabric_mode, descriptor, sp_axis, expected):
+    from models.demos.common.prefill.runners import runner_utils
+
+    requested = []
+    monkeypatch.setenv("PREFILL_FABRIC_MODE", fabric_mode)
+    monkeypatch.setenv("TT_MESH_GRAPH_DESC_PATH", descriptor)
+    monkeypatch.setattr(runner_utils.ttnn, "set_fabric_config", lambda config, *args: requested.append(config))
+    monkeypatch.setattr(runner_utils.ttnn, "open_mesh_device", lambda **kwargs: "mesh")
+    monkeypatch.setattr(runner_utils.ttnn, "get_fabric_config", lambda mesh_device: requested[-1])
+    assert runner_utils.open_mesh_device((4, 4), 4096, sp_axis=sp_axis) == "mesh"
+    assert requested == [getattr(ttnn.FabricConfig, expected)]
