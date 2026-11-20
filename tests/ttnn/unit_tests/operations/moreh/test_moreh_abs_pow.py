@@ -71,6 +71,7 @@ def test_moreh_abs_pow_corner_cases(input_shape, fp32_dest_acc_en, provide_outpu
     run_moreh_abs_pow_test(input_shape, 2.5, device, fp32_dest_acc_en=fp32_dest_acc_en, provide_output=provide_output)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("p", [0.0, 1.0, 2.0, 3.0], ids=["p0", "p1", "p2", "p3"])
 def test_moreh_abs_pow_int32_input_rejected(p, device, expect_error):
     # The kernel computes |x|^p with log/exp on float tiles; an INT32 tile used to
@@ -81,6 +82,7 @@ def test_moreh_abs_pow_int32_input_rejected(p, device, expect_error):
         ttnn.moreh_abs_pow(tt_input, p)
 
 
+@pytest.mark.merge_gate
 def test_moreh_abs_pow_int32_output_rejected(device, expect_error):
     torch_input = torch.rand((32, 32)).to(torch.bfloat16)
     tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)

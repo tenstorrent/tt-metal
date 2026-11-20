@@ -158,6 +158,7 @@ def test_moreh_norm_backward_allocated_input_grad(device):
     assert passing, out
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("p", [1.0, 2.0, 3.0, 0.0, float("inf")], ids=["p1", "p2", "p3", "p0", "inf"])
 @pytest.mark.parametrize("dim", [3, 2], ids=["w", "h"])
 def test_moreh_norm_int32_input(p, dim, device):
