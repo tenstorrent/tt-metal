@@ -446,7 +446,7 @@ each dimension <code class="docutils literal notranslate"><span class="pre">i</s
 
 <span class="c1"># Untilize the tensor and keep its first 32 columns; output_tensor_end holds inclusive end indices</span>
 <span class="n">untilized_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">untilize_with_unpadding</span><span class="p">(</span><span class="n">tilized_tensor</span><span class="p">,</span> <span class="n">output_tensor_end</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">63</span><span class="p">,</span> <span class="mi">31</span><span class="p">))</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Untilized Tensor with Unpadding Shape: </span><span class="si">{</span><span class="n">untilized_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Untilized Tensor with Unpadding Shape: </span><span class="si">{</span><span class="n">untilized_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 32])</span>
 </pre></div>
 </div>
 </div>

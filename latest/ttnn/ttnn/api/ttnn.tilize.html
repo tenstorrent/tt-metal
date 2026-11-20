@@ -422,14 +422,14 @@ that are multiples of both tile heights, and <code class="docutils literal notra
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT8</p></td>
+<td><p>BFLOAT16, FLOAT32, INT32, UINT32, UINT16, UINT8</p></td>
 <td><p>ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
-<p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input values must not be NaN. On Blackhole, a <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> input must be in DRAM and needs a tile height
-of 2 or more. On Blackhole, a <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input needs a tile height of 2 or more. On Quasar, a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code>
-input needs a tile height of 32.</p>
+<p><code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code> input values must not be NaN. On Blackhole, <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>, <code class="docutils literal notranslate"><span class="pre">UINT16</span></code> and <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> inputs need a
+tile height of 2 or more, and a <code class="docutils literal notranslate"><span class="pre">UINT8</span></code> input must be in DRAM. On Quasar, a <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> input needs a tile
+height of 32.</p>
 <p>On Blackhole, a <code class="docutils literal notranslate"><span class="pre">FP8_E4M3</span></code> ROW_MAJOR input is also supported. Its output defaults to <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code> and can be
 <code class="docutils literal notranslate"><span class="pre">FLOAT32</span></code>, <code class="docutils literal notranslate"><span class="pre">BFLOAT16</span></code>, <code class="docutils literal notranslate"><span class="pre">BFLOAT8_B</span></code> or <code class="docutils literal notranslate"><span class="pre">BFLOAT4_B</span></code>, and its last dimension must be more than 32.</p>
 </div>
@@ -440,7 +440,7 @@ input needs a tile height of 32.</p>
 <li><p>Interleaved: DRAM and L1</p></li>
 <li><p>Sharded input: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM</p></li>
 <li><p>Sharded output: HEIGHT_SHARDED, WIDTH_SHARDED and BLOCK_SHARDED in L1; HEIGHT_SHARDED and WIDTH_SHARDED in DRAM</p></li>
-<li><p>ND sharded: L1 input and output</p></li>
+<li><p>ND sharded: L1 and DRAM input and output</p></li>
 </ul>
 </dd>
 </dl>
@@ -452,7 +452,7 @@ input needs a tile height of 32.</p>
 
 <span class="c1"># Tilize the tensor</span>
 <span class="n">tilized_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">tilize</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tilized Tensor Layout: </span><span class="si">{</span><span class="n">tilized_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Layout.TILE</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Tilized Tensor Layout: </span><span class="si">{</span><span class="n">tilized_tensor</span><span class="o">.</span><span class="n">layout</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Layout.TILE</span>
 </pre></div>
 </div>
 </div>

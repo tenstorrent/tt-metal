@@ -442,7 +442,7 @@ dimension of a TILE input.</p>
 
 <span class="c1"># Repeat interleave the tensor</span>
 <span class="n">repeated_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">repeat_interleave</span><span class="p">(</span><span class="n">input_tensor</span><span class="p">,</span> <span class="n">repeats</span><span class="o">=</span><span class="mi">2</span><span class="p">,</span> <span class="n">dim</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Repeat Interleave Tensor Shape: </span><span class="si">{</span><span class="n">repeated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([20, 10])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Repeat Interleave Tensor Shape: </span><span class="si">{</span><span class="n">repeated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([20, 10])</span>
 </pre></div>
 </div>
 </div>

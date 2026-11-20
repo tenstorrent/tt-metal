@@ -375,6 +375,25 @@ Return value: None</p>
 </dd>
 </dl>
 
+<dl class="cpp function">
+<dt class="sig sig-object cpp" id="_CPPv4N7ckernel14fill_rows_tileE8uint32_t8uint32_t8uint32_tf">
+<span class="target" id="namespaceckernel_1ac470878a2b0127802ab8bb195f1817dd"></span><span class="kt"><span class="pre">void</span></span><span class="w"> </span><span class="sig-prename descclassname"><span class="n"><span class="pre">ckernel</span></span><span class="p"><span class="pre">::</span></span></span><span class="sig-name descname"><span class="n"><span class="pre">fill_rows_tile</span></span></span><span class="sig-paren">(</span><span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">idst</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">row_begin</span></span>, <span class="n"><span class="pre">uint32_t</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">row_end</span></span>, <span class="kt"><span class="pre">float</span></span><span class="w"> </span><span class="n sig-param"><span class="pre">value</span></span><span class="sig-paren">)</span><a class="headerlink" href="#_CPPv4N7ckernel14fill_rows_tileE8uint32_t8uint32_t8uint32_tf" title="Permalink to this definition"></a><br>
+</dt>
+<dd>
+<p>Fills rows [row_begin, row_end) of the 32x32 tile in DST with the given value and leaves every other row as it is: a 4-row band that lies inside the range is written with whole-vector stores, a band cut by row_begin or row_end with a lane-masked store. The DST register buffer must be in acquired state via <em>acquire_dst</em> call. This call is blocking and is only available on the compute engine. Call <em>fill_tile_init</em> first. Not supported on Quasar: a kernel that calls it fails to build.</p>
+<p>Return value: None</p>
+<p></p>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">idst  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to perform the computation on  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">row_begin  </span><span class="tt-api-param-desc">The first tile row to fill  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">row_end  </span><span class="tt-api-param-desc">One past the last tile row to fill  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">value  </span><span class="tt-api-param-desc">Value to fill the rows with  </span></p>
+</div>
+
+</dd>
+</dl>
+
 </section>
 
 

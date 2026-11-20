@@ -332,6 +332,14 @@
 <p class="tt-api-param-row"><span class="tt-api-param-name">odst  </span><span class="tt-api-param-desc">The index of the tile in DST register buffer to use as output  </span></p>
 </div>
 
+<p>add_binary_tile, sub_binary_tile and mul_binary_tile also take the extent of the tile they touch:</p>
+<p></p>
+<div class="tt-api-param-list colwidths-auto docutils container">
+<p class="tt-api-param-row"><span class="tt-api-param-name">Argument  </span><span class="tt-api-param-desc">Description  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">ITERATIONS  </span><span class="tt-api-param-desc">Template: 4-row groups per visited face. Iteration k writes face rows 4*(k/2)..4*(k/2)+3 of one column parity (even columns for even k, odd for odd k), so 8 is the whole face and 2 under VectorMode::R is rows 0..3 of all 32 columns. The body advances the DEST counter per iteration and the vector-mode loop re-bases every face on the CR counter, so a partial count composes with any vector mode. Fixed at 8 on Quasar.  </span></p>
+<p class="tt-api-param-row"><span class="tt-api-param-name">vector_mode  </span><span class="tt-api-param-desc">The faces to visit: RC all four, R faces 0 and 1 (rows 0..15), C faces 0 and 2 (columns 0..15)  </span></p>
+</div>
+
 </dd>
 </dl>
 

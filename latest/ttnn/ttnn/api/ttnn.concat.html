@@ -453,7 +453,7 @@ Sharded inputs must also have the same layout, shard grid, sharding scheme and s
 
 <span class="c1"># Concatenate along dimension 3</span>
 <span class="n">concatenated_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">concat</span><span class="p">([</span><span class="n">tensor1</span><span class="p">,</span> <span class="n">tensor2</span><span class="p">],</span> <span class="n">dim</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Concatenated Tensor Shape: </span><span class="si">{</span><span class="n">concatenated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 64])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Concatenated Tensor Shape: </span><span class="si">{</span><span class="n">concatenated_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([1, 1, 64, 64])</span>
 </pre></div>
 </div>
 </div>

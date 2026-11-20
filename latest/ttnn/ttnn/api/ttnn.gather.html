@@ -470,7 +470,7 @@ The output tensor will have the same shape as the index tensor. Note that the in
 
 <span class="c1"># Gather elements along dimension 1 using the index tensor</span>
 <span class="n">gathered_tensor</span> <span class="o">=</span> <span class="n">ttnn</span><span class="o">.</span><span class="n">gather</span><span class="p">(</span><span class="n">ttnn_input</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="n">index</span><span class="o">=</span><span class="n">ttnn_index</span><span class="p">)</span>
-<span class="n">logger</span><span class="o">.</span><span class="n">info</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Gathered Tensor Shape: </span><span class="si">{</span><span class="n">gathered_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([4, 2])</span>
+<span class="n">logger</span><span class="o">.</span><span class="n">debug</span><span class="p">(</span><span class="sa">f</span><span class="s2">"Gathered Tensor Shape: </span><span class="si">{</span><span class="n">gathered_tensor</span><span class="o">.</span><span class="n">shape</span><span class="si">}</span><span class="s2">"</span><span class="p">)</span>  <span class="c1"># Shape([4, 2])</span>
 </pre></div>
 </div>
 </div>

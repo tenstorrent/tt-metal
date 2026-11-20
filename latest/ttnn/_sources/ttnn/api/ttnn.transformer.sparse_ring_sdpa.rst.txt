@@ -1,0 +1,8 @@
+﻿ttnn.transformer.sparse\_ring\_sdpa
+===================================
+
+.. currentmodule:: ttnn.transformer
+
+.. _ttnn.transformer.sparse_ring_sdpa:
+
+.. autooperation:: ttnn.transformer.sparse_ring_sdpa

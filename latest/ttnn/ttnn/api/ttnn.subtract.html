@@ -446,13 +446,14 @@ L1 sharded layout is preferred, with no broadcast and matching tensor specs for 
 </thead>
 <tbody>
 <tr class="row-even">
-<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535])</p></td>
+<td><p>BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), UINT8 (range: [0, 255]), INT8 (range: [-128, 127])</p></td>
 <td><p>TILE, ROW_MAJOR</p></td>
 </tr>
 </tbody>
 </table>
 <p>If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.</p>
 <p>Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.</p>
+<p>UINT8 and INT8 results are returned in the input dtype and wrap modulo 256 on overflow. A scalar operand must be an integer within the dtype’s range. Output activations run on the wrapped result. Input activations are not supported for these dtypes.</p>
 </div>
 <p>When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>True</cite> (default) for bfloat16 datatype, the operation uses the FPU implementation for better performance, with a max error of 1 ULP.
 When <code class="xref py py-attr docutils literal notranslate"><span class="pre">fast_and_approximate_mode</span></code> is <cite>False</cite> for bfloat16 datatype, the operation uses the SFPU with the result rounded to nearest even (RNE), which matches the golden exactly at a slight perf cost.

@@ -367,7 +367,7 @@ If no dimension is provided, sum is computed over all dimensions yielding a sing
 <ul class="simple">
 <li><p><span class="tt-api-param-name"><strong>memory_config</strong> (<em>ttnn.MemoryConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Memory configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>compute_kernel_config</strong> (<em>ttnn.ComputeKernelConfig</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Compute kernel configuration for the operation. Defaults to <cite>None</cite>.</span></p></li>
-<li><p><span class="tt-api-param-name"><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.</span></p></li>
+<li><p><span class="tt-api-param-name"><strong>scalar</strong> (<em>float</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">A scaling factor to be applied to the input tensor. Defaults to <cite>1.0</cite>.For INT32 and UINT32 the scalar multiplies the reduced value in float32. The result is <cite>trunc(float32(value) * scalar)</cite>. It is not exact above 2^24 and is truncated toward zero. INT32 results clamp to the INT32 range and UINT32 results clamp to [0, 2^32 - 1]. The default <cite>scalar=1.0</cite> skips the multiply and is exact.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>sub_core_grids</strong> (<em>ttnn.CoreRangeSet</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">Subcore grids to use for the operation. Defaults to <cite>None</cite>, which will use all cores.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>fast_and_approximate_mode</strong> (<em>bool</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">FLOAT32 only. <cite>False</cite> (default) uses the accurate SFPU path (full float32 accumulation); <cite>True</cite> uses the faster FPU path (inputs truncated to TF32, higher ULP error). The accurate path requires a compute_kernel_config with <cite>fp32_dest_acc_en=True</cite> and is unavailable on Quasar; in those cases it falls back to the FPU. No effect for non-FLOAT32 inputs.</span></p></li>
 <li><p><span class="tt-api-param-name"><strong>output_layout</strong> (<em>ttnn.Layout</em><em>, </em><em>optional</em>)</span><span class="tt-api-param-desc">layout of the output tensor. Defaults to <cite>None</cite>, which keeps the layout the chosen path produces naturally (see the Note below). <cite>ttnn.TILE_LAYOUT</cite> or <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is always honored: it is produced directly by the kernel for a -2 reduce of a ROW_MAJOR input, and converted after reducing otherwise. <cite>ttnn.ROW_MAJOR_LAYOUT</cite> is rejected for block-float results (BFLOAT8_B, BFLOAT4_B), which only exist in TILE layout; typecast explicitly if a row-major result is needed.</span></p></li>
@@ -407,11 +407,11 @@ If no dimension is provided, sum is computed over all dimensions yielding a sing
 </tr>
 <tr class="row-odd">
 <td><p>INT32</p></td>
-<td><p>TILE</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 <tr class="row-even">
-<td><p>UINT32 (scalar=1.0 only)</p></td>
-<td><p>TILE</p></td>
+<td><p>UINT32</p></td>
+<td><p>ROW_MAJOR, TILE</p></td>
 </tr>
 </tbody>
 </table>
