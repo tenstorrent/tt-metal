@@ -230,7 +230,6 @@ def _run_sfpu_binary_llk_golden(
             # TYPECAST_OUT_FORMAT, so every build that includes it must define them.
             TYPECAST_FORMATS(),
             BROADCAST_TYPE(broadcast_type),
-            *([SFPU_COMPUTE_API_KERNELS(True)] if compute_api_kernels else []),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A * num_blocks),
@@ -256,6 +255,10 @@ def _run_sfpu_binary_llk_golden(
         "unpack_to_dest": unpack_to_dest,
         "dest_acc": dest_acc,
     }
+    if compute_api_kernels:
+        # Appended, not listed above: a functional-only switch that adds no perf column, and the perf
+        # column gate (test_perf_header_gate.py) cannot read a conditional entry in that list.
+        test_config_kwargs["templates"].append(SFPU_COMPUTE_API_KERNELS(True))
 
     configuration = create_test_or_perf_config(
         is_perf=is_perf,
