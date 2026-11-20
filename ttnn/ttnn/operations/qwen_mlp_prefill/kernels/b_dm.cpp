@@ -37,8 +37,10 @@ void kernel_main() {
         Semaphore<>(CT_ARG("sem_credit_y") + 1),
         Semaphore<>(CT_ARG("sem_credit_y") + 2)};
     Semaphore<> credit_partial(CT_ARG("sem_credit_partial"));
+    const uint32_t landing_base = arena_base(CT_ARG("cb_landing"));
+    const uint32_t relay_slots = landing_base + depth * segment_bytes;
     const uint32_t landing[RING_CHIPS - 1] = {
-        arena_base(CT_ARG("cb_landing")), arena_base(CT_ARG("cb_landing") + 1), arena_base(CT_ARG("cb_landing") + 2)};
+        landing_base, landing_base + depth * segment_bytes, landing_base + 2 * depth * segment_bytes};
     const uint32_t block_x[RING_CHIPS] = {
         CT_ARG("b_block_x0"), CT_ARG("b_block_x1"), CT_ARG("b_block_x2"), CT_ARG("b_block_x3")};
 
@@ -67,7 +69,7 @@ void kernel_main() {
         return RelayPort{
             x,
             relay_y,
-            arena_base(CT_ARG("cb_relay_slots")) + source * CT_ARG("relay_slots") * CT_ARG("relay_slot_bytes"),
+            relay_slots + source * CT_ARG("relay_slots") * CT_ARG("relay_slot_bytes"),
             arena_base(CT_ARG("cb_message")),
             Semaphore<>(CT_ARG("sem_relay_free") + port),
             0};
