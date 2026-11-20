@@ -164,9 +164,16 @@ Tensor minimum(
         !output_dtype.has_value() || !optional_output_tensor.has_value() ||
             *output_dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
-    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
     TT_FATAL(
         rhs_activations.empty(), "input_tensor_b_activations are not supported when the second operand is a scalar");
+    // With activations, a float32 output (asked for by dtype or by the output tensor) runs the whole chain on a
+    // float32 copy of a bfloat16 input, so the activations are not packed to bfloat16 before the final cast.
+    const DataType effective_output_dtype =
+        optional_output_tensor.has_value() ? optional_output_tensor->dtype() : output_dtype.value_or(input_a.dtype());
+    const bool widen = effective_output_dtype == DataType::FLOAT32 && input_a.dtype() == DataType::BFLOAT16 &&
+                       !(post_activations.empty() && lhs_activations.empty());
+    const Tensor operand = widen ? ttnn::typecast(input_a, DataType::FLOAT32, memory_config) : input_a;
+    const bool retype = output_dtype.has_value() && *output_dtype != operand.dtype();
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
         [&](auto input_b) {
@@ -174,7 +181,7 @@ Tensor minimum(
             std::vector<unary::EltwiseUnaryWithParam> op_chain(lhs_activations.begin(), lhs_activations.end());
             op_chain.push_back(unary::EltwiseUnaryWithParam{unary::UnaryOpType::MINIMUM, (input_b)});
             op_chain.insert(op_chain.end(), post_activations.begin(), post_activations.end());
-            return ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, compare_output);
+            return ttnn::operations::unary::detail::unary_impl(operand, op_chain, memory_config, compare_output);
         },
         value);
     return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
@@ -216,9 +223,16 @@ Tensor maximum(
         !output_dtype.has_value() || !optional_output_tensor.has_value() ||
             *output_dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
-    const bool retype = output_dtype.has_value() && *output_dtype != input_a.dtype();
     TT_FATAL(
         rhs_activations.empty(), "input_tensor_b_activations are not supported when the second operand is a scalar");
+    // With activations, a float32 output (asked for by dtype or by the output tensor) runs the whole chain on a
+    // float32 copy of a bfloat16 input, so the activations are not packed to bfloat16 before the final cast.
+    const DataType effective_output_dtype =
+        optional_output_tensor.has_value() ? optional_output_tensor->dtype() : output_dtype.value_or(input_a.dtype());
+    const bool widen = effective_output_dtype == DataType::FLOAT32 && input_a.dtype() == DataType::BFLOAT16 &&
+                       !(post_activations.empty() && lhs_activations.empty());
+    const Tensor operand = widen ? ttnn::typecast(input_a, DataType::FLOAT32, memory_config) : input_a;
+    const bool retype = output_dtype.has_value() && *output_dtype != operand.dtype();
     const std::optional<Tensor> compare_output = retype ? std::optional<Tensor>{} : optional_output_tensor;
     Tensor result = std::visit(
         [&](auto input_b) {
@@ -226,7 +240,7 @@ Tensor maximum(
             std::vector<unary::EltwiseUnaryWithParam> op_chain(lhs_activations.begin(), lhs_activations.end());
             op_chain.push_back(unary::EltwiseUnaryWithParam{unary::UnaryOpType::MAXIMUM, (input_b)});
             op_chain.insert(op_chain.end(), post_activations.begin(), post_activations.end());
-            return ttnn::operations::unary::detail::unary_impl(input_a, op_chain, memory_config, compare_output);
+            return ttnn::operations::unary::detail::unary_impl(operand, op_chain, memory_config, compare_output);
         },
         value);
     return retype ? ttnn::typecast(result, *output_dtype, memory_config, optional_output_tensor) : result;
@@ -1261,7 +1275,9 @@ Tensor bias_gelu(
     TT_FATAL(
         !dtype.has_value() || !optional_output_tensor.has_value() || *dtype == optional_output_tensor->dtype(),
         "If both output dtype and output tensor are provided, their dtypes should match");
-    const bool widen = dtype.has_value() && *dtype == DataType::FLOAT32 && input_tensor_a.dtype() != DataType::FLOAT32;
+    const DataType effective_output_dtype =
+        optional_output_tensor.has_value() ? optional_output_tensor->dtype() : dtype.value_or(input_tensor_a.dtype());
+    const bool widen = effective_output_dtype == DataType::FLOAT32 && input_tensor_a.dtype() != DataType::FLOAT32;
     const Tensor operand = widen ? ttnn::typecast(input_tensor_a, DataType::FLOAT32, memory_config) : input_tensor_a;
     const bool narrow = dtype.has_value() && *dtype != operand.dtype();
     TT_FATAL(rhs_activations.empty(), "input_tensor_b_activations are not supported when the bias is a scalar");

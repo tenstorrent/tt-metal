@@ -1017,3 +1017,35 @@ def test_binary_composite_scalar_rejects_rhs_activations(op, device, expect_erro
     a = ttnn.from_torch(torch.randn(1, 1, 32, 32, dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
     with expect_error(RuntimeError, "input_tensor_b_activations are not supported"):
         getattr(ttnn, op)(a, 0.5, input_tensor_b_activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)])
+
+
+@pytest.mark.parametrize("op", ["maximum", "minimum", "bias_gelu"])
+@pytest.mark.parametrize("variant", ["dtype", "output_tensor"])
+def test_binary_composite_scalar_activation_keeps_float32_precision(op, variant, device):
+    # A SQUARE post activation on a bfloat16 input with a float32 output must run in float32, not be packed to
+    # bfloat16 first: the bfloat16 error is about 4e-3 relative, far above the bound below.
+    torch.manual_seed(0)
+    scalar = 0.1
+    torch_a = torch.randn(1, 1, 32, 64, dtype=torch.bfloat16)
+    a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device)
+    kwargs = {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]}
+    output_tensor = ttnn.from_torch(
+        torch.zeros(1, 1, 32, 64), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    if variant == "dtype":
+        kwargs["dtype"] = ttnn.float32
+    else:
+        kwargs["output_tensor"] = output_tensor
+
+    result = getattr(ttnn, op)(a, scalar, **kwargs)
+    actual = ttnn.to_torch(result if variant == "dtype" else output_tensor).double()
+
+    a64 = torch_a.double()
+    if op == "maximum":
+        inner = torch.clamp(a64, min=scalar)
+    elif op == "minimum":
+        inner = torch.clamp(a64, max=scalar)
+    else:
+        inner = torch.nn.functional.gelu(a64 + scalar)
+    expected = inner**2
+    assert torch.allclose(actual, expected, rtol=2e-4, atol=1e-6), (actual - expected).abs().max()
