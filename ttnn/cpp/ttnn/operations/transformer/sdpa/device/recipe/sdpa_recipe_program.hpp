@@ -91,6 +91,9 @@ uint64_t recipe_drop_fused(
 // Recipe QK/PV matmul subblock width for a K chunk or head dim of `tiles` tiles: the largest of 4, 2 and 1
 // dividing it (recipe_qk_w / recipe_pv_w). Shared by the dense, ring and exp ring recipe hosts.
 uint32_t recipe_subblock_width(uint32_t tiles);
+// Recipe QK subblock width for a K chunk of `k_tiles` tiles: recipe_subblock_width, except that STANDARD runs four-wide
+// subblocks over a K chunk of 2 mod 4 tiles (more than four), the last subblock of each row two wide.
+uint32_t recipe_qk_subblock_width(uint32_t k_tiles, const PrecisionPolicy& policy);
 
 // The kernel optimization level a recipe factory sets: `level`, or the default when the watcher is enabled. Watcher
 // builds are -Os (the recipe kernels' WATCHER_ENABLED pragma), and their link must stay at the default level: at -O2

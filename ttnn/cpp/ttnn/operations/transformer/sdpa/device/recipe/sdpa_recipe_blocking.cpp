@@ -292,7 +292,7 @@ double block_compute(
     fpu += fp32 ? 2 * kFpuEltwiseCycles * r * v : 0.0;
     fpu += masked ? kFpuEltwiseCycles * scores : 0.0;
     const double sfpu = kSfpuIterationsPerTile * work.exp_instructions * scores;
-    const double subblocks = scores / build.qk_width + r * v / build.pv_width;
+    const double subblocks = r * div_up(k_tiles, build.qk_width) + r * v / build.pv_width;
     const double math = fpu + sfpu + kDestHandoffCycles * subblocks;
     // Pack thread: it issues the exps, then packs per score tile P and the row sums (reduce path: S as well; FP32: S
     // and P, ACCURATE also S - m by L1 accumulation) and per row the FP32 O update.
@@ -301,7 +301,7 @@ double block_compute(
     double pack =
         sfpu + (scores * score_bytes + r * v * kFp32Tile) / kPackBytesPerCycle + kDestHandoffCycles * subblocks;
     if (policy.selection.recipe == Recipe::E && fused) {
-        pack += kFastPackSetups * (kBf16Tile / kPackBytesPerCycle) * (scores / build.qk_width);
+        pack += kFastPackSetups * (kBf16Tile / kPackBytesPerCycle) * (r * div_up(k_tiles, build.qk_width));
     }
     // Unpacker: one new operand tile per tile product (K, V), P once per PV subblock, S twice on the reduce path.
     double unpack_bytes = scores * d * kb + r * k * v * vb + r * k * (v / build.pv_width) * state;
@@ -312,7 +312,7 @@ double block_compute(
     double syncs = kSyncCycles * syncs_per_group(policy, fused, vd) * groups;
     // BF16 reduce path: each QK subblock's S is packed and unpacked again for the row max (one round trip). Matches
     // the measured cost of losing the fused chunk: FAST 1.28x (LOW_PRECISION study), STANDARD 1.09x (one core).
-    syncs += !fused && !fp32 ? kSyncCycles * scores / build.qk_width : 0.0;
+    syncs += !fused && !fp32 ? kSyncCycles * r * div_up(k_tiles, build.qk_width) : 0.0;
     return std::max({math, pack, unpack}) + syncs;
 }
 
@@ -480,7 +480,7 @@ bool recipe_program_fits(const RecipeBlockingProblem& p, uint32_t q_tiles, uint3
         return q_tiles < 5 || !((pv_tiles == 3 && (feature || p.mask_page_bytes > 0)) ||
                                 (pv_tiles == 2 && p.key_range && p.attention_sink));
     }
-    if (recipe != Recipe::B || attn_mask || recipe_subblock_width(k_tiles) < 2) {
+    if (recipe != Recipe::B || attn_mask || recipe_qk_subblock_width(k_tiles, p.policy) < 2) {
         return true;
     }
     if (q_tiles % 2 != 0 && q_tiles >= 7 && (feature || narrow_pv)) {

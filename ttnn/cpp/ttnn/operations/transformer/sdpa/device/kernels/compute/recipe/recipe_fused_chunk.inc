@@ -31,8 +31,13 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr uint32_t kH1MaxQTiles = recipe::lofi || recipe::ring || recipe::wormhole ? 0 : 6;
     constexpr uint32_t H = Sq_chunk_t <= kH1MaxQTiles ? 1 : 2;
     constexpr uint32_t sbw = qkt_subblock_w;
-    constexpr uint32_t n_kb = Sk_chunk_t / sbw;
-    static_assert(Sk_chunk_t % sbw == 0 && vDHt % qktv_subblock_w == 0 && vDHt <= DHt);
+    // A K chunk of 2 mod 4 tiles ends with a two-wide QK subblock (recipe_qk_subblock_width); the chunk's row sums
+    // stay sbw tiles wide (the narrow subblock adds into their first columns).
+    constexpr bool qk_ragged = Sk_chunk_t % sbw != 0;
+    constexpr uint32_t n_kb = (Sk_chunk_t + sbw - 1) / sbw;
+    static_assert(!qk_ragged || (sbw == 4 && Sk_chunk_t % 4 == 2));
+    static_assert(vDHt % qktv_subblock_w == 0 && vDHt <= DHt);
+    auto kb_w = [](uint32_t kb) -> uint32_t { return qk_ragged && kb == n_kb - 1 ? Sk_chunk_t % sbw : sbw; };
     // PV of a pipelined group runs in n_pieces K pieces, each after QK subblocks of the next group: two when the QK
     // subblocks split evenly, and at least enough that no piece accumulates more than the recipe's fold interval in
     // DEST (recipe::pv_fold; the packer adds each piece to O in FP32). Pieces split the K tiles and the QK subblocks
@@ -137,6 +142,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // with the counter reset, so it leaves nothing behind), and in STANDARD so is the P pack setup (format,
     // row width, ReLU; FAST's exp ring builds have no room for it); every other step calls leave_qk.
     uint32_t qk_setup_h = 0;
+    [[maybe_unused]] uint32_t qk_setup_w = sbw;
     // STANDARD keeps the P pack setup across QK subblocks (qk_pack_on); leave_qk resets it.
     bool qk_pack_on = false;
     // Out of line: it is called from every other step.
@@ -164,17 +170,21 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         const uint32_t h = rows(g);
         const uint32_t row0 = H * g;
         const uint32_t col0 = kb * sbw;
-        if (qk_setup_h != h) {
+        const uint32_t w = kb_w(kb);
+        if (qk_setup_h != h || (qk_ragged && qk_setup_w != w)) {
             set_srca(cb_kt_in);
-            recipe_mm_reinit(cb_q_in, cb_kt_in, true, sbw, h, DHt);
+            recipe_mm_reinit(cb_q_in, cb_kt_in, true, w, h, DHt);
             qk_setup_h = h;
+            if constexpr (qk_ragged) {
+                qk_setup_w = w;
+            }
         }
         tile_regs_acquire();
         uint32_t in0_index = row0 * DHt;
         uint32_t in1_index = col0;
         srcb_to_q();
         for (uint32_t inner = 0; inner < DHt; ++inner) {
-            matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, sbw, h, DHt);
+            matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, w, h, DHt);
             in0_index++;
             in1_index += KT;
         }
@@ -182,33 +192,33 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
         // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
         // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
-        UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, sbw, h, 1)));
+        UNPACK((llk_unpack_AB_matmul(prev.max, neg_unit_cb, row0, 0, w, h, 1)));
         // A LoFi image has no halves; this keeps FAST's matmul instantiations (and code size) as they were.
         constexpr bool m_inner_half = !recipe::lofi;
-        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(prev.max, neg_unit_cb, 0, sbw, h)));
+        MATH((llk_math_matmul_no_mop<MATH_FIDELITY, MM_THROTTLE, 1, m_inner_half>(prev.max, neg_unit_cb, 0, w, h)));
         tile_regs_commit();
         tile_regs_wait();
         if constexpr (recipe::ring) {
             if (recipe_ring_chunk_masked()) {
                 recipe_mask_row0 = row0;
-                mask_recipe_tail(col0, sbw, h);
+                mask_recipe_tail(col0, w, h);
                 qk_setup_h = 0;
             }
         } else if constexpr (recipe::k_tail) {
-            mask_recipe_tail(col0, sbw, h);
+            mask_recipe_tail(col0, w, h);
             qk_setup_h = 0;
         }
         if constexpr (recipe::lofi) {
             if constexpr (score_relu) {
                 PACK((llk_pack_relu_config(ReluConfig::zero())));
             }
-            recipe_score_exp<scale_fp32>(0, h * sbw);
+            recipe_score_exp<scale_fp32>(0, h * w);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             set_pack(cb_qkt_im);
-            configure_row_pack_width(cb_qkt_im, sbw);
-            pack_contiguous_rows_nocfg(cb_qkt_im, row0, h, KT, col0, sbw);
+            configure_row_pack_width(cb_qkt_im, w);
+            pack_contiguous_rows_nocfg(cb_qkt_im, row0, h, KT, col0, w);
             PACK((llk_pack_reconfig_l1_acc(kb > 0 ? 1 : 0)));
-            pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, sbw);
+            pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, w);
             PACK((llk_pack_reconfig_l1_acc(0)));
             if constexpr (score_relu) {
                 PACK((llk_pack_relu_config(ReluConfig::none())));
@@ -219,21 +229,31 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                     PACK((llk_pack_relu_config(ReluConfig::zero())));
                 }
             }
-            recipe_score_exp<scale_fp32>(0, h * sbw);
+            recipe_score_exp<scale_fp32>(0, h * w);
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             if (!qk_pack_on) {
                 set_pack(cb_qkt_im);
-                configure_row_pack_width(cb_qkt_im, sbw);
+                configure_row_pack_width(cb_qkt_im, w);
                 PACK((llk_pack_reconfig_l1_acc(0)));
                 qk_pack_on = true;
+            } else if constexpr (qk_ragged) {
+                if (w != sbw) {
+                    configure_row_pack_width(cb_qkt_im, w);
+                }
             }
-            pack_contiguous_rows_nocfg(cb_qkt_im, row0, h, KT, col0, sbw);
+            pack_contiguous_rows_nocfg(cb_qkt_im, row0, h, KT, col0, w);
             if (kb > 0) {
                 PACK((llk_pack_reconfig_l1_acc(1)));
             }
-            pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, sbw);
+            pack_contiguous_rows_nocfg(psum_cb, row0, h, sbw, 0, w);
             if (kb > 0) {
                 PACK((llk_pack_reconfig_l1_acc(0)));
+            }
+            if constexpr (qk_ragged) {
+                // The narrow subblock's pack width does not carry over: the next subblock sets the pack up again.
+                if (w != sbw) {
+                    leave_qk();
+                }
             }
         }
         tile_regs_release();
@@ -399,8 +419,15 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         configure_row_pack_width(cb_qkt_im, sbw);
         srcb_to_q();
         for (uint32_t kb = 0; kb < n_kb; ++kb) {
+            const uint32_t w = kb_w(kb);
+            if constexpr (qk_ragged) {
+                if (w != sbw) {
+                    recipe_mm_reinit(cb_q_in, cb_kt_in, true, w, h, DHt);
+                    configure_row_pack_width(cb_qkt_im, w);
+                }
+            }
             blocked_matmul_and_pack<true, KT, KT>(
-                cb_q_in, cb_kt_in, cb_qkt_im, row0 * DHt, kb * sbw, gi, kb * sbw, sbw, h, DHt, DHt, true);
+                cb_q_in, cb_kt_in, cb_qkt_im, row0 * DHt, kb * sbw, gi, kb * sbw, w, h, DHt, DHt, true);
         }
         srcb_from_q();
         pack_to_unpack_barrier();
@@ -412,7 +439,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         pack_to_unpack_barrier();
         for (uint32_t kb = 0; kb < n_kb; ++kb) {
             sub_exp_block_bcast_cols<scale_fp32>(
-                cb_qkt_im, cur.max, lsum_cb, KT, gi, kb * sbw, h, sbw, false, /*wait_max=*/false);
+                cb_qkt_im, cur.max, lsum_cb, KT, gi, kb * sbw, h, kb_w(kb), false, /*wait_max=*/false);
         }
         pack_cb = cb_qkt_im;
         srca = cb_qkt_im;

@@ -71,7 +71,7 @@ uint32_t recipe_dense_k_tiles(const std::optional<SDPAProgramConfig>& program_co
 uint32_t recipe_compute_q_tiles(
     const PrecisionPolicy& policy, uint32_t q_tiles, uint32_t k_tiles, bool masked, bool keyed) {
     const bool unfused_standard =
-        policy.selection.recipe == Recipe::B && (masked || recipe_subblock_width(k_tiles) < 2);
+        policy.selection.recipe == Recipe::B && (masked || recipe_qk_subblock_width(k_tiles, policy) < 2);
     const bool paired = !policy.fp32_destination;
     return (unfused_standard || (keyed && paired)) && q_tiles % 2 != 0 ? q_tiles + 1 : q_tiles;
 }
@@ -122,6 +122,14 @@ bool recipe_fused_cb(const CBDescriptor& cb) {
 }
 
 uint32_t recipe_subblock_width(uint32_t tiles) { return tiles % 4 == 0 ? 4 : tiles % 2 == 0 ? 2 : 1; }
+
+uint32_t recipe_qk_subblock_width(uint32_t k_tiles, const PrecisionPolicy& policy) {
+    // Two-wide subblocks cost STANDARD 15-24% at K chunks of 2 mod 4 tiles (BH Galaxy ring MLA, Q160/K192 and K320 vs
+    // K256: each subblock carries a fixed DEST handoff and pack setup), so STANDARD runs four-wide subblocks there and
+    // ends each row with one two-wide subblock. FAST keeps the dividing width: four-wide ragged rows made it slower
+    // (WH dense D64 S4096 1.40 -> 1.48 ms, H3 BFP8 13.45 -> 13.98 ms, with the blocking picking those K chunks).
+    return policy.selection.recipe == Recipe::B && k_tiles > 4 && k_tiles % 4 == 2 ? 4 : recipe_subblock_width(k_tiles);
+}
 
 std::optional<KernelBuildOptLevel> recipe_opt_level(KernelBuildOptLevel level) {
     // tt_metal exposes no public watcher query to ttnn. The JIT build enables the watcher from RunTimeOptions
@@ -206,7 +214,7 @@ ProgramDescriptor recipe_compute_program(
     // fused chunk (recipe_fused_chunk.hpp). It needs QK subblocks at least two tiles wide: the one-wide LoFi
     // matmul reuses its other operand, which the m_ref inner step does not support.
     const bool fused = (policy.selection.recipe == Recipe::B || policy.selection.recipe == Recipe::E) &&
-                       recipe_subblock_width(k_tiles) >= 2;
+                       recipe_qk_subblock_width(k_tiles, policy) >= 2;
     ProgramDescriptor program;
     auto add_cb = [&](uint8_t index, uint32_t count, uint32_t page, tt::DataFormat format) {
         CBDescriptor cb{
@@ -253,9 +261,9 @@ ProgramDescriptor recipe_compute_program(
         // CB 31: a check unit's saturation verdict tile in the fused chunks.
         add_cb(31, 1, 2048, tt::DataFormat::Float16_b);
         // CB 30: per Q tile row, QK-subblock-width partial row sums of the fused chunks.
-        add_cb(30, q_tiles * recipe_subblock_width(k_tiles), 2048, tt::DataFormat::Float16_b);
+        add_cb(30, q_tiles * recipe_qk_subblock_width(k_tiles, policy), 2048, tt::DataFormat::Float16_b);
         // CB 29: QK-subblock-width copies of -e0 in K's format (the fused chunks subtract m_ref in the QK).
-        add_cb(29, recipe_subblock_width(k_tiles), kv_bytes, kv_format);
+        add_cb(29, recipe_qk_subblock_width(k_tiles, policy), kv_bytes, kv_format);
     }
     add_cb(16, (fp32 ? 2 : 4) * vd, q_bytes, q_format);
     ComputeConfigDescriptor compute_config{
@@ -297,7 +305,7 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_ring_stream_state", 0},
              {"recipe_k_primary_rows", 0},
              {"recipe_k_joint_rows", 0},
-             {"recipe_qk_w", recipe_subblock_width(k_tiles)},
+             {"recipe_qk_w", recipe_qk_subblock_width(k_tiles, policy)},
              {"recipe_pv_w", recipe_subblock_width(vd)},
              {"recipe_pv_fold", policy.pv_fold_tiles}},
         .defines =

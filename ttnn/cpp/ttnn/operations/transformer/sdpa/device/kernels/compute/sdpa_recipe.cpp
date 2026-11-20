@@ -31,11 +31,13 @@ constexpr uint32_t k_tiles = get_named_compile_time_arg_val("k_tiles");
 constexpr uint32_t d_tiles = get_named_compile_time_arg_val("d_tiles");
 // V and output head dim: narrower than Q/K's for MLA.
 constexpr uint32_t vd_tiles = get_named_compile_time_arg_val("vd_tiles");
-// QK and PV matmul subblock widths: the largest of 4, 2, 1 dividing the K chunk and V head dim.
+// QK and PV matmul subblock widths: the largest of 4, 2, 1 dividing the K chunk and V head dim, except that the BF16
+// recipes run four-wide QK subblocks over a K chunk of 2 mod 4 tiles, the last one two wide (recipe_qk_subblock_width).
 constexpr uint32_t qk_subblock_w = recipe::qk_w;
 constexpr uint32_t pv_subblock_w = recipe::pv_w;
 static_assert(q_tiles >= 1 && k_tiles >= 1 && d_tiles >= 1 && vd_tiles >= 1 && vd_tiles <= d_tiles);
-static_assert(k_tiles % qk_subblock_w == 0 && vd_tiles % pv_subblock_w == 0);
+static_assert(k_tiles % qk_subblock_w == 0 || (qk_subblock_w == 4 && k_tiles % 4 == 2));
+static_assert(vd_tiles % pv_subblock_w == 0);
 
 // Circular buffers (host: recipe_compute_program).
 constexpr uint32_t cb_q = 0, cb_k = 1, cb_v = 2, cb_identity_scale = 3, cb_col_identity = 4, cb_recip_scratch = 5;

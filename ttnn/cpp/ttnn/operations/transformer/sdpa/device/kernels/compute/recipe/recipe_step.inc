@@ -837,7 +837,13 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
             Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt >= 1 && qkt_subblock_h == 2 &&
             qktv_subblock_h == 2);
     }
-    const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
+    // A K chunk of 2 mod 4 tiles ends with a two-wide QK subblock (recipe_qk_subblock_width).
+    constexpr bool qk_ragged = active_Sk % actual_sbw != 0;
+    static_assert(!qk_ragged || (actual_sbw == 4 && active_Sk % 4 == 2 && !recipe::fp32));
+    constexpr uint32_t kt_num_subblocks = (active_Sk + actual_sbw - 1) / actual_sbw;
+    auto kt_w = [](uint32_t kt) -> uint32_t {
+        return qk_ragged && kt == kt_num_subblocks - 1 ? active_Sk % actual_sbw : actual_sbw;
+    };
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     constexpr uint32_t in0_block_w = DHt;
     // An odd Q chunk (BF16 recipes, two-row subblocks) ends with a one-row subblock. Helpers
@@ -1008,7 +1014,10 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
         const uint32_t first_half_last_sb = (active_Sk / 2 - 1) / actual_sbw;
 
         {
-            for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
+            for (uint32_t kt_subblock = 0; kt_subblock < kt_num_subblocks; ++kt_subblock) {
+                const uint32_t kt_width = kt_w(kt_subblock);
+                // The narrow subblock configures its own pack width (the caller set the full one).
+                const bool narrow = qk_ragged && kt_width != actual_sbw;
                 if (q_subblock > 0) {
                     uint32_t prev_q_subblock = q_subblock - 1;
                     if constexpr (!recipe::fp32) {
@@ -1022,8 +1031,8 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         prev_q_subblock,
                         kt_subblock * actual_sbw,
                         qkt_subblock_h,
-                        actual_sbw,
-                        /*skip_pack_configure=*/true);
+                        kt_width,
+                        /*skip_pack_configure=*/!narrow);
                     sdpa_maybe_pack_reconfig_data_format<cb_recip_scratch, cb_qkt_im>();
                     if constexpr (recipe::fp32) {
                         // sub_exp left the FP32 maxima's format on srcB: restore Q's.
@@ -1031,11 +1040,13 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                     } else {
                         sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
                     }
-                    recipe_mm_reinit(cb_q_in, cb_kt_in, true, actual_sbw, cur_qk_h, in0_block_w);
+                    recipe_mm_reinit(cb_q_in, cb_kt_in, true, kt_width, cur_qk_h, in0_block_w);
                     if constexpr (kBalancedQk) {
                         MATH((llk_math_matmul_reinit_no_mop<kBalancedQkFidelity, MM_THROTTLE>(
                             cb_q_in, cb_kt_in, true, actual_sbw, qkt_subblock_h)));
                     }
+                } else if (narrow) {
+                    recipe_mm_reinit(cb_q_in, cb_kt_in, true, kt_width, cur_qk_h, in0_block_w);
                 }
                 {
                     blocked_matmul_and_pack<true, KT_stride, KT_stride>(
@@ -1046,11 +1057,11 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         kt_index_offset,
                         cur_qk_index,
                         kt_subblock * actual_sbw,
-                        actual_sbw,
+                        kt_width,
                         cur_qk_h,
                         in0_block_w,
                         in0_block_w,
-                        /*skip_pack_configure=*/recipe::fp32 ? true : q_subblock == 0);
+                        /*skip_pack_configure=*/recipe::fp32 ? true : (q_subblock == 0 && !narrow));
                     if constexpr (recipe::fp32) {
                         // The previous row's max was already consumed by sub_exp
                         // above. Scan it after issuing current QK so scalar L1 loads
@@ -1072,7 +1083,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                             }
                         })
                     }
-                    kt_index_offset += actual_sbw;
+                    kt_index_offset += kt_width;
                 }
             }
         }
@@ -1368,8 +1379,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
 
         // q_subblock 0: drain last row's sub_exp in-place + first QKT@V matmul
         {
-            const uint32_t matmul_inner = actual_sbw;
-            const uint32_t drain_subblocks = kt_num_full_subblocks;
+            const uint32_t drain_subblocks = kt_num_subblocks;
             // Group 0 is short only when the whole chunk is one single-row group (a one-tile
             // BF16 chunk); cb_qkt_im then holds one row, not qktv_h.
             constexpr uint32_t first_h = last_group == 0 ? last_h : qktv_h;
@@ -1378,13 +1388,14 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                 // Interleave each column-subblock's sub_exp with its partial V matmul; partial products
                 // accumulate across kt_sub via L1.
                 for (uint32_t kt_sub = 0; kt_sub < drain_subblocks; ++kt_sub) {
+                    const uint32_t matmul_inner = kt_w(kt_sub);
                     sub_exp_block_bcast_cols<scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         chunk_sum_cb(),
                         KT_stride,
                         qk_index(q_num_subblocks - 1),
-                        kt_sub * matmul_inner,
+                        kt_sub * actual_sbw,
                         qk_rows(q_num_subblocks - 1),
                         matmul_inner);
                     if constexpr (q_num_subblocks == 1) {
@@ -1414,7 +1425,7 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
                         recipe_mm_reinit(cb_qkt_im, cb_v_in, false, qktv_subblock_w, first_h, KT_stride);
                         configure_row_pack_width(out_cb, qktv_subblock_w);
                         for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
-                            const uint32_t pv_inner_offset = kt_sub * matmul_inner;
+                            const uint32_t pv_inner_offset = kt_sub * actual_sbw;
                             const uint32_t qktv_in1_index = pv_inner_offset * vDHt + v_index_offset;
                             if constexpr (recipe::accurate && recipe::wormhole) {
                                 blocked_matmul_and_pack<false, vDHt, vDHt>(
