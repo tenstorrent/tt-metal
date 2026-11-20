@@ -33,7 +33,7 @@ export PERF_RUN_TAG="p0"
 export LLK_WINDOW_HASH=1
 STOP_AT="${LLK_STOP_AT:-}"
 if [[ -n "$STOP_AT" ]]; then
-  export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) * 3 / 5 ))
+  export LLK_STOP_AT=$(( $(date +%s) + (STOP_AT - $(date +%s)) / 3 ))
 fi
 pytest "${PYTEST_EXTRA[@]}" --compile-producer -n 10 --junitxml="pytest-report-placement-1-compile.xml" "${FILES[@]}" || STATUS=1
 [[ -n "$STOP_AT" ]] && export LLK_STOP_AT="$STOP_AT"
