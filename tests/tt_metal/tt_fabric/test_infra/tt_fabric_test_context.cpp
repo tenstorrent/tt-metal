@@ -440,8 +440,7 @@ void TestContext::compile_programs() {
         for (auto* test_device : devices) {
             test_device->set_defer_host_writes(true);
         }
-        const size_t num_threads =
-            std::min<size_t>(devices.size(), std::max(1u, std::thread::hardware_concurrency()));
+        const size_t num_threads = std::min<size_t>(devices.size(), std::max(1u, std::thread::hardware_concurrency()));
         std::atomic<size_t> next_device{0};
         {
             std::vector<std::future<void>> workers;
@@ -463,7 +462,7 @@ void TestContext::compile_programs() {
             test_device->set_defer_host_writes(false);
             test_device->flush_deferred_host_writes();
         }
-    } else { // serial build
+    } else {  // serial build
         for (auto* test_device : devices) {
             build_device(*test_device);
         }
@@ -634,7 +633,11 @@ tt::tt_fabric::fabric_tests::AllocatorPolicies TestContext::size_receiver_rings_
     const uint32_t rings_end = tt::tt_fabric::fabric_tests::sfpu_verify_control_base();
     // Where the rings start: the receiver layout with empty rings.
     const tt::tt_fabric::fabric_tests::ReceiverMemoryMap layout_without_rings(
-        fixture_->get_l1_unreserved_base(), fixture_->get_l1_unreserved_size(), fixture_->get_l1_alignment(), 0, num_configs);
+        fixture_->get_l1_unreserved_base(),
+        fixture_->get_l1_unreserved_size(),
+        fixture_->get_l1_alignment(),
+        0,
+        num_configs);
     const uint32_t rings_base = layout_without_rings.payload_chunks.start;
     TT_FATAL(rings_base < rings_end, "Receiver rings start at {:#x}, past the usable end {:#x}", rings_base, rings_end);
     const uint32_t ring_bytes = ((rings_end - rings_base) / num_configs) & ~uint32_t{63};

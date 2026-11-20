@@ -203,7 +203,10 @@ std::vector<RoutingDirection> mcast_outgoing_directions(
 // ====================================
 
 void FabricConnectionManager::register_client(
-    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type, const ConnectionKey& key, const FabricNodeId& next_hop_dst) {
+    const tt::tt_metal::CoreCoord& core,
+    TestWorkerType worker_type,
+    const ConnectionKey& key,
+    const FabricNodeId& next_hop_dst) {
     auto [it, inserted] = connections_.try_emplace(key);
     auto& conn = it->second;
 
@@ -364,7 +367,8 @@ std::vector<ConnectionKey> FabricConnectionManager::get_connection_keys_for_core
     return {};
 }
 
-size_t FabricConnectionManager::get_connection_count_for_core(const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
+size_t FabricConnectionManager::get_connection_count_for_core(
+    const tt::tt_metal::CoreCoord& core, TestWorkerType worker_type) const {
     auto keys = get_connection_keys_for_core(core, worker_type);
     return keys.size();
 }
@@ -770,7 +774,8 @@ bool TestReceiver::validate_results(std::vector<uint32_t>& data) const {
 // TestSync Implementation
 // ====================================
 
-TestSync::TestSync(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestSync::TestSync(
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {
     // TODO: init mem map?
 }
@@ -814,7 +819,8 @@ bool TestSync::validate_results(std::vector<uint32_t>& /*data*/) const {
 // TestMux Implementation
 // ====================================
 
-TestMux::TestMux(tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
+TestMux::TestMux(
+    tt::tt_metal::CoreCoord logical_core, TestDevice* test_device_ptr, std::optional<std::string_view> kernel_src) :
     TestWorker(logical_core, test_device_ptr, kernel_src) {}
 
 void TestMux::set_config(FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
@@ -950,7 +956,8 @@ void TestDevice::add_sender_sync_config(tt::tt_metal::CoreCoord logical_core, Te
     this->sync_workers_.at(logical_core).add_config(std::move(sync_config));
 }
 
-void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
+void TestDevice::add_receiver_traffic_config(
+    tt::tt_metal::CoreCoord logical_core, const TestTrafficReceiverConfig& config) {
     if (!this->receivers_.contains(logical_core)) {
         this->add_worker(TestWorkerType::RECEIVER, logical_core);
     }
@@ -959,7 +966,10 @@ void TestDevice::add_receiver_traffic_config(tt::tt_metal::CoreCoord logical_cor
 }
 
 void TestDevice::add_mux_worker_config(
-    tt::tt_metal::CoreCoord logical_core, FabricMuxConfig* mux_config, ConnectionKey connection_key, FabricNodeId next_hop_dst) {
+    tt::tt_metal::CoreCoord logical_core,
+    FabricMuxConfig* mux_config,
+    ConnectionKey connection_key,
+    FabricNodeId next_hop_dst) {
     if (!this->muxes_.contains(logical_core)) {
         this->add_worker(TestWorkerType::MUX, logical_core);
     }
@@ -1310,8 +1320,8 @@ void TestDevice::create_sender_kernels() {
 
         check_sender_payload_buffers_fit(sender, *sender_memory_map_);
 
-        // Per config: true when its payloads come from the core's compute engine (sfpu_payload_configs), false when this
-        // kernel fills them. Passed as a runtime flag, so the kernel build doesn't depend on the choice.
+        // Per config: true when its payloads come from the core's compute engine (sfpu_payload_configs), false when
+        // this kernel fills them. Passed as a runtime flag, so the kernel build doesn't depend on the choice.
         const std::vector<bool> sfpu_configs = sfpu_payload_configs(sender, benchmark_mode_, *sender_memory_map_);
         sfpu_coverage_.sender_configs += sfpu_configs.size();
         sfpu_coverage_.generated += std::count(sfpu_configs.begin(), sfpu_configs.end(), true);
@@ -1370,8 +1380,7 @@ void TestDevice::create_sender_kernels() {
 
         // Add sender traffic config args (including credit management info)
         for (size_t i = 0; i < sender.configs_.size(); i++) {
-            auto traffic_config_args =
-                sender.configs_[i].first.get_args(false /* is_sync_config */, sfpu_configs[i]);
+            auto traffic_config_args = sender.configs_[i].first.get_args(false /* is_sync_config */, sfpu_configs[i]);
             local_args.insert(local_args.end(), traffic_config_args.begin(), traffic_config_args.end());
         }
 
@@ -1439,7 +1448,8 @@ uint32_t TestDevice::create_sfpu_payload_generator(
     uint32_t page_tiles = 0;
     for (size_t i = 0; i < sender.configs_.size(); i++) {
         if (sfpu_configs[i]) {
-            page_tiles = std::max(page_tiles, sfpu_payload_tiles(sender.configs_[i].first.parameters.payload_size_bytes));
+            page_tiles =
+                std::max(page_tiles, sfpu_payload_tiles(sender.configs_[i].first.parameters.payload_size_bytes));
         }
     }
     const uint32_t page_bytes = page_tiles * SFPU_TILE_BYTES;
@@ -1458,8 +1468,7 @@ uint32_t TestDevice::create_sfpu_payload_generator(
     sfpu_payload_buffers_.push_back(std::move(ring_buffer));
 
     // Create the circular buffer and place it over the ring buffer
-    tt::tt_metal::CircularBufferConfig ring_config(
-        ring_bytes, {{SFPU_PAYLOAD_CB_INDEX, tt::DataFormat::Int32}});
+    tt::tt_metal::CircularBufferConfig ring_config(ring_bytes, {{SFPU_PAYLOAD_CB_INDEX, tt::DataFormat::Int32}});
     ring_config.set_page_size(SFPU_PAYLOAD_CB_INDEX, page_bytes);
     ring_config.set_globally_allocated_address(*device_ring_buffer);
     tt::tt_metal::CreateCircularBuffer(program_handle_, core, ring_config);
@@ -1488,9 +1497,9 @@ uint32_t TestDevice::create_sfpu_payload_generator(
 
     // One line per generator for post-mortem reads (ttexalens): where the ring and results live, and what the
     // first configs' first pages must hold (word i = seed + i).
-    const auto physical_chip_id = tt::tt_metal::MetalContext::instance()
-                                      .get_control_plane()
-                                      .get_physical_chip_id_from_fabric_node_id(fabric_node_id_);
+    const auto physical_chip_id =
+        tt::tt_metal::MetalContext::instance().get_control_plane().get_physical_chip_id_from_fabric_node_id(
+            fabric_node_id_);
     std::string first_configs;
     for (size_t i = 0; i < std::min<size_t>(sender.configs_.size(), 3); i++) {
         const auto& config = sender.configs_[i].first;
@@ -1585,7 +1594,8 @@ void TestDevice::create_sfpu_payload_verifier(
         auto* device_ring_buffer = ring_buffer->get_device_buffer(coord_);
         sfpu_payload_buffers_.push_back(std::move(ring_buffer));
 
-        tt::tt_metal::CircularBufferConfig data_config(ring_bytes, {{static_cast<uint8_t>(data_cb), tt::DataFormat::Int32}});
+        tt::tt_metal::CircularBufferConfig data_config(
+            ring_bytes, {{static_cast<uint8_t>(data_cb), tt::DataFormat::Int32}});
         data_config.set_page_size(data_cb, payload_bytes);
         data_config.set_globally_allocated_address(*device_ring_buffer);
         tt::tt_metal::CreateCircularBuffer(program_handle_, core, data_config);
@@ -1872,8 +1882,9 @@ void TestDevice::log_sender_core_perf(
     uint32_t aiclk_mhz) const {
     const auto read_slot_cycles = [&words](uint32_t slot) {
         const uint32_t idx = perf_breakdown::PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * slot;
-        return idx + 1 < words.size() ? static_cast<uint64_t>(words[idx]) | (static_cast<uint64_t>(words[idx + 1]) << 32)
-                                      : uint64_t{0};
+        return idx + 1 < words.size()
+                   ? static_cast<uint64_t>(words[idx]) | (static_cast<uint64_t>(words[idx + 1]) << 32)
+                   : uint64_t{0};
     };
     const double cycles_per_ms = aiclk_mhz > 0 ? aiclk_mhz * 1000.0 : 1.0;
 
@@ -1935,7 +1946,8 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
                 perf_collector.add_sender(data.at(core), sender.configs_.size());
             }
             if (collect_perf && perf_breakdown::perf_per_core()) {
-                log_sender_core_perf(core, sender, data.at(core), fixture->get_device_frequency_mhz(this->fabric_node_id_));
+                log_sender_core_perf(
+                    core, sender, data.at(core), fixture->get_device_frequency_mhz(this->fabric_node_id_));
             }
             if (collect_perf && perf_breakdown::hot_detail_period() > 0) {
                 const auto& words = data.at(core);
@@ -1951,7 +1963,8 @@ void TestDevice::validate_results_after_readback(const ValidationReadOps& ops) c
                 }
                 std::vector<perf_breakdown::SchedConfigInfo> sched_configs;
                 for (const auto& [config, connection_keys] : sender.configs_) {
-                    perf_breakdown::SchedConfigInfo info{.conn_load = configs_per_connection.at(connection_keys.front())};
+                    perf_breakdown::SchedConfigInfo info{
+                        .conn_load = configs_per_connection.at(connection_keys.front())};
                     if (config.hops.has_value()) {
                         for (const auto& [direction, hops] : *config.hops) {
                             info.hops += hops;

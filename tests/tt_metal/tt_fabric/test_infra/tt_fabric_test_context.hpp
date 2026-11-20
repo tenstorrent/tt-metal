@@ -244,7 +244,6 @@ private:
 
     void setup_latency_test_workers(TestConfig& config);
 
-
     LatencyResultsManager::LatencyWorkerLocation get_latency_sender_location();
 
     LatencyResultsManager::LatencyWorkerLocation get_latency_receiver_location();

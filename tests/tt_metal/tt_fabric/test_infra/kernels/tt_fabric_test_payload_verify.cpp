@@ -73,13 +73,9 @@ inline void flag_payload_page(uint32_t seed, uint32_t num_words, const PayloadSe
         for (uint32_t t = s; t + 1 < segments->count && segments->end[t] < block_start + 64; t++) {
             const int32_t end = static_cast<int32_t>(segments->end[t] - block_start);
             const uint32_t step = segments->delta[t + 1] - segments->delta[t];
-            v_if (lane_word >= sfpi::vInt(end)) {
-                expected_even += step;
-            }
+            v_if(lane_word >= sfpi::vInt(end)) { expected_even += step; }
             v_endif;
-            v_if (lane_word >= sfpi::vInt(end - 1)) {
-                expected_odd += step;
-            }
+            v_if(lane_word >= sfpi::vInt(end - 1)) { expected_odd += step; }
             v_endif;
         }
         const sfpi::vInt even = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
@@ -91,13 +87,9 @@ inline void flag_payload_page(uint32_t seed, uint32_t num_words, const PayloadSe
             flag |= even ^ expected_even;
             flag |= odd ^ expected_odd;
         } else {
-            v_if (lane_word < sfpi::vInt(words_left)) {
-                flag |= even ^ expected_even;
-            }
+            v_if(lane_word < sfpi::vInt(words_left)) { flag |= even ^ expected_even; }
             v_endif;
-            v_if (lane_word < sfpi::vInt(words_left - 1)) {
-                flag |= odd ^ expected_odd;
-            }
+            v_if(lane_word < sfpi::vInt(words_left - 1)) { flag |= odd ^ expected_odd; }
             v_endif;
         }
     }
@@ -144,7 +136,8 @@ void kernel_main() {
                 copy_tile(data_cb, t, t);
             }
         }
-        MATH((_llk_math_eltwise_unary_sfpu_params_(flag_payload_page, 0, VectorMode::None, seed, num_words, &segments)));
+        MATH(
+            (_llk_math_eltwise_unary_sfpu_params_(flag_payload_page, 0, VectorMode::None, seed, num_words, &segments)));
         tile_regs_commit();
         cb_pop_front(data_cb, 1);
 
