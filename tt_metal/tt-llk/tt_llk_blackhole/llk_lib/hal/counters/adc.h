@@ -170,6 +170,15 @@ inline constexpr std::uint32_t DualXCounterValueMax     = 0x3ffu;  ///< Maximum 
 inline constexpr std::uint32_t SingleXCounterValueMax   = 0xffffu; ///< Maximum SETADC X value without a thread override.
 inline constexpr std::uint32_t SingleYZWCounterValueMax = 0x1fffu; ///< Maximum value stored by a thirteen-bit Y, Z, or W counter.
 
+/** @brief SETADC dimension operand selecting the counter within a channel. */
+enum class Dimension : std::uint32_t
+{
+    X = 0, ///< X counter.
+    Y = 1, ///< Y counter.
+    Z = 2, ///< Z counter.
+    W = 3  ///< W counter.
+};
+
 /** @brief Four counter slots in either the X/Y or Z/W instruction group. */
 class Group
 {
@@ -270,9 +279,9 @@ inline __attribute__((always_inline)) constexpr std::uint32_t single(
     const std::uint8_t clients, const bool zw, const std::size_t index, const std::uint32_t value)
 {
     const auto channel   = static_cast<std::uint32_t>(index / 2);
-    const auto dimension = static_cast<std::uint32_t>((zw ? 2 : 0) + index % 2);
+    const auto dimension = hal::to_underlying(zw ? Dimension::Z : Dimension::X) + static_cast<std::uint32_t>(index % 2);
     // SETADC's top two operand bits select a thread; Y/Z/W storage is narrower still.
-    const auto value_max = dimension == 0 ? SingleXCounterValueMax : SingleYZWCounterValueMax;
+    const auto value_max = dimension == hal::to_underlying(Dimension::X) ? SingleXCounterValueMax : SingleYZWCounterValueMax;
     hal::detail::require(
         value <= value_max && TT_SETADC_VALID(clients, channel, dimension, value), "SETADC value must be in [0, 65535] for X or [0, 8191] for Y/Z/W");
     return TT_OP_SETADC(clients, channel, dimension, value);
@@ -436,7 +445,7 @@ constexpr Sequence plan_group(const std::uint8_t clients, const bool zw, const A
             Sequence with_xx;
             with_xx.append(xx(clients, group));
             const Group ys {{Value {}, group.fields[1], Value {}, group.fields[3]}};
-            with_xx.append(constant_sets(clients, false, ys));
+            with_xx.append(constant_sets(clients, false /*zw*/, ys));
             // Prefer the dedicated dual-X instruction whenever it needs no additional instructions.
             if (with_xx.count <= result.count)
             {
@@ -465,8 +474,8 @@ constexpr Sequence plan(const AddrCounter& descriptor)
     hal::detail::require(is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
     const Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
     const Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
-    auto result = plan_group(descriptor.clients, false, descriptor.action, xy);
-    result.append(plan_group(descriptor.clients, true, descriptor.action, zw));
+    auto result = plan_group(descriptor.clients, false /*zw*/, descriptor.action, xy);
+    result.append(plan_group(descriptor.clients, true /*zw*/, descriptor.action, zw));
     return result;
 }
 
@@ -552,8 +561,8 @@ inline __attribute__((always_inline)) void set(const AddrCounter descriptor)
     hal::detail::require(detail::is_valid(descriptor), "address-counter descriptor requires valid clients, an action, and at least one field");
     const detail::Group xy {{descriptor.channel0.x, descriptor.channel0.y, descriptor.channel1.x, descriptor.channel1.y}};
     const detail::Group zw {{descriptor.channel0.z, descriptor.channel0.w, descriptor.channel1.z, descriptor.channel1.w}};
-    detail::emit_runtime<false>(descriptor.clients, descriptor.action, xy);
-    detail::emit_runtime<true>(descriptor.clients, descriptor.action, zw);
+    detail::emit_runtime<false /*ZW*/>(descriptor.clients, descriptor.action, xy);
+    detail::emit_runtime<true /*ZW*/>(descriptor.clients, descriptor.action, zw);
 }
 
 } // namespace hal::counters::adc
