@@ -44,18 +44,20 @@ void bind_generic_operation(nb::module_& mod) {
 
         Note:
             The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
-            and distribution shape. As for most ops, generic_op merges this label from the labels of all the tensors
-            in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the output
-            sharded along it. Other output tensors keep their labels. The label changes before most of generic_op's
-            checks, so it can change even if the call raises.
+            and distribution shape. As for most ops, each generic_op call merges this label from the labels of all
+            the tensors in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes
+            the output sharded along it. Other output tensors keep their labels. The label changes before the program
+            is compiled and before some of generic_op's checks, so a call that raises can still change it.
 
             If the program places the output's data otherwise, fix the label with
             ``output.update_tensor_topology(topology)``, which moves no data. For the same data on every device
             from a sharded input, save ``topology = output.tensor_topology()`` before the first call that uses the
-            output, ``ttnn.experimental.prepare_generic_op`` included, and pass it back after. For different data on
-            each device from replicated inputs, build the label with
-            ``ttnn.TensorTopology(distribution_shape, placements, mesh_coords)`` and ``ttnn.PlacementShard(dim)``.
-            Fix another output tensor's label the same way if the program changes how its data is placed.
+            output, ``ttnn.experimental.prepare_generic_op`` included, and pass it back after each call. For
+            different data on each device from replicated inputs, take ``t = output.tensor_topology()`` and pass
+            ``ttnn.TensorTopology(t.distribution_shape(), placements, t.mesh_coords())``, where placements holds a
+            ``ttnn.PlacementShard(dim)`` for each mesh axis along which the data differs and a
+            ``ttnn.PlacementReplicate()`` for each other axis. Fix another output tensor's label the same way if the
+            program changes how its data is placed.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
@@ -198,17 +200,21 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
 
         Note:
             The output's tensor topology is a label of how its data is placed across the mesh: its mesh placements
-            and distribution shape. As for most ops, generic_op merges this label from the labels of all the tensors
-            in io_tensors, the output's own included, so a tensor sharded along a mesh axis usually makes the output
-            sharded along it. generic_op and prepare_generic_op change the label before most of their checks, so it
-            can change even if the call raises.
+            and distribution shape. As for most ops, each generic_op or prepare_generic_op call merges this label
+            from the labels of all the tensors in io_tensors, the output's own included, so a tensor sharded along a
+            mesh axis usually makes the output sharded along it. Other tensors in io_tensors keep their labels. The
+            label changes before the program is compiled and before some of the call's checks, such as those of the
+            run args against the spec, so a call that raises can still change it.
 
             If the program places the output's data otherwise, fix the label with
             ``output.update_tensor_topology(topology)``, which moves no data. For the same data on every device
             from a sharded input, save ``topology = output.tensor_topology()`` before the first call that uses the
-            output, ``prepare_generic_op`` included, and pass it back after. For different data on each device from
-            replicated inputs, build the label with
-            ``ttnn.TensorTopology(distribution_shape, placements, mesh_coords)`` and ``ttnn.PlacementShard(dim)``.
+            output, ``prepare_generic_op`` included, and pass it back after each call. For different data on each
+            device from replicated inputs, take ``t = output.tensor_topology()`` and pass
+            ``ttnn.TensorTopology(t.distribution_shape(), placements, t.mesh_coords())``, where placements holds a
+            ``ttnn.PlacementShard(dim)`` for each mesh axis along which the data differs and a
+            ``ttnn.PlacementReplicate()`` for each other axis. Fix another tensor's label the same way if the program
+            changes how its data is placed.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or
