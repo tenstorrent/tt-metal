@@ -23,3 +23,13 @@ inline void fill_reduce_scaler(const Noc& noc, uint32_t cb_id, uint32_t tile_byt
     }
     cb.push_back(1);
 }
+
+inline void fill_ones(const Noc& noc, uint32_t cb_id, uint32_t tile_bytes) {
+    CircularBuffer cb(cb_id);
+    cb.reserve_back(1);
+    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr());
+    for (uint32_t i = 0; i < tile_bytes / sizeof(uint32_t); i++) {
+        tile[i] = BF16_ONE_PAIR;
+    }
+    cb.push_back(1);
+}

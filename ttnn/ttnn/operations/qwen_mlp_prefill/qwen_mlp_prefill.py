@@ -17,7 +17,7 @@ def _allocate_dram(device, rows, columns):
 
 def _startup_addresses(mesh):
     if mesh not in _startup_semaphores:
-        relays = L.RELAY_GRID.core_range_set()
+        relays = L.core_range_set(L.RELAY_CORE_LIST)
         _startup_semaphores[mesh] = [ttnn.create_global_semaphore(mesh, relays, 0) for _ in range(2)]
     return [ttnn.get_global_semaphore_address(semaphore) for semaphore in _startup_semaphores[mesh]]
 

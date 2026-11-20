@@ -29,17 +29,7 @@ struct Rect {
             false);
     }
 
-    void write_each(const Noc& noc, uint32_t src, uint32_t dst, uint32_t bytes, Semaphore<>& valid) const {
-        for (uint32_t x = x_start; x <= x_end; x++) {
-            for (uint32_t y = y_start; y <= y_end; y++) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(src), UnicastEndpoint{}, bytes, {}, {.noc_x = x, .noc_y = y, .addr = dst});
-                valid.up(noc, x, y, 1);
-            }
-        }
-    }
-
-    void signal(const Noc& noc, Semaphore<>& semaphore, uint32_t value) const {
+    void increment(const Noc& noc, Semaphore<>& semaphore, uint32_t value) const {
         for (uint32_t x = x_start; x <= x_end; x++) {
             for (uint32_t y = y_start; y <= y_end; y++) {
                 semaphore.up(noc, x, y, value);

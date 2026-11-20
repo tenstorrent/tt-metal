@@ -15,16 +15,16 @@ void kernel_main() {
     const auto h = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_h")>(), RT_ARG("h_addr"), tile_bytes);
     const auto w_norm = TensorAccessor(TensorAccessorArgs<CT_ARG("ta_w_norm")>(), RT_ARG("w_norm_addr"), tile_bytes);
     CircularBuffer in(CT_ARG("cb_norm_in"));
-    CircularBuffer weight(CT_ARG("cb_norm_weight"));
 
     fill_reduce_scaler(noc, CT_ARG("cb_norm_scaler"), tile_bytes);
-    weight.reserve_back(row_tiles);
+    fill_ones(noc, CT_ARG("cb_norm_ones"), tile_bytes);
+    in.reserve_back(row_tiles);
     for (uint32_t t = 0; t < row_tiles; t++) {
         noc.async_read(
-            w_norm, CoreLocalMem<uint32_t>(weight.get_write_ptr() + t * tile_bytes), tile_bytes, {.page_id = t}, {});
+            w_norm, CoreLocalMem<uint32_t>(in.get_write_ptr() + t * tile_bytes), tile_bytes, {.page_id = t}, {});
     }
     noc.async_read_barrier();
-    weight.push_back(row_tiles);
+    in.push_back(row_tiles);
 
     for (uint32_t m = RT_ARG("index"); m < CT_ARG("rows"); m += CT_ARG("norm_cores")) {
         in.reserve_back(row_tiles);

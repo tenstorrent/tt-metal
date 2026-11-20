@@ -14,33 +14,82 @@ BF16_TILE_BYTES = 2048
 BFP4_TILE_BYTES = 576
 ACT_TILE_BYTES = 1088
 
-NORM_CORES = 4
-NORM_CHUNK_TILES = 8
+CHIPS = 4
+GRID_COLUMNS = 11
+GRID_ROWS = 10
+
+NORM_CORES = 2
 NORM_DEST_TILES = 4
 MCAST_CHUNK_TILES = 16
+N_DEPTH = 4
+N_ROW_TILES = HIDDEN_TILES + 1
 
 A_COLUMNS = 7
-A_ROWS = 10
 A_ACTIVE = 68
+A_COLLECTORS = GRID_ROWS
 A_TILES_PER_CORE = 2
+A_OUT_DEPTH = 8
+GATHER_TILES = A_COLUMNS * A_TILES_PER_CORE
+
 B_FIRST_X = 7
 B_COLUMNS = 4
-B_FIRST_Y = 2
-B_ROWS = 8
+B_ROWS = GRID_ROWS
 B_CORES = B_COLUMNS * B_ROWS
 B_TILES_PER_CORE = HIDDEN_TILES // B_CORES
-K_GROUPS = B_COLUMNS
-K_TILES_PER_B = INTERMEDIATE_TILES // K_GROUPS
-N_TILES_PER_B = HIDDEN_TILES // B_ROWS
-A_PER_K_GROUP = A_ACTIVE // K_GROUPS
-KRED_DEPTH = 3
-FLAG_BYTES = 16
-NORM_Y = 1
-RELAY_Y = 0
+A_DEPTH = 2
 
-assert A_ACTIVE * A_TILES_PER_CORE == INTERMEDIATE_TILES
-assert B_TILES_PER_CORE * K_GROUPS == N_TILES_PER_B
-assert A_PER_K_GROUP * A_TILES_PER_CORE == K_TILES_PER_B
+SEGMENT_BYTES = B_TILES_PER_CORE * BF16_TILE_BYTES
+LANDING_DEPTH = 6
+OWNER_LAG = 3
+MESSAGE_BYTES = 32
+RELAY_SLOT_BYTES = MESSAGE_BYTES + SEGMENT_BYTES
+RELAY_SOURCE_SLOTS = 15
+
+# B column (x - B_FIRST_X) -> group: the output block it computes belongs to chip (chip + group) % CHIPS
+GROUP_OF_COLUMN = [2, 1, 3, 0]
+COLUMN_OF_GROUP = [GROUP_OF_COLUMN.index(group) for group in range(B_COLUMNS)]
+OWNER_GROUP = 0
+
+# group -> (ring direction, hops, relay index) used to send a partial segment to its owner chip
+PARTIAL_ROUTE = {1: (0, 1, 1), 2: (0, 2, 0), 3: (1, 1, 2)}
+RELAY_COUNT = 4
+RELAY_ROW = GRID_ROWS - 1
+FLAG_BYTES = 16
+FLAG_WORDS = 16
+
+# CB_A on the B cores, CB_NORM_OUT on the norm cores and CB_N on the A cores are each the first CB of their cores, so they share an L1 address
+CB_NORM_WEIGHT = 0
+CB_NORM_IN = 1
+CB_N = 2
+CB_NORM_OUT = 8
+CB_NORM_SCALER = 3
+CB_NORM_ONES = 4
+CB_NORM_SUM = 5
+CB_NORM_RSTD = 6
+CB_NORM_STARTUP = 16
+CB_WG = 9
+CB_A_OUT = 10
+CB_A = 11
+CB_WD = 12
+CB_PARTIAL_OWN = 13
+CB_H = 14
+CB_Y = 15
+CB_SEND = 17
+CB_LANDING = 18
+CB_RELAY_SLOTS = 22
+CB_MESSAGE = 23
+CB_GATHER = 24
+
+SEM_N_FREE = 0
+SEM_N_VALID = 0
+SEM_A_FREE = N_DEPTH
+SEM_A_VALID = 0
+SEM_GATHER_VALID = N_DEPTH + A_DEPTH
+SEM_GATHER_FREE = N_DEPTH + 2 * A_DEPTH
+SEM_LAND_READY = 2
+SEM_CREDIT_PARTIAL = 5
+SEM_CREDIT_Y = 6
+SEM_RELAY_FREE = 9
 
 
 @dataclass(frozen=True)
@@ -59,76 +108,30 @@ class Block:
             [ttnn.CoreRange(ttnn.CoreCoord(self.x_start, self.y_start), ttnn.CoreCoord(self.x_end, self.y_end))]
         )
 
-    def logical(self, index):
-        width = self.x_end - self.x_start + 1
-        return self.x_start + index % width, self.y_start + index // width
+
+GRID = Block(0, 0, GRID_COLUMNS - 1, GRID_ROWS - 1)
+B_GRID = Block(B_FIRST_X, 0, B_FIRST_X + B_COLUMNS - 1, GRID_ROWS - 1)
+NORM_CORE_LIST = [(0, 0), (1, 0)]
+A_CORE_LIST = [(x, y) for y in range(GRID_ROWS) for x in range(A_COLUMNS) if (x, y) not in NORM_CORE_LIST]
+RELAY_CORE_LIST = [(B_FIRST_X + column, RELAY_ROW) for column in range(RELAY_COUNT)]
+
+assert len(A_CORE_LIST) == A_ACTIVE
+assert A_ACTIVE * A_TILES_PER_CORE == INTERMEDIATE_TILES
+assert B_TILES_PER_CORE * B_CORES == HIDDEN_TILES
+assert NORM_CORES == len(NORM_CORE_LIST)
 
 
-A_GRID = Block(0, 0, A_COLUMNS - 1, A_ROWS - 1)
+def core_range_set(cores):
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in cores])
 
 
-def a_core(index):
-    return index // A_ROWS, index % A_ROWS
+def a_row_cores(row):
+    return [core for core in A_CORE_LIST if core[1] == row]
 
 
-def a_active_cores():
-    full_columns = A_ACTIVE // A_ROWS
-    return ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(full_columns - 1, A_ROWS - 1)),
-            ttnn.CoreRange(ttnn.CoreCoord(full_columns, 0), ttnn.CoreCoord(full_columns, A_ACTIVE % A_ROWS - 1)),
-        ]
-    )
+def b_core(group, row):
+    return B_FIRST_X + COLUMN_OF_GROUP[group], row
 
 
-B_GRID = Block(B_FIRST_X, B_FIRST_Y, B_FIRST_X + B_COLUMNS - 1, B_FIRST_Y + B_ROWS - 1)
-NORM_GRID = Block(B_FIRST_X, NORM_Y, B_FIRST_X + NORM_CORES - 1, NORM_Y)
-RELAY_COUNT = 4
-RELAY_GRID = Block(B_FIRST_X, RELAY_Y, B_FIRST_X + RELAY_COUNT - 1, RELAY_Y)
-
-CB_NORM_WEIGHT = 0
-CB_NORM_IN = 1
-CB_NORM_OUT = 2
-CB_NORM_SCALER = 3
-CB_NORM_SQUARES = 4
-CB_NORM_SUM = 5
-CB_NORM_RSTD = 6
-CB_NORM_SCALED = 7
-CB_NORM_STARTUP = 16
-CB_N = 8
-CB_WG = 9
-CB_A_OUT = 10
-CB_A = 11
-CB_WD = 12
-CB_PARTIAL_OWN = 13
-CB_H = 14
-CB_Y = 15
-CB_SEND = 17
-CB_RS = 18
-CB_AG = 21
-CB_RELAY_SLOTS = 22
-CB_MESSAGE = 23
-CB_KOWN = 24
-CB_KOUT = 25
-CB_KRED = 26
-CB_FLAGS = 29
-
-CHIPS = 4
-RING_DEPTH = 3
-OWNER_LAG = 2
-REDUCE_LAG = 0
-RELAY_SOURCES = 16
-SEGMENT_BYTES = B_TILES_PER_CORE * BF16_TILE_BYTES
-MESSAGE_BYTES = 32
-RELAY_SLOT_BYTES = MESSAGE_BYTES + SEGMENT_BYTES
-
-N_DEPTH = 4
-SEM_N_FREE = 0
-SEM_N_VALID = 0
-SEM_A_FREE = N_DEPTH
-SEM_A_VALID = 0
-SEM_RS_READY = 2
-SEM_AG_READY = 5
-SEM_CREDIT_RS = 8
-SEM_CREDIT_AG = 11
-SEM_RELAY_FREE = 14
+def peer_index(peer, chip):
+    return ((peer - chip) % CHIPS) - 1

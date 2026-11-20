@@ -26,21 +26,3 @@ constexpr uint32_t MESSAGE_BYTES = sizeof(Message);
 
 // Index of chip `peer` among the three other chips, as seen from chip `self`.
 inline uint32_t peer_index(uint32_t peer, uint32_t self) { return ((peer - self) & (RING_CHIPS - 1)) - 1; }
-
-struct RingRoute {
-    uint32_t relay;
-    uint32_t hops;
-};
-
-// Opposite-chip traffic is spread over both directions by the position of the B core, so that every
-// (core, chip pair) stream stays on one path and arrives in order.
-inline RingRoute ring_route(uint32_t from, uint32_t to, uint32_t core) {
-    const uint32_t distance = (to - from) & (RING_CHIPS - 1);
-    if (distance == 1) {
-        return {0, 1};
-    }
-    if (distance == RING_CHIPS - 1) {
-        return {1, 1};
-    }
-    return {(core >> 1) & 1, 2};
-}

@@ -9,16 +9,19 @@
 void kernel_main() {
     Noc noc;
     constexpr uint32_t a_tiles = CT_ARG("a_tiles_per_core");
-    constexpr uint32_t a_row_bytes = CT_ARG("k_tiles_per_b") * CT_ARG("tile_bytes_act");
-    constexpr uint32_t b_cores = CT_ARG("b_rows");
-    const uint32_t k_group = RT_ARG("index") / CT_ARG("a_per_k_group");
-    const uint32_t b_x = CT_ARG("b_grid_x_start") + k_group;
-    const Rect b_column{b_x, CT_ARG("b_grid_y_start"), b_x, CT_ARG("b_grid_y_end"), CT_ARG("b_rows")};
-    const uint32_t b_slots = arena_base(CT_ARG("cb_n"));
-    const uint32_t a_offset = (RT_ARG("index") % CT_ARG("a_per_k_group")) * a_tiles * CT_ARG("tile_bytes_act");
+    constexpr uint32_t tile_bytes = CT_ARG("tile_bytes_act");
+    constexpr uint32_t a_row_bytes = CT_ARG("i_tiles") * tile_bytes;
+    constexpr uint32_t depth = CT_ARG("a_depth");
+    constexpr uint32_t own_bytes = a_tiles * tile_bytes;
+    constexpr uint32_t gather_bytes = CT_ARG("gather_tiles") * tile_bytes;
+    const Rect b_grid = RECT("b_grid");
+    const Rect row_sources{
+        RT_ARG("row_x_start"), RT_ARG("row_y"), RT_ARG("collector_x") - 1, RT_ARG("row_y"), RT_ARG("row_cores") - 1};
+    const uint32_t row_cores = RT_ARG("row_cores");
+    const bool collector = RT_ARG("is_collector") == 1;
+    const uint32_t gather = arena_base(CT_ARG("cb_gather"));
+    const uint32_t b_slots = arena_base(CT_ARG("cb_n")) + RT_ARG("row_first") * own_bytes;
     CircularBuffer a_out(CT_ARG("cb_a_out"));
-    Semaphore<> a_free[2] = {Semaphore<>(CT_ARG("sem_a_free")), Semaphore<>(CT_ARG("sem_a_free") + 1)};
-    Semaphore<> a_valid[2] = {Semaphore<>(CT_ARG("sem_a_valid")), Semaphore<>(CT_ARG("sem_a_valid") + 1)};
 
     const auto w_gate_up = TensorAccessor(
         TensorAccessorArgs<CT_ARG("ta_w_gate_up")>(), RT_ARG("w_gate_up_addr"), CT_ARG("tile_bytes_bfp4"));
@@ -34,19 +37,45 @@ void kernel_main() {
         2 * a_tiles);
 
     for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
-        const uint32_t slot = m & 1;
+        const uint32_t slot = m % depth;
+        const uint32_t use = m / depth;
+        const uint32_t destination = gather + slot * gather_bytes + RT_ARG("position") * own_bytes;
         a_out.wait_front(a_tiles);
 
-        a_free[slot].wait_min(b_cores * (m / 2 + 1));
+        if (!collector) {
+            Semaphore<> gather_free(CT_ARG("sem_gather_free") + slot);
+            gather_free.wait_min(use);
+            noc.async_write(
+                CoreLocalMem<uint32_t>(a_out.get_read_ptr()),
+                UnicastEndpoint{},
+                own_bytes,
+                {},
+                {.noc_x = RT_ARG("collector_x"), .noc_y = RT_ARG("row_y"), .addr = destination});
+            noc.async_writes_flushed();
+            Semaphore<>(CT_ARG("sem_gather_valid") + slot).up(noc, RT_ARG("collector_x"), RT_ARG("row_y"), 1);
+        } else {
+            noc.async_write(
+                CoreLocalMem<uint32_t>(a_out.get_read_ptr()),
+                UnicastEndpoint{},
+                own_bytes,
+                {},
+                {.noc_x = RT_ARG("collector_x"), .noc_y = RT_ARG("row_y"), .addr = destination});
+            Semaphore<>(CT_ARG("sem_gather_valid") + slot).wait_min((row_cores - 1) * (use + 1));
+            Semaphore<>(CT_ARG("sem_a_free") + slot).wait_min(CT_ARG("b_cores") * (use + 1));
 
-        b_column.write_each(
-            noc,
-            a_out.get_read_ptr(),
-            b_slots + slot * a_row_bytes + a_offset,
-            a_tiles * CT_ARG("tile_bytes_act"),
-            a_valid[slot]);
-        noc.async_write_barrier();
+            noc.async_writes_flushed();
+            b_grid.write(noc, gather + slot * gather_bytes, b_slots + slot * a_row_bytes, row_cores * own_bytes);
+            noc.async_writes_flushed();
 
+            Semaphore<> a_valid(CT_ARG("sem_a_valid") + slot);
+            b_grid.increment(noc, a_valid, 1);
+
+            noc.async_write_barrier();
+
+            Semaphore<> gather_free(CT_ARG("sem_gather_free") + slot);
+            row_sources.increment(noc, gather_free, 1);
+        }
         a_out.pop_front(a_tiles);
     }
+    noc.async_atomic_barrier();
 }

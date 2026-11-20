@@ -15,8 +15,6 @@ void kernel_main() {
     constexpr uint32_t slot_bytes = CT_ARG("relay_slot_bytes");
     constexpr uint32_t headers = 4;
     const uint32_t slots = arena_base(CT_ARG("cb_relay_slots"));
-    const uint32_t link = CT_ARG("relay_link");
-    const uint32_t direction = CT_ARG("relay_direction");
 
     size_t fabric_arg = get_named_compile_time_arg_val("rt_fabric");
     auto fabric = FabricConnectionManager::build_from_args<
@@ -88,12 +86,9 @@ void kernel_main() {
                 noc_async_writes_flushed();
             }
             consumed[source]++;
-            const uint32_t core = 2 * source + link;
-            Semaphore<>(CT_ARG("sem_relay_free") + direction)
-                .up(noc,
-                    CT_ARG("b_grid_x_start") + core % CT_ARG("b_width"),
-                    CT_ARG("b_grid_y_start") + core / CT_ARG("b_width"),
-                    1);
+            const uint32_t table = get_named_compile_time_arg_val("rt_sources") + 3 * source;
+            Semaphore<>(CT_ARG("sem_relay_free") + get_arg_val<uint32_t>(table + 2))
+                .up(noc, get_arg_val<uint32_t>(table), get_arg_val<uint32_t>(table + 1), 1);
         }
     }
     fabric.close();
