@@ -10,12 +10,16 @@ add_executable(
 
 target_include_directories(generate_noc_latencies PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-target_link_libraries(
+# yaml-cpp is a static library that is already inside libtt_metal.so / libtt-umd.so and exported from them. Linking it
+# again would embed a second copy in this executable, which ASan reports as an ODR violation, so take only its headers.
+target_include_directories(
     generate_noc_latencies
+    SYSTEM
     PRIVATE
-        yaml-cpp::yaml-cpp
-        TT::Metalium
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
 )
+
+target_link_libraries(generate_noc_latencies PRIVATE TT::Metalium)
 
 set_target_properties(
     generate_noc_latencies

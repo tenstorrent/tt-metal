@@ -15,7 +15,6 @@ target_link_libraries(
         gmock_main
         enchantum::enchantum
         protobuf::libprotobuf
-        yaml-cpp::yaml-cpp
 )
 
 # Make sure protobuf files are generated before compiling
@@ -67,7 +66,6 @@ target_link_libraries(
         test_common_libs
         tt_metal
         protobuf::libprotobuf
-        yaml-cpp::yaml-cpp
         enchantum::enchantum
 )
 
@@ -154,12 +152,20 @@ target_include_directories(
         "$<TARGET_PROPERTY:TT::Metalium,INCLUDE_DIRECTORIES>"
 )
 
+# yaml-cpp is a static library that is already inside libtt_metal.so / libtt-umd.so and exported from them. Linking it
+# again would embed a second copy in this executable, which ASan reports as an ODR violation, so take only its headers.
+target_include_directories(
+    test_generate_rank_bindings
+    SYSTEM
+    PRIVATE
+        $<TARGET_PROPERTY:yaml-cpp::yaml-cpp,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
 target_link_libraries(
     test_generate_rank_bindings
     PRIVATE
         test_common_libs
         tt_metal
-        yaml-cpp::yaml-cpp
         gmock_main
         enchantum::enchantum
 )
