@@ -1881,7 +1881,8 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
 // Program-cache hits on fresh tensors. A launch on new tensors of the same shapes reuses both programs (dQ and dK/dV),
 // so its gradients must match a cache miss on the same tensors bit for bit, and the earlier launch's gradients must
 // stay as they were. One case per work split, including causal attention with more rows than cores but fewer pairs,
-// where the light/heavy pairs reach only part of the grid.
+// where the light/heavy pairs reach only part of the grid, and grouped-query attention, where dK/dV splits fewer rows
+// than dQ.
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -1896,20 +1897,26 @@ struct SdpaBwCacheInputs {
     std::optional<ttnn::Tensor> mask;
 };
 
-// Random Q, K, V and dO, with the forward output and intermediates the backward needs.
+// Random Q, K, V and dO, with the forward output and intermediates the backward needs. K and V have `kv_heads` heads.
 SdpaBwCacheInputs make_sdpa_bw_cache_inputs(
-    uint32_t B, uint32_t H, uint32_t S, uint32_t D, ttml::metal::AttentionMaskType mask_type, uint32_t seed) {
+    uint32_t B,
+    uint32_t H,
+    uint32_t kv_heads,
+    uint32_t S,
+    uint32_t D,
+    ttml::metal::AttentionMaskType mask_type,
+    uint32_t seed) {
     auto* device = &ttml::autograd::ctx().get_device();
-    auto random_tensor = [&](uint32_t tensor_seed) {
+    auto random_tensor = [&](uint32_t heads, uint32_t tensor_seed) {
         return ttml::core::from_xtensor(
             ttml::test_utils::make_uniform_xarray<float>(
-                std::array<std::size_t, 4>{B, H, S, D}, -1.0F, 1.0F, tensor_seed),
+                std::array<std::size_t, 4>{B, heads, S, D}, -1.0F, 1.0F, tensor_seed),
             device);
     };
-    auto query = random_tensor(seed);
-    auto key = random_tensor(seed + 1U);
-    auto value = random_tensor(seed + 2U);
-    auto grad_output = random_tensor(seed + 3U);
+    auto query = random_tensor(H, seed);
+    auto key = random_tensor(kv_heads, seed + 1U);
+    auto value = random_tensor(kv_heads, seed + 2U);
+    auto grad_output = random_tensor(H, seed + 3U);
     std::optional<ttnn::Tensor> mask;
     if (mask_type == ttml::metal::AttentionMaskType::Arbitrary) {
         // 1 keeps a score and 0 masks it; the diagonal is kept so that no row is fully masked.
@@ -1939,17 +1946,20 @@ std::vector<ttnn::Tensor> run_sdpa_bw_gradients(
     return {grad_query, grad_key, grad_value};
 }
 
+// K and V have as many heads as Q unless `kv_heads` gives fewer (grouped-query attention).
 void expect_cache_hit_on_fresh_tensors_matches_miss(
     uint32_t B,
     uint32_t H,
     uint32_t S,
     uint32_t D,
     ttml::metal::AttentionMaskType mask_type,
-    const std::string& label) {
+    const std::string& label,
+    std::optional<uint32_t> kv_heads = std::nullopt) {
     using ttml::test_utils::CacheExpectation;
     auto& device = ttml::test_utils::device_with_empty_program_cache();
-    const auto first_inputs = make_sdpa_bw_cache_inputs(B, H, S, D, mask_type, /*seed=*/31U);
-    const auto second_inputs = make_sdpa_bw_cache_inputs(B, H, S, D, mask_type, /*seed=*/41U);
+    const uint32_t num_kv_heads = kv_heads.value_or(H);
+    const auto first_inputs = make_sdpa_bw_cache_inputs(B, H, num_kv_heads, S, D, mask_type, /*seed=*/31U);
+    const auto second_inputs = make_sdpa_bw_cache_inputs(B, H, num_kv_heads, S, D, mask_type, /*seed=*/41U);
 
     auto entries = device.num_program_cache_entries();
     const auto first = run_sdpa_bw_gradients(first_inputs, mask_type);
@@ -2032,4 +2042,10 @@ TEST_F(SDPABackwardTest, ProgramCacheHit_ArbitraryMask) {
         64U,
         ttml::metal::AttentionMaskType::Arbitrary,
         "arbitrary mask");
+}
+
+TEST_F(SDPABackwardTest, ProgramCacheHit_GroupedQueryAttention) {
+    // 8 query heads share 2 K/V heads, two tile rows each: dQ splits 16 rows over 16 cores and dK/dV 4 rows over 4.
+    expect_cache_hit_on_fresh_tensors_matches_miss(
+        1U, 8U, 64U, 64U, ttml::metal::AttentionMaskType::None, "grouped-query attention", /*kv_heads=*/2U);
 }

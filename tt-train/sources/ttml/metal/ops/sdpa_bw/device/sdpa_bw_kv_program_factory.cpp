@@ -587,12 +587,15 @@ void SDPABackwardKVProgramFactory::override_runtime_arguments(
     const auto* grad_key_buffer = grad_key.buffer();
     const auto* grad_value_buffer = grad_value.buffer();
 
+    // The work is K/V rows, as in create_descriptor(): one per K/V head and tile row of the sequence. Grouped-query
+    // attention has fewer of them than query rows.
     const auto [qB, qNH, qS, qEmbd] = tensor_args.query.padded_shape().to_array_4D();
+    const auto [kB, kNH, kS, kEmbd] = tensor_args.key.padded_shape().to_array_4D();
     const auto grid = tensor_args.query.device()->compute_with_storage_grid_size();
     const RowSplit row_split = choose_row_split(
         operation_attributes.mask_type,
         qS / tt::constants::TILE_HEIGHT,
-        qB * qNH,
+        kB * kNH,
         static_cast<uint32_t>(grid.x * grid.y));
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernel);
