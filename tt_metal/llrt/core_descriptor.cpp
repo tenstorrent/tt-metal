@@ -16,10 +16,8 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/core_coord.hpp"
-#include "hal.hpp"
-#include "hal_types.hpp"
+#include "llrt/hal.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
@@ -246,7 +244,14 @@ const tt::core_descriptor_t& MetalEnvImpl::get_core_descriptor_config(
     // reserved (same effective worker pool as slow dispatch).
     // A worker-grid override (TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE) is honoured on the dispatch-engine
     // path too, falling through to the descriptor-derived grid below.
-    if ((!fast_dispatch && !get_rtoptions().is_simulator_or_emulated()) ||
+    // In slow dispatch, silicon and the Wormhole/Blackhole simulator get the full grid; the emulator and other
+    // simulators keep the descriptor grid. The simulator keeps a worker-grid override.
+    const bool full_grid_target =
+        !get_rtoptions().is_simulator_or_emulated() ||
+        (get_rtoptions().get_simulator_enabled() && !get_rtoptions().is_core_grid_override_todeprecate() &&
+         (arch == tt::ARCH::WORMHOLE_B0 || arch == tt::ARCH::BLACKHOLE));
+    const bool slow_dispatch_full_grid = !fast_dispatch && full_grid_target;
+    if (slow_dispatch_full_grid ||
         (quasar_dispatch_engine_fd && !get_rtoptions().is_core_grid_override_todeprecate())) {
         compute_grid_size = get_cluster().get_soc_desc(device_id).get_grid_size(CoreType::TENSIX);
         if (quasar_dispatch_engine_fd) {

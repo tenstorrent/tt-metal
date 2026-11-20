@@ -181,4 +181,5 @@ enum class SfpuType {
     expm1_cw,
     softcap,
     situ_glu,
+    quick_gelu,
 };

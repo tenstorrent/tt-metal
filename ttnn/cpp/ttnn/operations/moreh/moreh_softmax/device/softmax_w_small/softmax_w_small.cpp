@@ -10,14 +10,14 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <ttnn/metal_v2_artifacts.hpp>
 #include <cstdint>
 
 namespace ttnn::operations::moreh::moreh_softmax {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 ttnn::device_operation::ProgramArtifacts MorehSoftmaxOperation::MorehSoftmaxWSmallFactory::create_program_artifacts(
     const operation_attributes_t& operation_attributes,

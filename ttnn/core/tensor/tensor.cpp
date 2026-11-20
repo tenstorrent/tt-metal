@@ -40,6 +40,7 @@
 #include <memory>
 #include <utility>
 #include <atomic>
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn {
 
@@ -80,7 +81,7 @@ Tensor::Tensor(
         std::move(buffer),
         TensorSpec(
             logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 dtype,
                 tt::tt_metal::PageConfig(layout, tile),
                 tt::tt_metal::MemoryConfig{},
@@ -349,6 +350,13 @@ Tensor Tensor::to_device(
 }
 
 Tensor Tensor::cpu(bool blocking, std::optional<QueueId> cq_id) const { return ttnn::cpu(*this, blocking, cq_id); }
+
+std::vector<Tensor> Tensor::cpu_shards(
+    const std::vector<tt::tt_metal::distributed::MeshCoordinate>& coords,
+    bool blocking,
+    std::optional<QueueId> cq_id) const {
+    return ttnn::cpu_shards(*this, coords, blocking, cq_id);
+}
 
 Tensor Tensor::extract_shard(const CoreCoord& core) const {
     ZoneScoped;
