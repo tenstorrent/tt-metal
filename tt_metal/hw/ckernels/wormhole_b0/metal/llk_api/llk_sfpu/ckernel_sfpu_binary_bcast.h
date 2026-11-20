@@ -226,6 +226,13 @@ constexpr std::uint32_t COL_GROUP_OFFSETS[4] = {
 // Helpers
 // ============================================================================
 
+// RWC.Dst += one face (FACE1_BASE -> FACE2_BASE), as two INCRWC steps.
+inline void _advance_rwc_dst_one_face_() {
+    static_assert(FACE2_BASE - FACE1_BASE == 2 * INCRWC_FACE_HALF_STEP, "two INCRWCs span one face");
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+}
+
 // Build LREG_MASK = {~0, 0, 0, 0, 0, 0, 0, 0} repeated across all 4 sub-rows
 // of the register. LReg[15] contains 2*lane_id, so left-shifting it by 28
 // leaves zero only for SFPU col 0 in each 8-lane sub-vector; those lanes get
@@ -882,8 +889,7 @@ inline void _calculate_sfpu_normalize_bcast_scalar_full_tile_(
 // is recorded into the replay buffer once per full-tile call - executing
 // band 0 as it records - and replayed for the remaining 7 bands. The band
 // loop then costs the RISC one REPLAY per band instead of 8 encoded `TT_`
-// instructions, which is what made this path RISC-bound (275 RISC vs 124
-// SFPU instructions per tile).
+// instructions.
 //
 // The recording is per call rather than per init because the init is shared
 // across ADD / SUB / MUL (`sfpu_bcast_row_init`) and the body depends on the
@@ -1032,9 +1038,7 @@ inline void _calculate_sfpu_binary_bcast_row_full_tile_(
     }
 
     // RWC.Dst: FACE1_BASE -> FACE2_BASE.
-    static_assert(FACE2_BASE - FACE1_BASE == 2 * INCRWC_FACE_HALF_STEP, "two INCRWCs span one face");
-    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
-    TTI_INCRWC(/*rwc_cr*/ 0, /*rwc_d*/ INCRWC_FACE_HALF_STEP, /*rwc_b*/ 0, /*rwc_a*/ 0);
+    _advance_rwc_dst_one_face_();
 
     // Lower half (face 2/3): bands 0..3 replay.
     for (std::uint32_t band = 0; band < NUM_ROW_BANDS_PER_FACE_HALF; band++) {
