@@ -82,26 +82,6 @@ void validate_weight_pages(const UnifiedRoutedExpertFfnParams& op, const Unified
         op.weights_n_down,
         op.weights_k_gate_up,
         op.weights_k_down);
-    if (op.weights_lo_k_stride > 0) {
-        // Two-part weights: a weights_dtype tile plus a BFP2 tile per weight tile, the BFP2 tile read into a
-        // weights_dtype-sized slot (the compute unpacks it as BFP2), so it must fit one.
-        const uint32_t lo_bytes = tt::tile_size(tt::DataFormat::Bfp2_b);
-        const uint32_t dram_align = tt::tt_metal::hal::get_dram_alignment();
-        TT_FATAL(
-            op.weights_dtype == tt::tt_metal::DataType::BFLOAT4_B,
-            "two-part weights (weights_lo_k_stride) need weights_dtype BFLOAT4_B, got {}",
-            op.weights_dtype);
-        TT_FATAL(
-            op.weights_lo_k_stride >= lo_bytes && op.weights_lo_k_stride % dram_align == 0 &&
-                op.gate_up_lo_delta % dram_align == 0 && op.down_lo_delta % dram_align == 0,
-            "weights_lo_k_stride ({}) must be >= the BFP2 tile size ({} B) and, like gate_up_lo_delta ({}) and "
-            "down_lo_delta ({}), a multiple of the DRAM alignment ({} B)",
-            op.weights_lo_k_stride,
-            lo_bytes,
-            op.gate_up_lo_delta,
-            op.down_lo_delta,
-            dram_align);
-    }
     TT_FATAL(
         op.weights_dtype == tt::tt_metal::DataType::BFLOAT4_B ||
             op.weights_dtype == tt::tt_metal::DataType::BFLOAT8_B ||
@@ -615,10 +595,7 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down,
     uint32_t weights_k_gate_up,
     uint32_t weights_k_down,
-    tt::tt_metal::DataType weights_dtype,
-    uint32_t weights_lo_k_stride,
-    uint32_t gate_up_lo_delta,
-    uint32_t down_lo_delta) {
+    tt::tt_metal::DataType weights_dtype) {
     using OperationType = ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::
         UnifiedRoutedExpertFfnDeviceOperation;
     // Checked here, not in validate_on_program_cache_miss, so it also runs on cache hits: the reader uses
@@ -649,10 +626,7 @@ ttnn::Tensor unified_routed_expert_moe(
             .weights_n_down = weights_n_down,
             .weights_k_gate_up = weights_k_gate_up,
             .weights_k_down = weights_k_down,
-            .weights_dtype = weights_dtype,
-            .weights_lo_k_stride = weights_lo_k_stride,
-            .gate_up_lo_delta = gate_up_lo_delta,
-            .down_lo_delta = down_lo_delta},
+            .weights_dtype = weights_dtype},
         OperationType::tensor_args_t{
             .x = x,
             .gate_projs = gate_projs,

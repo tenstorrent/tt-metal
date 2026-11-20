@@ -114,14 +114,7 @@ void kernel_main() {
     // truncating here would drain one subblock per row too few and deadlock against compute.
     constexpr uint32_t d_in1_num_subblocks_N = (per_core_N_d + d_out_subblock_w - 1) / d_out_subblock_w;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
-    // WEIGHT_LO (two-part weights): each in1 block holds the bfloat4_b K rows, then their BFP2 parts (the host's
-    // d_in1_block_num_tiles already counts both).
-#ifdef WEIGHT_LO
-    constexpr uint32_t kWeightParts = 2;
-#else
-    constexpr uint32_t kWeightParts = 1;
-#endif
-    constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu * kWeightParts;
+    constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
 
     CircularBuffer cb_out_buf(cb_out);
     CircularBuffer cb_counts_scratch_buf(cb_counts_scratch);
@@ -201,13 +194,6 @@ void kernel_main() {
     constexpr uint32_t d_k_stride = get_compile_time_arg_val(pages_ct_offset + 1);
     constexpr uint32_t cb_weight_pages = get_compile_time_arg_val(pages_ct_offset + 2);
     constexpr auto pages_args = TensorAccessorArgs<pages_ct_offset + 3>();
-#ifdef WEIGHT_LO
-    constexpr uint32_t lo_ct_offset = pages_args.next_compile_time_args_offset();
-    constexpr uint32_t gu_lo_delta = get_compile_time_arg_val(lo_ct_offset + 0);
-    constexpr uint32_t d_lo_delta = get_compile_time_arg_val(lo_ct_offset + 1);
-    constexpr uint32_t lo_k_stride = get_compile_time_arg_val(lo_ct_offset + 2);
-    constexpr uint32_t lo_tile_bytes = get_compile_time_arg_val(lo_ct_offset + 3);
-#endif
     const auto gu_src_acc = TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 0));
     const auto d_src_acc = TensorAccessor(down_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 1));
     const auto pages_acc = TensorAccessor(pages_args, get_common_arg_val<uint32_t>(COMMON_PAGES + 2));
@@ -312,10 +298,6 @@ void kernel_main() {
         }
         const auto up_acc = unified_routed_expert_ffn::make_weight_table(
             gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, gu_k_stride);
-#ifdef WEIGHT_LO
-        const auto up_lo_acc = unified_routed_expert_ffn::make_weight_table(
-            gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, lo_k_stride, gu_lo_delta, lo_tile_bytes);
-#endif
 #else
         const auto up_acc =
             TensorAccessor(up_args, get_common_arg_val<uint32_t>(COMMON_UP + local_expert_id), up_tile_bytes);
@@ -376,20 +358,6 @@ void kernel_main() {
                                 up_tile_bytes);
                             l1_w_up += per_core_N_gu * up_tile_bytes;
                         }
-#ifdef WEIGHT_LO
-                        for (uint32_t k = 0; k < in0_block_w_gu; ++k) {  // the BFP2 parts: rows in0_block_w_gu + k
-                            GuRuns::read(
-                                noc_up,
-                                up_lo_acc,
-                                kb * in0_block_w_gu + k,
-                                N_gate_tiles_full,
-                                up_col0,
-                                up_col_end,
-                                l1_w_up,
-                                up_tile_bytes);
-                            l1_w_up += per_core_N_gu * up_tile_bytes;
-                        }
-#endif
                         noc_up.async_read_barrier();
                         up_done_sem.set(up_seq);
 
@@ -467,10 +435,6 @@ void kernel_main() {
 #ifdef WEIGHT_PAGES
                     const auto down_acc = unified_routed_expert_ffn::make_weight_table(
                         d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
-#ifdef WEIGHT_LO
-                    const auto down_lo_acc = unified_routed_expert_ffn::make_weight_table(
-                        d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, lo_k_stride, d_lo_delta, lo_tile_bytes);
-#endif
 #else
                     const auto down_acc = TensorAccessor(
                         down_args, get_common_arg_val<uint32_t>(COMMON_DOWN + local_expert_id), down_tile_bytes);
@@ -485,8 +449,8 @@ void kernel_main() {
                     for (uint32_t kb = 0; kb < num_blocks_d; ++kb) {
                         ++down_seq;
                         down_go_sem.wait_min(down_seq);
-                        const uint32_t down_slot = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes;
-                        uint32_t l1_w = down_slot + down_split_k * per_core_N_d * down_tile_bytes;
+                        uint32_t l1_w = down_cb_base + (down_blk % kDownNumSlots) * down_slot_bytes +
+                                        down_split_k * per_core_N_d * down_tile_bytes;
                         ++down_blk;
                         // Both OOB directions left UNWRITTEN, matching the reader: the compute
                         // bounds its down K-loop by real_k_tiles and the writer's col guard drops
@@ -503,17 +467,6 @@ void kernel_main() {
                                     down_col_end,
                                     l1_w,
                                     down_tile_bytes);
-#ifdef WEIGHT_LO
-                                DRuns::read(  // its BFP2 part: row in0_block_w_d + k of the block
-                                    noc_up,
-                                    down_lo_acc,
-                                    row,
-                                    N_down_tiles_full,
-                                    down_col0,
-                                    down_col_end,
-                                    down_slot + (in0_block_w_d + k) * per_core_N_d * down_tile_bytes,
-                                    down_tile_bytes);
-#endif
                             }
                             l1_w += per_core_N_d * down_tile_bytes;
                         }

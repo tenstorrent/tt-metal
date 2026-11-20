@@ -155,14 +155,7 @@ void kernel_main() {
     // UP_SPLIT iff the reader multicasts up but does not read it from DRAM.
     constexpr bool up_split = (reader_mcasts_up != 0) && (reader_reads_up == 0);
 
-    // WEIGHT_LO (two-part weights): every in1 block holds its K rows of bfloat4_b tiles, then the same K rows' BFP2
-    // parts (each in a bfloat4_b-sized slot), so the weight blocks are twice as many tiles.
-#ifdef WEIGHT_LO
-    constexpr uint32_t kWeightParts = 2;
-#else
-    constexpr uint32_t kWeightParts = 1;
-#endif
-    constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu * kWeightParts;
+    constexpr uint32_t g_in1_block_num_tiles = per_core_N_gu * in0_block_w_gu;
     // CB block sizes are the compile-time MAX and never vary with the runtime
     // per_core_M. Only the DRAM reads and the multicast payload below shrink to
     // the live rows (#50885); the CB pointers always advance by a full max block.
@@ -175,7 +168,7 @@ void kernel_main() {
     // the reader pushes the full block (filling only per_core_M runtime rows via
     // the activated mcast; the rest are MAC-skipped downstream).
     constexpr uint32_t d_in0_block_num_tiles = per_core_M_max * in0_block_w_d;
-    constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d * kWeightParts;
+    constexpr uint32_t d_in1_block_num_tiles = per_core_N_d * in0_block_w_d;
     constexpr uint32_t num_blocks_gu = K_gate_tiles / in0_block_w_gu;
     constexpr uint32_t num_blocks_d = K_down_tiles_padded / in0_block_w_d;
 
@@ -254,17 +247,7 @@ void kernel_main() {
     constexpr uint32_t d_k_stride = get_compile_time_arg_val(pages_ct_offset + 1);
     constexpr uint32_t cb_weight_pages = get_compile_time_arg_val(pages_ct_offset + 2);
     constexpr auto pages_args = TensorAccessorArgs<pages_ct_offset + 3>();
-#ifdef WEIGHT_LO
-    // The BFP2 parts: bytes from a column's tile 0 to its BFP2 tile 0 (gate/up, down), their k stride and tile size.
-    constexpr uint32_t lo_ct_offset = pages_args.next_compile_time_args_offset();
-    constexpr uint32_t gu_lo_delta = get_compile_time_arg_val(lo_ct_offset + 0);
-    constexpr uint32_t d_lo_delta = get_compile_time_arg_val(lo_ct_offset + 1);
-    constexpr uint32_t lo_k_stride = get_compile_time_arg_val(lo_ct_offset + 2);
-    constexpr uint32_t lo_tile_bytes = get_compile_time_arg_val(lo_ct_offset + 3);
-    constexpr uint32_t after_start_ct_offset = lo_ct_offset + 4;
-#else
     constexpr uint32_t after_start_ct_offset = pages_args.next_compile_time_args_offset();
-#endif
     // The role accessors carry only each source's bank base address (BankView in weight_runs.hpp).
     const auto gu_src_acc = TensorAccessor(gate_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 0));
     const auto d_src_acc = TensorAccessor(down_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 1));
@@ -504,15 +487,6 @@ void kernel_main() {
             gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, gu_k_stride);
         const auto down_acc = unified_routed_expert_ffn::make_weight_table(
             d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
-#ifdef WEIGHT_LO
-        // The same columns' BFP2 parts, read into the second half of each in1 block.
-        const auto gate_lo_acc =
-            unified_routed_expert_ffn::make_weight_table(gu_src_acc, pages_l1, lo_k_stride, gu_lo_delta, lo_tile_bytes);
-        const auto up_lo_acc = unified_routed_expert_ffn::make_weight_table(
-            gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, lo_k_stride, gu_lo_delta, lo_tile_bytes);
-        const auto down_lo_acc = unified_routed_expert_ffn::make_weight_table(
-            d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, lo_k_stride, d_lo_delta, lo_tile_bytes);
-#endif
 #else
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
@@ -931,20 +905,6 @@ void kernel_main() {
                         gate_tile_bytes);
                     l1_w_gate += per_core_N_gu * gate_tile_bytes;
                 }
-#ifdef WEIGHT_LO
-                for (uint32_t k = 0; k < in0_block_w_gu; ++k) {  // the BFP2 parts: rows in0_block_w_gu + k
-                    GuRuns::read(
-                        noc_read,
-                        gate_lo_acc,
-                        kb * in0_block_w_gu + k,
-                        N_gate_tiles_full,
-                        gate_col0,
-                        gate_col_end,
-                        l1_w_gate,
-                        gate_tile_bytes);
-                    l1_w_gate += per_core_N_gu * gate_tile_bytes;
-                }
-#endif
                 // `up` slot. LEGACY: reader reads it on NoC 0. UP_SPLIT: writer
                 // already read it on NoC 1; reader just takes the L1 start and
                 // waits on up_done (below) before mcasting.
@@ -968,20 +928,6 @@ void kernel_main() {
                             up_tile_bytes);
                         l1_w_up += per_core_N_gu * up_tile_bytes;
                     }
-#ifdef WEIGHT_LO
-                    for (uint32_t k = 0; k < in0_block_w_gu; ++k) {
-                        GuRuns::read(
-                            noc_read,
-                            up_lo_acc,
-                            kb * in0_block_w_gu + k,
-                            N_gate_tiles_full,
-                            gate_col0,
-                            gate_col_end,
-                            l1_w_up,
-                            up_tile_bytes);
-                        l1_w_up += per_core_N_gu * up_tile_bytes;
-                    }
-#endif
                 }
                 noc_read.async_read_barrier();
 
@@ -1166,18 +1112,6 @@ void kernel_main() {
                     if (row < K_down_tiles) {
                         DRuns::read(
                             noc_read, down_acc, row, N_down_tiles_full, down_col0, down_col_end, l1_w, down_tile_bytes);
-#ifdef WEIGHT_LO
-                        // its BFP2 part: row in0_block_w_d + k of the block
-                        DRuns::read(
-                            noc_read,
-                            down_lo_acc,
-                            row,
-                            N_down_tiles_full,
-                            down_col0,
-                            down_col_end,
-                            in1_block_start + (in0_block_w_d + k) * per_core_N_d * down_tile_bytes,
-                            down_tile_bytes);
-#endif
                     }
                     l1_w += per_core_N_d * down_tile_bytes;
                 }

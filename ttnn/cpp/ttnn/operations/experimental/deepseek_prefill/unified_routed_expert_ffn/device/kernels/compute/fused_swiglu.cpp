@@ -77,34 +77,6 @@ constexpr uint32_t kWeightsTranspose = 1;
 constexpr uint32_t kWeightsTranspose = 0;
 #endif
 
-#ifdef WEIGHT_LO
-// WEIGHT_LO (two-part weights, gpt-oss: MXFP4 held exactly as bfloat4_b + BFP2): each in1 block holds in0_block_w K
-// rows of bfloat4_b tiles, then the same rows' BFP2 parts, each in a bfloat4_b-sized slot. After a subblock's
-// bfloat4_b rows, its BFP2 rows are added into the same DST: the weight (SrcA) unpacker switches to BFP2 (the
-// cb_weight_lo_fmt format; its page size keeps the tile stride) and back. The in0 tiles are the same for both.
-template <uint32_t in0_block_w>
-FORCE_INLINE void matmul_lo_rows(
-    uint32_t in0_cb_id,
-    uint32_t in1_cb_id,
-    uint32_t in0_index,
-    uint32_t in1_index,
-    uint32_t k_steps,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t in1_per_core_w) {
-    constexpr uint32_t cb_lo = get_named_compile_time_arg_val("cb_weight_lo_fmt");
-    reconfig_data_format_srca(in1_cb_id, cb_lo);
-    in1_index += in0_block_w * in1_per_core_w;
-    for (uint32_t inner_dim = 0; inner_dim < k_steps; ++inner_dim) {
-        matmul_block(
-            in0_cb_id, in1_cb_id, in0_index, in1_index, /*dst_index=*/0, kWeightsTranspose, ct_dim, rt_dim, in0_block_w);
-        in0_index += 1;
-        in1_index += in1_per_core_w;
-    }
-    reconfig_data_format_srca(cb_lo, in1_cb_id);
-}
-#endif
-
 #ifdef FUSE_BIAS
 // Row-broadcast bias add (gpt-oss). Bias is a (1, N) tensor tiled to one
 // tile-row; add_tiles_bcast_rows adds its row 0 to every row of the output
@@ -317,17 +289,6 @@ FORCE_INLINE void matmul_phase(
                                 in0_index += 1;
                                 in1_index += in1_per_core_w;
                             }
-#ifdef WEIGHT_LO
-                            matmul_lo_rows<in0_block_w>(
-                                in0_cb_id,
-                                in1_cb_id,
-                                in0_index_subblock_offset,
-                                in1_index_subblock_offset,
-                                k_steps,
-                                this_w,
-                                out_subblock_h,
-                                in1_per_core_w);
-#endif
                         }
                         tile_regs_commit();
                         tile_regs_wait();
@@ -676,17 +637,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             in0_index += 1;
                             in1_index += in1_per_core_w;
                         }
-#ifdef WEIGHT_LO
-                        matmul_lo_rows<in0_block_w>(
-                            x_cb_id,
-                            gate_cb_id,
-                            in0_index_subblock_offset,
-                            in1_index_subblock_offset,
-                            in0_block_w,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in1_per_core_w);
-#endif
                     }
                     tile_regs_commit();
                     tile_regs_wait();
@@ -714,17 +664,6 @@ FORCE_INLINE void matmul_phase_fused_gu(
                             in0_index += 1;
                             in1_index += in1_per_core_w;
                         }
-#ifdef WEIGHT_LO
-                        matmul_lo_rows<in0_block_w>(
-                            x_cb_id,
-                            up_cb_id,
-                            in0_index_subblock_offset,
-                            in1_index_subblock_offset,
-                            in0_block_w,
-                            out_subblock_w,
-                            out_subblock_h,
-                            in1_per_core_w);
-#endif
                     }
                     tile_regs_commit();
                     tile_regs_wait();

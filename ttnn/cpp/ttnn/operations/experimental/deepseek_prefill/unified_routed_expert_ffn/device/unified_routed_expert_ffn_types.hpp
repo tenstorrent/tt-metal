@@ -139,13 +139,6 @@ struct UnifiedRoutedExpertFfnParams {
     uint32_t weights_k_gate_up = 0;  // gate / up K tiles
     uint32_t weights_k_down = 0;     // down K tiles
     tt::tt_metal::DataType weights_dtype = tt::tt_metal::DataType::BFLOAT8_B;  // format of every weight tile
-    // Table-addressed weights held as two parts (gpt-oss: an MXFP4 weight held exactly as a bfloat4_b part plus a
-    // BFP2 part, fused_decode/mxfp4_split.py): every weight is the sum of its weights_dtype tile and a BFP2 tile.
-    // Tile k of a column's BFP2 part sits at the column's entry offset + *_lo_delta + k * weights_lo_k_stride in
-    // the same bank. weights_lo_k_stride = 0: one part. Changes all three programs (part of the cache key).
-    uint32_t weights_lo_k_stride = 0;
-    uint32_t gate_up_lo_delta = 0;
-    uint32_t down_lo_delta = 0;
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "m_tiles",
@@ -167,10 +160,7 @@ struct UnifiedRoutedExpertFfnParams {
         "weights_n_down",
         "weights_k_gate_up",
         "weights_k_down",
-        "weights_dtype",
-        "weights_lo_k_stride",
-        "gate_up_lo_delta",
-        "down_lo_delta");
+        "weights_dtype");
     auto attribute_values() const {
         return std::forward_as_tuple(
             m_tiles,
@@ -192,10 +182,7 @@ struct UnifiedRoutedExpertFfnParams {
             weights_n_down,
             weights_k_gate_up,
             weights_k_down,
-            weights_dtype,
-            weights_lo_k_stride,
-            gate_up_lo_delta,
-            down_lo_delta);
+            weights_dtype);
     }
 };
 

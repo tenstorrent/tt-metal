@@ -94,12 +94,6 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
             weights_k_gate_up (int, optional): gate / up K tiles (= emb / 32).
             weights_k_down (int, optional): down K tiles (= weights_n_gate_up).
             weights_dtype (ttnn.DataType, optional): the weight tiles' format (bfloat4_b, bfloat8_b or bfloat16).
-            weights_lo_k_stride (int, optional): with weight_pages and bfloat4_b weights, every weight is the sum of
-                its bfloat4_b tile and a BFP2 tile (an MXFP4 weight held exactly, gpt-oss): tile k of a column's BFP2
-                part is at the column's entry offset + gate_up_lo_delta / down_lo_delta + k * weights_lo_k_stride in
-                the same bank. 0 (default): one part.
-            gate_up_lo_delta (int, optional): bytes from a gate / up column's tile 0 to its BFP2 tile 0.
-            down_lo_delta (int, optional): bytes from a down column's tile 0 to its BFP2 tile 0.
 
         Each per-expert FFN picks its chunk_M_tiles / per_core_M / num_chunks at
         RUNTIME from the device-resident token count, so there is no expected-token
@@ -139,10 +133,7 @@ void bind_unified_routed_expert_ffn(nb::module_& mod) {
         nb::arg("weights_n_down") = 0,
         nb::arg("weights_k_gate_up") = 0,
         nb::arg("weights_k_down") = 0,
-        nb::arg("weights_dtype") = nb::none(),
-        nb::arg("weights_lo_k_stride") = 0,
-        nb::arg("gate_up_lo_delta") = 0,
-        nb::arg("down_lo_delta") = 0);
+        nb::arg("weights_dtype") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn::detail

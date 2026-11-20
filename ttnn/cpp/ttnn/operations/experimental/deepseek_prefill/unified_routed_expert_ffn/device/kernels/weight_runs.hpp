@@ -29,9 +29,7 @@
 // WeightTable — table-addressed weights (WEIGHT_PAGES). Each tile column of one expert has a table entry
 // (dram_bank_id, byte_offset) of its tile k = 0; tile k sits k_stride bytes further in the same bank. byte_offset
 // is relative to the source tensor's bank base address (BankView). Columns are independent placements, so there
-// is no run across n: one read per tile. The same read() call sites take either source. A table may name a
-// second part of each column (two-part weights, WEIGHT_LO): base_delta bytes after the entry's offset, read_bytes
-// per tile (placed at the caller's page stride, so a smaller tile sits at the start of each slot).
+// is no run across n: one read per tile. The same read() call sites take either source.
 namespace unified_routed_expert_ffn {
 
 template <class Acc>
@@ -39,15 +37,12 @@ struct WeightTable {
     BankView<Acc> src;    // the source tensor's banks
     uint32_t entries_l1;  // L1 address of entry 0 of this role (column j's entry: 2 words at entries_l1 + 8 j)
     uint32_t k_stride;    // bytes from tile k to tile k + 1 of one column
-    uint32_t base_delta;  // bytes added to every entry's offset (0: the entry itself)
-    uint32_t read_bytes;  // bytes read per tile (0: the caller's page size)
 };
 
 // entries_l1 points at this role's first entry in the expert's weight_pages row (already in L1).
 template <class Acc>
-FORCE_INLINE WeightTable<Acc> make_weight_table(
-    const Acc& src, uint32_t entries_l1, uint32_t k_stride, uint32_t base_delta = 0, uint32_t read_bytes = 0) {
-    return WeightTable<Acc>{BankView<Acc>(src), entries_l1, k_stride, base_delta, read_bytes};
+FORCE_INLINE WeightTable<Acc> make_weight_table(const Acc& src, uint32_t entries_l1, uint32_t k_stride) {
+    return WeightTable<Acc>{BankView<Acc>(src), entries_l1, k_stride};
 }
 
 template <uint32_t SHARD_W = 0>
@@ -109,14 +104,13 @@ struct WeightRuns {
         uint32_t page_bytes) {
         const volatile tt_l1_ptr uint32_t* entry =
             reinterpret_cast<const volatile tt_l1_ptr uint32_t*>(table.entries_l1) + 2 * j0;
-        const uint32_t row_offset = table.base_delta + row * table.k_stride;
-        const uint32_t bytes = table.read_bytes != 0 ? table.read_bytes : page_bytes;
+        const uint32_t row_offset = row * table.k_stride;
         uint32_t l1 = l1_base;
         for (uint32_t j = j0; j < jend; ++j) {
             noc.async_read(
                 table.src,
                 CoreLocalMem<uint32_t>(l1),
-                bytes,
+                page_bytes,
                 {.bank_id = entry[0], .offset_bytes = entry[1] + row_offset},
                 {});
             entry += 2;

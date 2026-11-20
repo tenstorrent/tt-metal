@@ -200,17 +200,16 @@ def decode_stream_kinds(layer_idx):
 
 def routed_tp_stream_supported(layer_idx, decode_weights):
     """Whether a layer's routed prefill experts read the decode streams (TP mode): the fused decode's expert streams
-    exist (decode_weights), the prefill reads the decode experts' values (GPT_OSS_PREFILL_KGPTQ), and both streams carry
-    a part it can read (decode_stream_kinds): the exact MXFP4 split (full segments, read exactly, whatever
-    ROUTED_PREFILL_BF8_LAYERS says: exact is finer than bf8), or else the K-GPTQ rounding on a bfloat4_b layer."""
-    from .stream_pages import STREAM_FULL
-
-    if decode_weights is None or not prefill_kgptq_enabled() or layer_idx is None:
-        return False
-    kinds = decode_stream_kinds(layer_idx)
-    if kinds is None:
-        return False
-    return all(k == STREAM_FULL for k in kinds) or routed_weights_dtype(layer_idx) == ttnn.bfloat4_b
+    exist (decode_weights), the prefill reads the K-GPTQ experts (GPT_OSS_PREFILL_KGPTQ, the decode streams' rounded
+    part), and both streams carry a rounded part (decode_stream_kinds). Every such layer reads it, the layers of
+    ROUTED_PREFILL_BF8_LAYERS too: their bf8 copy would be a second copy of the experts (with the bf16
+    closing sum the K-GPTQ values measured better than it, v4 KL 0.0748 vs 0.1001)."""
+    return (
+        decode_weights is not None
+        and prefill_kgptq_enabled()
+        and layer_idx is not None
+        and decode_stream_kinds(layer_idx) is not None
+    )
 
 
 def routed_tp_dense_supported(dense_weights):
@@ -459,6 +458,11 @@ class RoutedPrefillExperts:
         self.tp_dense = not self.tp_stream and routed_tp_dense_supported(dense_weights)
         # Either TP mode: every device runs every expert on its TP shard of the intermediate dimension.
         self.tp_mode = self.tp_stream or self.tp_dense
+        # Dtype of the per-device partial sums the closing all-reduce / reduce-scatter adds. TP mode: bfloat16. Every
+        # device's partial is a sum over a quarter of every expert's intermediate columns, and those partials largely
+        # cancel, so rounding each to bf8 before the sum cost accuracy (v4 KL 0.1050 bf8 vs 0.0741 bf16, 8K window
+        # 1.24x vs 0.60x the reference); EP mode partials are whole experts and stay bf8.
+        self.out_dtype = ttnn.bfloat16 if self.tp_mode else ttnn.bfloat8_b
         if self.tp_mode:
             assert mesh_config.decode.tp == self.num_devices, "TP mode needs the decode weights sharded over the row"
         # TP mode: every expert is local (its TP shard) on every device.
@@ -706,10 +710,7 @@ class RoutedPrefillExperts:
         )
 
     def _init_tp_stream(self, decode_weights, kinds, tensor_cache_path):
-        """TP mode: the page table over the decode streams (stream_pages.py) and the bf16 biases. Streams that hold the
-        exact MXFP4 split (full segments: the layers with an exact top-k in decode, GPT_OSS_DECODE_SPLIT_RANKS) are read
-        exactly, bfloat4_b + BFP2 parts for every expert (unified_routed_expert_moe weights_lo_k_stride); round-only
-        streams through their K-GPTQ rounding."""
+        """TP mode: the page table over the decode streams' rounded parts (stream_pages.py) and the bf16 biases."""
         from ..fused_decode.stream import EXPERT_BANK_ROT
         from . import stream_pages as sp
 
@@ -729,11 +730,7 @@ class RoutedPrefillExperts:
                 f"has {layouts[s].bank_bytes}"
             )
         n_gu, n_dn = inter_pad // tile, H // tile
-        self.tp_exact = all(layouts[s].kind == sp.STREAM_FULL for s in layouts)
-        # [E, 2 * (2 n_gu + n_dn)]
-        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn, exact=self.tp_exact)
-        # (exact: a full segment is [BFP4 part + bias tile][BFP2 part][rounded part], so the BFP2 tiles of a column the
-        # check below places inside its bank lie inside it too)
+        table = sp.stream_page_table(layouts["gate_up"], layouts["down"], n_gu, n_dn)  # [E, 2 * (2 n_gu + n_dn)]
         sp.check_page_table(
             table,
             n_gu,
@@ -757,7 +754,7 @@ class RoutedPrefillExperts:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         self.weights_dtype = ttnn.bfloat4_b
-        self.weights_tile_transposed = True  # the streams' tiles (rounded and exact parts) are stored transposed
+        self.weights_tile_transposed = True  # the rounded parts' tiles are stored transposed
         self.routed_expert = types.SimpleNamespace(gate_projs=[], up_projs=[], down_projs=[])
         self._table_kwargs = dict(
             weight_pages=self.weight_pages,
@@ -771,16 +768,6 @@ class RoutedPrefillExperts:
             weights_k_down=layouts["down"].k_tiles,
             weights_dtype=ttnn.bfloat4_b,
         )
-        if self.tp_exact:
-            assert (
-                layouts["gate_up"].exact_lo_delta % sp.DRAM_ALIGN == 0
-                and layouts["down"].exact_lo_delta % sp.DRAM_ALIGN == 0
-            )
-            self._table_kwargs.update(
-                weights_lo_k_stride=sp.BFP2_BYTES,
-                gate_up_lo_delta=layouts["gate_up"].exact_lo_delta,
-                down_lo_delta=layouts["down"].exact_lo_delta,
-            )
         self.cache_dir = None
         if tensor_cache_path is not None:
             rows, cols = self.mesh_device.shape
@@ -898,10 +885,7 @@ class RoutedPrefillExperts:
         rows, cols = self.mesh_device.shape
         projs = ("gate", "up", "down")
         # The values depend on the checkpoint biases (the cache directory), the neuron orders and the padding.
-        key = "|".join(
-            [str(n_gu), str(n_dn), str(layouts["gate_up"].banks)]
-            + (["exact"] if getattr(self, "tp_exact", False) else [])
-        )
+        key = "|".join([str(n_gu), str(n_dn), str(layouts["gate_up"].banks)])
         prefix = f"routed_tp_v{ROUTED_TP_FILES_VERSION}_" + hashlib.sha1(key.encode()).hexdigest()[:10]
         names = None
         if self.cache_dir is not None:
@@ -1415,9 +1399,9 @@ class RoutedPrefillExperts:
                     ttnn.deallocate(t)
             if out is not None:
                 # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
-                ttnn.typecast(part, ttnn.bfloat8_b, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
+                ttnn.typecast(part, self.out_dtype, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
             else:
-                pieces.append(ttnn.typecast(part, ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+                pieces.append(ttnn.typecast(part, self.out_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG))
             ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
@@ -1430,7 +1414,7 @@ class RoutedPrefillExperts:
         topk_indices are slot ids: id v is expert self.expert_order[v] (the HF id itself when expert_order is None),
         as the MLP's routed router emits them (TopKRouter.with_expert_order).
 
-        Returns the MoE output [1, 1, S, H] (bf8), all-reduced over the mesh row like the dense TP path; with scatter
+        Returns the MoE output [1, 1, S, H] (self.out_dtype), all-reduced over the mesh row like the dense TP path; with scatter
         (sequence-parallel prefill, S % (32 * N) == 0) only the reduce-scatter half: [1, 1, S / N, H], device d holding
         rows d * S / N onward, bit-identical to those rows of the all-reduce.
 
@@ -1453,7 +1437,7 @@ class RoutedPrefillExperts:
         if seq_len > Cs:
             out = ttnn.empty(
                 (1, 1, seq_len, self.hidden_size),
-                dtype=ttnn.bfloat8_b,
+                dtype=self.out_dtype,
                 layout=ttnn.TILE_LAYOUT,
                 device=self.mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,

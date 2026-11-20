@@ -40,10 +40,7 @@ ttnn::Tensor unified_routed_expert_moe(
     uint32_t weights_n_down,
     uint32_t weights_k_gate_up,
     uint32_t weights_k_down,
-    const std::optional<tt::tt_metal::DataType>& weights_dtype,
-    uint32_t weights_lo_k_stride,
-    uint32_t gate_up_lo_delta,
-    uint32_t down_lo_delta) {
+    const std::optional<tt::tt_metal::DataType>& weights_dtype) {
     // Single fused device op across ALL local experts. This builds ONE program
     // whose reader/compute/writer kernels iterate over every local expert.
     TT_FATAL(
@@ -91,10 +88,9 @@ ttnn::Tensor unified_routed_expert_moe(
     } else {
         TT_FATAL(
             gate_up_k_stride == 0 && down_k_stride == 0 && weights_n_gate_up == 0 && weights_n_down == 0 &&
-                weights_k_gate_up == 0 && weights_k_down == 0 && !weights_dtype.has_value() &&
-                weights_lo_k_stride == 0 && gate_up_lo_delta == 0 && down_lo_delta == 0,
-            "gate_up_k_stride / down_k_stride / weights_n_* / weights_k_* / weights_dtype / weights_lo_k_stride / "
-            "*_lo_delta apply only with weight_pages");
+                weights_k_gate_up == 0 && weights_k_down == 0 && !weights_dtype.has_value(),
+            "gate_up_k_stride / down_k_stride / weights_n_* / weights_k_* / weights_dtype apply only with "
+            "weight_pages");
     }
     TT_FATAL(experts_per_chip > 0, "Need at least one expert per chip");
 
@@ -192,10 +188,7 @@ ttnn::Tensor unified_routed_expert_moe(
         weights_n_down,
         weights_k_gate_up,
         weights_k_down,
-        weights_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B),
-        weights_lo_k_stride,
-        gate_up_lo_delta,
-        down_lo_delta);
+        weights_dtype.value_or(tt::tt_metal::DataType::BFLOAT8_B));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::unified_routed_expert_ffn

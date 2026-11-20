@@ -83,9 +83,6 @@ constexpr uint32_t CB_ZERO_ROW = tt::CBIndex::c_22;
 // the other. Only the weight sender cores fill them.
 constexpr uint32_t CB_PAGES_READER = tt::CBIndex::c_23;
 constexpr uint32_t CB_PAGES_WRITER = tt::CBIndex::c_24;
-// Two-part weights (weights_lo_k_stride > 0): never filled; its BFP2 format is what the compute reconfigures the
-// weight unpacker to for the BFP2 rows of each in1 block (which live in the weight CBs themselves).
-constexpr uint32_t CB_WEIGHT_LO_FMT = tt::CBIndex::c_25;
 
 // Tile columns per DRAM ND shard of a weight tensor, or 0 when it is not ND-sharded (the
 // interleaved default). The kernels take this as a compile-time arg and coalesce a shard row into
@@ -208,10 +205,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // format come from the op attributes.
     const uint32_t experts_per_chip = op.experts_per_chip;
     const bool from_pages = op.weights_from_pages;
-    // Two-part weights: every in1 block holds its K rows of weights_dtype tiles, then the same rows' BFP2 tiles (each
-    // in a weights_dtype-sized slot), so the weight CBs and blocks are twice as many tiles.
-    const bool weights_lo = from_pages && op.weights_lo_k_stride > 0;
-    const uint32_t weight_parts = weights_lo ? 2 : 1;
     const auto& x_shape = t.x.padded_shape();
 
     // This expert's M (not x's allocated M): x may be a shared buffer wider
@@ -508,12 +501,9 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
             total += static_cast<uint64_t>(M * w_gu) * partials_gu_tile_size;  // cb_x_rm (bf16 staging)
             total += static_cast<uint64_t>(M * w_gu) * in0_x_tile_size;        // cb_x_tilized (bf8_b)
         }
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2 * weight_parts) * gate_tile_size;  // cb_in1_gate
-        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2 * weight_parts) * up_tile_size;    // cb_in1_up
-        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2 * weight_parts) * down_tile_size;  // cb_in1_down
-        if (weights_lo) {
-            total += gate_tile_size;  // cb_weight_lo_fmt
-        }
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * gate_tile_size;          // cb_in1_gate
+        total += static_cast<uint64_t>(w_gu * per_core_N_gu * 2) * up_tile_size;            // cb_in1_up
+        total += static_cast<uint64_t>(in0_block_w_d * per_core_N_d * 2) * down_tile_size;  // cb_in1_down
         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_gate_intermed
         total += static_cast<uint64_t>(M * per_core_N_gu) * intermed_tile_size;             // cb_activated
         total += static_cast<uint64_t>(M * per_core_N_gu) * partials_gu_tile_size;          // cb_mm_partials_gu
@@ -645,7 +635,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t gu_in1_num_subblocks = per_core_N_gu / gu_out_subblock_w;
     const uint32_t gu_in0_block_num_tiles = per_core_M * in0_block_w_gu;
     const uint32_t gu_in0_subblock_num_tiles = gu_out_subblock_h * in0_block_w_gu;
-    const uint32_t gu_in1_block_num_tiles = in0_block_w_gu * per_core_N_gu * weight_parts;
+    const uint32_t gu_in1_block_num_tiles = in0_block_w_gu * per_core_N_gu;
     const uint32_t gu_in1_block_w = per_core_N_gu;
     const uint32_t gu_num_blocks = K_gate_tiles / in0_block_w_gu;
     const uint32_t gu_out_block_num_tiles = per_core_M * per_core_N_gu;
@@ -653,7 +643,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     const uint32_t d_in0_num_subblocks = per_core_M / d_out_subblock_h;
     const uint32_t d_in0_block_num_tiles = per_core_M * in0_block_w_d;
     const uint32_t d_in0_subblock_num_tiles = d_out_subblock_h * in0_block_w_d;
-    const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d * weight_parts;
+    const uint32_t d_in1_block_num_tiles = in0_block_w_d * per_core_N_d;
     const uint32_t d_in1_block_w = per_core_N_d;
     const uint32_t d_num_blocks = K_down_tiles_padded / in0_block_w_d;
     const uint32_t d_out_block_num_tiles = per_core_M * per_core_N_d;
@@ -978,10 +968,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         make_cb(CB_PAGES_READER, tt::DataFormat::UInt32, /*tiles=*/1, pages_scratch_bytes);
         make_cb(CB_PAGES_WRITER, tt::DataFormat::UInt32, /*tiles=*/1, pages_scratch_bytes);
     }
-    if (weights_lo) {
-        // The page size is the weight CBs' tile size: the unpacker's tile stride when it is configured from this CB.
-        make_cb(CB_WEIGHT_LO_FMT, tt::DataFormat::Bfp2_b, /*tiles=*/1, gate_tile_size);
-    }
     if (op.x_indexed) {
         make_cb(
             CB_X_ROW_IDX,
@@ -1088,14 +1074,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         reader_ct_args.push_back(CB_PAGES_READER);
         tt::tt_metal::TensorAccessorArgs(t.weight_pages->buffer()).append_to(reader_ct_args);
         reader_defines.emplace_back("WEIGHT_PAGES", "1");
-        if (weights_lo) {
-            // WEIGHT_LO: after the table accessor, the BFP2 parts' offsets (gate/up, down), k stride and tile size.
-            reader_ct_args.push_back(op.gate_up_lo_delta);
-            reader_ct_args.push_back(op.down_lo_delta);
-            reader_ct_args.push_back(op.weights_lo_k_stride);
-            reader_ct_args.push_back(tt::tile_size(tt::DataFormat::Bfp2_b));
-            reader_defines.emplace_back("WEIGHT_LO", "1");
-        }
     }
 
     // FUSE_BIAS: after the `start` accessor, append the 3 bias CB ids then the 3
@@ -1203,13 +1181,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         writer_ct_args.push_back(CB_PAGES_WRITER);
         tt::tt_metal::TensorAccessorArgs(t.weight_pages->buffer()).append_to(writer_ct_args);
         writer_defines.emplace_back("WEIGHT_PAGES", "1");
-        if (weights_lo) {
-            writer_ct_args.push_back(op.gate_up_lo_delta);
-            writer_ct_args.push_back(op.down_lo_delta);
-            writer_ct_args.push_back(op.weights_lo_k_stride);
-            writer_ct_args.push_back(tt::tile_size(tt::DataFormat::Bfp2_b));
-            writer_defines.emplace_back("WEIGHT_LO", "1");
-        }
     }
 
     tt::tt_metal::KernelDescriptor writer_kernel_desc;
@@ -1300,9 +1271,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // positional CT arg; compute has no free positional slot, so it is named.
         {"m_tiles_full", M_tiles_full},
     };
-    if (weights_lo) {
-        compute_named_args.emplace_back("cb_weight_lo_fmt", CB_WEIGHT_LO_FMT);
-    }
     if (fuse_bias) {
         compute_named_args.emplace_back("cb_gate_bias", CB_GATE_BIAS);
         compute_named_args.emplace_back("cb_up_bias", CB_UP_BIAS);
@@ -1342,10 +1310,6 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     if (op.weights_tile_transposed) {
         // Weight tiles stored transposed within themselves: every matmul transposes in1 as it unpacks it.
         compute_defines.emplace_back("WEIGHTS_TILE_TRANSPOSED", "1");
-    }
-    if (weights_lo) {
-        // Each in1 block's second half holds the BFP2 parts: the matmuls add them with the unpacker on BFP2.
-        compute_defines.emplace_back("WEIGHT_LO", "1");
     }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
