@@ -112,6 +112,9 @@ PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode
 # Refinement 5). Enabled only when the split chosen without it still fits L1 with cb_own (the split never changes for
 # it); members without an own slice keep the post-landing block pivot. 0 = block pivot everywhere.
 OWN_PIVOT = int(os.environ.get("AGRMS_OWN_PIVOT", "1"))
+# ln FPU normalize: cap on the output tiles per DEST block (one init per chain step per block; Refinement 5:
+# case1 12.42 -> 12.07 us at 4); 0 = the writer unit. The block actually used is norm_block_of() (wrap-safe).
+NORM_BLOCK = int(os.environ.get("AGRMS_NORM_BLOCK", "0"))
 OUT_DEPTH = 2
 OUT_UNIT_CAP = int(
     os.environ.get("AGRMS_OUT_UNIT", "4")
@@ -999,11 +1002,25 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     g_is_tile = 1 if (has_gamma and gamma.layout == ttnn.TILE_LAYOUT) else 0
     g_page = gamma.buffer_aligned_page_size() if has_gamma else 0
 
+    def norm_block_of(kk: int, mmk: MemberMap) -> int:
+        """ln FPU normalize: output tiles per DEST block (compute CT [6]). A block is packed at contiguous cb_out
+        offsets, so it must never straddle the cb_out ring end: every block is full (it divides each member's core_w,
+        no ragged row tail) and the ring holds a whole number of blocks; <= the writer's unit (the writer drains whole
+        units). Cap: NORM_BLOCK (0 = the writer unit)."""
+        return math.gcd(NORM_BLOCK or fit_unit[kk], cplan[CB_OUT][0], *(s.core_w for s in mmk.members))
+
     def class_cts(kk: int, mmk: MemberMap):
         """(reader, compute, writer) CT args of one member class."""
         reader_ct = [tile_bytes, mmk.pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
-        # [6] norm_block: ln FPU normalize tiles per DEST block = the writer's cb_out unit (single source: fit_unit)
-        compute_ct = [kk, mmk.pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp, fit_unit[kk]]
+        compute_ct = [
+            kk,
+            mmk.pitch,
+            n_stat,
+            dp.max_fin if dense else 0,
+            dp.max_fout if dense else 0,
+            gp,
+            norm_block_of(kk, mmk),
+        ]
         writer_ct = writer_ct_of(kk, mmk.pitch, fit_unit[kk])
         return reader_ct, compute_ct, writer_ct
 
