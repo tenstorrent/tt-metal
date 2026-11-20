@@ -135,6 +135,8 @@ DB_SCHEMA = [
     Column("math_transpose_faces", "string", True, "configuration"),
     Column("mathop", "string", True, "configuration"),
     Column("mm_transpose", "bool", True, "configuration"),
+    Column("norm_s_layout", "string", True, "configuration"),
+    Column("norm_s_runtime", "int64", True, "configuration"),
     Column("num_blocks", "int64", True, "configuration"),
     Column("num_faces", "int64", True, "configuration"),
     Column("num_faces_A", "int64", True, "configuration"),
