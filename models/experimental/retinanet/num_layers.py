@@ -37,8 +37,11 @@ def reduce_layers(retinanet: torch.nn.Module, num_layers: int) -> None:
     if num_layers < 1:
         raise ValueError(f"num_layers must be at least 1, got {num_layers}")
     body = retinanet.backbone.body
-    for stage in ("layer1", "layer2", "layer3", "layer4"):
-        setattr(body, stage, getattr(body, stage)[: 1 + num_layers])
+    stage_end = 1 + num_layers
+    body.layer1 = body.layer1[:stage_end]
+    body.layer2 = body.layer2[:stage_end]
+    body.layer3 = body.layer3[:stage_end]
+    body.layer4 = body.layer4[:stage_end]
     for head in (retinanet.head.classification_head, retinanet.head.regression_head):
         head.conv = head.conv[:num_layers]
 
@@ -55,7 +58,7 @@ def load_reduced(retinanet: torch.nn.Module) -> torch.nn.Module:
 def log_layer_counts(retinanet: torch.nn.Module, num_layers: int | None) -> None:
     reduced = f" ({NUM_LAYERS_ENV}={num_layers})" if num_layers is not None else ""
     body = retinanet.backbone.body
-    depths = [len(getattr(body, stage)) for stage in ("layer1", "layer2", "layer3", "layer4")]
+    depths = [len(body.layer1), len(body.layer2), len(body.layer3), len(body.layer4)]
     logger.info(
         f"RetinaNet layers: backbone depths {depths}, head conv blocks "
         f"{len(retinanet.head.classification_head.conv)}{reduced}"
