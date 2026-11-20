@@ -52,7 +52,7 @@ def test_h3_ring_sdpa_bench(mesh_device):
     preset = resolve_mesh_preset(tuple(mesh_device.shape))
     tp_axis, sp_axis = preset["tp_axis"], preset["sp_axis"]
     # The pipeline's rule: the open fabric wins over the preset on a line.
-    topology = ttnn.Topology.Linear if fabric_topology() == ttnn.Topology.Linear else preset["topology"]
+    topology = ttnn.Topology.Linear if fabric_topology(mesh_device) == ttnn.Topology.Linear else preset["topology"]
     dynamic = _resolve_denoise_path(
         preset,
         trace_denoise=None,

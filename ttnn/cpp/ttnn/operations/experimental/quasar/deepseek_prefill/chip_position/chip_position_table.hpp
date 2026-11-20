@@ -23,9 +23,9 @@ namespace ttnn::operations::experimental::quasar::deepseek_prefill {
 // of per-chip values indexed by fabric chip id instead; kernels/chip_position.hpp picks the entry. `value_of(coord)`
 // is the value for the chip at `coord`, used for both the whole-mesh table and a per-chip program's one-entry table.
 
-// Fabric init writes the routing tables for 1D and 2D configs only. Reads the default context, like other ttnn ops.
-inline bool chip_lookup_available() {
-    const auto config = tt::tt_fabric::GetFabricConfig();
+// Fabric init writes the routing tables for 1D and 2D configs only.
+inline bool chip_lookup_available(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto config = tt::tt_fabric::GetFabricConfig(mesh_device);
     return tt::tt_fabric::is_1d_fabric_config(config) || tt::tt_fabric::is_2d_fabric_config(config);
 }
 
@@ -33,7 +33,7 @@ inline bool chip_lookup_available() {
 template <typename Coords, typename ValueOf>  // Coords: any range of tt::tt_metal::distributed::MeshCoordinate
 std::optional<std::vector<uint32_t>> chip_lookup_table(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, const Coords& coords, const ValueOf& value_of) {
-    if (std::empty(coords) || !chip_lookup_available()) {
+    if (std::empty(coords) || !chip_lookup_available(mesh_device)) {
         return std::nullopt;
     }
     std::vector<uint32_t> table;
@@ -60,7 +60,7 @@ std::optional<std::vector<uint32_t>> chip_lookup_table(
 // coordinate) does not cover, e.g. after a reshape.
 template <typename Coords>  // any range of tt::tt_metal::distributed::MeshCoordinate
 uint64_t chip_mapping_hash(const tt::tt_metal::distributed::MeshDevice& mesh_device, const Coords& coords) {
-    if (!chip_lookup_available()) {
+    if (!chip_lookup_available(mesh_device)) {
         return 0;
     }
     uint64_t hash = 0xcbf29ce484222325ull;  // FNV-1a
