@@ -727,11 +727,6 @@ void kernel_main() {
             // tilize_once ownership of this K-block.
             const uint32_t x_owner_gx = x_owner_of(kb);
             const bool is_x_owner = tilize_once && (my_nt_gu == x_owner_gx);
-            if constexpr (tilize_once) {
-                if (owns_x(kb + kAhead)) {
-                    finish_x_rm_block();
-                }
-            }
             x_stage_obj.reserve_back(g_in0_block_tiles_max);
             cb_in1_gate_obj.reserve_back(g_in1_block_num_tiles);
             if constexpr (reader_mcasts_up) {
@@ -769,6 +764,21 @@ void kernel_main() {
             if (!is_in1_sender) {
                 in1_valid_sem.set(0);
                 in1_ready_sem.up(noc, in1_sender_nx, in1_sender_ny, 1);
+            }
+
+            // tilize_once: this core's own upcoming x blocks, AFTER the acks above. Block kb's owner multicasts only
+            // once every core of the M-row has acked, so a core that first barriers on its DRAM reads of block
+            // kb + A, or issues the 32 * per_core_M stick reads of block kb + A + 2, holds up the whole row: measured
+            // on gpt-oss-20b's tensor-parallel experts (1/4 of the math per x block of the full experts), the owner
+            // waited 3.6 us of every 6.7 us K-block for that one late ack. Issued here, the reads also start one
+            // K-block earlier than at the end of the iteration, and the core does them while it waits for block kb.
+            if constexpr (tilize_once) {
+                if (owns_x(kb + kAhead)) {
+                    finish_x_rm_block();
+                }
+                if (owns_x(kb + kAhead + 2)) {
+                    issue_x_rm_block(kb + kAhead + 2);
+                }
             }
 
             // Step 2: senders run their work. in0 sender path and in1 sender
@@ -1017,11 +1027,6 @@ void kernel_main() {
                 cb_in1_gate_obj.push_back(g_in1_block_num_tiles);
                 if constexpr (reader_mcasts_up) {
                     cb_in1_up_obj.push_back(g_in1_block_num_tiles);
-                }
-            }
-            if constexpr (tilize_once) {
-                if (owns_x(kb + kAhead + 2)) {
-                    issue_x_rm_block(kb + kAhead + 2);
                 }
             }
         }

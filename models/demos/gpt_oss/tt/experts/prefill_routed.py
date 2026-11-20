@@ -1372,8 +1372,11 @@ class RoutedPrefillExperts:
         # from out_rm row pos[t, j] (no [Cs, k, H] gather copy), weights it and skips the non-local slots (dispatch
         # table -1; the spare row they point at is never read). The reduced [Cs, H] block stays in L1, so only its bf8
         # cast is written to DRAM.
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
-        part_mem = _l1_if_fits(Cs * H * 2, self.l1_held)
+        Cs = self._combine_block(C)
+        # A bf16 output (tensor-parallel experts) is the combine's own dtype: write the block straight to DRAM and use it
+        # as the output, instead of an L1 block that no longer fits plus a bf16 -> bf16 "cast" (a full copy).
+        same_dtype = self.out_dtype == ttnn.bfloat16
+        part_mem = ttnn.DRAM_MEMORY_CONFIG if same_dtype else _l1_if_fits(Cs * H * 2, self.l1_held)
         pieces = []
         for s in range(0, C, Cs):
             e = min(s + Cs, C)
@@ -1401,13 +1404,20 @@ class RoutedPrefillExperts:
                 # Cast straight into this block's rows of the preallocated output (a narrow view): no concat.
                 ttnn.typecast(part, self.out_dtype, output_tensor=ttnn.narrow(out, 2, out_start + s, e - s))
             else:
-                pieces.append(ttnn.typecast(part, self.out_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-            ttnn.deallocate(part)
+                pieces.append(part if same_dtype else ttnn.typecast(part, self.out_dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            if not (out is None and same_dtype):
+                ttnn.deallocate(part)
         ttnn.deallocate(out_rm)
         ttnn.deallocate(pos_tm)
         ttnn.deallocate(w_rm)
         ttnn.deallocate(idx_rm)
         return pieces
+
+    def _combine_block(self, C):
+        """Tokens per combine block. The blocks keep the bf16 combine output in L1 so that only its cast to the bf8
+        output is written to DRAM; with a bf16 output (tensor-parallel experts) there is no cast, so the whole chunk
+        is one block, written straight to DRAM as the output (no [S, H] copy per layer; 8K TTFT 233.5 -> 231.2 ms)."""
+        return C if self.out_dtype == ttnn.bfloat16 else min(C, ROUTED_COMBINE_BLOCK)
 
     def __call__(self, hidden_states, topk_indices, topk_weights, scatter=False, batch_size=1):
         """hidden_states: [1, 1, S, H] replicated; topk_indices / topk_weights: [S, k] (router top-k path).
@@ -1429,7 +1439,7 @@ class RoutedPrefillExperts:
         if len(x.shape) != 4:
             x = ttnn.reshape(x, (1, 1, seq_len, self.hidden_size))
         C = min(self.chunk_size, seq_len)
-        Cs = min(C, ROUTED_COMBINE_BLOCK)
+        Cs = self._combine_block(C)
         # More than one combine block: cast every block into its rows of one preallocated output (narrow views)
         # instead of concatenating the blocks afterwards (a full read + write of the [S, H] bf8 output), when every
         # block start is a view start.
