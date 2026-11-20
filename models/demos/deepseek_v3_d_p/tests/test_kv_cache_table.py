@@ -436,7 +436,10 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, model, tmp_path, mon
         sparse_kv_cache_format=None,  # the adapter's default: scaled FP8 on K3.1, none (bf8 TILE) on K3
         chunk_size=PREFILL_CHUNK_TOKENS,
         dflash_enabled=False,
+        forward_chunks=1,
+        use_trace=False,
     )
+    params.cache_num_users = adapter.kv_cache_slots(params)  # the runtime config the table builder reads
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     token_caches = {"kvpe": caches.kvpe.storage}
     if caches.index is not None:

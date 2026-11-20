@@ -75,9 +75,9 @@ _GALAXY = "SP8xTP4"
 # running AttnRes as one program per mesh (#66039: ordinary 175 -> 108 us, boundary 400 -> 380 us on one Galaxy).
 # LoudBox SP2xTP4 and SP4xTP4 report until a CI run gives their targets.
 _TARGETS_MS = {
-    ("boundary", "untraced"): 0.504,
-    ("boundary", "traced"): 0.474,
-    ("ordinary", "untraced"): 0.106,
+    ("boundary", "untraced"): 0.459,
+    ("boundary", "traced"): 0.446,
+    ("ordinary", "untraced"): 0.127,
     ("ordinary", "traced"): 0.128,
 }
 # A layout's prefill chunk where it is not PER_CHIP_TOKENS a chip: a 4x4 stage takes the same chunk as the 8x4 mesh,
