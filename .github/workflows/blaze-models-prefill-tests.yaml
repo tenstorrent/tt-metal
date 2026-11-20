@@ -71,10 +71,10 @@ on:
         type: boolean
         default: false
         description: "Gemma4 > gemma4_d_p_layer_perf (Tracy build; only runs when ticked)"
-      minimax_m3:
+      k3_det_ab:
         type: boolean
         default: false
-        description: "MiniMax-M3: every MiniMax leg"
+        description: "K3 determinism A/B (temporary, replaces minimax_m3)"
       mistral4:
         type: boolean
         default: false

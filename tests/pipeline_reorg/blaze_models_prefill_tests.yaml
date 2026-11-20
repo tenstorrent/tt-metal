@@ -483,6 +483,50 @@
   sp_config: sc1
 
 
+# TEMPORARY (determinism A/B, with the k3_det_ab checkbox): K3 L24 traced determinism, many replays per weight load,
+# with the per-layer probe (tt/kimi_k3/det_probe.py) naming the first layer/op that changed. A: the MoE block as is;
+# C: TtMoe under the same setup. Each runs even if the other failed; the leg fails if either did. (No host pre-check: the
+# DIDT full-chip matmul took two 8 kW CI hosts down.)
+- name: "(Kimi-K3-2.8T) MoE block determinism A/B: block, TtMoe (L24 traced, 500 replays)"
+  fabric_profile: torus_xy
+  cmd: |
+
+    export LOGURU_LEVEL=INFO
+    export TT_METAL_HOME=${TT_METAL_HOME:-$PWD}
+    export PYTHONPATH=${TT_METAL_HOME}${PYTHONPATH:+:$PYTHONPATH}
+    export KIMI_K3_HF_MODEL=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-mxfp4-2496450e
+    export KIMI_K3_CKPT=/mnt/weka/model-weights/llm/moonshotai/Kimi-K3-dequantized
+    export TT_KIMI_K3_PREFILL_TTNN_CACHE=/mnt/weka/model-cache/scratch/moonshotai/Kimi-K3-Cache/Kimi-K3-Cache-prefill
+    export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto
+    export DET_ITERS=500  # (a traced L24 replay is ~1.4 s: 500 is ~12 min against the ~12 min weight load)
+    echo "det A/B host: $(hostname)"
+    det_variant() (
+      name=$1; shift
+      echo "=== det variant $name: $*"
+      timeout -k 2m 75m mpirun --bind-to none --pernode --tag-output -x DET_ITERS "$@" bash -lc '
+        export OMP_NUM_THREADS=$(nproc)
+        python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_kimi_k3_prefill_transformer_chunked -k "L24 and chunks_eleven and traced and ten_iters and with_determinism" -vvv --tb=short
+      '
+      rc=$?; echo "=== det variant $name: rc $rc"; return $rc
+    )
+    fail=0
+    det_variant A_block || fail=1
+    MOE_IMPL=ttmoe det_variant C_ttmoe -x MOE_IMPL || fail=1
+    exit $fail
+  test_type: k3_det_ab
+  test_tags: [k3_det_ab]
+  test_group: module
+  skus:
+    bh_sc1:
+      timeout: 255
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
 - name: "(Kimi-K3-2.8T) MoE accuracy 5k"
   fabric_profile: torus_xy
   cmd: |
