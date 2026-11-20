@@ -125,6 +125,12 @@ tt::TargetDevice MeshCommandQueueBase::get_target_device_type() const {
         .get_target_device_type();
 }
 
+bool MeshCommandQueueBase::runs_dispatch_firmware() const {
+    return tt::tt_metal::MetalContext::instance(this->device()->impl().get_context_id())
+        .get_cluster()
+        .runs_dispatch_firmware();
+}
+
 void MeshCommandQueueBase::write_sharded_buffer(const MeshBuffer& buffer, const void* src) {
     auto global_buffer_shape = buffer.global_shard_spec().global_buffer_shape;
 

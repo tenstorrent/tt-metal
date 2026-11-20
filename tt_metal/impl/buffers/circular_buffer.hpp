@@ -51,6 +51,8 @@ public:
     const std::optional<FaceGeometry>& unpack_face_geometry(uint32_t buffer_index) const;
 
     uint32_t address() const;
+    // Whether address() has an answer yet: a global buffer, or a local allocation the program has made.
+    bool is_allocated() const { return this->globally_allocated() || this->locally_allocated_address_.has_value(); }
 
     bool is_on_logical_corerange(const CoreRange& logical_cr) const;
 

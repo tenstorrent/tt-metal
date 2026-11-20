@@ -174,9 +174,8 @@ struct SemaphoreHandles {
 // fastest access path that keeps its operations atomic, from the binder census
 // (CollectedSpecData::semaphore_binders). Every declared semaphore resolves, bound or not.
 //
-// The mechanism depends on the target device, not just the ProgramSpec: emule has no cached
-// pool, and Gen1 only ever gets LOCAL_NONATOMIC or COMPUTE_ATOMIC. So the same spec can resolve
-// differently on different devices.
+// The mechanism depends on the architecture, not just the ProgramSpec: Gen1 only ever gets
+// LOCAL_NONATOMIC or COMPUTE_ATOMIC. So the same spec can resolve differently on different devices.
 SemaphoreNameToScopeMap ResolveSemaphoreScopes(
     const ProgramSpec& spec, const CollectedSpecData::SemaphoreBinderCensus& census, MetalEnvImpl& env);
 

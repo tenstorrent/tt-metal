@@ -1447,8 +1447,8 @@ void issue_read_buffer_dispatch_command_sequence(
 
     SystemMemoryManager& sysmem_manager = dispatch_params.device->sysmem_manager();
 
-    // Mock/emulated devices don't have real hardware to read from, skip actual dispatch
-    if (sysmem_manager.env_impl().get_cluster().is_mock_or_emulated()) {
+    // Devices without dispatch firmware have no completion queue to read from
+    if (!sysmem_manager.env_impl().get_cluster().runs_dispatch_firmware()) {
         return;
     }
 

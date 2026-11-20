@@ -21,6 +21,8 @@
 #include "impl/buffers/semaphore.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "impl/dispatch/dispatch_mem_map.hpp"
+#include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/metal2_host_api/llk_metadata.hpp"
@@ -29,8 +31,13 @@
 #include "emule_device_map.hpp"              // NOC_NODE_ID_BITS
 #include "emule_tile_geometry.hpp"           // resolve_tile_geometry, ResolvedTileGeometry
 #include "host_sanitizers.hpp"               // emule_asan_enabled (host ASAN master switch)
+#include "jit_build/build_env_manager.hpp"   // BuildEnvManager (kernel build-env defines)
 #include "jit_build/jit_build_settings.hpp"  // NamedCTArgNamespaces, NamedRuntimeArgNamespaces
-#include <tt-metalium/kernel_types.hpp>      // DataMovementConfig/ComputeConfig, DataMovementProcessor
+#include "jit_build/genfiles.hpp"            // jit_build_genfiles_descriptors
+#include "jit_build/jit_build_options.hpp"   // JitBuildOptions
+#include <fstream>
+#include <unistd.h>
+#include <tt-metalium/kernel_types.hpp>  // DataMovementConfig/ComputeConfig, DataMovementProcessor
 
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/face_geometry.hpp>
@@ -82,6 +89,27 @@ ProcIdList compute_proc_ids_and_thread_count(
         out.proc_ids.push_back(static_cast<uint8_t>(kernel.get_kernel_processor_type(0)));
     }
     return out;
+}
+
+// The kernel's chlkc_descriptors.h exactly as a silicon build generates it (Program::compile's prep_kernel).
+std::string generate_chlkc_descriptors(detail::ProgramImpl& impl, IDevice& device, Kernel& kernel) {
+    const auto& env = MetalContext::instance(impl.get_context_id())
+                          .build_env_manager()
+                          .get_device_build_env(device.build_id())
+                          .build_env;
+    JitBuildOptions options(env);
+    kernel.set_build_options(options);
+    impl.set_dfb_data_fmt_and_tile(kernel.logical_coreranges(), options);
+    const auto dir = std::filesystem::temp_directory_path() / ("tt_emule_chlkc_" + std::to_string(::getpid()) + "_" +
+                                                               std::to_string(kernel.get_watcher_kernel_id()));
+    options.path = dir.string() + "/";
+    jit_build_genfiles_descriptors(env, options);
+    std::ifstream in(options.path + "chlkc_descriptors.h");
+    std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+    TT_FATAL(!text.empty(), "emule: no chlkc_descriptors.h generated for kernel {}", kernel.name());
+    return text;
 }
 
 }  // namespace
@@ -190,7 +218,8 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
                     continue;
                 }
                 CbDescriptor cd;
-                cd.address = cb->address();
+                // A fast-dispatch compile precedes allocation; its launches read the rings from L1.
+                cd.address = cb->is_allocated() ? cb->address() : 0;
                 cd.total_size = cb->size();
                 cd.globally_allocated = cb->globally_allocated();
                 cd.creation_index = cb_creation_index.at(cb.get());
@@ -264,7 +293,6 @@ static void fill_core_state(Program& program, EmuleProgramDescriptor& pd) {
 }
 
 EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device) {
-    (void)device;                 // kept for signature symmetry with build_soc_view; this half is program-only
     auto& impl = program.impl();  // non-const: get_kernels/get_kernel_groups/get_program_config_sizes
     const auto& hw = MetalContext::instance().hal();
     auto& metal_context = MetalContext::instance(impl.get_context_id());
@@ -287,6 +315,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
     EmuleProgramDescriptor pd;
     pd.config.context_id = static_cast<uint32_t>(impl.get_context_id().get());
     pd.config.asan_enabled = tt::tt_metal::emule::emule_asan_enabled();
+    pd.config.build_env_defines = MetalContext::instance(impl.get_context_id())
+                                      .build_env_manager()
+                                      .get_device_build_env(device->build_id())
+                                      .build_env.get_defines();
 
     // Per (programmable core type, logical core) -> the kernels placed there with resolved launch
     // offsets + unique RTA; stitched into each CoreDescriptor below. pct is part of the key because a
@@ -329,6 +361,35 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 }
             });
             k.process_defines([&kd](const std::string& dk, const std::string& dv) { kd.defines[dk] = dv; });
+            // The dispatch defines jit_build adds to every kernel build, copied from the kernel's build state.
+            {
+                const auto& hal = MetalContext::instance(impl.get_context_id()).hal();
+                const auto recipe = MetalContext::instance(impl.get_context_id())
+                                        .build_env_manager()
+                                        .get_kernel_build_state(
+                                            device->build_id(),
+                                            hal.get_programmable_core_type_index(k.get_kernel_programmable_core_type()),
+                                            enchantum::to_underlying(k.get_kernel_processor_class()),
+                                            k.get_kernel_processor_type(0))
+                                        .export_target_recipe(nullptr);
+                for (const auto& flag : recipe.defines) {
+                    for (const std::string_view name : {"DISPATCH_MESSAGE_ADDR", "FDS_SIGNALLING"}) {
+                        const std::string prefix = "-D" + std::string(name);
+                        if (flag.starts_with(prefix) && (flag.size() == prefix.size() || flag[prefix.size()] == '=')) {
+                            kd.defines[std::string(name)] =
+                                flag.size() == prefix.size() ? "" : flag.substr(prefix.size() + 1);
+                        }
+                    }
+                }
+            }
+            if (!k.get_full_kernel_name().empty()) {
+                kd.elf_paths = k.elf_paths_by_processor_index(
+                    *device,
+                    MetalContext::instance(impl.get_context_id())
+                        .build_env_manager()
+                        .get_device_build_env(device->build_id())
+                        .build_env.get_out_kernel_root_path());
+            }
             if (!quasar_arch_include.empty()) {
                 kd.include_paths.insert(kd.include_paths.begin(), quasar_arch_include);
             }
@@ -343,12 +404,18 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                     kd.fp32_dest_acc_en = cc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = cc->dst_full_sync_en;
                     kd.math_fidelity = static_cast<uint32_t>(cc->math_fidelity);
+                    for (const auto m : cc->unpack_to_dest_mode) {
+                        kd.unpack_to_dest_mode.push_back(static_cast<uint8_t>(m));
+                    }
                 } else if (const auto* qc = std::get_if<experimental::quasar::QuasarComputeConfig>(&cfg)) {
                     // Quasar carries the same compute scalars on its own config type.
                     kd.has_compute_config = true;
                     kd.fp32_dest_acc_en = qc->fp32_dest_acc_en;
                     kd.dst_full_sync_en = qc->dst_full_sync_en;
                     kd.math_fidelity = static_cast<uint32_t>(qc->math_fidelity);
+                    for (const auto m : qc->unpack_to_dest_mode) {
+                        kd.unpack_to_dest_mode.push_back(static_cast<uint8_t>(m));
+                    }
                 }
             }
             {
@@ -356,17 +423,25 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 // kernel is data movement on its own core type (EthernetKernel is not a DataMovementKernel).
                 auto* dm_kernel = dynamic_cast<DataMovementKernel*>(&k);
                 auto* eth_kernel = dynamic_cast<EthernetKernel*>(&k);
-                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr);
+                auto* de_kernel = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(&k);
+                kd.is_data_movement = (dm_kernel != nullptr || eth_kernel != nullptr || de_kernel != nullptr);
                 uint32_t proc_type_idx = 0;
                 if (dm_kernel != nullptr &&
                     std::get<DataMovementConfig>(dm_kernel->config()).processor == DataMovementProcessor::RISCV_1) {
                     proc_type_idx = 1;
                 }
+                if (de_kernel != nullptr) {
+                    proc_type_idx = de_kernel->get_kernel_processor_type(0);
+                    kd.dm_processor = proc_type_idx;
+                }
                 if (eth_kernel != nullptr) {
                     const auto processor = std::get<EthernetConfig>(eth_kernel->config()).processor;
                     kd.dm_processor = static_cast<uint32_t>(processor);
                     proc_type_idx = static_cast<uint32_t>(processor);
-                    // Silicon's JIT takes an ethernet build's per-RISC macros (COMPILE_FOR_ERISC, ...) from HAL.
+                }
+                if (eth_kernel != nullptr || de_kernel != nullptr) {
+                    // Silicon's JIT takes an ethernet or dispatch-engine build's per-RISC macros (COMPILE_FOR_ERISC,
+                    // COMPILE_FOR_DISPATCH_ENGINE, ...) from HAL.
                     const auto& rtoptions = MetalContext::instance().rtoptions();
                     for (const auto& define : hw.get_jit_build_query().defines(
                              {false,
@@ -392,6 +467,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                 kd.proc_ids.assign(procs.proc_ids.begin(), procs.proc_ids.end());
                 kd.num_threads = procs.num_threads;
                 kd.is_quasar_compute = kd.is_compute && (qck != nullptr);
+                kd.rvv_enabled = k.get_rvv_enabled();
+            }
+            if (kd.is_quasar_compute) {
+                kd.chlkc_descriptors = generate_chlkc_descriptors(impl, *device, k);
             }
             TT_FATAL(
                 k.global_semaphore_binding_handles().empty(),
@@ -407,10 +486,10 @@ EmuleProgramDescriptor build_emule_descriptor(Program& program, IDevice* device)
                                                           bool is_relay,
                                                           uint8_t pipe,
                                                           const std::optional<LLKMetadata>& llk,
-                                                          uint8_t /*pap*/,
-                                                          uint8_t /*cap*/) {
+                                                          uint8_t pap,
+                                                          uint8_t cap) {
                 kd.bindings.dfb.push_back(
-                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk, arch) : ""});
+                    DfbBinding{name, id, is_relay, pipe, llk ? serialize_llk_metadata(*llk, arch) : "", pap, cap});
             });
             k.process_semaphore_binding_handles(
                 [&kd](const std::string& name, uint16_t id, auto scope, uint32_t harts) {

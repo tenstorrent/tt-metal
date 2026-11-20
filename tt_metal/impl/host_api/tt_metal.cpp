@@ -342,7 +342,8 @@ void DispatchCompiledProgramToDevice(IDevice* device, Program& program) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
 
 #ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
+    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+        !metal_ctx.get_cluster().runs_dispatch_firmware()) {
         // Emule lazily JIT-compiles inside execute_program_emulated, so is_finalized()/is_compiled()
         // are never set — skip both asserts (HW-only) and run synchronously, mirroring LaunchProgram.
         // Configure before writing runtime args: ConfigureDeviceWithProgram allocates the ephemeral
@@ -508,7 +509,7 @@ ClusterType GetClusterType() { return MetalContext::instance().get_cluster().get
 std::string SerializeClusterDescriptor() {
     // Serialize the descriptor the cluster already holds. The cluster makes the
     // mock-vs-real (emule) decision once when it builds the descriptor at init
-    // (see tt_cluster.cpp, gated on rtoptions.get_mock_enabled()), so this layer
+    // (see tt_cluster.cpp, gated on rtoptions.has_mock_cluster_desc()), so this layer
     // must not re-create it: a fresh real-UMD create here would open the physical
     // card and bypass the emulator. Assumes the cluster is initialized (this API's
     // only caller, ttnn serialize_cluster_descriptor, runs in an active session).

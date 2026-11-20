@@ -383,8 +383,8 @@ void Device::init_command_queue_host() {
     sysmem_manager_ =
         std::make_unique<SystemMemoryManager>(MetalEnvAccessor(*env_).impl(), *context_, this->id_, this->num_hw_cqs());
 
-    // For mock/emulated devices, skip HWCommandQueue creation (they don't need real command queues)
-    if (MetalEnvAccessor(*env_).impl().get_cluster().is_mock_or_emulated()) {
+    // Devices without dispatch firmware get no HWCommandQueues
+    if (!MetalEnvAccessor(*env_).impl().get_cluster().runs_dispatch_firmware()) {
         return;
     }
 

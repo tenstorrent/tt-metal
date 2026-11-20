@@ -374,6 +374,10 @@ public:
         return this->target_type_ == tt::TargetDevice::Mock || this->target_type_ == tt::TargetDevice::Emule;
     }
 
+    /// Returns true if the devices run metal's fast-dispatch kernels and command queues: silicon, the simulator,
+    /// and emulated chips in fast dispatch.
+    bool runs_dispatch_firmware() const;
+
     void register_sim_fabric_endpoint_direction(
         ChipId chip_id, tt_fabric::chan_id_t eth_chan_id, tt_fabric::eth_chan_directions direction) const;
 

@@ -79,6 +79,9 @@
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include "hostdev/rta_constants.h"
 #include "hostdev/remote_dfb_constants.h"
+#ifdef TT_METAL_USE_EMULE
+#include "emulated_program_runner.hpp"  // emule::kernel_text_slot
+#endif
 
 namespace tt::tt_metal {
 enum NOC : uint8_t;
@@ -620,13 +623,17 @@ uint32_t finalize_kernel_bins(
     uint32_t& kernel_text_offset,
     uint32_t& kernel_text_size) {
     MetalContext& metal_ctx = MetalContext::instance(extract_context_id(device));
-    // Emule and Quasar mock don't have real binaries, skip finalization.
+    // Quasar mock doesn't have real binaries, skip finalization.
     const auto target = metal_ctx.get_cluster().get_target_device_type();
-    if (target == tt::TargetDevice::Emule || (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR)) {
+    if (target == tt::TargetDevice::Mock && device->arch() == tt::ARCH::QUASAR) {
         kernel_text_offset = base_offset;
         kernel_text_size = 0;
-        return base_offset;
+        // As below: a core type with no kernel group ends at offset 0, so it reserves no config buffer.
+        return kernel_groups.empty() ? 0 : base_offset;
     }
+    // Emule runs host code, not RISC-V binaries. Each binary still gets a text slot, which tt-emule fills with
+    // the kernel's identity, so a kernel-config block names its kernels wherever it is copied, as silicon's does.
+    const bool is_emule = target == tt::TargetDevice::Emule;
 
     const auto& hal = metal_ctx.hal();
     uint32_t l1_alignment = hal.get_alignment(HalMemType::L1);
@@ -646,12 +653,32 @@ uint32_t finalize_kernel_bins(
         std::ranges::fill(kg->kernel_text_offsets, 0);
         for (auto kernel_id : kg->kernel_ids) {
             const auto& kernel = kernels.at(kernel_id);
-            const auto& binaries = kernel->binaries(build_key);
             uint32_t num_binaries = kernel->expected_num_binaries();
             TT_ASSERT(kernel->get_kernel_programmable_core_type() == programmable_core_type);
+            const bool stored_in_config_buffer = hal.get_core_kernel_stored_in_config_buffer(programmable_core_type);
+            if (is_emule) {
+#ifdef TT_METAL_USE_EMULE
+                for (uint32_t i = 0; i < num_binaries; i++) {
+                    const auto slot = emule::kernel_text_slot(
+                        programmable_core_type,
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(static_cast<int>(i)),
+                        offset);
+                    for (uint32_t processor_index : kernel->get_processor_indices_for_binary(static_cast<int>(i))) {
+                        kg->kernel_text_offsets[processor_index] = slot.offset;
+                        kernel_config.kernel_text_offset()[processor_index] = slot.offset;
+                        kernel_config.kernel_text_size()[processor_index] = slot.size;
+                    }
+                }
+#else
+                TT_THROW("An emulated device's program, but tt-metal was built without TT_METAL_USE_EMULE");
+#endif
+                continue;
+            }
+            const auto& binaries = kernel->binaries(build_key);
             for (uint32_t i = 0; i < num_binaries; i++) {
                 uint32_t kernel_text_offset = 0;
-                if (hal.get_core_kernel_stored_in_config_buffer(programmable_core_type)) {
+                if (stored_in_config_buffer) {
                     kernel_text_offset = offset;
                     offset += binaries[i]->get_packed_size();
                     offset = tt::align(offset, l1_alignment);

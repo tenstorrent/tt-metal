@@ -173,7 +173,7 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
         for (const auto& logical_core : logical_cores) {
             KernelGroup* kernel_group = program.impl().kernels_on_core(logical_core, index);
             CoreCoord physical_core = device.virtual_core_from_logical_core(logical_core, core_type);
-            // Skip binary writing for emulated mode (JIT compilation happens in execute_program_emulated)
+            // Emulated kernels have no binaries; their text is written below.
             if (!is_emulated) {
                 ScopedHostTransfer binary_upload(
                     transfer_stats,
@@ -298,6 +298,11 @@ void ConfigureDeviceWithProgram(IDevice& device, Program& program, bool force_sl
             program.impl().init_semaphores(device, logical_core, index);
         }
     }
+#ifdef TT_METAL_USE_EMULE
+    if (is_emulated) {
+        emule::write_kernel_text(&device, program);
+    }
+#endif
 }
 
 void WriteRuntimeArgsToDevice(IDevice& device, Program& program, bool force_slow_dispatch) {
@@ -404,10 +409,10 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
             "completed on this device.");
     }
 
-#ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() != tt::TargetDevice::Emule)
-#endif
-    {
+    // An emulated chip without dispatch firmware launches the program itself (below), compiling it there.
+    const bool emulated_launch = metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule &&
+                                 !metal_ctx.get_cluster().runs_dispatch_firmware();
+    if (!emulated_launch) {
         program.impl().compile(&device);
     }
     program.impl().finalize_dataflow_buffer_configs();
@@ -421,9 +426,8 @@ void LaunchProgramAsync(IDevice& device, Program& program, bool force_slow_dispa
     WriteRuntimeArgsToDevice(device, program, force_slow_dispatch);
 
 #ifdef TT_METAL_USE_EMULE
-    if (metal_ctx.get_cluster().get_target_device_type() == tt::TargetDevice::Emule) {
-        // Emulated mode always executes synchronously (slow dispatch only): all kernels complete before this
-        // function returns.
+    if (emulated_launch) {
+        // Slow dispatch on an emulated chip executes synchronously: all kernels complete before this returns.
         emule::execute_program_emulated(&device, program);
         return;
     }

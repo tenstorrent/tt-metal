@@ -80,9 +80,20 @@ const CachedBinary& get_cached_binary(
     if (inserted) {
         // We're the first with PATH. Create and insert.
         lock.unlock();
+        ll_api::ElfFile elf;
+#ifdef TT_METAL_USE_EMULE
+        // An emulated kernel's binary is the host shared object the emulator runs: only its metadata is read.
+        if (tt::tt_metal::MetalContext::instance().rtoptions().get_target_device() == tt::TargetDevice::Emule) {
+            elf.ReadSections(path);
+            auto* mutable_ptr = new CachedBinary{.image = {}, .metadata = ll_api::parse_binary_metadata(elf)};
+            lock.lock();
+            slot->second = decltype(slot->second)(mutable_ptr);
+            cache.cvar.notify_all();
+            return *mutable_ptr;
+        }
+#endif
         // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
         // place for XIP), then pack the device image.
-        ll_api::ElfFile elf;
         elf.ReadImage(path);
         ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
         // Every device-executed image, kernel or firmware, passes through here before it can run, so

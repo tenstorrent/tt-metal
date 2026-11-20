@@ -58,6 +58,7 @@ enum class EnvVarID {
     TT_METAL_MOCK_CLUSTER_DESC_PATH,          // Mock cluster descriptor path
     TT_METAL_CLUSTER_ID,                      // Cluster id to stamp on the discovered cluster descriptor
     TT_METAL_EMULE_MODE,                      // Enable emulated mode (SWEmuleChip with real memory I/O)
+    TT_METAL_EMULE_SOC_DESC_PATH,             // SoC descriptor of the emulated chip
     TT_METAL_VISIBLE_DEVICES,                 // Comma-separated list of visible device IDs
     ARCH_NAME,                                // Architecture name (simulation mode)
     TT_MESH_GRAPH_DESC_PATH,                  // Custom fabric mesh graph descriptor
@@ -570,11 +571,22 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // TT_METAL_EMULE_MODE
         // Enable emulated mode: creates SWEmuleChip (with real memory-backed I/O)
         // instead of MockChip.  Requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set.
-        // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch,
-        // where emulated devices get tt-emule's mesh command queue.
+        // Dispatch follows TT_METAL_SLOW_DISPATCH_MODE as on silicon: set, slow dispatch; unset, fast dispatch, where
+        // emulated devices run metal's fast-dispatch command queues and dispatch kernels.
         // Default: Disabled
+        // Note: If both EMULE_MODE and SIMULATOR are set, SIMULATOR takes precedence
         // Usage: export TT_METAL_EMULE_MODE=1
-        case EnvVarID::TT_METAL_EMULE_MODE: this->runtime_target_device_ = tt::TargetDevice::Emule; break;
+        case EnvVarID::TT_METAL_EMULE_MODE:
+            if (this->simulator_path.empty()) {
+                this->runtime_target_device_ = tt::TargetDevice::Emule;
+            }
+            break;
+
+        // TT_METAL_EMULE_SOC_DESC_PATH
+        // SoC descriptor of the emulated chip, the counterpart of the soc_descriptor.yaml a simulator directory
+        // carries. Requires TT_METAL_EMULE_MODE=1. Default: the architecture's descriptor under
+        // tt_metal/soc_descriptors/ Usage: export TT_METAL_EMULE_SOC_DESC_PATH=/path/to/soc_descriptor.yaml
+        case EnvVarID::TT_METAL_EMULE_SOC_DESC_PATH: this->emule_soc_desc_path = std::string(value); break;
 
         // TT_METAL_VISIBLE_DEVICES
         // Comma-separated list of device IDs to make visible to the runtime.
@@ -2108,6 +2120,9 @@ void RunTimeOptions::InitializeFromEnvVars() {
     // Validate emulated mode configuration
     if (this->runtime_target_device_ == tt::TargetDevice::Emule && this->mock_cluster_desc_path.empty()) {
         TT_THROW("TT_METAL_EMULE_MODE=1 requires TT_METAL_MOCK_CLUSTER_DESC_PATH to be set");
+    }
+    if (this->runtime_target_device_ != tt::TargetDevice::Emule && !this->emule_soc_desc_path.empty()) {
+        TT_THROW("TT_METAL_EMULE_SOC_DESC_PATH requires TT_METAL_EMULE_MODE=1");
     }
 
     // On a simulator TT_METAL_SIMULATOR_DRAM_UNCAPPED and the quasar_aether_2x3_uncapped map imply each

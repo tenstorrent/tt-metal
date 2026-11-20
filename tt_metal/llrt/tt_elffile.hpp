@@ -69,6 +69,8 @@ public:
     // Read an elf file, populate segments vector.
     // Path must remain live throughout processing.
     void ReadImage(const std::string& path);
+    // Read only an ELF's sections, for an emulated kernel's host binary, which no device loads.
+    void ReadSections(const std::string& path);
 
     // Write the (now-processed) elf file.
     void WriteImage(const std::string& path);
