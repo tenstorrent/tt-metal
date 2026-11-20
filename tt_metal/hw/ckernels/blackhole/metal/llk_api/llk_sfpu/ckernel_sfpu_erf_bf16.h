@@ -36,6 +36,7 @@ inline void calculate_erf_bf16_body() {
 }
 // The constants stock's init also sets hold the kernel's own values for its call only.
 // Each call records replay slots 0-31, overwriting what an init recorded there (from 16).
+// The slots are the compiled call's, the SFPI compiler's own replay records included.
 template <int ITERATIONS = 32>
 __attribute__((noinline)) inline void calculate_erf_bf16() {
     sfpi::vConstFloatPrgm0 = __builtin_bit_cast(float, 0xbb39f45cu);

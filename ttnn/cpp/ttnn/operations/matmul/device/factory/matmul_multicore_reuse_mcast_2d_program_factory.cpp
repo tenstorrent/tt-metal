@@ -339,7 +339,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
     uint32_t in0_row_tiles = 0,
-    uint32_t in0_column_offset_tiles = 0) {
+    uint32_t in0_column_offset_tiles = 0,
+    const std::optional<operations::matmul::utilities::BatchBroadcast>& batch_broadcast = std::nullopt) {
     using namespace tt;
 
     using tt::tt_metal::TensorMemoryLayout;
@@ -1223,6 +1224,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                 .accessor_name = "in0",
             });
         }
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(
+                in0_sender, *batch_broadcast, M * in0_row_tiles, std::nullopt);
+        }
         kernels.push_back(std::move(in0_sender));
     }
 
@@ -1341,6 +1346,10 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
             }
         }
         in1_sender_writer.runtime_arg_schema.runtime_arg_names = std::move(in1_sender_rtas);
+        if (batch_broadcast.has_value()) {
+            operations::matmul::utilities::add_batch_broadcast_args(
+                in1_sender_writer, *batch_broadcast, std::nullopt, K * N);
+        }
         kernels.push_back(std::move(in1_sender_writer));
     }
 
@@ -1851,7 +1860,10 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
     // carries them all; packer_l1_acc has no Metal 2.0 counterpart and is consumed on the host.
     auto compute_hw = ttnn::to_compute_hardware_config(compute_kernel_config);
 
-    const auto B = fuse_batch ? 1 : get_batch_size(a_shape_padded);
+    // Broadcast batch dims are read in place, so the senders loop over the output's batches.
+    const auto batch_broadcast =
+        fuse_batch ? std::nullopt : operations::matmul::utilities::get_batch_broadcast(a_shape_padded, b_shape_padded);
+    const auto B = fuse_batch ? 1 : get_output_batch_size(a_shape_padded, b_shape_padded);
     const auto Mt = get_M_dim(a_shape_padded, in0_tile, fuse_batch);
     const auto Mt_per_batch = get_M_dim(a_shape_padded, in0_tile, false);
     const auto Kt = get_K_dim(a_shape_padded, in0_tile);
@@ -1910,7 +1922,8 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core,
         in0_row_tiles,
-        in0_column_offset_tiles);
+        in0_column_offset_tiles,
+        batch_broadcast);
 }
 
 }  // namespace ttnn::prim

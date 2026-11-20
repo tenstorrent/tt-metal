@@ -548,14 +548,14 @@ GeluTanh:
 - {input: Float16, output: Float16_b, dest: 'Yes', near_zero_atol: 2.1979212760925293e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16, output: Float32, dest: 'Yes', near_zero_atol: 2.1969080421513354e-07, domains: [{low: -.inf, high: .inf, ulp: 45319}]}
 - {input: Float16_b, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float16_b, output: Float16_b, dest: 'No', near_zero_atol: 2.8469003808977276e-38, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float16_b, output: Float16_b, dest: 'Yes', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float16_b, output: Float32, dest: 'No', near_zero_atol: 2.8469003808977276e-38, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float16_b, output: Float32, dest: 'Yes', near_zero_atol: 1.4968289008265856e-07, domains: [{low: -.inf, high: .inf, ulp: 33624}]}
 - {input: Float32, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: 65536.0, ulp: 1}, {low: 65536.0, high: .inf}]}
-- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
+- {input: Float32, output: Float16_b, dest: 'No', near_zero_atol: 2.8469003808977276e-38, domains: [{low: -.inf, high: .inf, ulp: 1}]}
 - {input: Float32, output: Float16_b, dest: 'Yes', near_zero_atol: 1.816079020500183e-07, domains: [{low: -.inf, high: .inf, ulp: 1}]}
-- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 1.4994293451309204e-07, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
+- {input: Float32, output: Float32, dest: 'No', near_zero_atol: 2.8469003808977276e-38, domains: [{low: -.inf, high: .inf, ulp: 65536}]}
 - {input: Float32, output: Float32, dest: 'Yes', near_zero_atol: 1.8119690992079995e-07, domains: [{low: -.inf, high: .inf, ulp: 30650}]}
 GreaterThanEqualZero:
 - {input: Float16, output: Float16, dest: 'Yes', domains: [{low: -.inf, high: .inf, ulp: 0}]}

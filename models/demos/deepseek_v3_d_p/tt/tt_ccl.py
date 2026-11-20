@@ -203,8 +203,16 @@ class TT_CCL:
         # ready/data_valid pair for MLA's TP high_bw_all_gather calls; see get_mla_high_bw_gather_semaphores.
         self.mla_high_bw_gather_semaphores = None
 
-    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links):
-        resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+    def get_fused_rmsnorm_resources(self, x, weight, cluster_axis, num_links, memo=None):
+        """The next (semaphores, stats) pair for this input. A caller that always passes the same axis and links can
+        pass a memo ([None, None, None], kept by the caller): its entry is then reused while x's spec and the weight
+        object are unchanged, which skips building the lookup key (~5 us) on every call."""
+        if memo is not None and memo[2] is weight and x.spec == memo[0]:
+            resources = memo[1]
+        else:
+            resources = self._fused_rmsnorm_entry(x, weight, cluster_axis, num_links)
+            if memo is not None:
+                memo[0], memo[1], memo[2] = x.spec, resources, weight
         index = resources["next"]
         resources["next"] = 1 - index
         return resources["pairs"][index]

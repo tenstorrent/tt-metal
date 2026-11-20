@@ -112,6 +112,19 @@ def test_pc_repeat_interleave_codegen(device, shape, repeats, dim, layout):
     assert device.num_program_cache_entries() == entries_after_miss, msg
 
 
+@pytest.mark.parametrize("repeats", [2, 3])
+@pytest.mark.parametrize("dim", [-1, -2])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b])
+def test_repeat_interleave_block_float_is_exact(device, repeats, dim, dtype):
+    """Rows of very different magnitude: repeating must not re-block values under another row's shared exponent."""
+    torch.manual_seed(0)
+    torch_input = torch.randn(1, 1, 64, 64) * torch.logspace(-3, 3, 64).reshape(-1, 1)
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_result = torch.repeat_interleave(ttnn.to_torch(input_tensor), repeats, dim=dim)
+    output = ttnn.repeat_interleave(input_tensor, repeats, dim=dim)
+    assert_equal(torch_result, ttnn.to_torch(output))
+
+
 @pytest.mark.skip(reason="ttnn.repeat_interleave only supports `repeats` as int")
 def test_repeat_interleave_with_repeat_tensor(device):
     torch_input_tensor = torch.rand(1, 2, 32, 32, dtype=torch.bfloat16)
@@ -125,17 +138,6 @@ def test_repeat_interleave_with_repeat_tensor(device):
     assert_equal(torch_result, output)
 
 
-_BLOCK_FLOATS = (ttnn.bfloat8_b, ttnn.bfloat4_b)
-
-
-def _one_exponent_input(shape, seed=0):
-    """Values in +-[1, 2) for a block float. They share one exponent, so values an op moves into another block of the
-    tile come back exactly."""
-    torch.manual_seed(seed)
-    magnitude = 1 + torch.rand(shape)
-    return torch.where(torch.rand(shape) < 0.5, -magnitude, magnitude)
-
-
 @pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.repeat_interleave))
 @pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.repeat_interleave))
 def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type, device):
@@ -145,13 +147,9 @@ def test_repeat_interleave_docstring_supported_inputs(dtype, layout, buffer_type
     memory_config = interleaved_memory_config(buffer_type)
     for dim in (1, -1):
         # A last-dim repeat runs a compute kernel that holds BFLOAT16 zeros by value: a BFLOAT16 input leaves out NaN,
-        # as the docstring requires, and its zeros are compared by value. Values also move into new blocks, so block
-        # floats get values with one exponent.
+        # as the docstring requires, and its zeros are compared by value.
         last_dim_bfloat16 = dim == -1 and dtype == ttnn.bfloat16
-        if dim == -1 and dtype in _BLOCK_FLOATS:
-            x = _one_exponent_input((2, 3, 32, 64))
-        else:
-            x = full_range_input((2, 3, 32, 64), dtype, nan=not last_dim_bfloat16)
+        x = full_range_input((2, 3, 32, 64), dtype, nan=not last_dim_bfloat16)
         input_tensor = ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, memory_config=memory_config)
         output = ttnn.repeat_interleave(input_tensor, 2, dim=dim, memory_config=memory_config)
 

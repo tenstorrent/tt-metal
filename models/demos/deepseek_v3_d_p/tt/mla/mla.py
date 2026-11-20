@@ -736,6 +736,7 @@ class ttMLA:
                 self.g_proj_weight = weights["g_proj"]
             if self._q_distnorm:
                 self._q_a_norm_weight_tp = weights["q_a_layernorm_tp"]
+                self._q_a_norm_resources_memo = [None, None, None]  # see TT_CCL.get_fused_rmsnorm_resources
                 self.tt_ccl.preallocate_fused_rmsnorm_resources(
                     [1, 1, self.active_seq_len_local, self.q_lora_rank // self.tp_factor],
                     ttnn.bfloat16,
@@ -1485,7 +1486,7 @@ class ttMLA:
     def _q_a_latent_distnorm(self, x: ttnn.Tensor, seq_len_local: int) -> ttnn.Tensor:
         """Distributed RMSNorm of this chip's q_a slice, then TP all-gather; returns the persistent gather buffer."""
         semaphores, stats = self.tt_ccl.get_fused_rmsnorm_resources(
-            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links
+            x, self._q_a_norm_weight_tp, self.tp_axis, self.ccl_num_links, memo=self._q_a_norm_resources_memo
         )
         normed = ttnn.experimental.dit_fused_distributed_rmsnorm(
             x,
