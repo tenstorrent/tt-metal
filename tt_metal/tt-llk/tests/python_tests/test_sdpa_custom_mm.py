@@ -72,20 +72,20 @@ from ttexalens.tt_exalens_lib import write_to_device
 
 pytestmark = [skip_for_wormhole, skip_for_quasar]
 
-# The P150 functional simulator does not support the per-context unpacker config
-# (tensix_unpacr: cfg_context_id=1) that the mask/restore sequence in
-# test_sdpa_custom_mm_mask_extent_restore uses. The simulator exits the process on that
-# error, so xfail cannot mark it; skip that test on the simulator only.
+# The simulator exits the process on these, so xfail cannot mark them.
 _SIM_CFG_CONTEXT_REASON = (
     "simulator does not support tensix_unpacr with cfg_context_id=1, "
     "used by the mask/restore sequence"
 )
+_SIM_MOP_LOOP_COUNT_REASON = (
+    "simulator does not support a MOP loop count above 31, which kt_dim 256 needs"
+)
 
 
-def _skip_on_simulator(request):
-    """Skip on the simulator only; see _SIM_CFG_CONTEXT_REASON."""
+def _skip_on_simulator(request, reason):
+    """Skip on the simulator only; silicon runs normally."""
     if request.config.getoption("--run-simulator"):
-        pytest.skip(_SIM_CFG_CONTEXT_REASON)
+        pytest.skip(reason)
 
 
 class _SdpaCustomMMStimuli(StimuliConfig):
@@ -328,7 +328,7 @@ def test_sdpa_custom_mm(shape):
 
 def test_sdpa_custom_mm_face_walk_exact(request):
     """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
-    _skip_on_simulator(request)
+    _skip_on_simulator(request, _SIM_MOP_LOOP_COUNT_REASON)
     M, kt, ct = 8, 256, 1
     torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
     res = _run(
@@ -442,7 +442,7 @@ def test_sdpa_custom_mm_mask_extent_restore(
     request, M, ct, read_transposed, padded_stride
 ):
     """Mask every output face, then reuse the restored SrcB geometry on the next matmul."""
-    _skip_on_simulator(request)
+    _skip_on_simulator(request, _SIM_CFG_CONTEXT_REASON)
     kt, K, N = 2, 64, ct * 32
     row_stride = kt + 2 if padded_stride else None
     input_tile_offset = 1 if padded_stride else 0
