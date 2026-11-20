@@ -296,12 +296,79 @@ class Module(ABC):
         for _, parameter in self.named_parameters():
             parameter.deallocate()
 
+        self._set_evicted()
+
+    def shard(self, mesh_axis: int) -> None:
+        """Shard the module's parameters along the mesh_axis. This is a transient sharding; you cannot save the
+        module, call it, or read a sharded parameter's data until you call gather. Note that calling `forward`
+        directly skips the check in `__call__`, so it is only caught if that forward reads a sharded parameter's data.
+
+        Parameters that cannot be split (see `Parameter.shard_dim`) stay whole. The module counts as unloaded while
+        sharded. If no parameter can be split (for example, when the mesh_axis has only one device), we leave the
+        module as it is: it stays loaded and its eviction hooks do not run.
+
+        We defer freeing the full weights until every parameter's sharded tensor is allocated, to avoid fragmenting
+        DRAM. If we freed each full weight right after allocating its sharded tensor, the next sharded tensor would
+        land in the hole it left, and the sharded tensors would end up scattered with gaps between them. `gather`
+        does the same in reverse, freeing all the sharded tensors at the end.
+
+        When calling `shard` the module (and its children) call their eviction hooks. If a module overrides
+        `deallocate_weights`, we cannot safely shard, so for now we will raise in that situation. TODO: move the
+        extra state those overrides free into eviction hooks, then remove this check.
+        """
+        modules = list(self._all_modules())
+        for module in modules:
+            if type(module).deallocate_weights is not Module.deallocate_weights:
+                msg = (
+                    f"{type(module).__name__} overrides deallocate_weights, which shard does not run; free its "
+                    "other device state from a hook (register_eviction_hook) instead"
+                )
+                raise TypeError(msg)
+        parameters = list(self._all_parameters())
+        for parameter in parameters:
+            parameter.check_shard_axis(mesh_axis)
+
+        defer_free: list[ttnn.Tensor] = []
+        for parameter in parameters:
+            if parameter.shard_dim(mesh_axis) is not None:
+                parameter.shard(mesh_axis, defer_free=defer_free)
+        if not defer_free:
+            return
+        for t in defer_free:
+            ttnn.deallocate(t)
+        for module in modules:
+            module._set_evicted()
+
+    def gather(self, ccl_manager: Any) -> None:
+        """Undo `shard`: all-gather every transiently sharded parameter; the module is loaded again."""
+        defer_free: list[ttnn.Tensor] = []
+        for parameter in self._all_parameters():
+            parameter.gather(ccl_manager, defer_free=defer_free)
+        for t in defer_free:
+            ttnn.deallocate(t)
+        self._mark_loaded()
+
+    def is_transiently_sharded(self) -> bool:
+        """Whether any parameter in any submodule is transiently sharded."""
+        return any(p.is_transiently_sharded() for p in self._all_parameters())
+
+    def _all_modules(self) -> Iterator[Module]:
+        for _, child in self.named_children():
+            yield from child._all_modules()
+        yield self
+
+    def _all_parameters(self) -> Iterator[Parameter]:
+        for module in self._all_modules():
+            for _, parameter in module.named_parameters():
+                yield parameter
+
+    def _set_evicted(self) -> None:
         self._is_loaded = False
         for hook in self._eviction_hooks:
             hook()
 
     def register_eviction_hook(self, hook: Callable[[], None]) -> None:
-        """Run `hook` whenever this module's weights are deallocated.
+        """Run `hook` whenever this module's weights are deallocated or transiently sharded (`shard`).
 
         For device state that belongs with the module's residency but lives outside its parameters
         and children -- an owner's per-geometry caches, for instance -- so that evicting the module
@@ -334,6 +401,11 @@ class Module(ABC):
         pass
 
     def __call__(self, *args: Any, **kwargs: Any) -> Any:  # noqa: ANN401
+        # only walk the current module's params, not the full tree! Sub-modules should check
+        # their own parameters when they get called.
+        if any(p.is_transiently_sharded() for _, p in self.named_parameters()):
+            msg = f"{type(self).__name__} has weights with a transient split; gather it first"
+            raise RuntimeError(msg)
         return self.forward(*args, **kwargs)
 
 
@@ -458,33 +530,44 @@ class Parameter:
 
         tensor.verify_tensor_mesh_axes(mesh_axes, tensor_rank=len(total_shape), mesh_rank=len(list(device.shape)))
 
-        local_shape = list(total_shape)
         for tensor_dim, mesh_axis in enumerate(mesh_axes):
-            if mesh_axis is not None:
-                n = device.shape[mesh_axis]
-                if local_shape[tensor_dim] % n != 0:
-                    msg = (
-                        f"tensor with shape {total_shape} cannot be evenly distributed over mesh with shape "
-                        f"{tuple(device.shape)} along mesh axis {mesh_axis} and tensor dimension {tensor_dim} "
-                    )
-                    raise ValueError(msg)
-                local_shape[tensor_dim] //= n
-        local_shape = tuple(local_shape)
+            if mesh_axis is not None and total_shape[tensor_dim] % device.shape[mesh_axis] != 0:
+                msg = (
+                    f"tensor with shape {total_shape} cannot be evenly distributed over mesh with shape "
+                    f"{tuple(device.shape)} along mesh axis {mesh_axis} and tensor dimension {tensor_dim} "
+                )
+                raise ValueError(msg)
 
         self.total_shape = total_shape
-        self.local_shape = local_shape
         self.device = device
         self.layout = layout
         self.dtype = dtype
         self.memory_config = memory_config
         self.pad_value = pad_value
+
+        # This sets the durable layout, which is how the parameter tensor will always be loaded, saved and cached.
+        # The Module which owns this Parameter expects it to be in the durable_mesh_axes layout when calling
+        # forward or __call__.
+        self.durable_mesh_axes = mesh_axes
+
+        # self.mesh_axes is the current layout, which can be changed via `shard` and `gather`.
         self.mesh_axes = mesh_axes
         self.on_host = on_host
         self._data = None
         self._host_data = None  # host copy retained across evictions when _HOST_WEIGHT_CACHE is on
         self._host_data_key = None
 
+    @property
+    def local_shape(self) -> tuple[int, ...]:
+        """Each device's shape of the tensor in its current layout (`mesh_axes`)."""
+        return tuple(
+            size if axis is None else size // self.device.shape[axis]
+            for size, axis in zip(self.total_shape, self.mesh_axes, strict=True)
+        )
+
     def load_torch_tensor(self, torch_tensor: torch.Tensor, /) -> None:
+        if self.is_transiently_sharded():
+            self.deallocate()
         shape = tuple(torch_tensor.shape)
         if shape != self.total_shape:
             msg = f"expected tensor shape {self.total_shape}, got {shape}"
@@ -497,7 +580,7 @@ class Parameter:
             dtype=self.dtype,
             memory_config=self.memory_config,
             pad_value=self.pad_value,
-            mesh_axes=self.mesh_axes,
+            mesh_axes=self.durable_mesh_axes,
             on_host=self.on_host,
         )
 
@@ -505,6 +588,8 @@ class Parameter:
         ttnn.dump_tensor(path, self.data, mode=ttnn.DumpTensorMode.LOCAL)
 
     def load(self, path: str | Path, /) -> None:
+        if self.is_transiently_sharded():
+            self.deallocate()
         if _HOST_WEIGHT_CACHE and not self.on_host:
             # Materialize the host weights once and keep them; a dynamic_load reload then only
             # re-pushes them to device (~2.4s DMA for the 22B DiT) rather than re-reading and
@@ -537,6 +622,10 @@ class Parameter:
         if self._data is None:
             msg = "parameter has no data"
             raise RuntimeError(msg)
+        if self.is_transiently_sharded():
+            axes = [self.mesh_axes[d] for d in self.transient_dims()]
+            msg = f"parameter is transiently sharded over mesh axes {axes}; gather it first"
+            raise RuntimeError(msg)
         return self._data
 
     @data.setter
@@ -549,6 +638,104 @@ class Parameter:
         if self._data is not None:
             ttnn.deallocate(self._data)
             self._data = None
+        self.mesh_axes = self.durable_mesh_axes
+
+    def is_transiently_sharded(self) -> bool:
+        """Whether the parameter has a transient split e.g. via `shard`."""
+        return self.mesh_axes != self.durable_mesh_axes
+
+    def transient_dims(self) -> list[int]:
+        """The dims split beyond the durable layout, by `shard`."""
+        return [d for d, (a, b) in enumerate(zip(self.mesh_axes, self.durable_mesh_axes, strict=True)) if a != b]
+
+    def check_shard_axis(self, mesh_axis: int) -> None:
+        """Raise if `mesh_axis` is in this parameter's durable layout (the owning module's forward is written for that
+        split, so it cannot be gathered away), or if the parameter already has a transient split from an earlier
+        `shard`: a parameter is sharded over one mesh axis at a time."""
+        if mesh_axis in self.durable_mesh_axes:
+            msg = (
+                f"mesh axis {mesh_axis} is part of this parameter's durable layout (durable_mesh_axes "
+                f"{self.durable_mesh_axes}); shard can only split over another mesh axis"
+            )
+            raise ValueError(msg)
+        if self.is_transiently_sharded():
+            axes = [self.mesh_axes[d] for d in self.transient_dims()]
+            msg = f"parameter already has a transient split over mesh axes {axes}; gather it before sharding again"
+            raise ValueError(msg)
+
+    def shard(self, mesh_axis: int, /, *, defer_free: list[ttnn.Tensor]) -> None:
+        """Shard this parameter's data along the mesh_axis; see `Module.shard`.
+
+        We split the dim `shard_dim` picks. If the parameter cannot be split (`shard_dim` returns None), we raise a
+        ValueError instead of leaving it whole, so a caller that shards one parameter always knows whether it was split.
+
+        After sharding, the parameter holds the sharded tensor, and the full tensor is appended to `defer_free` for
+        the caller to deallocate.
+        """
+        self.check_shard_axis(mesh_axis)
+        dim = self.shard_dim(mesh_axis)
+        if dim is None:
+            msg = (
+                f"parameter of shape {list(self.total_shape)} cannot be split over mesh axis {mesh_axis}: it needs "
+                "device data, a rank of at most 4, more than one device on the axis and a dim that splits evenly"
+            )
+            raise ValueError(msg)
+        full = self._data
+        offset = 4 - len(self.total_shape)
+        piece = ttnn.mesh_partition(
+            ttnn.reshape(full, (1,) * offset + self.local_shape),
+            dim + offset,
+            cluster_axis=mesh_axis,
+            memory_config=self.memory_config,
+        )
+        self._set_mesh_axis(dim, mesh_axis)
+        self.data = ttnn.reshape(piece, self.local_shape)
+        defer_free.append(full)
+
+    def gather(self, ccl_manager: Any, /, *, defer_free: list[ttnn.Tensor]) -> None:
+        """Undo `shard`: all-gather the transiently split dim, back to the durable layout (`durable_mesh_axes`).
+
+        After gathering, the parameter holds the full tensor again, and the sharded tensor is appended to
+        `defer_free` for the caller to deallocate.
+        """
+        dims = self.transient_dims()
+        if not dims or self._data is None:
+            return
+        (dim,) = dims
+        sharded = self._data
+        gathered = ccl_manager.all_gather(sharded, dim=dim, mesh_axis=self.mesh_axes[dim], use_hyperparams=False)
+        self._set_mesh_axis(dim, self.durable_mesh_axes[dim])
+        if gathered.memory_config() != self.memory_config:
+            gathered = ttnn.to_memory_config(gathered, self.memory_config)
+        self.data = gathered
+        defer_free.append(sharded)
+
+    def shard_dim(self, mesh_axis: int) -> int | None:
+        """The dim `shard` would split over the mesh_axis, or None if this parameter cannot be split.
+
+        We pick the first dim that is not already sharded and splits evenly over the mesh_axis: in whole tiles for
+        the last two dims of a tiled tensor, and never the last dim of a row-major one. A parameter cannot be split if
+        it has no device data, if its rank is above 4, if the mesh_axis has only one device, or if no dim splits
+        evenly.
+        """
+        if self._data is None or self.on_host or len(self.total_shape) > 4:
+            return None
+        n = self.device.shape[mesh_axis]
+        if n == 1:
+            return None
+        rank = len(self.total_shape)
+        tiled = self.layout == ttnn.Layout.TILE
+        for d, (size, axis) in enumerate(zip(self.local_shape, self.mesh_axes, strict=True)):
+            if axis is not None or (d == rank - 1 and not tiled):
+                continue
+            if size % (n * ttnn.TILE_SIZE if tiled and d >= rank - 2 else n) == 0:
+                return d
+        return None
+
+    def _set_mesh_axis(self, dim: int, mesh_axis: int | None) -> None:
+        axes = list(self.mesh_axes)
+        axes[dim] = mesh_axis
+        self.mesh_axes = tuple(axes)
 
     def _check_data(self, value: ttnn.Tensor) -> None:
         if self.on_host:
