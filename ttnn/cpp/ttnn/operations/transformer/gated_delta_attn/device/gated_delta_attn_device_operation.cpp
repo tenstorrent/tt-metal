@@ -43,6 +43,9 @@ void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
 
     TT_FATAL(BH >= 1, "num_heads (BH) must be >= 1, got {}", BH);
     TT_FATAL(NC >= 1, "num_chunks (NC) must be >= 1, got {}", NC);
+    TT_FATAL(
+        !attrs.output_mem_config.is_sharded() && attrs.output_mem_config.buffer_type() == BufferType::DRAM,
+        "output_mem_config must be interleaved DRAM");
 
     // The device kernels are hardwired to exactly four 32-wide block rows (Ct == Kt == Vt == 4):
     // the compute kernel calls fwd_sub_4rows unconditionally and the reader always fetches the 4
