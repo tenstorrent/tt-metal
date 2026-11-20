@@ -150,25 +150,32 @@ def _read_frames(paths):
     return frames
 
 
+def _module_values(frames):
+    """{(module, config column): the distinct values it takes in that module}."""
+    values = {}
+    for frame in frames:
+        for module, rows in frame.groupby(MODULE_COL, sort=False):
+            for col in _config_cols(rows.columns):
+                if col == MODULE_COL:
+                    continue
+                present = rows[col].dropna()
+                if not present.empty:
+                    values.setdefault((module, col), set()).update(present.unique())
+    return values
+
+
 def _one_sided_constants(mine, theirs):
-    """Config columns only I have, holding one value, so they cannot tell my points apart."""
+    """{module: columns only I have there, holding one value, so they cannot tell its points apart}."""
     # A column that is present but empty is a column they do not have: _medians
-    # drops all-null columns from the key.
-    theirs_cols = {
-        c for f in theirs for c in f.columns if c in f and f[c].notna().any()
-    }
-    drop = set()
-    for frame in mine:
-        for col in _config_cols(frame.columns):
-            if col in theirs_cols or col in drop:
-                continue
-            if frame[col].dropna().nunique() <= 1:
-                drop.add(col)
-    return {
-        c
-        for c in drop
-        if not any(c in f.columns and f[c].dropna().nunique() > 1 for f in mine)
-    }
+    # drops all-null columns from the key. The rule is per module, because a
+    # column another module already has says nothing about this one.
+    theirs_values = _module_values(theirs)
+    drop = {}
+    for (module, col), values in _module_values(mine).items():
+        if len(values) > 1 or (module, col) in theirs_values:
+            continue
+        drop.setdefault(module, set()).add(col)
+    return drop
 
 
 def _drop_one_sided_constants(cur_frames, base_frames):
@@ -178,10 +185,11 @@ def _drop_one_sided_constants(cur_frames, base_frames):
     so nothing matches and a whole module reads as new and missing at once.
     """
     for mine, theirs in ((cur_frames, base_frames), (base_frames, cur_frames)):
-        for col in _one_sided_constants(mine, theirs):
+        for module, cols in _one_sided_constants(mine, theirs).items():
             for frame in mine:
-                if col in frame.columns:
-                    frame.drop(columns=[col], inplace=True)
+                rows = frame[MODULE_COL] == module
+                for col in cols & set(frame.columns):
+                    frame[col] = frame[col].astype(object).mask(rows)
 
 
 def compare_runs(

@@ -241,6 +241,22 @@ def test_a_column_one_side_added_keeps_the_other_points_comparable(tmp_path):
     assert not result["new_points"] and not result["missing_points"]
 
 
+def test_a_column_another_module_has_is_still_one_sided_here(tmp_path):
+    baseline = [
+        _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_x"),
+        _csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_y", extra={"knob": 1}),
+    ]
+    current = [
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_x", extra={"knob": 1}),
+        _csv(tmp_path, "c.csv", _INIT, _TILE_LOOP, module="perf_y", extra={"knob": 1}),
+    ]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 4
+    assert not result["new_points"] and not result["missing_points"]
+
+
 def test_a_new_module_is_the_suite_changing_not_a_gap(tmp_path):
     baseline = [_csv(tmp_path, "b.csv", _INIT, _TILE_LOOP, module="perf_x")]
     current = [
