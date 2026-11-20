@@ -6,7 +6,6 @@ import pytest
 from loguru import logger
 
 from models.common.utility_functions import tt2torch_tensor, comp_pcc
-from models.common.utility_functions import skip_for_blackhole
 import torch
 import ttnn
 
@@ -121,7 +120,6 @@ def run_create_qkv_heads_test(
     assert passing_pcc_v
 
 
-@skip_for_blackhole("L1 and Circular buffers are crashing on BH, see #12349")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 8192}], indirect=True)
 @pytest.mark.parametrize(
     "dtype",
@@ -309,6 +307,7 @@ def run_create_q_and_kv_heads_test(
         (2, 1024, 96, 8, 8, 96, 2, 8),
         (2, 256, 96, 8, 8, 160, 2, 8),
         (2, 64, 96, 8, 8, 160, 2, 4),
+        (2, 64, 96, 8, 8, 160, 2, 8),
     ),
 )
 def test_nlp_create_q_and_kv_heads_separate_test(

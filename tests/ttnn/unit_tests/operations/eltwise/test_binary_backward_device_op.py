@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tests for the shared BinaryBackwardDeviceOperation (mul_bw first consumer)."""
+"""Tests for the shared BinaryBackwardDeviceOperation (mul/add/sub/rsub/div_bw)."""
 
 import pytest
 import torch
@@ -174,6 +174,9 @@ def test_mul_bw_partial_mask_routes_to_composite(mask, device):
     golden = ttnn.get_golden_function(ttnn.mul_bw)(g_pt, a_pt, b_pt, are_required_outputs=mask)
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, are_required_outputs=mask, memory_config=mc)
 
+    # Composite path must nullopt the unrequested slot (no silent full-output on partial mask).
+    for i, req in enumerate(mask):
+        assert (out[i] is not None) == req, f"slot {i} present={out[i] is not None} but mask said {req}"
     slots = [i for i, req in enumerate(mask) if req]
     _assert_mul_bw_grads(out, golden, ulp=1, out_dtype=torch.bfloat16, slots=slots)
 
@@ -373,4 +376,156 @@ def test_mul_bw_sharded_stays_on_composite(device):
 
     golden = ttnn.get_golden_function(ttnn.mul_bw)(g_pt, a_pt, b_pt)
     out = ttnn.mul_bw(g_tt, a_tt, b_tt, memory_config=sharded_mc)
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+# ---------------------------------------------------------------------------
+# add_bw / sub_bw / rsub_bw / div_bw — shared device-op routing + edge cases.
+# ---------------------------------------------------------------------------
+
+# (op_fn, other_low, other_high) — div_bw needs non-zero other.
+_OP_TABLE = [
+    ("add", ttnn.add_bw, -5.0, 5.0),
+    ("sub", ttnn.sub_bw, -5.0, 5.0),
+    ("rsub", ttnn.rsub_bw, -5.0, 5.0),
+    ("div", ttnn.div_bw, 0.1, 5.0),
+]
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+def test_bw_fused_multi_batch_no_cb_backpressure(op_name, op_fn, other_low, other_high, device):
+    # Reader sustains >2 tiles/core without CB starvation at this batch×channel×H×W.
+    shape = (1, 3, 320, 384)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, other_low, other_high, device, ttnn.bfloat16, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt, memory_config=mc)
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize(
+    "input_val,other_val,grad_val",
+    [
+        (1e-20, 1e-20, 1.0),  # tiny: other² = 1e-40 denormal → 1/other² = inf
+        (1e30, 1e20, 1.0),  # huge: other² = 1e40 overflows fp32; (input/other)/other = -1e-10
+        (-2.0, 3e-10, 1.0),  # mid: other² = 9e-20 risks precision loss
+    ],
+)
+def test_div_bw_fused_handles_extreme_other(input_val, other_val, grad_val, device):
+    # other_grad stays finite and matches (input/other)/other across fp32 range edges where other² fails.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+
+    def _const(val):
+        pt = torch.full(shape, val, dtype=torch.float32)
+        tt = ttnn.from_torch(pt, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=mc)
+        return pt, tt
+
+    a_pt, a_tt = _const(input_val)
+    b_pt, b_tt = _const(other_val)
+    g_pt, g_tt = _const(grad_val)
+    out = ttnn.div_bw(g_tt, a_tt, b_tt, memory_config=mc)
+    other_grad = ttnn.to_torch(out[1]).float()
+    assert torch.isfinite(other_grad).all(), f"other_grad has inf/nan at input={input_val}, other={other_val}"
+    # Expected via composite formulation.
+    expected = -grad_val * (a_pt / b_pt) / b_pt
+    if torch.isfinite(expected).all():
+        rel = ((other_grad - expected).abs() / expected.abs().clamp(min=1e-30)).max().item()
+        assert rel < 1e-3, f"max rel err {rel} at input={input_val}, other={other_val}"
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+@pytest.mark.parametrize(
+    "grad_shape,input_shape,other_shape",
+    [
+        ((1, 1, 32, 128), (1, 1, 1, 128), (1, 1, 32, 128)),
+        ((1, 1, 32, 128), (1, 1, 32, 128), (1, 1, 1, 128)),
+        ((2, 4, 32, 32), (2, 1, 32, 32), (1, 4, 32, 32)),
+    ],
+)
+def test_bw_broadcast_returns_operand_shape_grads(
+    op_name, op_fn, other_low, other_high, grad_shape, input_shape, other_shape, device
+):
+    # Broadcast grads sum-reduce back to each operand's shape per d(a op b)/da and /db semantics.
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(input_shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(other_shape, other_low, other_high, device, ttnn.bfloat16, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(grad_shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt, memory_config=mc)
+    assert list(out[0].shape) == list(
+        a_pt.shape
+    ), f"{op_name}: input_grad shape {list(out[0].shape)} != {list(a_pt.shape)}"
+    assert list(out[1].shape) == list(
+        b_pt.shape
+    ), f"{op_name}: other_grad shape {list(out[1].shape)} != {list(b_pt.shape)}"
+    # add/sub/rsub are exact apart from the sum-reduce; div's recip adds real precision loss.
+    if op_name == "div":
+        _assert_mul_bw_grads(out, golden, pcc=0.99)
+    else:
+        _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+@pytest.mark.parametrize("mask", [[True, False], [False, True]])
+def test_bw_partial_mask_routes_to_composite(op_name, op_fn, other_low, other_high, mask, device):
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, other_low, other_high, device, ttnn.bfloat16, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt, are_required_outputs=mask)
+    out = op_fn(g_tt, a_tt, b_tt, are_required_outputs=mask, memory_config=mc)
+    # Composite path must nullopt the unrequested slot (no silent full-output on partial mask).
+    for i, req in enumerate(mask):
+        assert (out[i] is not None) == req, f"{op_name}: slot {i} present={out[i] is not None} but mask said {req}"
+    slots = [i for i, req in enumerate(mask) if req]
+    _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16, slots=slots)
+
+
+@pytest.mark.parametrize("op_name,op_fn,other_low,other_high", _OP_TABLE)
+@pytest.mark.parametrize("bad_role", ["grad", "input", "other"])
+def test_bw_int_operand_raises(op_name, op_fn, other_low, other_high, bad_role, device, expect_error):
+    # Hard check runs before composite fallback — int/uint operands now TT_FATAL for all 5 ops.
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    _, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, seed=1)
+    _, b_tt = _pt_and_tt(shape, other_low, other_high, device, ttnn.bfloat16, mc, seed=2)
+    _, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    int_tensor = ttnn.zeros(shape, dtype=ttnn.int32, device=device, layout=ttnn.TILE_LAYOUT, memory_config=mc)
+    grad, input_, other = (
+        (int_tensor, a_tt, b_tt)
+        if bad_role == "grad"
+        else (g_tt, int_tensor, b_tt)
+        if bad_role == "input"
+        else (g_tt, a_tt, int_tensor)
+    )
+    with expect_error(RuntimeError, "floating-point"):
+        op_fn(grad, input_, other, memory_config=mc)
+
+
+def test_rsub_bw_output_dtype_follows_input_other(device):
+    # input_grad dtype follows input, other_grad dtype follows other (not grad_tensor's dtype).
+    shape = (1, 1, 32, 32)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.bfloat16, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.bfloat16, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.float32, mc, seed=3)  # grad is fp32, operands bf16
+    out = ttnn.rsub_bw(g_tt, a_tt, b_tt, memory_config=mc)
+    assert out[0].dtype == a_tt.dtype, f"input_grad dtype {out[0].dtype} != input dtype {a_tt.dtype}"
+    assert out[1].dtype == b_tt.dtype, f"other_grad dtype {out[1].dtype} != other dtype {b_tt.dtype}"
+
+
+@pytest.mark.parametrize("op_name,op_fn", [("add", ttnn.add_bw), ("sub", ttnn.sub_bw), ("rsub", ttnn.rsub_bw)])
+def test_bw_fp32_dest_acc_still_enabled_on_grad_only_kernel(op_name, op_fn, device):
+    # fp32_dest_acc_en still derives from input_df/other_df even when 1-input kernel skips those CBs.
+    shape = (1, 1, 320, 384)
+    mc = ttnn.DRAM_MEMORY_CONFIG
+    a_pt, a_tt = _pt_and_tt(shape, -1.0, 1.0, device, ttnn.float32, mc, required_grad=True, seed=1)
+    b_pt, b_tt = _pt_and_tt(shape, -5.0, 5.0, device, ttnn.float32, mc, required_grad=True, seed=2)
+    g_pt, g_tt = _pt_and_tt(shape, -3.0, 3.0, device, ttnn.bfloat16, mc, seed=3)
+    golden = ttnn.get_golden_function(op_fn)(g_pt, a_pt, b_pt)
+    out = op_fn(g_tt, a_tt, b_tt, memory_config=mc)
     _assert_mul_bw_grads(out, golden, ulp=4, out_dtype=torch.bfloat16)

@@ -36,7 +36,7 @@ struct WorkUnitSpec {
 };
 
 struct ProgramSpec {
-    // Object invariants (excluding advanced options):
+    // Object invariants (excluding most advanced options):
     //
     // Every name resolves:
     // - Each KernelSpec::DFBBinding::dfb_spec_name names a spec in dataflow_buffers.
@@ -45,12 +45,15 @@ struct ProgramSpec {
     // - Each KernelSpec::TensorBinding::tensor_parameter_name names a parameter in tensor_parameters.
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
     // - Each DataflowBufferSpec::borrowed_from, when set, names a parameter in tensor_parameters.
+    // - Each DFB or scratchpad advanced_options.allocation_override, when set, names an arena
+    //   parameter in ProgramAdvancedOptions::sram_arena_parameters.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.
     // - Each dataflow buffer is bound by at least one kernel.
     // - Each scratchpad is bound by at least one kernel.
     // - Each tensor parameter is bound by a kernel, or by a dataflow buffer's borrowed_from.
+    // - Each SRAM arena parameter is used by a DFB or scratchpad allocation override.
     // - (Semaphores are exempt here)
     //
     // Data-movement core assignment:

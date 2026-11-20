@@ -33,7 +33,7 @@ from helpers.test_variant_parameters import (
     generate_input_dim,
 )
 from helpers.tile_constants import MAX_TILE_ELEMENTS
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test, result_tensor
 
 
@@ -113,7 +113,9 @@ def test_unp_bcast_sub_sdpa(
             tile_32x32 = combined.repeat(32, 1)
             reconstructed_tiles.append(tile_32x32.flatten())
 
-    tilized_reconstructed_tiles = [tilize(tile) for tile in reconstructed_tiles]
+    tilized_reconstructed_tiles = [
+        tilize_block(tile, TILE_DIMENSIONS).flatten() for tile in reconstructed_tiles
+    ]
 
     golden = []
 

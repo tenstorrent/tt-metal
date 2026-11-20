@@ -93,6 +93,8 @@ PROMPT = _typography_prompt_json()
 # l1_small_size=32KB: only the VAE conv draws from L1_SMALL (proven sufficient in the VAE tests);
 # the denoiser matmuls use none, so 64KB over-reserved the shared L1 region and made the SP4xTP2
 # path's resident ring/all-gather buffers clash with the matmul circular buffers.
+# These tests run untraced (traced=False, run_warmup=False), so the trace region is unused. Serving
+# warms and keeps traces: open the mesh with required_trace_region_size(mesh_shape) for that.
 _LINE_PIPE = {**line_params, "l1_small_size": 32768, "trace_region_size": 60000000}
 _RING_PIPE = {**ring_params, "l1_small_size": 32768, "trace_region_size": 60000000}
 
@@ -113,7 +115,7 @@ _PIPE_CONFIGS = [
 @pytest.mark.parametrize("preset", ["V4_TURBO_12", "V4_QUALITY_48"])
 def test_pipeline_class(*, mesh_device, height, width, preset) -> None:
     # Parallel config is discovered from the mesh shape (_PRESETS); no per-test tp/sp/links wiring.
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width)
+    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=height, width=width, run_warmup=False)
     img = pipe(prompts=[PROMPT], preset=preset, seed=1234, traced=False)[0]
 
     out_dir = os.environ.get("IDEOGRAM4_OUT_DIR", "generated")
@@ -134,7 +136,7 @@ def test_2048_presets(*, mesh_device) -> None:
     Builds the pipeline ONCE and loops the presets (avoids a per-preset model reload).
     Untraced (traced=False) per the serving plan; 2048px doesn't benefit from tracing.
     """
-    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=2048, width=2048)
+    pipe = Ideogram4Pipeline.create_pipeline(mesh_device=mesh_device, height=2048, width=2048, run_warmup=False)
     for preset in ("V4_TURBO_12", "V4_DEFAULT_20", "V4_QUALITY_48"):
         img = pipe(prompts=[PROMPT], preset=preset, seed=1234, traced=False)[0]
         out_dir = os.environ.get("IDEOGRAM4_OUT_DIR", "generated")

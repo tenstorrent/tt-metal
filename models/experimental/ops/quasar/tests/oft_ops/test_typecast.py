@@ -52,6 +52,7 @@ def _host_int(tt_tensor, shape):
 )
 def test_typecast_bf16_to_uint32(ttnn_mesh_device, reset_seeds, shape):
     """Prescaled features (x * 2^20, non-negative) -> uint32. Integer-valued bf16 inputs: exact."""
+    U.xfail_on_quasar("Quasar has no UInt32 DataFormat / LLK store mode: typecast to or from uint32 is unsupported")
     mesh = ttnn_mesh_device
     x = torch.randint(0, 2**20, shape).to(torch.bfloat16)  # bf16 rounding keeps them integers
     tt_x = U.to_tt(x, mesh)  # bf16 TILE DRAM
@@ -73,6 +74,7 @@ def test_typecast_bf16_to_uint32(ttnn_mesh_device, reset_seeds, shape):
 )
 def test_typecast_uint32_to_bf16(ttnn_mesh_device, reset_seeds, shape):
     """uint32 integral image -> bf16 (values kept below 2^31 so the int32 host view is exact)."""
+    U.xfail_on_quasar("Quasar has no UInt32 DataFormat / LLK store mode: typecast to or from uint32 is unsupported")
     mesh = ttnn_mesh_device
     x = torch.randint(0, 2**30, shape, dtype=torch.int32)
     tt_x = U.to_tt(x, mesh, dtype=ttnn.uint32)  # uint32 TILE DRAM

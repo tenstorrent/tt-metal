@@ -87,6 +87,21 @@ _PATHS = [
     # Sliced segment map: 4 output tiles on a grid of 21 or more cores, each reading 32 source tiles, so every output
     # tile is cut into ranges written by different cores.
     ("tile_mapped_sliced", [1, 1, 4, 1000], [1, 1, 125, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    # LCM: a width change tile rows loses on, run through the compute engine, which copies the bits of every dtype it
+    # takes. 64 two-tile chunks against 128 native output tiles: LCM wins by the 5x margin on any grid.
+    ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT),
+    ("lcm_bf16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT),
+    ("lcm_uint16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint16, ttnn.TILE_LAYOUT),
+    ("lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT),
+    ("lcm_uint32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.uint32, ttnn.TILE_LAYOUT),
+    # Row-major stick program: dividing widths.
+    ("rm_split", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major stick program, non-aligned: 6 B source sticks repacked by RISC copies, merged 8 to one and split back.
+    ("rm_merge_nonaligned", [5120, 3], [640, 24], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_split_nonaligned", [640, 24], [5120, 3], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    # Row-major slab program: widths that do not divide, and dividing widths whose stick program does not fit L1.
+    ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
+    ("rm_slab_dividing", [2, 409600], [4, 204800], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 
@@ -105,11 +120,15 @@ def test_reshape_codegen_bit_exact(device, path, in_shape, out_shape, dtype, lay
     _check_bit_exact(device, in_shape, out_shape, dtype, layout, mem, mem)
 
 
-_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced")]
+_KEYED = [p for p in _PATHS if p[0] in ("tile_rows", "tile_mapped_fp32", "tile_mapped_sliced", "lcm_fp32", "rm_split")]
 
 
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype, layout):
+    _check_sub_core_grids(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_sub_core_grids(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=_SUB_CORE_GRIDS)
@@ -121,8 +140,12 @@ def test_reshape_codegen_sub_core_grids(device, path, in_shape, out_shape, dtype
     assert device.num_program_cache_entries() == entries
 
 
+# The slab and non-aligned programs size reads and scratch by each side's alignment, which differs between DRAM and L1.
+_PLACED = _KEYED + [p for p in _PATHS if p[0] in ("rm_arbitrary_bf16", "rm_merge_nonaligned", "rm_split_nonaligned")]
+
+
 @pytest.mark.parametrize("in_mem,out_mem", [(_DRAM, _L1), (_L1, _DRAM)], ids=["dram_to_l1", "l1_to_dram"])
-@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
+@pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _PLACED, ids=[p[0] for p in _PLACED])
 def test_reshape_codegen_mixed_placement(device, path, in_shape, out_shape, dtype, layout, in_mem, out_mem):
     _check_bit_exact(device, in_shape, out_shape, dtype, layout, in_mem, out_mem)
 
@@ -137,9 +160,16 @@ _EDGE = [
     ("odd_outer", [7, 32, 96], [3, 7, 32, 32]),
     ("outer_to_h", [3, 50, 64], [50, 3, 64]),
 ]
-_EDGE_CASES = [(*e, ttnn.bfloat16) for e in _EDGE] + [
-    (*e, ttnn.float32) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h")
-]
+_EDGE_CASES = (
+    [(*e, ttnn.bfloat16) for e in _EDGE]
+    + [(*e, ttnn.float32) for e in _EDGE if e[0] in ("h50", "rank5", "outer_to_h")]
+    + [
+        # Unpadded input, tile-padded output height: LCM must refuse it, or its unpadded tile stream lands in the
+        # output's padding. With 64 batches LCM's 32 six-tile chunks would beat native by lcm_beats_native, so only
+        # the guard keeps forced codegen off LCM.
+        ("h_out_pad", [64, 32, 96], [64, 48, 64], ttnn.float32),
+    ]
+)
 
 
 @pytest.mark.parametrize(
@@ -163,19 +193,38 @@ def _check_edge_shape(device, in_shape, out_shape, dtype):
     _assert_bits(padded, codegen.cpu().to_torch_with_padded_shape(), dtype)
 
 
-# (id, in shape, out shape, dtype, layout, expected route). Demotion is decided by the TILE program routing takes:
-# tile rows where it beats native, the segment map on widths that are not multiples of 32. Row-major runs native.
+def _rm_aligned_pair(piece_bytes, merge, sticks=512):
+    # bf16 sticks of `piece_bytes` and twice that, both alignment multiples: a merge goes short to long, a split back.
+    short, long = [sticks, piece_bytes // 2], [sticks // 2, piece_bytes]
+    return (short, long) if merge else (long, short)
+
+
+# (id, in shape, out shape, dtype, layout, expected route). Row-major demotion is decided by stick sizes
+# (rm_native_faster) and taken only where native and the stick program fit the static L1 window; the row-major
+# cases sit on either side of its aligned-DRAM rule, which demotes merges from a 256 B piece on Blackhole and a 2 KB
+# piece on Wormhole and never splits; "native_bh" is native on Blackhole only. TILE demotion is decided by the TILE
+# program routing takes: tile rows or LCM where they beat native, the segment map on widths that are not multiples
+# of 32.
 _ROUTES = [
+    ("rm_split_piece_256", *_rm_aligned_pair(256, merge=False), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_128", *_rm_aligned_pair(128, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "codegen"),
+    ("rm_merge_piece_256", *_rm_aligned_pair(256, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native_bh"),
+    ("rm_merge_piece_2048", *_rm_aligned_pair(2048, merge=True), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
     # Head split: batching cuts source reads 32x.
     ("tile_rows", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # 4-head merge: the cut is only 4x, but each output tile reads 24 fewer padded source tiles.
     ("tile_head_merge", [1, 512, 4, 256], [1, 512, 1024], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    # Width change: tile rows saves only 2x the reads on far fewer cores.
+    # Width change: tile rows saves only 2x the reads on far fewer cores, and LCM loses as in fp32 below.
     ("tile_width_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.bfloat16, ttnn.TILE_LAYOUT, "native"),
     ("tile_width_uint16", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
+    # The same width change in fp32: LCM runs its one six-tile chunk on one core while native spreads its six output
+    # tiles over six cores, and LCM is not 6x faster, so it stays native.
+    ("tile_width_lcm_native", [1, 1, 64, 96], [1, 1, 32, 192], ttnn.float32, ttnn.TILE_LAYOUT, "native"),
+    # A width split in fp32: 64 two-tile chunks against 128 native output tiles, so LCM wins by the 5x margin.
+    ("tile_split_lcm", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
+    ("tile_split_lcm_bf16", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
     # A width that is not a multiple of 32 takes the segment map.
     ("tile_unaligned_width", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.bfloat16, ttnn.TILE_LAYOUT, "codegen"),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, "native"),
 ]
 
 
@@ -185,6 +234,8 @@ def test_reshape_codegen_routing(device, case, in_shape, out_shape, dtype, layou
 
 
 def _check_routing(device, in_shape, out_shape, dtype, layout, route):
+    if route == "native_bh":
+        route = "codegen" if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else "native"
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     expected_leg = _force_codegen if route == "codegen" else _force_native
@@ -196,8 +247,37 @@ def _check_routing(device, in_shape, out_shape, dtype, layout, route):
     assert device.num_program_cache_entries() == entries, f"auto did not take {route}"
 
 
+# LCM on shapes whose rank or outer dims differ from [1, 1, H, W]: the chunks run over the flattened tile rows, so they
+# cross batch boundaries. All win by the 5x margin and route to LCM.
+_LCM_EDGE = [
+    # 64 -> 32 splits: two-tile chunks against twice as many native output tiles.
+    ("batched", [2, 3, 64, 64], [2, 3, 128, 32]),
+    ("rank2", [2048, 64], [4096, 32]),
+    ("outer_change", [4, 32, 64], [2, 128, 32]),
+    # 64 -> 96: each six-tile chunk spans three one-tile-row batches; 48 chunks against 288 native output tiles.
+    ("chunk_spans_batches", [144, 32, 64], [3072, 96]),
+]
+_LCM_EDGE_CASES = [(*e, ttnn.float32) for e in _LCM_EDGE] + [
+    (*e, dtype)
+    for e in _LCM_EDGE
+    if e[0] == "batched"
+    for dtype in (ttnn.int32, ttnn.uint32, ttnn.bfloat16, ttnn.uint16)
+]
+
+
+@pytest.mark.parametrize(
+    "case,in_shape,out_shape,dtype", _LCM_EDGE_CASES, ids=[f"{c[0]}-{c[3].name.lower()}" for c in _LCM_EDGE_CASES]
+)
+def test_reshape_codegen_lcm_edge_shapes(device, case, in_shape, out_shape, dtype):
+    _check_routing(device, in_shape, out_shape, dtype, ttnn.TILE_LAYOUT, "codegen")
+
+
 @pytest.mark.parametrize("path,in_shape,out_shape,dtype,layout", _KEYED, ids=[p[0] for p in _KEYED])
 def test_reshape_codegen_cache_hit_new_addresses(device, path, in_shape, out_shape, dtype, layout):
+    _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout)
+
+
+def _check_cache_hit_new_addresses(device, in_shape, out_shape, dtype, layout):
     source = _make(in_shape, dtype)
     x = _to_device(device, source, dtype, layout, _DRAM)
     first = _force_codegen(x, out_shape, memory_config=_DRAM)
@@ -231,13 +311,18 @@ def test_reshape_codegen_new_shape_is_new_program(device):
 
 @pytest.mark.parametrize("entry", ["auto", "forced"])
 @pytest.mark.parametrize(
-    "big_shape,view_shape,out_shape",
-    [([1, 128, 1024], [1, 64, 1024], [1, 64, 8, 128]), ([2, 128, 1024], [2, 64, 1024], [2, 64, 8, 128])],
-    ids=["b1", "b2"],
+    "big_shape,view_shape,out_shape,dtype",
+    [
+        ([1, 128, 1024], [1, 64, 1024], [1, 64, 8, 128], ttnn.bfloat16),
+        ([2, 128, 1024], [2, 64, 1024], [2, 64, 8, 128], ttnn.bfloat16),
+        # The view routes to LCM, which checks the buffer against its own page count.
+        ([1, 1, 4096, 64], [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32),
+    ],
+    ids=["b1", "b2", "lcm_fp32"],
 )
-def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_shape, out_shape):
-    source = _make(big_shape, ttnn.bfloat16)
-    x = _to_device(device, source, ttnn.bfloat16, ttnn.TILE_LAYOUT, _DRAM)
+def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_shape, out_shape, dtype):
+    source = _make(big_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
     # Shrinking the volume with the last dim kept returns a view on x's whole buffer.
     view = ttnn.reshape(x, ttnn.Shape(view_shape))
     assert view.buffer_address() == x.buffer_address()
@@ -246,7 +331,7 @@ def test_reshape_codegen_view_on_larger_buffer(device, entry, big_shape, view_sh
     reshape = ttnn.reshape if entry == "auto" else _force_codegen
     out = reshape(view, out_shape, memory_config=_DRAM)
     expected = source.flatten()[: torch.Size(view_shape).numel()].reshape(out_shape)
-    _assert_bits(expected, ttnn.to_torch(out), ttnn.bfloat16)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
 
 
 def _l1_hog(device, bytes_per_core):
@@ -329,6 +414,35 @@ def test_reshape_codegen_shrinks_plan_under_l1_pressure(device):
     assert device.num_program_cache_entries() == entries + 1
 
 
+def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
+    # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
+    # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
+    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+
+    def run():
+        out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+
+    run()
+    entries = device.num_program_cache_entries()
+    hog = _l1_hog_leaving(device, 120 * 1024)
+    try:
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+        # Auto routes to the smaller LCM program just compiled; native would compile a new one.
+        out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1(device):
     # The same head split's smallest tile-row plan takes 173 KiB per core, so with 128 KiB free the program factory
     # builds the segment map instead: a new program, which auto takes as well.
@@ -348,9 +462,122 @@ def test_reshape_codegen_falls_back_to_segment_map_when_no_tile_row_plan_fits_l1
         ttnn.deallocate(hog)
 
 
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.uint16], ids=["bf16", "uint16"])
+def test_reshape_codegen_lcm_16bit_every_bit_pattern(device, dtype):
+    # Every 16-bit pattern twice, shuffled over tile positions: bf16 NaN payloads, Inf and subnormals included, which
+    # a float conversion in unpack, DEST or pack would change.
+    in_shape, out_shape = [1, 1, 2048, 64], [1, 1, 4096, 32]
+    g = torch.Generator().manual_seed(0)
+    patterns = torch.cat([torch.randperm(1 << 16, generator=g) for _ in range(2)]).reshape(in_shape)
+    if dtype == ttnn.bfloat16:
+        source = (patterns - (1 << 15)).to(torch.int16).view(torch.bfloat16)
+    else:
+        source = patterns.to(torch.int32)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
+
+
+# LCM cases on one core, so each runs several chunks through the same CBs.
+_LCM_ONE_CORE = [
+    # 96 -> 160: 15-tile chunks, compute tilizes 5 tiles at a time and the writer drains batches of 8. fit_lcm needs
+    # depth >= 2 * 8 + 5 - 1 = 20 and rounds it up to lcm(5, 8) = 40; 8 chunks put 120 tiles through it, three passes.
+    # Rounding to 8 (24) would split a tilize write and rounding to 5 (20) a writer batch at the wrap.
+    ("wrap", [1, 1, 1280, 96], [1, 1, 768, 160], ttnn.float32),
+    ("wrap_bf16", [1, 1, 1280, 96], [1, 1, 768, 160], ttnn.bfloat16),
+    # 256 -> 128: 8 input tiles per row exceed the 4 fp32 tiles DEST holds, so each row untilizes in two blocks; 4
+    # chunks of 8 tiles.
+    ("multi_block", [1, 1, 128, 256], [1, 1, 256, 128], ttnn.float32),
+    # 512 -> 256 in 16-bit: 16 input tiles per row exceed the 8 a 16-bit DEST holds; 8 chunks of 16 tiles.
+    ("multi_block_uint16", [1, 1, 256, 512], [1, 1, 512, 256], ttnn.uint16),
+]
+
+
+@pytest.mark.parametrize("case,in_shape,out_shape,dtype", _LCM_ONE_CORE, ids=[c[0] for c in _LCM_ONE_CORE])
+def test_reshape_codegen_lcm_multi_chunk_one_core(device, case, in_shape, out_shape, dtype):
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    entries = device.num_program_cache_entries()
+    out = ttnn.reshape(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(expected, ttnn.to_torch(out), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
+
+
+def test_reshape_codegen_lcm_falls_back_to_segment_map_when_no_plan_fits_l1(device):
+    # A 96 -> 128 width change chunks lcm = 384 datums: 12 input and 12 output tiles, so the smallest LCM plan takes
+    # 28 fp32 tiles (112 KiB) per core, a 4-tile output CB written one tile at a time. 140 twelve-tile chunks against
+    # 1680 native output tiles, so LCM wins by the 5x margin with L1 free; with 96 KiB free the program factory builds the
+    # segment map instead, a new program that auto takes as well.
+    in_shape, out_shape, dtype = [1, 1, 140 * 128, 96], [1, 1, 140 * 96, 128], ttnn.float32
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT, _DRAM)
+    _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+    entries = device.num_program_cache_entries()
+    _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+    assert device.num_program_cache_entries() == entries, "auto did not take the LCM program"
+    hog = _l1_hog_leaving(device, 96 * 1024)
+    try:
+        _assert_bits(expected, ttnn.to_torch(_force_codegen(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+
+
+_RM_ABOVE_NATIVE_FLOOR = [
+    # Merging 4 B sticks into 30004 B ones takes two 30 KB CB pages in the stick program and a window region of over
+    # 64 KiB in the slab program, while native's single kernel needs about 30 KB.
+    ("merge_30004", lambda n: ([60008, 1], [8, 7501]), ttnn.float32),
+    # 6 B sticks do not divide 8 KiB ones, so only the slab program applies: a slab of up to 4 KiB spans one window
+    # per 6 B source stick, over 54 KiB per core, while native needs under 9 KiB.
+    ("slab_6_to_8192", lambda n: ([n * 4096, 3], [n * 3, 4096]), ttnn.bfloat16),
+]
+
+
+@pytest.mark.parametrize("case,shapes,dtype", _RM_ABOVE_NATIVE_FLOOR, ids=[c[0] for c in _RM_ABOVE_NATIVE_FLOOR])
+def test_reshape_codegen_rm_routes_native_when_no_program_fits_l1(device, expect_error, case, shapes, dtype):
+    # The smallest row-major program needs more L1 than native's, so auto runs native and keeps running with 48 KiB
+    # free, while the forced entry refuses.
+    grid = device.compute_with_storage_grid_size()
+    in_shape, out_shape = shapes(grid.x * grid.y)
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    hog = _l1_hog_leaving(device, 48 * 1024)
+    try:
+        # Native's program hash leaves out its staging ring depth, so a program cached with more L1 free would not fit.
+        device.clear_program_cache()
+        _assert_bits(expected, ttnn.to_torch(_force_native(x, out_shape, memory_config=_DRAM)), dtype)
+        entries = device.num_program_cache_entries()
+        _assert_bits(expected, ttnn.to_torch(ttnn.reshape(x, out_shape, memory_config=_DRAM)), dtype)
+        assert device.num_program_cache_entries() == entries, "auto did not run native"
+        with expect_error(RuntimeError, "no row-major program fits"):
+            _force_codegen(x, out_shape, memory_config=_DRAM)
+    finally:
+        ttnn.deallocate(hog)
+
+
+def test_reshape_codegen_rm_ring_within_cb_page_limit(device):
+    # Splitting 4096 16 B sticks into 2 B ones on one core wants a 65,536-page ring of 16 B pages, one more than the
+    # 16-bit CB page counters hold, though 1 MiB fits L1; the plan must shrink the ring instead.
+    in_shape, out_shape, dtype = [4096, 8], [4096, 8, 1], ttnn.bfloat16
+    source = _make(in_shape, dtype)
+    x = _to_device(device, source, dtype, ttnn.ROW_MAJOR_LAYOUT, _DRAM)
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+    _assert_bits(source.reshape(out_shape), ttnn.to_torch(out), dtype)
+
+
 _OUT_OF_SCOPE = [
     ("bfloat8_b", [1, 1, 64, 128], [1, 1, 128, 64], ttnn.bfloat8_b, ttnn.TILE_LAYOUT),
-    ("row_major", [512, 256], [1024, 128], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT),
 ]
 
 

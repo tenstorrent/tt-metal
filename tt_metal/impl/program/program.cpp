@@ -47,11 +47,11 @@
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include "circular_buffer_constants.h"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "impl/context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
 #include "impl/context/context_types.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
 #include "tt-metalium/mesh_buffer.hpp"
@@ -101,7 +101,6 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
-#include <fmt/ranges.h>
 #include "distributed/mesh_device_impl.hpp"
 
 namespace tt {
@@ -194,7 +193,11 @@ SummaryRows program_config_breakdown(
         }
     }
     rows.emplace_back("  text-sizing group, cores", sizing_group.core_ranges.str());
-    rows.emplace_back("  text-sizing group, kernels", fmt::format("{}", fmt::join(names, ", ")));
+    std::string joined_names;
+    for (size_t i = 0; i < names.size(); ++i) {
+        joined_names += (i == 0 ? "" : ", ") + names[i];
+    }
+    rows.emplace_back("  text-sizing group, kernels", joined_names);
     return rows;
 }
 
@@ -248,8 +251,10 @@ namespace {
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    const auto& env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id()).build_env;
+    const auto& env = MetalContext::instance(extract_context_id(device))
+                          .build_env_manager()
+                          .get_device_build_env(device->build_id())
+                          .build_env;
     jit_build_genfiles_descriptors(env, build_options);
     if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
         jit_build_genfiles_triscs_src(env, *kernel, kernel->kernel_source());
@@ -270,11 +275,10 @@ bool remote_kernel_cached(IDevice* device, const std::shared_ptr<Kernel>& kernel
     if (num_binaries <= 0) {
         return false;
     }
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         if (!bs.warmed_elf_reusable(kernel->get_full_kernel_name())) {
             return false;
         }
@@ -291,11 +295,10 @@ void finalize_preprocess_reuse_cache(IDevice* device, const std::shared_ptr<Kern
                              .get_programmable_core_type_index(kernel->get_kernel_programmable_core_type());
     uint32_t proc_class = enchantum::to_underlying(kernel->get_kernel_processor_class());
     int num_binaries = kernel->expected_num_binaries();
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         bs.write_reuse_cache(kernel->get_full_kernel_name());
     }
 }
@@ -306,8 +309,8 @@ KernelCompileDescriptor build_kernel_descriptor(
     const std::shared_ptr<Kernel>& kernel,
     const JitBuildOptions& build_options,
     std::size_t kernel_hash) {
-    const auto& build_env =
-        BuildEnvManager::get_instance(extract_context_id(device)).get_device_build_env(device->build_id());
+    BuildEnvManager& build_env_manager = MetalContext::instance(extract_context_id(device)).build_env_manager();
+    const auto& build_env = build_env_manager.get_device_build_env(device->build_id());
 
     uint32_t core_type = MetalContext::instance(kernel->get_context_id())
                              .hal()
@@ -330,10 +333,8 @@ KernelCompileDescriptor build_kernel_descriptor(
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
-        const JitBuildState& bs =
-            BuildEnvManager::get_instance(extract_context_id(device))
-                .get_kernel_build_state(
-                    device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
+        const JitBuildState& bs = build_env_manager.get_kernel_build_state(
+            device->build_id(), core_type, proc_class, kernel->get_kernel_processor_type(i));
         desc.request.targets.push_back(bs.export_target_recipe(kernel.get()));
         desc.expected_elf_paths.push_back(bs.get_target_out_path(kernel->get_full_kernel_name()));
     }
@@ -361,6 +362,15 @@ KernelCompileDescriptor build_kernel_descriptor(
                 // header's bare -include resolve here. -MMD (in
                 // cflags) leaves a .d next to each .ii; the reuse-cache sidecar is built from those
                 // only after a successful compile (see JitBuildState::write_reuse_cache).
+                //
+                // Processes sharing a TT_METAL_CACHE can preprocess the same kernel at the same time.
+                // The compiler writes into per-process temp files, which are then renamed into place,
+                // so nobody reads a .ii or .d another process is still writing: a torn .ii fails to
+                // compile, and a torn .d builds a sidecar that misses headers. The temp names end in
+                // .tmp, so write_reuse_cache's scan for .d files never picks one up.
+                const std::string d_path = std::filesystem::path(ii_path).replace_extension(".d").string();
+                const std::string tmp_ii = tt::jit_build::utils::FileRenamer::generate_temp_path(ii_path) + ".tmp";
+                const std::string tmp_d = tt::jit_build::utils::FileRenamer::generate_temp_path(d_path) + ".tmp";
                 const auto args = tt::jit_build::utils::build_gpp_argv(
                     desc.request.gpp,
                     target.compiler_opt_level,
@@ -369,11 +379,28 @@ KernelCompileDescriptor build_kernel_descriptor(
                     target.defines,
                     target.srcs[i],
                     tt::jit_build::utils::GppAction::Preprocess,
-                    ii_path);
+                    tmp_ii,
+                    tmp_d);
+                const auto remove_temps = [&] {
+                    std::error_code ec;
+                    std::filesystem::remove(tmp_ii, ec);
+                    std::filesystem::remove(tmp_d, ec);
+                };
                 if (!tt::jit_build::utils::exec_command(args, client_out_dir, ii_path + ".log")) {
+                    remove_temps();
                     TT_THROW("preprocess-and-ship: -E failed for {} (log: {})", target.srcs[i], ii_path + ".log");
                 }
-                const auto bytes = tt::jit_build::utils::read_file_bytes(ii_path);
+                // Read this process's own output before the rename: the final path may be replaced
+                // by another process's (identical) .ii at any time.
+                std::vector<std::uint8_t> bytes;
+                try {
+                    bytes = tt::jit_build::utils::read_file_bytes(tmp_ii);
+                    std::filesystem::rename(tmp_ii, ii_path);
+                    std::filesystem::rename(tmp_d, d_path);
+                } catch (...) {
+                    remove_temps();
+                    throw;
+                }
                 tt::jit_build::GeneratedFile gf;
                 gf.name = ii_name;
                 gf.content.assign(bytes.begin(), bytes.end());
@@ -489,6 +516,17 @@ Program::Program(std::shared_ptr<detail::ProgramImpl> impl) : internal_(std::mov
 Program::Program(const ProgramDescriptor& descriptor) : internal_(std::make_shared<detail::ProgramImpl>()) {
     LIGHT_METAL_TRACE_FUNCTION_ENTRY();
     LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    populate_from_descriptor(descriptor);
+}
+
+Program::Program(distributed::MeshDevice& mesh_device, const ProgramDescriptor& descriptor) :
+    internal_(std::make_shared<detail::ProgramImpl>(mesh_device.impl().get_context_id())) {
+    LIGHT_METAL_TRACE_FUNCTION_ENTRY();
+    LIGHT_METAL_TRACE_FUNCTION_CALL(CaptureProgramConstructor, *this);
+    populate_from_descriptor(descriptor);
+}
+
+void Program::populate_from_descriptor(const ProgramDescriptor& descriptor) {
     ScopedBusyClock build_busy(kProgramBuildBusy);
 
     if (descriptor.reload_table.has_value()) {
@@ -645,10 +683,6 @@ KernelHandle detail::ProgramImpl::add_kernel(
                     coreCoord.str());
             }
         }
-    }
-
-    if (!kernel->scratchpad_binding_handles().empty()) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
 
     kernels_[index].insert({id, kernel});
@@ -824,7 +858,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
                 continue;
             }
             // set_runtime_args may only allocate on the first call; skip if already sized
-            // (e.g. SetProgramRunArgs ran earlier on a non-factory path).
+            // (e.g. Program::set_program_run_args ran earlier on a non-factory path).
             if (!kernel->runtime_args(core).empty()) {
                 continue;
             }
@@ -835,7 +869,7 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
         if (crta_words == 0) {
             continue;
         }
-        // set_common_runtime_args may only be called once; SetProgramRunArgs overwrites in place after.
+        // set_common_runtime_args may only be called once; Program::set_program_run_args overwrites in place after.
         if (!kernel->common_runtime_args().empty()) {
             continue;
         }
@@ -845,13 +879,31 @@ void ProgramImpl::reserve_runtime_arg_buffers() {
 }
 
 void ProgramImpl::register_tensor_parameter(
-    const std::string& name, const TensorSpec& spec, const experimental::TensorSpecRelaxations& relaxations) {
+    const std::string& name, const TensorSpec& spec, const TensorSpecRelaxations& relaxations) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
     auto [it, inserted] = metal2_registry_->tensor_parameter_layouts.try_emplace(
         name, Metal2NameRegistry::RegisteredTensorParameter{spec, relaxations});
     TT_FATAL(inserted, "Duplicate tensor parameter name: {}", name);
+}
+
+void ProgramImpl::register_sram_arena_parameter(
+    const std::string& name,
+    const experimental::SRAMArenaProperties& properties,
+    const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->sram_arena_parameters.try_emplace(
+        name, RegisteredSRAMArenaParameter{properties, std::cref(device)});
+    TT_FATAL(inserted, "Duplicate SRAM arena parameter name: {}", name);
+}
+
+const std::unordered_map<std::string, ProgramImpl::RegisteredSRAMArenaParameter>&
+ProgramImpl::get_sram_arena_parameters() const {
+    static const std::unordered_map<std::string, RegisteredSRAMArenaParameter> empty;
+    return metal2_registry_ ? metal2_registry_->sram_arena_parameters : empty;
 }
 
 const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& name) const {
@@ -865,7 +917,7 @@ const TensorSpec* ProgramImpl::get_tensor_parameter_layout(const std::string& na
     return &it->second.spec;
 }
 
-experimental::TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
+TensorSpecRelaxations ProgramImpl::get_tensor_parameter_relaxations(const std::string& name) const {
     if (!metal2_registry_) {
         return {};
     }
@@ -887,14 +939,40 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
     return names;
 }
 
+void ProgramImpl::register_global_semaphore_parameter(const std::string& name, const distributed::MeshDevice& device) {
+    if (!metal2_registry_) {
+        metal2_registry_ = Metal2NameRegistry{};
+    }
+    const auto [it, inserted] = metal2_registry_->global_semaphore_parameters.try_emplace(name, &device);
+    TT_FATAL(inserted, "Duplicate GlobalSemaphore parameter name: {}", name);
+}
+
+const distributed::MeshDevice* ProgramImpl::get_global_semaphore_parameter_device(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->global_semaphore_parameters.find(name);
+    return it == metal2_registry_->global_semaphore_parameters.end() ? nullptr : it->second;
+}
+
+std::vector<std::string> ProgramImpl::get_registered_global_semaphore_parameter_names() const {
+    std::vector<std::string> names;
+    if (metal2_registry_) {
+        names.reserve(metal2_registry_->global_semaphore_parameters.size());
+        for (const auto& [name, device] : metal2_registry_->global_semaphore_parameters) {
+            names.push_back(name);
+        }
+    }
+    return names;
+}
+
 detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
     const auto& mesh_buffer = tensor.mesh_buffer();
-    const Buffer* backing_buffer = mesh_buffer.get_backing_buffer();
     return BoundTensorFootprint{
         .buffer_type = mesh_buffer.device_local_config().buffer_type,
         .address = mesh_buffer.address(),
         .size_per_bank = mesh_buffer.get_reference_buffer()->aligned_size_per_bank(),
-        .buffer_id = backing_buffer != nullptr ? std::optional{backing_buffer->unique_id()} : std::nullopt};
+        .buffer_id = mesh_buffer.unique_id()};
 }
 
 void ProgramImpl::set_bound_tensor_footprint(const std::string& name, const detail::BoundTensorFootprint& footprint) {
@@ -918,29 +996,25 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {
+void ProgramImpl::register_dfb_storage_binding(DFBStorageBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.emplace_back(dfb_id, tensor_parameter_name);
+    metal2_registry_->dfb_storage_bindings.push_back(std::move(binding));
 }
 
-const std::vector<std::pair<uint32_t, std::string>>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<std::pair<uint32_t, std::string>> empty;
+const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_bindings() const {
+    static const std::vector<DFBStorageBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }
-    return metal2_registry_->dfb_borrowed_bindings;
+    return metal2_registry_->dfb_storage_bindings;
 }
 // ============================================================================
 
 std::vector<detail::KernelMeta> experimental::collect_kernel_meta(
     const Program& program, distributed::MeshDevice& mesh_device) {
     return program.impl().collect_kernel_meta(&mesh_device);
-}
-
-std::vector<detail::KernelMeta> detail::collect_kernel_meta(const Program& program, IDevice* device) {
-    return program.impl().collect_kernel_meta(device);
 }
 
 std::vector<detail::KernelMeta> ProgramImpl::collect_kernel_meta(IDevice* device) const {
@@ -1052,6 +1126,15 @@ KernelGroup::KernelGroup(
                 kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
+        } else if (auto* dk = dynamic_cast<experimental::quasar::DispatchEngineKernel*>(kernel.get())) {
+            // A dispatch-engine kernel is one thread on one DM. Left at 0, get_num_threads() would make
+            // thread-partitioned device code (PrefetcherPipe::owns_receiver) divide by zero.
+            const uint32_t processor_index = hal.get_processor_index(
+                hal.get_programmable_core_type(programmable_core_type_index),
+                HalProcessorClassType::DM,
+                dk->get_kernel_processor_type(0));
+            kernel_config.num_sw_threads()[processor_index] = 1;
+            kernel_config.kernel_thread_id()[processor_index] = 0;
         }
         // Quasar: set per-processor num_sw_threads and kernel_thread_id for trisc/runtime access
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
@@ -1491,6 +1574,7 @@ const detail::ProgramImpl::PrefetcherPipeSlot& detail::ProgramImpl::get_prefetch
 uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     const CoreRangeSet& cores,
     const CoreRangeSet& receiver_cores,
+    const CoreRangeSet& extra_cores,
     uint32_t ring_size,
     uint32_t entry_size,
     uint32_t num_credit_lanes) {
@@ -1511,6 +1595,13 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
     TT_FATAL(
         cores.intersection(receiver_cores).num_cores() == receiver_cores.num_cores(),
         "PrefetcherPipe slot receiver cores must be a subset of the slot cores");
+    TT_FATAL(
+        cores.contains(extra_cores) && !extra_cores.intersects(receiver_cores),
+        "PrefetcherPipe slot extra cores {} must be a subset of the slot cores {} and disjoint from its receiver cores "
+        "{}",
+        extra_cores.str(),
+        cores.str(),
+        receiver_cores.str());
 
     const uint32_t l1_alignment = MetalContext::instance(this->get_context_id()).hal().get_alignment(HalMemType::L1);
     TT_FATAL(entry_size > 0, "PrefetcherPipe entry_size must be > 0");
@@ -1560,12 +1651,14 @@ uint8_t detail::ProgramImpl::reserve_prefetcher_pipe_slot(
                  .config_page_addr = 0,
                  .entry_size = entry_size,
                  .relay_dfb_id = std::numeric_limits<uint8_t>::max(),
-                 .pipe = nullptr});
+                 .pipe_identity = experimental::PrefetcherPipeIdentity{0},
+                 .num_credit_lanes = 1});
         }
     }
     prefetcher_pipe_slots_.push_back(
         {.cores = cores,
          .receiver_cores = receiver_cores,
+         .extra_cores = extra_cores,
          .ring_size = ring_size,
          .entry_size = entry_size,
          .num_credit_lanes = num_credit_lanes,
@@ -1577,6 +1670,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
     uint8_t prefetcher_pipe_id,
     const CoreRangeSet& cores,
     const experimental::PrefetcherPipeImpl& prefetcher_pipe,
+    experimental::PrefetcherPipeIdentity replaced,
     PrefetcherPipeBindPreflight& preflight) const {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
     TT_FATAL(cores.num_cores() > 0, "PrefetcherPipe slot {} bind requires a non-empty core set", prefetcher_pipe_id);
@@ -1627,7 +1721,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             pipe_receivers_here.str());
     }
 
-    // Sticky: a core binds one pipe object for the program's lifetime.
+    // Sticky: a core binds one pipe object, until a pipe with the same binding key replaces it.
     for (const CoreCoord& core : corerange_to_cores(cores)) {
         const auto& participants = per_core_prefetcher_pipes_.at(core);
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
@@ -1639,41 +1733,37 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             prefetcher_pipe_id,
             core.str());
         TT_FATAL(
-            participant->pipe == nullptr || participant->pipe == &prefetcher_pipe,
+            !participant->is_bound() || participant->pipe_identity == prefetcher_pipe.identity() ||
+                participant->pipe_identity == replaced,
             "PrefetcherPipe slot {} on core {} is already bound to a different PrefetcherPipe object; a Program "
-            "binds one pipe per slot for its lifetime",
+            "binds one pipe per slot, or one that replaces it at the same addresses with the same geometry",
             prefetcher_pipe_id,
             core.str());
         auto [claimed, first_claim] = preflight.claimed.try_emplace({prefetcher_pipe_id, core}, &prefetcher_pipe);
         TT_FATAL(
             first_claim || claimed->second == &prefetcher_pipe,
             "PrefetcherPipe slot {} on core {} is claimed by two different PrefetcherPipe objects in one "
-            "SetProgramRunArgs; every node hosts one pipe per slot (two pipes carved with the same sender node "
-            "cannot share a sender kernel)",
+            "Program::set_program_run_args; every node hosts one pipe per slot (two pipes carved with the same "
+            "sender node cannot share a sender kernel)",
             prefetcher_pipe_id,
             core.str());
     }
 
-    // Lane mode needs an exact, P-divisible entry ring. Check against the lanes this slot asks
-    // for and against lanes already armed by an earlier bind / relay, or by an earlier binding in
-    // this batch (a sender-only bind with a non-dividing entry size would otherwise assert on
+    // The pipe's credit lanes were fixed when it was carved. Receivers bound here must consume it
+    // with that many threads, and lane mode needs an exact, P-divisible entry ring at this slot's
+    // entry size (a sender-only bind with a non-dividing entry size would otherwise assert on
     // device).
-    auto armed = preflight.armed_lanes.find(&prefetcher_pipe);
-    const uint32_t current_lanes =
-        armed != preflight.armed_lanes.end() ? armed->second : prefetcher_pipe.num_credit_lanes();
-    prefetcher_pipe.validate_lane_geometry(slot.entry_size, std::max(slot.num_credit_lanes, current_lanes));
-    if (slot.relay_dfb_host_id.has_value()) {
-        TT_FATAL(
-            slot.num_credit_lanes <= prefetcher_pipe.credit_lane_capacity(),
-            "PrefetcherPipe relay num_producers {} exceeds credit lane capacity {} "
-            "(Quasar sizes the config page for PREFETCHER_PIPE_MAX_CREDIT_LANES at pipe create)",
-            slot.num_credit_lanes,
-            prefetcher_pipe.credit_lane_capacity());
-    }
     if (attached_receiver_count != 0) {
-        prefetcher_pipe.validate_credit_lane_transition(current_lanes, slot.num_credit_lanes);
-        preflight.armed_lanes[&prefetcher_pipe] = slot.num_credit_lanes;
+        TT_FATAL(
+            slot.num_credit_lanes == prefetcher_pipe.num_credit_lanes(),
+            "PrefetcherPipe slot {} consumes its pipe with {} credit lane(s) (receiver kernel num_threads / relay "
+            "num_producers), but the supplied pipe was carved with {}; carve it with num_credit_lanes = {}",
+            prefetcher_pipe_id,
+            slot.num_credit_lanes,
+            prefetcher_pipe.num_credit_lanes(),
+            slot.num_credit_lanes);
     }
+    prefetcher_pipe.validate_lane_geometry(slot.entry_size);
 
     // Relay: the borrowed DFB aliases the pipe ring. Several pipes may share one slot (one per
     // node); a relay over them needs one ring address, so all must agree: with a pipe bound to
@@ -1685,7 +1775,8 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
             std::optional<DeviceAddr> ring_addr;
             for (const CoreCoord& core : corerange_to_cores(relay_dfb->core_ranges)) {
                 for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
-                    if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.pipe != nullptr && a.pipe != &prefetcher_pipe) {
+                    if (a.prefetcher_pipe_id == prefetcher_pipe_id && a.is_bound() &&
+                        a.pipe_identity != prefetcher_pipe.identity()) {
                         ring_addr = relay_dfb->borrowed_addr_;
                     }
                 }
@@ -1707,16 +1798,9 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
 }
 
 void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
-    uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe) {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
-    const bool binds_receivers = prefetcher_pipe.receiver_cores().intersects(cores);
-
-    if (binds_receivers) {
-        // Arm lane credits for multi-DM pipe consumers (with or without a relay).
-        prefetcher_pipe.set_active_credit_lanes(slot.num_credit_lanes);
-    }
-
-    if (slot.relay_dfb_host_id.has_value() && binds_receivers) {
+    if (slot.relay_dfb_host_id.has_value() && prefetcher_pipe.receiver_cores().intersects(cores)) {
         auto relay_dfb = get_dataflow_buffer(*slot.relay_dfb_host_id);
         TT_FATAL(relay_dfb != nullptr, "Relay DFB host id {} does not exist", *slot.relay_dfb_host_id);
         if (relay_dfb->core_ranges.intersects(cores)) {
@@ -1729,8 +1813,9 @@ void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
             return a.prefetcher_pipe_id == prefetcher_pipe_id;
         });
-        participant->pipe = &prefetcher_pipe;
+        participant->pipe_identity = prefetcher_pipe.identity();
         participant->config_page_addr = prefetcher_pipe.config_address();
+        participant->num_credit_lanes = prefetcher_pipe.num_credit_lanes();
     }
 }
 
@@ -1766,9 +1851,8 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
                 if (!slot.receiver_cores.contains(core)) {
                     continue;  // sender: partition-R uses the kernel's own thread count, no lane binding
                 }
-                // A bound pipe may have been armed by another program; otherwise the slot's own P.
-                const uint32_t lanes =
-                    participant.pipe != nullptr ? participant.pipe->num_credit_lanes() : slot.num_credit_lanes;
+                // A pipe bound to a receiver slot was carved with the slot's P (checked at bind).
+                const uint32_t lanes = slot.num_credit_lanes;
                 // "Some" rather than "every": a receiver core may also host unrelated DM kernels.
                 // Keeps the common single-kernel mismatch from becoming a silent device hang.
                 if (std::find(dm_thread_counts.begin(), dm_thread_counts.end(), lanes) == dm_thread_counts.end()) {
@@ -1777,7 +1861,7 @@ void detail::ProgramImpl::validate_prefetcher_pipe_consumer_threads(const Kernel
                         found += (found.empty() ? "" : ", ") + std::to_string(n);
                     }
                     TT_THROW(
-                        "PrefetcherPipe slot {} on receiver core {} is armed for {} credit lane(s) "
+                        "PrefetcherPipe slot {} on receiver core {} consumes with {} credit lane(s) "
                         "(receiver kernel num_threads / relay num_producers) but no Quasar DM kernel on that core "
                         "has num_threads_per_cluster == {} (found: {})",
                         participant.prefetcher_pipe_id,
@@ -1833,14 +1917,16 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
         usable_ring_size,
         slot.ring_size,
         slot.entry_size);
+    // The relay covers the slot's receivers and may extend over its extra nodes, like the receiver kernel.
     const CoreRangeSet& relay_cores = relay_dfb->core_ranges;
     TT_FATAL(
-        relay_cores.num_cores() > 0 &&
-            slot.receiver_cores.intersection(relay_cores).num_cores() == relay_cores.num_cores(),
-        "Relay DFB core ranges {} must be receiver cores of PrefetcherPipe slot {} ({})",
+        relay_cores.contains(slot.receiver_cores) && slot.cores.contains(relay_cores),
+        "Relay DFB core ranges {} must include every receiver core of PrefetcherPipe slot {} ({}) and lie within "
+        "the slot's cores ({})",
         relay_cores.str(),
         prefetcher_pipe_id,
-        slot.receiver_cores.str());
+        slot.receiver_cores.str(),
+        slot.cores.str());
     TT_FATAL(
         relay_dfb->device_slot < std::numeric_limits<uint8_t>::max(),
         "Relay DFB device slot {} cannot be represented in PrefetcherPipe receiver metadata",
@@ -1870,12 +1956,12 @@ void detail::ProgramImpl::register_prefetcher_pipe_relay_dfb(uint8_t prefetcher_
             num_producers);
     }
 
-    // Relays register at MakeProgramFromSpec, before any pipe binds; commit_prefetcher_pipe_slot_bind
-    // points the DFB at the ring and arms the lanes.
+    // Relays register at Program construction, before any pipe binds; commit_prefetcher_pipe_slot_bind
+    // points the DFB at the ring.
     for (const CoreCoord& core : corerange_to_cores(relay_cores)) {
         for (const auto& a : per_core_prefetcher_pipes_.at(core)) {
             TT_FATAL(
-                a.prefetcher_pipe_id != prefetcher_pipe_id || a.pipe == nullptr,
+                a.prefetcher_pipe_id != prefetcher_pipe_id || !a.is_bound(),
                 "Internal error: PrefetcherPipe slot {} bound on core {} before its relay DFB was registered",
                 prefetcher_pipe_id,
                 core.str());
@@ -1933,25 +2019,26 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
     struct Checked {
         const std::string* name;
         PrefetcherPipeParameterBinding* binding;
-        experimental::PrefetcherPipeImpl* pipe;
+        const experimental::PrefetcherPipeImpl* pipe;
     };
     std::vector<Checked> to_commit;
     PrefetcherPipeBindPreflight preflight;
     for (const PrefetcherPipeParameterBind& bind : binds) {
         TT_FATAL(bind.pipe != nullptr, "PrefetcherPipeParameter '{}' bind supplies a null pipe", bind.name);
-        experimental::PrefetcherPipeImpl& prefetcher_pipe = *bind.pipe;
+        const experimental::PrefetcherPipeImpl& prefetcher_pipe = *bind.pipe;
         auto it = prefetcher_pipe_parameters_.find(bind.name);
         TT_FATAL(
             it != prefetcher_pipe_parameters_.end(), "Program declares no PrefetcherPipeParameter '{}'", bind.name);
         PrefetcherPipeParameterBinding& binding = it->second;
 
-        if (binding.bound_pipe != nullptr && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
+        if (binding.is_bound() && binding.bound_pipe_identity == prefetcher_pipe.identity()) {
             continue;  // sticky: same object again is a no-op
         }
         TT_FATAL(
-            binding.bound_pipe == nullptr,
+            binding.accepts(prefetcher_pipe),
             "PrefetcherPipeParameter '{}' is already bound to a different PrefetcherPipe object; a Program binds a "
-            "parameter to one pipe for its lifetime (re-supplying the same pipe is a no-op)",
+            "parameter to one pipe, or to one that replaces it at the same addresses with the same geometry "
+            "(re-supplying the same pipe is a no-op)",
             bind.name);
         TT_FATAL(
             prefetcher_pipe.get_device() == binding.device,
@@ -1974,10 +2061,22 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
             prefetcher_pipe.ring_size());
 
         for (const auto& slot_cores : binding.slots) {
+            // An extra node takes no part in the slot's pipes. Checked before the sender kernel's
+            // placement, which an extra sender node would fail with a less direct message.
+            const CoreRangeSet& extra_cores = get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores;
+            TT_FATAL(
+                !extra_cores.intersects(prefetcher_pipe.sender_cores()),
+                "PrefetcherPipeParameter '{}': the supplied pipe's sender {} is one of the extra_nodes {} of a kernel "
+                "binding the pipe. Extra nodes take no part in the pipe: the sender kernel must not list its sender "
+                "node, and the receiver kernel cannot also run on the sender.",
+                bind.name,
+                prefetcher_pipe.sender_cores().str(),
+                extra_cores.str());
             check_prefetcher_pipe_slot_bind(
                 slot_cores.prefetcher_pipe_id,
                 prefetcher_pipe_slot_bind_cores(bind.name, slot_cores, prefetcher_pipe),
                 prefetcher_pipe,
+                binding.bound_pipe_identity,
                 preflight);
         }
         to_commit.push_back({.name = &bind.name, .binding = &binding, .pipe = &prefetcher_pipe});
@@ -1986,14 +2085,33 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
     // Pass 2: commit.
     for (const Checked& checked : to_commit) {
         for (const auto& slot_cores : checked.binding->slots) {
-            commit_prefetcher_pipe_slot_bind(
-                slot_cores.prefetcher_pipe_id,
-                prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
-                *checked.pipe);
+            CoreRangeSet cores = prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe);
+            if (slot_cores.binds_extra_cores) {
+                // Disjoint from the pipe's receivers, so the extra cores only add per-core records.
+                cores = cores.merge(get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores);
+            }
+            commit_prefetcher_pipe_slot_bind(slot_cores.prefetcher_pipe_id, cores, *checked.pipe);
         }
-        checked.binding->bound_pipe = checked.pipe;
         checked.binding->bound_pipe_identity = checked.pipe->identity();
+        checked.binding->bound_pipe_key = prefetcher_pipe_binding_key(*checked.pipe);
     }
+}
+
+detail::ProgramImpl::PrefetcherPipeBindingKey detail::ProgramImpl::prefetcher_pipe_binding_key(
+    const experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    return {
+        .sender_core_type = prefetcher_pipe.sender_core_type(),
+        .sender_cores = prefetcher_pipe.sender_cores(),
+        .receiver_cores = prefetcher_pipe.receiver_cores(),
+        .config_address = prefetcher_pipe.config_address(),
+        .buffer_address = prefetcher_pipe.buffer_address(),
+        .initial_entry_size = prefetcher_pipe.initial_entry_size(),
+        .ring_size = prefetcher_pipe.ring_size(),
+        .num_credit_lanes = prefetcher_pipe.num_credit_lanes()};
+}
+
+bool detail::ProgramImpl::PrefetcherPipeParameterBinding::accepts(const experimental::PrefetcherPipeImpl& pipe) const {
+    return !is_bound() || bound_pipe_identity == pipe.identity() || bound_pipe_key == prefetcher_pipe_binding_key(pipe);
 }
 
 CoreRangeSet detail::ProgramImpl::prefetcher_pipe_slot_bind_cores(
@@ -2106,7 +2224,13 @@ void detail::ProgramImpl::update_dynamic_cross_node_dfb_address(uint8_t remote_d
         relay_dfb->set_borrowed_memory_base_addr(gdfb.buffer_address());
     }
 
-    // Invalidate cached command sequences so they are re-assembled with new addresses.
+    // Invalidate cached command sequences so they are re-assembled with new addresses. The runtime-arg views point
+    // into them (and hold the current values): move the values back into the kernels first.
+    for (auto& kernels : kernels_) {
+        for (auto& [handle, kernel] : kernels) {
+            kernel->reclaim_runtime_args_from_command_sequence();
+        }
+    }
     cached_program_command_sequences_.clear();
     trace_cached_program_command_sequences_.clear();
 }
@@ -2224,22 +2348,43 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
-    // Shared scratchpads allocate over the union of their binders' nodes. Register
-    // those exact ranges before initializing region bases and allocating DFBs.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, CoreRangeSet> shared_cores;
-    for (const auto& kernels_of_core_type : this->kernels_) {
+std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl::scratchpad_allocation_groups() {
+    std::vector<ScratchpadAllocationGroup> groups;
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, ScratchpadAllocationGroup> shared;
+    for (const auto& kernels_of_core_type : kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            for (const auto& handle : kernel->scratchpad_binding_handles()) {
+            for (auto& handle : kernel->scratchpad_binding_handles()) {
+                // SRAMArena-backed bindings take their address from the bound arena.
+                if (handle.allocation_override) {
+                    continue;
+                }
+                const auto& cores = handle.placement;
                 if (handle.shared_allocation_identifier) {
-                    auto& cores = shared_cores[*handle.shared_allocation_identifier];
-                    cores = cores.merge(kernel->core_range_set());
+                    auto& group = shared[*handle.shared_allocation_identifier];
+                    group.cores = group.cores.merge(cores);
+                    group.bindings.emplace_back(kernel.get(), &handle);
+                } else {
+                    groups.push_back({cores, {{kernel.get(), &handle}}});
                 }
             }
         }
     }
-    for (const auto& [identifier, cores] : shared_cores) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, cores);
+    // Allocate private bindings first, then shared specs.
+    for (auto& [identifier, group] : shared) {
+        groups.push_back(std::move(group));
+    }
+    return groups;
+}
+
+void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
+    // Register the ranges used by scratchpad allocation groups before preparing bases/seals
+    // and allocating DFBs.
+    for (const auto& group : scratchpad_allocation_groups()) {
+        // Register each binding range and the union used by its allocation group.
+        for (const auto& [kernel, handle] : group.bindings) {
+            register_ephemeral_allocation(this->dfb_allocation_metadata_, handle->placement);
+        }
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, group.cores);
     }
 
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
@@ -2255,84 +2400,37 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
 
     const uint32_t alignment = device->allocator()->get_alignment(BufferType::DRAM);
 
-    // Set address to a given scratchpad binding handle and it's kernel
-    auto set_address_on_scratchpad = [](DeviceAddr addr, ScratchpadBindingHandle& handle, Kernel& kernel) {
-        TT_FATAL(
-            addr != 0,
-            "Internal error: scratchpad '{}' on kernel '{}' "
-            "has a 0 allocated address (allocation failed or was skipped).",
-            handle.accessor_name,
-            kernel.name());
-
-        handle.allocated_address = static_cast<uint32_t>(addr);
-
-        // Patch the allocated address into the kernel's CRTA buffer if it exists.
-        // On the Metal 2.0 factory path, reserve_runtime_arg_buffers pre-sizes the CRTA
-        // buffer before this runs, so the address is updated here. If CRTA is not yet allocated
-        // (legacy order: SetProgramRunArgs first), SetProgramRunArgs copies
-        // handle.allocated_address into the scratchpad section when it builds the buffer.
-        // This allows for allocation of scratchpad and the CRTA buffer to be order agnostic.
-        //
-        // Usage of the CRTA buffer:
-        //  - FD: the fast/mesh path snapshots the CRTA buffer into the command stream
-        //  - SD: the slow-dispatch path writes it via WriteRuntimeArgsToDevice
-        if (!kernel.common_runtime_args().empty()) {
-            RuntimeArgsData& crta = kernel.common_runtime_args_data();
-            crta[handle.addr_crta_word] = handle.allocated_address;
-        }
-    };
-
-    // Backticks needed to set a binding handle's address
-    struct ScratchpadBindingRef {
-        ScratchpadBindingHandle& handle;
-        Kernel& kernel;
-    };
-
-    // Multiple Scratchpad bindings could share the same allocation through:
-    // ScratchpadAdvancedOptions::allow_instance_multi_binding.
-    //
-    // Shared allocation are identified by an ID.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>
-        multi_binded_scratchpads;
-
-    // Going through all single-binded scratchpads
-    for (auto& kernels_of_core_type : this->kernels_) {
-        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-            if (scratchpad_handles.empty()) {
-                continue;
-            }
-            const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            for (auto& handle : scratchpad_handles) {
-                // Multi-binded scratchpad, let's collect it and deal with it later
-                if (auto id = handle.shared_allocation_identifier) {
-                    multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
-                    continue;
-                }
-
-                DeviceAddr addr =
-                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
-            }
-        }
-    }
-
-    // Now let's deal with multi-binded scratchpads
-    for (auto& [id, refs] : multi_binded_scratchpads) {
-        auto size_bytes = refs.front().handle.size_bytes;
-
-        CoreRangeSet cores = std::accumulate(
-            refs.begin(), refs.end(), CoreRangeSet{}, [](const CoreRangeSet& cores, const auto& handle) {
-                return cores.merge(handle.kernel.core_range_set());
-            });
-
-        DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
-        for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+    for (const auto& group : scratchpad_allocation_groups()) {
+        const auto size_bytes = group.bindings.front().second->size_bytes;
+        const DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
+        for (const auto& [kernel, handle] : group.bindings) {
+            SetScratchpadBindingAddress(*kernel, *handle, addr);
         }
     }
 
     this->scratchpads_allocated_ = true;
+}
+
+void detail::ProgramImpl::validate_scratchpad_bindings() const {
+    // Mock devices are exempt, as for borrowed-memory DFBs: nothing they serialize reaches hardware (issue #57022).
+    if (MetalContext::instance(this->context_id_).get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
+        return;
+    }
+    for (const auto& kernels_of_core_type : this->kernels_) {
+        for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
+            for (const auto& binding : kernel->scratchpad_binding_handles()) {
+                if (binding.allocation_override) {
+                    TT_FATAL(
+                        binding.allocated_address != 0,
+                        "Scratchpad '{}' on kernel '{}' has no bound SRAMArena '{}'. "
+                        "Supply its arena argument through Program::set_program_run_args before dispatch.",
+                        binding.accessor_name,
+                        kernel->name(),
+                        binding.allocation_override->arena);
+                }
+            }
+        }
+    }
 }
 
 void detail::ProgramImpl::allocate_circular_buffers(const IDevice* device) {
@@ -2625,6 +2723,69 @@ void detail::ProgramImpl::validate_circular_buffer_region(const IDevice* device)
     }
 }
 
+namespace {
+// Union of the cores claimed through ServiceCoreManager on the physical devices behind `device`
+// (each chip of a MeshDevice, or the device itself).
+std::unordered_set<CoreCoord> claimed_cores_behind(
+    const tt::tt_metal::internal::ServiceCoreManagerImpl& svc, const IDevice* device) {
+    if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
+        std::unordered_set<CoreCoord> claimed;
+        for (auto device_id : mesh->get_device_ids()) {
+            auto chip_claimed = svc.claimed_cores(device_id);
+            claimed.insert(chip_claimed.begin(), chip_claimed.end());
+        }
+        return claimed;
+    }
+    return svc.claimed_cores(device->id());
+}
+}  // namespace
+
+bool detail::ProgramImpl::cb_regions_touch_service_cores(const IDevice* device) const {
+    const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
+    if (!svc.has_any_claims()) {
+        return false;
+    }
+    // Test the CB ranges against the claimed cores (usually a few dispatch-column cores), not core by core.
+    const auto claimed = claimed_cores_behind(svc, device);
+    auto range_touches = [&](const CoreRange& range) {
+        return std::any_of(claimed.begin(), claimed.end(), [&](const CoreCoord& core) { return range.contains(core); });
+    };
+    for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
+        if (range_touches(cb_allocator.core_range)) {
+            return true;
+        }
+    }
+    for (const auto& cb : circular_buffers_) {
+        for (const auto& range : cb->core_ranges().ranges()) {
+            if (range_touches(range)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+void detail::ProgramImpl::cache_simple_l1_validation(const IDevice* device) {
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    // Claims change only sequentially (see ServiceCoreManagerImpl), so the generation read here matches
+    // the claims the full validation just checked against.
+    this->simple_l1_validation_claims_gen_ = svc.claims_generation();
+    this->simple_l1_validation_touches_service_ = this->cb_regions_touch_service_cores(device);
+    this->simple_l1_validation_cached_ =
+        device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+}
+
+bool detail::ProgramImpl::simple_l1_validation_usable(const IDevice* device) const {
+    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
+    // Service claims matter only to CB regions on a claimed core; with claims unchanged since the
+    // last full validation and no such region, the lockstep frontier check is still complete.
+    return this->simple_l1_validation_cached_ && !this->simple_l1_validation_touches_service_ &&
+           this->simple_l1_validation_claims_gen_ == svc.claims_generation() &&
+           device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
+           device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
+}
+
 void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* device) {
     auto grid_size = device->compute_with_storage_grid_size();
     // Flatten MeshDevice into constituent physical devices so ServiceCoreManager (keyed by ChipId) can be queried per
@@ -2632,14 +2793,7 @@ void detail::ProgramImpl::validate_circular_buffer_core_ranges(const IDevice* de
     const auto& svc = tt::tt_metal::MetalContext::instance(context_id_).get_service_core_manager().impl();
     std::unordered_set<CoreCoord> claimed;
     if (svc.has_any_claims()) {
-        if (const auto* mesh = dynamic_cast<const tt::tt_metal::distributed::MeshDevice*>(device)) {
-            for (auto device_id : mesh->get_device_ids()) {
-                auto chip_claimed = svc.claimed_cores(device_id);
-                claimed.insert(chip_claimed.begin(), chip_claimed.end());
-            }
-        } else {
-            claimed = svc.claimed_cores(device->id());
-        }
+        claimed = claimed_cores_behind(svc, device);
     }
     auto entirely_on_service_cores = [&](const CoreRange& cr) {
         if (claimed.empty()) {
@@ -2874,12 +3028,14 @@ void detail::ProgramImpl::populate_dispatch_data(IDevice* device) {
     std::vector<uint32_t> binaries_data;
     // Map is used to look up transfer info by kernel id when we populate data ordered by core groups
     std::unordered_map<KernelHandle, kernel_bins_transfer_info> kernel_transfer_info;
+    const uint64_t build_key = MetalContext::instance(extract_context_id(device))
+                                   .build_env_manager()
+                                   .get_device_build_env(device->build_id())
+                                   .build_key();
     // This is generic for workers and eth cores
     for (const auto& kernels : this->kernels_) {
         for (const auto& [kernel_id, kernel] : kernels) {
-            const auto& binaries = kernel->binaries(BuildEnvManager::get_instance(extract_context_id(device))
-                                                        .get_device_build_env(device->build_id())
-                                                        .build_key());
+            const auto& binaries = kernel->binaries(build_key);
             std::vector<uint32_t> dst_base_addrs;
             std::vector<uint32_t> page_offsets;
             std::vector<uint32_t> lengths;
@@ -3103,7 +3259,9 @@ void detail::ProgramImpl::allocate_kernel_bin_buf_on_device(IDevice* device) {
 void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
+    uint64_t device_hash = mesh_device->impl()
+                               .metal_context()
+                               .build_env_manager()
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
     if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
@@ -3143,7 +3301,9 @@ void ProgramImpl::generate_dispatch_commands(distributed::MeshDevice* mesh_devic
 void ProgramImpl::generate_trace_dispatch_commands(distributed::MeshDevice* mesh_device, bool use_prefetcher_cache) {
     uint64_t command_hash = *mesh_device->get_active_sub_device_manager_id();
 
-    uint64_t device_hash = BuildEnvManager::get_instance(mesh_device->impl().get_context_id())
+    uint64_t device_hash = mesh_device->impl()
+                               .metal_context()
+                               .build_env_manager()
                                .get_device_build_env(mesh_device->build_id())
                                .build_key();
     if (not mesh_device->impl().metal_env().get_hal().is_coordinate_virtualization_enabled()) {
@@ -3190,20 +3350,21 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     // case: when slot 0 is empty it aliases to a live non-default context (mock-only /
     // coexistence) instead of opening silicon. Allow DEFAULT programs on any device so that
     // bridge keeps working; do not overwrite context_id_. Reject only a real mismatch where the
-    // program was explicitly bound (CreateProgram(MeshDevice&) or Metal 2.0 MakeProgramFromSpec) to a
+    // program was explicitly bound (CreateProgram(MeshDevice&) or the Metal 2.0 Program constructor) to a
     // different context.
     TT_FATAL(
         context_id_ == DEFAULT_CONTEXT_ID || context_id_ == device_context_id,
         "Program {} was created for context_id {} but is being compiled on a device from context_id {}. "
         "A program bound to a non-default context must be compiled on a device from that same context "
-        "(CreateProgram(MeshDevice&) / Metal 2.0 MakeProgramFromSpec).",
+        "(CreateProgram(MeshDevice&) / Metal 2.0 Program(MeshDevice&, const ProgramSpec&)).",
         this->id,
         context_id_.get(),
         device_context_id.get());
 
-    const auto& cluster = MetalContext::instance(device_context_id).get_cluster();
+    auto& device_context = MetalContext::instance(device_context_id);
+    const auto& cluster = device_context.get_cluster();
 
-    const auto& build_env = BuildEnvManager::get_instance(device_context_id).get_device_build_env(device->build_id());
+    const auto& build_env = device_context.build_env_manager().get_device_build_env(device->build_id());
 
     if (compiled_.contains(build_env.build_key())) {
         Inspector::program_compile_already_exists(this, device, build_env.build_key());
@@ -3227,7 +3388,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     // Emule never links a real RISC-V kernel binary -- DispatchCompiledProgramToDevice already skips
     // this function for Emule, JIT-compiling to x86 in execute_program_emulated instead. Eager callers
-    // (MakeProgramFromSpec/MakeMeshWorkloadFromSpecs) reach compile() directly, so skip here too.
+    // (the Metal 2.0 Program/MeshWorkload constructors) reach compile() directly, so skip here too.
     if (cluster.get_target_device_type() == tt::TargetDevice::Emule) {
         compiled_.insert(build_env.build_key());
         Inspector::program_compile_finished(this, device, build_env.build_key());
@@ -3399,10 +3560,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     // program. Validation still reads live device state. In the lockstep case,
     // one L1 frontier covers all static CB and DFB regions.
     if (not this->compile_and_allocate_needed_ and this->compile_and_allocate_device_ == device) {
-        const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-        if (this->simple_l1_validation_cached_ && !svc.has_any_claims() &&
-            device->get_active_sub_device_manager_id() == this->simple_l1_validation_manager_id_ &&
-            device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP) {
+        if (this->simple_l1_validation_usable(device)) {
             if (this->simple_l1_validation_region_end_ == 0) {
                 return;
             }
@@ -3416,9 +3574,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
         this->validate_circular_buffer_core_ranges(device);
         this->validate_circular_buffer_region(device);
         this->validate_dataflow_buffer_region(device);
-        this->simple_l1_validation_cached_ =
-            !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
-        this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+        this->cache_simple_l1_validation(device);
         return;
     }
     this->compile(device, force_slow_dispatch);
@@ -3437,10 +3593,7 @@ void detail::ProgramImpl::compile_and_allocate(IDevice* device, bool force_slow_
     this->allocate_scratchpads(device);
     this->validate_dataflow_buffer_region(device);
 
-    const auto& svc = MetalContext::instance(context_id_).get_service_core_manager().impl();
-    this->simple_l1_validation_cached_ =
-        !svc.has_any_claims() && device->allocator_impl()->get_config().allocator_mode == AllocatorMode::LOCKSTEP;
-    this->simple_l1_validation_manager_id_ = device->get_active_sub_device_manager_id();
+    this->cache_simple_l1_validation(device);
     this->simple_l1_validation_region_end_ = 0;
     for (const auto& cb_allocator : this->cb_allocation_metadata_.regions) {
         if (!cb_allocator.l1_regions.empty()) {
