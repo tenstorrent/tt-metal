@@ -24,6 +24,9 @@ is a WARN that names nothing; a chip that differs alone is its L1 FAIL (fleet/ch
 and pattern: 'L1 FAIL <BDF> tray N core x,y pattern P words k'. It covers only the allocatable L1: firmware and kernel
 config regions are N3's.
 """
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 import re
 import time
 

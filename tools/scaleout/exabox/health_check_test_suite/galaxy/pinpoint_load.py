@@ -18,6 +18,9 @@ device open) into <result>.load.jsonl. Box kW is the sum of the 32 chips' W (chi
 temperature counts only from launches before its first fault (a bad check, or an implausible reading: at or
 below 0, over TEMP_MAX C, power over 1000 W), never at or after it.
 """
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 import argparse
 import json
 import time

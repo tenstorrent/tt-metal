@@ -26,6 +26,9 @@ that names nothing); a chip that differs alone is its N7 FAIL (fleet/chunk_sched
 naming BDF, tray, core x,y, leg and the flipped bits. An op that raises leaves that leg 'not checked' (a WARN), never
 a crash. Passes loop until the wall cap (always at least one).
 """
+import os
+import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 import time
 
 TILES = 4  # 32x32 tiles per core

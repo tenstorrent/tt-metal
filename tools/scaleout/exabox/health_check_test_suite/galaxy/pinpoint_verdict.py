@@ -61,6 +61,7 @@ import json
 import os
 import re
 import sys
+sys.path.append(os.path.dirname(os.path.realpath(__file__)))  # the sibling programs, also when run or imported through a link
 
 import numeric_capture as nc  # standard library only too
 
