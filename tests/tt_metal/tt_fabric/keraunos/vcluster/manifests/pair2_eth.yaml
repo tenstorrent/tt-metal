@@ -1,5 +1,6 @@
 # The two-device pair on one mmk package: A on HSIO tiles 0 and 2, B on tiles 1 and 3, one Ethernet link between
-# tiles 0 and 1. Each device has a second Ethernet core with no link.
+# tiles 0 and 1. Each device has a second Ethernet core with no link, and CCE1 of its router's tile, where a fabric
+# test worker runs.
 version: 1
 devices:
   - name: A
@@ -7,16 +8,20 @@ devices:
     slots:
       - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
       - {tile: 2, cce: 0, hart: 0, role: idle, port: 1}
+      - {tile: 0, cce: 1, hart: 0, role: idle, port: 2}
     regions:
       - {tile: 0, cce: 0, base: 0x0, size: 0x400000}
       - {tile: 2, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 0, cce: 1, base: 0x0, size: 0x400000}
   - name: B
     fabric_chip: 1
     slots:
       - {tile: 1, cce: 0, hart: 0, role: router, port: 0}
       - {tile: 3, cce: 0, hart: 0, role: idle, port: 1}
+      - {tile: 1, cce: 1, hart: 0, role: idle, port: 2}
     regions:
       - {tile: 1, cce: 0, base: 0x0, size: 0x400000}
       - {tile: 3, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 1, cce: 1, base: 0x0, size: 0x400000}
 links:
   - {a: {device: A, port: 0}, b: {device: B, port: 0}, backend: ethernet}

@@ -74,13 +74,17 @@ Eth eth_mode_of(HalProgrammableCoreType type) {
     return type == HalProgrammableCoreType::ACTIVE_ETH ? Eth::SENDER : Eth::IDLE;
 }
 
-// Every Keraunos core the chip's descriptor lists, in eth-list order. Linked cores are ACTIVE_ETH.
+// Every CCE0 the chip's descriptor lists, in eth-list order. Linked cores are ACTIVE_ETH. A CCE1, listed where a
+// fabric test worker runs, is left out: these tests cross tiles.
 std::vector<EthCore> keraunos_eth_cores(IDevice* device) {
     const auto& soc_desc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
     const auto& chiplet = soc_desc.get_arch_descriptor().get_keraunos();
     const auto active = device->get_active_ethernet_cores();
     std::vector<EthCore> cores;
     for (const auto& core : chiplet.cores) {
+        if (core.eth_cce != 0) {
+            continue;
+        }
         const CoreCoord logical = soc_desc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
         const auto type =
             active.contains(logical) ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::IDLE_ETH;
