@@ -1183,6 +1183,116 @@ void kernel_main() {
                     Semaphore<>(slab_free_sem_id).up(1);
                 }
             }
+#ifdef BANK_RUN_FILL
+            {
+                // Bank-run fill. DRAM-interleaved pages p, p + NB, p + 2 NB, ... sit back to back in one bank
+                // (InterleavedAddrGen: bank offset (p / NB) * aligned page), so a chunk of BRF_CHUNK_PX consecutive
+                // input pixels [a, e) is NB reads (one per bank) instead of e - a one-page reads: one read per page is
+                // DRAM-transaction-bound (~600 M reads/s across the chip), bank runs are bandwidth-bound (~410 GB/s).
+                // The reads land bank-major in a staging slot of cb_im2col_rm (staged row k of slot s = pixel a + s +
+                // NB k); the reader then de-interleaves the chunk into the slab with one self-aimed NoC read per pixel
+                // (~24 cycles each), tagged with the band's trid kh + 1, so the K-block loop's band waits are
+                // unchanged. BRF_NSTG staging slots: up to BRF_NSTG - 1 chunks of DRAM reads stay in flight across the
+                // three bands. Measured (Blackhole p150b, 110 cores, bit-identical): 1026x2048x32 -> 128 13.71 -> 3.64
+                // ms, 1026x2048x128 -> 3 13.76 -> 5.69 ms, 514x1024x64 -> 256 4.44 -> 2.28 ms. Raw NoC (capability):
+                // dataflow_kernel_lib::read_with_state fixes the source address; the de-interleave changes both
+                // addresses on every read.
+                static_assert(!tile_input && !slab_split && !channel_slice && !zero_slab_lanes, "interleaved RM fill");
+                // The staging ring is cb_im2col_rm's L1 (the gathered-block FIFO): every unit of the previous M-block
+                // was popped (the wait above), and this reader gathers into it again only after the fill.
+                static_assert(kb_tap_direct && !zero_im2col_once, "staging aliases the tap-direct block FIFO");
+                static_assert(
+                    BRF_NSTG * BRF_CHUNK_PX * pixel_bytes <= im2col_rm_depth_rows * block_k_tiles * 2048,
+                    "staging fits cb_im2col_rm");
+                constexpr uint32_t NB = NUM_DRAM_BANKS;
+                constexpr uint32_t brf_ch = BRF_CHUNK_PX;
+                static_assert(brf_ch % NB == 0, "a chunk is whole bank rows");
+                constexpr uint32_t brf_slot_bytes = brf_ch / NB * pixel_bytes;
+                constexpr uint32_t brf_chunk_bytes = brf_ch * pixel_bytes;
+                constexpr uint32_t brf_trid0 = 8;  // DRAM trids 8 .. 8 + BRF_NSTG - 1 (TILE-only TRID_FILL_BASE)
+                static_assert(brf_trid0 + BRF_NSTG - 1 <= NOC_MAX_TRANSACTION_ID, "trids");
+                const uint32_t brf_stage =
+                    get_local_cb_interface(cb_im2col_rm).fifo_limit - get_local_cb_interface(cb_im2col_rm).fifo_size;
+                int32_t band_lo[3], band_hi[3], band_vmx[3];
+                conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
+                    footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                        band_lo[kh] = x_lo + v_minus_x;
+                        band_hi[kh] = (x_hi > x_lo ? x_hi : x_lo) + v_minus_x;
+                        band_vmx[kh] = v_minus_x;
+                    });
+                struct BrfCursor {
+                    int32_t kh;
+                    int32_t a;
+                };
+                auto settle = [&](BrfCursor& c) {
+                    while (c.kh < 3 && c.a >= band_hi[c.kh]) {
+                        if (++c.kh < 3) {
+                            c.a = band_lo[c.kh];
+                        }
+                    }
+                };
+                BrfCursor ic{0, band_lo[0]};
+                settle(ic);
+                BrfCursor pc = ic;
+                auto issue = [&](uint32_t slot) {
+                    const int32_t a = ic.a;
+                    const int32_t e = a + static_cast<int32_t>(brf_ch) < band_hi[ic.kh] ? a + brf_ch : band_hi[ic.kh];
+                    const uint32_t base = brf_stage + slot * brf_chunk_bytes;
+                    reads.begin(brf_trid0 + slot);
+                    for (int32_t s = 0; s < static_cast<int32_t>(NB) && a + s < e; ++s) {
+                        const uint32_t run = static_cast<uint32_t>(e - a - s + NB - 1) / NB;
+                        ASSERT(input.num_contiguous_pages(a + s, e) == run);
+                        reads.read(input.get_noc_addr(a + s), base + s * brf_slot_bytes, run * pixel_bytes);
+                    }
+                    ic.a += brf_ch;
+                    settle(ic);
+                };
+                uint32_t issued = 0;
+                uint32_t processed = 0;
+                int32_t prev_kh = -1;
+                for (; issued + 1 < BRF_NSTG && ic.kh < 3; ++issued) {
+                    issue(issued % BRF_NSTG);
+                }
+                const uint32_t noc = reads.noc.get_noc_id();
+                while (pc.kh < 3) {
+                    const uint32_t slot = processed % BRF_NSTG;
+                    reads.wait(brf_trid0 + slot);
+                    if (ic.kh < 3) {
+                        // The slot freed by the previous chunk (its copies are under that chunk's band trid).
+                        if (prev_kh >= 0) {
+                            reads.wait(prev_kh + 1);
+                        }
+                        issue(issued % BRF_NSTG);
+                        ++issued;
+                    }
+                    const int32_t a = pc.a;
+                    const int32_t e = a + static_cast<int32_t>(brf_ch) < band_hi[pc.kh] ? a + brf_ch : band_hi[pc.kh];
+                    const uint32_t base = brf_stage + slot * brf_chunk_bytes;
+                    reads.begin(pc.kh + 1);
+                    ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(
+                        noc, NCRISC_RD_CMD_BUF, get_noc_addr(base, noc), pixel_bytes);
+                    for (int32_t s = 0; s < static_cast<int32_t>(NB) && a + s < e; ++s) {
+                        uint32_t src = base + s * brf_slot_bytes;
+                        uint32_t dst = slab_l1 + static_cast<uint32_t>(a + s - band_vmx[pc.kh]) * pixel_bytes;
+                        for (int32_t q = a + s; q < e; q += NB) {
+                            ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(noc, NCRISC_RD_CMD_BUF, src, dst);
+                            reads.count_packets(1);
+                            src += pixel_bytes;
+                            dst += NB * pixel_bytes;
+                        }
+                    }
+                    reads.drop_fixed_state();
+                    prev_kh = pc.kh;
+                    ++processed;
+                    pc.a += brf_ch;
+                    settle(pc);
+                }
+                // The staging overwrote any canonical zero rows the block FIFO kept (zero-once): forget them.
+                for (uint32_t blk = 0; blk < sizeof(fifo.blk_zkw); ++blk) {
+                    fifo.blk_zkw[blk] = 0;
+                }
+            }
+#else
             conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
                 footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
                     reads.begin(kh + 1);
@@ -1194,6 +1304,7 @@ void kernel_main() {
                         read_slab_pixels(x_lo, x_split, v_minus_x);
                     }
                 });
+#endif
             if constexpr (slab_split) {
                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
                 Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);

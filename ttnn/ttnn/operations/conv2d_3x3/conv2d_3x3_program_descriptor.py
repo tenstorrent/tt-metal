@@ -86,6 +86,26 @@ CB_SRC_TABLE = 13
 # compute unpack (a neighbour's rows landed).
 CB_KWF_HALO_OUT = 14
 CB_KWF_HALO_IN = 15
+# Bank-run fill: the ROW_MAJOR DRAM-interleaved slab fill reads each chunk of consecutive pixels as one run per DRAM
+# bank into a staging ring (BRF_NSTG chunks of up to BRF_CHUNK_BYTES), then de-interleaves it into the slab with local
+# NoC copies. One read per pixel page is DRAM-transaction-bound (~600 M reads/s across the chip); bank runs are
+# bandwidth-bound.
+BRF_NSTG = 4
+BRF_CHUNK_BYTES = 16384
+BRF_MIN_READ_BYTES = 2048  # smallest per-bank read worth a staging chunk (else fewer, larger chunks)
+
+
+def _brf_staging(g, slack_bytes):
+    """(chunks, chunk pixels) of the staging ring that fit in slack_bytes, or None (the per-pixel fill). A chunk is
+    whole bank rows (a multiple of 8 pixels), at most BRF_CHUNK_BYTES; the most chunks whose chunk is >= 8 KB (a bank
+    read of >= 1 KB), else 2 chunks of what fits."""
+    pixel_bytes = g.c_in_p * 2
+    for nstg in range(BRF_NSTG, 1, -1):
+        chunk_px = min(BRF_CHUNK_BYTES, slack_bytes // nstg) // pixel_bytes // 8 * 8
+        if chunk_px * pixel_bytes >= 8 * BRF_MIN_READ_BYTES or (nstg == 2 and chunk_px >= 8):
+            return nstg, chunk_px
+    return None
+
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
 SEM_COMBINE_CREDIT = 0
@@ -3691,8 +3711,33 @@ def create_program_descriptor(
         and list(_wspec.shard_shape)[-2:] == [b.block_k_tiles * b.num_k_blocks * TILE, g.out_n_tiles * TILE]
         else []
     )
+    # Bank-run fill wherever a ROW_MAJOR input sits DRAM-interleaved with one pixel per page (C_in a multiple of 32: no
+    # padded lanes) on the K-blocked tap-direct walk. Its staging ring aliases that walk's gathered-block FIFO
+    # (cb_im2col_rm), which is dead during the fill: the reader refills the slab only once compute popped every unit of
+    # the previous M-block, and it gathers again only after the fill. No new L1, no blocking change. Elsewhere the
+    # per-pixel fill: TILE and sharded inputs have no pixel pages to coalesce, L1-interleaved pages stride by the L1
+    # bank count, and the other walks keep cb_im2col_rm live during the fill.
+    brf_stage = _brf_staging(g, b.im2col_rm_depth_rows * bk * TILE_BYTES_BF16)
+    brf_fill = (
+        brf_stage is not None
+        and not g.tile_input
+        and input_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED
+        and input_tensor.memory_config().buffer_type == ttnn.BufferType.DRAM
+        and g.c_in == g.c_in_p
+        and input_tensor.buffer_aligned_page_size() == pixel_bytes
+        and tap_direct_fifo_units > 0
+    )
     _host_fill_defines = (
         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+    )
+    _brf_defines = (
+        [
+            ("BANK_RUN_FILL", "1"),
+            ("BRF_NSTG", str(brf_stage[0])),
+            ("BRF_CHUNK_PX", str(brf_stage[1])),
+        ]
+        if brf_fill
+        else []
     )
     readers = [
         ttnn.KernelDescriptor(
@@ -3705,7 +3750,8 @@ def create_program_descriptor(
             + _ring_owner_defines
             + _sd_dm_defines
             + _s2_dm_defines
-            + _host_fill_defines,
+            + _host_fill_defines
+            + _brf_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
