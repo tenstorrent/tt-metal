@@ -34,44 +34,34 @@ inline void llk_math_reduce_init(const std::uint32_t operandA, const std::uint32
     const bool src_2x = pool_type != PoolType::MAX && reduce_dim == ReduceDim::REDUCE_COL &&
                         get_operand_src_format(operandA_id) == static_cast<std::uint32_t>(DataFormat::MxFp4) &&
                         get_operand_src_format(operandB_id) == static_cast<std::uint32_t>(DataFormat::MxFp4);
-    const DataFormat data_format = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
-    const DataFormat scaler_format = static_cast<DataFormat>(unpack_dst_format[operandB_id]);
-    const DataFormat srcA_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? scaler_format : data_format);
-    const DataFormat srcB_format = src_2x ? DataFormat::MxFp4_2x_B : (swap_operands ? data_format : scaler_format);
+    // MxFp4_2x_B deviates from unpack_dst_format[]; the tracker keys on formats, so it is still programmed.
+    const DataFormat data_format =
+        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandA_id]);
+    const DataFormat scaler_format =
+        src_2x ? DataFormat::MxFp4_2x_B : static_cast<DataFormat>(unpack_dst_format[operandB_id]);
+    const DataFormat srcA_format = swap_operands ? scaler_format : data_format;
+    const DataFormat srcB_format = swap_operands ? data_format : scaler_format;
 
-    // The default path skips the ALU setup when already configured, so set the ALU formats directly when they change.
-    if (src_2x || swap_operands) {
-        const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(srcA_format) &&
-                                          _is_src_fmt_int32_dest_compatible_(srcB_format) && EN_32BIT_DEST;
-        _configure_alu_formats_<EN_32BIT_DEST>(
-            srcA_format, srcB_format, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
-        if (swap_operands) {
-            data_format_config_set = DataFormatConfigSet::UNCONFIGURED;
-        }
-    } else {
-        _configure_default_alu_data_format_state_<EN_32BIT_DEST>(srcA_format, srcB_format);
-    }
+    // Declare the Dest-derived width for operands copied back from Dest; init still takes the unpacked formats.
+    const auto alu_format = [](const DataFormat format) {
+        return reduce_moves_dest_to_src<pool_type, reduce_dim>() ? ckernel::math::dest_src_format<EN_32BIT_DEST>(format)
+                                                                 : format;
+    };
+
+    _configure_alu_cfg_<AluCfgType::DEFAULT, EN_32BIT_DEST>(alu_format(srcA_format), alu_format(srcB_format));
     _llk_math_reduce_init_<pool_type, reduce_dim, EN_32BIT_DEST, math_fidelity>(srcA_format, srcB_format, tensor_shape);
 }
 
 /**
- * @brief Restore the ALU SrcA/SrcB formats after a column reduce that consumed an MxFp4 (2x) operand.
+ * @brief Math-side reduce uninit. Empty, as on WH/BH where _llk_math_reduce_uninit_ is also empty.
  *
- * @param operandA: The srcA (data) operand circular buffer (same as reduce init)
+ * Nothing to undo: every FPU math init programs its own SrcA/SrcB formats, so the MxFp4 -> MxFp4_2x_B
+ * deviation @ref llk_math_reduce_init applies cannot be observed by the next op.
  *
- * Both reduce operands of an MxFp4 reduce use operandA's table format, so both ALU sources are restored from it.
- * Pair with @ref llk_unpack_AB_reduce_uninit.
+ * @note The unpacker half is not a no-op -- see @ref llk_unpack_AB_reduce_uninit. The packer edge
+ *       mask is cleared separately by llk_pack_reduce_mask_clear.
  */
-inline void llk_math_reduce_uninit(const std::uint32_t operandA) {
-    const std::uint32_t operandA_id = get_operand_id(operandA);
-    if (static_cast<DataFormat>(get_operand_src_format(operandA_id)) != DataFormat::MxFp4) {
-        return;
-    }
-    const DataFormat table_fmt = static_cast<DataFormat>(unpack_dst_format[operandA_id]);
-    const bool en_int32_dest_format = _is_src_fmt_int32_dest_compatible_(table_fmt) && DST_ACCUM_MODE;
-    _configure_alu_formats_<DST_ACCUM_MODE>(
-        table_fmt, table_fmt, en_int32_dest_format, DataFormat::Invalid /* no dest-format override */);
-}
+inline void llk_math_reduce_uninit([[maybe_unused]] const std::uint32_t operandA = 0) {}
 
 /**
  * @brief Perform a reduce operation

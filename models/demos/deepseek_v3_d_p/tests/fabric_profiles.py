@@ -10,6 +10,8 @@ import re
 from pathlib import Path
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_fabric_router_config,
     get_max_payload_size,
@@ -21,6 +23,16 @@ def moe_fabric_payload(model_config):
     """The payload for a mesh running TtMoe: room for the routed expert / combine overlap on Blackhole, the
     model's own FABRIC_PAYLOAD_SIZE everywhere else. See init_helpers.moe_fabric_payload_size."""
     return moe_fabric_payload_size(model_config)
+
+
+# Each model opens the fabric at its production packet size; other variants at the arch maximum.
+MODEL_PAYLOAD_CONFIGS = {"kimi_k3_1": KimiK31Config, "glm_5_3": GLM53Config}
+
+
+def model_fabric_payload(variant_name):
+    """The production fabric packet size for `variant_name`, or None (the arch maximum) for a variant without one."""
+    config = MODEL_PAYLOAD_CONFIGS.get(variant_name)
+    return moe_fabric_payload(config) if config else None
 
 
 def fabric2d_device_params(*, fabric_payload_size=None, **overrides) -> dict:
@@ -136,6 +148,11 @@ def _device_topologies(path: str) -> tuple[Path, list[tuple[str, str, str, str]]
     return descriptor_path, topologies
 
 
+def mesh_descriptor_topologies(path: str) -> list[tuple[str, str, str, str]]:
+    """(dims..., dim_types...) of every device mesh a mesh graph descriptor declares."""
+    return _device_topologies(path)[1]
+
+
 def assert_torus_xy_descriptor(path: str) -> None:
     """Fail before device open unless every declared device mesh is 8x4 Ring/Ring."""
     descriptor_path, topologies = _device_topologies(path)
@@ -145,7 +162,7 @@ def assert_torus_xy_descriptor(path: str) -> None:
 
 
 # One tray half as a 4x4 prefill stage: SP on the axis-1 ring, TP on the axis-0 line.
-_4X4_STAGE_TOPOLOGY = ("4", "4", "LINE", "RING")
+STAGE_4X4_TOPOLOGY = ("4", "4", "LINE", "RING")
 
 
 def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
@@ -156,7 +173,7 @@ def certified_torus_fabric(path: str) -> ttnn.FabricConfig:
     Anything else fails before device open.
     """
     _, topologies = _device_topologies(path)
-    if all(topology == _4X4_STAGE_TOPOLOGY for topology in topologies):
+    if all(topology == STAGE_4X4_TOPOLOGY for topology in topologies):
         return ttnn.FabricConfig.FABRIC_2D_TORUS_X
     assert_torus_xy_descriptor(path)
     return ttnn.FabricConfig.FABRIC_2D_TORUS_XY
@@ -186,7 +203,7 @@ def tp_axis_is_wrapped(mesh_device) -> bool:
 
     def direction(src, dst):
         node = lambda col: ttnn.FabricNodeId(mesh_id, col)  # noqa: E731 -- row 0, so chip id is the column
-        value = ttnn.get_eth_forwarding_direction(node(src), node(dst))
+        value = ttnn.get_eth_forwarding_direction(mesh_device, node(src), node(dst))
         assert value is not None, f"no TP route from column {src} to {dst}"
         return value
 
@@ -201,7 +218,7 @@ def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
     short one wrap link therefore answers a torus request with an unwrapped fabric and runs
     the arm to green on the single topology that arm exists to exercise.
     """
-    if ttnn.get_fabric_config() not in _REQUESTS_TP_WRAP:
+    if ttnn.get_fabric_config(mesh_device) not in _REQUESTS_TP_WRAP:
         return
 
     _, cols = tuple(mesh_device.shape)
@@ -211,6 +228,6 @@ def assert_requested_tp_wrap_was_realized(mesh_device) -> None:
         return
 
     assert tp_axis_is_wrapped(mesh_device), (
-        f"{ttnn.get_fabric_config()} was requested but the TP axis came up unwrapped; "
+        f"{ttnn.get_fabric_config(mesh_device)} was requested but the TP axis came up unwrapped; "
         f"this box cannot gate a wrap-direction bug -- check the wrap cabling"
     )
