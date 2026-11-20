@@ -189,6 +189,7 @@ class TTMossVAE:
                 exp_approx_mode=False,
             ),
             compute_kernel_config=self.compute,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         x = self._linear(ttnn.typecast(x, ttnn.float32), name + ".to_out.0")
         x = ttnn.add(x, residual)

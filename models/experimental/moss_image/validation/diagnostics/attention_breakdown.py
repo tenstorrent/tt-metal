@@ -126,6 +126,7 @@ try:
                     is_causal=False,
                     scale=scale,
                     compute_kernel_config=compute,
+                    precision=t.SDPAPrecision.ACCURATE,
                     memory_config=t.DRAM_MEMORY_CONFIG,
                     program_config=cfg,
                 )
