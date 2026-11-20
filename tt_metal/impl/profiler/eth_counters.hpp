@@ -88,9 +88,13 @@ struct Delta {
 };
 
 // Nonzero differences only. A 32-bit value wraps; a 64-bit value that went down is dropped and sets FLAG_RESET in
-// *flags. When the firmware poll counter did not move, every value read from L1 is stale: those rows are dropped and
-// FLAG_STALE is set.
+// *flags. When the firmware poll counter of a core did not move, the values read from its L1 are stale: those rows
+// are dropped and FLAG_STALE is set.
 std::vector<Delta> diff(const Plan& plan, const Reading& before, const Reading& after, uint32_t* flags);
+
+// Adds the wrapped difference of every register value to totals, which is reading_size() long. Summed snapshot by
+// snapshot, a run keeps the counter periods that one open to close difference of a 32-bit register would lose.
+void add_register_deltas(const Plan& plan, const Reading& before, const Reading& after, std::vector<uint64_t>& totals);
 
 std::string counter_name(llk::perf::eth::EthCounter counter);
 
