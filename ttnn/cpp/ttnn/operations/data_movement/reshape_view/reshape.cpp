@@ -591,6 +591,48 @@ std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
     return planned;
 }
 
+// Row-major copy of the logical values of a TILE tensor whose padded shape has whole padding tiles. The untilize
+// rank adapter reshapes its input to 4D, which on this tensor would re-enter reshape's padding normalization, so a
+// higher-rank input is collapsed to 4D here with a view that keeps its padding.
+ttnn::Tensor untilize_whole_padding_tiles(
+    const ttnn::Tensor& tensor, const std::optional<CoreRangeSet>& sub_core_grid) {
+    const auto& logical = tensor.logical_shape();
+    const auto& padded = tensor.padded_shape();
+    const size_t rank = logical.rank();
+    ttnn::Shape last_index = logical;
+    for (size_t i = 0; i < rank; ++i) {
+        last_index[i] -= 1;
+    }
+    if (rank <= 4) {
+        return ttnn::untilize_with_unpadding(
+            tensor, last_index, tensor.memory_config(), /*use_multicore=*/true, sub_core_grid);
+    }
+    for (size_t i = 1; i < rank - 3; ++i) {
+        TT_FATAL(
+            logical[i] == padded[i],
+            "reshape: padding in dim {} of logical shape {} padded shape {} is not supported",
+            i,
+            logical,
+            padded);
+    }
+    uint32_t outer_logical = 1;
+    uint32_t outer_padded = 1;
+    for (size_t i = 0; i < rank - 3; ++i) {
+        outer_logical *= logical[i];
+        outer_padded *= padded[i];
+    }
+    const ttnn::Shape logical_4d({outer_logical, logical[-3], logical[-2], logical[-1]});
+    const ttnn::Shape padded_4d({outer_padded, padded[-3], padded[-2], padded[-1]});
+    const ttnn::Shape last_index_4d({outer_logical - 1, last_index[-3], last_index[-2], last_index[-1]});
+    const Tensor row_major = ttnn::untilize_with_unpadding(
+        ttnn::experimental::view(tensor, logical_4d, padded_4d),
+        last_index_4d,
+        tensor.memory_config(),
+        /*use_multicore=*/true,
+        sub_core_grid);
+    return ttnn::experimental::view(row_major, logical, logical);
+}
+
 ttnn::Tensor reshape_dispatch(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
@@ -676,18 +718,20 @@ ttnn::Tensor reshape_dispatch(
 
     // Views and the tiled reshape kernels address the input's tiles on the default tile grid of its logical
     // shape. Whole padding tiles past it (e.g. from tilize_with_val_padding) shift every later tile off that
-    // grid, so such an input is first rebuilt on it.
-    if (layout == ttnn::TILE_LAYOUT && !tensor.is_sharded() && !same_logical_and_padded) {
-        const auto& tile = tensor.tensor_spec().tile();
+    // grid, so such an input is first rebuilt on it. A caller asking for a non-default output padding manages
+    // the padding itself, so its request is left as it was.
+    const auto& tile = tensor.tensor_spec().tile();
+    const bool default_output_padding =
+        padded_shape == logical_shape || padded_shape == operations::data_movement::compute_padded_shape(
+                                                             logical_shape, tile.get_height(), tile.get_width());
+    if (layout == ttnn::TILE_LAYOUT && !tensor.is_sharded() && !same_logical_and_padded && default_output_padding) {
         const auto default_padded_shape =
             operations::data_movement::compute_padded_shape(tensor_shape, tile.get_height(), tile.get_width());
         if (tensor.padded_shape() != default_padded_shape) {
-            ttnn::Shape last_index = tensor_shape;
-            for (size_t i = 0; i < last_index.rank(); ++i) {
-                last_index[i] -= 1;
-            }
-            const Tensor row_major = ttnn::untilize_with_unpadding(
-                tensor, last_index, tensor.memory_config(), /*use_multicore=*/true, sub_core_grid);
+            const Tensor widened = tensor.dtype() == DataType::BFLOAT4_B
+                                       ? ttnn::typecast(tensor, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grid)
+                                       : tensor;
+            const Tensor row_major = untilize_whole_padding_tiles(widened, sub_core_grid);
             const Tensor retiled = ttnn::tilize_with_val_padding(
                 row_major,
                 default_padded_shape,
