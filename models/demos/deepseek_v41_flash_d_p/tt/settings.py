@@ -1382,6 +1382,18 @@ TABLE = {
         "through the dispatch (PB.3A). Real rows bit-identical (tests/packed/test_packed_moe_block.py). Default off (the "
         "overseer's: on = the change; the gate sets it)",
     ),
+    "PACKED_GATHER_HIDE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.3H (OWNER 2026-11-19 20:55), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings). With "
+        "PACKED=on and PACKED_ATTN_ONECALL=on (a chunk of more than one segment): on = every segment's history all-gather "
+        "of the chunk (from its own slot's served cache, as off) runs on a gather sub-device (the grid's free column next "
+        "to the 11 x 10 matmul grid) CONCURRENT with a layer's attention phase (wq_b, rope, sparse_sdpa, wo_a, wo_b) on "
+        "the other sub-device (tt/gather_hide.py; deepseek_v3_d_p's sparse_sdpa-beside-push pattern): the history "
+        "prefetches at the earlier layers' attention, the chunk's own tail periods beside the source layer's indexer "
+        "query; off = PB.3A (the prefetches serial at the first engram wait, the tails serial at the source layer). Same "
+        "bytes at the same rows (a data move). Default off (the task's: on = the change; the gate sets it)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

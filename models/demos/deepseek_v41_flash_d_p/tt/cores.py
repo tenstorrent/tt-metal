@@ -107,6 +107,23 @@ def _caps(dev) -> tuple:
     return hit
 
 
+class nonmm_on_mm_grid:
+    """PB.3H (PACKED_GATHER_HIDE=on, tt/gather_hide.py): ``with nonmm_on_mm_grid():`` every ``sub_cores()`` answers the
+    matmul grid (MAX_WORKER_CORES: 11 x 10 from (0, 0) on the Galaxy) instead of NONMM_MAX_CORES' full grid, so the
+    stock non-matmul ops of a region stay inside its compute sub-device. A no-op where no cap applies."""
+
+    def __enter__(self):
+        self.hit = _CAPS.get(None)
+        if self.hit is not None and self.hit[0] is not None:
+            _CAPS[None] = (self.hit[0], self.hit[1], self.hit[1])
+        return self
+
+    def __exit__(self, *exc):
+        if self.hit is not None:
+            _CAPS[None] = self.hit
+        return False
+
+
 def init_caps(mesh) -> None:
     """Record the mesh the model runs on (sub_cores() / max_grid() with no argument)."""
     _CAPS[None] = _caps(mesh)

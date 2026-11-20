@@ -10,12 +10,17 @@ today's path, PACKED=off, in the same 8192 geometry):
     P   slot 2, start 2048, 1600 rows (a continuing request, padded lane)
     O   slot 3, start 4096, 777 rows  (continuing, odd length: a ratio-2 group left pending at its end)
     Q   slot 4, start 2048, 40 rows   (PREFILL_END=cap: cap 2048 <= start: nothing computed, its snapshot and acks)
+    G   slot 5, start 16384, 2048 rows (PB.3H: two whole chunks of history: every source's history gathered, the
+        prefetch and the tail; PACKED_GATHER_HIDE=on hides them in packed3)
+    H   slot 6, start 9216, 1500 rows  (PB.3H: one chunk + 1024 rows of history, padded lane)
 Runs (every run on fresh slot states, the prefixes replayed: the device path is deterministic):
     today[S]   S as today's single-request chunk (PACKED=off)              S in F, P, O
     alone[S]   S alone in lane 0 through PACKED=on                          S in F, P, O, Q
     packed1    [F, P, O, Q]       (lanes 0-3)                               PACKED=on
     packed2    [O, F, -, P]       (every segment in another lane, an empty lane)
-    packed1'   packed1 again (determinism)
+    packed3    [G, O, H, F]       (PB.3H: two segments with whole chunks of history)
+    packed1'   packed1 again, packed3' packed3 again (determinism)
+Every slot's caches have one capacity (MAX_SEQ: serving's slots are one size).
 Metrics (gated == 0):
     packed_alone_vs_today_max_abs_diff   alone[S] vs today[S], every layer output (S's rows: streams and pre)
     packed_lane_equiv_max_abs_diff       packed1[S], packed2[S] vs alone[S], every layer output
@@ -60,15 +65,17 @@ S = spec()
 pytestmark = device_timeout(S)
 BATCH_SHARED = True
 BATCH_ITEM_VARS = ("DS41_PACKED_LAYERS",)  # (the iteration rungs: the layers computed; the model is the gate's)
-MAX_SEQ = 16384  # (state caches; positions < 8192 + 4096 + 2048)
+MAX_SEQ = 32768  # (state caches, one size: positions < 16384 + 8192)
 SEGS = {
     "F": dict(slot=1, start=0, n=2048, off=0),
     "P": dict(slot=2, start=2048, n=1600, off=8192),
     "O": dict(slot=3, start=4096, n=777, off=16384),
     "Q": dict(slot=4, start=2048, n=40, off=24576),
+    "G": dict(slot=5, start=16384, n=2048, off=4096),
+    "H": dict(slot=6, start=9216, n=1500, off=12288),
 }
-COMPUTED = ("F", "P", "O")
-COMPS = {"packed1": ["F", "P", "O", "Q"], "packed2": ["O", "F", None, "P"]}
+COMPUTED = ("F", "P", "O", "G", "H")
+COMPS = {"packed1": ["F", "P", "O", "Q"], "packed2": ["O", "F", None, "P"], "packed3": ["G", "O", "H", "F"]}
 
 
 def _layers(model) -> list:
@@ -94,15 +101,16 @@ class Run:
 
 
 def _fresh_state(model, layers, run, name):
-    """A slot state holding segment ``name``'s history [0, start) (today's path, one chunk)."""
+    """A slot state holding segment ``name``'s history [0, start) (today's path, one chunk a CHUNK rows)."""
     from models.demos.deepseek_v41_flash_d_p.tt.packed_device import run_chunk
 
     st = model.new_state(MAX_SEQ)
     d = SEGS[name]
-    if d["start"] > 0:
+    for c0 in range(0, d["start"], CHUNK):
+        end = min(c0 + CHUNK, d["start"])
         ids = torch.full((CHUNK,), PAD_ID, dtype=torch.long)
-        ids[: d["start"]] = run.toks(name)[: d["start"]]
-        desc = ChunkDescriptor.single(CHUNK, d["slot"], 0, d["start"])
+        ids[: end - c0] = run.toks(name)[c0:end]
+        desc = ChunkDescriptor.single(CHUNK, d["slot"], c0, end)
         with packed("off"):
             run_chunk(model, desc, ids, [st], layers)
     return st
@@ -171,6 +179,7 @@ def test_packed_oracle(mesh_device):
         alone[n] = _run(model, layers, run, [n, None, None, None], "on")
     comps = {c: _run(model, layers, run, lanes, "on") for c, lanes in COMPS.items()}
     again = _run(model, layers, run, COMPS["packed1"], "on")
+    again3 = _run(model, layers, run, COMPS["packed3"], "on")
 
     a_t = max(Capture.diff(alone[n][0], today[n][0], keys(n)) for n in COMPUTED)
     a_t_dig = sum(_dig_mismatch(alone[n][1][n], today[n][1][n]) for n in COMPUTED)
@@ -190,8 +199,11 @@ def test_packed_oracle(mesh_device):
             if m:
                 bad = sorted({k for k in set(dig[n]) | set(alone[n][1][n]) if dig[n].get(k) != alone[n][1][n].get(k)})
                 worst.append(f"{c} {n}: served digests differ {bad[:6]}")
-    det = Capture.diff(again[0], comps["packed1"][0], [k for n in COMPUTED for k in keys(n)])
-    det_dig = sum(_dig_mismatch(again[1][n], comps["packed1"][1][n]) for n in again[1])
+    det = 0.0
+    det_dig = 0
+    for c, rep in (("packed1", again), ("packed3", again3)):
+        det = max(det, Capture.diff(rep[0], comps[c][0], [k for n in COMPS[c] if n in COMPUTED for k in keys(n)]))
+        det_dig += sum(_dig_mismatch(rep[1][n], comps[c][1][n]) for n in rep[1])
     if det_dig and not det:
         det = 1e-30
     metrics.record("packed_alone_vs_today_max_abs_diff", a_t)
@@ -204,6 +216,10 @@ def test_packed_oracle(mesh_device):
         f"packed oracle: alone vs today {a_t} (digests {a_t_dig}), lane equivalence {lane_eq}, slot digest "
         f"mismatches {digs}, determinism {det} (digests {det_dig})"
     )
+    from models.demos.deepseek_v41_flash_d_p.tt import gather_hide, history_gather
+
+    print(f"  history gathers since load: {history_gather.STATS}; PACKED_GATHER_HIDE regions: {gather_hide.STATS}")
+    metrics.record("packed_gather_hide_regions", gather_hide.STATS["regions"])
     for w in worst:
         print("  " + w)
     assert a_t == 0 and lane_eq == 0 and digs == 0 and det == 0, "packed oracle: not bit-identical (see above)"

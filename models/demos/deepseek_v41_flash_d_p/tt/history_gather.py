@@ -93,6 +93,7 @@ class HistoryBuffer:
         self.owner = None  # (id(cache), start, version) of the rows it holds
         self.pre = None  # P.75: (id(cache), start, version, h) of a prefetched history (rows [q R, q R + h))
         self.view = None  # P.75: [1, owners, rows / owners, WIDTH], a view of ``tensor`` (the slice_write's operand)
+        self.ready = None  # PB.3H: (id(cache), start, version, rows) of a gather completed ahead of its ``gather`` call
         if owners is not None:
             assert self.rows % owners == 0, (self.rows, owners)
             self.view = ttnn.reshape(self.tensor, [1, owners, self.rows // owners, self.width])
@@ -188,7 +189,39 @@ def _key(ckv_cache):
     return k if k is not None else ckv_cache.owners * ckv_cache.slab.rows
 
 
-STATS = {"prefetch": 0, "tail": 0, "full": 0}  # P.75: gathers by kind since load (diagnostic, tests)
+STATS = {"prefetch": 0, "tail": 0, "full": 0, "ready": 0}  # P.75: gathers by kind since load (diagnostic)
+# PB.3H (diagnostic, tests/packed/test_packed_walls.py): when a list, every history gather / prep op appends
+# (kind, source layer, lane, first device-operation id, end id): the profile tells its programs from the rest
+TRACE: list | None = None
+
+
+def _lane_src(ckv_cache) -> tuple:
+    """(source layer, lane) of a cache's buffer key (P.75 (rows, layer); PB.3 lanes ((rows, layer), "lane", k))."""
+    k = getattr(ckv_cache, "history_key", None)
+    if isinstance(k, tuple) and len(k) == 3 and k[1] == "lane":
+        return (k[0][1] if isinstance(k[0], tuple) else -1), int(k[2])
+    return (k[1] if isinstance(k, tuple) else -1), 0
+
+
+class _Traced:
+    """``with _Traced(kind, cache):`` records the device-operation ids the block launched into TRACE (when on);
+    ``lane``: the lane to book it to (default the cache's)."""
+
+    __slots__ = ("kind", "cache", "a", "lane")
+
+    def __init__(self, kind: str, ckv_cache, lane: int | None = None):
+        self.kind, self.cache, self.lane = kind, ckv_cache, lane
+
+    def __enter__(self):
+        self.a = ttnn._ttnn.get_device_operation_id() if TRACE is not None else None
+        return self
+
+    def __exit__(self, *exc):
+        if self.a is not None and TRACE is not None:
+            src, lane = _lane_src(self.cache)
+            lane = lane if self.lane is None else self.lane
+            TRACE.append((self.kind, src, lane, self.a, ttnn._ttnn.get_device_operation_id()))
+        return False
 
 
 def gather(ckv_cache, local_rows: int, start: int) -> tuple[ttnn.Tensor, int]:
@@ -207,6 +240,12 @@ def gather(ckv_cache, local_rows: int, start: int) -> tuple[ttnn.Tensor, int]:
         f"HISTORY_GATHER=rows: no history buffer {_key(ckv_cache)} (acquired by tt/compressor.TtServedRows; "
         f"held: {list((_BUF.get(id(mesh)) or (None, {}))[1])})"
     )
+    ready, buf.ready = buf.ready, None
+    if ready is not None and ready == (id(ckv_cache), start, ckv_cache.version, local_rows):
+        buf.pre = None  # PB.3H: completed ahead (tail_finish: the same rows as the tail path below)
+        buf.owner = (id(ckv_cache), start, ckv_cache.version)
+        STATS["ready"] += 1
+        return buf.tensor, R
     pre, buf.pre = buf.pre, None
     if (
         pre is not None
@@ -226,35 +265,48 @@ def gather(ckv_cache, local_rows: int, start: int) -> tuple[ttnn.Tensor, int]:
 def _full(ckv_cache, buf: HistoryBuffer, local_rows: int, owners: int, axis) -> None:
     """Every owner's first ``local_rows`` local slab rows -> its fixed slot of ``buf`` (bfp4, P.77: packed into the
     chip's local record buffer first, the records gathered)."""
+    src = None
+    if buf.bfp4:
+        with _Traced("pack", ckv_cache):
+            src = _pack(ckv_cache, 0, local_rows)
+    _gather_full(ckv_cache, buf, src, local_rows, owners, axis)
+
+
+def _gather_full(ckv_cache, buf: HistoryBuffer, src, local_rows: int, owners: int, axis, sub: dict | None = None):
+    """The gather of ``_full``: ``src`` the packed records (bfp4) or None (the slab's bf16 rows). ``sub`` (PB.3H):
+    high_bw_all_gather's subdevice_id / sub_core_grids (the gather sub-device of tt/gather_hide.Split)."""
     slab = ckv_cache.slab
     s0, s1 = ccl._sems(buf.mesh, axis)
-    if buf.bfp4:
-        loc = _pack(ckv_cache, 0, local_rows)
+    kw = dict(sub or {})
+    with _Traced("gather", ckv_cache):
+        if src is not None:
+            ttnn.experimental.high_bw_all_gather(
+                src,
+                2,
+                buf.tensor,
+                cluster_axis=axis,
+                num_links=ccl.AG_LINKS,
+                gathered_dim_size=owners * local_rows,
+                ready_semaphore=s0,
+                data_valid_semaphore=s1,
+                **kw,
+            )
+            return
         ttnn.experimental.high_bw_all_gather(
-            loc,
+            slab.tensor,
             2,
             buf.tensor,
             cluster_axis=axis,
             num_links=ccl.AG_LINKS,
+            input_batch_index=slab.batch,
             gathered_dim_size=owners * local_rows,
             ready_semaphore=s0,
             data_valid_semaphore=s1,
+            **kw,
         )
-        return
-    ttnn.experimental.high_bw_all_gather(
-        slab.tensor,
-        2,
-        buf.tensor,
-        cluster_axis=axis,
-        num_links=ccl.AG_LINKS,
-        input_batch_index=slab.batch,
-        gathered_dim_size=owners * local_rows,
-        ready_semaphore=s0,
-        data_valid_semaphore=s1,
-    )
 
 
-def _pack(ckv_cache, lo: int, hi: int) -> ttnn.Tensor:
+def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn.Tensor:
     """P.77 (HISTORY_FORMAT=bfp4): the chip's own served bf16 rows [lo, hi) of ``ckv_cache``'s slab -> 320 B
     bfloat4_b records at the same rows of the local record buffer (returned; persistent, never freed by the caller).
     Packs whole tiles: [lo // 32 x 32, ...) up to hi rounded to 32 rows, or, for a whole history (lo 0), to
@@ -262,8 +314,9 @@ def _pack(ckv_cache, lo: int, hi: int) -> ttnn.Tensor:
     extra rows past hi are later slab rows (no index reads their records; a later pack overwrites them)."""
     slab = ckv_cache.slab
     R = slab.rows
-    loc = _buffer(ckv_cache.mesh, ("loc", R))
-    assert loc is not None and loc.bfp4, ("P.77: no local record buffer", R)
+    if loc is None:  # (PB.3H: a caller's own record buffer of the slab's rows, else the shared one)
+        loc = _buffer(ckv_cache.mesh, ("loc", R))
+    assert loc is not None and loc.bfp4 and loc.rows == R, ("P.77: no local record buffer", R)
     a = lo // 32 * 32
     b = min(-(-hi // (PACK_BUCKET if a == 0 else 32)) * (PACK_BUCKET if a == 0 else 32), R)
     assert 0 <= a < b <= R and (b - a) % 32 == 0, (lo, hi, a, b, R)
@@ -285,21 +338,42 @@ def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, a
     m = local_rows - h
     small = _buffer(buf.mesh, ("tail", owners * m) + (("bfp4",) if buf.bfp4 else ()))
     assert small is not None and buf.view is not None, ("P.75: no tail buffer", owners, m)
+    with _Traced("pack", ckv_cache):
+        part = _tail_part(ckv_cache, buf, h, local_rows)
+    _tail_gather(ckv_cache, buf, part, small, axis)
+    with _Traced("write", ckv_cache):
+        ttnn.bringup.slice_write(
+            small.view, buf.view, [0, 0, h, 0], [1, owners, local_rows, buf.width], [1, 1, 1, 1], max_grid=max_grid()
+        )
+
+
+def _tail_part(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, loc: HistoryBuffer | None = None):
+    """The tail's input: the chip's own rows [h, local_rows) (bfp4: packed into ``loc`` / the shared record buffer
+    first, then sliced) as a full-mesh gather input (the slab's topology)."""
     if buf.bfp4:  # P.77: the chunk's own rows packed on their chip first, their records gathered
-        loc = _pack(ckv_cache, h, local_rows)
-        part = ttnn.slice(loc, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(loc))
+        rec = _pack(ckv_cache, h, local_rows, loc)
+        part = ttnn.slice(rec, [0, 0, h, 0], [1, 1, local_rows, REC], memory_config=DRAM, sub_core_grids=sub_cores(rec))
     else:
         part = ckv_cache.slab.slice_rows(h, local_rows)  # [1, 1, m, 512] ROW_MAJOR DRAM interleaved
     # (host metadata only: the slice's own topology is not the slab's dim-2 sharding the full-mesh gather checks)
     part.update_tensor_topology(ckv_cache.slab.tensor.tensor_topology())
+    return part
+
+
+def _tail_gather(ckv_cache, buf: HistoryBuffer, part, small: HistoryBuffer, axis, sub: dict | None = None) -> None:
     s0, s1 = ccl._sems(buf.mesh, axis)
-    ttnn.experimental.high_bw_all_gather(
-        part, 2, small.tensor, cluster_axis=axis, num_links=ccl.AG_LINKS, ready_semaphore=s0, data_valid_semaphore=s1
-    )
+    with _Traced("tail", ckv_cache):
+        ttnn.experimental.high_bw_all_gather(
+            part,
+            2,
+            small.tensor,
+            cluster_axis=axis,
+            num_links=ccl.AG_LINKS,
+            ready_semaphore=s0,
+            data_valid_semaphore=s1,
+            **dict(sub or {}),
+        )
     dealloc(part)
-    ttnn.bringup.slice_write(
-        small.view, buf.view, [0, 0, h, 0], [1, owners, local_rows, buf.width], [1, 1, 1, 1], max_grid=max_grid()
-    )
 
 
 def new_chunk() -> None:
@@ -311,6 +385,7 @@ def new_chunk() -> None:
     for _, bufs in _BUF.values():
         for b in bufs.values():
             b.pre = None
+            b.ready = None
 
 
 def prefetch(ckv_cache, start: int, chunk: int) -> bool:
@@ -332,6 +407,140 @@ def prefetch(ckv_cache, start: int, chunk: int) -> bool:
     buf.pre = (id(ckv_cache), int(start), ckv_cache.version, h)
     STATS["prefetch"] += 1
     return True
+
+
+# ---------------------------------------------------------------------------------------------- PB.3H split steps
+def prefetch_prepare(ckv_cache, start: int, chunk: int, loc: HistoryBuffer | None = None):
+    """PACKED_GATHER_HIDE=on (PB.3H, tt/gather_hide.py): ``prefetch`` up to its gather (the bfp4 pack into ``loc``, a
+    record buffer of the caller's, so several prefetches can be packed before their gathers run). Returns the plan
+    ``prefetch_gather`` takes, or None (nothing to prefetch: c = 0, a cache not hidden)."""
+    if getattr(ckv_cache, "history_key", None) is None or not isinstance(ckv_cache.history_key, tuple):
+        return None
+    owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
+    buf = _buffer(ckv_cache.mesh, ckv_cache.history_key)
+    assert buf is not None, ("P.75: the source's buffer", ckv_cache.history_key)
+    buf.pre = buf.ready = None
+    h = (int(start) // int(chunk)) * (ckv_cache.stripe // ckv_cache.ratio)
+    if h == 0:
+        return None
+    assert h <= ckv_cache.slab.rows, (h, ckv_cache.slab.rows)
+    src = None
+    if buf.bfp4:
+        with _Traced("pack", ckv_cache):
+            src = _pack(ckv_cache, 0, h, loc)
+    return (ckv_cache, buf, src, h, owners, axis, int(start))
+
+
+def prefetch_gather(plan, sub: dict | None = None) -> None:
+    """The gather of a ``prefetch_prepare`` plan (``sub``: the gather sub-device's high_bw_all_gather arguments) and
+    the prefetch marker ``gather`` then takes the tail path from (as ``prefetch``)."""
+    ckv_cache, buf, src, h, owners, axis, start = plan
+    _gather_full(ckv_cache, buf, src, h, owners, axis, sub)
+    buf.owner = None  # (rows [0, h) only until ``gather`` completes it)
+    buf.pre = (id(ckv_cache), start, ckv_cache.version, h)
+    STATS["prefetch"] += 1
+
+
+def tail_prepare(ckv_cache, start: int, local_rows: int, loc: HistoryBuffer | None = None):
+    """PB.3H: the tail of ``gather(ckv_cache, local_rows, start)`` ahead of its call, up to its gather (pack + slice).
+    None when ``gather`` would not take the tail path (no matching prefetch: it then gathers in full itself)."""
+    buf = _buffer(ckv_cache.mesh, _key(ckv_cache))
+    if buf is None or buf.view is None:
+        return None
+    pre = buf.pre
+    if not (
+        pre is not None
+        and pre[:2] == (id(ckv_cache), start)
+        and 0 <= ckv_cache.version - pre[2] <= 1
+        and pre[3] < local_rows <= ckv_cache.slab.rows
+    ):
+        return None
+    owners, axis = owners_and_axis(ckv_cache.mesh, ckv_cache.tp_axis is not None)
+    with _Traced("pack", ckv_cache):
+        part = _tail_part(ckv_cache, buf, pre[3], local_rows, loc)
+    return (ckv_cache, buf, part, pre[3], int(local_rows), owners, axis, int(start))
+
+
+def tail_gather(plan, small: HistoryBuffer, sub: dict | None = None) -> None:
+    """The tail plan's gather into ``small`` (the caller's [owners m, width] buffer with its 4-D view)."""
+    ckv_cache, buf, part, h, local_rows, owners, axis, start = plan
+    assert small.rows == owners * (local_rows - h) and small.view is not None and small.bfp4 == buf.bfp4
+    _tail_gather(ckv_cache, buf, part, small, axis, sub)
+
+
+def tail_finish(plan, small: HistoryBuffer) -> None:
+    """The tail's slice_write into the source buffer; ``gather(ckv_cache, local_rows, start)`` then finds it ready."""
+    ckv_cache, buf, part, h, local_rows, owners, axis, start = plan
+    with _Traced("write", ckv_cache):
+        ttnn.bringup.slice_write(
+            small.view, buf.view, [0, 0, h, 0], [1, owners, local_rows, buf.width], [1, 1, 1, 1], max_grid=max_grid()
+        )
+    buf.pre = None
+    buf.ready = (id(ckv_cache), start, ckv_cache.version, local_rows)
+    STATS["tail"] += 1
+
+
+def tails_input(plans: list):
+    """PB.3H: several tail plans' inputs (each chip's own rows of each) concatenated on dim 2 in plan order: one
+    full-mesh gather input (consumes the parts). Every plan of one gather geometry (owners, axis, record width)."""
+    parts = [p[2] for p in plans]
+    first = plans[0]
+    assert all(p[5:7] == first[5:7] and p[1].bfp4 == first[1].bfp4 for p in plans), "tails_input: one geometry"
+    if len(parts) == 1:
+        return parts[0]
+    with _Traced("pack", first[0], -1):
+        x = ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores(parts[0]))
+    for t in parts:
+        dealloc(t)
+    x.update_tensor_topology(first[0].slab.tensor.tensor_topology())  # (host metadata, as _tail_part)
+    return x
+
+
+def tails_gather(plans: list, x, small: HistoryBuffer, sub: dict | None = None) -> None:
+    """``tails_input``'s rows of every owner -> ``small`` ([owners M, width], M the plans' rows together; owner q's
+    block holds every plan's rows in plan order): ONE gather for every segment's tail. Consumes ``x``."""
+    first = plans[0]
+    M = sum(p[4] - p[3] for p in plans)
+    assert small.rows == first[5] * M and small.view is not None and small.bfp4 == first[1].bfp4
+    s0, s1 = ccl._sems(small.mesh, first[6])
+    with _Traced("tail", first[0], -1):
+        ttnn.experimental.high_bw_all_gather(
+            x,
+            2,
+            small.tensor,
+            cluster_axis=first[6],
+            num_links=ccl.AG_LINKS,
+            ready_semaphore=s0,
+            data_valid_semaphore=s1,
+            **dict(sub or {}),
+        )
+    dealloc(x)
+
+
+def tails_finish(plans: list, small: HistoryBuffer) -> None:
+    """Each plan's rows of ``small`` (its owner-block offset) slice_written into its source buffer (as tail_finish)."""
+    o = 0
+    for ckv_cache, buf, part, h, local_rows, owners, axis, start in plans:
+        m = local_rows - h
+        with _Traced("write", ckv_cache):
+            sl = small.view
+            if len(plans) > 1:
+                sl = ttnn.slice(
+                    small.view,
+                    [0, 0, o, 0],
+                    [1, owners, o + m, buf.width],
+                    memory_config=DRAM,
+                    sub_core_grids=sub_cores(),
+                )
+            ttnn.bringup.slice_write(
+                sl, buf.view, [0, 0, h, 0], [1, owners, local_rows, buf.width], [1, 1, 1, 1], max_grid=max_grid()
+            )
+            if sl is not small.view:
+                dealloc(sl)
+        o += m
+        buf.pre = None
+        buf.ready = (id(ckv_cache), start, ckv_cache.version, local_rows)
+        STATS["tail"] += 1
 
 
 def holds(ckv_cache, start: int) -> bool:

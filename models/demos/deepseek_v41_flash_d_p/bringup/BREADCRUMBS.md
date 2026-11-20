@@ -1602,3 +1602,111 @@
   test alone: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
   DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile
   models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py"` (PB4_MOE_LAYERS picks layers).
+
+## PPB.3H (PB.3H perf, attempt 1): the per-segment history all-gather hidden beside the attention (PACKED_GATHER_HIDE off | on)
+
+- Expected (written before any code or device run, perf_guide s2). PB.4's walls, 4 x 2k @ 139264: engram_rows 3.81 ms
+  (1 x 2k: 1.03) = the 4 segments' history prefetch (3 sources x (pack + full-mesh gather)) + index-key decodes at
+  layer 1's engram wait; attn_table 1.52 (1 x 2k 0.53) = the per-segment tails (pack + slice + gather + slice_write) at
+  layers 2 / 8 / 14. So ~2.5-3 ms of prefetch gathers and ~1 ms of tail gathers a chunk sit serially on the device
+  (mixed ~4-5 ms prefetch: the 308k / 547k lanes). Change: V3's sparse-MLA pattern (deepseek_v3_d_p
+  tt/mla/sparse_kv_push.py + mla._beside_prefetch): a sub-device manager per mesh (sub-device 0 = the 11 x 10 matmul
+  grid, sub-device 1 = the free 12th column, 10 cores = the full-mesh gather's 8 link workers + 2 copy cores); each
+  layer's attention phase (wq_b, rope chain, sparse_sdpa, rope chain, wo_a, wo_b: no fabric op, ~1.2 ms a layer) runs
+  on sub-device 0 while sub-device 1 gathers the next pending segment-sources' histories (source 2's four at layers 0-1,
+  8's at 2-7, 14's at 8-13); the region's clear joins both. Expected device: -2.5..-3 ms a chunk at 4 x 2k @ 139k
+  (prefetch gathers off the critical path; the col-11 gather is slower than next to the links, DS41-286, but hidden),
+  ~-4 ms mixed; tails (~1 ms) next, beside the indexer's gates / query. Host: + 2 manager switches a region (~10-16
+  regions a chunk, ~0.05-0.2 ms each: +1..+3 ms enqueue on a host-bound chunk). Wall: ~-1..-2 ms 4 x 2k (host-bound:
+  PB.3A device 92.6 vs enqueue ~108 ms), mixed more. Gate metric: packed_gather_exposed_frac_<case> <= 0.25 (the walls
+  test computes it from the rt profiler's per-chip program intervals: a history gather program's time overlapped by
+  any other program on its chip is hidden, the rest exposed).
+- Load (1): tests/packed/test_gather_hide_ops.py on the runner's held process: "needs only the mesh: the gather
+  sub-device (Split) with a full-mesh record gather beside local ops, bit-exact vs serial and the host, smallest
+  shapes (128 / 2176 records an owner)".
+- test_gather_hide_ops (mesh only; it cost a fresh process: DS41-316 again, the held model's memory did not come
+  back): gather outputs bit-exact (serial, region x 2, every chip vs the host) at 128 / 2176 records an owner, the
+  region's local ops (110 cores) == serial (120 cores). Host-timed (sync around, ms): R 2176 serial gather 0.284, on
+  the gather column alone 0.491 (DS41-286: far from the links), compute (6 DRAM-bound multiplies) 0.69, serial both
+  0.837, region 0.872: no gain on a DRAM-bound block; the model's attention phase (sdpa, matmuls) is the real test.
+- Load (2): the gate's 40-layer accuracy model (OV-61) for test_packed_oracle at DS41_PACKED_LAYERS=0,1,2,3: "needs
+  the gate's one accuracy config; computes layers 0-3 only (source 2's four prefetches in layers 0-1's regions, its
+  tails beside layer 2's indexer)".
+- Oracle extended (tests/packed/test_packed_oracle.py: segments G start 16384 / 2048 rows and H start 9216 / 1500 rows,
+  their histories written by today's path in whole chunks; packed3 = [G, O, H, F] and its repeat; one slot capacity
+  32768): the PB.3 / PB.3A cases all start inside the first chunk (no history gather at all: h = 0), so they never
+  exercised the gathers this task hides. The new case found a PB.3A bug with PACKED_GATHER_HIDE=off too (DS41-330):
+  packed3's G differed from alone[G] from layer 0 (max abs 1.0; served compressed KV / index keys of layer 2 and the
+  window of layer 3): OneCall._region used the slot's kept tail ``rtail`` as the carry when ``rtail_end == start``,
+  but a single-request chunk keeps it on its last chip only; fixed (the served snapshot or the ring carry always;
+  a lane's own chunk never keeps one). After: layers 0-3 off and on, and the characteristic layers on: alone vs
+  today 0, lane equivalence 0, slot digests 0, determinism 0; hide regions ran (gather_hide.STATS: prefetch items
+  and tails hidden, the rest flushed where the rung skips the layers in between).
+- Load (3): the walls' performance config (layers 0-20, DS41_ENGRAM_TABLE=resident as the gate's walls unit,
+  max_seq raised to the one slot capacity 1,048,576, OV-62): "needs the gate's one performance load: the walls are
+  its only unit; both switch values run on it (call-time)".
+- Walls, first version (one load of the performance config, slots at the one capacity 1,048,576, OV-62):
+  4 x 2k @ 139264 123.4 ms (device 95.3), mixed 134.8 (device 108.4: the one ring now, OV-62; PB.4 151.1 with
+  position-sized slots), 1 x 2k 92.9. Its gather metric read 0 hidden everywhere: WRONG METHOD, not a result. The
+  real-time profiler keeps ONE open record a command queue (dispatch_s stamps a program's end while it waits for
+  workers; a record nobody waited on gets the previous record's end, cq_realtime_profiler.cpp), so two sub-devices'
+  programs never overlap in its records (DS41-331). Also found: dispatch is in order, a gather's launch waits for the
+  gather before it, so a region's gathers queued back to back ran serially before its compute. Rebuilt: the gathers
+  interleaved between the compute steps (gather_hide.Split.region), device clock stamps (gather_hide.Stamps) for the
+  exposed time, the reference cost from a serial profiled run of the same chunk (the switch off, same lanes).
+- Stamped walls (per region, every chip; /tmp/pb3h/stamps*.json while iterating): the single-gather prefetch regions
+  (sources 8 / 14, one item a layer) show 0.00 ms exposed on every chip at 4 x 2k; the first version's four
+  per-segment tails beside gates + query stalled ~1 ms a source layer (a tail on the gather column ~0.45 ms,
+  latency-bound, four back to back) -> ONE combined tail gather a source layer (every segment's rows concatenated
+  a chip, one high_bw_all_gather, slices + slice_writes after): 0.08-0.17 ms left. Mixed: the 547k lane's chips
+  reach a region late, so on the other chips the join waits for it (median 0.9-1.6 ms, min 0): that is the lanes'
+  skew, which the next collective absorbs in the serial design too; the metric charges each region and each
+  reference gather on the chip that waited least (its own cost), the worst chip's sum is kept as a diagnostic.
+  Left in mixed: source 2's four items (61k..547k) at layers 0-1 (~3.5 ms of col-11 gathers vs ~2.8 ms of
+  attention): ~1 ms exposed. Then: source layers run the compressor first and the tails beside q_a + kv + gates +
+  query; each source's items balanced over its layers (largest first, least-loaded layer).
+- DECIDED (OV-58): the gather sub-device is the 12th column, not row 0 next to the links (DS41-286: ~1.6x slower
+  there): the matmul / fork grids are 11 x 10 from (0, 0) and cannot move without changing every program config;
+  hidden, the slower gather costs nothing while the attention phase covers it.
+- One more cover window before source 2's reader: the index-key decodes at layer 1's engram wait (local
+  unpack_fp8_rows on max_grid) are a region too (PackedChunk.prefetch -> Hide.decodes), weighted 0.5 of an attention
+  phase in the balancing.
+- Built (final): tt/gather_hide.py (Split: sub-device manager, compute = 11 x 10 from (0, 0), gather = column 11;
+  region: gathers interleaved between compute steps, stock non-matmul ops on the matmul grid inside, the clear joins;
+  Hide: per chunk the (source, segment) prefetch items balanced over the regions before each source's reader
+  (attention phases + the decode region), the tails of a source as ONE combined gather beside q_a + kv + gates +
+  query of the source layer (the compressor moved before q_a there), the rest flushed serially at the table;
+  Stamps: the diagnostic clock program), tt/history_gather.py (prefetch / tail split into prepare (pack) and gather
+  steps with sub-device arguments; tails_input / tails_gather / tails_finish; ``ready`` marker; TRACE),
+  tt/cores.nonmm_on_mm_grid, tt/packed_onecall.py (OneCall.hide, the attention phase as steps, the source-layer
+  order, the DS41-330 fix), tt/packed_device.PackedChunk.prefetch (the decode region), Setting PACKED_GATHER_HIDE
+  (call-time, batch_call_settings), tests: test_gather_hide_ops (mesh only), test_packed_oracle (G / H / packed3),
+  test_packed_walls (OV-62 one capacity, the gather metrics). No fork, no new op but the diagnostic stamp program
+  (1 core a chip, only in the walls' profiled runs). Cores: the gathers on column 11's 10 cores (data movement),
+  the region's compute on the 110-core grid (stock non-matmul ops there drop from 120 to 110 inside regions only).
+- Walls (resident table, one 21-layer load, slots at 1,048,576; HIDE=on; gather metrics = median of 3 profiled runs):
+  4 x 2k @ 139264: history gathers 2.233 ms serial reference, 0.251 exposed (frac 0.113; the combined tails 0.248,
+  every prefetch ~0.000), wall 124.8 ms (runs 120.5-162.4, host hiccups), device 94.9; mixed (61k / 139k / 308k /
+  547k): 3.646 ms reference, 0.645 exposed (frac 0.177; per segment 61k 0.000, 139k 0.106, 308k 0.120, 547k 0.170,
+  tails 0.249), wall 138.5 ms (59.1k new tok/s; device 109.6: the one ring now, indexer 20.2), 1 x 2k (earlier run)
+  0.520 / 0.158 (frac 0.305; not gated: a lone segment in lane 0 is today's path, only its other-lane chunks hide).
+  The wall is host-bound (4 x 2k: enqueue ~108-111 ms, PB.3A) so the hidden ~2 ms of device gathers barely move it;
+  the regions add ~2 manager switches each on the host (14 a chunk). Targets: 4 x 2k >= 67k (124.8 ms = 65.6k: at the
+  bar within the run spread; PB.4 122.8), mixed >= 64k (138.5 ms = 59.1k: not met; the host and the 547k lane's
+  indexer are the levers, not the gathers).
+- Re-run: walls `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+  BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode PB3H_STAMP_DUMP=/tmp/stamps scripts/run_safe_pytest.sh
+  --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py"` (PACKED_WALL_CASES
+  picks cases, PACKED_WALL_CAP the slot capacity); oracle rung: the gate's oracle cmd + DS41_PACKED_LAYERS=0,1,2,3.
+- Gate (`gate PB.3H --check`, after the last code edit, pre-commit clean): every metric ok. Oracle on 40 layers (with
+  packed3, histories of whole chunks; 24 hide regions ran): alone vs today 0, lane equivalence 0, slot digests 0,
+  packed determinism 0; reference: every segment's every layer within its limit, top-5 1.0 x 4; determinism 0.0.
+  Walls (gate): packed_gather_exposed_frac_4x2k_p139264 0.109 (reference 2.245 ms, exposed 0.245: the combined tails;
+  every prefetch hidden), _mixed 0.162 (3.664 / 0.593), 1 x 2k 0.307 (not gated); walls 123.3 / 137.7 / 94.7 ms
+  (4 x 2k 66.4k new tok/s; PB.4 122.8 / 151.1 (position-sized slots) / 92.1).
+- Final check `orchestrator measure --task PB.3H` (quick, single-request path): rc 0, chunk_wall_ms 229.9 (PB.4
+  229.4), min layer PCC 0.732 (L39, as PB.4), host_transfers_per_layer 0.
+- Device opens this task: the runner's restarts for my runs (1 mesh-only test, the 40-layer accuracy model twice
+  after python reloads whose memory did not come back, the 21-layer performance model per walls iteration after a
+  python change), plus the gate's own processes.

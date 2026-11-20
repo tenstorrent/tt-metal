@@ -316,6 +316,17 @@ class PackedChunk:
         """At the chunk's first engram wait (as today): every segment's history and index-key prefetch, in lane order,
         each into its own lane's buffers."""
         m = self.model
+        hide = self.oc.hide if self.oc is not None else None
+        if hide is not None and hide.dec_layer is not None:  # PB.3H: the decodes beside prefetch gathers
+
+            def step(_, r):
+                self.enter(r)
+                if m._kpf_start is not None:
+                    m.prefetch_index_keys()
+                self.leave(r)
+
+            hide.decodes([lambda prev, r=r: step(prev, r) for r in self.segs])
+            return
         for r in self.segs:
             self.enter(r)
             if m._pf_start is not None:

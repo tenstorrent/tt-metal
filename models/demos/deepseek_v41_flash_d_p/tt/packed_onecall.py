@@ -802,6 +802,13 @@ def _kbuf(mesh, base: ttnn.Tensor, j: int) -> ttnn.Tensor:
     return t
 
 
+def _out(att, o: ttnn.Tensor, cos, sin) -> ttnn.Tensor:
+    """The attention phase's last step: the sdpa output (consumed) -> attn_out."""
+    out = att._out(o, cos, sin)
+    dealloc(o)
+    return out
+
+
 # ---------------------------------------------------------------------------------------------- table buffers
 _TABLES: dict = {}  # (id(mesh), shape, dtype) -> (mesh, tensor): one table buffer a history size (every source)
 _TOPS: dict = {}  # (id(mesh), shape) -> (mesh, tensor): the combined top-k of a packed chunk
@@ -838,6 +845,15 @@ class OneCall:
             for k in range(self.lanes.lanes)
         )
         self.memo: dict = {}  # ("table", kv source) -> (T, stride); ("index", idx src, kv src, classes) -> index
+        # PB.3H (PACKED_GATHER_HIDE=on, read per chunk): the history gathers beside the attention (tt/gather_hide.py;
+        # None: off, or no free grid column on this box)
+        self.hide = None
+        from .gather_hide import Hide, Split, hide_on
+
+        if hide_on():
+            split = Split.of(self.model.mesh)
+            if split is not None:
+                self.hide = Hide(self, split)
         STATS["chunks"] += 1
         if STATS["chunks"] == 1:
             from loguru import logger
@@ -846,6 +862,8 @@ class OneCall:
 
     # ------------------------------------------------------------------ helpers
     def close(self) -> None:
+        if self.hide is not None:
+            self.hide.close()
         for key in list(self.memo):
             self._drop(key)
 
@@ -881,16 +899,37 @@ class OneCall:
         """The layer's attention output [1, 1, q_rows, H] for every row of the packed chunk (x: attn_norm, the chips'
         own rows; not consumed)."""
         m, i = self.model, block.layer
-        qr, p = block.q_a.with_proj(x)
-        profiler.signpost("kv")  # (the step names: the profile's phases, as the single-request path's)
-        kv = block.kv.from_proj(p, self.starts)
-        dealloc(p)
-        if block.compressor is not None:
+        if self.hide is not None and block.indexer is not None and self.hide.tails_here(block):
+            # PB.3H: at a KV source layer the compressor first (it reads x only), then the segments' history tails
+            # (its fresh rows) gathered beside q_a, kv and the indexer's gates and query
             profiler.signpost("compressor")
             self._compress(block, x)
-        if block.indexer is not None:
+            ix, got = block.indexer, {}
+
+            def q_a(_):
+                got["qr"], p = block.q_a.with_proj(x)
+                got["kv"] = block.kv.from_proj(p, self.starts)
+                dealloc(p)
+
+            def gates(_):
+                ix.qr_twin = block.q_a.twin_out if block.q_a.twin else None
+                return ix.gates(x)
+
+            pre = self.hide.tails(block, [q_a, gates, lambda w: self._query(ix, got["qr"], w)])
+            qr, kv = got["qr"], got["kv"]
             profiler.signpost("indexer")
-            self._index(block, x, qr)
+            self._index(block, x, qr, pre=pre)
+        else:
+            qr, p = block.q_a.with_proj(x)
+            profiler.signpost("kv")  # (the step names: the profile's phases, as the single-request path's)
+            kv = block.kv.from_proj(p, self.starts)
+            dealloc(p)
+            if block.compressor is not None:
+                profiler.signpost("compressor")
+                self._compress(block, x)
+            if block.indexer is not None:
+                profiler.signpost("indexer")
+                self._index(block, x, qr)
         if block.cfg.ratio(i):
             out = self._sparse(block, qr, kv)
         else:
@@ -965,14 +1004,10 @@ class OneCall:
         dealloc(k)
 
     # ------------------------------------------------------------------ indexer
-    def _index(self, block, x: ttnn.Tensor, qr: ttnn.Tensor) -> None:
-        from .indexer import TtCandidateIndexer, TtReindexer
-
-        ix, i, cfg = block.indexer, block.layer, block.cfg
-        assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
-        ix.qr_twin = block.q_a.twin_out if block.q_a.twin else None
-        w = ix.gates(x)
-        q = ix.query(qr, self.starts)  # (the chips' own rows at their lanes' positions)
+    def _query(self, ix, qr: ttnn.Tensor, w):
+        """The indexer's query (the chips' own rows at their lanes' positions), rounded as INDEX_Q_FORMAT says ->
+        (w, q, q_kept)."""
+        q = ix.query(qr, self.starts)
         q_kept = False
         if ix.q_bfp4 and q.dtype == ttnn.bfloat4_b:  # ROPE_CHAINS=on: the rope wrote it rounded
             q_kept = ix._q_kept
@@ -980,6 +1015,18 @@ class OneCall:
             q4, q_kept = ix._round(q, "query")
             dealloc(q)
             q = q4
+        return w, q, q_kept
+
+    def _index(self, block, x: ttnn.Tensor, qr: ttnn.Tensor, pre=None) -> None:
+        """``pre``: (w, q, q_kept) already made (PB.3H: in the tails' region)."""
+        from .indexer import TtCandidateIndexer, TtReindexer
+
+        ix, i, cfg = block.indexer, block.layer, block.cfg
+        assert ix.glue, "PACKED_ATTN_ONECALL=on: INDEXER_GLUE=on"
+        if pre is None:
+            ix.qr_twin = block.q_a.twin_out if block.q_a.twin else None
+            pre = self._query(ix, qr, ix.gates(x))
+        w, q, q_kept = pre
         L = self.lanes.L
         if ONE_RING[0] and self._one_ring(block, x, q, w):
             if not q_kept:
@@ -1219,7 +1266,10 @@ class OneCall:
         for r in segs:
             cache, start = r.state.window[i], r.start
             tails[r.lane], rings[r.lane] = cache.rtail, cache.ring.t
-            if cache.rtail_end != start and start > 0 and not cache.carry_masked(start):
+            # (never the kept tail ``rtail`` as a carry, DS41-330: a single-request chunk that ended at ``start``
+            # keeps it on its LAST chip only (window_send), not on this lane's first chip; a lane's own chunk never
+            # keeps one: lanes are shorter than the chunk)
+            if start > 0 and not cache.carry_masked(start):
                 assert cache.carry_owner(start) is None, "a ring keeps the carry"
                 if snap[r.lane]:  # (the slot's served snapshot, read in place: carry row i at row (start + i) % 128)
                     s = cache.snap
@@ -1276,12 +1326,24 @@ class OneCall:
         self._region(att, kv, i)
         index = self.lanes.region_index(att.tables, self._classes(i))
         profiler.signpost("attention")
-        q_rm = att._q(qr, cos, sin)
-        o = att._sdpa(q_rm, att.region, index)
-        dealloc(q_rm)
-        out = att._out(o, cos, sin)
-        dealloc(o)
+
+        def sdpa(q_rm):
+            o = att._sdpa(q_rm, att.region, index)
+            dealloc(q_rm)
+            return o
+
+        out = self._phase(i, lambda _: att._q(qr, cos, sin), sdpa, lambda o: _out(att, o, cos, sin))
         att.rope.free(cos, sin)
+        return out
+
+    def _phase(self, i: int, *steps):
+        """The attention phase's steps (wq_b + rope, sparse_sdpa, rope + wo_a + wo_b), each fn(previous result);
+        PB.3H: a region beside the pending history gathers."""
+        if self.hide is not None:
+            return self.hide.attention(i, list(steps))
+        out = None
+        for step in steps:
+            out = step(out)
         return out
 
     def _table(self, block):
@@ -1293,6 +1355,8 @@ class OneCall:
         hit = self.memo.get(key)
         if hit is not None:
             return hit
+        if self.hide is not None:  # PB.3H: the source's prefetches not gathered yet, here (serially)
+            self.hide.flush(block.kv_src)
         att, lanes = block.attention, self.lanes
         parts = []
         for r in self.pk.segs:
@@ -1357,13 +1421,15 @@ class OneCall:
             dealloc(rows)
             self.memo[ikey] = index
         profiler.signpost("attention")
-        q_rm = att._q(qr, cos, sin)
-        if tab[0] == "lanes":  # (the sdpa fork's kv_lanes: each chip its lane's gather buffer)
-            o = sdpa_lanes(att, q_rm, tab[1], tab[2], index, att.region)
-        else:
-            o = att._sdpa(q_rm, tab[1], index, window=att.region)
-        dealloc(q_rm)
-        out = att._out(o, cos, sin)
-        dealloc(o)
+
+        def sdpa(q_rm):
+            if tab[0] == "lanes":  # (the sdpa fork's kv_lanes: each chip its lane's gather buffer)
+                o = sdpa_lanes(att, q_rm, tab[1], tab[2], index, att.region)
+            else:
+                o = att._sdpa(q_rm, tab[1], index, window=att.region)
+            dealloc(q_rm)
+            return o
+
+        out = self._phase(i, lambda _: att._q(qr, cos, sin), sdpa, lambda o: _out(att, o, cos, sin))
         att.rope.free(cos, sin)
         return out

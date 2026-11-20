@@ -215,6 +215,20 @@ Design rules (from the start, not as a later optimization):
    STATIC_TABLES=off + HISTORY_GATHER_OVERLAP=on (120-core programs, capped in P.73 attempt 2). So: every program
    capped (matmuls 110), bounded waits on every semaphore, smallest shape first (one source, one segment, 1 layer on the
    runner), then the 4 x 3 schedule; the hang loop (tests/test_skip_hang_loop.py) once before the walls.
+   **Built (PB.3H, PACKED_GATHER_HIDE=on, tt/gather_hide.py):** deepseek_v3_d_p's sparse_sdpa-beside-push pattern
+   instead of a gather sub-device at row 0: sub-device 0 = the 11 x 10 matmul grid (every matmul and every fork with
+   ``max_grid`` runs there already: no compute op changes its core count), sub-device 1 = the free 12th column (10
+   cores = the full-mesh gather's 8 link workers + 2 copy cores; slower than next to the links, DS41-286, but hidden).
+   Each layer's attention phase (wq_b, rope chain, sparse_sdpa, rope chain, wo_a, wo_b: no fabric op; the stock
+   non-matmul ops in it moved to the matmul grid for the region, cores.nonmm_on_mm_grid, row-local) is a region
+   beside prefetch gathers, and so is the index-key decode at layer 1's engram wait: each source's (segment) items are
+   balanced over the regions before its reader (largest first; source 2's over layers 0-1 and the decodes, 8's over
+   2-7, 14's over 8-13). Dispatch is in order, so a region's gathers go between its compute steps, never back to back
+   (DS41-331). At a source layer the compressor runs first and every segment's tail is ONE combined gather beside
+   q_a, kv and the indexer's gates and query. Packs before a region (own record buffers), slice_writes after; an item
+   not reached by its source's table is gathered there serially. Bit-identical (the oracle's packed3 case, histories
+   of whole chunks). Measured (walls, device clock stamps: the real-time profiler cannot show two sub-devices at
+   once): exposed / serial gather time 0.113 at 4 x 2k @ 139k, 0.177 mixed (BREADCRUMBS PPB.3H).
 4. **Batch per-segment launches.** The 4 segments' served writes of a source (compressed KV + index keys) go in one
    prepared program (per-lane slot / start / valid runtime args); the 4 snapshot writes of a layer in one
    snapshot_send program (P.65's tree, 4 owners); the per-lane carry reads folded into window_send's program. Target:
