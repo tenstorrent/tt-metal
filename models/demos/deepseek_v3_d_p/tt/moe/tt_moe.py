@@ -860,6 +860,9 @@ class TtMoe(LightweightModule):
         batch_dim = x.shape[0]
         scores = ttnn.reshape(scores, (batch_dim, seq_dim, scores.shape[-1]))
         indices = ttnn.reshape(indices, (batch_dim, seq_dim, indices.shape[-1]))
+        tap = getattr(self, "_tap", None)  # DS41F-0169 diagnostic (V4.1 prefill STREAM_EAGER_B): blocking read-backs
+        if tap is not None:
+            tap("Mg", [scores, indices, tt_expert_offsets, tt_expert_token_counts, tt_expert_region_offsets])
 
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"  {scores.shape=} {scores.memory_config()=}")
@@ -889,6 +892,8 @@ class TtMoe(LightweightModule):
         # ========================================
         # Outside the sub-device window below: the down-projection feeds dispatch, so it cannot
         # overlap it. x stays full-width for the shared expert, which reads the pre-projection hidden.
+        if tap is not None:
+            tap("Mx", [x])
         routed_x = self.latent_projections.to_latent(x) if self.use_latent_moe else x
         if self.use_latent_moe and DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] routed_x (latent) shape: {routed_x.shape}")
@@ -961,6 +966,9 @@ class TtMoe(LightweightModule):
         indices = ttnn.to_memory_config(indices, ttnn.DRAM_MEMORY_CONFIG)
 
         ttnn.tracy_message("`TT_SIGNPOST: dispatch_and_shared_expert_end`")
+        if tap is not None:
+            tap("Md", [dispatched_buffer, metadata])
+            tap("Ms", [shared_output])
 
         # ========================================
         # Step 3: Routed experts (enabled)
@@ -976,6 +984,8 @@ class TtMoe(LightweightModule):
         # needs it to compare against the bfloat16 torch reference.
         squeezed_dispatch = ttnn.squeeze(ttnn.squeeze(dispatched_buffer, dim=0), dim=0)
         expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
+        if tap is not None:
+            tap("Me", [expert_outputs])
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
         if DEBUG_LOGGING_ENABLED:
@@ -1012,6 +1022,9 @@ class TtMoe(LightweightModule):
         # TtReduceModule uses fused post_combine_reduce kernel:
         # 1. Fused weighted sum over topk (dim=3): reads ROW_MAJOR, outputs TILE_LAYOUT
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
+        if tap is not None:
+            tap("Mc", [combined_output])
+        self.reduce_module._tap = tap
         routed_output = self.reduce_module(
             combined_output,
             weights=scores,
@@ -1045,7 +1058,11 @@ class TtMoe(LightweightModule):
         # ========================================
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, emb_dim)
+        if tap is not None:
+            tap("Mr", [routed_output])
         final_output = ttnn.add(routed_output, shared_output)
+        if tap is not None:
+            tap("Mo", [final_output])
         if DEBUG_LOGGING_ENABLED:
             logger.debug(f"[TtMoe.forward] final_output (tiled) shape: {final_output.shape}")
 

@@ -128,6 +128,9 @@ class TtReduceModule(LightweightModule):
 
         # Reduce-scatter across chips (only if multiple devices in cluster_axis)
         # [seq_len, emb_dim] -> [seq_len, emb_dim / num_chips]
+        tap = getattr(self, "_tap", None)  # DS41F-0169 diagnostic: the pre-reduce-scatter partial
+        if tap is not None:
+            tap("Mp", [summed])
         if self.mesh_device.shape[self.cluster_axis] > 1:
             output = ttnn.reduce_scatter(
                 summed,

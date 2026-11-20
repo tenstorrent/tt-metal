@@ -424,7 +424,17 @@ class V41PrefillBlock(LightweightModule):
             ttnn.deallocate(y)
         if tap is not None:
             tap("y", [y_buf])
-        outs = B.replay()
+        if tap is not None and os.environ.get("V41_PREFILL_STREAM_EAGER_B", "0") == "1":
+            # DS41F-0169 diagnostic: island B's function run EAGERLY (MoE taps inside), its outputs copied into B's buffers
+            self.moe._tap = tap
+            res = B.fn(*B.inputs)
+            self.moe._tap = None
+            for dst, src in zip(B.outputs, res):
+                copy_into(dst, src)
+                ttnn.deallocate(src)
+            outs = B.outputs
+        else:
+            outs = B.replay()
         return list(outs[:HC]), outs[HC]
 
     # ---- DS41F-0068: path A3, the CSA attention as two trace islands per slot (V4-Flash DS4F-0246 / 0300, tt/v4/block.py) ----
