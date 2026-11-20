@@ -156,6 +156,7 @@ class Attention:
             attn_mask=None,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         hidden_states = ttnn.transpose(hidden_states, 1, 2)
         hidden_states = ttnn.reshape(hidden_states, [1, -1, self.heads * head_dim])
