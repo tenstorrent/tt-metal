@@ -362,6 +362,7 @@ class TtLlamaCrossAttention(LightweightModule):
             scale=self.scale,
             program_config=program_config,
             compute_kernel_config=self.compute_kernel_config_sdpa,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
 
         # WARNING: this broadcast is also broken, must broadcast on host

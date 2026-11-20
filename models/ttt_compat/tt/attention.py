@@ -144,6 +144,10 @@ class Attention(LightweightModule):
         self.sdpa_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
         )
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.sdpa_prefill_precision = (
+            ttnn.SDPAPrecision.ACCURATE if self.sdpa_prefill_compute_kernel_cfg.fp32_dest_acc_en else None
+        )
         self.li_qkv_prefill_compute_kernel_cfg = decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
         )
@@ -1386,6 +1390,7 @@ class Attention(LightweightModule):
                     chunk_start_idx=None,
                     chunk_start_idx_tensor=chunk_start_idx,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    precision=self.sdpa_prefill_precision,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, 0, None),
                 )
             else:
@@ -1396,6 +1401,7 @@ class Attention(LightweightModule):
                     page_table_tensor=page_table,
                     chunk_start_idx=chunk_start_idx,
                     compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                    precision=self.sdpa_prefill_precision,
                     program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, chunk_start_idx, None),
                 )
         else:
@@ -1410,6 +1416,7 @@ class Attention(LightweightModule):
                 sliding_window_size=self.sliding_window,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+                precision=self.sdpa_prefill_precision,
                 program_config=self.args.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
             )
 
