@@ -13,10 +13,10 @@ from pathlib import Path
 from typing import Sequence
 
 from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT
+from .galaxy import EXPECTED_CHIP_COUNT, all_bdfs
 from .model import FAIL, PASS, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
-from .snapshot_checks import validate_snapshot
+from .snapshot_checks import pcie_enum_check, validate_snapshot
 
 # The tt-smi flags a tier's reset plan may name.
 RESET_FLAGS = ("-r", "-glx_reset")
@@ -28,13 +28,26 @@ RESET_FLAGS = ("-r", "-glx_reset")
 CPLD_OLD_BANNER_RE = re.compile(r"CPLD FW v1\.16 or higher is required to use tt-smi -r", re.IGNORECASE)
 
 
+def pcie_bdfs() -> list[str] | None:
+    """BDFs of the Tenstorrent chips enumerated on PCIe, or None if they could not be listed."""
+    try:
+        lspci = subprocess.run(["lspci", "-D", "-d", "1e52:"], capture_output=True, text=True, check=True)
+        return [line.split()[0] for line in lspci.stdout.splitlines() if line.strip()]
+    except Exception:
+        return None
+
+
 def count_pcie_chips() -> int:
     """Tenstorrent chips enumerated on PCIe, or -1 if they could not be counted."""
-    try:
-        lspci = subprocess.run(["bash", "-c", "lspci -d 1e52: | wc -l"], capture_output=True, text=True, check=True)
-        return int(lspci.stdout.strip())
-    except Exception:
-        return -1
+    bdfs = pcie_bdfs()
+    return -1 if bdfs is None else len(bdfs)
+
+
+def recount_check(name: str, bdfs: list[str] | None) -> Check:
+    """The chip recount after a reset, from the PCIe listing: how many of the 32 are back, each missing one by BDF, tray and ASIC."""
+    if bdfs is None:
+        return Check(name=name, status=FAIL, details="chips could not be listed (lspci failed)", ip="pcie")
+    return pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs], name)
 
 
 def reset_loop(
@@ -83,7 +96,8 @@ def reset_loop(
                 log(f"  log:  {log_path}")
 
         # Quick post-reset enum check
-        post_count = EXPECTED_CHIP_COUNT if dry_run else count_pcie_chips()
+        bdfs = all_bdfs() if dry_run else pcie_bdfs()
+        post_count = -1 if bdfs is None else len(bdfs)
         status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
         emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
 
@@ -156,6 +170,7 @@ def reset_loop(
             # bailout below doesn't trip on the pre-recovery state.
             if recovered:
                 post_count = rpost
+                bdfs = pcie_bdfs()
                 # Downgrade the original -r FAIL to WARN now that we know it's
                 # CPLD-attributable and the unit is back up. Hard FAIL is reserved
                 # for -r failures we *can't* explain or recover from.
@@ -164,6 +179,8 @@ def reset_loop(
                         c.status = WARN
                         c.details += " (downgraded to WARN: CPLD-attributable, auto-recovered)"
                         break
+        if not dry_run:
+            phase.add(recount_check(f"recount_{i+1}", bdfs))
         # Post-reset snapshot: validate the unit's state after this iteration
         # (including any auto-recovery). Skipped on dry-run / offline.
         _post_reset_snapshot(f"r{i+1}_{flag.lstrip('-')}")

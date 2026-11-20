@@ -22,6 +22,11 @@ def expected_bdf(tray: int, asic_loc: int) -> str:
     return f"0000:{TRAY_TO_UBB_NIBBLE[tray]:x}{asic_loc:x}:00.0"
 
 
+def all_bdfs() -> list[str]:
+    """The 32 BDFs of a full Galaxy, tray by tray."""
+    return [expected_bdf(t, a) for t in sorted(TRAY_TO_UBB_NIBBLE) for a in range(1, 9)]
+
+
 def parse_bdf_physical(bdf: str) -> tuple[int, int] | None:
     """Parse a BDF '0000:XY:00.0' into (tray, asic_loc). None if unparseable."""
     m = re.match(r"^[0-9a-f]+:([0-9a-f])([0-9a-f]):", bdf or "", re.IGNORECASE)

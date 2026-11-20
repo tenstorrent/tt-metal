@@ -38,6 +38,7 @@ if _SUITE_DIR not in sys.path:
     sys.path.insert(0, _SUITE_DIR)
 
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
+from diag.aer import aer_check, load_aer_baseline, read_aer  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -149,6 +150,12 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         default=default_tt_metal_path(),
         help="tt-metal repo root (contains build/test/tt_metal/unit_tests_deployment).",
+    )
+    ap.add_argument(
+        "--aer-baseline",
+        type=Path,
+        help="An earlier diag_report.json: judge the new AER errors since its pcie_aer_delta read "
+        "instead of since this run's tests started.",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -267,6 +274,7 @@ def run_diag(
     skip_eth_status: bool = False,
     skip_qsfp_tests: bool = False,
     input_snapshot: Path | None = None,
+    aer_baseline: Path | None = None,
     tt_smi_path: str | None = None,
     tt_metal_path: Path | None = None,
     triage_dir: Path | None = None,
@@ -369,6 +377,14 @@ def run_diag(
     _finish(report, reset_phase, t0, summary=False)
     fold_post_reset_snapshots(report, post_reset_phases)
 
+    # The AER counters the triage phase's pcie_aer_delta is judged against: read after the resets, which
+    # re-enumerate the chips and so restart the kernel's counts, and before the tests.
+    aer_before = aer_t0 = None
+    if plan.aer_diff and not dry_run:
+        aer_before, aer_t0 = read_aer(), time.time()
+        if aer_baseline:
+            aer_before, aer_t0 = load_aer_baseline(aer_baseline)
+
     # Phase 3: gtest
     test_phase = Phase(name="tests")
     t0 = time.time()
@@ -419,6 +435,8 @@ def run_diag(
             WARN,
             lambda: run_triage(triage_dir, plan.triage, triage_phase, dry_run, logs_dir, triage_gating, tt_metal_path),
         )
+    if aer_before is not None and not skip_triage:
+        triage_phase.add(aer_check(aer_before, read_aer(), (time.time() - aer_t0) / 3600))
     _finish(report, triage_phase, t0, summary=True)
 
     # Phase 6: the ETH status read. After the post-test reset and the triage
@@ -548,6 +566,7 @@ def main() -> int:
         skip_eth_status=args.skip_eth_status,
         skip_qsfp_tests=args.skip_qsfp_tests,
         input_snapshot=args.input_snapshot,
+        aer_baseline=args.aer_baseline,
         tt_smi_path=args.tt_smi_path,
         tt_metal_path=args.tt_metal_path,
         triage_dir=args.triage_dir,

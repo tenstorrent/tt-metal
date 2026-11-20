@@ -104,6 +104,7 @@ def parse_args() -> argparse.Namespace:
             "daily",
             "weekly",
             "full",
+            "galaxy",
             "pre_bmc_reboot",
             "post_bmc_reboot",
             "light",
