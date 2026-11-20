@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "common/env_lib.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt_stl/span.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"

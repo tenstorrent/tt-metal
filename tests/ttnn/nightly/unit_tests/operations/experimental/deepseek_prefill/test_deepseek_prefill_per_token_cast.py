@@ -242,6 +242,44 @@ def test_cast_to_fp8_power_of_two_scale_e4m3fn_boundary(device):
     ), f"Unexpected E4M3FN boundary outputs: got {actual_output.tolist()}, expected {expected_output.tolist()}"
 
 
+@pytest.mark.parametrize("round_scale_to_power_of_two", [True, False], ids=["pow2_scale", "fp32_scale"])
+def test_cast_to_fp8_rounds_to_nearest(device, round_scale_to_power_of_two):
+    """The e4m3 output rounds to nearest even, as torch's float8_e4m3fn cast does, not toward zero.
+
+    Toward-zero rounding shrinks every magnitude by ~4% on average. The error is one-sided, so it does
+    not average out over a reduction: in the scaled-FP8 MLA KV cache it acts like a softmax temperature
+    change on every attended key.
+    """
+    torch.manual_seed(5)
+    x = torch.randn(64, 512).to(torch.bfloat16)
+    x_tt = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    e4m3_tt, scale_tt = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
+        x_tt, round_scale_to_power_of_two=round_scale_to_power_of_two
+    )
+    y_tt = ttnn.experimental.deepseek_prefill.per_token_cast_back(e4m3_tt, scale_tt, output_dtype=ttnn.float32)
+    y = ttnn.to_torch(y_tt).float()
+    scale = ttnn.to_torch(scale_tt).float().repeat_interleave(BLOCK_W, dim=-1)
+
+    xf = x.float()
+    normalized = xf / scale
+    normal = normalized.abs() >= 2.0**-6  # e4m3 subnormals are out of scope here
+    err = (y - xf)[normal]
+    # Signed error along each value's own sign, relative to the mean magnitude: ~-0.04 when truncating.
+    bias = ((err * xf[normal].sign()).mean() / xf[normal].abs().mean()).item()
+    msg = f"bias {bias:+.5f}"
+    if round_scale_to_power_of_two:
+        # Power-of-two scales make x / scale exact, so every normal value must match the RNE golden.
+        golden = normalized.to(torch.float8_e4m3fn).float() * scale
+        exact = (y[normal] == golden[normal]).float().mean().item()
+        msg += f", exact match vs float8_e4m3fn golden {exact:.4f}"
+    logger.info(f"round to nearest ({'pow2' if round_scale_to_power_of_two else 'fp32'} scale): {msg}")
+    assert abs(bias) < 0.005, f"e4m3 cast is biased: {msg}"
+    if round_scale_to_power_of_two:
+        assert exact >= 0.999, f"e4m3 cast does not round to nearest even: {msg}"
+
+
 # ---------------------------------------------------------------------------
 # per_token_cast_back: dequantization value tests.
 # ---------------------------------------------------------------------------

@@ -8,7 +8,8 @@
 #include "device_fixture.hpp"
 #include "dm_common.hpp"
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <cstdint>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
@@ -24,8 +25,6 @@ constexpr std::uint32_t BASE_ADDR = 100 * 1024;
 // Repeat the timed write(+flush) region this many times per run and divide the
 // zone duration by it, to amortize fixed per-run overhead (April used 100).
 constexpr std::uint32_t NUM_ITERATIONS = 100;
-
-bool should_skip_test() { return std::getenv("TT_METAL_SIMULATOR") == nullptr; }
 
 // Runs one write pass of `size_bytes` via `write_path` (0=uncached,1=cached+flush)
 // on a single DM core, then reads back and verifies the byte pattern landed.
@@ -50,7 +49,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
     };
     WorkUnitSpec main_wu{.name = "main", .kernels = {DM_KERNEL}, .target_nodes = node};
     ProgramSpec spec{.name = "cache_write_perf", .kernels = {dm_kernel_spec}, .work_units = {main_wu}};
-    Program program = experimental::MakeProgramFromSpec(mesh_device, spec);
+    Program program(mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
@@ -63,7 +62,7 @@ bool run_cache_write(distributed::MeshDevice& mesh_device, std::uint32_t size_by
              {"num_iterations", NUM_ITERATIONS},
              {"test_id", QUASAR_CACHE_WRITE_TEST_ID}}),
     }};
-    experimental::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range(mesh_device.shape());
@@ -93,9 +92,6 @@ static const std::vector<std::uint32_t> kSizesBytes = {8, 16, 24, 32, 64, 128, 2
 }  // namespace unit_tests::dm::quasar_cache_perf
 
 TEST_F(QuasarCacheWrite, SizeSweep) {
-    if (unit_tests::dm::quasar_cache_perf::should_skip_test()) {
-        GTEST_SKIP() << "Test requires Quasar simulator";
-    }
     bool pass = true;
     // mode: 0=uncached 1B, 1=uncached 8B, 2=cached+range flush (April), 3=cached+fast flush
     for (std::uint32_t mode : {0u, 1u, 2u, 3u}) {

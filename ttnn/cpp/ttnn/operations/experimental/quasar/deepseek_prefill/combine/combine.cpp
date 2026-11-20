@@ -1,0 +1,86 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include "combine.hpp"
+#include "device/combine_device_operation.hpp"
+#include "ttnn/operation.hpp"
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/hal.hpp>
+#include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/ccl/common/host/moe_utils.hpp"
+
+namespace ttnn::operations::experimental::quasar::deepseek_prefill::combine {
+
+ttnn::Tensor combine(
+    const ttnn::Tensor& dispatched_buffer,
+    const ttnn::Tensor& dispatched_metadata,
+    const ttnn::Tensor& expert_token_counts,
+    const ttnn::Tensor& expert_region_offsets,
+    uint32_t dispatch_group_size,
+    uint32_t experts_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t seq_len_per_chip,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
+    std::optional<uint32_t> cluster_axis,
+    std::optional<uint32_t> num_links,
+    std::optional<tt::tt_fabric::Topology> topology,
+    bool init_zeros,
+    bool use_l1_small_for_semaphores,
+    bool use_fp8_combine) {
+    // Get device and subdevice info
+    auto* mesh_device = dispatched_buffer.device();
+    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+
+    // A singleton communication axis has no peers, even when other axes have devices.
+    // Preserve omitted-axis behavior and the existing local worker pipeline.
+    const bool singleton_domain =
+        mesh_device->shape().mesh_size() == 1 ||
+        (cluster_axis.has_value() && *cluster_axis <= 1 && mesh_device->shape()[*cluster_axis] == 1);
+    const bool local_only = singleton_domain && dispatch_group_size == 1;
+    // Validate fabric configuration - only tested values are supported
+    TT_FATAL(
+        cluster_axis.value_or(0) <= 1, "cluster_axis must be 0 or 1 (current value: {}).", cluster_axis.value_or(0));
+    TT_FATAL(
+        (local_only || num_links.value_or(1) >= 1) && num_links.value_or(1) <= 4,
+        "num_links must be between 1 and 4, or 0 on a singleton dispatch group (current value: {}).",
+        num_links.value_or(1));
+    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
+    TT_FATAL(
+        topology_ == tt::tt_fabric::Topology::Linear || topology_ == tt::tt_fabric::Topology::Ring,
+        "topology must be Linear or Ring. 2D topologies are not supported.");
+
+    std::optional<uint32_t> axis = cluster_axis;
+    uint32_t num_links_ =
+        local_only ? 0 : (num_links.has_value() ? *num_links : ccl::common::get_num_links(*mesh_device, axis));
+    tt::tt_fabric::Topology usable_topology =
+        local_only ? tt::tt_fabric::Topology::Linear
+                   : ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
+
+    log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
+
+    auto memory_config_ = memory_config.value_or(dispatched_buffer.memory_config());
+
+    // Call the primitive operation
+    return ttnn::prim::qsr::prefill_combine(
+        dispatched_buffer,
+        dispatched_metadata,
+        expert_token_counts,
+        expert_region_offsets,
+        dispatch_group_size,
+        experts_per_chip,
+        num_experts_per_tok,
+        seq_len_per_chip,
+        axis,
+        num_links_,
+        usable_topology,
+        memory_config_,
+        subdevice_core_range_set,
+        init_zeros,
+        use_l1_small_for_semaphores,
+        use_fp8_combine);
+}
+
+}  // namespace ttnn::operations::experimental::quasar::deepseek_prefill::combine
