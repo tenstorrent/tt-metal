@@ -5,7 +5,9 @@
 #pragma once
 
 #include <functional>
+#include <string>
 #include <tuple>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -36,6 +38,17 @@ struct GenericProgramSpecDeviceOperation {
         // The run args' PrefetcherPipes, which ttnn's framework rebinds on a cache hit. The ttnn::prim overloads fill
         // it. It points at the caller's pipes without owning them.
         ttnn::PrefetcherPipeList prefetcher_pipes;
+        // A tensor argument that holds only some devices of its tensor, such as a per-device view from
+        // ttnn.get_device_tensors, and the run args that bind it. Metal binds a tensor argument's whole MeshTensor,
+        // which the views of a tensor share, so on each device a program runs on, it reads that device's part: a view
+        // must hold every device its program runs on. Only the Python binding fills this, from the ttnn.Tensors that
+        // Python run args keep; C++ run args keep only MeshTensors. Not part of the cache key.
+        struct TensorView {
+            std::reference_wrapper<const tt::tt_metal::ProgramRunArgs> run_args;
+            std::string name;
+            std::vector<ttnn::MeshCoordinate> devices;
+        };
+        std::vector<TensorView> tensor_views;
 
         // Op logging and the profiler show the number of programs, not whole specs.
         static constexpr auto attribute_names = std::forward_as_tuple("num_programs");
@@ -76,11 +89,6 @@ ttsl::hash::hash_t compute_program_spec_hash(const tt::tt_metal::ProgramSpec& sp
 
 namespace ttnn::prim {
 
-// The mesh ranges a ProgramSpec-form generic_op call runs its program on for these io_tensors: the whole mesh when
-// every tensor is on every device, else the devices of the tensor on the fewest devices. Raises as generic_op does for
-// io_tensors it cannot take.
-ttnn::MeshCoordinateRangeSet program_spec_ranges(const std::vector<Tensor>& io_tensors);
-
 // The ProgramSpec form. The program runs on the ranges that ttnn's framework gives the tensors, as it would in a
 // MeshProgramSpec with those ranges, so the two forms share cache entries.
 Tensor generic_op(
@@ -93,7 +101,19 @@ void prepare_generic_op(
     const tt::tt_metal::ProgramSpec& spec,
     const tt::tt_metal::ProgramRunArgs& run_args);
 
-// The MeshProgramSpec form: a program for each range.
+// The operation attributes of each form, which refer to the given specs and run args: the ProgramSpec form's program
+// on each range that ttnn's framework gives the tensors, or the MeshProgramSpec form's program for each range, paired
+// with the run args for the same range.
+ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t program_spec_attributes(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_args);
+
+ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t mesh_program_spec_attributes(
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramSpec>>& programs,
+    const std::vector<std::pair<ttnn::MeshCoordinateRange, tt::tt_metal::ProgramRunArgs>>& run_args);
+
+// Either form, from its operation attributes.
 Tensor generic_op(
     const std::vector<Tensor>& io_tensors,
     const ttnn::operations::generic::GenericProgramSpecDeviceOperation::operation_attributes_t& operation_attributes);

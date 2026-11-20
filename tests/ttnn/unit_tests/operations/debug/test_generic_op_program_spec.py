@@ -1059,10 +1059,12 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     spec, run_args = exp_program(second_input, first_output)
     with expect_error(
         RuntimeError,
-        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but these run args are for device "
-        r"MeshCoordinate\(\[0, 0\]\) \(a device of io_tensors\), which it does not hold\. On each device it runs on, "
-        r"a program reads that device's part of a tensor, so to read a per-device view's data, list only views of the "
-        r"devices it holds in io_tensors",
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\. On each device, a program reads that device's part of a "
+        r"tensor, so a program that binds a per-device view must run only on the view's devices: list only views of "
+        r"those devices in io_tensors or, in a MeshProgramSpec, bind the view only in the run args of a range "
+        r"on them\. Binding the whole tensor instead reads each device's own part, which is the view's data only if "
+        r"every device holds the same data",
     ):
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
@@ -1082,9 +1084,8 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
     with expect_error(
         RuntimeError,
-        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but these run args are for device "
-        r"MeshCoordinate\(\[0, 0\]\) \(in mesh range .*\), which it does not hold\..* so to read a per-device view's "
-        r"data, bind it only in the run args of a range on the devices it holds",
+        r"tensor_args\['input'\] holds devices MeshCoordinate\(\[0, 1\]\), but its program runs on device "
+        r"MeshCoordinate\(\[0, 0\]\), which it does not hold\.",
     ):
         E.generic_op([input_tensor, output_tensor], mesh_spec, mesh_run_args)
     with expect_error(RuntimeError, message):
@@ -1109,10 +1110,9 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # Only a view of a listed tensor, bound to a parameter its program declares, gets this check. Every other call that
-    # generic_op rejects gets its own message: a view of a tensor that io_tensors does not list, or that whole tensor; a
-    # tensor under a name its program does not declare, even if another range's program declares it; and a tensor in
-    # run args for a range the spec has no program on.
+    # generic_op's other checks run first, so every other call they reject gets their message: a view of a tensor
+    # that io_tensors does not list, or that whole tensor; a tensor under a name its program does not declare, even if
+    # another range's program declares it; and a tensor in run args for a range the spec has no program on.
     unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
     spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
     with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
@@ -1141,7 +1141,7 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramSpec(programs=[(one_device(1), spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
         )
-    # A range far past the mesh gets generic_op's own message at once: the check walks the mesh, not the range.
+    # A range far past the mesh gets the range check's message, which comes before any walk over the range.
     past_the_mesh = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(999999, 999999))
     spec, run_args = exp_program(second_input, second_output)
     with expect_error(RuntimeError, "mesh range .* reaches outside the MeshDevice"):
@@ -1182,10 +1182,12 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     with expect_error(RuntimeError, "a MeshProgramRunArgs keeps were edited in place; set its programs again"):
         E.generic_op([first_input, first_output], mesh_spec, edited_mesh)
 
-    # A view, or the whole tensor, that holds the program's device reads that device's part.
-    for input_view in (first_input, input_tensor):
-        spec, run_args = exp_program(input_view, first_output)
-        result = E.generic_op([first_input, first_output], spec, run_args)
+    # A view, or the whole tensor, that holds the program's device reads that device's part, whether io_tensors lists
+    # the input's view or the whole input: the output's view keeps the program on the first device.
+    inputs_bound_and_listed = [(first_input, input_tensor), (first_input, first_input), (input_tensor, first_input)]
+    for bound_input, listed_input in inputs_bound_and_listed:
+        spec, run_args = exp_program(bound_input, first_output)
+        result = E.generic_op([listed_input, first_output], spec, run_args)
         assert_close(torch.exp(torch_input[:1]), ttnn.to_torch(result))
 
     # The check compares devices, not placements: one device's view of a replicated tensor is rejected in the other
