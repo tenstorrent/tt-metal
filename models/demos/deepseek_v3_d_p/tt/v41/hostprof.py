@@ -15,6 +15,11 @@ ON = os.environ.get("V41_PREFILL_HOSTPROF", "0") == "1"
 _acc: dict = defaultdict(float)
 _cnt: dict = defaultdict(int)
 _t = [0.0]
+_pfx = [""]  # WS6: "d." while a decoder layer (20..39) runs, so its steps report apart from the encoder's
+
+
+def set_prefix(p: str) -> None:
+    _pfx[0] = p
 
 
 def start() -> None:
@@ -26,6 +31,7 @@ def start() -> None:
 def mark(name: str) -> None:
     """The time since the previous mark (or ``start``) goes to ``name``."""
     now = time.perf_counter()
+    name = _pfx[0] + name
     _acc[name] += now - _t[0]
     _cnt[name] += 1
     _t[0] = now

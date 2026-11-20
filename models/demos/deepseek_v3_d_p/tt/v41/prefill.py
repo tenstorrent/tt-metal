@@ -976,9 +976,13 @@ class V41Prefill:
                 if HP.ON:
                     HP.mark("kv_only20")
                 break
+            if HP.ON:
+                HP.set_prefix("d." if L >= self.cfg.first_decoder_layer else "")
             streams, pre = blk.forward_islands(
                 streams, pre, real_len=real_len, owned=owned, owned_pre=blk is self.blocks[0]
             )
+            if HP.ON:
+                HP.set_prefix("")
             owned = False
             mark(f"block.{type(blk.attn).__name__}")
         if self.kv_attn is not None:

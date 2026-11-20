@@ -50,6 +50,11 @@ OUT = os.environ.get("PREFIX_CHECK_OUT", ".")
 CTL = os.environ["PREFIX_CHECK_CTL"]
 RUNNER_LOG = os.environ["PREFIX_CHECK_RUNNER_LOG"]
 MARKED, LAST = 1 << 29, 1 << 30
+# WS6: PREFIX_CHECK_DECODER_CONE = tt-d-gen's pd_decoder_cone (0 = off): bit 28 on every chunk whose end lies past S - cone, as
+# the prefill writer marks the decoder chunks (PrefixIndexer::decoder_chunk; v41/decoder_cone.py is_decoder_chunk). With the
+# runner's V41_PREFILL_DECODER=1 + V41_PREFILL_DECODER_MARKED=1 those chunks run layers 20..39 (the AgentX shape).
+DECODER = 1 << 28
+DECODER_CONE = int(os.environ.get("PREFIX_CHECK_DECODER_CONE", "0"))
 PHASES = os.environ.get("PREFIX_CHECK_PHASES", "R,S").split(",")
 
 # the prompts and the S2 sequence's expected per-chunk patterns at THIS chunk size and store (s2_plan.py, next to this file:
@@ -96,9 +101,9 @@ def set_ctl(words: str) -> None:
     os.replace(CTL + ".tmp", CTL)
 
 
-def push(toks: list, start: int, end: int, last: bool, mark: bool = True) -> None:
+def push(toks: list, start: int, end: int, last: bool, mark: bool = True, decoder: bool = False) -> None:
     body = toks[start:end] + [1] * (CHUNK - (end - start))
-    word = (MARKED | (LAST if last else 0)) if mark else 0
+    word = (MARKED | (LAST if last else 0) | (DECODER if decoder else 0)) if mark else 0
     header = struct.pack("<3i", word, start, end)
     pp._push(service, PAYLOAD, pp._h2d_rows(body, start if end > start else 0), None, header)
 
@@ -135,7 +140,7 @@ def run_prompt(phase: str, name: str, arm: str, *, digest=False, mark=True, time
     marks = {base + (k + 1) * ACKS_PER_CHUNK: None for k in range(len(chunks))}
     t0 = time.perf_counter()
     for k, (s, e) in enumerate(chunks):
-        push(toks, s, e, k == len(chunks) - 1, mark)
+        push(toks, s, e, k == len(chunks) - 1, mark, decoder=bool(DECODER_CONE) and e > S - DECODER_CONE)
     ok = wait_acks(base + len(chunks) * ACKS_PER_CHUNK, timeout_s, marks)
     done = [None if v is None else round(v - t0, 4) for v in marks.values()]
     r = {
