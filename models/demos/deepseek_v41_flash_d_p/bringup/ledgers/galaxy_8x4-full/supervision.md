@@ -761,3 +761,16 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   pipelined host prep; a trace only with every per-chunk value in device buffers), PB.5 now after it. Both targets are
   missed only by the host: device 95 (4x2k) / 110 (mixed) vs walls 123 / 138; the owner's 21:00 principle covers it.
   Without it PB.5 fails on the targets.
+- 05:17 UTC PB.3H gate PASS -> ac706c7f2c7. PB.3K attempt 1 started.
+- 06:30 UTC PB.3K done (attempt 1), WAITING. Host enqueue cut (per-segment work batched, the engram stalls removed):
+  gate walls 4x2k@139264 111.3 ms = 73.6k serving tok/s (TARGET MET, >= 67k), mixed 129.4 ms = 63.3k (target 64k: ~1 %
+  short; device-bound: device 121.0, host exposed 6.5; the 547k lane's indexer bounds the one ring, 22.4 ms a chunk;
+  experts 44.2 uneven over 4 texts), 1x2k 88.9 ms. Oracle bit-identical (lane equiv 0, alone vs today 0, digests 0,
+  determinism 0). Gathers exposed frac 0.104 / 0.143. DRAM 13.0 GiB a chip with every slot at the 1M capacity (of 32).
+  KNOWLEDGE CONTRADICTED DS41-298 (agent): on the packed 8192 chunk the engram stall is tt-metal's pinned write path
+  (copy_host_to_device_tensor > 32 MiB -> blocking enqueue_write_shards + finish under the CQ lock), not host work:
+  for the owner; re-check at the run end. DECIDED: accept.
+- 06:36 UTC DECIDED: PB.3M added (mixed device time: balance the longest lane's indexer keys over the early-finishing
+  lanes' chips; switch PACKED_LANE_BALANCE) before PB.5, since mixed misses by ~1 % on device alone. PB.5's metric names
+  fixed (the walls record _tagentic_cc suffixes; DRAM gated as packed_dram_gib_4x2k... < 32 GiB a chip, slots at 1M
+  capacity; there is no separate 4x2k_p1m case).
