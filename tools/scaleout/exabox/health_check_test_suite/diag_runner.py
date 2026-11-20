@@ -40,7 +40,7 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import MODES, plan as busbar_plan, run_busbar  # noqa: E402
+from diag.busbar import MODES, OVERRIDES, STEPS, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -162,6 +162,14 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--plan", action="store_true", help="Print the bus-bar step list for --mode (default plain) and exit."
     )
+    ap.add_argument(
+        "--steps",
+        default=None,
+        help=f"With --mode: run only these bus-bar steps, comma-separated, in plan order (any of {', '.join(STEPS)}). "
+        "Not given: all of them.",
+    )
+    for key, (flag, typ, what) in OVERRIDES.items():
+        ap.add_argument(flag, dest=key, type=typ, default=None, help=f"With --mode: {what}. Not given: the plan's own.")
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
     return ap
@@ -294,6 +302,8 @@ def run_diag(
     output: Path = Path("diag_report.json"),
     snapshot_out: Path = Path("/tmp/diag_snapshot.json"),
     mode: str | None = None,
+    steps: str | None = None,
+    overrides: dict | None = None,
 ) -> tuple[int, dict]:
     """Run the full pipeline (snapshot → resets → gtests → triage → ETH status → QSFP tests → sys-triage).
 
@@ -424,7 +434,7 @@ def run_diag(
             busbar_phase,
             "busbar",
             FAIL,
-            lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run)),
+            lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {}))),
         )
         _finish(report, busbar_phase, t0, summary=True)
         links_phase = Phase(name="links")
@@ -594,9 +604,17 @@ def run_diag(
 
 
 def main() -> int:
-    args = build_diag_arg_parser().parse_args()
+    ap = build_diag_arg_parser()
+    args = ap.parse_args()
+    overrides = {k: getattr(args, k) for k in OVERRIDES}
+    try:
+        steps = busbar_plan(args.mode or "plain", args.steps, **overrides)
+    except ValueError as e:
+        ap.error(str(e))
+    if (args.steps is not None or any(v is not None for v in overrides.values())) and not (args.mode or args.plan):
+        ap.error("--steps and the bus-bar overrides need --mode (without it no bus-bar step runs)")
     if args.plan:
-        for step in busbar_plan(args.mode or "plain"):
+        for step in steps:
             print(step.line())
         return 0
     rc, _report = run_diag(
@@ -623,6 +641,8 @@ def main() -> int:
         output=args.output,
         snapshot_out=args.snapshot_out,
         mode=args.mode,
+        steps=args.steps,
+        overrides=overrides,
     )
     return rc
 

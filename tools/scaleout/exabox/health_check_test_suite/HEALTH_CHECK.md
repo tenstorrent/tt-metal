@@ -641,6 +641,9 @@ whose baked-in suite predates the phase has the `--skip-sys-triage` and
 | `--tier {flash,daily,weekly,full,galaxy,pre_bmc_reboot,post_bmc_reboot}` | required | Selects reset cadence + gtest matrix |
 | `--mode {plain,full,smoke}` | off | `galaxy` tier: run the bus-bar phase (`diag/busbar.py`: quiet clocks, CCL mix, G3/G3b numeric, N1/N2, step, heavy, code readback) and then the links phase (`diag/links.py`: pair link test, sweep on a fault, fabric open/close) at this length. Not given: neither runs. |
 | `--plan` | off | Print the bus-bar step list for `--mode` (default plain) and exit. Use with `--tier galaxy`. |
+| `--steps LIST` | all | With `--mode`: run only these bus-bar steps (`qb`, `mix`, `step`, `heavy`, `code`, comma-separated, in plan order); an unknown name is an error. |
+| `--heavy-s N`, `--heavy-ops OPS`, `--heavy-x-s N`, `--heavy-x-ops OPS` | plan's own | With `--mode`: the heavy step's seconds, DIDT ops, seconds of extra ops at its end, and extra ops. |
+| `--heavy-n N`, `--burst-gap-ms N`, `--trays LIST`, `--mm-throttle 1-5` | plan's own | With `--mode`: heavy ops per launch (mix, heavy), pause after each burst, load only these trays (mix, heavy), matmul di/dt throttle (`TT_MM_THROTTLE_PERF`). |
 | `--dry-run` | off | Print intended subprocess calls; skip destructive steps |
 | `--skip-reset` | off | Skip the reset loop phase entirely |
 | `--skip-tests` | off | Skip the gtest phase entirely |
