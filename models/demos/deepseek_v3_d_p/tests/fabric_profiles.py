@@ -194,16 +194,14 @@ def tp_axis_is_wrapped(mesh_device, axis: int = 1) -> bool:
     far peer sits one hop behind on a ring and `n - 1` hops ahead on a line.
     """
     assert axis in (0, 1), f"axis must be 0 or 1, got {axis}"
-    rows, cols = tuple(mesh_device.shape)
-    n = (rows, cols)[axis]
-    stride = cols if axis == 0 else 1
-    mesh_shapes = ttnn.get_physical_mesh_shapes()
-    assert len(mesh_shapes) == 1, f"expected a single local mesh, got {mesh_shapes}"
-    mesh_id = ttnn.MeshId(next(iter(mesh_shapes)))
+    n = tuple(mesh_device.shape)[axis]
 
     def direction(src, dst):
-        # Chip ids are row-major, so the line along `axis` through chip 0 steps by `stride`.
-        node = lambda i: ttnn.FabricNodeId(mesh_id, i * stride)  # noqa: E731
+        # The line along `axis` through the mesh's first coordinate, resolved to fabric nodes through the mesh itself so
+        # a mesh that is not laid out like the physical one still probes its own chips.
+        node = lambda i: mesh_device.get_fabric_node_id(  # noqa: E731
+            ttnn.MeshCoordinate(i, 0) if axis == 0 else ttnn.MeshCoordinate(0, i)
+        )
         value = ttnn.get_eth_forwarding_direction(mesh_device, node(src), node(dst))
         assert value is not None, f"no route along axis {axis} from index {src} to {dst}"
         return value
