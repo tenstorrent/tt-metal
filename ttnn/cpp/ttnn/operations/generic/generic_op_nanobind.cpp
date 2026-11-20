@@ -50,8 +50,8 @@ void bind_generic_operation(nb::module_& mod) {
             output sharded along it. Other tensors in io_tensors keep their labels. The label changes before the program
             is compiled and before some of generic_op's checks, so a call that raises can still change it.
 
-            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label has changed but the
-            program has not run, so give back the label the output had before the call with
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
+            the program has not run, so give back the label the output had before the call with
             ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
             ``output.tensor_topology()``, which returns a copy.
 
@@ -119,10 +119,11 @@ void bind_generic_operation_preparation(nb::module_& mod) {
         committing resources to it. The prepared workload is inserted into the program cache, so the next
         generic_op call with the same tensors and program is a cache hit. A failed preparation leaves the program
         cache unchanged, with one exception: when a ProgramSpec is already cached, its run args are applied to the
-        cached program first, so DFB size overrides stay in effect even if the preparation then fails. Like the
-        generic_op call it prepares, it changes the output's tensor topology, a label of how the data of the output
-        (the last entry of io_tensors) is placed across the mesh, and a failed preparation can leave it changed. The
-        note of ttnn.generic_op or ttnn.experimental.generic_op says how to fix it.
+        cached program first, so DFB size overrides stay in effect even if the preparation then fails.
+
+        Like the generic_op call it prepares, it changes the output's tensor topology: the label of how the data of the
+        output, the last entry of io_tensors, is placed across the mesh. A failed preparation can leave the label
+        changed too. The note of ttnn.generic_op or ttnn.experimental.generic_op says how to give the old label back.
 
         Args:
             io_tensors (List[ttnn.Tensor]): The tensors the generic_op call would receive.
@@ -224,8 +225,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             label changes before the program is compiled and before some of the call's checks, such as those of the
             run args against the spec, so a call that raises can still change it.
 
-            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label has changed but the
-            program has not run, so give back the label the output had before the call with
+            After a call that raises, or a ``ttnn.experimental.prepare_generic_op`` call, the label may have changed but
+            the program has not run, so give back the label the output had before the call with
             ``output.update_tensor_topology(topology)``, which moves no data. Save that label first with
             ``output.tensor_topology()``, which returns a copy.
 

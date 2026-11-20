@@ -1166,6 +1166,15 @@ def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(0)], coords)
     assert same == allocated
     assert split == input_label
+    # A label with a placement for each mesh axis, as ttnn.create_mesh_mapper gives a tensor.
+    per_axis = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]
+    mapped = ttnn.from_torch(
+        torch.rand([2, 1, 32, 32]).to(torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.create_mesh_mapper(mesh_device, ttnn.MeshMapperConfig(per_axis)),
+    )
+    assert mapped.tensor_topology() == ttnn.TensorTopology(shape, per_axis, coords)
 
     # exp over the sharded input writes different data on each device, split along dim 0 as the input is, and the
     # merged label says so, in the input's 1-D form: after a call that raises after the label changes, after
