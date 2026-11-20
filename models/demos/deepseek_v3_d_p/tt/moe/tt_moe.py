@@ -621,6 +621,52 @@ class TtMoe(LightweightModule):
             self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
             self.sd_manager_id = None
 
+    def _expert_repeat(self, reps, first, dispatched, counts, offsets) -> None:
+        """DS41F-0169 diagnostic (V41_PREFILL_EXPERT_REPEAT=<n>, V41_PREFILL_EXPERT_REPEAT_CHIPS=<chips, default 8>): re-run
+        the routed experts ``n`` times on the SAME device inputs and compare each output with the first, on the listed chips,
+        over the rows the counts / region offsets mark valid (the rest of the shared output is uninitialized)."""
+        chips = [int(v) for v in os.environ.get("V41_PREFILL_EXPERT_REPEAT_CHIPS", "8").split(",") if v.strip()]
+
+        def rd(t, k):
+            return ttnn.to_torch(ttnn.get_device_tensors(t)[k])
+
+        for k in chips:
+            cnt, off = rd(counts, k).flatten().to(torch.int64), rd(offsets, k).flatten().to(torch.int64)
+            base = rd(first, k)
+            rows = base.shape[-2]
+            base = base.reshape(-1, rows, base.shape[-1])
+            valid = torch.zeros(base.shape[0] * rows, dtype=torch.bool)
+            n_e = min(int(cnt.numel()), int(off.numel()), int(self.experts_per_chip))
+            spans = []
+            for j in range(n_e):
+                o, c = int(off[j]), int(cnt[j])
+                if c > 0:
+                    valid[o : o + c] = True
+                    spans.append((j, o, c))
+            flat = base.reshape(-1, base.shape[-1])
+            iv = flat.view(torch.int16) if flat.dtype == torch.bfloat16 else flat.view(torch.int32)
+            ndiff_runs, first_bad = 0, None
+            for r in range(reps):
+                o_t = self.routed_expert(dispatched, counts, offsets)
+                cur = rd(o_t, k).reshape(-1, base.shape[-1])
+                ttnn.deallocate(o_t)
+                ci = cur.view(torch.int16) if cur.dtype == torch.bfloat16 else cur.view(torch.int32)
+                bad = (ci != iv) & valid[: ci.shape[0], None]
+                if bool(bad.any()):
+                    ndiff_runs += 1
+                    if first_bad is None:
+                        rr, cc = torch.nonzero(bad, as_tuple=True)
+                        experts = sorted({j for j, o, c in spans if bool(((rr >= o) & (rr < o + c)).any())})
+                        first_bad = (
+                            f"run {r}: {int(bad.sum())} elems, rows {int(rr.min())}..{int(rr.max())} "
+                            f"({int(torch.unique(rr).numel())} rows), cols {int(cc.min())}..{int(cc.max())}, "
+                            f"local experts {experts}"
+                        )
+            logger.info(
+                f"[v41 0169] expert repeat layer {getattr(self, 'layer_idx', '?')} chip {k}: {ndiff_runs} of {reps} re-runs "
+                f"differ from the first; spans (expert, offset, count) {spans}; dtype {base.dtype}; first diff: {first_bad}"
+            )
+
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
 
     def _dump_routing(
@@ -986,6 +1032,11 @@ class TtMoe(LightweightModule):
         expert_outputs = self.routed_expert(squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets)
         if tap is not None:
             tap("Me", [expert_outputs])
+            reps = int(os.environ.get("V41_PREFILL_EXPERT_REPEAT", "0"))
+            if reps:
+                self._expert_repeat(
+                    reps, expert_outputs, squeezed_dispatch, tt_expert_token_counts, tt_expert_region_offsets
+                )
         if not return_intermediates:
             dispatched_buffer = ttnn.deallocate(dispatched_buffer)
         if DEBUG_LOGGING_ENABLED:
