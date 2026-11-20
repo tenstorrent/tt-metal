@@ -28,6 +28,9 @@ import torch
 from loguru import logger
 
 VERIFY = os.environ.get("V41_PREFILL_HOST_IDS_VERIFY", "0") == "1"
+# the Engram layers whose rows are gathered early ("1": layer 1 only -- the one the chunk start waits for; layer 14's rows are
+# gathered at the chunk start as before, needed only at block 14); empty = all
+LAYERS = tuple(int(x) for x in os.environ.get("V41_PREFILL_HOST_IDS_LAYERS", "").split(",") if x.strip())
 _NEED = ("hash_ids", "_hash", "_gather", "_dead", "_layer_pool", "row_elems", "layer_ids", "layout", "vocab_size")
 
 
@@ -84,7 +87,7 @@ class EngramPrefetch:
             "key": (int(slot), int(start_pos), len(ids)),
             "ids": np.asarray(ids, dtype=np.int64),
             "idx": idx,
-            "futures": self._submit(idx, ids),
+            "futures": self._submit(idx, ids, layers=LAYERS or None),
         }
         self.stats["prefetched"] += 1
 
@@ -124,9 +127,13 @@ class EngramPrefetch:
             and all(np.array_equal(p["idx"][lid], idx[lid]) for lid in e.layer_ids)
         ):
             self.stats["hits"] += 1
+            futs = dict(p["futures"])
             if VERIFY:
-                self._verify.append((p["futures"], self._submit(idx, token_ids)))
-            return p["futures"]
+                self._verify.append((futs, self._submit(idx, token_ids, layers=tuple(futs))))
+            rest = tuple(lid for lid in e.layer_ids if lid not in futs)
+            if rest:  # layers not gathered early (V41_PREFILL_HOST_IDS_LAYERS): now, as before
+                futs.update(self._submit(idx, token_ids, layers=rest))
+            return futs
         if p is not None:
             self.stats["misses"] += 1
         return self._submit(idx, token_ids, layers)
