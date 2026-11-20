@@ -5629,8 +5629,8 @@ tasks:
   gate:
     cmd: BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode WALLS_FRESH=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
     metrics:
-      '*_fresh*': '> 0'
       program_builds_after_warmup_*: '>= 0'
+      single*_fresh_tok_s*: '> 0'
 - id: MB.2
   title: 'OWNER 2026-11-20: no program build in serving on the single-request path (every per-chunk value a runtime value), ids reordered on the device; a permanent no-rebuild test in every accept gate'
   step: perf
@@ -5685,6 +5685,6 @@ tasks:
       contract_checks_failed: == 0
       contract_checks_failed_decoder_skip: == 0
       outside_history_max_abs_diff: == 0
-      '*_fresh*': '> 0'
       program_builds_after_warmup_*: == 0
       ids_uploads_per_chunk*: == 0
+      single*_fresh_tok_s*: '> 0'
