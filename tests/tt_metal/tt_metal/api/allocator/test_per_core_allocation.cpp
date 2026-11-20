@@ -129,7 +129,7 @@ TEST_F(PerCoreAllocationTest, PerCoreSkipsPersistentL1OnSameCore) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        *mesh_device,
+        mesh_device->mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -548,7 +548,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1) {
     const CoreCoord sender(0, 0);
     const CoreCoord receiver(1, 0);
     auto space = experimental::CreatePrefetcherPipeSpace(
-        mesh_device,
+        mesh_device.mesh_command_queue(0),
         experimental::PrefetcherPipeSpaceConfig{
             .sender_cores = CoreRangeSet(CoreRange(sender)),
             .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -576,7 +576,7 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesIncludePersistentL1AcrossSubmeshes) 
     // A pipe reserves persistent L1 on the mesh it is created on; the other mesh must still see it.
     for (const auto& [owner, viewer] : {std::pair{parent, submesh}, std::pair{submesh, parent}}) {
         auto space = experimental::CreatePrefetcherPipeSpace(
-            *owner,
+            owner->mesh_command_queue(0),
             experimental::PrefetcherPipeSpaceConfig{
                 .sender_cores = CoreRangeSet(CoreRange(sender)),
                 .receiver_domain = CoreRangeSet(CoreRange(receiver)),
@@ -606,6 +606,30 @@ TEST_F(PerCoreAllocationTest, OccupiedRangesWholeDeviceMatchesPerCore) {
     for (const auto& [core, ranges] : by_core) {
         EXPECT_EQ(ranges, per_core::get_l1_occupied_ranges(mesh_device, coord, core)) << core.str();
     }
+}
+
+TEST_F(PerCoreAllocationTest, DeviceBuffersShareMeshBufferUniqueId) {
+    auto& mesh_device = *this->devices_[0];
+    CoreRange core_range(CoreCoord(0, 0), CoreCoord(1, 0));
+    ShardSpecBuffer shard_spec(CoreRangeSet(core_range), {32, 32}, ShardOrientation::ROW_MAJOR, {32, 32}, {2, 1});
+    auto sharding_args = BufferShardingArgs(shard_spec, TensorMemoryLayout::HEIGHT_SHARDED);
+    per_core::set_per_core_allocation(sharding_args, true);
+    const distributed::DeviceLocalBufferConfig local_config{
+        .page_size = PAGE_SIZE, .buffer_type = BufferType::L1, .sharding_args = sharding_args};
+    const distributed::ReplicatedBufferConfig buffer_config{.size = 2 * PAGE_SIZE};
+
+    // The allocator and graph tracking see the device buffers' IDs, so they must identify the MeshBuffer.
+    auto mesh_buffer = distributed::MeshBuffer::create(buffer_config, local_config, &mesh_device);
+    ASSERT_TRUE(mesh_buffer->unique_id().has_value());
+    for (const auto& coord : mesh_device.get_view().get_local_mesh_coord_range()) {
+        EXPECT_EQ(mesh_buffer->get_device_buffer(coord)->unique_id(), *mesh_buffer->unique_id());
+    }
+
+    const distributed::MeshCoordinate coord(0, 0);
+    auto single_device = per_core::create_on_single_device(buffer_config, local_config, &mesh_device, coord);
+    ASSERT_TRUE(single_device->unique_id().has_value());
+    EXPECT_NE(*single_device->unique_id(), *mesh_buffer->unique_id());
+    EXPECT_EQ(single_device->get_device_buffer(coord)->unique_id(), *single_device->unique_id());
 }
 
 using OccupiedRangesLockstepModeTest = MeshDeviceSingleCardBufferFixture;

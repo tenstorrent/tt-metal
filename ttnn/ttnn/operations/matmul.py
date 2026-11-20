@@ -25,6 +25,8 @@ MatmulInputs = ttnn._ttnn.operations.matmul.MatmulInputs
 MatmulDeviceOperation = ttnn._ttnn.operations.matmul.MatmulDeviceOperation
 create_matmul_attributes = ttnn._ttnn.operations.matmul.create_matmul_attributes
 matmul_select_program_factory = ttnn._ttnn.operations.matmul.matmul_select_program_factory
+# Diagnostic of the opt-in matmul config model for tests and benchmarks; deliberately not exported as ttnn.*
+matmul_model_last_pick = ttnn._ttnn.operations.matmul.matmul_model_last_pick
 
 
 def _golden_function(

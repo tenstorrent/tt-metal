@@ -43,16 +43,7 @@ def test_fill_rm_program_cache(device):
     entries = None
     for i in range(2):
         x = torch.zeros((N, C, H, W))
-        xt = (
-            ttnn.Tensor(
-                x.reshape(-1).tolist(),
-                x.shape,
-                ttnn.bfloat16,
-                ttnn.ROW_MAJOR_LAYOUT,
-            )
-            .to(ttnn.TILE_LAYOUT)
-            .to(device)
-        )
+        xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
         output = ttnn.fill_rm(N, C, H, W, fillH, fillW, xt, val_hi, val_lo)
         tt_got_back = output.cpu().to_torch()
         assert torch.equal(tt_got_back, golden)
@@ -85,16 +76,7 @@ def test_fill_rm(device):
     xp = torch.clone(x)
     xp[:, :, :fillH, :fillW] = 1.0
 
-    xt = (
-        ttnn.Tensor(
-            x.reshape(-1).tolist(),
-            x.shape,
-            ttnn.bfloat16,
-            ttnn.ROW_MAJOR_LAYOUT,
-        )
-        .to(ttnn.TILE_LAYOUT)
-        .to(device)
-    )
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT).to(ttnn.TILE_LAYOUT).to(device)
     xtt = ttnn.fill_ones_rm(N, C, H, W, fillH, fillW, xt)
     assert list(xtt.padded_shape) == [N, C, H, W]
 

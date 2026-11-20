@@ -8,9 +8,8 @@
 #include <string>
 #include <vector>
 
-#include "impl/context/context_types.hpp"
 #include "device.hpp"
-#include "dispatch_core_common.hpp"
+#include <tt-metalium/dispatch_core_common.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -76,7 +75,7 @@ void dump_data(
         if (dump_cqs) {
             cout << "Dumping Command Queues into: " << cq_dir.string() << endl;
             std::unique_ptr<SystemMemoryManager> sysmem_manager =
-                std::make_unique<SystemMemoryManager>(DEFAULT_CONTEXT_ID, id, num_hw_cqs);
+                std::make_unique<SystemMemoryManager>(env_impl, MetalContext::instance(), id, num_hw_cqs);
             ::internal::dump_cqs(cq_file, iq_file, *sysmem_manager, dump_cqs_raw_data);
         }
     }

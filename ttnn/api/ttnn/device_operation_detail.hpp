@@ -6,10 +6,12 @@
 
 #include <cstddef>
 #include <functional>
+#include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <ttnn/distributed/distributed_configs.hpp>
@@ -18,12 +20,19 @@ namespace ttnn {
 class Tensor;
 }  // namespace ttnn
 
+namespace ttnn::command_list {
+struct CmdListBindings;
+}  // namespace ttnn::command_list
+
 namespace tt::tt_metal {
+class MeshTensor;
+class Program;
 class TensorTopology;
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 class MeshDevice;
+class MeshWorkload;
 }  // namespace tt::tt_metal::distributed
 
 namespace ttnn::device_operation::detail {
@@ -83,5 +92,31 @@ std::vector<tt::tt_metal::distributed::MeshCoordinate> extract_tensor_coordinate
  * therefore still drop the per-core bit unnoticed; tracked in #51482.
  */
 void validate_no_per_core_allocation(const ttnn::Tensor& tensor, std::string_view operation_name, size_t input_index);
+
+// True while a ttnn::command_list::CommandListBuilder records on the calling thread (ttnn/command_list.hpp).
+bool is_recording_command_list();
+
+// Throws while recording on the calling thread. For calls whose meaning depends on recorded work, so running them at
+// record time would be wrong.
+void throw_if_recording_command_list(std::string_view call_name);
+
+// True while TTNN command-list parameter binds are pushed on the calling thread (ttnn/command_list_params.hpp).
+bool has_active_cmd_list_binds();
+
+// A program of a workload being recorded, with the bindings its factory stored on the cache miss and the tensor this
+// call binds to each of its TensorParameters.
+struct CmdListProgramBindings {
+    const tt::tt_metal::Program* program;
+    const ttnn::command_list::CmdListBindings* bindings;
+    std::vector<std::pair<tt::tt_metal::TensorParamName, const tt::tt_metal::MeshTensor*>> bound_tensors;
+};
+
+// Adds `workload` to the CommandListBuilder recording on the calling thread instead of enqueueing it, recording as
+// TTNN command-list parameters the active binds that match `programs`.
+void record_to_command_list(
+    std::string_view operation_name,
+    tt::tt_metal::distributed::MeshDevice* mesh_device,
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    std::span<const CmdListProgramBindings> programs = {});
 
 }  // namespace ttnn::device_operation::detail
