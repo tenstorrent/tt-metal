@@ -621,6 +621,7 @@ class TtMoe(LightweightModule):
             self.mesh_device.remove_sub_device_manager(self.sd_manager_id)
             self.sd_manager_id = None
 
+    _dump_seq: dict = {}  # layer -> routing dumps written (file-name counter)
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
 
     def _dump_routing(
@@ -679,6 +680,10 @@ class TtMoe(LightweightModule):
             host_scores = ttnn.to_torch(scores, mesh_composer=composer).reshape(-1, self.num_experts_per_tok)
             sp_factor = int(self.mesh_device.shape[0])
             os.makedirs(dump_dir, exist_ok=True)
+            # a per-layer call counter in the name: callers that pass no actual_start (V4.1's prefill) would otherwise
+            # overwrite one file per layer and keep only the last chunk
+            seq = TtMoe._dump_seq.get(self.layer_idx, 0) + 1
+            TtMoe._dump_seq[self.layer_idx] = seq
             torch.save(
                 {
                     # int32, not int16: the sentinel is num_routed_experts and a wider expert space
@@ -695,7 +700,7 @@ class TtMoe(LightweightModule):
                 },
                 os.path.join(
                     dump_dir,
-                    f"routing_layer{self.layer_idx}_slot{int(cache_user_id)}_start{int(actual_start)}.pt",
+                    f"routing_layer{self.layer_idx}_slot{int(cache_user_id)}_start{int(actual_start)}_seq{seq}.pt",
                 ),
             )
         except Exception as exc:  # diagnostics must never fail a run
