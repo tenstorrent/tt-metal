@@ -14,6 +14,7 @@ import shutil
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+from typing import Optional
 
 import pytest
 import torch
@@ -196,14 +197,14 @@ def pytest_collection_modifyitems(config, items):
     CI_ALLOWED_FABRICS = {
         CT.P150: {(1, 1): [FC.DISABLED, FC.FABRIC_2D]},  # single chip
         CT.P300_X2: {  # 4-chip QuietBox
-            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 and TP4 rings
+            (4, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's QuietBox SP4xTP1 ring
             (2, 2): [FC.FABRIC_2D],
-            (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4 on a 1D fabric
+            (1, 4): [FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_X],  # KDA's QKV exchange rings SP4
         },
         CT.P150_X8: {
             (8, 1): [FC.FABRIC_1D, FC.FABRIC_1D_RING, FC.FABRIC_2D_TORUS_Y],  # KDA's LoudBox SP8xTP1 rings SP8
             (4, 2): [FC.FABRIC_2D],
-            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line run on a 1D fabric
+            (2, 4): [FC.FABRIC_1D, FC.FABRIC_2D],  # KDA's LoudBox SP4xTP2 and TP4 line
             (1, 8): [FC.FABRIC_2D_TORUS_X],
         },
         CT.T3K: {
@@ -620,18 +621,12 @@ def _resolve_hf_snapshot_dir(path: Path) -> Path:
     return path
 
 
-def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
-    """
-    Get model path, downloading from HuggingFace if necessary.
+def find_local_model(variant: TestVariant) -> Optional[Path]:
+    """The variant's checkpoint directory if one is already on this host, else None. Never downloads.
 
-    Args:
-        variant: The TestVariant to resolve weights for.
-        layer_idx: Which layer weights to ensure are available.
-        num_layers: Number of layers to download (default: 6).
-                    When >1, downloads the additional per-layer shards.
-
-    Returns:
-        Path to model directory with weights.
+    Checks, in order: the variant's env var, its default location, its shared location. A
+    random-weight test calls this to decide whether pretrained weights are an option at all, rather
+    than requesting the model_path fixture, which downloads the checkpoint when none is found.
     """
     # Check environment variable first
     env_path = os.getenv(variant.env_var)
@@ -666,6 +661,26 @@ def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: 
         if index_file.exists():
             logger.info(f"Using model from shared location: {variant.shared_path}")
             return variant.shared_path.resolve()
+
+    return None
+
+
+def get_or_download_model(variant: TestVariant, layer_idx: int = 0, num_layers: int = 6) -> Path:
+    """
+    Get model path, downloading from HuggingFace if necessary.
+
+    Args:
+        variant: The TestVariant to resolve weights for.
+        layer_idx: Which layer weights to ensure are available.
+        num_layers: Number of layers to download (default: 6).
+                    When >1, downloads the additional per-layer shards.
+
+    Returns:
+        Path to model directory with weights.
+    """
+    local = find_local_model(variant)
+    if local is not None:
+        return local
 
     # Download from HuggingFace
     logger.info(f"Model not found locally. Downloading {variant.hf_repo_id} from HuggingFace...")

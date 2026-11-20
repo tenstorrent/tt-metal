@@ -89,8 +89,8 @@ def test_the_cache_check_call_binds_to_the_transformer():
 
 
 def test_every_forward_call_binds_to_the_transformer():
-    """The eager and traced chunk paths both call `self.model.forward`; neither is reached by an eager test."""
-    for call in _call_sites("self.model.forward", expected=2):
+    """The eager and traced chunk paths and the packed `prefill_forward` call `self.model.forward`; none is reached by an eager test."""
+    for call in _call_sites("self.model.forward", expected=3):
         _bind(TtKimiK3Transformer.forward, call, None)
 
 
@@ -108,6 +108,34 @@ def test_forward_rejects_mtp_arguments_before_device_work(expect_error, mtp_kwar
     model = object.__new__(TtKimiK3Transformer)
     with expect_error(ValueError, "no MTP predictor"):
         model.forward(object(), **mtp_kwargs)
+
+
+def test_forward_checks_the_index_cache_against_the_config(expect_error):
+    """K3 has no DSA indexer, so an index cache is a wiring mistake; K3.1's DSA layers cannot run without one."""
+    model = object.__new__(TtKimiK3Transformer)
+    model.has_indexer = False
+    with expect_error(ValueError, "no DSA indexer"):
+        model.forward(object(), index_kv_cache=object())
+    model.has_indexer, model.schedule = True, SimpleNamespace(num_mla_layers=1)
+    with expect_error(ValueError, "pass index_kv_cache"):
+        model.forward(object())
+
+
+def test_only_a_dsa_config_takes_a_sparse_kv_cache_format(expect_error):
+    """K3's dense MLA cache cannot take a sparse format; refused before any device work."""
+    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCacheFormat
+
+    with expect_error(ValueError, "dense MLA KV cache"):
+        TtKimiK3Transformer(
+            None,
+            kimi_k3_hf_config(),
+            KimiK3Config,
+            {},
+            num_layers=1,
+            seq_len=5120,
+            sparse_kv_cache_format=MlaKvCacheFormat.SCALED_FP8,
+        )
 
 
 def test_runtime_rejects_mtp_before_the_shared_build(monkeypatch, expect_error):
@@ -247,8 +275,9 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer = object.__new__(ttKDA)
     layer.tensor_parallel_size = tensor_parallel_size
     layer.tensor_parallel_axis = 1
-    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1)
-    layer.weights = SimpleNamespace(convolution_taps=())
+    layer.config = SimpleNamespace(hidden_size=256, q_dim=1, k_dim=1, v_dim=1, num_heads=2, norm_eps=1e-6)
+    layer.weights = SimpleNamespace(convolution_taps=(), norm=object())
+    layer.gated_rms_output_dtype = layer.norm_output_memory_config = None
     layer.convolution_page_channels = KDA_CONVOLUTION_PAGE_CHANNELS
     layer.kda_compute_config = object()
     for name in ("qkv_convolution_program_config", "qkv_memory_config", "sequence_parallel_axis"):
@@ -263,6 +292,7 @@ def _mocked_layer(monkeypatch, tensor_parallel_size: int):
     layer._compute_decay = calls.compute_decay
     layer.recurrence = calls.recurrence
     calls.recurrence.return_value = SimpleNamespace(output=object(), final_state="final_recurrent")
+    calls.recurrence.applies_output_norm = False
     layer._kda_rms_norm = calls.norm
     layer._project_output = calls.project_output
     calls.project_output.return_value = "output"
@@ -281,6 +311,17 @@ def test_kda_layer_functional_path_skips_the_gather_on_a_full_width_input(monkey
     calls.all_gather.assert_not_called()
     calls.project_inputs.assert_called_once_with(full)
     assert output == "output" and (state.recurrent, state.convolution) == ("final_recurrent", "new_convolution")
+
+
+def test_kda_layer_with_sequence_parallelism_leaves_the_norm_to_the_relay(monkeypatch):
+    layer, calls = _mocked_layer(monkeypatch, tensor_parallel_size=4)
+    calls.recurrence.applies_output_norm = True
+    output, _ = layer.forward(SimpleNamespace(shape=(1, 64, 256)), Mock(), object())
+    calls.norm.assert_not_called()
+    output_norm = calls.recurrence.call_args.kwargs["output_norm"]
+    assert output_norm.gate is calls.project_inputs.return_value.projected and output_norm.num_heads == 2
+    calls.project_output.assert_called_once_with(calls.recurrence.return_value.output)
+    assert output == "output"
 
 
 def test_kda_attention_rejects_a_layer_without_the_contract_convolution_pages(expect_error):

@@ -6,7 +6,7 @@
 The ops' accuracy is gated in their own test files; this one only asks whether a run repeats. Each
 test builds its inputs, persistent buffers and semaphores once, the way the model holds them, keeps
 the first run's outputs on device as the reference, and folds every later run's exact mismatch into
-one device marker read back at the end (`device_determinism.py`). Without a sync the chips drift
+one device marker read back at the end (`tests/measure/determinism.py`). Without a sync the chips drift
 apart, which is what exposes a buffer or a semaphore reused before a slow peer is done with it.
 
 Shapes are K3's: `d = 7168` over TP4, so 1792 columns per chip, and the 5120-token chunk over the SP
@@ -24,7 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.attn_res.device_determinism import (
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
     deterministic_input,
     device_mismatch_marker_is_set,
     fold_mismatches,

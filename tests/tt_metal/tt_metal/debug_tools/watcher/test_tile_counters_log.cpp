@@ -13,7 +13,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
@@ -123,7 +124,7 @@ void RunTest(
         .work_units = {wu},
     };
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);

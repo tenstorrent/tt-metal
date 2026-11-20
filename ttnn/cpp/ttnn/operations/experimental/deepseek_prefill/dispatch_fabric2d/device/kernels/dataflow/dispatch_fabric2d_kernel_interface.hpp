@@ -260,7 +260,7 @@ struct ScratchGeometry {
     uint32_t num_routed_experts = 0;
     uint32_t experts_per_chip = 0;
     uint32_t topk = 0;
-    uint32_t num_forward = 0;  // forward_descriptors_per_stream(extent), the same for every stream
+    uint32_t num_forward = 0;  // forward_chunks_per_stream(extent), the same for every stream
 };
 
 constexpr uint32_t scratch_block_raw_bytes(const ScratchGeometry& g, uint32_t block) {

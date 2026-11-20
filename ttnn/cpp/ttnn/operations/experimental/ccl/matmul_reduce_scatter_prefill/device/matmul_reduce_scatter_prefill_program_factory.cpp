@@ -950,6 +950,7 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
     Tensor& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared;
+    auto& mesh_device = *tensor_args.input_tensor.device();
     auto add = [&](const ttnn::MeshCoordinateRange& range, Program program) {
         shared_variables_t sv{
             .reader = GetCommonRuntimeArgs(program, args::kernel_index::READER),
@@ -989,13 +990,13 @@ MatmulReduceScatterPrefillMeshWorkloadFactory::create_mesh_workload(
                           ? ttnn::merge_per_device_program_descriptors(descriptors, options)
                           : std::nullopt;
         if (merged.has_value()) {
-            add(range, Program{merged->descriptor});
+            add(range, Program{mesh_device, merged->descriptor});
             ttnn::apply_per_device_runtime_args(workload, range, merged->per_device_runtime_args);
             continue;
         }
         size_t i = 0;
         for (const auto& coord : range) {
-            add(ttnn::MeshCoordinateRange(coord), Program{descriptors[i++]});
+            add(ttnn::MeshCoordinateRange(coord), Program{mesh_device, descriptors[i++]});
         }
     }
     return cached_mesh_workload_t{std::move(workload), std::move(shared)};

@@ -5,6 +5,7 @@
 #include "dit_fused_distributed_groupnorm_program_factory.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <set>
 #include <tuple>
@@ -57,10 +58,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     const auto& beta = tensor_args.beta;
     const auto& input_mask = tensor_args.input_mask;
 
-    Program program = CreateProgram();
-
     MeshDevice* device = input_tensor.device();
     auto* mesh_device = input_tensor.device();
+    Program program = CreateProgram(*device);
 
     const bool is_local = (args.ring_size <= 1);
     const bool use_mux = !is_local;
@@ -584,14 +584,23 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     // Forwarder (single fabric ring all-gather, coalescing all masters' sub-sticks).
     // ------------------------------------------------------------------------
     std::vector<KernelHandle> forwarder_kernel_ids(num_forwarders, 0);
+    // The chip's fabric routes: forwarder runtime args (with the device index), as the fused rmsnorm passes them.
+    std::array<uint32_t, 6> forward_route{};
+    std::array<uint32_t, 6> backward_route{};
+    if (num_forwarders > 0) {
+        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
+        TT_FATAL(
+            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)) ||
+                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
+            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
+        std::tie(forward_route, backward_route) = ttnn::ccl::get_forward_backward_line_mcast_configuration(
+            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
+    }
     for (uint32_t f = 0; f < num_forwarders; f++) {
         std::vector<uint32_t> fwd_ct = {
             packet_cb_id,
             reserved_packet_header_cb_id,
             args.ring_size,
-            device_index,
-            num_targets_forward,
-            num_targets_backward,
             f,
             num_forwarders,
             num_masters,  // group_size (masters coalesced by this forwarder)
@@ -602,15 +611,6 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
             go_sem_id,
         };
         TensorAccessorArgs(stats_dram_buffer).append_to(fwd_ct);
-        // 2D fabric multicasts N hops in one physical direction: the cluster axis must be a straight physical line.
-        TT_FATAL(
-            !tt::tt_fabric::is_2d_fabric_config(tt::tt_fabric::GetFabricConfig(*mesh_device)) ||
-                ttnn::ccl::is_axis_straight(*mesh_device, args.cluster_axis),
-            "Fused distributed norm requires a straight physical cluster axis on 2D fabric");
-        const auto [forward_route, backward_route] = ttnn::ccl::get_forward_backward_line_mcast_configuration(
-            mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
-        fwd_ct.insert(fwd_ct.end(), forward_route.begin(), forward_route.end());
-        fwd_ct.insert(fwd_ct.end(), backward_route.begin(), backward_route.end());
         // The coalescing forwarder is fully parameterized by these CT args (stick_bytes,
         // max_rounds, num_chunks_per_device), so it is shared verbatim with the fused rmsnorm op.
         forwarder_kernel_ids[f] = CreateKernel(
@@ -868,7 +868,9 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         const auto local_node_id = mesh_device->get_fabric_node_id(mesh_coordinate);
         for (uint32_t f = 0; f < num_forwarders; f++) {
             const auto& core = forwarder_cores[f];
-            std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr};
+            std::vector<uint32_t> fwd_rt = {stats_dram_addr, out_ready_sem_bank_addr, device_index};
+            fwd_rt.insert(fwd_rt.end(), forward_route.begin(), forward_route.end());
+            fwd_rt.insert(fwd_rt.end(), backward_route.begin(), backward_route.end());
             for (uint32_t m = 0; m < num_masters; m++) {
                 CoreCoord mv = device->worker_core_from_logical_core(mcast_groups[m].front());
                 fwd_rt.push_back(static_cast<uint32_t>(mv.x));

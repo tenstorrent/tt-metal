@@ -140,8 +140,9 @@ struct TensorSpecRelaxations {
 // as pertinent. A given relaxation implies an equivalence relationship as defined in the
 // TensorSpecRelaxations documentation above.
 //
-// NOTE: This check is used by SetProgramRunArgs, UpdateProgramRunArgs, and UpdateTensorArgs when
-// validating a supplied MeshTensor argument against its TensorParameter's declared TensorSpec.
+// NOTE: This check is used by Program::set_program_run_args, Program::update_program_run_args, and
+// Program::update_tensor_args when validating a supplied MeshTensor argument against its TensorParameter's declared
+// TensorSpec.
 //
 bool tensorspecs_match_with_relaxation(
     const tt::tt_metal::TensorSpec& a, const tt::tt_metal::TensorSpec& b, const TensorSpecRelaxations& relaxation);

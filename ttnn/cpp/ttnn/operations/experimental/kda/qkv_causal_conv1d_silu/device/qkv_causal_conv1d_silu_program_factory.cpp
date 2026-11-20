@@ -5,6 +5,7 @@
 
 #include "ttnn/operations/experimental/kda/factory/chronology_binding.hpp"
 #include <algorithm>
+#include <tuple>
 #include <vector>
 
 #include <internal/fabric.hpp>
@@ -134,6 +135,40 @@ ExchangeRoute exchange_route(const ttnn::MeshDevice& device, const ttnn::MeshCoo
     return route;
 }
 
+// The exchange's compile-time args: what its routes look like, the same on every chip of a ring.
+auto exchange_layout(const ExchangeRoute& route) {
+    return std::make_tuple(
+        route.neighbors.size(),
+        route.forward_connection,
+        route.forward_range,
+        route.backward_connection,
+        route.backward_range,
+        route.successor_connection,
+        route.successor_hops,
+        route.unicast_peers,
+        route.peer_args.size());
+}
+
+// Whether every chip of each tensor range has its range's first chip's exchange layout, so the range runs one program
+// with each chip's rank, successor and routes as per-device run args. A line's end ranks have one neighbor and a
+// different layout; such a mesh runs one program per chip.
+bool exchange_layouts_match(
+    const ttnn::MeshDevice& device, const ttnn::MeshCoordinateRangeSet& tensor_coords, uint32_t axis) {
+    // A single rank exchanges nothing and may run without a fabric: every chip's (empty) layout matches.
+    if (device.shape()[axis] == 1) {
+        return true;
+    }
+    for (const auto& range : tensor_coords.ranges()) {
+        const auto first = exchange_layout(exchange_route(device, range.start_coord(), axis));
+        for (const auto& coordinate : range) {
+            if (exchange_layout(exchange_route(device, coordinate, axis)) != first) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 // The exchange core's packets go to the ETH cores above the first Tensix row, so its kernel uses the NoC that routes
 // toward lower rows (NOC_1) rather than inheriting whichever the writer placement picks.
 DataMovementHardwareConfig exchange_datamovement_config() {
@@ -189,23 +224,47 @@ void add_history_exchange(
     const CoreRangeSet exchange_nodes{CoreRange(exchange_core)};
     const std::vector<std::string> semaphore_args = {"entry_semaphore", "predecessor_semaphore", "carry_semaphore"};
 
-    for (auto& program : workload.programs) {
-        const auto coordinate = program.range.start_coord();
-        // A single rank exchanges nothing and may run without a fabric: no connections, no cores to release.
-        const auto route = sp_size > 1 ? exchange_route(device, coordinate, axis) : ExchangeRoute{};
-        std::vector<uint32_t> varargs;
+    // A single rank exchanges nothing and may run without a fabric: no connections, no cores to release.
+    const auto route_of = [&](const ttnn::MeshCoordinate& coordinate) {
+        return sp_size > 1 ? exchange_route(device, coordinate, axis) : ExchangeRoute{};
+    };
+    // The routes array: the fabric connections, the convolution cores' NoC x and y, then the peers. Never empty, so the
+    // kernel always declares it.
+    const auto routes_of = [&](const ttnn::MeshCoordinate& coordinate, const ExchangeRoute& route) {
+        std::vector<uint32_t> routes;
         if (sp_size > 1) {
             const std::vector<uint32_t> unbound_semaphores(route.neighbors.size(), 0);
-            varargs = tt::tt_metal::internal::compute_fabric_connection_rt_args(
+            routes = tt::tt_metal::internal::compute_fabric_connection_rt_args(
                 device,
                 device.get_fabric_node_id(coordinate),
                 route.neighbors,
                 {0},
                 unbound_semaphores,
                 unbound_semaphores);
-            varargs.insert(varargs.end(), convolution_core_xy.begin(), convolution_core_xy.end());
-            varargs.insert(varargs.end(), route.peer_args.begin(), route.peer_args.end());
         }
+        routes.insert(routes.end(), convolution_core_xy.begin(), convolution_core_xy.end());
+        routes.insert(routes.end(), route.peer_args.begin(), route.peer_args.end());
+        if (routes.empty()) {
+            routes.push_back(0);
+        }
+        return routes;
+    };
+    // Per chip: its rank, its successor and its routes.
+    const auto set_device_args = [&](KernelRunArgs& args, const ttnn::MeshCoordinate& coordinate) {
+        const auto route = route_of(coordinate);
+        AddRuntimeArgsForNode(
+            args.runtime_arg_values,
+            exchange_core,
+            {{"sp_rank", coordinate[axis]},
+             {"successor_chip", route.successor_chip},
+             {"successor_mesh", route.successor_mesh}});
+        args.runtime_array_arg_values["routes"][NodeCoord(exchange_core)] = routes_of(coordinate, route);
+    };
+
+    for (auto& program : workload.programs) {
+        const auto coordinate = program.range.start_coord();
+        const auto route = route_of(coordinate);
+        const uint32_t routes_words = static_cast<uint32_t>(routes_of(coordinate, route).size());
 
         KernelSpec kernel{
             .unique_id = exchange_kernel,
@@ -239,7 +298,6 @@ void add_history_exchange(
             .compile_time_args =
                 {{"channel_tiles", channel_tiles},
                  {"max_payload", max_payload},
-                 {"named_runtime_args", static_cast<uint32_t>(semaphore_args.size())},
                  {"num_connections", static_cast<uint32_t>(route.neighbors.size())},
                  {"forward_connection", route.forward_connection},
                  {"forward_range", route.forward_range},
@@ -247,17 +305,22 @@ void add_history_exchange(
                  {"backward_range", route.backward_range},
                  {"successor_connection", route.successor_connection},
                  {"successor_hops", route.successor_hops},
-                 {"successor_chip", route.successor_chip},
-                 {"successor_mesh", route.successor_mesh},
                  {"num_convolution_cores", static_cast<uint32_t>(convolution_cores.size())},
-                 {"sp_rank", coordinate[axis]},
                  {"sp_size", sp_size},
                  {"local_rows", attrs.sequence},
                  {"has_actual_end", uint32_t(in.actual_end.has_value())},
                  {"token_paged", uint32_t(tail.token_paged)},
                  {"page_channels", tail.page_channels},
                  {"unicast_peers", uint32_t(route.unicast_peers)}},
-            .runtime_arg_schema = {.runtime_arg_names = {semaphore_args.begin(), semaphore_args.end()}},
+            .runtime_arg_schema =
+                {.runtime_arg_names =
+                     {"entry_semaphore",
+                      "predecessor_semaphore",
+                      "carry_semaphore",
+                      "sp_rank",
+                      "successor_chip",
+                      "successor_mesh"},
+                 .runtime_array_args = {{.name = "routes", .size = routes_words}}},
             .hw_config = exchange_datamovement_config(),
         };
         if (sp_size > 1) {
@@ -267,7 +330,6 @@ void add_history_exchange(
             }
         }
         add_slab_args(kernel, attrs, in);
-        kernel.advanced_options.num_runtime_varargs = static_cast<uint32_t>(varargs.size());
         if (in.actual_end) {
             kernel.tensor_bindings.push_back({TensorParamName{"actual_end"}, "actual_end"});
         }
@@ -296,10 +358,25 @@ void add_history_exchange(
                 exchange_core,
                 {{semaphore_args[i], attrs.exchange_semaphore_addresses[i]}});
         }
-        if (!varargs.empty()) {
-            exchange_args.advanced_options.runtime_varargs[NodeCoord(exchange_core)] = std::move(varargs);
-        }
+        set_device_args(exchange_args, coordinate);
         program.run_params.kernel_run_args.push_back(std::move(exchange_args));
+        // Every other chip of the range: its own rank, successor and routes, beside its readers' sp_rank.
+        for (const auto& other : program.range) {
+            if (other == coordinate) {
+                continue;
+            }
+            auto entry = std::find_if(
+                program.per_device_run_params.begin(),
+                program.per_device_run_params.end(),
+                [&](const auto& device_args) { return device_args.device == other; });
+            if (entry == program.per_device_run_params.end()) {
+                program.per_device_run_params.push_back({.device = other});
+                entry = std::prev(program.per_device_run_params.end());
+            }
+            KernelRunArgs device_exchange_args{.kernel = exchange_kernel};
+            set_device_args(device_exchange_args, other);
+            entry->values.kernel_run_args.push_back(std::move(device_exchange_args));
+        }
     }
 }
 
@@ -602,9 +679,10 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         attrs.sequence,
         // The writer stages the exchanged rows, so it needs the same chronology as the reader.
         {reader_kernel_name, writer_kernel_name},
-        // The history exchange gives each device its own fabric connections.
-        exchange ? kda_factory_detail::ChronologyPrograms::per_device
-                 : kda_factory_detail::ChronologyPrograms::per_sp_rank);
+        // The history exchange's routes are per-device run args where every chip of a range shares their layout.
+        exchange && !exchange_layouts_match(device, tensor_coords, attrs.sequence_parallel_axis)
+            ? kda_factory_detail::ChronologyPrograms::per_device
+            : kda_factory_detail::ChronologyPrograms::per_range);
     if (exchange) {
         add_history_exchange(workload, attrs, in, predecessor_name, outputs[3], dist.cores, exchange_core, Ct);
     }
