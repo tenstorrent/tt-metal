@@ -401,8 +401,8 @@ public:
     void check_kernel_config_fits(
         IDevice* device, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
 
-    // Throws if the program has Tensix program semaphores, which a kernel config buffer without a lockstep address
-    // cannot run: each core's block, and so each semaphore, sits at a different address.
+    // Throws if the program has Tensix program semaphores, which a kernel config buffer cannot run: each core's block,
+    // and so each semaphore, sits at a different address.
     void check_no_tensix_semaphores() const;
 
     // Whether this program's kernel config fits the KERNEL_CONFIG window of `core_type` on `device`. The program

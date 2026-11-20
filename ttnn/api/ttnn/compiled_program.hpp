@@ -67,11 +67,9 @@ private:
 
 // A kernel config buffer for `compiled` (experimental::CreateKernelConfigBuffer), for device_operation::run to launch
 // it from instead of the KERNEL_CONFIG window. Needs slow dispatch and the device opened with
-// TT_METAL_ALLOCATOR_MODE_HYBRID=1; rejects Tensix program semaphores unless `lockstep_address`.
-inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(
-    CompiledProgram& compiled, bool lockstep_address = false) {
-    return tt::tt_metal::experimental::CreateKernelConfigBuffer(
-        compiled.mesh_device(), compiled.workload(), lockstep_address);
+// TT_METAL_ALLOCATOR_MODE_HYBRID=1; rejects Tensix program semaphores.
+inline tt::tt_metal::experimental::KernelConfigBuffer create_kernel_config_buffer(CompiledProgram& compiled) {
+    return tt::tt_metal::experimental::CreateKernelConfigBuffer(compiled.mesh_device(), compiled.workload());
 }
 
 }  // namespace ttnn::device_operation

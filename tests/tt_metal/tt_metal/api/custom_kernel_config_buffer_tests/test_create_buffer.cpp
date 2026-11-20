@@ -96,36 +96,6 @@ TEST_F(CustomKernelConfigBufferTest, SizesEachCoreForItsKernelGroup) {
     EXPECT_EQ(buffer.max_size(), buffer.size(kDevice, kFreeCore));
 }
 
-// A lockstep address: both cores' shards at one address, sized alike, so a program with Tensix program semaphores
-// may run from it.
-TEST_F(CustomKernelConfigBufferTest, LockstepAddressPutsEveryShardAtOneAddress) {
-    auto& device = *this->devices_[0];
-
-    Program program = CreateProgram();
-    CreateKernel(
-        program,
-        "tests/tt_metal/tt_metal/test_kernels/dataflow/blank.cpp",
-        CoreRange(kBlockedCore, kFreeCore),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    CreateSemaphore(program, CoreRange(kBlockedCore, kFreeCore), 0);
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(device.shape()), std::move(program));
-
-    auto buffer = experimental::CreateKernelConfigBuffer(device, workload, /*lockstep_address=*/true);
-
-    EXPECT_EQ(buffer.address(kDevice, kBlockedCore), buffer.address(kDevice, kFreeCore));
-    EXPECT_EQ(buffer.size(kDevice, kBlockedCore), buffer.size(kDevice, kFreeCore));
-}
-
-// A lockstep address needs the cores' free L1 to start at the same address: here one core's lowest slot is taken.
-TEST_F(CustomKernelConfigBufferTest, LockstepAddressRejectsCoresWithDifferentFreeL1) {
-    auto& device = *this->devices_[0];
-    auto blocker = allocate_on(device, kBlockedCore, /*bottom_up=*/true);
-
-    auto workload = make_workload(device);
-    EXPECT_ANY_THROW(experimental::CreateKernelConfigBuffer(device, workload, /*lockstep_address=*/true));
-}
-
 TEST_F(CustomKernelConfigBufferTest, RejectsProgramSemaphores) {
     auto& device = *this->devices_[0];
 

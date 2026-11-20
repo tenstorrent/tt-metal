@@ -41,8 +41,7 @@ public:
     // Bytes of the shard on `core` of the device at `device_coord`: sized for the block of the core's kernel group in
     // that device's program.
     uint32_t size(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
-    // Shard address on `core` of the device at `device_coord`. Differs per core and per device; with a lockstep
-    // address, every core of one device has its shard at one address.
+    // Shard address on `core` of the device at `device_coord`. Differs per core and per device.
     DeviceAddr address(const distributed::MeshCoordinate& device_coord, const CoreCoord& core) const;
     // Frees the L1 now, for every copy. Launching with a deallocated buffer is an error.
     void deallocate();
@@ -58,21 +57,18 @@ private:
 // out the programs first (program_preparation::compile), unless the caller already has. Their blocks may outgrow the
 // KERNEL_CONFIG window: launching them from it fails.
 //
-// By default each core of each device gets a shard sized for its kernel group's block in that device's program, at
-// its own address. With `lockstep_address`, every core of a device has its shard at one address, sized for the
-// largest block on that device, so the programs may use Tensix program semaphores; it needs the cores' free L1 to
-// start at the same address, and fails otherwise.
+// Each core of each device gets a shard sized for its kernel group's block in that device's program, at its own
+// address. Rejects programs with Tensix program semaphores (CreateSemaphore): a kernel finds a peer core's program
+// semaphore at its own address, which per-core block addresses break. Use a global semaphore instead.
 //
 // Requires slow dispatch and the device opened with TT_METAL_ALLOCATOR_MODE_HYBRID=1.
-KernelConfigBuffer CreateKernelConfigBuffer(
-    distributed::MeshDevice& device, distributed::MeshWorkload& workload, bool lockstep_address = false);
+KernelConfigBuffer CreateKernelConfigBuffer(distributed::MeshDevice& device, distributed::MeshWorkload& workload);
 
 // distributed::EnqueueMeshWorkload, with the workload's Tensix kernel-config blocks written to and
 // run from `buffer`, each core's at its own address. `buffer` must have a shard on each Tensix core of each
 // device's program that fits the block of the core's kernel group.
 //
-// Rejects Tensix program semaphores (CreateSemaphore) unless `buffer` has a lockstep address: a kernel finds a peer
-// core's program semaphore at its own address, which per-core block addresses break.
+// Rejects Tensix program semaphores (CreateSemaphore), as CreateKernelConfigBuffer does.
 // Slow dispatch only.
 void EnqueueMeshWorkload(
     distributed::MeshCommandQueue& mesh_cq,
