@@ -1715,6 +1715,19 @@ class TestJobOwnership:
         assert time.time() - t0 < 8, f"waited {time.time() - t0:.0f} s for a zombie\n{text}"
         assert "a leak" not in text and "job end: outcome=clean exit=0" in text, text
 
+    def test_launch_env_drops_a_tcp_interface_variable_the_line_contradicts(self, monkeypatch):
+        from ttnn.distributed.ttrun import launch_env
+
+        # A site profile exports an exclude list; --tcp-interface (or --mpi-args) puts an include list on the line.
+        # Open MPI aborts on both, so the environment's one is dropped; an unrelated environment is left alone.
+        monkeypatch.setenv("OMPI_MCA_btl_tcp_if_exclude", "lo,docker0")
+        line = ["mpirun", "--mca", "btl", "self,tcp", "--mca", "btl_tcp_if_include", "eth0", "prog"]
+        assert "OMPI_MCA_btl_tcp_if_exclude" not in launch_env(line)
+        assert launch_env(["mpirun", "prog"])["OMPI_MCA_btl_tcp_if_exclude"] == "lo,docker0"
+        monkeypatch.delenv("OMPI_MCA_btl_tcp_if_exclude")
+        monkeypatch.setenv("OMPI_MCA_btl_tcp_if_include", "eth0")
+        assert "OMPI_MCA_btl_tcp_if_include" not in launch_env(["mpirun", "--mca", "btl_tcp_if_exclude", "lo", "p"])
+
     def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
         from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop
 

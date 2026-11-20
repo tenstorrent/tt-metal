@@ -116,6 +116,27 @@ def with_timeout_backstop(cmd: List[str], backstop_s: float) -> List[str]:
     return out
 
 
+# The TCP interface selection is either an include list or an exclude list; Open MPI aborts a job that sees both
+# (MPI_Init: no usable BTL, exit 14). A site profile can export one of them (OMPI_MCA_btl_tcp_if_exclude on the
+# exabox hosts) while the launch line sets the other (--tcp-interface, or --mpi-args).
+_TCP_IF_PAIR = (("btl_tcp_if_include", "btl_tcp_if_exclude"), ("btl_tcp_if_exclude", "btl_tcp_if_include"))
+
+
+def launch_env(cmd: List[str]) -> Dict[str, str]:
+    """The environment for the launcher: os.environ, minus an OMPI_MCA_ TCP-interface variable that contradicts the one
+    the launch line sets (the command line wins). Says so when it drops one."""
+    env = dict(os.environ)
+    for on_line, opposite in _TCP_IF_PAIR:
+        var = f"OMPI_MCA_{opposite}"
+        if has_mca_param(cmd, on_line) and var in env:
+            logger.warning(
+                f"{TT_RUN_PREFIX} the launch line sets {on_line} and the environment sets {var}={env[var]}; Open MPI "
+                f"refuses both, so {var} is dropped for this job"
+            )
+            env.pop(var)
+    return env
+
+
 def find_rank_wrapper() -> Optional[str]:
     """tt-run-rank (tools/scaleout/src/tt_run_rank.cpp), the wrapper each rank runs in so a rank that dies or fails
     without stopping the job still stops it gracefully: ``TT_RUN_RANK_WRAPPER`` ("none" turns it off), else the
@@ -332,7 +353,13 @@ class LaunchedJob:
         # watch for prterun's MPI_ABORT banner; the thread re-emits every line, so owning the pipe swallows nothing.
         self._helper, self._helper_why = find_signal_helper()
         self.proc = subprocess.Popen(
-            self.cmd, cwd=self.cwd, start_new_session=True, stderr=subprocess.PIPE, text=True, bufsize=1
+            self.cmd,
+            cwd=self.cwd,
+            env=launch_env(self.cmd),
+            start_new_session=True,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
         )
         self._pump = threading.Thread(target=self._pump_stderr, daemon=True)
         self._pump.start()
