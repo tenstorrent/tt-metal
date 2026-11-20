@@ -43,10 +43,9 @@ overload_t(Func, Args...) -> overload_t<Func, Args...>;
 // mistake. is_overload_t, which tells bind_function's overload specs from a plain function, counts both.
 template <typename Func, typename... Args>
 struct gil_held_overload_t {
-    Func func;
-    std::tuple<Args...> args;
+    overload_t<Func, Args...> overload;
 
-    constexpr gil_held_overload_t(Func f, const Args&... a) : func(f), args(std::make_tuple(a...)) {}
+    constexpr gil_held_overload_t(Func f, const Args&... a) : overload(f, a...) {}
 };
 
 template <typename Func, typename... Args>
@@ -89,8 +88,8 @@ void add_call_overload(Class& cls, const overload_t<Func, Args...>& spec) {
 // The same for an overload whose function releases the GIL itself.
 template <typename Wrapper, typename Class, typename Func, typename... Args>
 void add_call_overload(Class& cls, const gil_held_overload_t<Func, Args...>& spec) {
-    auto method = make_method_wrapper<Wrapper>(spec.func);
-    std::apply([&cls, &method](const Args&... args) { cls.def("__call__", method, args...); }, spec.args);
+    auto method = make_method_wrapper<Wrapper>(spec.overload.func);
+    std::apply([&cls, &method](const Args&... args) { cls.def("__call__", method, args...); }, spec.overload.args);
 }
 
 }  // namespace detail

@@ -1218,15 +1218,17 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     assert_close(torch.exp(torch_input), result)
 
     # Views are not part of the cache key, so a call that hits a cached program gets the check too, with
-    # validate_program_args off as well: here the second device's view in a program on the first device.
+    # validate_program_args off as well: here the second device's view in a program on the first device. The same
+    # call with the first device's view adds no cache entry, so the program is cached and the next call hits it.
     ttnn.CONFIG.validate_program_args = False
     output = zeros()
     output_view = ttnn.get_device_tensors(output)[0]
-    spec, run_args = exp_program(second_input, output_view)
     entries = mesh_device.num_program_cache_entries()
+    E.generic_op([first_input, output_view], *exp_program(first_input, output_view))
+    assert mesh_device.num_program_cache_entries() == entries
+    spec, run_args = exp_program(second_input, output_view)
     with expect_error(RuntimeError, message):
         E.generic_op([first_input, output_view], spec, run_args)
-    assert mesh_device.num_program_cache_entries() == entries
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)

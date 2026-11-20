@@ -313,10 +313,10 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 devices of the tensor in io_tensors that is on the fewest devices (every other tensor must be on them
                 too), or a program for each mesh coordinate range.
             run_args (ttnn.experimental.ProgramRunArgs or ttnn.experimental.MeshProgramRunArgs): The values of this
-                call, or of each range's program. A tensor argument that is another view of a tensor io_tensors lists
-                (they share one MeshTensor), such as one device's view from ttnn.get_device_tensors, must hold every
-                device its program runs on, since on each device a program reads that device's part of the tensor:
-                bind a one-device view only in a program that runs on that device alone.
+                call, or of each range's program. A tensor argument that is another view of a tensor io_tensors lists,
+                such as one device's view from ttnn.get_device_tensors, must hold every device its program runs on,
+                since on each device a program reads that device's part of the tensor: bind a one-device view only in a
+                program that runs on that device alone.
 
         Returns:
             ttnn.Tensor: The output tensor, the last entry of io_tensors. When the tensors are not all on the same
