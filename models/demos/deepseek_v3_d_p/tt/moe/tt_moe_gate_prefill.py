@@ -683,6 +683,31 @@ class TtMoEGatePrefill(LightweightModule):
         # Broadcast bias for moe_grouped_topk kernel
         bias_torch = ttnn.to_torch(bias_tt)
         del bias_tt
+
+        # V41_MOE_PLACE (placement.py, default off): relabel the experts inside their dispatch groups -- row e' of the
+        # weight and entry e' of the bias become expert e's (bf16 values read back from the cache: exact), so the top-k
+        # emits the ids of the slots the routed experts were moved to.
+        from models.demos.deepseek_v3_d_p.tt.moe.placement import inverse, new_ids_for
+
+        _new_id_of = new_ids_for(
+            cache_name_prefix, config.n_routed_experts, int(mesh_device.shape[0]), int(mesh_device.shape[1])
+        )
+        if _new_id_of is not None:
+            assert fallback_mode == GateComputeMode.DEVICE_FP32, fallback_mode
+            _inv = torch.tensor(inverse(_new_id_of), dtype=torch.long)
+            _w = torch_weight_fallback[_inv]  # (n_experts, dim), HF convention
+            ttnn.deallocate(self.weight)
+            self.weight = ttnn.from_torch(
+                _w.T.contiguous(),
+                device=mesh_device,
+                dtype=ttnn.bfloat16,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.TILE_LAYOUT,
+                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=mesh_device.shape),
+            )
+            bias_torch = bias_torch.reshape(-1)[: config.n_routed_experts][_inv]
+            torch_weight_fallback = _w
+            torch_bias_fallback = bias_torch
         bias_broadcasted = bias_torch.repeat(config.sp_dim).view(config.sp_dim, -1)
         self.bias = ttnn.from_torch(
             bias_broadcasted,

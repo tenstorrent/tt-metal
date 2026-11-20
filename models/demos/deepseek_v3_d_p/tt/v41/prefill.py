@@ -500,6 +500,14 @@ class V41Prefill:
             text = ttnn.to_torch(ttnn.get_device_tensors(g.bias)[0])[0].to(torch.bfloat16)
             vl = self.ck.raw(f"layers.{L}.ffn.gate.bias_vl").float()
             vl = (vl - (vl.min() + vl.max()) / 2).to(torch.bfloat16)
+            # V41_MOE_PLACE: the text row above is the gate's own (already relabelled) bias; relabel bias_vl the same way
+            from models.demos.deepseek_v3_d_p.tt.moe.placement import inverse, new_ids_for
+
+            new_id_of = new_ids_for(
+                f"layer_{L}.gate", int(vl.numel()), int(self.mesh.shape[0]), int(self.mesh.shape[1])
+            )
+            if new_id_of is not None:
+                vl = vl[torch.tensor(inverse(new_id_of), dtype=torch.long)]
             self._gate_bias_rows[L] = (text, vl)
         return self._gate_bias_rows[L]
 

@@ -218,6 +218,16 @@ class TtRoutedExpert(LightweightModule):
 
         mesh_rows, mesh_cols = mesh_device.shape
         gate_tensors, up_tensors, down_tensors = [], [], []
+        # V41_MOE_PLACE (placement.py): this layer's experts relabelled inside their dispatch groups -- collect the host
+        # tensors of all local slots, move whole per-device shards, then upload (default off: placed as before)
+        from models.demos.deepseek_v3_d_p.tt.moe.placement import new_ids_for, permute_expert_shards
+
+        new_id_of = (
+            new_ids_for(cache_name_prefix, experts_per_chip * mesh_rows * mesh_cols, mesh_rows, mesh_cols)
+            if device is not None
+            else None
+        )
+        host_gate, host_up, host_down = [], [], []
 
         mode = "build-cache" if device is None else ("load-cache" if torch_weights is None else "convert")
         for local_expert_idx in tqdm(range(experts_per_chip), desc=f"Expert weights ({mode})"):
@@ -277,10 +287,20 @@ class TtRoutedExpert(LightweightModule):
 
             if device is None:
                 del gate_tt, up_tt, down_tt
+            elif new_id_of is not None:
+                host_gate.append(gate_tt)
+                host_up.append(up_tt)
+                host_down.append(down_tt)
             else:
                 gate_tensors.append(_to_device(gate_tt))
                 up_tensors.append(_to_device(up_tt))
                 down_tensors.append(_to_device(down_tt))
+
+        if new_id_of is not None:
+            for host, dev in ((host_gate, gate_tensors), (host_up, up_tensors), (host_down, down_tensors)):
+                for t in permute_expert_shards(host, new_id_of, mesh_rows, mesh_cols, mesh_device.shape):
+                    dev.append(_to_device(t))
+                host.clear()
 
         return (gate_tensors, up_tensors, down_tensors) if device else None
 
@@ -600,6 +620,12 @@ class TtRoutedExpert(LightweightModule):
             assert (
                 len(torch_biases) == total_experts
             ), f"Expected {total_experts} expert biases, got {len(torch_biases)}"
+            from models.demos.deepseek_v3_d_p.tt.moe.placement import new_ids_for
+
+            rows_, cols_ = self.mesh_device.shape
+            assert (
+                new_ids_for(cache_name_prefix, total_experts, rows_, cols_) is None
+            ), "V41_MOE_PLACE does not permute per-expert biases (no V4.1 layer has them)"
             self.gate_biases, self.up_biases, self.down_biases = self._convert_expert_biases(
                 torch_biases, experts_per_chip, self.mesh_device
             )
