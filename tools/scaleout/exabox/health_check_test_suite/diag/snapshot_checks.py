@@ -131,7 +131,7 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
             status=FAIL if over else WARN if warm else PASS,
             details=(
                 "".join(
-                    f"{r['bdf']} (tray {r['tray']} ASIC {r['asic']}) {r['asic_temperature']:.1f}C at limit {r['thm_limit']:.0f}C; "
+                    f"{format_bdf(r['bdf'])} {r['asic_temperature']:.1f}C at limit {r['thm_limit']:.0f}C; "
                     for r in over + warm
                 )
                 or (f"hottest {top['bdf']} {top['asic_temperature']:.1f}C" if top else "no plausible temperature reading")
@@ -141,6 +141,7 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
                 "hottest_chip": top["bdf"] if top else None,
                 "hottest_temp_c": top["asic_temperature"] if top else None,
                 "over": [r["bdf"] for r in over],
+                "warm": [r["bdf"] for r in warm],
                 "per_chip": rows,
                 "ignored": ignored,
             },
@@ -162,7 +163,7 @@ def _thermal_and_telemetry(devs: list[dict], phase: Phase) -> None:
         Check(
             name="c8_telemetry",
             status=WARN if flagged else PASS,
-            details="; ".join(f"{f['bdf']} (tray {f['tray']} ASIC {f['asic']}) {f['why']}" for f in flagged)
+            details="; ".join(f"{format_bdf(f['bdf'])} {f['why']}" for f in flagged)
             or f"temperature, power, current and vcore in range on {len(rows)} chips",
             data={"flagged": flagged, "ignored": ignored},
             ip="asic",

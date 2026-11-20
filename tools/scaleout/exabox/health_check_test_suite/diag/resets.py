@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Sequence
 
 from .common import emit_result, emit_running, log, print_phase_summary, run, write_command_log
-from .galaxy import EXPECTED_CHIP_COUNT, all_bdfs
+from .galaxy import EXPECTED_CHIP_COUNT
 from .model import FAIL, PASS, WARN, Check, Phase
 from .snapshot import resolve_tt_smi, take_snapshot
 from .snapshot_checks import pcie_enum_check, validate_snapshot
@@ -35,12 +35,6 @@ def pcie_bdfs() -> list[str] | None:
         return [line.split()[0] for line in lspci.stdout.splitlines() if line.strip()]
     except Exception:
         return None
-
-
-def count_pcie_chips() -> int:
-    """Tenstorrent chips enumerated on PCIe, or -1 if they could not be counted."""
-    bdfs = pcie_bdfs()
-    return -1 if bdfs is None else len(bdfs)
 
 
 def recount_check(name: str, bdfs: list[str] | None) -> Check:
@@ -96,8 +90,8 @@ def reset_loop(
                 log(f"  log:  {log_path}")
 
         # Quick post-reset enum check
-        bdfs = all_bdfs() if dry_run else pcie_bdfs()
-        post_count = -1 if bdfs is None else len(bdfs)
+        bdfs = None if dry_run else pcie_bdfs()
+        post_count = EXPECTED_CHIP_COUNT if dry_run else -1 if bdfs is None else len(bdfs)
         status = PASS if (dry_run or (cp.returncode == 0 and post_count == EXPECTED_CHIP_COUNT)) else FAIL
         emit_result(check_name, status, suffix=f"({dt:.1f}s, post_pcie={post_count})")
 
@@ -143,7 +137,8 @@ def reset_loop(
             t0 = time.time()
             rcp = run([tt_smi, "-glx_reset"], dry_run=False, capture_output=True, text=True)
             rdt = time.time() - t0
-            rpost = count_pcie_chips()
+            rbdfs = pcie_bdfs()
+            rpost = -1 if rbdfs is None else len(rbdfs)
             recovered = rcp.returncode == 0 and rpost == EXPECTED_CHIP_COUNT
             rstatus = PASS if recovered else FAIL
             emit_result("cpld_auto_recover", rstatus, suffix=f"({rdt:.1f}s, post_pcie={rpost})")
@@ -169,8 +164,7 @@ def reset_loop(
             # If recovery worked, refresh post_count so the enumeration-break
             # bailout below doesn't trip on the pre-recovery state.
             if recovered:
-                post_count = rpost
-                bdfs = pcie_bdfs()
+                post_count, bdfs = rpost, rbdfs
                 # Downgrade the original -r FAIL to WARN now that we know it's
                 # CPLD-attributable and the unit is back up. Hard FAIL is reserved
                 # for -r failures we *can't* explain or recover from.

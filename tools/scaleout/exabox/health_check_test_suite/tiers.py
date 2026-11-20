@@ -177,8 +177,6 @@ def _validate() -> None:
         ]
         if tier.glx_reset_only:
             problems += [f"{name}: -r is not allowed" for f in (*tier.resets, *tier.post_test_resets) if f == "-r"]
-        if tier.aer_diff and not tier.triage:
-            problems.append(f"{name}: aer_diff needs triage")
         problems += [f"{name}: unknown test {t!r}" for t in tier.tests if t not in TESTS and t not in PYTESTS]
         problems += [f"{name}: unknown triage tool {t!r}" for t in tier.triage if t not in TRIAGE_TOOLS]
         if tier.eth_summary and not tier.eth_status:

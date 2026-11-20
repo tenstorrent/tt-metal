@@ -687,7 +687,7 @@ The detected rev is also recorded at the top of the JSON report as `detected_boa
 |---|---|---|
 | `pcie_enum_count` | All 32 chips enumerated | **FAIL** |
 | `recount_N` (reset loop) | After reset N, `lspci` lists all 32 chips; each missing one is named by BDF, tray and ASIC (`data.missing`) | **FAIL** |
-| `pcie_aer_delta` (triage phase, `galaxy` tier) | New AER errors per chip since the tests started, or since `--aer-baseline`'s report. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
+| `pcie_aer_delta` (triage phase, `galaxy` tier) | New AER errors per chip since the tests started. Any uncorrectable: **FAIL**. Correctable: **WARN** at 2 or more and 6 or more per hour. | **FAIL** / **WARN** |
 | `pcie_lane_width` | x8 on host-PCIe chips (`ASIC_LOCATION==0x6`); x1 elsewhere | **FAIL** |
 | `pcie_gen` | Host-PCIe (U6) chips trained to at least the rev's expected gen (Gen4 on RevA/B, Gen5 on RevC). Above-spec is rendered with `(^)` but doesn't degrade status; under-spec is rendered with `(!)` and WARNs. | **WARN** (known: occasional Gen1 fallback). **SKIP** when `board_rev` is indeterminate. |
 

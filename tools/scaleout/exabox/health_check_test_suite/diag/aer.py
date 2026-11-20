@@ -5,9 +5,7 @@
 """PCIe AER counters per chip, read from sysfs, and the judgement of a before/after pair."""
 from __future__ import annotations
 
-import json
 import re
-import time
 from pathlib import Path
 
 from .model import FAIL, PASS, WARN, Check
@@ -42,13 +40,6 @@ def read_aer(devices: Path = PCI_DEVICES) -> dict[str, dict[str, int]]:
     return out
 
 
-def load_aer_baseline(report: Path) -> tuple[dict, float]:
-    """The counters and the time (epoch s) of the pcie_aer_delta read in an earlier diag_report.json."""
-    checks = json.loads(report.read_text())["phases"]["triage"]["checks"]
-    data = next(c["data"] for c in checks if c["name"] == "pcie_aer_delta")
-    return data["after"], data["epoch"]
-
-
 def aer_check(before: dict, after: dict, hours: float) -> Check:
     """New AER errors per chip between two reads: uncorrectable FAIL, correctable at CORR_MIN and CORR_PER_HOUR WARN."""
     new = {}
@@ -72,7 +63,6 @@ def aer_check(before: dict, after: dict, hours: float) -> Check:
             "; ".join(f"{b}: {d}" for b, d in named.items()) or f"no new AER errors over {len(after)} chips"
         ),
         data={
-            "epoch": time.time(),
             "hours": hours,
             "before": before,
             "after": after,
