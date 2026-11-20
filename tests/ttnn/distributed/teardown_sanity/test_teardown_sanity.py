@@ -373,7 +373,11 @@ def test_abort_core_dump():
     )
     ended(r)
     nonzero(r)
-    assert r.wall_s < 20, f"P8: the aborting rank's core dump held the job for {r.wall_s:.0f} s\n{r.log[-2000:]}"
+    # tt-run's own job time (launch to the end of the job), not the harness wall clock, which also counts tt-run's and
+    # the ranks' start-up on a loaded runner.
+    m = re.search(r"job end: .* elapsed=([0-9.]+)s", r.log)
+    assert m, r.log[-2000:]
+    assert float(m.group(1)) < 20, f"P8: the aborting rank's core dump held the job for {m.group(1)} s\n{r.log[-2000:]}"
     clean(r)
 
 

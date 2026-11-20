@@ -57,6 +57,26 @@ double stop_timeout_s() {
     return ((grace != nullptr && *grace != '\0') ? std::atof(grace) : 120.0) + 10.0;
 }
 
+// Whether the process is writing a core dump right now (/proc/<pid>/status "CoreDumping: 1").
+bool core_dumping(pid_t pid) {
+    char path[64];
+    std::snprintf(path, sizeof path, "/proc/%d/status", static_cast<int>(pid));
+    FILE* f = std::fopen(path, "r");
+    if (f == nullptr) {
+        return false;
+    }
+    char line[256];
+    bool dumping = false;
+    while (std::fgets(line, sizeof line, f) != nullptr) {
+        if (std::strncmp(line, "CoreDumping:", 12) == 0) {
+            dumping = std::atoi(line + 12) == 1;
+            break;
+        }
+    }
+    std::fclose(f);
+    return dumping;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -110,8 +130,24 @@ int main(int argc, char** argv) {
         ::close(status_pipe[1]);
     }
 
+    // Wait for the program. If the job is stopping while the program is still writing a core dump (a crash that is
+    // not over yet), end it: a core dump never holds the job (teardown plan P8); the core is cut short.
     int status = 0;
-    while (::waitpid(child, &status, 0) < 0) {
+    bool dump_ended = false;
+    for (;;) {
+        const pid_t done = ::waitpid(child, &status, WNOHANG);
+        if (done == child || (done < 0 && errno != EINTR)) {
+            break;
+        }
+        if (g_stop_signal != 0 && !dump_ended && core_dumping(child)) {
+            std::fprintf(
+                stderr,
+                "[tt-run-rank] rank %s was still writing a core dump when the job stopped; ending it (core cut short)\n",
+                std::getenv("OMPI_COMM_WORLD_RANK") != nullptr ? std::getenv("OMPI_COMM_WORLD_RANK") : "?");
+            ::kill(child, SIGKILL);
+            dump_ended = true;
+        }
+        ::usleep(100000);
     }
     const bool signalled = WIFSIGNALED(status);
     const int code = signalled ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
