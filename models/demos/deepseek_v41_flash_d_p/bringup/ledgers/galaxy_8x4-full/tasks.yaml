@@ -6186,6 +6186,7 @@ tasks:
   - models/demos/deepseek_v41_flash_d_p/bringup/PACKED_DESIGN.md
   - models/demos/deepseek_v41_flash_d_p/bringup/drafts
   - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.5C_packed_walls.md
   brief:
     prior_work: 'PB.5 (accepted gate 3f8be7264b4): walls 4x2k_p139264 109.4 ms = 74.9k serving tok/s, mixed 126.4 = 64.8k, 1x2k 88.4; DRAM 13.0 GiB a chip with slots at the 1M capacity but histories at
       <= 547k. tests/packed/test_packed_walls.py CASES has only 4x2k_p139264 / mixed / 1x2k_p139264 and writes no markdown table.'

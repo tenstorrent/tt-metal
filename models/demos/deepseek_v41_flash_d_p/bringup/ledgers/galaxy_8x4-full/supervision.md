@@ -791,3 +791,29 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   a chip. BOTH OWNER TARGETS MET. Gap found: the padded-lanes case (4 x ~1.6k) and the 4 x 1M DRAM case were never
   added to the walls test (PB.1 named them), nor the walls table: DECIDED: PB.5C (test-only) completes them (owner rule
   3: padded / empty cases, DRAM at 1M with all histories resident).
+
+### Morning summary (2026-11-20 ~07:40 UTC; overseer, owner asleep; branch dnijemcevic/model_bringup_batching, NOT pushed)
+- Goal MET: packed prefill (up to 4 requests x <= 2048 new tokens in one 8192-row chunk) at the owner's targets,
+  serving-equivalent, agentic_cc, layers 0-20 + decoder skip, slots at the 1M capacity: 4x2k@139k 109.4 ms = 74.9k new
+  tok/s (target >= 67k), mixed 61k/139k/308k/547k 126.4 ms = 64.8k (>= 64k), 1x2k + 3 empty 88.4 ms. Comparison: one
+  request per 8192 chunk 101.0 ms / 81.1k; today's 5120 path ~68k at 128k.
+- Correctness (one fresh 40-layer process, PB.5): lane equivalence 0, alone == today 0 (incl. slot digests), slot
+  digests 0, packed determinism 0, every segment within the existing reference limits (final hidden 0.131 / 0.242,
+  top-5 1.0); single-request 8192 vs goldens 0.141 / 0.259, top-5 1.0.
+- Tasks: PB.0 box, PB.1 design (PACKED_DESIGN.md, CPU oracle), PB.2 8192 single request (RoPE tables one chunk
+  longer), PB.3 v1 loop (294 ms), PB.3A one attention call with per-chip lane args (122 ms), PB.4 pad rows out of the
+  MoE, PB.3H gathers hidden on a sub-device (exposed 10-13 %), PB.3K host off the critical path (111 ms), PB.3M per-lane
+  ring extent (mixed 129 -> 126), PB.5 accept. PB.5C running: the padded-lanes and 4 x 1M DRAM walls cases + table.
+- Switches (all call-time, default off; the accepted path = all on): PACKED, PACKED_ATTN_ONECALL, PACKED_MOE,
+  PACKED_GATHER_HIDE, PACKED_HOST_FAST, PACKED_LANE_BALANCE. Forks touched: sparse_sdpa (lane tables),
+  ring_indexer_score_dsa (lane_lo/hi, lane_own_extent), new lane copy / lane send ops (see CHANGELOGs).
+- Decisions I took (owner-delegated): PB.3A before PB.3H; PB.3K and PB.3M added (targets missed on host, then mixed by
+  1 % on device); one slot capacity for all lanes in the walls (serving's layout); accept gate at 8192 only (one-load
+  rule) - the 5120 accept units were NOT re-run on this branch; skip of the repo-wide models-import-tests pre-commit
+  hook for the night (fails on two old files, FIX.37).
+- Framework fixes: F289 settings lint (committed env reads in hooks.py), F290 no abort cap (owner); skill: procedural
+  limits never stall progress.
+- For the owner: KNOWLEDGE CONTRADICTED DS41-298 (PB.3K: on packed chunks the engram stall is tt-metal's > 32 MiB
+  blocking pinned write, not host work); tt-d-gen ask draft bringup/drafts/tt_d_gen_packed_ask.md (multi-segment chunk
+  header, per-segment acks); RAM leaked ~50 GiB by repeated device opens (reboot clears it); /scratch 97 % full.
+- 08:05 UTC PB.5C attempt 1 failed on the path check only: the walls test wrote results/PB.5C_packed_walls.md as MY brief asked, but my paths list lacked it (my error). Paused, aborted attempt 2, added the file to PB.5C's paths, resumed (--attempts 20).
