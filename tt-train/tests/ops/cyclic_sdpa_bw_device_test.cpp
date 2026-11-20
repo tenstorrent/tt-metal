@@ -3783,9 +3783,27 @@ struct TransportConfig {
     bool compute = true;      // the arithmetic; false keeps only the protocol
     bool stat_work = true;    // the writer RISC's soft-float statistics
     uint32_t dram_skip = 0;   // relay only: 1 skips the reloads and their spills, 2 everything after t = 0
-    bool stat_reads = true;   // DRAM variant only: whether L and D are read at all
+    bool stat_reads = true;   // DRAM variant only, tiled statistics only: whether L and D are read at all
+    // L and D in DRAM as row-major tensors with one page of 32 * Bt values per
+    // row block (COMPACT_STATS in the dataflow kernels) instead of Float32
+    // tiles with the values in column 0. The default; TRANSPORT_TILED_STATS=1
+    // selects the tiles the op uses, for comparing the two on one build.
+    bool compact_stats = std::getenv("TRANSPORT_TILED_STATS") == nullptr;
     uint32_t repeats = 1;     // the slice run this many times inside one launch
 };
+
+// Column 0 of a (1, 1, N, 32) statistic tile tensor as (1, groups, N / (32 Bt),
+// 32 Bt): one row, and so one row-major page, per row block.
+xt::xarray<float> compact_statistic(const xt::xarray<float>& tiles, uint32_t N, uint32_t Bt, uint32_t groups) {
+    const uint32_t width = Bt * kTile;
+    xt::xarray<float> out = xt::zeros<float>({1u, groups, N / width, width});
+    for (uint32_t g = 0; g < groups; ++g) {
+        for (uint32_t i = 0; i < N; ++i) {
+            out(0, g, i / width, i % width) = tiles(0, 0, i, 0);
+        }
+    }
+    return out;
+}
 
 std::string transport_name(const TransportConfig& cfg) {
     std::string s = cfg.null ? "none" : (cfg.dram ? "DRAM" : "relay");
@@ -3803,6 +3821,9 @@ std::string transport_name(const TransportConfig& cfg) {
     }
     if (!cfg.stat_reads) {
         s += ", no stat reads";
+    }
+    if (!cfg.null) {
+        s += cfg.compact_stats ? ", compact L/D" : ", tiled L/D";
     }
     return s;
 }
@@ -3834,8 +3855,25 @@ Gradients run_transport(
     const auto key = ttml::core::from_xtensor(as_4d_repeated(ref.K, groups), device);
     const auto value = ttml::core::from_xtensor(as_4d_repeated(ref.V, groups), device);
     const auto grad_output = ttml::core::from_xtensor(as_4d_repeated(ref.dO, groups), device);
-    const auto lse = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.lse_tile, groups), device);
-    const auto u_scalar = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(ref.u_tile, groups), device);
+    // The null transport reads nothing from DRAM, so it has no compact path.
+    const bool compact_stats = cfg.compact_stats && !cfg.null;
+    const auto stat_tensor = [&](const xt::xarray<float>& tiles) {
+        if (!compact_stats) {
+            return ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(repeat_4d(tiles, groups), device);
+        }
+        const auto t = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(
+            compact_statistic(tiles, ref.N, Bt, groups), device, ttnn::Layout::ROW_MAJOR);
+        // One page per row block, read whole by the kernels: 128 * Bt bytes,
+        // a multiple of the DRAM alignment, so the pages are not padded.
+        TT_FATAL(
+            t.buffer()->page_size() == Bt * kTile * sizeof(float) &&
+                t.buffer()->aligned_page_size() == t.buffer()->page_size(),
+            "compact statistic page is {} bytes ({} aligned), expected {}", t.buffer()->page_size(),
+            t.buffer()->aligned_page_size(), Bt * kTile * sizeof(float));
+        return t;
+    };
+    const auto lse = stat_tensor(ref.lse_tile);
+    const auto u_scalar = stat_tensor(ref.u_tile);
     const xt::xarray<float> zeros = xt::zeros<float>({1u, groups, ref.N, ref.d});
     const auto grad_query = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
     const auto grad_key = ttml::core::from_xtensor<float, ttnn::DataType::FLOAT32>(zeros, device);
@@ -3934,6 +3972,9 @@ Gradients run_transport(
     if (!cfg.stat_work) {
         dataflow_defines["NO_STAT_WORK"] = "1";
     }
+    if (compact_stats) {
+        dataflow_defines["COMPACT_STATS"] = "1";
+    }
     // TRANSPORT_PROFILE_DRAM: compile only the DRAM zones of the relay
     // kernels, so a whole pass of them fits the profiler's marker buffer.
     if (std::getenv("TRANSPORT_PROFILE_DRAM") != nullptr) {
@@ -3958,7 +3999,8 @@ Gradients run_transport(
         if (cfg.directional_noc) {
             dataflow_defines["DIRECTIONAL_NOC"] = "1";
         }
-    } else if (!cfg.stat_reads) {
+    } else if (!cfg.stat_reads && !compact_stats) {
+        // Meaningless with compact statistics (the kernel ignores it there).
         dataflow_defines["NO_STAT_READS"] = "1";
     }
     std::map<std::string, std::string> compute_defines;
@@ -4167,6 +4209,65 @@ void check_dram_variant(uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t B
 TEST(CyclicSdpaBwTransportTest, Algorithm1MatchesTheRelay) {
     check_dram_variant(4, 2, 2, 1, 64);
 }
+
+// Compact L and D are the same values at a different place in DRAM: every
+// transport that reads them gives the same gradients to the bit as with the
+// tiled statistics. The relay shapes have later streak starts (C >= 4), so
+// its packet loads and prefetches from DRAM are both covered.
+namespace {
+void check_compact_against_tiled(
+    uint32_t C, uint32_t grid_w, uint32_t grid_h, uint32_t Bt, uint32_t d, uint32_t transport, uint32_t groups = 1) {
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
+    if (grid_w * groups > grid.x || grid_h > grid.y) {
+        GTEST_SKIP() << "needs " << grid_w * groups << "x" << grid_h;
+    }
+    const auto ref = make_reference(2u * C * Bt * kTile, d);
+    TransportConfig cfg;
+    cfg.dram = transport == 2u;
+    cfg.directional_noc = transport == 1u;
+    cfg.compact_stats = false;
+    const auto tiled = run_transport(C, ref, grid_w, grid_h, Bt, groups, cfg);
+    cfg.compact_stats = true;
+    const auto compact = run_transport(C, ref, grid_w, grid_h, Bt, groups, cfg);
+    const std::string what = transport_name(cfg) + " against tiled L/D";
+    expect_identical(tiled.dQ, compact.dQ, ("dQ, " + what).c_str());
+    expect_identical(tiled.dK, compact.dK, ("dK, " + what).c_str());
+    expect_identical(tiled.dV, compact.dV, ("dV, " + what).c_str());
+    if (groups == 1u) {
+        expect_close(compact.dQ, ref.dQ, 2.5e-2F, "dQ");
+        expect_close(compact.dK, ref.dK, 2.5e-2F, "dK");
+        expect_close(compact.dV, ref.dV, 2.5e-2F, "dV");
+    }
+}
+}  // namespace
+// Several groups side by side, as the five-head bench shapes run: each group
+// reads its own slice's statistic pages.
+TEST(CyclicSdpaBwTransportTest, CompactStatsSeveralGroups) {
+    check_compact_against_tiled(4, 2, 2, 2, 64, 2u, 3);
+    check_compact_against_tiled(4, 2, 2, 2, 64, 0u, 3);
+    check_compact_against_tiled(4, 2, 2, 4, 64, 1u, 3);
+}
+TEST(CyclicSdpaBwTransportTest, CompactStatsAlgorithm1OneCore) {
+    check_compact_against_tiled(1, 1, 1, 1, 64, 2u);
+}
+TEST(CyclicSdpaBwTransportTest, CompactStatsAlgorithm1) {
+    check_compact_against_tiled(4, 2, 2, 1, 64, 2u);
+    check_compact_against_tiled(4, 2, 2, 4, 64, 2u);
+    check_compact_against_tiled(8, 4, 2, 2, 128, 2u);
+}
+TEST(CyclicSdpaBwTransportTest, CompactStatsRelayTwoCores) {
+    check_compact_against_tiled(2, 2, 1, 1, 64, 0u);
+}
+TEST(CyclicSdpaBwTransportTest, CompactStatsRelay) {
+    check_compact_against_tiled(4, 2, 2, 1, 64, 0u);
+    check_compact_against_tiled(4, 2, 2, 4, 64, 0u);
+    check_compact_against_tiled(8, 4, 2, 2, 128, 0u);
+    check_compact_against_tiled(16, 4, 4, 2, 64, 0u);
+}
+TEST(CyclicSdpaBwTransportTest, CompactStatsDirectionalRelay) {
+    check_compact_against_tiled(16, 4, 4, 2, 64, 1u);
+    check_compact_against_tiled(16, 4, 4, 4, 64, 1u);
+}
 // The directional-NoC relay is the relay with a different wire per hop: the
 // same gradients to the bit.
 TEST(CyclicSdpaBwTransportTest, DirectionalNocMatchesTheRelay) {
@@ -4320,7 +4421,9 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
     }
     const bool profile = std::getenv("TRANSPORT_PROFILE") != nullptr;
     const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
-    std::printf("transport bench: median of 5 enqueues; per pass = (x%u - x1) / %u\n", repeats, repeats - 1u);
+    std::printf(
+        "transport bench: median of 5 enqueues; per pass = (x%u - x1) / %u; L and D %s\n", repeats, repeats - 1u,
+        TransportConfig{}.compact_stats ? "compact (one page per row block)" : "tiled (TRANSPORT_TILED_STATS)");
     std::printf("%-6s %-3s %-4s %-7s %-32s %12s %12s %12s\n", "C", "Bt", "d", "groups", "variant", "x1 us", "xR us", "per pass us");
     for (const auto s : shapes) {
         if (s.w > grid.x || s.h > grid.y) {
@@ -4333,6 +4436,9 @@ TEST(CyclicSdpaBwTransportTest, DISABLED_BenchTransport) {
                 continue;
             }
             TransportConfig cfg = base;
+            if (cfg.compact_stats && !cfg.stat_reads) {
+                continue;  // "no L/D reads" bounds what compact statistics save; it is not a variant of them
+            }
             cfg.repeats = 1;
             double once = 0.0;
             run_transport(s.C, ref, s.w, s.h, s.Bt, s.groups, cfg, &once, /* read_back */ false);
