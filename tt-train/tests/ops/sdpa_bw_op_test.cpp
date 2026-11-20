@@ -16,6 +16,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
+#include "test_utils/program_cache.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -1874,4 +1875,161 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
     EXPECT_TRUE(dQ_matches) << "Ring attention dQ does not match full-sequence SDPA";
     EXPECT_TRUE(dK_matches) << "Ring attention dK does not match full-sequence SDPA";
     EXPECT_TRUE(dV_matches) << "Ring attention dV does not match full-sequence SDPA";
+}
+
+// ---------------------------------------------------------------------------
+// Program-cache hits on fresh tensors. A launch on new tensors of the same shapes reuses both programs (dQ and dK/dV),
+// so its gradients must match a cache miss on the same tensors bit for bit, and the earlier launch's gradients must
+// stay as they were. One case per work split, including causal attention with more rows than cores but fewer pairs,
+// where the light/heavy pairs reach only part of the grid.
+// ---------------------------------------------------------------------------
+
+namespace {
+
+struct SdpaBwCacheInputs {
+    ttnn::Tensor grad_output;
+    ttnn::Tensor attn_output;
+    ttnn::Tensor query;
+    ttnn::Tensor key;
+    ttnn::Tensor value;
+    ttnn::Tensor intermediates;
+    std::optional<ttnn::Tensor> mask;
+};
+
+// Random Q, K, V and dO, with the forward output and intermediates the backward needs.
+SdpaBwCacheInputs make_sdpa_bw_cache_inputs(
+    uint32_t B, uint32_t H, uint32_t S, uint32_t D, ttml::metal::AttentionMaskType mask_type, uint32_t seed) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    auto random_tensor = [&](uint32_t tensor_seed) {
+        return ttml::core::from_xtensor(
+            ttml::test_utils::make_uniform_xarray<float>(
+                std::array<std::size_t, 4>{B, H, S, D}, -1.0F, 1.0F, tensor_seed),
+            device);
+    };
+    auto query = random_tensor(seed);
+    auto key = random_tensor(seed + 1U);
+    auto value = random_tensor(seed + 2U);
+    auto grad_output = random_tensor(seed + 3U);
+    std::optional<ttnn::Tensor> mask;
+    if (mask_type == ttml::metal::AttentionMaskType::Arbitrary) {
+        // 1 keeps a score and 0 masks it; the diagonal is kept so that no row is fully masked.
+        const auto uniform = ttml::test_utils::make_uniform_xarray<float>(
+            std::array<std::size_t, 4>{1U, 1U, S, S}, 0.0F, 1.0F, seed + 4U);
+        xt::xarray<float> mask_host = xt::cast<float>(uniform > 0.3F);
+        for (uint32_t i = 0; i < S; ++i) {
+            mask_host(0, 0, i, i) = 1.0F;
+        }
+        mask = ttml::core::from_xtensor(mask_host, device);
+    }
+    auto forward = ttml::metal::sdpa_fw(query, key, value, mask_type, mask, 0.0F, /*return_intermediates=*/true);
+    return SdpaBwCacheInputs{grad_output, forward[0].value(), query, key, value, forward[1].value(), mask};
+}
+
+std::vector<ttnn::Tensor> run_sdpa_bw_gradients(
+    const SdpaBwCacheInputs& inputs, ttml::metal::AttentionMaskType mask_type) {
+    auto [grad_query, grad_key, grad_value, grad_gate] = ttml::metal::sdpa_bw(
+        inputs.grad_output,
+        inputs.attn_output,
+        inputs.query,
+        inputs.key,
+        inputs.value,
+        inputs.intermediates,
+        mask_type,
+        inputs.mask);
+    return {grad_query, grad_key, grad_value};
+}
+
+void expect_cache_hit_on_fresh_tensors_matches_miss(
+    uint32_t B,
+    uint32_t H,
+    uint32_t S,
+    uint32_t D,
+    ttml::metal::AttentionMaskType mask_type,
+    const std::string& label) {
+    using ttml::test_utils::CacheExpectation;
+    auto& device = ttml::test_utils::device_with_empty_program_cache();
+    const auto first_inputs = make_sdpa_bw_cache_inputs(B, H, S, D, mask_type, /*seed=*/31U);
+    const auto second_inputs = make_sdpa_bw_cache_inputs(B, H, S, D, mask_type, /*seed=*/41U);
+
+    auto entries = device.num_program_cache_entries();
+    const auto first = run_sdpa_bw_gradients(first_inputs, mask_type);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Miss, label + ": first launch");
+    std::vector<xt::xarray<float>> first_snapshots;
+    first_snapshots.reserve(first.size());
+    for (const auto& gradient : first) {
+        first_snapshots.push_back(ttml::core::to_xtensor(gradient));
+    }
+
+    entries = device.num_program_cache_entries();
+    const auto hit = run_sdpa_bw_gradients(second_inputs, mask_type);
+    ttml::test_utils::expect_cache(entries, CacheExpectation::Hit, label + ": launch on fresh tensors");
+    ttml::test_utils::expect_new_buffers(
+        {first_inputs.grad_output,
+         first_inputs.attn_output,
+         first_inputs.query,
+         first_inputs.intermediates,
+         first[0],
+         first[1],
+         first[2]},
+        {second_inputs.grad_output,
+         second_inputs.attn_output,
+         second_inputs.query,
+         second_inputs.intermediates,
+         hit[0],
+         hit[1],
+         hit[2]},
+        label);
+    const char* names[] = {"dQ", "dK", "dV"};
+    std::vector<xt::xarray<float>> hit_host;
+    hit_host.reserve(first.size());
+    for (std::size_t i = 0; i < first.size(); ++i) {
+        ttml::test_utils::expect_unchanged(first[i], first_snapshots[i], label + ": first launch's " + names[i]);
+        hit_host.push_back(ttml::core::to_xtensor(hit[i]));
+    }
+
+    device.clear_program_cache();
+    const auto miss = run_sdpa_bw_gradients(second_inputs, mask_type);
+    for (std::size_t i = 0; i < miss.size(); ++i) {
+        EXPECT_EQ(ttml::test_utils::count_bit_mismatches(ttml::core::to_xtensor(miss[i]), hit_host[i]), 0U)
+            << label << ": the cache hit's " << names[i] << " differs from a cache miss on the same tensors";
+    }
+}
+
+}  // namespace
+
+TEST_F(SDPABackwardTest, ProgramCacheHit_CausalBalancedPairsOnWholeGrid) {
+    // 2 * 8 heads of 32 tile rows: 256 light/heavy pairs, at least one per core on any grid.
+    expect_cache_hit_on_fresh_tensors_matches_miss(
+        2U, 8U, 1024U, 64U, ttml::metal::AttentionMaskType::Causal, "causal balanced pairs on the whole grid");
+}
+
+TEST_F(SDPABackwardTest, ProgramCacheHit_CausalBalancedPairsOnPartOfGrid) {
+    // One head of cores + 2 or cores + 3 tile rows (an even count): more rows than cores but fewer pairs, so the pairs
+    // reach only part of the grid.
+    const uint32_t cores = ttml::test_utils::num_worker_cores();
+    const uint32_t St = (cores % 2U == 0U) ? cores + 2U : cores + 3U;
+    expect_cache_hit_on_fresh_tensors_matches_miss(
+        1U, 1U, St * 32U, 64U, ttml::metal::AttentionMaskType::Causal, "causal balanced pairs on part of the grid");
+}
+
+TEST_F(SDPABackwardTest, ProgramCacheHit_RowSplitOverTwoCoreGroups) {
+    // One tile row per head and 2 * cores + 3 heads: three cores take three rows and the others two.
+    expect_cache_hit_on_fresh_tensors_matches_miss(
+        1U,
+        ttml::test_utils::two_core_group_units(3U),
+        32U,
+        64U,
+        ttml::metal::AttentionMaskType::None,
+        "row split over two core groups");
+}
+
+TEST_F(SDPABackwardTest, ProgramCacheHit_ArbitraryMask) {
+    // Two tile rows per head and cores + 3 heads: six cores take three rows and the others two.
+    expect_cache_hit_on_fresh_tensors_matches_miss(
+        1U,
+        ttml::test_utils::num_worker_cores() + 3U,
+        64U,
+        64U,
+        ttml::metal::AttentionMaskType::Arbitrary,
+        "arbitrary mask");
 }
