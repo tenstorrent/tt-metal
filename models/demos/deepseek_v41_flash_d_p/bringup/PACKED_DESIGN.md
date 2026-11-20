@@ -32,6 +32,12 @@ Oracle bit-identical (alone vs today, lane equivalence, digests, determinism); w
 lane-targeted gather (each lane's chips receive only their slot's rows; PB.3H), pad rows out of the MoE dispatch
 (the block's padded-forward mode does not describe lanes as whole SP rows: PB.4), the lanes ring over unequal key
 capacities.
+PB.4 (PACKED_MOE=on, `tt/packed_device.MoEPadSpan`): pad rows out of the MoE dispatch without a fork change: the
+head's padded-chunk words are per device, (0, r W + n_r), so SP row r has its n_r real rows as a prefix
+(`ChunkDescriptor.moe_real_prefix`; exact where lanes are whole SP rows, 8x4 / 4x4; on 2x4 / 2x2 a superset: pad rows
+between two lanes of one SP row stay routed). Verified lane-equivalent by construction on the block alone
+(`tests/packed/test_packed_moe_block.py`: permuted / different / hot companions, other lanes, pad lanes routed or
+not: A's rows bit-identical) and by the oracle with PACKED_MOE=on.
 
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
@@ -331,6 +337,7 @@ The v2 column is what the targets need; v1 is the correctness rung.
 - DECIDED: pad rows are excluded from MoE dispatch (no expert, weight 0): changes nothing for a real row if PB.4's
   row-locality check holds, and saves the padded lanes' expert work. If PB.4 finds the device MoE is not row-local,
   pad rows go through dispatch like real ones and the oracle compares under the same padding.
+  Built in PB.4 (PACKED_MOE=on): the row-locality check holds (test_packed_moe_block, oracle: 0).
 
 ## 12. Estimates PB.2-PB.4 (from this ledger)
 

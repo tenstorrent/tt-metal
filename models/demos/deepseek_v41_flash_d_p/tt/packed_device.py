@@ -152,6 +152,77 @@ class LaneMover:
 _LANE_KEYS: set = set()  # (mesh id, kind, key) of the per-lane buffers acquired (held for the process: v1)
 
 
+class MoEPadSpan:
+    """PB.4 (PACKED_MOE=on): a packed chunk's pad rows out of the MoE dispatch. The block's moe_head (fork
+    ttnn.bringup.moe_block, padded_rows.hpp) takes a padded chunk as two one-word uint32 DRAM tensors (actual_start,
+    actual_end) and each of its kernels reads them for its OWN SP row only (padded_chunk_rows(start, end, sp_row, ..):
+    at start 0 an SP row r holds clamp(end - r W, 0, W) real rows, a prefix). So per device (0, r W + n_r) gives SP row
+    r exactly its n_r real rows (ChunkDescriptor.moe_real_prefix): pad rows get no route (not dispatched, not computed
+    by the routed experts, not combined; the planner counts only real rows). The words are two persistent tensors of
+    the mesh (sharded per device), rewritten only when the counts change (a host write at begin_packed, before the
+    chunk's first layer: no transfer inside a layer). A chunk whose rows are all real gets no span (the unpadded
+    program, as PACKED_MOE=off)."""
+
+    _BY: dict = {}  # id(mesh) -> (mesh, MoEPadSpan)
+
+    @classmethod
+    def of(cls, mesh, chunk: int) -> "MoEPadSpan":
+        hit = cls._BY.get((id(mesh), chunk))
+        if hit is None or hit[0] is not mesh:
+            hit = cls._BY[(id(mesh), chunk)] = (mesh, cls(mesh, chunk))
+        return hit[1]
+
+    def __init__(self, mesh, chunk: int):
+        assert SP_AXIS == 0, "MoEPadSpan: SP on mesh rows (device order = chip-linear r tp + c)"
+        self.mesh, self.chunk = mesh, int(chunk)
+        self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
+        self.words = None  # (start, end) device tensors
+        self.last = None  # the end words they hold
+
+    def _words(self, vals, device: bool):
+        """[len(vals), 1, 1, 1] uint32 row-major sharded per device (device i: vals[i]): on the mesh in DRAM, or
+        (device False) the mesh host tensor copy_host_to_device_tensor writes into it."""
+        import torch
+
+        t = torch.tensor(vals, dtype=torch.int64).reshape(len(vals), 1, 1, 1)
+        kw = dict(device=self.mesh, memory_config=DRAM) if device else {}
+        return ttnn.from_torch(
+            t,
+            dtype=ttnn.uint32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh, dim=0),
+            **kw,
+        )
+
+    def span(self, desc, valid) -> dict | None:
+        """{actual_start, actual_end} for moe_head (None: every row real). ``valid``: [chunk] bool, the rows the
+        chunk computes (each live segment's [start, run_end) in its lane)."""
+        n, _exact = desc.moe_real_prefix(self.sp, valid)
+        w = self.chunk // self.sp
+        if all(v == w for v in n):
+            return None
+        ends = [r * w + n[r] for r in range(self.sp) for _ in range(self.tp)]
+        if self.words is None:  # (first padded chunk of the process: two persistent words, pinned)
+            self.words = (self._words([0] * len(ends), True), self._words(ends, True))
+            for t in self.words:
+                ccl.pin(self.mesh, t)
+            self.last = ends
+        elif ends != self.last:
+            ttnn.copy_host_to_device_tensor(self._words(ends, False), self.words[1])
+            self.last = ends
+        return dict(actual_start=self.words[0], actual_end=self.words[1])
+
+
+def moe_pad_on() -> bool:
+    """PACKED_MOE=on (call-time, bringup/hooks.py batch_call_settings), on the MoE block that takes a padded chunk
+    (MOE_IMPL=block, MOE_BLOCK_SRC=block: tt/moe_block_v2_adapter; the other MoE paths run every row as off)."""
+    return (
+        settings.get("PACKED_MOE") == "on"
+        and settings.get("MOE_IMPL") == "block"
+        and settings.get("MOE_BLOCK_SRC") == "block"
+    )
+
+
 class PackedChunk:
     """The device side of one packed chunk (TtDS41Model.begin_packed .. end_packed)."""
 
@@ -169,6 +240,17 @@ class PackedChunk:
 
             if onecall_on():
                 self.oc = OneCall(self)
+        # PB.4 (PACKED_MOE=on, read per chunk): the pad rows out of the MoE dispatch (MoEPadSpan; None: every row real
+        # or the switch off)
+        self.moe_span = None
+        if segs and moe_pad_on():
+            import torch
+
+            valid = torch.zeros(desc.chunk, dtype=torch.bool)
+            for r in segs:
+                o = r.lane * desc.lane_rows
+                valid[o : o + max(0, r.run_end - r.start)] = True
+            self.moe_span = MoEPadSpan.of(model.mesh, desc.chunk).span(desc, valid)
 
     # ------------------------------------------------------------------ per segment model fields
     def enter(self, r: SegRun) -> None:

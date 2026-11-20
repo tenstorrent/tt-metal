@@ -865,9 +865,13 @@ class TtDS41Block:
 
             def experts(ctx, x, routing):  # noqa: F811
                 ready, self._moe_xq_ready = self._moe_xq_ready, False
+                # PB.4 (PACKED_MOE=on): a packed chunk's pad rows out of the dispatch (packed_device.MoEPadSpan)
+                pk = ctx.extra.get("packed")
+                span = None if pk is None else pk.moe_span
+                kw = {} if span is None else {"span": span}
                 if ctx.extra.pop("ffn_fed", False):  # FFN_FEED=on (P.36): attn_residual's pass wrote the head's x
-                    return self.moe_block(x, xq_ready=ready, fed=True)
-                return self.moe_block(x, xq_ready=ready)
+                    return self.moe_block(x, xq_ready=ready, fed=True, **kw)
+                return self.moe_block(x, xq_ready=ready, **kw)
 
             def shared_expert(ctx, x):  # noqa: F811
                 return Keep()

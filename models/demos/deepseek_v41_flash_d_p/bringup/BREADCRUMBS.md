@@ -1546,3 +1546,59 @@
   125.5 with the shipped resident table in the same code).
 - Final check `orchestrator measure --task PB.3A` (quick, single-request path): rc 0, chunk_wall_ms 233.8 (PB.3:
   233.7), min layer PCC 0.732 (L39, as PB.3), host_transfers_per_layer 0.
+
+## PPB.4 (PB.4 perf, attempt 1): bulk MoE over the packed rows; pad rows out of the dispatch (PACKED_MOE off | on)
+
+- Expected (written before any code or device run, perf_guide s2): (a) pad rows out of the dispatch (overseer, s11
+  DECIDED): 4 x 2k @ 139k has no pad rows, so 0 ms there (the span is omitted when every row is real: the same
+  program as off, bit-identical by construction); 1 x 2k + 3 empty lanes: experts 67.2 -> ~15-20 ms device a chunk
+  (only 2048 rows routed; the 6144 pad rows of one id no longer pile onto one chip's 6 experts); 4 x ~1.6k padded
+  lanes: a few ms. Host: + ~0.05 ms a chunk (two per-chip words written when the lanes' real counts change).
+  (b) tuning for the bigger per-expert matrices on 4 x 2k: judged by the experts section's split (head / dispatch /
+  experts + combine / tail) of the packed profile; kept only at >= 1 ms device a chunk.
+- Design (no kernel change): the fork's moe_head already takes a padded chunk's actual_start / actual_end as
+  one-word DRAM tensors and every kernel reads them for ITS OWN SP row only (padded_rows.hpp padded_chunk_rows with
+  args.sp_row; routing_planner / router_output_writer / x_gather), so a per-device (start, end) = (0, r W + n_r)
+  gives SP row r exactly n_r real rows as a prefix (closed form at start 0: clamp(end - r W, 0, W)). Lanes are whole
+  SP rows on 8x4 / 4x4 (exact); on 2x4 / 2x2 two lanes share an SP row: n_r = last real row + 1 (a superset: pad rows
+  between two lanes are computed as today, correct).
+- Load (1): runner at BRINGUP_CHUNK=8192 with the gate's accuracy model (40 layers, OV-61) for
+  tests/packed/test_packed_moe_block.py: "needs the gate's one accuracy config (a smaller load would be a second
+  config the gate cannot reuse); the test itself runs only 3 layers' MoE blocks on synthetic rows (seconds)". The
+  same held model then serves the oracle rungs (DS41_PACKED_LAYERS).
+- Built: Setting PACKED_MOE (call-time, batch_call_settings; default off per the overseer note), `tt/packed.py
+  ChunkDescriptor.moe_real_prefix`, `tt/packed_device.MoEPadSpan` (two persistent per-device word tensors, pinned,
+  rewritten by copy_host_to_device_tensor at begin_packed only when the counts change), PackedChunk.moe_span (None
+  when the switch is off, the MoE is not MOE_BLOCK_SRC=block, or every row is real), the block's experts step passing
+  it to TtMoEBlockV2Layer(span=) -> moe_head(actual_start=, actual_end=) (OWN_ROWS one call; the block's own forward
+  path passes it too). No fork change, no new op, no core count change (the head's padded variant is the fork's own).
+- Verification (tests/packed/test_packed_moe_block.py, BATCH_SHARED, the gate's 40-layer 8192 model, layers 1 / 14 /
+  24, synthetic bf16 rows: A, B, C, D random, E one row x 2048 = a hot lane, PAD one row): A's output rows across
+  [A,B,C,D] / [B,E,A,C] / [D,C,E,A] / [A,-,-,-] / [E,A:777,B:1600,-] / [-,-,A,-], PACKED_MOE off and on, a repeat:
+  max abs diff 0.0 vs A alone with every pad row routed. So the device MoE is lane-equivalent by construction
+  (planner order and counts, the flat experts' program by rows, the int32-snap combine, bfp exponents per row).
+  Block alone (synchronized call, layer mean): [A,B,C,D] 2.06 / 2.03 ms (off / on: the same program), 1 x 2k + 3
+  empty lanes of one pad row 3.65 -> 1.75 ms (x 20 MoE layers ~ -38 ms device on the walls' 1 x 2k case).
+- Oracle rung (DS41_PACKED_MOE=on, characteristic layers, the held model): alone vs today 0, lane equivalence 0, slot
+  digests 0, determinism 0 (P and O are padded lanes, Q acks-only: their pad rows out of the dispatch).
+- Tuning for the bigger per-expert matrices on 4 x 2k (no pad rows there): NOT built, nothing kept. Evidence: the
+  routed experts + combine are the busiest chip's FPU time (DS41-299, P.79: 84 % of LoFi peak on its gate/up cores,
+  205 us a layer + 6.77 us a busiest-chip row tile; the light chips wait), the flat plan has no rows-per-expert knob
+  (sub-blocks capped at 128 rows by the L1 arena, FlatLayoutOptions: arena / x / h formats / x pieces only); the
+  dispatch already sends <= 6208 B packets (MOE_BLOCK_SPLIT_ROWS); the one measured dispatch change over 1 ms
+  (P.80 fp8 rows, -1.74 ms at 5120) was REJECTED by the owner (2df5f707b9a) and is not redone. Only spreading
+  rows over chips (replicas, DS41-278: off this branch) moves the bound.
+- Gate (`gate PB.4 --check`, after the last code edit, pre-commit clean): PASS PB.4. packed_moe_block 0.0; oracle (40
+  layers, PACKED_MOE=on): lane equivalence 0, alone vs today 0, slot digests 0, packed determinism 0; reference: every
+  segment's every layer within its limit, top-5 1.0 x 4; determinism 0.0. Walls (PACKED_MOE=on, resident table):
+  4 x 2k @ 139264 122.8 ms = 66.7k new tok/s (device 92.8, experts 37.8; PB.3A 122.3 / 92.5 / 37.6: no pad rows, the
+  same program), mixed 151.1 ms = 54.2k (PB.3A 150.8), 1 x 2k + 3 empty lanes 92.1 ms (PB.3A 125.5): device 75.9
+  (114.7), experts 27.4 ms (66.7): the pad rows' expert work is gone.
+- Final check `orchestrator measure --task PB.4` (quick, single-request path): rc 0, chunk_wall_ms 229.4, min layer
+  PCC 0.732 (L39, as PB.3A), host_transfers_per_layer 0.
+- Device opens this task: 2 runner (re)starts for my runs (the 8192 accuracy model; the released model's memory did
+  not come back once), plus the gate's own processes.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.4 --spec $BRINGUP_SPEC --check`; the block
+  test alone: `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_PACKED=on scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_moe_block.py"` (PB4_MOE_LAYERS picks layers).

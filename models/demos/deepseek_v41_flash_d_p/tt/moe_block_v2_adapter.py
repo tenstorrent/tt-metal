@@ -445,20 +445,25 @@ class TtMoEBlockV2Layer:
             out.gidx, out.w_gu, out.w_d = out._routed(blk)
         return out
 
-    def __call__(self, x: ttnn.Tensor, xq_ready: bool = False, fed: bool = False) -> ttnn.Tensor:
+    def __call__(
+        self, x: ttnn.Tensor, xq_ready: bool = False, fed: bool = False, span: dict | None = None
+    ) -> ttnn.Tensor:
         """x: ffn_norm's output (the column split [1, 1, S/SP, H/TP]; OWN_ROWS: [1, 1, S/(SP TP), H]) -> the MoE
         output, same rows. xq_ready: never (input_buffers gives no xq). fed (FFN_FEED=on, P.36): the attn_residual pass
-        wrote the head's input into feed_buffer()."""
+        wrote the head's input into feed_buffer(). span (PB.4, PACKED_MOE=on: tt/packed_device.MoEPadSpan): a padded
+        chunk's {actual_start, actual_end} one-word device tensors (per device: its SP row's real rows a prefix) - the
+        pad rows are not routed, dispatched, computed or combined (their routed part is zero); None: every row real."""
         assert x.layout == ttnn.TILE_LAYOUT
         assert not xq_ready, "MOE_BLOCK_SRC=block: the head takes no xq"
         blk = self.block()
         weights = self._head_weights(blk)
         xb = cast(x, ttnn.bfloat16)
+        span = span or {}
         if not self.own_rows:
             assert not fed, "FFN_FEED: the feed is the OWN_ROWS path's"
-            y = blk(xb, weights)
+            y = blk(xb, weights, **span)
         else:
-            y = self._own_rows(blk, xb, weights, fed=fed)
+            y = self._own_rows(blk, xb, weights, fed=fed, span=span)
         if xb is not x:
             dealloc(xb)
         if not self.fold:
@@ -467,7 +472,7 @@ class TtMoEBlockV2Layer:
             y = y32
         return y
 
-    def _own_rows(self, blk, x_own, weights, fed: bool = False):
+    def _own_rows(self, blk, x_own, weights, fed: bool = False, span: dict | None = None):
         """OWN_ROWS: x [1, 1, S/(SP TP), H] -> one TP all-to-all into [1, 1, S/SP, H/TP] -> head, dispatch, experts +
         combine -> the combine's owner rows [S/(SP TP), H] (row-major) tilized + the shared expert's owner rows (the
         local tail: no all-to-all back). fed (FFN_FEED=on): no all-to-all, the head reads feed_buffer()."""
@@ -477,7 +482,7 @@ class TtMoEBlockV2Layer:
             xc = ttnn.experimental.all_to_all_async_generic(
                 x_own, in_dim=2, out_dim=3, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
             )
-            y = blk(xc, weights)
+            y = blk(xc, weights, **(span or {}))
             dealloc(xc)
             out = ttnn.experimental.all_to_all_async_generic(
                 y, in_dim=3, out_dim=2, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
@@ -492,7 +497,13 @@ class TtMoEBlockV2Layer:
             )
         arena = ttnn.allocate_tensor_on_device(blk.arena_spec, self.mesh)
         head = mb.moe_head(
-            x, weights.head, resources=blk.resources, dtypes=blk.dtypes, accumulators=blk.accumulators, arena=arena
+            x,
+            weights.head,
+            resources=blk.resources,
+            dtypes=blk.dtypes,
+            accumulators=blk.accumulators,
+            arena=arena,
+            **(span or {}),
         )
         if not fed:  # (the feed buffer is persistent)
             dealloc(x)

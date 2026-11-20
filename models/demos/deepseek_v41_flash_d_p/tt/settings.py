@@ -1369,6 +1369,19 @@ TABLE = {
         "PB.3's v1 loop (each segment's rows moved to lane 0's chips, today's steps per segment). Bit-identical to the "
         "loop (tests/packed/test_packed_oracle.py). Default off (the task's: off = PB.3's loop)",
     ),
+    "PACKED_MOE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.4 (OWNER 2026-11-19, overseer 2026-11-20: bringup/PACKED_DESIGN.md s11 DECIDED), read per chunk (CALL-TIME, "
+        "listed in bringup/hooks.py batch_call_settings). With PACKED=on and MOE_BLOCK_SRC=block: on = a packed chunk's "
+        "pad rows (past each segment's run end, and every row of an empty or acks-only lane) are out of the MoE "
+        "dispatch: the block's moe_head gets a padded chunk's actual_start / actual_end as per-device one-word tensors "
+        "(0, r W + n_r) so SP row r's real rows are its first n_r (tt/packed_device.MoEPadSpan, "
+        "ChunkDescriptor.moe_real_prefix): a pad row is not routed, dispatched, computed by the routed experts or "
+        "combined, and moves no planner count; a chunk whose rows are all real calls the head as off. off = every row "
+        "through the dispatch (PB.3A). Real rows bit-identical (tests/packed/test_packed_moe_block.py). Default off (the "
+        "overseer's: on = the change; the gate sets it)",
+    ),
     "PREFILL_END": Setting(
         "cap",
         ("cap", "end"),

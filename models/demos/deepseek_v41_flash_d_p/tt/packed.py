@@ -230,6 +230,26 @@ class ChunkDescriptor:
                 out.append(("slot", lane) if j == 0 else ("prev", q - 1))
         return out
 
+    def moe_real_prefix(self, sp: int, valid: torch.Tensor | None = None) -> tuple[list[int], bool]:
+        """PB.4 (PACKED_MOE=on): the MoE head's real rows of every SP row as a prefix count (the head's padded chunk
+        describes an SP row's real rows as a prefix of its rows: moe_block_ttnn padded_rows.hpp). SP row r holds the
+        natural chunk rows [r W, (r + 1) W), W = chunk / sp (WindowGeometry: chip q = r tp + c, rows [q R, ..)).
+        ``valid``: [chunk] bool, the rows computed for real (default row_valid()). Returns (n_r a row, exact): n_r =
+        1 + the SP row's last real row (0: none); exact = every SP row's real rows ARE that prefix (lanes of whole SP
+        rows: 8x4 / 4x4); else (two lanes in one SP row, 2x4 / 2x2) the pad rows between two real runs count as real
+        (computed as today: a superset, correct)."""
+        v = self.row_valid() if valid is None else valid.reshape(-1).bool()
+        assert v.numel() == self.chunk and self.chunk % sp == 0, (v.numel(), self.chunk, sp)
+        w = self.chunk // sp
+        out, exact = [], True
+        for r in range(sp):
+            row = v[r * w : (r + 1) * w]
+            idx = torch.nonzero(row).reshape(-1)
+            n = int(idx[-1]) + 1 if idx.numel() else 0
+            exact = exact and bool(row[:n].all())
+            out.append(n)
+        return out, exact
+
     def history_slots(self, sp: int, tp: int) -> list[int]:
         """[sp tp] the slot whose history each chip's queries read (-1: an empty lane's chips read none)."""
         out = [-1] * (sp * tp)

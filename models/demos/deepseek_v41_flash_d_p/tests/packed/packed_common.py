@@ -21,16 +21,16 @@ PAD_ID = 0xFFFFFFFF
 
 
 @contextmanager
-def packed(value: str):
-    """PACKED=value for the calls inside (a call-time switch: the frozen snapshot's entry when the model froze its
-    settings, DS41-314: only this switch; else the environment)."""
-    name = settings.env_name("PACKED")
+def switch(key: str, value: str):
+    """A call-time switch (bringup/hooks.py batch_call_settings) = value for the calls inside: the frozen snapshot's
+    entry when the model froze its settings (DS41-314), and the environment."""
+    name = settings.env_name(key)
     snap = settings.snap
     old_env = os.environ.get(name)
-    old_snap = None if snap is None else snap.get("PACKED")
+    old_snap = None if snap is None else snap.get(key)
     os.environ[name] = value
     if snap is not None:
-        snap["PACKED"] = value
+        snap[key] = value
     try:
         yield
     finally:
@@ -39,7 +39,12 @@ def packed(value: str):
         else:
             os.environ[name] = old_env
         if snap is not None and settings.snap is snap:
-            snap["PACKED"] = old_snap
+            snap[key] = old_snap
+
+
+def packed(value: str):
+    """PACKED=value for the calls inside (switch)."""
+    return switch("PACKED", value)
 
 
 def lane_rows(model, t, desc, lane: int, n: int, width: int | None = None) -> torch.Tensor:
