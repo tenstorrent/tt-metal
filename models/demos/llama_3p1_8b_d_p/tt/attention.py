@@ -437,6 +437,7 @@ class FullCausalAttention:
             scale=Model.HEAD_DIM**-0.5,
             program_config=self.program_config,
             compute_kernel_config=self.compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         masked_output = ttnn.multiply(output, query_valid)
         output.deallocate(True)
