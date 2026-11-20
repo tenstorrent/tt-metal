@@ -181,20 +181,53 @@ public:
         return cluster.get_soc_desc(device->get_device_ids()[0]).get_cores(CoreType::TENSIX, tt::CoordSystem::NOC0).empty();
     }
 
+    // Where a worker runs beside the fabric router on Ethernet channel `router_chan` of Keraunos chip `chip`: CCE1 of
+    // the router's HSIO tile, an idle Ethernet core of its own, so worker and router share a tile and no traffic
+    // between them crosses D2D. Fatal when the chip's SoC descriptor does not list that core or it is not idle.
+    static FabricTestWorker get_worker_beside_router(ChipId chip, chan_id_t router_chan) {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        const auto& soc = cluster.get_soc_desc(chip);
+        const uint32_t hsio = soc.get_keraunos_core_for_channel(router_chan).hsio;
+        for (const auto& core : soc.get_arch_descriptor().get_keraunos().cores) {
+            if (core.hsio != hsio || core.eth_cce != 1) {
+                continue;
+            }
+            const tt_metal::CoreCoord logical =
+                soc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
+            TT_FATAL(
+                tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip).contains(
+                    logical),
+                "Chip {} CCE1 of HSIO tile {} ({}) is not an idle Ethernet core",
+                chip,
+                hsio,
+                logical.str());
+            return {
+                logical,
+                CoreType::ETH,
+                cluster.get_virtual_coordinate_from_logical_coordinates(chip, logical, CoreType::ETH)};
+        }
+        TT_FATAL(
+            false,
+            "Chip {} SoC descriptor lists no CCE1 on HSIO tile {}, where the worker of the router on channel {} runs",
+            chip,
+            hsio,
+            static_cast<uint32_t>(router_chan));
+    }
+
     // Where a fabric data-movement test runs a worker kernel on `device`: the Tensix core at `tensix_logical`, or, on a
-    // chip whose workers run on Ethernet cores, its first idle Ethernet core in logical order. Fatal when that chip has
-    // no idle Ethernet core.
+    // chip whose workers run on Ethernet cores, beside its fabric router on the lowest channel
+    // (get_worker_beside_router). Fatal when that chip has no fabric router.
     static FabricTestWorker get_fabric_test_worker(
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, tt_metal::CoreCoord tensix_logical) {
         if (!workers_on_ethernet_cores(device)) {
             return {tensix_logical, CoreType::WORKER, device->worker_core_from_logical_core(tensix_logical)};
         }
         const ChipId chip = device->get_device_ids()[0];
-        const auto idle = tt::tt_metal::MetalContext::instance().get_control_plane().get_inactive_ethernet_cores(chip);
-        TT_FATAL(!idle.empty(), "Chip {} has no idle Ethernet core for a fabric test worker", chip);
-        const tt_metal::CoreCoord logical = *std::ranges::min_element(
-            idle, [](const auto& a, const auto& b) { return std::tie(a.y, a.x) < std::tie(b.y, b.x); });
-        return {logical, CoreType::ETH, device->virtual_core_from_logical_core(logical, CoreType::ETH)};
+        const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+        const auto routers =
+            control_plane.get_active_fabric_eth_channels(control_plane.get_fabric_node_id_from_physical_chip_id(chip));
+        TT_FATAL(!routers.empty(), "Chip {} has no fabric router for a fabric test worker to run beside", chip);
+        return get_worker_beside_router(chip, routers.begin()->first);
     }
 
     // A data-movement kernel on `worker`: DataMovementConfig on RISCV_0 for a Tensix core, EthernetConfig on DM0 of
@@ -297,8 +330,9 @@ public:
     }
 
     // Utility function reused across tests to get address params. On a chip whose workers run on Ethernet cores the
-    // map starts at the idle Ethernet core's unreserved L1, and the kernel's view is the CCE's uncached alias
-    // (MEM_IERISC_UNCACHED_BASE): the worker's stores must reach SRAM, where the iDMA and the host read them.
+    // map starts at the idle Ethernet core's unreserved L1, and the kernel's view is CCE1's uncached alias
+    // (MEM_IERISC_UNCACHED_BASE above CCE1's SRAM, which starts one SRAM size up in its own view): the worker's
+    // stores must reach SRAM, where the iDMA and the host read them.
     static WorkerMemMap generate_worker_mem_map(
         const std::shared_ptr<tt_metal::distributed::MeshDevice>& device, Topology /*topology*/) {
         constexpr uint32_t PACKET_HEADER_RESERVED_BYTES = 45056;
@@ -318,7 +352,9 @@ public:
                 PACKET_HEADER_RESERVED_BYTES + DATA_SPACE_RESERVED_BYTES + 2 * TEST_RESULTS_SIZE_BYTES <= size,
                 "Idle Ethernet unreserved L1 ({} B) cannot hold the fabric test worker map",
                 size);
-            kernel_view_offset = KERAUNOS_CCE_UNCACHED_ALIAS;
+            kernel_view_offset =
+                KERAUNOS_CCE_UNCACHED_ALIAS +
+                hal.get_dev_size(tt_metal::HalProgrammableCoreType::IDLE_ETH, tt_metal::HalL1MemAddrType::BASE);
         } else {
             base_addr = device->allocator()->get_base_allocator_addr(tt_metal::HalMemType::L1);
         }
