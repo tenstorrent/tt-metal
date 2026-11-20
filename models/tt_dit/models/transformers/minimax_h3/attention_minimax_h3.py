@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 
@@ -65,6 +66,20 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
         zeros = torch.zeros(*sin.shape[:-1], pad, dtype=sin.dtype)
         cos, sin = torch.cat([cos, ones], dim=-1), torch.cat([sin, zeros], dim=-1)
     return cos, sin
+
+
+SDPA_MM_FIDELITY_ENV = "MINIMAX_H3_SDPA_MM_FIDELITY"
+
+
+def sdpa_matmul_fidelity() -> ttnn.MathFidelity | None:
+    """Ring SDPA QK^T / softmax @ V fidelity from `MINIMAX_H3_SDPA_MM_FIDELITY`; unset keeps the op's HiFi2."""
+    raw = os.environ.get(SDPA_MM_FIDELITY_ENV, "").strip().lower()
+    if not raw:
+        return None
+    names = {"lofi": "LoFi", "hifi2": "HiFi2", "hifi3": "HiFi3", "hifi4": "HiFi4"}
+    if raw not in names:
+        raise ValueError(f"{SDPA_MM_FIDELITY_ENV}={raw!r}: expected one of {sorted(names)}")
+    return getattr(ttnn.MathFidelity, names[raw])
 
 
 class MiniMaxH3Attention(Module):
@@ -199,6 +214,7 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
+        self.sdpa_matmul_fidelity = sdpa_matmul_fidelity()
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
@@ -213,6 +229,7 @@ class MiniMaxH3Attention(Module):
                     q_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][0],
                     k_chunk_size=DYNAMIC_RING_SDPA_CHUNKS[cls.name][1],
                     exp_approx_mode=False,
+                    matmul_math_fidelity=self.sdpa_matmul_fidelity,
                 )
                 for cls in LENGTH_CLASSES
             }
@@ -344,6 +361,7 @@ class MiniMaxH3Attention(Module):
                 q_chunk_size=q_chunk,
                 k_chunk_size=k_chunk,
                 exp_approx_mode=False,  # NOTE: False is more correct
+                matmul_math_fidelity=self.sdpa_matmul_fidelity if ring else None,
             )
         return self._sdpa_program_configs[key]
 
