@@ -484,6 +484,7 @@ def _meta_suite(model, tokens, seq: int, chunk: int, layers, eager_final: dict, 
     return res
 
 
+@pytest.mark.timeout(25200)  # weight load plus waiting on the CPU golden, which runs alongside
 @pytest.mark.skipif(os.environ.get("ML4_E2E_GALAXY") != "1", reason="needs a Blackhole Galaxy (ML4_E2E_GALAXY=1)")
 def test_e2e_full(mesh_device):
     from safetensors.torch import load_file
