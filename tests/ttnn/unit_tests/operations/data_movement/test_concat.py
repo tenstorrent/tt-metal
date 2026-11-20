@@ -1193,19 +1193,27 @@ def test_sharded_concat_height_leading_dims_block_sharded(
 )
 def test_block_sharded_concat_partially_filled_grid(device, dim, shape, in_shard, out_shard, layout, orientation):
     grid = _sharded_grid_2d(2, 2)
-    torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(2)]
-    torch_out = torch.concat(torch_inputs, dim=dim)
-
     in_mem = _height_concat_mem_config(in_shard, grid, ttnn.ShardStrategy.BLOCK, orientation)
-    ttnn_inputs = [
-        ttnn.to_memory_config(ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16), in_mem)
-        for t in torch_inputs
-    ]
     output_mem = _height_concat_mem_config(out_shard, grid, ttnn.ShardStrategy.BLOCK, orientation)
-    ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
 
-    assert ttnn_out.memory_config() == output_mem
-    assert_equal(torch_out, ttnn.to_torch(ttnn_out))
+    def run_concat():
+        torch_inputs = [random_torch_tensor(ttnn.bfloat16, shape) for _ in range(2)]
+        ttnn_inputs = [
+            ttnn.to_memory_config(ttnn.from_torch(t, layout=layout, device=device, dtype=ttnn.bfloat16), in_mem)
+            for t in torch_inputs
+        ]
+        ttnn_out = ttnn.concat(ttnn_inputs, dim=dim, memory_config=output_mem)
+        assert ttnn_out.memory_config() == output_mem
+        assert_equal(torch.concat(torch_inputs, dim=dim), ttnn.to_torch(ttnn_out))
+        return ttnn_inputs, ttnn_out
+
+    # The second call hits the program cache and must rebind to its own tensors. The first call's
+    # tensors stay alive so the second call's land at different addresses and a stale binding shows.
+    first_tensors = run_concat()
+    entries_after_first = device.num_program_cache_entries()
+    run_concat()
+    assert device.num_program_cache_entries() == entries_after_first, "second concat missed the program cache"
+    del first_tensors
 
 
 # The issue's repro, spelled out. Distinct arange fills so a failure names which block moved where
