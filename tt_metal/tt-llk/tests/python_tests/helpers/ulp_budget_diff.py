@@ -7,18 +7,23 @@ tell apart by the registry's own rules: a figure that goes up, a cell that stops
 gated, or a tolerance cell whose recorded measurement or declared bound loosens is a
 regression. ``headroom`` judges the ``--ulp-measure`` records against the table: the
 tolerance cells the sweep cannot fail, and the cells that now measure better than their
-row. ``acknowledgements`` tells whether two revisions of test_sfpu_accuracy_budget.py
-differ only in the lists a budget raise may edit. Run from ``python_tests`` as
-``python -m helpers.ulp_budget_diff <command>``."""
+row. ``guard`` is the PR check's (tests/run_sfpu_ulp_pr_check.sh): ``diff`` over every
+table a change touches against its parent revision, and whether the change may loosen
+one. Run from ``python_tests`` as ``python -m helpers.ulp_budget_diff <command>``."""
 
 import argparse
 import ast
 import itertools
+import json
+import os
+import subprocess
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field, fields
 from enum import Enum
-from pathlib import Path
-from typing import Iterable
+from pathlib import Path, PurePosixPath
+from typing import Callable, Iterable
 
 from .chip_architecture import ChipArchitecture
 from .llk_params import MathOperation
@@ -36,6 +41,7 @@ from .ulp_table import (
     measured_arch,
     most_specific,
     read_measurements,
+    read_table,
     resolve,
     steps_bind,
     table_arch,
@@ -764,27 +770,140 @@ def _load(side: str, path: Path) -> Table:
         raise ValueError(f"the {side} table {path}: {refused}") from refused
 
 
+# ── The PR guard ──────────────────────────────────────────────────────────────
+
+# The label that lets a pull request loosen a budget.
+RAISE_LABEL = "ulp-budget-raise-approved"
+_TABLE_PREFIX, _TABLE_SUFFIX = "sfpu_accuracy_budget_", ".yaml"
+# From the tables' directory.
+_ACKNOWLEDGEMENTS = "../../hardware_free/accuracy/test_sfpu_accuracy_budget.py"
+_REFUSED = {
+    1: f"A budget was loosened. A raise must be a PR that changes only the tables (and "
+    f"the acknowledgement lists in test_sfpu_accuracy_budget.py) and has the "
+    f"{RAISE_LABEL} label; then re-run this job.",
+    2: "A budget table did not load (the report above says why); no label passes that.",
+}
+
+
+def pull_request(event: str | None, ref: str) -> int | None:
+    """The pull request a ``pull_request`` run (``refs/pull/<number>/merge``) or a merge
+    queue run (``.../gh-readonly-queue/<base>/pr-<number>-<sha>``) is for."""
+    if event == "pull_request":
+        number = ref.removeprefix("refs/pull/").partition("/")[0]
+    elif event == "merge_group":
+        number = ref.rpartition("/pr-")[2].partition("-")[0]
+    else:
+        return None
+    return int(number) if number.isdecimal() else None
+
+
+def raise_approved() -> bool:
+    """Whether the run's pull request has :data:`RAISE_LABEL`, read now, so a re-run
+    sees a label added after the push. Labels that cannot be read are no approval."""
+    env = os.environ
+    number = pull_request(env.get("GITHUB_EVENT_NAME"), env.get("GITHUB_REF", ""))
+    if number is None:
+        return False
+    api = env.get("GITHUB_API_URL", "https://api.github.com")
+    url = f"{api}/repos/{env.get('GITHUB_REPOSITORY')}/issues/{number}/labels?per_page=100"
+
+    def labels(token: str | None) -> list[dict]:
+        request = urllib.request.Request(url)
+        if token:
+            request.add_header("Authorization", f"Bearer {token}")
+        with urllib.request.urlopen(request, timeout=30) as response:
+            return json.load(response)
+
+    try:
+        try:
+            found = labels(env.get("GH_TOKEN"))
+        except urllib.error.HTTPError:
+            found = labels(None)  # the repository is public
+    except (OSError, ValueError) as refused:
+        print(f"::warning::Could not read the PR's labels ({refused}); not approved.")
+        return False
+    return any(label["name"] == RAISE_LABEL for label in found)
+
+
+def guard(
+    base_rev: str,
+    tables_dir: Path = TABLE_PATHS[ChipArchitecture.WORMHOLE].parent,
+    approved: Callable[[], bool] = raise_approved,
+) -> tuple[str, int]:
+    """The report and exit status for ``HEAD`` against *base_rev*, over every table in
+    *tables_dir* the change touches. 1: a budget loosened, and the change is not a
+    raise, which changes only the tables and the acknowledgement lists and is
+    *approved*. 2: a table did not load, which nothing passes."""
+
+    def git(*args: str, check: bool = True) -> str:
+        command = ("git", "-C", str(tables_dir), *args)
+        done = subprocess.run(command, check=check, capture_output=True, text=True)
+        return done.stdout if done.returncode == 0 else ""
+
+    root = Path(git("rev-parse", "--show-toplevel").strip())
+    here = PurePosixPath(git("rev-parse", "--show-prefix").strip())
+    changed = [
+        PurePosixPath(p)
+        for p in git("diff", "--name-only", base_rev, "HEAD").splitlines()
+    ]
+    tables = [
+        path
+        for path in changed
+        if path.parent == here
+        and path.name.startswith(_TABLE_PREFIX)
+        and path.name.endswith(_TABLE_SUFFIX)
+    ]
+    acknowledgements = PurePosixPath(os.path.normpath(here / _ACKNOWLEDGEMENTS))
+
+    def at_base(path: PurePosixPath) -> str:
+        """Empty for a file the base revision does not have."""
+        return git("show", f"{base_rev}:{path}", check=False)
+
+    reports, loosened, unloadable = [], False, False
+    for path in tables:
+        try:
+            try:
+                base = read_table(at_base(path))
+            except ValueError as refused:
+                raise ValueError(f"the base table {path}: {refused}") from refused
+            arch = _tables_arch(None, Path(path))
+            changes = compare(base, _load("head", root / path), arch)
+        except (ValueError, OSError) as refused:
+            reports.append(f"cannot load: {refused}\n")
+            unloadable = True
+            continue
+        reports.append(render_budget_diff(changes))
+        loosened = loosened or any(c.kind.loosens for c in changes)
+    others = [p for p in changed if p not in tables and p != acknowledgements]
+    if acknowledgements in changed:
+        try:
+            head = (root / acknowledgements).read_text(encoding="utf-8")
+            only = only_acknowledgements_differ(at_base(acknowledgements), head)
+        except (ValueError, OSError, SyntaxError):
+            only = False
+        if not only:
+            others.append(acknowledgements)
+    if unloadable:
+        return "".join(reports), 2
+    return "".join(reports), 1 if loosened and (others or not approved()) else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     diff = sub.add_parser("diff", help="what a change to the table does to the gates")
     diff.add_argument("--base", type=Path, required=True)
     diff.add_argument("--head", type=Path, required=True)
-    diff.add_argument("--allow-raises", action="store_true", help="report, do not fail")
     headroom = sub.add_parser(
         "headroom", help="--ulp-measure records against the table"
     )
     headroom.add_argument("--table", type=Path, help="default: CHIP_ARCH's table")
     headroom.add_argument("--measured", type=Path, required=True)
-    acknowledgements = sub.add_parser(
-        "acknowledgements",
-        help="exit 1 if test_sfpu_accuracy_budget.py changed outside the lists a "
-        "budget raise may edit",
-    )
-    acknowledgements.add_argument("--base", type=Path, required=True)
-    acknowledgements.add_argument("--head", type=Path, required=True)
+    guarded = sub.add_parser("guard", help="`diff` of HEAD's tables against a revision")
+    guarded.add_argument("--base-rev", required=True)
+    for command in (diff, headroom, guarded):
+        command.add_argument("--out", type=Path, help="also append the report here")
     for command in (diff, headroom):
-        command.add_argument("--out", type=Path, help="also write the report here")
         command.add_argument(
             "--arch",
             choices=[arch.value for arch in TABLE_PATHS],
@@ -792,23 +911,15 @@ def main(argv: list[str] | None = None) -> int:
             "file name, e.g. sfpu_accuracy_budget_bh.yaml)",
         )
     args = parser.parse_args(argv)
-    if args.command == "acknowledgements":
-        try:
-            same = only_acknowledgements_differ(
-                args.base.read_text(encoding="utf-8"),
-                args.head.read_text(encoding="utf-8"),
-            )
-        except (ValueError, OSError, SyntaxError) as refused:
-            print(f"cannot load: {refused}")
-            return 2
-        return 0 if same else 1
     try:
-        if args.command == "diff":
+        if args.command == "guard":
+            report, status = guard(args.base_rev)
+        elif args.command == "diff":
             arch = _tables_arch(args.arch, args.head, args.base)
             changes = compare(_load("base", args.base), _load("head", args.head), arch)
             report = render_budget_diff(changes)
             loosened = any(c.kind.loosens for c in changes)
-            status = 1 if loosened and not args.allow_raises else 0
+            status = 1 if loosened else 0
         else:
             # The reader takes a missing file as no records (a sweep that died before its
             # first cell); here it is an input that is not there, so it cannot load.
@@ -826,7 +937,10 @@ def main(argv: list[str] | None = None) -> int:
         report, status = f"cannot load: {refused}\n", 2
     print(report, end="")
     if args.out is not None:
-        args.out.write_text(report, encoding="utf-8")
+        with args.out.open("a", encoding="utf-8") as out:
+            out.write(report)
+    if args.command == "guard" and status:
+        print(f"::error::{_REFUSED[status]}")
     return status
 
 

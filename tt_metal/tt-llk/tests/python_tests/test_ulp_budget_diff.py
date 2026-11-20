@@ -5,6 +5,7 @@
 to the gates, and how the ``--ulp-measure`` records are judged against it."""
 
 import math
+import subprocess
 from dataclasses import replace
 
 import pytest
@@ -17,9 +18,11 @@ from helpers.ulp_budget_diff import (
     Kind,
     Verdict,
     compare,
+    guard,
     judge,
     main,
     only_acknowledgements_differ,
+    pull_request,
     read_cells,
     render_budget_diff,
 )
@@ -297,17 +300,14 @@ _RAISED_HEAD = _edited(0, Row(input=F16B, output=F16B, measured=9))
 
 
 @pytest.mark.parametrize(
-    "head, flags, status",
-    [(_BASE, [], 0), (_RAISED_HEAD, [], 1), (_RAISED_HEAD, ["--allow-raises"], 0)],
-    ids=["unchanged", "raised", "raised-advisory"],
+    "head, status", [(_BASE, 0), (_RAISED_HEAD, 1)], ids=["unchanged", "raised"]
 )
-def test_diff_exit_status(tmp_path, head, flags, status):
+def test_diff_exit_status(tmp_path, head, status):
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
     write_table_file(_BASE, base_path)
     write_table_file(head, head_path)
-    argv = ["diff", "--base", str(base_path), "--head", str(head_path), *flags]
-    argv += ["--arch", MEASURED_ARCH.value]
-    assert main(argv) == status
+    argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
+    assert main([*argv, "--arch", MEASURED_ARCH.value]) == status
 
 
 @pytest.mark.parametrize(
@@ -332,10 +332,9 @@ def test_diff_exit_status(tmp_path, head, flags, status):
     ],
 )
 def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsys):
-    """Exit 2, "cannot load", even under --allow-raises: the flag admits a loosened
-    gate, not a table no gate can be read from. A conflict marker, a mapping used as a
-    key, an entry missing a field and a file that is not UTF-8 used to escape as
-    tracebacks with exit 1."""
+    """Exit 2, "cannot load": a conflict marker, a mapping used as a key, an entry
+    missing a field and a file that is not UTF-8 used to escape as tracebacks with
+    exit 1."""
     base_path, head_path = tmp_path / "base.yaml", tmp_path / "head.yaml"
     write_table_file(_BASE, base_path)
     if isinstance(head_text, bytes):
@@ -343,7 +342,7 @@ def test_a_table_the_registry_refuses_gets_no_verdict(tmp_path, head_text, capsy
     elif head_text is not None:
         head_path.write_text(head_text)
     argv = ["diff", "--base", str(base_path), "--head", str(head_path)]
-    assert main([*argv, "--arch", MEASURED_ARCH.value, "--allow-raises"]) == 2
+    assert main([*argv, "--arch", MEASURED_ARCH.value]) == 2
     # Refused by the loader, not by the architecture check that runs first.
     out = capsys.readouterr().out
     assert "cannot tell which architecture" not in out
@@ -802,21 +801,117 @@ def test_it():
     ],
     ids=["list", "per-arch-list", "comment", "test-body", "import", "rename", "new"],
 )
-def test_a_raise_may_edit_only_the_acknowledgements(tmp_path, old, new, only):
-    """`acknowledgements` exits 1 for a change to anything else in the file."""
+def test_a_raise_may_edit_only_the_acknowledgements(old, new, only):
     assert old in _ACKNOWLEDGING
     assert only_acknowledgements_differ(_ACKNOWLEDGING, _ACKNOWLEDGING)
-    base, head = tmp_path / "base.py", tmp_path / "head.py"
-    base.write_text(_ACKNOWLEDGING)
-    head.write_text(_ACKNOWLEDGING.replace(old, new))
-    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
-    assert main(argv) == (0 if only else 1)
+    changed = _ACKNOWLEDGING.replace(old, new)
+    assert only_acknowledgements_differ(_ACKNOWLEDGING, changed) == only
 
 
-def test_acknowledgements_that_do_not_parse_cannot_load(tmp_path):
-    base, head = tmp_path / "base.py", tmp_path / "head.py"
-    base.write_text(_ACKNOWLEDGING)
-    head.write_text("def (")
-    argv = ["acknowledgements", "--base", str(base), "--head", str(head)]
-    assert main(argv) == 2
-    assert main([*argv[:-1], str(tmp_path / "absent.py")]) == 2
+# ── The PR guard: a commit's tables against its parent's ──────────────────────
+
+_TABLE = f"tests/python_tests/helpers/{TABLE_PATHS[MEASURED_ARCH].name}"
+_ACKNOWLEDGEMENTS = "tests/hardware_free/accuracy/test_sfpu_accuracy_budget.py"
+_TEST_BODY = _ACKNOWLEDGING.replace("    assert ONLY_EVER_TOLERANCE", "    pass")
+_NEW_LIST = _ACKNOWLEDGING.replace("frozenset({1})", "frozenset({1, 2})")
+
+
+def _guarded(repo, head_files, approved=True):
+    """`guard` over a commit that writes *head_files* onto the base table and the
+    acknowledgement file; a table value is written as a table, ``None`` deletes."""
+
+    def git(*args):
+        identity = ("-c", "user.name=t", "-c", "user.email=t@t")
+        subprocess.run(("git", "-C", str(repo), *identity, *args), check=True)
+
+    def commit(files):
+        for name, content in files.items():
+            path = repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            if content is None:
+                path.unlink()
+            elif isinstance(content, str):
+                path.write_text(content)
+            else:
+                write_table_file(content, path)
+        git("add", "-A")
+        git("commit", "-q", "--allow-empty", "-m", "c")
+
+    git("init", "-q")
+    commit({_TABLE: _BASE, _ACKNOWLEDGEMENTS: _ACKNOWLEDGING})
+    commit(head_files)
+    asked = []
+    report, status = guard(
+        "HEAD^1", (repo / _TABLE).parent, lambda: asked.append(1) or approved
+    )
+    return report, status, bool(asked)
+
+
+@pytest.mark.parametrize(
+    "head_files, approved, status",
+    [
+        ({"README.md": "x"}, False, 0),
+        ({_TABLE: _edited(0, Row(input=F16B, output=F16B, measured=0))}, False, 0),
+        ({_TABLE: _RAISED_HEAD}, False, 1),
+        ({_TABLE: _RAISED_HEAD}, True, 0),
+        ({_TABLE: _RAISED_HEAD, _ACKNOWLEDGEMENTS: _NEW_LIST}, True, 0),
+        ({_TABLE: _RAISED_HEAD, _ACKNOWLEDGEMENTS: _TEST_BODY}, True, 1),
+        ({_TABLE: _RAISED_HEAD, _ACKNOWLEDGEMENTS: "def ("}, True, 1),
+        ({_TABLE: _RAISED_HEAD, "README.md": "x"}, True, 1),
+        (
+            {_TABLE: _RAISED_HEAD, f".github/{TABLE_PATHS[MEASURED_ARCH].name}": "x"},
+            True,
+            1,
+        ),
+        ({_TABLE: "Abs: [\n"}, True, 2),
+        ({_TABLE: None}, True, 2),
+    ],
+    ids=[
+        "no-table",
+        "tightened",
+        "raised",
+        "raised-approved",
+        "with-acknowledgement",
+        "with-test-body",
+        "with-unparsable-acknowledgements",
+        "with-another-file",
+        "with-a-table-name-elsewhere",
+        "unloadable",
+        "deleted",
+    ],
+)
+def test_the_guard_admits_only_an_approved_raise_of_the_tables_alone(
+    tmp_path, head_files, approved, status
+):
+    report, got, asked = _guarded(tmp_path, head_files, approved)
+    assert got == status
+    assert bool(report) == (_TABLE in head_files)
+    # The label is read only when it decides: a loosened budget in a change of the
+    # tables alone.
+    assert asked == (
+        status != 2
+        and _RAISED_HEAD in head_files.values()
+        and len(head_files) == 1
+        or head_files.get(_ACKNOWLEDGEMENTS) == _NEW_LIST
+    )
+
+
+def test_the_guard_takes_a_table_the_base_lacks_as_added(tmp_path):
+    other = _TABLE.replace(
+        TABLE_PATHS[MEASURED_ARCH].name, TABLE_PATHS[OTHER_ARCH].name
+    )
+    assert _guarded(tmp_path, {other: _RAISED_HEAD}, approved=False)[1] == 0
+
+
+@pytest.mark.parametrize(
+    "event, ref, number",
+    [
+        ("pull_request", "refs/pull/60887/merge", 60887),
+        ("merge_group", "refs/heads/gh-readonly-queue/main/pr-60887-0a1b2c", 60887),
+        ("push", "refs/heads/main", None),
+        ("pull_request", "refs/heads/main", None),
+        (None, "", None),
+    ],
+)
+def test_the_pull_request_a_run_is_for(event, ref, number):
+    assert pull_request(event, ref) == number
