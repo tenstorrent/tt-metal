@@ -52,7 +52,13 @@ struct FusedRingConfig {
     ttnn::ccl::Topology topology{ttnn::ccl::Topology::Linear};
     std::vector<tt::tt_metal::GlobalSemaphore> ag_semaphore;  // the all-gather's own out-ready semaphores
     std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id{std::nullopt};
+    // Full mesh: invoke sets only full_mesh and the mesh shape. The route (topology, snake_orientation,
+    // route_plan_hash) is proved by the program factory on a program-cache miss and is not part of the key: the
+    // program cache is per mesh device and its fabric cannot change while it is open, so the key already fixes it.
     bool full_mesh{false};
+    // Full mesh only: tensor (K ownership and causal) ranks are column-major instead of row-major, for
+    // SP-major shards with SP on mesh axis 1. Set from full_mesh_outer_axis.
+    bool column_major{false};
     ttnn::ccl::snake_ring::Orientation snake_orientation{ttnn::ccl::snake_ring::Orientation::Row};
     uint32_t mesh_rows{0};
     uint32_t mesh_cols{0};

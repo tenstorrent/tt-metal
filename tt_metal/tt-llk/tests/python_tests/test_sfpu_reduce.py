@@ -51,9 +51,11 @@ from helpers.sfpu_domains import (
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
     APPROX_MODE,
+    DEST_SYNC,
     LOOP_FACTOR,
     MATH_OP,
     NUM_BLOCKS,
+    NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
     generate_input_dim,
@@ -95,16 +97,16 @@ def get_format_input_bounds(formats: InputOutputFormat) -> list[tuple[int, int]]
 
 
 def get_supported_reduce_axioms(
-    reduce_pool: ReducePool, formats: InputOutputFormat
+    pool_type: ReducePool, formats: InputOutputFormat
 ) -> list[MathOperation]:
     # Row reduce (REDUCE_ROW) supports SUM/MAX/MIN for every format and AVG for float formats only
     # (the row AVG divisor is the runtime column count, which only the float reciprocal-multiply
     # divides exactly; integer AVG stays column-only). See ckernel_sfpu_reduce.h::calculate_reduce.
-    if reduce_pool in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
+    if pool_type in (ReducePool.Sum, ReducePool.Max, ReducePool.Min):
         return [MathOperation.ReduceRow, MathOperation.ReduceColumn]
     # Only Float32/Float16_b: the kernel's `is_float_format` AVG row gate treats just these two as
     # float, so a Float16 row AVG would hit the calculate_reduce static_assert at compile time.
-    if reduce_pool == ReducePool.Average and formats.input_format in (
+    if pool_type == ReducePool.Average and formats.input_format in (
         DataFormat.Float32,
         DataFormat.Float16_b,
     ):
@@ -119,13 +121,13 @@ SFPU_REDUCE_PERF_SWEEP = dict(
         same=True,
     ),
     dest_acc=[DestAccumulation.Yes],
-    reduce_pool=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    pool_type=[ReducePool.Max, ReducePool.Sum, ReducePool.Average],
     mathop=get_supported_reduce_axioms,
 )
 
 
 def use_int32_twos_complement(
-    formats: InputOutputFormat, reduce_pool: ReducePool, mathop: MathOperation
+    formats: InputOutputFormat, pool_type: ReducePool, mathop: MathOperation
 ) -> bool:
     """Whether Int32 stimuli/results use two's-complement (not sign-magnitude) L1 encoding.
 
@@ -149,9 +151,9 @@ def use_int32_twos_complement(
     """
     if formats.input_format != DataFormat.Int32:
         return False
-    if reduce_pool in (ReducePool.Sum, ReducePool.Average):
+    if pool_type in (ReducePool.Sum, ReducePool.Average):
         return True
-    if reduce_pool in (ReducePool.Max, ReducePool.Min):
+    if pool_type in (ReducePool.Max, ReducePool.Min):
         # Both column and row MAX/MIN take two's-complement (row MAX now matches the column path so
         # the chained multi-axis reduce is consistent).
         return True
@@ -162,7 +164,7 @@ def _sfpu_reduce_config_kwargs(
     formats,
     dest_acc,
     mathop,
-    reduce_pool,
+    pool_type,
     input_dimensions,
     tile_cnt,
     *,
@@ -175,6 +177,8 @@ def _sfpu_reduce_config_kwargs(
     runtimes = [
         TILE_COUNT(tile_cnt),
         LOOP_FACTOR(loop_factor),
+        # The kernel is written for full 32x32 tiles (four faces).
+        NUM_FACES(4),
     ]
 
     return {
@@ -183,7 +187,9 @@ def _sfpu_reduce_config_kwargs(
         "templates": [
             generate_input_dim(input_dimensions, input_dimensions),
             APPROX_MODE(ApproximationMode.No),
-            MATH_OP(mathop=mathop, pool_type=reduce_pool),
+            # The kernel only syncs Dest in halves.
+            DEST_SYNC(DestSync.Half),
+            MATH_OP(mathop=mathop, pool_type=pool_type),
         ],
         "runtimes": runtimes,
         "variant_stimuli": StimuliConfig(
@@ -233,7 +239,7 @@ def _run_functional_sfpu_reduce(
     formats,
     dest_acc,
     mathop,
-    reduce_pool,
+    pool_type,
     input_dimensions,
     tile_cnt,
     src_A,
@@ -247,7 +253,7 @@ def _run_functional_sfpu_reduce(
         formats,
         dest_acc,
         mathop,
-        reduce_pool,
+        pool_type,
         input_dimensions,
         tile_cnt,
         src_A=src_A,
@@ -264,7 +270,7 @@ def _run_functional_sfpu_reduce(
     return _run_sfpu_reduce(test_config_kwargs)
 
 
-def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
+def get_reduce_pad_value(pool_type: ReducePool, input_format: DataFormat):
     """Identity fill for the padded (non-data) rows of a sub-tile column reduce.
 
     Mirrors ttnn's ``get_pad_value``: the pad must never win the reduction, so the device result
@@ -272,14 +278,14 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
     operands are two's-complement (see ``use_int32_twos_complement``), so the sentinels are the
     ordinary two's-complement reduction identities.
     """
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         if input_format == DataFormat.Int32:
             # INT32_MIN + 1 (matches ttnn get_pad_value; avoids INT32_MIN).
             return INT32_PAD_MIN
         if input_format.is_integer():
             return 0  # unsigned formats: 0 is the smallest representable value
         return -3.0e30  # float "-inf"-ish, finite so PCC stays well-defined
-    if reduce_pool == ReducePool.Min:
+    if pool_type == ReducePool.Min:
         if input_format == DataFormat.Int32:
             return INT32_MAX
         if input_format == DataFormat.UInt32:
@@ -296,7 +302,7 @@ def get_reduce_pad_value(reduce_pool: ReducePool, input_format: DataFormat):
 
 def get_reduce_extents(
     mathop: MathOperation,
-    reduce_pool: ReducePool,
+    pool_type: ReducePool,
     formats: InputOutputFormat,
     dimension_combinations: list[int],
 ) -> list[int]:
@@ -316,7 +322,7 @@ def get_reduce_extents(
     if (
         mathop != MathOperation.ReduceColumn
         or dimension_combinations != [TILE_DIM, TILE_DIM]
-        or reduce_pool == ReducePool.Average
+        or pool_type == ReducePool.Average
     ):
         return full
     if formats.input_format == DataFormat.Int32:
@@ -334,7 +340,7 @@ REDUCE_BASE_FORMATS = [
 ]
 
 
-def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
+def get_reduce_formats(pool_type: ReducePool) -> list[InputOutputFormat]:
     """Input/output format pairs for the reduce suite.
 
     A UInt16 Sum/Average reduction can exceed the UInt16 range: a single 32-wide tile row/column
@@ -343,7 +349,7 @@ def get_reduce_formats(reduce_pool: ReducePool) -> list[InputOutputFormat]:
     cases; the SFPU already accumulates in 32-bit and stores the full word into a 32-bit (fp32) dest.
     Every other case keeps input == output.
     """
-    widening = reduce_pool in (ReducePool.Sum, ReducePool.Average)
+    widening = pool_type in (ReducePool.Sum, ReducePool.Average)
     return [
         (
             InputOutputFormat(fmt, DataFormat.UInt32)
@@ -364,7 +370,7 @@ _FLOAT_FORMAT_EPS = {
 
 
 def get_reduce_sum_atol(
-    output_format, reduce_pool, mathop, input_dimensions, input_bounds
+    output_format, pool_type, mathop, input_dimensions, input_bounds
 ):
     """Absolute tolerance for accumulating float reductions (Sum/Average).
 
@@ -378,7 +384,7 @@ def get_reduce_sum_atol(
     Returns None for non-accumulating ops (Max/Min) and integer formats, leaving the
     default exact/loose tolerances in place.
     """
-    if reduce_pool not in (ReducePool.Sum, ReducePool.Average):
+    if pool_type not in (ReducePool.Sum, ReducePool.Average):
         return None
 
     eps = _FLOAT_FORMAT_EPS.get(output_format)
@@ -393,7 +399,7 @@ def get_reduce_sum_atol(
     atol = safety_factor * max_term * eps * (num_terms**0.5)
 
     # Average divides the accumulated sum by the reduced extent, shrinking the error too.
-    if reduce_pool == ReducePool.Average:
+    if pool_type == ReducePool.Average:
         atol /= num_terms
 
     # Keep at least the baseline absolute tolerance used elsewhere.
@@ -425,7 +431,7 @@ def is_valid_reduce_dimension(mathop, dest_acc, formats, dim):
     mathop=get_supported_reduce_axioms,
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
     input_bounds=get_format_input_bounds,
-    reduce_pool=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
+    pool_type=[ReducePool.Min, ReducePool.Max, ReducePool.Sum, ReducePool.Average],
     dimension_combinations=lambda mathop, dest_acc, formats: [
         dim
         for dim in dimension_combinations
@@ -437,7 +443,7 @@ def test_sfpu_reduce(
     formats,
     dest_acc,
     mathop,
-    reduce_pool,
+    pool_type,
     input_bounds,
     dimension_combinations,
     reduced_extent,
@@ -447,12 +453,12 @@ def test_sfpu_reduce(
 
     if (
         mathop == MathOperation.ReduceRow
-        and reduce_pool in (ReducePool.Max, ReducePool.Min)
+        and pool_type in (ReducePool.Max, ReducePool.Min)
         and formats.input_format == DataFormat.UInt16
     ):
         pytest.skip(
             reason="UInt16 row MAX/MIN is unsupported by the kernel: without a 32-bit dest it loads "
-            "with LO16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
+            "with UINT16 (rejected by the row MAX/MIN static_assert), and with a 32-bit dest it routes "
             "through the INT32 sign-magnitude row path, which does not mask UInt16's high bits and "
             "returns garbage. Column UInt16 MAX/MIN (the ttnn-exercised path) is still covered."
         )
@@ -507,7 +513,7 @@ def test_sfpu_reduce(
     # folding dim=0/dim=1 onto H). The real data must win so the result matches a golden reduced over
     # only the real rows.
     if mathop == MathOperation.ReduceColumn and reduced_extent < TILE_DIM:
-        pad_value = get_reduce_pad_value(reduce_pool, formats.input_format)
+        pad_value = get_reduce_pad_value(pool_type, formats.input_format)
         src_A = src_A.view(TILE_DIM, tile_cnt * TILE_DIM)
         src_A[reduced_extent:, :] = pad_value
         src_A = src_A.flatten()
@@ -539,21 +545,21 @@ def test_sfpu_reduce(
         dest_acc,
         formats.input_format,
         dst_dim,
-        reduce_pool=reduce_pool,
+        reduce_pool=pool_type,
     )
 
     res_from_L1 = _run_functional_sfpu_reduce(
         formats,
         dest_acc,
         mathop,
-        reduce_pool,
+        pool_type,
         input_dimensions,
         tile_cnt,
         src_A,
         src_B,
         num_blocks=num_blocks,
         num_tiles_in_block=num_tiles_in_block,
-        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
+        twos_complement=use_int32_twos_complement(formats, pool_type, mathop),
     )
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
@@ -571,7 +577,7 @@ def test_sfpu_reduce(
     # Accumulating float reductions lose precision proportional to the number of summed
     # terms; size the absolute tolerance accordingly (PCC still guards correctness).
     reduce_atol = get_reduce_sum_atol(
-        formats.output_format, reduce_pool, mathop, input_dimensions, input_bounds
+        formats.output_format, pool_type, mathop, input_dimensions, input_bounds
     )
 
     assert passed_test(
@@ -666,7 +672,7 @@ def test_sfpu_reduce_prod_specials(formats, special):
 
 def _run_integer_reduce(
     mathop,
-    reduce_pool,
+    pool_type,
     injected_value=None,
     base_range=(-1000, 1000),
     input_format=DataFormat.Int32,
@@ -730,7 +736,7 @@ def _run_integer_reduce(
             dest_acc,
             formats.input_format,
             dst_dim,
-            reduce_pool=reduce_pool,
+            reduce_pool=pool_type,
         )
         if tile is None
         else None
@@ -742,7 +748,7 @@ def _run_integer_reduce(
         formats,
         dest_acc,
         mathop,
-        reduce_pool,
+        pool_type,
         input_dimensions,
         tile_cnt,
         src_A,
@@ -750,7 +756,7 @@ def _run_integer_reduce(
         num_blocks=num_blocks,
         num_tiles_in_block=num_tiles_in_block,
         # Int32 MAX/MIN operands sit in DEST as two's-complement.
-        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
+        twos_complement=use_int32_twos_complement(formats, pool_type, mathop),
     )
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)
@@ -773,7 +779,7 @@ def _run_integer_reduce(
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
-@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
+@pytest.mark.parametrize("pool_type", MAX_MIN_POOLS)
 @pytest.mark.parametrize(
     "injected_value", [INT32_MIN, INT32_MAX], ids=["INT32_MIN", "INT32_MAX"]
 )
@@ -782,7 +788,7 @@ def _run_integer_reduce(
     [(-1000, 1000), (-1000, -1), (1, 1000)],
     ids=["mixed", "all_negative", "all_positive"],
 )
-def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
+def test_int32_reduce_extreme(mathop, pool_type, injected_value, base_range):
     """Repro/guard for tenstorrent/tt-metal#44750: INT32 SFPU reduce (min/max) must stay correct when
     the input contains INT32_MIN or INT32_MAX.
 
@@ -792,7 +798,7 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     """
 
     golden_slice, res_slice = _run_integer_reduce(
-        mathop, reduce_pool, injected_value, base_range=base_range
+        mathop, pool_type, injected_value, base_range=base_range
     )
 
     golden = golden_slice.to(torch.int64)
@@ -810,7 +816,7 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         detail = "\n".join(lines)
         logger.info(
             "\n{} {} injected={}: {} mismatched lanes\n{}",
-            reduce_pool,
+            pool_type,
             mathop,
             int(injected_value),
             num_mismatch,
@@ -818,7 +824,7 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
         )
 
     assert num_mismatch == 0, (
-        f"{num_mismatch} mismatched reduction lanes for {reduce_pool} {mathop} "
+        f"{num_mismatch} mismatched reduction lanes for {pool_type} {mathop} "
         f"injected={int(injected_value)} (see stdout)"
     )
 
@@ -855,19 +861,19 @@ INTEGER_MAX_MIN_BLOCKS = [
 
 def _check_max_min(
     block: IntegerReduceBlock,
-    reduce_pool: ReducePool,
+    pool_type: ReducePool,
     values: torch.Tensor,
     input_format: DataFormat,
 ):
     """Reduce ``values`` on device and compare every result with torch's max / min."""
 
-    if reduce_pool == ReducePool.Max:
+    if pool_type == ReducePool.Max:
         expected = values.amax(dim=block.reduced_dim)
     else:
         expected = values.amin(dim=block.reduced_dim)
 
     _, result = _run_integer_reduce(
-        block.mathop, reduce_pool, input_format=input_format, tile=values
+        block.mathop, pool_type, input_format=input_format, tile=values
     )
     result = result.to(torch.int64)
     if input_format == DataFormat.UInt32:
@@ -925,14 +931,14 @@ def _sign_boundary_block(block: IntegerReduceBlock) -> torch.Tensor:
 
 
 @pytest.mark.parametrize("block", INTEGER_MAX_MIN_BLOCKS, ids=str)
-@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
-def test_int32_reduce_max_min_sign_boundary(block, reduce_pool):
-    _check_max_min(block, reduce_pool, _sign_boundary_block(block), DataFormat.Int32)
+@pytest.mark.parametrize("pool_type", MAX_MIN_POOLS)
+def test_int32_reduce_max_min_sign_boundary(block, pool_type):
+    _check_max_min(block, pool_type, _sign_boundary_block(block), DataFormat.Int32)
 
 
 @pytest.mark.parametrize("block", INTEGER_MAX_MIN_BLOCKS, ids=str)
-@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
-def test_uint32_reduce_max_min_bit31(block, reduce_pool):
+@pytest.mark.parametrize("pool_type", MAX_MIN_POOLS)
+def test_uint32_reduce_max_min_bit31(block, pool_type):
     """UInt32 MAX/MIN must rank values with bit 31 set above all others, although SFPSWAP
     compares them as negative numbers."""
     torch.manual_seed(0)
@@ -964,7 +970,7 @@ def test_uint32_reduce_max_min_bit31(block, reduce_pool):
     values[28, :] = UINT32_BIT31
     values[28, 16] = INT32_MAX
 
-    _check_max_min(block, reduce_pool, values, DataFormat.UInt32)
+    _check_max_min(block, pool_type, values, DataFormat.UInt32)
 
 
 # =============================================================================
@@ -1057,7 +1063,7 @@ def _build_reduce_specials_tile(edge_class, torch_format, mathop):
     return tile
 
 
-def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_acc):
+def _run_float_reduce_specials(mathop, pool_type, edge_class, formats, dest_acc):
     """Drive one specials class through the float reduce and return (golden, device) slices.
 
     A near-copy of _run_integer_reduce's body rather than a shared helper: that one assumes an integer format,
@@ -1095,7 +1101,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
         dest_acc,
         formats.input_format,
         dst_dim,
-        reduce_pool=reduce_pool,
+        reduce_pool=pool_type,
     )
 
     src_B = torch.zeros_like(src_A)
@@ -1104,7 +1110,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
         formats,
         dest_acc,
         mathop,
-        reduce_pool,
+        pool_type,
         input_dimensions,
         tile_cnt,
         src_A,
@@ -1126,7 +1132,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
         DestAccumulation.Yes,
         DataFormat.Float32,
         dst_dim,
-        reduce_pool=reduce_pool,
+        reduce_pool=pool_type,
     )
     nan_probe = torch.as_tensor(nan_probe)
 
@@ -1140,7 +1146,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
 @pytest.mark.parametrize(
-    "reduce_pool",
+    "pool_type",
     [ReducePool.Max, ReducePool.Min, ReducePool.Sum, ReducePool.Average],
 )
 @pytest.mark.parametrize("edge_class", sorted(_REDUCE_SPECIAL_CLASSES))
@@ -1152,7 +1158,7 @@ def _run_float_reduce_specials(mathop, reduce_pool, edge_class, formats, dest_ac
     ],
     ids=["Float32->Float32", "Float16_b->Float16_b"],
 )
-def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
+def test_float_reduce_specials(mathop, pool_type, edge_class, formats):
     """Cat B for the reduce family: a special reaches the output through the fold.
 
     dest_acc follows the format rather than being a separate axis: a 32-bit input requires a
@@ -1173,7 +1179,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     )
 
     golden_slice, res_slice, fold_is_nan = _run_float_reduce_specials(
-        mathop, reduce_pool, edge_class, formats, dest_acc
+        mathop, pool_type, edge_class, formats, dest_acc
     )
 
     # Where the fold produces a NaN and this pipeline cannot carry one to L1, the packer
@@ -1193,7 +1199,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     # +NaN, whose sign is real -- and relaxing it here would accept a -inf and hide a broken
     # selection or a broken order. UnarySFPUGolden._SFPMAD_REDUCE_POOLS is the same split on the
     # golden side. Measured: 4 of 96 variants, Average over both_inf and over nan, on Float16_b.
-    if reduce_pool in _SFPMAD_REDUCE_POOLS and generated_nan_sign_is_asserted(
+    if pool_type in _SFPMAD_REDUCE_POOLS and generated_nan_sign_is_asserted(
         formats.input_format,
         formats.output_format,
         dest_acc,
@@ -1209,7 +1215,7 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
 
     assert passed_test(
         golden_slice, res_slice, formats.output_format
-    ), f"{reduce_pool} {mathop} on the '{edge_class}' class disagreed with the golden"
+    ), f"{pool_type} {mathop} on the '{edge_class}' class disagreed with the golden"
 
 
 # =============================================================================
@@ -1278,7 +1284,7 @@ def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
     formats = InputOutputFormat(data_format, data_format)
     dest_acc = DestAccumulation.Yes  # 32-bit formats require dest accumulation
     mathop = MathOperation.ReduceColumn
-    reduce_pool = ReducePool.Average
+    pool_type = ReducePool.Average
     input_dimensions = [TILE_DIM, TILE_DIM]
     tile_cnt = input_dimensions[0] * input_dimensions[1] // ELEMENTS_PER_TILE
 
@@ -1300,14 +1306,14 @@ def _run_integer_column_average(grid: torch.Tensor, data_format: DataFormat):
         formats,
         dest_acc,
         mathop,
-        reduce_pool,
+        pool_type,
         input_dimensions,
         tile_cnt,
         src_A,
         src_B,
         num_blocks=num_blocks,
         num_tiles_in_block=num_tiles_in_block,
-        twos_complement=use_int32_twos_complement(formats, reduce_pool, mathop),
+        twos_complement=use_int32_twos_complement(formats, pool_type, mathop),
     )
 
     res_tensor = result_tensor(res_from_L1, formats.output_format)

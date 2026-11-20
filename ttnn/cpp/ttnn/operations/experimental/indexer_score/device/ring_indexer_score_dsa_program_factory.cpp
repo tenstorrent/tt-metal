@@ -20,6 +20,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/small_vector.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdevcommon/kernel_structs.h"  // tt::CBIndex
 
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
@@ -392,8 +393,9 @@ ProgramDescriptor build_ring_program_descriptor(
         .full_mesh = fused.full_mesh,
         .orientation = fused.snake_orientation,
         .mesh_rows = fused.mesh_rows,
-        .mesh_cols = fused.mesh_cols};
-    reader_ct.push_back(rank_mapping.full_mesh ? 1u : 0u);
+        .mesh_cols = fused.mesh_cols,
+        .column_major_ranks = fused.column_major};
+    reader_ct.push_back(rank_mapping_compile_time_arg(rank_mapping));
     reader_ct.push_back(static_cast<uint32_t>(rank_mapping.orientation));
     reader_ct.push_back(rank_mapping.mesh_rows);
     reader_ct.push_back(rank_mapping.mesh_cols);
@@ -618,7 +620,8 @@ ProgramDescriptor build_ring_program_descriptor(
             .mesh_rows = fused.mesh_rows,
             .mesh_cols = fused.mesh_cols,
             .ring_size = ring_size,
-            .route_plan_hash = fused.route_plan_hash};
+            .route_plan_hash = fused.route_plan_hash,
+            .column_major_ranks = fused.column_major};
         const auto position =
             ttnn::operations::ccl::common::get_mesh_ring_position(q, coord, mesh_ring_plan, fused.topology);
         TT_FATAL(
@@ -712,14 +715,68 @@ ProgramDescriptor build_ring_program_descriptor(
     return desc;
 }
 
+// A full-mesh fused ring's route (snake orientation, Ring vs Linear closure) is proved here, on a program-cache
+// miss, instead of in invoke on every call: proving it walks the fabric control plane. The key need not hold it:
+// the program cache is per mesh device, and the device's fabric cannot change while it is open.
+operation_attributes_t resolve_full_mesh_route(const operation_attributes_t& args, const Tensor& q) {
+    // Only create_mesh_workload's resolved copy carries a route hash; invoke never sets one.
+    if (!args.has_fused_ring() || !args.fused_ring->full_mesh || args.fused_ring->route_plan_hash.has_value()) {
+        return args;
+    }
+    auto resolved = args;
+    auto& fused = *resolved.fused_ring;
+    const auto fabric_config = tt::tt_fabric::GetFabricConfig(*q.device());
+    const std::array<tt::tt_fabric::Topology, 2> axis_topology{
+        ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
+    const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
+        q,
+        std::nullopt,
+        fused.num_links,
+        axis_topology,
+        true,
+        "ring_indexer_score_dsa",
+        /*allow_open_path=*/true);
+    TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
+    TT_FATAL(
+        route->plan.mesh_rows == fused.mesh_rows && route->plan.mesh_cols == fused.mesh_cols,
+        "ring_indexer_score_dsa full-mesh route {}x{} does not match the {}x{} mesh it was requested for",
+        route->plan.mesh_rows,
+        route->plan.mesh_cols,
+        fused.mesh_rows,
+        fused.mesh_cols);
+    fused.topology = route->topology;
+    fused.snake_orientation = route->plan.orientation;
+    fused.route_plan_hash = route->plan.route_plan_hash;
+    return resolved;
+}
+
 }  // namespace CMAKE_UNIQUE_NAMESPACE
 }  // namespace
 
+std::vector<ttnn::PerDeviceRuntimeArgsWords> RingIndexerScoreDsaProgramFactory::per_device_runtime_args_words() {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    namespace common = indexer_common;
+    constexpr uint32_t kGeometryWords = 3;  // ChunkStart, StraddleQ, StraddleJump
+    static_assert(common::writer::StraddleJump == common::writer::ChunkStart + kGeometryWords - 1);
+    static_assert(common::compute::StraddleJump == common::compute::ChunkStart + kGeometryWords - 1);
+    return {
+        {.kernel_index = kWriterKernelIndex,
+         .core = std::nullopt,
+         .first_word = common::writer::ChunkStart,
+         .num_words = kGeometryWords},
+        {.kernel_index = kComputeKernelIndex,
+         .core = std::nullopt,
+         .first_word = common::compute::ChunkStart,
+         .num_words = kGeometryWords},
+    };
+}
+
 tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workload_descriptor(
-    const operation_attributes_t& args,
+    const operation_attributes_t& unresolved_args,
     const tensor_args_t& tensors,
     tensor_return_value_t& out,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    const auto args = CMAKE_UNIQUE_NAMESPACE::resolve_full_mesh_route(unresolved_args, tensors.q);
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
@@ -732,12 +789,17 @@ tt::tt_metal::WorkloadDescriptor RingIndexerScoreDsaProgramFactory::create_workl
 
 RingIndexerScoreDsaMeshWorkloadFactory::cached_mesh_workload_t
 RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
-    const operation_attributes_t& args,
+    const operation_attributes_t& unresolved_args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensors,
     tensor_return_value_t& out) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
-    auto descriptor_cached = descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out);
+    // Program-cache miss: prove the full-mesh route once; create_workload_descriptor then sees it resolved.
+    const auto args = resolve_full_mesh_route(unresolved_args, tensors.q);
+    // override_runtime_arguments sets the per-device words of a merged range with SetRuntimeArgsPerDevice, so this
+    // factory takes the merged programs.
+    auto descriptor_cached =
+        descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensors, out, ttnn::MergePerDevicePrograms{});
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     constexpr std::array kernel_indices{
         kAllGatherReaderForwardKernelIndex,
@@ -747,11 +809,13 @@ RingIndexerScoreDsaMeshWorkloadFactory::create_mesh_workload(
     for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
         auto& shared = shared_variables[range];
         shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
-        shared.device_index = transport_to_tensor_rank(args, transport_rank_for(args, range.start_coord(), tensors.q));
-        shared.tp_index =
-            (args.tp_axis().has_value() && tensors.q.device_storage().get_coords().size() > 1)
-                ? ttnn::ccl::get_linearized_index_from_physical_coord(tensors.q, range.start_coord(), args.tp_axis())
-                : 0u;
+        for (const auto& coord : range) {
+            shared.device_indices.push_back(transport_to_tensor_rank(args, transport_rank_for(args, coord, tensors.q)));
+            shared.tp_indices.push_back(
+                (args.tp_axis().has_value() && tensors.q.device_storage().get_coords().size() > 1)
+                    ? ttnn::ccl::get_linearized_index_from_physical_coord(tensors.q, coord, args.tp_axis())
+                    : 0u);
+        }
         for (size_t index = 0; index < kernel_indices.size(); ++index) {
             auto& plan = shared.ag_plans[index];
             plan.kernel_idx = kernel_indices[index];
@@ -867,7 +931,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         }
     }
     const uint32_t slot_metadata_address =
-        update_metadata && has_slot_metadata ? tensors.cache_batch_idx_tensor->buffer()->address() : 0u;
+        update_metadata && has_slot_metadata ? tensors.cache_batch_idx_tensor->mesh_buffer().address() : 0u;
     const uint32_t ag_meta_base = ag_rt::reader_metadata_base(/*num_inputs=*/1);
     std::array<ttsl::SmallVector<std::pair<uint32_t, uint32_t>, 3>, 4> ag_updates;
     if (update_semaphores) {
@@ -896,7 +960,7 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         }
     }
     for (auto& [range, program] : cached.workload.get_programs()) {
-        const auto& shared = cached.shared_variables.at(range);
+        auto& shared = cached.shared_variables.at(range);
 
         // Visit each AG kernel/core once for all of its changing scalars. The largest field
         // bounds-check implies every field in this fixed table fits; empty AG cores stay skipped.
@@ -940,8 +1004,45 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             }
         };
         if (update_consumer) {
-            const auto geom = device_causal_geometry(args, shared.device_index, shared.tp_index, q.logical_shape()[2]);
             namespace common = indexer_common;
+            // The causal geometry of each device of the range: the program's own words when the range is one device,
+            // per-device runtime args (merged program) otherwise, set only when a device's value changed.
+            std::vector<uint32_t> geometry;
+            geometry.reserve(shared.device_indices.size() * 3);
+            for (size_t i = 0; i < shared.device_indices.size(); ++i) {
+                const auto geom =
+                    device_causal_geometry(args, shared.device_indices[i], shared.tp_indices[i], q.logical_shape()[2]);
+                geometry.insert(
+                    geometry.end(), {geom.chunk_start_tiles, geom.straddle_q_tile, geom.straddle_jump_tiles});
+            }
+            if (geometry != shared.geometry) {
+                if (shared.device_indices.size() == 1) {
+                    auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
+                    auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
+                    for (uint32_t w = 0; w < 3; ++w) {
+                        compute_common.at(common::compute::ChunkStart + w) = geometry[w];
+                        writer_common.at(common::writer::ChunkStart + w) = geometry[w];
+                    }
+                } else {
+                    tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                        cached.workload,
+                        range,
+                        kComputeKernelIndex,
+                        std::nullopt,
+                        common::compute::ChunkStart,
+                        3,
+                        geometry);
+                    tt::tt_metal::distributed::SetRuntimeArgsPerDevice(
+                        cached.workload,
+                        range,
+                        kWriterKernelIndex,
+                        std::nullopt,
+                        common::writer::ChunkStart,
+                        3,
+                        geometry);
+                }
+                shared.geometry = std::move(geometry);
+            }
             auto& reader_common = tt::tt_metal::GetCommonRuntimeArgs(program, kReaderKernelIndex);
             reader_common.at(common::reader::BatchOffset) = pcache.k_batch_page_offset;
             reader_common.at(common::reader::KvLength) = pcache.kv_len_tiles;
@@ -950,14 +1051,8 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
             reader_common.at(common::reader::LayerIndex) = args.index_cache_layer_idx;
             auto& compute_common = tt::tt_metal::GetCommonRuntimeArgs(program, kComputeKernelIndex);
             compute_common.at(common::compute::KvLength) = pcache.kv_len_tiles;
-            compute_common.at(common::compute::ChunkStart) = geom.chunk_start_tiles;
-            compute_common.at(common::compute::StraddleQ) = geom.straddle_q_tile;
-            compute_common.at(common::compute::StraddleJump) = geom.straddle_jump_tiles;
             auto& writer_common = tt::tt_metal::GetCommonRuntimeArgs(program, kWriterKernelIndex);
             writer_common.at(common::writer::KvLength) = pcache.kv_len_tiles;
-            writer_common.at(common::writer::ChunkStart) = geom.chunk_start_tiles;
-            writer_common.at(common::writer::StraddleQ) = geom.straddle_q_tile;
-            writer_common.at(common::writer::StraddleJump) = geom.straddle_jump_tiles;
         }
 
         // Semaphore rotation need not rewrite the unchanged extent or consumer geometry.

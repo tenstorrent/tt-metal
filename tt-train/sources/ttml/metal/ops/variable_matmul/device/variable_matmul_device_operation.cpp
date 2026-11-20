@@ -7,7 +7,9 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include <vector>
 
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "variable_matmul_program_factory.hpp"
@@ -16,6 +18,16 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttml::metal::ops::variable_matmul::device {
+
+namespace {
+
+// The compile-time args a kernel's TensorAccessorArgs adds for this tensor: an interleaved tensor's buffer type and
+// aligned page size, or a sharded tensor's shard layout.
+std::vector<uint32_t> accessor_compile_time_args(const ttnn::Tensor& tensor) {
+    return tt::tt_metal::TensorAccessorArgs(*tensor.buffer()).get_compile_time_args();
+}
+
+}  // namespace
 
 void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
@@ -176,7 +188,7 @@ void VariableMatmulDeviceOperation::validate_on_program_cache_miss(
         offsets_volume);
     // The dataflow kernels read exactly ONE page of the offsets tensor and index within it, so
     // the {start, end} pair must fall inside page 0. Enforce the documented limitation here.
-    const uint32_t offsets_page_bytes = off.buffer()->page_size();
+    const uint32_t offsets_page_bytes = off.mesh_buffer().page_size();
     TT_FATAL(
         (operation_attributes.offsets_start_index + 2U) * sizeof(uint32_t) <= offsets_page_bytes,
         "variable_matmul: offsets_start_index ({}) + 2 spills past offsets_tensor page 0 ({} bytes); "
@@ -288,7 +300,14 @@ ttsl::hash::hash_t VariableMatmulDeviceOperation::compute_program_hash(
         // Write-at-offset toggles a CTA path. Boolean only (offset value is RT-only).
         tensor_args.output_tensor.has_value(),
         // On-device offsets: different role = different cached program (CTA define).
-        static_cast<uint32_t>(operation_attributes.offsets_role));
+        static_cast<uint32_t>(operation_attributes.offsets_role),
+        // What the kernels bake in about each tensor: where it lives and its aligned page size, which for the
+        // offsets tensor follows its length. An output the op allocates follows the input's memory config and dtype.
+        accessor_compile_time_args(a),
+        accessor_compile_time_args(w),
+        tensor_args.output_tensor.has_value() ? accessor_compile_time_args(*tensor_args.output_tensor)
+                                              : std::vector<uint32_t>{},
+        accessor_compile_time_args(tensor_args.offsets_tensor));
 }
 
 }  // namespace ttml::metal::ops::variable_matmul::device

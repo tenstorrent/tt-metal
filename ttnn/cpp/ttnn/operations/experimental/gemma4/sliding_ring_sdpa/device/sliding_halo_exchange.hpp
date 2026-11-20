@@ -45,10 +45,13 @@ struct SlidingHaloConfig {
     uint32_t link_base = 0;
     // Every exchange delivers its per-link ready-increment to the hop-1 exchange's workers
     // (rendezvous_noc[link]), and only that exchange waits and signals the SDPA: one signaller per
-    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Each collecting worker
-    // expects one arrival per remote predecessor. Empty rendezvous_noc: each worker's own core.
-    uint32_t arrivals_expected = 1;
+    // semaphore, since concurrent Semaphore::up from two cores can lose an update. Empty rendezvous_noc:
+    // each worker's own core.
     std::vector<CoreCoord> rendezvous_noc;
+    // The writer increments semaphores[kHaloArrivalSemaphoreBase + arrival_key] on its receivers; the
+    // collector waits for one arrival on each of collected_keys (one distinct key per predecessor).
+    uint32_t arrival_key = 0;
+    std::vector<uint32_t> collected_keys;
     // A halo with more hops than fabric links time-shares a link. An ERISC exposes one worker
     // sender channel per direction, and concurrent workers on it stall each other, but SEQUENTIAL
     // reuse is the fabric's own protocol: close() persists the producer cursor and the next open()
@@ -73,6 +76,9 @@ struct SlidingHaloConfig {
     uint32_t q_local_tile_rows = 0;
     uint32_t halo_tile_rows = 0;
     uint32_t source_device = 0;
+    // Lanes: the exchange ships num_lanes requests' tails, lane b from cache slot slot_id[b] with prefix
+    // kv_actual_isl[b], into batch b of the halo buffer; one arrival per exchange.
+    uint32_t num_lanes = 1;
 
     bool derives_cache_batch_on_device() const { return slot_id != nullptr; }
     bool derives_start_on_device() const { return kv_actual_isl != nullptr; }
@@ -80,9 +86,11 @@ struct SlidingHaloConfig {
 
 // Halo reader/writer runtime-arg layout (sliding_halo_{reader,writer}.cpp).
 namespace halo_rt {
-constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 2;
-// The halo GlobalSemaphore's address: not in the program hash, so re-patched on every dispatch.
-constexpr uint32_t kNeighborReaderSemaphoreArg = 0;
+// semaphores[0]/[1] are the all-gather directions; halo arrival semaphores start here.
+constexpr uint32_t kHaloArrivalSemaphoreBase = 2;
+// Reader header: the link index. The collector's arrival semaphores close its args.
+constexpr uint32_t kNeighborReaderRuntimeArgHeaderCount = 1;
+// The writer's arrival semaphore address: not in the program hash, so re-patched on every dispatch.
 constexpr uint32_t kNeighborWriterSemaphoreArg = 2;
 constexpr uint32_t kNeighborReaderTensorDescriptorFieldCount = 8;
 constexpr uint32_t kNeighborReaderMetadataTensorDescriptorFieldCount = kNeighborReaderTensorDescriptorFieldCount + 1;
