@@ -29,11 +29,10 @@ GlobalCircularBuffer create_global_circular_buffer(
     BufferType buffer_type) {
     auto guard = tt::tt_metal::make_allocation_context_guard("ttnn.create_global_circular_buffer");
     return tt::tt_metal::experimental::GlobalCircularBuffer(
-        *device,
+        ttnn::core::current_mesh_command_queue(*device),
         sender_receiver_core_mapping,
         size,
-        buffer_type,
-        ttnn::core::get_current_command_queue_id_for_thread().get());
+        buffer_type);
 }
 
 namespace {
