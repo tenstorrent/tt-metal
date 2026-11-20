@@ -527,7 +527,19 @@ def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
     )
 
 
-@pytest.mark.parametrize("tilized", [True, False])
+@pytest.mark.parametrize(
+    "tilized, input_dtype, output_dtype",
+    [
+        (True, "bfloat16", None),
+        (True, "float32", None),
+        (True, "bfloat16", "float32"),
+        (True, "uint32", None),
+        (True, "bfloat8_b", None),
+        (False, "bfloat16", None),
+        (False, "float32", None),
+        (False, "uint32", None),
+    ],
+)
 @pytest.mark.parametrize(
     "shape, shard_layout, shard_shape",
     [
@@ -547,7 +559,6 @@ def _two_shard_memory_config(shard_layout, buffer_type, shard_shape):
         (ttnn.BufferType.L1, ttnn.BufferType.DRAM),
     ],
 )
-@pytest.mark.parametrize("input_dtype, output_dtype", [("bfloat16", None), ("float32", None), ("bfloat16", "float32")])
 def test_clone_dram_sharded(
     tilized,
     shape,
@@ -563,14 +574,21 @@ def test_clone_dram_sharded(
     Clone with the input and/or output sharded in DRAM (same shard spec on both sides),
     including uneven last shards.
     """
-    if output_dtype and not tilized:
-        pytest.skip("When not tilized, dtype conversion is not supported.")
-    torch.manual_seed(2024)
-    torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+    torch.manual_seed(0)
+    if input_dtype == "uint32":
+        # torch has no uint32; non-negative int32 values are the same bits.
+        torch_input = torch.randint(0, 2**31 - 1, shape, dtype=torch.int32)
+        ttnn_in_dtype = ttnn.uint32
+    elif input_dtype == "bfloat8_b":
+        torch_input = torch.randn(shape, dtype=torch.float32)
+        ttnn_in_dtype = ttnn.bfloat8_b
+    else:
+        torch_input = torch.randn(shape, dtype=get_lib_dtype(torch, input_dtype))
+        ttnn_in_dtype = get_lib_dtype(ttnn, input_dtype)
     ttnn_input = ttnn.from_torch(
         torch_input,
         device=device,
-        dtype=get_lib_dtype(ttnn, input_dtype),
+        dtype=ttnn_in_dtype,
         layout=ttnn.TILE_LAYOUT if tilized else ttnn.ROW_MAJOR_LAYOUT,
         memory_config=_two_shard_memory_config(shard_layout, input_buffer_type, shard_shape),
     )
@@ -579,5 +597,11 @@ def test_clone_dram_sharded(
         dtype=get_lib_dtype(ttnn, output_dtype),
         memory_config=_two_shard_memory_config(shard_layout, output_buffer_type, shard_shape),
     )
-    expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
-    assert torch.equal(ttnn.to_torch(ttnn_output), expected)
+    if input_dtype == "bfloat8_b":
+        # Block-float quantizes on upload, so compare against what the input tensor holds.
+        expected = ttnn.to_torch(ttnn_input)
+    elif input_dtype == "uint32":
+        expected = torch_input
+    else:
+        expected = torch_input.to(get_lib_dtype(torch, output_dtype or input_dtype))
+    assert torch.equal(ttnn.to_torch(ttnn_output).to(expected.dtype), expected)
