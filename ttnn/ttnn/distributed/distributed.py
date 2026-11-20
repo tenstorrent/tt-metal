@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import contextlib
+import sys
 import functools
 
 from typing import List, Dict, Optional, Callable, Tuple, Optional, Callable, Union, List
@@ -688,7 +689,21 @@ def close_mesh_device(mesh_device):
     close_mesh_device(multi_device: ttnn.Multi) -> None:
 
     Close the device and remove it from the device cache.
+
+    In a distributed job, a close that runs while an exception is unwinding (a ``with`` block or ``finally`` on the
+    way out of an error) first stops the job: every other rank gets SIGTERM and closes its own devices. Otherwise this
+    rank's close would wait for peers that are still in their collectives, and the error would never reach them.
     """
+    exc = sys.exc_info()[1]
+    if exc is not None and not (isinstance(exc, SystemExit) and exc.code in (0, None)):
+        if isinstance(exc, SystemExit):
+            code = exc.code if isinstance(exc.code, int) else 1
+        else:
+            code = 130 if isinstance(exc, KeyboardInterrupt) else 1
+        text = str(exc).splitlines()[0][:200] if str(exc) else ""
+        ttnn._ttnn.multi_device.request_job_stop(
+            code, f"Python exception {type(exc).__name__}{': ' + text if text else ''} (closing the mesh)"
+        )
     return ttnn._ttnn.multi_device.close_mesh_device(mesh_device)
 
 

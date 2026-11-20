@@ -59,15 +59,16 @@ def test_ttrun_clean():
 
 
 def test_ttrun_dead_rank():
-    """A rank is killed. Because tt-run launches the plain mpirun, the job ends with a non-zero code (not the ULFM
-    false 0, P4) and nothing is left."""
+    """A rank is killed. Its wrapper (tt-run-rank) stops the job in its place: every other rank gets SIGTERM, the job
+    ends with the dead rank's 137 (not the ULFM false 0, P4), tt-run names it, and nothing is left."""
     r = run_case("ttrun_dead_rank", {**NP, "PROBE_SCENARIO": "victim_sigkill"}, DEADLINE_END, cmd=ttrun_mpi_cmd())
     ended(r)
     nonzero(r)
     clean(r)
     # tt-run names the rank, where it ran, how it ended and what happened to the others, not the stale-cache hint
-    assert re.search(r"rank 1 on \S+ \(pid \d+\) was killed by signal 9 \(SIGKILL\)", r.log), r.log[-2000:]
-    assert "the launcher then killed the other ranks" in r.log and "outcome=failed" in r.log, r.log[-2000:]
+    assert re.search(r"rank 1 on \S+ \(pid \d+\): was killed by signal 9 \(SIGKILL\)", r.log), r.log[-2000:]
+    assert "the other ranks were sent SIGTERM and exited" in r.log, r.log[-2000:]
+    assert r.exit == 137 and "outcome=failed exit=137" in r.log, r.log[-2000:]
 
 
 def test_ttrun_hang_timeout():
@@ -87,18 +88,16 @@ def test_ttrun_hang_timeout():
 
 
 @pytest.mark.xfail(
-    reason="P1 (tt-metal #66367): a rank leaving on an error runs atexit -> MPI_Finalize, which is collective and "
-    "deadlocks the peers waiting in a different collective, so the whole job hangs until the --timeout wall clock "
-    "(exit 241) instead of failing fast. The fix is abort-on-error in MPIContext (call MPI_Abort on an error exit, "
-    "MPI_Finalize only on a clean one) and lives in a LOWER layer than tt-run — PR2 / tt-metal #64546. Remove this "
-    "xfail when that lands.",
-    strict=False,
+    reason="P1 for a raw MPI program: a rank that calls exit(1) runs its own atexit MPI_Finalize, which is collective "
+    "and waits on the peers in their barrier, so the job rides the --timeout wall clock (241). Neither tt-run nor its "
+    "rank wrapper can end a rank that is still alive; tt-metal ranks stop the job from their exit instead "
+    "(test_teardown_sanity.py::test_exit1_stops_the_job).",
+    strict=True,
 )
 def test_ttrun_error_exit_fails_fast_not_hang():
-    """A rank exits on an error (victim_exit1). The contract: the job ends FAST with a truthful non-zero code and
-    leaves nothing — a rank's error must never deadlock its peers in MPI_Finalize. A PRRTE --timeout bounds the run
-    so this test can never hang the suite; today the job rides that wall clock to 241 (the P1 hang), which is the
-    known error PR2 fixes. xfail until abort-on-error lands in MPIContext."""
+    """A raw MPI rank (no tt-metal context) exits on an error with MPI_Finalize in its atexit (victim_exit1). A PRRTE
+    --timeout bounds the run so the row can never hang the suite. The row stays a strict xfail: it documents the one
+    error exit the launcher layer cannot see, and turns red if that ever changes."""
     r = run_case(
         "ttrun_error_exit_hang",
         {**NP, "PROBE_SCENARIO": "victim_exit1"},
@@ -108,7 +107,7 @@ def test_ttrun_error_exit_fails_fast_not_hang():
     ended(r)
     nonzero(r)
     clean(r)
-    # The real contract (what PR2 delivers): a fast abort, NOT riding the --timeout wall clock to 241.
+    # The contract: a fast end, NOT riding the --timeout wall clock to 241.
     assert r.exit != 241, f"P1: the error-exit deadlocked and the job rode the --timeout wall clock (241): {r}"
 
 
@@ -231,7 +230,8 @@ def test_ttrun_abort_ends():
     nonzero(r)
     clean(r)  # every surviving rank is gone, nothing left on any host
     assert r.wall_s < 30, f"tt-run stalled on the aborting rank: {r}"
-    assert re.search(r"rank 1 on \S+ \(pid \d+\) was killed by signal 6 \(SIGABRT\)", r.log), r.log[-2000:]
+    assert re.search(r"rank 1 on \S+ \(pid \d+\): was killed by signal 6 \(SIGABRT\)", r.log), r.log[-2000:]
+    assert r.exit == 134, str(r)
 
 
 def test_ttrun_dead_peer_survivors_abort():

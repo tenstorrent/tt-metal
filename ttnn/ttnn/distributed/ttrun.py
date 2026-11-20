@@ -86,6 +86,25 @@ def find_signal_helper() -> Tuple[Optional[str], str]:
     return None, "tt-run-signal is not built (tools/scaleout, needs the ULFM Open MPI install)"
 
 
+def find_rank_wrapper() -> Optional[str]:
+    """tt-run-rank (tools/scaleout/src/tt_run_rank.cpp), the wrapper each rank runs in so a rank that dies or fails
+    without stopping the job still stops it gracefully: ``TT_RUN_RANK_WRAPPER`` ("none" turns it off), else the
+    one next to tt-run-signal. None when it is not built; the ranks then run unwrapped."""
+    override = os.environ.get("TT_RUN_RANK_WRAPPER")
+    if override is not None:
+        return override if override not in ("", "none") and os.access(override, os.X_OK) else None
+    helper, _ = find_signal_helper()
+    if helper is None:
+        return None
+    candidate = Path(helper).parent / "tt-run-rank"
+    return str(candidate) if os.access(candidate, os.X_OK) else shutil.which("tt-run-rank")
+
+
+# The line a rank (tt-metal's DistributedContext::request_job_stop) or its wrapper (tt-run-rank) prints when it stops
+# the job: tt-run names that rank and returns its code.
+_STOP_LINE = re.compile(r"\[tt-stop\] rank (\S+) on (\S+) \(pid (\d+)\): (.*?); stopping the job \(exit (\d+)\)")
+
+
 def prterun_tool_uri(prterun_pid: int) -> Optional[str]:
     """The PMIx server URI prterun publishes for tools: the first line of
     ``<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>``, or None while it is not there yet."""
@@ -263,6 +282,8 @@ class LaunchedJob:
         self.stop_sent = False  # the ranks were sent SIGTERM through PRRTE job control
         self.forced_why = ""  # set once tt-run forced the job down (SIGTERM to the launcher)
         self._force_t0: Optional[float] = None
+        self.rank_stop: Optional[re.Match] = None  # the first rank that stopped the job (its [tt-stop] line)
+        self.stopped_by_rank = False  # a rank stopped the job before tt-run was stopped: its code is the job's
 
     def __enter__(self) -> "LaunchedJob":
         remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
@@ -311,6 +332,10 @@ class LaunchedJob:
                 del self._stderr_tail[:-400]
                 if _MPI_ABORT_BANNER in line:
                     self._abort_seen = True
+                if self.rank_stop is None and "[tt-stop]" in line:
+                    m = _STOP_LINE.search(line)
+                    if m:
+                        self._rank_stopped(m)
         except OSError:
             pass
 
@@ -319,6 +344,19 @@ class LaunchedJob:
         if self._pump is not None:
             self._pump.join(timeout=2.0)
         return "".join(self._stderr_tail)
+
+    def _rank_stopped(self, m: re.Match) -> None:
+        """A rank stopped the job (every rank was sent SIGTERM): from now on the stop grace applies as if tt-run had
+        been stopped, so a rank that does not exit is forced after it."""
+        self.rank_stop = m
+        if self.stop_t0 is None:
+            self.stopped_by_rank = True
+            self.stop_t0 = time.time()
+            self.stop_sent = True
+            logger.warning(
+                f"{TT_RUN_PREFIX} rank {m.group(1)} on {m.group(2)} stopped the job ({m.group(4)}): all ranks were "
+                f"sent SIGTERM; waiting up to {_stop_grace_s():g} s for them to exit (Ctrl-C to force)"
+            )
 
     def _relay(self, signum, frame) -> None:
         # Only record it: the first stop signal makes wait() send SIGTERM to every rank, a second one makes it force.
@@ -427,7 +465,9 @@ class LaunchedJob:
                     else:
                         self._force(f"{name} received, could not reach prterun: {why}", 0)
                 elif not self.forced_why:
-                    self._force(f"second {name}", now - self.stop_t0)
+                    first = handled == 1  # the job was already stopping because a rank stopped it
+                    why = f"{name} received while the job was stopping" if first else f"second {name}"
+                    self._force(why, now - self.stop_t0)
             if self.stop_sent and not self.forced_why and now - self.stop_t0 >= _stop_grace_s():
                 self._force(f"ranks did not exit within {_stop_grace_s():g} s", now - self.stop_t0)
             if self.forced_why:
@@ -555,7 +595,16 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
     # __exit__ has torn the job down (handlers restored, leftover ranks ended, shm swept). Classify the result,
     # say it once, and end with one summary line every run has.
     elapsed, origin = time.time() - job.t0, ""
-    if job.forwarded:  # stopped at tt-run: the code is the stop's, whatever the ranks died of
+    launcher_stderr = job.launcher_stderr()  # drained first: a rank's [tt-stop] line may be the last thing it wrote
+    if job.stopped_by_rank:  # a rank stopped the job: its code, and it is named
+        r, host, pid, reason, code = job.rank_stop.groups()
+        rc, origin, cause = int(code), f"rank {r} on {host}", "rank failure"
+        if job.forced_why:
+            outcome, others = "forced", "the other ranks did not all exit in time and were killed"
+        else:
+            outcome, others = "failed", "the other ranks were sent SIGTERM and exited"
+        logger.error(f"{TT_RUN_PREFIX} rank {r} on {host} (pid {pid}): {reason}; {others}. tt-run returns {rc}.")
+    elif job.forwarded:  # stopped at tt-run: the code is the stop's, whatever the ranks died of
         rc = 128 + job.forwarded[0]
         cause = signal.Signals(job.forwarded[0]).name
         outcome = "forced" if job.forced_why else "stopped"
@@ -567,7 +616,7 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
         )
         outcome, cause = "forced", "--timeout"
     elif rc != 0:
-        message, origin = describe_rank_failure(job.launcher_stderr(), rc, job.hosts)
+        message, origin = describe_rank_failure(launcher_stderr, rc, job.hosts)
         logger.error(f"{TT_RUN_PREFIX} {message}")
         outcome, cause = "failed", "rank failure"
     elif job.ended:  # the launcher reported success but left ranks alive -> a failure (logged as a leak)
@@ -2681,6 +2730,21 @@ def normalize_rankfile_mpi_args(
     return normalized_args
 
 
+def peer_failure_mca_args(mpi_args: Optional[List[str]], rank_wrapper: Optional[str]) -> List[str]:
+    """``--mca mpi_ft_enable 1`` when the ranks run in tt-run-rank. Without it Open MPI treats a peer's closed TCP
+    socket as fatal, and a rank whose peer died is aborted (exit 14) before the wrapper's SIGTERM lets it close its
+    devices; with it the failure is an error returned by the wait (MPI_ERR_PROC_FAILED), and the rank closes. Only
+    the MPI library's own fault handling: PRRTE still ends the job on a rank's exit, so codes are unchanged. Left
+    out when the user sets it, or picks a PML other than ob1 (fault tolerance needs ob1)."""
+    args = mpi_args or []
+    if rank_wrapper is None or has_mca_param(args, "mpi_ft_enable"):
+        return []
+    for i, a in enumerate(args):
+        if a in ("--mca", "-mca") and i + 2 < len(args) and args[i + 1] == "pml" and args[i + 2] != "ob1":
+            return []
+    return ["--mca", "mpi_ft_enable", "1"]
+
+
 def build_mpi_command(
     config: TTRunConfig,
     program: List[str],
@@ -2718,6 +2782,9 @@ def build_mpi_command(
     if "--oversubscribe" in (effective_mpi_args or []):
         cmd.extend(yield_when_idle_mca_args(effective_mpi_args))
 
+    rank_wrapper = find_rank_wrapper()
+    cmd.extend(peer_failure_mca_args(effective_mpi_args, rank_wrapper))
+
     if effective_mpi_args:
         cmd.extend(effective_mpi_args)
 
@@ -2733,6 +2800,8 @@ def build_mpi_command(
         rank_program = program
         if tracy_config:
             rank_program, tracy_env = wrap_program_with_tracy(program, binding, tracy_config)
+        if rank_wrapper and not debug_gdbserver:
+            rank_program = [rank_wrapper, "--"] + list(rank_program)
         cmd.extend(
             build_rank_environment_args(binding, config, parent_env_prefix=parent_env_prefix, extra_env=tracy_env)
         )

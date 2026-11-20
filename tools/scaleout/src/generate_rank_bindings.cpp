@@ -994,8 +994,13 @@ int main(int argc, char** argv) {
         context->barrier();
 
     } catch (const std::exception& e) {
+        // Teardown plan P9: only rank 0 runs the solve (topology mapping), so an unsatisfiable mesh graph
+        // descriptor throws here on rank 0 only. Returning 1 locally would skip the barrier above and leave every
+        // other rank waiting in it forever. Abort the whole job (MPI_Abort) so the launcher ends Phase 1 non-zero
+        // with nothing left, instead of hanging on the peers still in the barrier.
         log_error(tt::LogFabric, "Error: {}", e.what());
-        return 1;
+        context->abort(1);
+        return 1;  // not reached under MPI (abort terminates); kept for the single-host context path
     }
 
     return 0;

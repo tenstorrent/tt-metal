@@ -1,0 +1,163 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// tt-run-rank: the wrapper tt-run starts each rank in, so a rank that dies still stops the job gracefully.
+//
+//   tt-run-rank -- <program> [args...]
+//
+// It runs the program as its child and passes it every signal the launcher sends. When the program ends:
+//   - with 0, or after a signal from the launcher (the job is being stopped), or after it stopped the job itself
+//     (tt-metal's context writes "stopped" to TT_RUN_RANK_FD): exit with the program's code;
+//   - otherwise (a segfault, a SIGKILL, an exit with an error from a program that did not stop the job): print one
+//     "[tt-stop] rank R on HOST (pid P): <how it ended>; stopping the job (exit CODE)" line, which tt-run reads to
+//     name the rank and return CODE, then send SIGTERM to every rank through the launcher (PMIx job control) and
+//     stay up in the dead program's place until the launcher ends the job once the other ranks have closed and
+//     exited (at most TT_METAL_STOP_TIMEOUT_S), so its own exit does not make the launcher kill them mid-close.
+// A program killed by a signal is reported with exit 128 + the signal.
+
+#include <pmix.h>
+
+#include <cerrno>
+#include <csignal>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+#include <fcntl.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+namespace {
+
+constexpr int kForwarded[] = {SIGTERM, SIGINT, SIGHUP, SIGQUIT, SIGUSR1, SIGUSR2, SIGCONT};
+volatile pid_t g_child = -1;
+volatile sig_atomic_t g_stop_signal = 0;  // a stop signal (SIGTERM, SIGINT, SIGHUP) the launcher sent this rank
+
+void forward(int signal_number) {
+    if (signal_number == SIGTERM || signal_number == SIGINT || signal_number == SIGHUP) {
+        g_stop_signal = signal_number;
+    }
+    if (g_child > 0) {
+        ::kill(g_child, signal_number);
+    }
+}
+
+double stop_timeout_s() {
+    const char* v = std::getenv("TT_METAL_STOP_TIMEOUT_S");
+    return (v != nullptr && *v != '\0') ? std::atof(v) : 30.0;
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    int first = 1;
+    if (first < argc && std::strcmp(argv[first], "--") == 0) {
+        ++first;
+    }
+    if (first >= argc) {
+        std::fprintf(stderr, "usage: %s -- <program> [args...]\n", argv[0]);
+        return 2;
+    }
+
+    int status_pipe[2] = {-1, -1};
+    if (::pipe2(status_pipe, O_CLOEXEC) != 0) {
+        status_pipe[0] = status_pipe[1] = -1;
+    }
+    struct sigaction action{};
+    action.sa_handler = forward;
+    ::sigemptyset(&action.sa_mask);
+    action.sa_flags = SA_RESTART;
+    for (const int s : kForwarded) {
+        ::sigaction(s, &action, nullptr);
+    }
+
+    const pid_t child = ::fork();
+    if (child < 0) {
+        std::perror("tt-run-rank: fork");
+        return 127;
+    }
+    if (child == 0) {
+        for (const int s : kForwarded) {
+            ::signal(s, SIG_DFL);
+        }
+        if (status_pipe[1] >= 0) {
+            const int fd = ::dup(status_pipe[1]);  // without O_CLOEXEC, so the program inherits it
+            ::setenv("TT_RUN_RANK_FD", std::to_string(fd).c_str(), 1);
+        }
+        ::execvp(argv[first], argv + first);
+        std::fprintf(stderr, "tt-run-rank: cannot run %s: %s\n", argv[first], std::strerror(errno));
+        ::_exit(127);
+    }
+    g_child = child;
+    if (status_pipe[1] >= 0) {
+        ::close(status_pipe[1]);
+    }
+
+    int status = 0;
+    while (::waitpid(child, &status, 0) < 0) {
+    }
+    const bool signalled = WIFSIGNALED(status);
+    const int code = signalled ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
+
+    char note[64] = {};
+    if (status_pipe[0] >= 0) {
+        ::fcntl(status_pipe[0], F_SETFL, O_NONBLOCK);  // a helper the program forked may still hold the write end
+        (void)!::read(status_pipe[0], note, sizeof note - 1);
+    }
+    const bool stopped_by_program = std::strstr(note, "stopped") != nullptr;
+    if (code == 0 || g_stop_signal != 0 || stopped_by_program) {
+        return code;
+    }
+
+    // The program died, or failed without stopping the job: stop it in its place.
+    ::signal(SIGTERM, SIG_IGN);  // our own broadcast comes back to this rank
+    const char* rank = std::getenv("OMPI_COMM_WORLD_RANK");
+    char host[256] = "?";
+    ::gethostname(host, sizeof host - 1);
+    std::string how;
+    if (signalled) {
+        const char* name = sigabbrev_np(WTERMSIG(status));
+        how = "was killed by signal " + std::to_string(WTERMSIG(status)) + " (SIG" + (name ? name : "?") + ")";
+    } else {
+        how = "exited with code " + std::to_string(code) + " without stopping the job";
+    }
+    std::fprintf(
+        stderr,
+        "[tt-stop] rank %s on %s (pid %d): %s; stopping the job (exit %d)\n",
+        rank != nullptr ? rank : "?",
+        host,
+        static_cast<int>(child),
+        how.c_str(),
+        code);
+    std::fflush(stderr);
+
+    pmix_proc_t me;
+    pmix_status_t rc = PMIx_Init(&me, nullptr, 0);
+    if (rc != PMIX_SUCCESS) {
+        std::fprintf(
+            stderr, "[tt-stop] tt-run-rank: PMIx_Init: %s; the launcher ends the job\n", PMIx_Error_string(rc));
+        return code;
+    }
+    pmix_proc_t all;
+    PMIX_LOAD_PROCID(&all, me.nspace, PMIX_RANK_WILDCARD);
+    int32_t signum = SIGTERM;
+    pmix_info_t directive;
+    PMIX_INFO_LOAD(&directive, PMIX_JOB_CTRL_SIGNAL, &signum, PMIX_INT32);
+    rc = PMIx_Job_control(&all, 1, &directive, 1, nullptr, nullptr);
+    PMIX_INFO_DESTRUCT(&directive);
+    if (rc != PMIX_SUCCESS) {
+        std::fprintf(stderr, "[tt-stop] tt-run-rank: PMIx_Job_control: %s\n", PMIx_Error_string(rc));
+        return code;
+    }
+    // Stay up in the dead program's place while the other ranks close: this rank's exit would make the launcher kill
+    // them mid-close. When they have exited (non-zero, so the launcher ends the job) the launcher ends this wrapper
+    // too; otherwise it leaves after TT_METAL_STOP_TIMEOUT_S. A PMIx fence cannot hold it here: with this rank's
+    // own client gone, the fence returns at once.
+    const double timeout = stop_timeout_s();
+    for (double waited = 0.0; timeout <= 0.0 || waited < timeout; waited += 0.1) {
+        ::usleep(100000);
+    }
+    return code;
+}

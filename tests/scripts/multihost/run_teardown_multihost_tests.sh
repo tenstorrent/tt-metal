@@ -9,7 +9,8 @@
 #
 # Run it yourself:
 #   ./run_teardown_multihost_tests.sh --hosts host1,host2[,host3,...]
-# Needs: at least two hosts, passwordless ssh between them, and mpirun + mpicxx on PATH. The probe source is found
+# Needs: at least two hosts, passwordless ssh between them (or TEARDOWN_REMOTE=srun inside a Slurm allocation that
+# holds them, where the compute nodes have no ssh keys), and mpirun + mpicxx on PATH. The probe source is found
 # under $TT_METAL_HOME (falls back to the current directory).
 set -uo pipefail
 
@@ -38,6 +39,18 @@ victim_rank=$((num_hosts - 1))               # one rank per host, so the last ra
 # uses your own account and keys.
 REMOTE_USER="${TEARDOWN_REMOTE_USER:-}"
 rtarget() { if [ -n "$REMOTE_USER" ]; then printf '%s@%s' "$REMOTE_USER" "$1"; else printf '%s' "$1"; fi; }
+# A command on a host: ssh, or srun --overlap inside a Slurm allocation (TEARDOWN_REMOTE=srun). remote_sh_stdin
+# runs a script read from stdin there.
+remote_sh() {
+  local host="$1"; shift
+  if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then srun --overlap -N1 -n1 -w "$host" bash -c "$*"
+  else ssh -o BatchMode=yes -o ConnectTimeout=5 "$(rtarget "$host")" "$*"; fi
+}
+remote_sh_stdin() {
+  local host="$1"; shift
+  if [ "${TEARDOWN_REMOTE:-ssh}" = srun ]; then srun --overlap -N1 -n1 -w "$host" env "$@" bash -s
+  else ssh -o BatchMode=yes "$(rtarget "$host")" "$* bash -s"; fi
+}
 
 # --------------------------------------------------------------------------------------------------------------
 # build the probe and stage it on every host. The compile dir is a local mktemp under /tmp, which SC4 does NOT
@@ -49,10 +62,12 @@ probe="$(mktemp -d)/teardown_mpi_probe"
 probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.cpp"
 mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
 for host in $(host_names); do
-  ssh -o BatchMode=yes "$(rtarget "$host")" "mkdir -p '$(dirname "$probe")'" \
+  remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
-  scp -q "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host (same file); verified next
-  ssh -o BatchMode=yes "$(rtarget "$host")" "test -x '$probe'" \
+  if [ "${TEARDOWN_REMOTE:-ssh}" != srun ]; then  # under srun the temp dir is on a shared filesystem (TMPDIR)
+    scp -q "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host; verified next
+  fi
+  remote_sh "$host" "test -x '$probe'" \
     || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
 done
 
@@ -97,7 +112,7 @@ launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to
 ranks_still_alive() {
   local total=0 host n
   for host in $(host_names); do
-    n=$(ssh -o BatchMode=yes -o ConnectTimeout=5 "$(rtarget "$host")" "pgrep -cf '$probe_pat' || true" 2>/dev/null)
+    n=$(remote_sh "$host" "pgrep -cf '$probe_pat' || true" 2>/dev/null)
     if [ $? -ne 0 ] || ! [[ "$n" =~ ^[0-9]+$ ]]; then echo "ERROR"; return 1; fi
     total=$((total + n))
   done
@@ -106,7 +121,7 @@ ranks_still_alive() {
 
 kill_stragglers() {
   local host
-  for host in $(host_names); do ssh -o BatchMode=yes "$(rtarget "$host")" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
+  for host in $(host_names); do remote_sh "$host" "pkill -9 -f '$probe_pat'" 2>/dev/null || true; done
 }
 
 # Kill ONLY this job's prted on $1. The rank on that host runs under this job's prted, so we find this run's rank
@@ -117,7 +132,7 @@ kill_stragglers() {
 # PROBE_PAT, which keeps the remote script free of nested quoting.
 kill_this_jobs_prted() {
   local host="$1"
-  ssh -o BatchMode=yes "$(rtarget "$host")" "PROBE_PAT='$probe_pat' bash -s" <<'REMOTE'
+  remote_sh_stdin "$host" "PROBE_PAT=$probe_pat" <<'REMOTE'
     rank=$(pgrep -f "$PROBE_PAT" | head -1)
     [ -n "$rank" ] || { echo "no rank matching the probe on this host"; exit 2; }
     pid=$rank
@@ -194,7 +209,7 @@ echo "       remote host, kill ONLY this job's prted there, and require PRRTE's 
 echo "       is no --timeout backstop on purpose: if PRRTE does not abort, the rank hangs, the outer 'timeout 120'"
 echo "       ends it with 124, and expect rejects that as the failure — so the case tests the abort, not the clock."
 ( for _ in $(seq 1 30); do
-    ssh -o BatchMode=yes "$(rtarget "$last_host")" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
+    remote_sh "$last_host" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
   done
   kill_this_jobs_prted "$last_host" || echo "::error::daemon-death fault was not injected on $last_host" ) &
 inject_pid=$!
@@ -222,12 +237,19 @@ else
     echo 'mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"'
   } >"$binding"
   sig_log="$(mktemp)"
+  # tt-run starts one app context per rank, so -np or --map-by node in --mpi-args would multiply the ranks or pile
+  # them on the first host. A rankfile places rank r on host r. It sits under the working directory with a plain
+  # relative name, which is how tt-run hands it to PRRTE (--map-by rankfile:file=<path>; a ../ path is rejected).
+  mkdir -p generated/teardown_sanity
+  rankfile="generated/teardown_sanity/rankfile_$$"
+  r=0; for host in $(host_names); do printf 'rank %d=%s slot=0\n' "$r" "$host"; r=$((r + 1)); done >"$rankfile"
   PROBE_SCENARIO=all_hang PROBE_NP="$num_hosts" \
     "${ttrun_cmd[@]}" --rank-binding "$binding" \
-      --mpi-args "--host $hosts -np $num_hosts --map-by node --oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_NP" \
+      --mpi-args "--rankfile $rankfile --oversubscribe --tag-output -x PROBE_SCENARIO -x PROBE_NP" \
       "$probe" >"$sig_log" 2>&1 &
   ttrun_pid=$!
-  for _ in $(seq 1 60); do [ "$(ranks_still_alive)" = "$num_hosts" ] && break; sleep 1; done  # all ranks up first
+  # all ranks up first (each rank counts twice under tt-run: its tt-run-rank wrapper carries the probe path too)
+  for _ in $(seq 1 60); do [ "$(ranks_still_alive)" -ge "$num_hosts" ] 2>/dev/null && break; sleep 1; done
   kill -INT "$ttrun_pid" 2>/dev/null  # tt-run sends SIGTERM to every rank on every host through PRRTE job control
   for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
   kill -9 "$ttrun_pid" 2>/dev/null || true
@@ -242,7 +264,7 @@ else
     echo "---- tt-run output ----"; tail -40 "$sig_log"
     failures=$((failures + 1)); kill_stragglers
   fi
-  rm -f "$sig_log" "$binding"
+  rm -f "$sig_log" "$binding" "$rankfile"
 fi
 
 # --------------------------------------------------------------------------------------------------------------

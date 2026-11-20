@@ -52,6 +52,13 @@ ttrun_module = importlib.import_module("ttnn.distributed.ttrun")
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@pytest.fixture(autouse=True)
+def _no_rank_wrapper(monkeypatch):
+    """Launch lines here are compared verbatim, so they never depend on whether tt-run-rank happens to be built; the
+    wrapper's own tests set TT_RUN_RANK_WRAPPER themselves."""
+    monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+
+
 @pytest.fixture
 def runner():
     """Create a Click test runner."""
@@ -1422,6 +1429,68 @@ class TestJobOwnership:
         if banner:
             assert "the launcher then killed the other ranks" in text and "tt-smi -r" in text, text
         assert f"job end: outcome=failed exit={code}" in text, text
+
+    # The line a rank (DistributedContext::request_job_stop) or its wrapper (tt-run-rank) prints when it stops the
+    # job, as prterun forwards it with --tag-output.
+    @pytest.mark.parametrize(
+        "reason,code",
+        [
+            ("sys.exit(3)", 3),
+            ("uncaught Python exception RuntimeError: boom on rank 1", 1),
+            ("uncaught C++ exception: TT_FATAL @ mesh_device.cpp: bad shape", 1),
+            ("exited with code 7", 7),
+            ("was killed by signal 9 (SIGKILL)", 137),
+            ("received SIGTERM from pid 999 (not from the launcher)", 143),
+        ],
+        ids=["sys_exit", "py_exception", "cpp_exception", "exit_code", "sigkill_via_wrapper", "outside_sigterm"],
+    )
+    def test_run_launcher_names_the_rank_that_stopped_the_job_and_returns_its_code(self, reason, code):
+        from ttnn.distributed.ttrun import run_launcher
+
+        # Every rank exits after the stop (143 for the ones told to stop), but the job's code is the stopping rank's
+        # and tt-run names it, even when prterun reports another rank first.
+        line = f"[1,1]<stderr>: [tt-stop] rank 1 on nodeB (pid 4242): {reason}; stopping the job (exit {code})"
+        script = f"echo {shlex.quote(line)} >&2; sleep 0.3; echo {shlex.quote(self._BANNER_EXIT_CODE)} >&2; exit 143"
+        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == code, text
+        assert f"rank 1 on nodeB stopped the job ({reason})" in text, text
+        assert f"rank 1 on nodeB (pid 4242): {reason}; the other ranks were sent SIGTERM and exited" in text, text
+        assert f"job end: outcome=failed exit={code} cause=rank failure" in text and "origin=rank 1 on nodeB" in text
+
+    def test_run_launcher_forces_a_job_a_rank_stopped_when_the_ranks_do_not_exit(self, monkeypatch):
+        import time
+
+        from ttnn.distributed import ttrun as m
+
+        # A rank stopped the job but another rank never exits (stuck in a device wait): the stop grace applies as
+        # for a stop at tt-run, then tt-run forces through the launcher. The code is still the stopping rank's.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        line = "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): sys.exit(5); stopping the job (exit 5)"
+        script = f"echo {shlex.quote(line)} >&2; trap 'exit 143' TERM; while :; do sleep 0.1; done"
+        t0 = time.time()
+        text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", script], cwd=Path.cwd()))
+        assert rc == 5, text
+        assert time.time() - t0 < 10
+        assert "job forced down" in text and "ranks did not exit within 1 s" in text and "tt-smi -r" in text, text
+        assert "the other ranks did not all exit in time and were killed" in text, text
+        assert "job end: outcome=forced exit=5" in text, text
+
+    def test_build_mpi_command_runs_each_rank_in_the_wrapper(self, sample_rank_binding_yaml, tmp_path, monkeypatch):
+        # Each rank's program runs under tt-run-rank, which stops the job if the program dies; gdbserver launches
+        # and TT_RUN_RANK_WRAPPER=none run the program bare.
+        wrapper = tmp_path / "tt-run-rank"
+        wrapper.write_text("#!/bin/sh\n")
+        wrapper.chmod(0o755)
+        config = parse_binding_config(sample_rank_binding_yaml)
+        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", str(wrapper))
+        cmd = build_mpi_command(config, ["python3", "train.py"])
+        n = len(config.rank_bindings)
+        assert cmd.count(str(wrapper)) == n, cmd
+        i = cmd.index(str(wrapper))
+        assert cmd[i : i + 4] == [str(wrapper), "--", "python3", "train.py"], cmd
+        assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"], debug_gdbserver=True)
+        monkeypatch.setenv("TT_RUN_RANK_WRAPPER", "none")
+        assert str(wrapper) not in build_mpi_command(config, ["python3", "train.py"])
 
     # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
     # (<TMPDIR>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>, URI on the first line), then runs until its

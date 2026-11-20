@@ -9,7 +9,27 @@ A row that passes today is a **gate**: the behavior already holds and the row gu
 is marked `@known("P..")` with the plan's error id and fails on purpose, so the lane stays red until that fix
 lands; the marker is dropped in the PR that fixes it.
 
-This suite is built in two stacked PRs. This document is the map; each PR fills in its part.
+## How a job stops
+
+Every way a job ends, and what each rank does. tt-run starts each rank inside `tt-run-rank`
+(`tools/scaleout/src/tt_run_rank.cpp`); a stop is SIGTERM to every rank through PRRTE job control (PMIx), sent by
+tt-run (`tt-run-signal`), by the failing rank (`DistributedContext::request_job_stop`), or by the dead rank's wrapper.
+On the SIGTERM a rank's MPI waits (all polled) throw, the rank unwinds, closes its mesh without the pre-close barrier,
+waits for the other ranks (a PMIx fence, `TT_METAL_STOP_TIMEOUT_S`, default 30 s) and exits.
+
+| ending | what happens | tt-run returns | rows |
+|---|---|---|---|
+| Ctrl-C / SIGTERM at tt-run | every rank gets SIGTERM, leaves its wait, closes, exits | 130 / 143 | `test_ctrl_c_in_deadlock`, `test_sigterm_at_ttrun`, `test_ttrun_stop[*]` |
+| SIGTERM to one rank (kill, scancel) | that rank sends it on to every rank | 143, rank named | `test_sigterm_runs_close` |
+| `sys.exit(n)` / an exception / `exit(n)` / TT_FATAL / `abort(n)` | the failing rank stops the job before it closes (at `sys.exit`, or in the mesh close it unwinds through), then every rank closes | the rank's code, rank named | `test_exit1_stops_the_job`, `test_raise_after_open`, `test_sigint_one_rank`, `test_thread_exception_stops_the_job`, `test_bad_shape`, `test_unsat_mgd` |
+| a rank hung in a collective, then Ctrl-C | its polled wait leaves on the SIGTERM | 130 | `test_ctrl_c_in_deadlock` |
+| a rank that does not react (device wait) | the others close; tt-run forces on a second Ctrl-C or after the stop grace (`TT_RUN_STOP_GRACE_S`, 60 s) and says to reset the devices | 130 | `test_stuck_rank_is_forced[*]` |
+| a rank SIGKILLed or segfaulting | its wrapper stops the job in its place and stays up while the others close | 128 + signal, rank named | `test_sigkill_with_mesh_open_stops_the_job`, `test_segfault_stops_the_job`, `test_dead_peer_*` |
+| clean | normal finalize | 0 | `test_clean` |
+
+tt-run passes `--mca mpi_ft_enable 1` with the wrapper: without it Open MPI aborts a rank whose peer's TCP socket
+closes before the stop reaches it. A raw MPI program (no tt-metal context) that exits non-zero while still inside
+`MPI_Finalize` cannot be seen by the wrapper (`test_ttrun_error_exit_fails_fast_not_hang`, a strict xfail).
 
 ---
 
@@ -31,8 +51,9 @@ How tt-run ends the job for each class of single-rank failure, each launched thr
 | `test_ttrun_abort_ends` | a rank that aborts (SIGABRT) → the job ends fast, with no stall for a core dump, and every survivor is torn down |
 | `test_ttrun_hang_timeout` | a rank that spins forever → the job ends at the opt-in PRRTE `--timeout` (given via `--mpi-args`) with exit 241, nothing left |
 | `test_ttrun_no_shm_leak` | a failed job leaves nothing in `/dev/shm` (the `self,tcp` line maps no shared-memory segment) |
-| `test_ttrun_ctrl_c` | Ctrl-C (SIGINT) at tt-run is forwarded to the launcher, which ends every rank; nothing left |
-| `test_ttrun_sigterm` | SIGTERM at tt-run is forwarded the same way; nothing left |
+| `test_ttrun_stop[ctrl_c, sigterm]` | Ctrl-C / SIGTERM at tt-run: every rank gets SIGTERM through PRRTE job control and exits; 128 + the signal |
+| `test_ttrun_stop[ctrl_c_no_helper]` | without `tt-run-signal` tt-run forces through the launcher and says the devices may need a reset |
+| `test_ttrun_stop_on_each_mpi_install` | the stop on every Open MPI 5 install on the host |
 
 ### Group B — the mpirun transport/config line
 tt-run launches every job with a fixed line: the point-to-point layer `pml ob1` over the TCP byte transport
@@ -78,9 +99,9 @@ Honours `TT_SANITY_MPI_PREFIX`, so a second install can be checked with the same
 
 ---
 
-## Part 2 — tt-metal, the DistributedContext (PR #64546, stacked on Part 1)
+## Part 2 — tt-metal, the DistributedContext
 
-*Does tt-metal's own distributed stack tear down?* Added in the stacked PR, continuing the same structure.
+*Does tt-metal's own distributed stack tear down?*
 
 ### Group F — DistributedContext rows (`test_teardown_sanity.py`, `sanity_probe.py`)
 Two tt-metal ranks on the mock Blackhole dual galaxy (CPU only, no device), launched by tt-run; one fault at each
@@ -99,8 +120,9 @@ tests of things MPI cannot do: `test_mpi_delivers_proc_failed_ulfm` (under ULFM 
 survivors as a process failure) and `test_mpi_abort_reports_failure` (a survivor's `MPI_Abort` makes the launcher
 return a non-zero code).
 
-The stacked PR adds one more group here, **Group H — multi-host DistributedContext (SC4)**, the cross-host
-counterpart of Group D (described in that PR).
+### Group H — multi-host job stop (SC4)
+`run_teardown_multihost_context_tests.sh` runs the ttnn rank program with rank 1 on a remote host and checks every
+row of the table above across hosts. `TEARDOWN_REMOTE=srun` runs both multi-host scripts inside a Slurm allocation.
 
 ---
 
@@ -112,8 +134,7 @@ pytest tests/tt_metal/distributed/multiprocess/teardown_sanity -v -p no:benchmar
 ```
 
 In CI the single-host groups run as `teardown-sanity-mpi` (Part 1) and `teardown-sanity-ttmetal` (Part 2); each is
-its own matrix entry, so they are reported as teardown, not folded into the fabric suite. The multi-host launcher
-group (Part 1, D) runs on the SC4 lane, added in the base PR; the stacked PR adds the DistributedContext multi-host
-group (Part 2, H) on the same lane. Deadlines: `TT_SANITY_DEADLINE` (a row that must end) and
+its own matrix entry, so they are reported as teardown, not folded into the fabric suite. Both multi-host groups (D,
+H) run on the SC4 lane. Deadlines: `TT_SANITY_DEADLINE` (a row that must end) and
 `TT_SANITY_DEADLINE_HANG` (a row that hangs today). `TT_SANITY_MPI_PREFIX=/opt/openmpi-<version>` reruns the MPI
 rows, install group E included, against another install.
