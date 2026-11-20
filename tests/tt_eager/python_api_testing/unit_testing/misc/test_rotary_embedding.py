@@ -544,3 +544,31 @@ def test_rotary_embedding_unaligned_seq_keeps_logical_shape(S, X, token_idx, lay
     p, o = comp_pcc(apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx), ttnn.to_torch(xtt), 0.999)
     logger.info(o)
     assert p
+
+
+# Decode with a height-sharded L1 output at an unaligned head count, as gemma4_31b_qb2 _apply_decode_rope does when
+# the head count is not 32: the sharded output spec must also keep the input's logical shape.
+@pytest.mark.parametrize("S", [8, 16, 17, 50])
+@pytest.mark.parametrize("X", [64, 256])
+def test_rotary_embedding_decode_height_sharded_unaligned_keeps_logical_shape(S, X, device):
+    torch.manual_seed(0)
+    input_shape = [1, 1, S, X]
+    token_idx = 0
+    x = torch.randn(input_shape).bfloat16().float()
+    cos_cached = torch.randn([1, 1, 2048, X]).bfloat16().float()
+    sin_cached = torch.randn([1, 1, 2048, X]).bfloat16().float()
+
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    cost = ttnn.from_torch(cos_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    sint = ttnn.from_torch(sin_cached, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    xtt = ttnn.experimental.rotary_embedding(
+        xt, cost, sint, token_idx, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
+    )
+
+    assert xtt.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+    assert list(xtt.shape) == input_shape
+    assert xtt.padded_shape[-2] == divup(S, 32) * 32
+
+    p, o = comp_pcc(apply_rotary_pos_emb(x, cos_cached, sin_cached, token_idx), ttnn.to_torch(xtt), 0.999)
+    logger.info(o)
+    assert p
