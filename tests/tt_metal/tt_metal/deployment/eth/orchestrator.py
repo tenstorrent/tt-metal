@@ -584,6 +584,10 @@ def prepare_dist_test_runner(dbpath: str, mergeid: str, runid: str, linkspec: st
             raise ExceptionGroup("Errors happened when processing logs", errors)
 
 
+def execute_many(hosts: list[HostSettings], argv: str, env: dict[str, str | int]) -> list[int]:
+    return run_many(list(hosts), argv, env, None)
+
+
 def main() -> int:
     parser = ArgumentParser()
     parser.add_argument("-d", type=str, help="Path to the sqlite3 db with hardware info")
@@ -616,7 +620,10 @@ def main() -> int:
     runid = opts.r if opts.r else "run_id"
 
     if opts.e:
-        assert not opts.t
+        assert not opts.t and not opts.l and not opts.s and not opts.r and not opts.d
+        env: dict = {}  # TODO
+        rets = run_many(hs, opts.e, env)
+        return int(sum(rets) > 0)
 
     test_pass = True
 
@@ -631,7 +638,7 @@ def main() -> int:
         with prepare_dist_test_runner(dbpath, mergeid, runid, links) as wfds:
             test_pass = test_pass and test_dist(db, [DistTestCase(opts.t)], hs, links, wfds)
 
-    return 0 if test_pass else 1
+    return n if test_pass else 1
 
 
 if __name__ == "__main__":
