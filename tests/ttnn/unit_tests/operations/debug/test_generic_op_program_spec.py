@@ -1080,6 +1080,37 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramSpec(programs=[(one_device(1), spec)]),
             E.MeshProgramRunArgs(programs=[(one_device(0), run_args)]),
         )
+    # A range far past the mesh gets generic_op's own message at once: the check of the views walks the tensors'
+    # devices, not the range.
+    past_the_mesh = ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(0, 1), ttnn.MeshCoordinate(999999, 999999))
+    spec, run_args = exp_program(second_input, second_output)
+    with expect_error(RuntimeError, "mesh range .* reaches outside the MeshDevice"):
+        E.generic_op(
+            [input_tensor, output_tensor],
+            E.MeshProgramSpec(programs=[(past_the_mesh, spec)]),
+            E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
+        )
+
+    # The check compares whole names, so a tensor parameter whose name holds a NUL character is checked too. Its message
+    # stops at the NUL, as any C++ exception message does.
+    nul_name = "in\x00put"
+    spec, run_args = exp_program(second_input, first_output)
+    parameters = spec.tensor_parameters
+    for parameter in parameters:
+        if parameter.unique_id == "input":
+            parameter.unique_id = nul_name
+    spec.tensor_parameters = parameters
+    kernels = spec.kernels
+    for kernel in kernels:
+        bindings = kernel.tensor_bindings
+        for binding in bindings:
+            if binding.tensor_parameter_name == "input":
+                binding.tensor_parameter_name = nul_name
+        kernel.tensor_bindings = bindings
+    spec.kernels = kernels
+    run_args.tensor_args = {nul_name: second_input, "output": first_output}
+    with expect_error(RuntimeError, "generic_op: tensor parameter 'in"):
+        E.generic_op([first_input, first_output], spec, run_args)
 
     # A view, or the whole tensor, that holds the program's device reads that device's part.
     for input_view in (first_input, input_tensor):
