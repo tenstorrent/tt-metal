@@ -47,7 +47,8 @@ int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
 uint8_t worker_logical_col_to_virtual_col[round_up_to_mult_of_4(noc_size_x)] __attribute__((used));
 uint8_t worker_logical_row_to_virtual_row[round_up_to_mult_of_4(noc_size_y)] __attribute__((used));
 
-// CCE0 executes at local 0. CCE1's +4 MiB window is not in this image.
+// Each CCE of an HSIO tile is its own core with its own firmware build, linked into the CCE's SRAM at its native
+// address (ETH_CCE_LOCAL_BASE: 0 for CCE0, 4 MiB for CCE1). The sibling CCE's SRAM is MEM_IERISC_PEER_CCE_BASE.
 // Uncached alias. L2 does not snoop the host's NOC->TL1 writes, so a cached read of the go
 // message would spin on the stale line the previous iteration left behind.
 inline tt_l1_ptr mailboxes_t* ierisc_mailboxes() {

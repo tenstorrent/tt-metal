@@ -31,10 +31,10 @@ namespace ckernel {
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -83,10 +83,10 @@ ALWI void custom_mm_block_init(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -125,10 +125,10 @@ ALWI void custom_mm_block_init_short(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -144,7 +144,7 @@ ALWI void custom_mm_block_init_short(
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t           | Must be less than the size of the CB                    | True                    |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t           | Must be less than the size of the CB                    | True                    |
  * | dst_index       | The first DST output tile, in tiles of the layout's custom_mm_tile_rows (64, 32 or 16 rows)                     | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t           | Any integer of 1 or more                                | True                    |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
 // clang-format on
@@ -174,10 +174,10 @@ ALWI void custom_mm_block(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -190,7 +190,7 @@ ALWI void custom_mm_block(
  * | in1_cb_id       | The identifier of the second input circular buffer (CB)                                                         | uint32_t | 0 to 31                               | True                  |
  * | in0_tile_index  | The index of the tile in block A from the first input CB                                                        | uint32_t | Must be less than the size of the CB  | True                  |
  * | in1_tile_index  | The index of the tile in block B from the second input CB                                                       | uint32_t | Must be less than the size of the CB  | True                  |
- * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer from 1 to 256 (inclusive) | True                  |
+ * | kt_dim          | The inner dimension in tiles                                                                                    | uint32_t | Any integer of 1 or more              | True                  |
  * | ct_dim          | The width of the output matrix in tiles                                                                         | uint32_t | 1 to 34                               | False (default 1)     |
  */
 // clang-format on
@@ -215,10 +215,10 @@ ALWI void custom_mm_block_unpack(
  *
  * Custom version of matmul that performs a full matrix multiplication more optimally but has the following limitations:
  * in0 tile shape: [{1, 2, 4, 8}, 32]
- * in1 tile shape: [32, 32]
+ * in1 tile shape: [32, 32], or [32, 16] ([16, 32] with transpose) for an N = 16 * ct_dim output of [M, 16] tiles
  * rt_dim: 1
  * ct_dim: any integer from 1 to 34, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: any integer from 1 to 256 (inclusive)
+ * kt_dim: any integer of 1 or more; above 255, the in0 CB page must be exactly the in0 tile's two faces
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -231,7 +231,7 @@ ALWI void custom_mm_block_unpack(
  * | in0_cb_id | The identifier of the first input circular buffer (CB)                                                      | uint32_t           | 0 to 31                                                 | True                    |
  * | in1_cb_id | The identifier of the second input circular buffer (CB)                                                     | uint32_t           | 0 to 31                                                 | True                    |
  * | dst_index | The first DST output tile, in tiles of the layout's custom_mm_tile_rows                                     | uint32_t           | Output tiles must fit the acquired DST REG              | True                    |
- * | kt_dim    | The inner dimension in tiles                                                                                | uint32_t           | Any integer from 1 to 256 (inclusive)                   | True                    |
+ * | kt_dim    | The inner dimension in tiles                                                                                | uint32_t           | Any integer of 1 or more                                | True                    |
  * | ct_dim    | The width of the output matrix in tiles                                                                     | uint32_t           | 1 to 34                                                 | False (default 1)       |
  */
 // clang-format on

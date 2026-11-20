@@ -81,7 +81,7 @@ std::vector<EthCore> keraunos_eth_cores(IDevice* device) {
         const CoreCoord logical = soc_desc.get_logical_ethernet_core_from_physical({core.coord.x, core.coord.y});
         const auto type =
             active.contains(logical) ? HalProgrammableCoreType::ACTIVE_ETH : HalProgrammableCoreType::IDLE_ETH;
-        cores.push_back({logical, type, core.hsio, core.cce});
+        cores.push_back({logical, type, core.hsio, core.eth_cce});
     }
     return cores;
 }

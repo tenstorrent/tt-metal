@@ -34,6 +34,17 @@ static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
+static constexpr uint32_t MAX_HORIZON_MESHES = 1;
+static constexpr uint32_t MAX_HORIZON_DEVS_PER_MESH = 56;  // (2704-16)/(2*3*8) = 56 devices
+static constexpr uint32_t MAX_HORIZON_NOC_X = 2;           // from horizon_2x3_att_config.h
+static constexpr uint32_t MAX_HORIZON_NOC_Y = 3;           // from horizon_2x3_att_config.h
+// ATT window constants — from horizon_2x3_att_config.h; update if the ATT config changes.
+static constexpr uint64_t HORIZON_LOCAL_WINDOW_COMPARE = 0x1800000000ULL;   // LOCAL_WINDOW.compare
+static constexpr uint32_t HORIZON_LOCAL_WINDOW_MASK_BITS = 33;              // LOCAL_WINDOW.mask_bits
+static constexpr uint64_t HORIZON_REMOTE_WINDOW_COMPARE = 0x1000000000ULL;  // REMOTE_WINDOW.compare
+static constexpr uint32_t HORIZON_REMOTE_WINDOW_MASK_BITS = 32;             // REMOTE_WINDOW.mask_bits
+static constexpr uint32_t HORIZON_REMOTE_ENDPOINT_SHIFT = 26;               // REMOTE_WINDOW.endpoint_shift
+static constexpr uint32_t HORIZON_ATT_WORKER_GRID_X = 2;                    // ATT_WORKER_GRID_X
 
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
@@ -103,18 +114,57 @@ struct __attribute__((packed)) direction_table_t {
     // For 1024 entries: 1024 * 3 / 8 = 384 bytes
     std::uint8_t packed_directions[ArraySize * BITS_PER_COMPRESSED_ENTRY / BITS_PER_BYTE];
 
+    // Readers, usable on host and device (defined below the struct).
+    inline std::uint8_t get_direction(std::uint16_t index) const;
+    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
+    inline std::uint8_t get_original_direction(std::uint16_t index) const;
+
 #if !defined(KERNEL_BUILD) && !defined(FW_BUILD)
     // Host-side methods (declared here, implemented in compressed_direction_table.cpp):
     void set_direction(std::uint16_t index, std::uint8_t direction);
     std::uint8_t compress_value(std::uint8_t original_value) const;
     void set_original_direction(std::uint16_t index, std::uint8_t original_direction);
-#else
-    // Device-side methods (declared here, implemented in fabric_direction_table_interface.h):
-    inline std::uint8_t get_direction(std::uint16_t index) const;
-    inline std::uint8_t decompress_value(std::uint8_t compressed_value) const;
-    inline std::uint8_t get_original_direction(std::uint16_t index) const;
 #endif
 };
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::get_direction(std::uint16_t index) const {
+    std::uint32_t bit_index = index * BITS_PER_COMPRESSED_ENTRY;
+    std::uint32_t byte_index = bit_index / BITS_PER_BYTE;
+    std::uint32_t bit_offset = bit_index % BITS_PER_BYTE;
+
+    if (bit_offset <= BITS_PER_BYTE - BITS_PER_COMPRESSED_ENTRY) {
+        // All 3 bits are in the same byte
+        return (packed_directions[byte_index] >> bit_offset) & COMPRESSED_ENTRY_MASK;
+    } else {
+        // Bits span across two bytes
+        std::uint8_t low_bits =
+            (packed_directions[byte_index] >> bit_offset) & ((1 << (BITS_PER_BYTE - bit_offset)) - 1);
+        std::uint8_t high_bits = (packed_directions[byte_index + 1] &
+                                  ((1 << (BITS_PER_COMPRESSED_ENTRY - (BITS_PER_BYTE - bit_offset))) - 1))
+                                 << (BITS_PER_BYTE - bit_offset);
+        return low_bits | high_bits;
+    }
+}
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::decompress_value(std::uint8_t compressed_value) const {
+    switch (static_cast<compressed_routing_values>(compressed_value)) {
+        case compressed_routing_values::COMPRESSED_EAST: return eth_chan_directions::EAST;
+        case compressed_routing_values::COMPRESSED_WEST: return eth_chan_directions::WEST;
+        case compressed_routing_values::COMPRESSED_NORTH: return eth_chan_directions::NORTH;
+        case compressed_routing_values::COMPRESSED_SOUTH: return eth_chan_directions::SOUTH;
+        case compressed_routing_values::COMPRESSED_Z: return eth_chan_directions::Z;
+        case compressed_routing_values::COMPRESSED_INVALID_DIRECTION: return eth_chan_magic_values::INVALID_DIRECTION;
+        case compressed_routing_values::COMPRESSED_INVALID_ROUTING_TABLE_ENTRY:
+        default: return eth_chan_magic_values::INVALID_ROUTING_TABLE_ENTRY;
+    }
+}
+
+template <std::uint32_t ArraySize>
+inline std::uint8_t direction_table_t<ArraySize>::get_original_direction(std::uint16_t index) const {
+    return decompress_value(get_direction(index));
+}
 
 // ============================================================================
 // Dynamic Packet Header Configuration
@@ -352,14 +402,13 @@ struct Routing2DCodec {
     }
 
     // ---- Decode (packet-side action selection) -----------------------------------
-    // Y row while it still holds an action, X row once it is spent. Independent of facing.
+    // Y row while it still holds an action, X row once it is spent. Independent of facing. Both bytes are read up
+    // front, so the X load does not wait on the Y test.
     static std::uint8_t decode_action_y_first(
         const volatile std::uint8_t* route_buffer, std::uint32_t local_y, std::uint32_t local_x, std::uint32_t y_size) {
         const std::uint8_t action_y = route_buffer[local_y];
-        if (action_y != 0) {
-            return action_y;
-        }
-        return route_buffer[y_size + local_x];
+        const std::uint8_t action_x = route_buffer[y_size + local_x];
+        return action_y != 0 ? action_y : action_x;
     }
 
     // The router at logical (local_y, local_x) reads its action byte from the packet's flat [Y | X]
@@ -415,6 +464,29 @@ struct Routing2DCodec {
                 eth_chan_directions::NORTH,
                 eth_chan_directions::SOUTH};
         }
+    }
+
+    // The live downstreams of a 2D router facing MY_DIR on one VC, as a mask with bit d set for direction d (an
+    // action bit). `entry_count` is the size of its downstream array on that VC (the first entries of fwd_dirs). Every
+    // entry is live except, on an E/W-facing router that does not turn packets, the N and S ones. A router turns
+    // packets when it is an intermesh router (a landing decodes Y first) or an intramesh router on an exit chip (a
+    // packet may leave the mesh in any direction); any other E/W router decodes Y first and never turns one onto N/S.
+    template <eth_chan_directions MY_DIR>
+    static constexpr std::uint32_t live_downstreams(
+        std::size_t entry_count, bool is_intermesh_router, bool is_intramesh_router_on_edge) {
+        const bool turns_packets = is_intermesh_router || is_intramesh_router_on_edge;
+        constexpr bool east_west = MY_DIR == eth_chan_directions::EAST || MY_DIR == eth_chan_directions::WEST;
+        constexpr auto directions = fwd_dirs<MY_DIR>();
+        std::uint32_t live = 0;
+        for (std::size_t entry = 0; entry < entry_count && entry < directions.size(); entry++) {
+            const auto direction = directions[entry];
+            const bool is_north_south =
+                direction == eth_chan_directions::NORTH || direction == eth_chan_directions::SOUTH;
+            if (!(east_west && !turns_packets && is_north_south)) {
+                live |= 1u << static_cast<std::uint32_t>(direction);
+            }
+        }
+        return live;
     }
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
@@ -1118,6 +1190,44 @@ static_assert(
     sizeof(routing_l1_info_t) == 2704,
     "routing_l1_info_t must be 2704 bytes: base(516) + union(1160) + exit(1024) + coords(2) + shape(2)");
 
+// ============================================================
+// Fabric-over-NoC L1 routing table
+// ============================================================
+// Designed to be used for architectures that use NoC for inter-device communication and a flat (global) AXI address
+// scheme: Tensix cores write directly to a remote device's L1 via noc_async_write with a flat 64-bit address. No ERISC
+// hop-by-hop routing is required.
+//
+// flat_addr[mesh][device][noc_x][noc_y] holds the full 64-bit flat address for core
+// (noc_x, noc_y) on device `device` in mesh `mesh` at offset 0.  Callers add the
+// L1 byte offset before calling noc_async_write.
+//
+// Budget (MEM_ROUTING_TABLE_SIZE = 2704 bytes):
+//   metadata  :  16 bytes
+//   flat_addr : MAX_HORIZON_MESHES x MAX_HORIZON_DEVS_PER_MESH x MAX_HORIZON_NOC_X x MAX_HORIZON_NOC_Y x 8
+//             =      1     x           56             x         2          x         3          x 8 = 2688 bytes
+//   total     : 2704 bytes  (exact fit, zero waste)
+
+struct fabric_flat_address_routing_l1_info_t {
+    // ---- metadata: 16 bytes ----
+    uint16_t my_mesh_id = 0;    // 2 B
+    uint16_t my_device_id = 0;  // 2 B
+    uint8_t my_noc_x = 0;       // 1 B
+    uint8_t my_noc_y = 0;       // 1 B
+    uint16_t _pad0 = 0;         // 2 B (align to 8 bytes)
+    uint64_t _reserved = 0;     // 8 B (reserved for future offset/window field)
+    // ---- routing table: 2688 bytes ----
+    uint64_t flat_addr[MAX_HORIZON_MESHES][MAX_HORIZON_DEVS_PER_MESH][MAX_HORIZON_NOC_X][MAX_HORIZON_NOC_Y] = {};
+};
+// Total: 16 + 1*56*2*3*8 = 2704 bytes
+
+static_assert(
+    sizeof(fabric_flat_address_routing_l1_info_t) == 2704, "fabric_flat_address_routing_l1_info_t must be 2704 bytes");
+// Multi-mesh not currently supported on Fabric-over-NoC
+static_assert(MAX_HORIZON_MESHES == 1, "Multi-mesh not currently supported on Fabric-over-NoC");
+
+static_assert(offsetof(fabric_flat_address_routing_l1_info_t, flat_addr) == 16);
+static_assert(sizeof(fabric_flat_address_routing_l1_info_t) % 16 == 0);
+
 // Fabric connection synchronization region in L1
 // Used for multi-RISC synchronization when opening fabric connections
 // Memory layout: [lock(4) | initialized(4) | connection_object(128) | padding(8)] = 144 bytes
@@ -1169,6 +1279,5 @@ static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
 #define FABRIC_COUNTER_BASE MEM_FABRIC_COUNTER_BASE
 #endif
 
-#include "hostdev/fabric_direction_table_interface.h"
 #include "hostdev/fabric_routing_path_interface.h"
 #endif
