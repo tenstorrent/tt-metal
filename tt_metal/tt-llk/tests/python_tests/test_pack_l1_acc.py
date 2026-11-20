@@ -1,0 +1,267 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+import pytest
+import torch
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.data_format_inference import unpacks_to_dest
+from helpers.format_config import DataFormat, InputOutputFormat
+from helpers.golden_generators import (
+    TILE_DIMENSIONS,
+    DataCopyGolden,
+    TilizeGolden,
+    get_golden_generator,
+)
+from helpers.llk_params import (
+    DestAccumulation,
+    L1Accumulation,
+    PerfRunType,
+    Tilize,
+)
+from helpers.param_config import (
+    BlocksCalculationAlgorithm,
+    DestSync,
+    get_num_blocks_and_num_tiles_in_block,
+    input_output_formats,
+    parametrize,
+)
+from helpers.perf.core import create_test_or_perf_config
+from helpers.stimuli_config import StimuliConfig
+from helpers.stimuli_generator import generate_stimuli
+from helpers.test_config import BuildMode, TestConfig
+from helpers.test_variant_parameters import (
+    DEST_INDEX,
+    L1_ACC,
+    LOOP_FACTOR,
+    NUM_BLOCKS,
+    NUM_FACES,
+    NUM_TILES_IN_BLOCK,
+    TILE_COUNT,
+    TILIZE,
+    generate_input_dim,
+)
+from helpers.tile_constants import get_tile_params
+from helpers.utils import passed_test, result_tensor
+
+
+def get_valid_tilize_datacopy(formats):
+    """
+    Get valid tilize options for _llk_math_eltwise_unary_datacopy_
+
+    - Blackhole and Wormhole have differing APIs:
+        - Blackhole: Has tilize argument (SW workaround for HW bug)
+        - Wormhole: No tilize argument (No SW workaround needed)
+    - Tilize cannot be enabled if input format is Bfp8_b (HW limitation)
+
+    Therefore we only test tilization on Blackhole
+    """
+
+    chip_arch = get_chip_architecture()
+
+    if chip_arch == ChipArchitecture.WORMHOLE:
+        return [Tilize.No]
+
+    if formats.input_format == DataFormat.Bfp8_b:
+        return [Tilize.No]
+
+    return [Tilize.No, Tilize.Yes]
+
+
+def get_valid_tile_dimensions_pack_l1_acc(tilize):
+    """Tilize needs full 32x32 tiles (software limitation of the datacopy); otherwise 32x32 or 16x32.
+
+    16x32 is a two-face tile with face_r_dim 16.
+    """
+    if tilize == Tilize.Yes:
+        return [[32, 32]]
+    return [[32, 32], [16, 32]]
+
+
+# Shared with perf_pack_l1_acc.py so the two sweeps stay aligned.
+PACK_L1_ACC_SWEEP = dict(
+    formats=InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
+    tilize=get_valid_tilize_datacopy,
+    tile_dimensions=get_valid_tile_dimensions_pack_l1_acc,
+    dest_index=0,
+    input_dimensions=[[32, 32], [32, 64], [128, 32], [128, 64], [128, 256]],
+)
+
+
+def _run_pack_l1_acc_test(
+    formats,
+    dest_acc,
+    l1_acc,
+    tile_dimensions,
+    tilize,
+    dest_index,
+    input_dimensions,
+    *,
+    blocks=None,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
+    """Shared body for the functional and perf L1-accumulation pack tests.
+
+    ``blocks`` overrides the (num_blocks, num_tiles_in_block) split that Dest
+    capacity would otherwise choose.
+    """
+    if is_perf and perf_report is None:
+        raise ValueError("perf_report must be provided when is_perf=True")
+    if run_types is None:
+        run_types = [PerfRunType.L1_TO_L1]
+
+    # num_faces follows the tile shape: 32x32 is four faces, 16x32 is two (face_r_dim stays 16).
+    face_r_dim, num_faces_r_dim, num_faces_c_dim = get_tile_params(tile_dimensions)
+    assert face_r_dim == 16, "pack_l1_acc runs full-face tiles only"
+    num_faces = num_faces_r_dim * num_faces_c_dim
+
+    src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
+        stimuli_format_A=formats.input_format,
+        input_dimensions_A=input_dimensions,
+        stimuli_format_B=formats.input_format,
+        input_dimensions_B=input_dimensions,
+    )
+
+    if tilize == Tilize.No:
+        generate_golden = get_golden_generator(DataCopyGolden)
+        golden_tensor = generate_golden(
+            src_A, formats.output_format, num_faces, input_dimensions
+        )
+    else:
+        generate_golden = get_golden_generator(TilizeGolden)
+        golden_tensor = generate_golden(src_A, input_dimensions, formats.output_format)
+
+    if blocks is None:
+        blocks = get_num_blocks_and_num_tiles_in_block(
+            DestSync.Half,
+            dest_acc,
+            formats,
+            input_dimensions,
+            TILE_DIMENSIONS,
+            (
+                BlocksCalculationAlgorithm.Standard
+                if tilize == Tilize.No
+                else BlocksCalculationAlgorithm.Tilize
+            ),
+        )
+    num_blocks, num_tiles_in_block = blocks
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types,
+        test_config_kwargs={
+            "test_name": "sources/pack_l1_acc_test.cpp",
+            "formats": formats,
+            "templates": [
+                TILIZE(tilize),
+                LOOP_FACTOR(loop_factor),
+            ],
+            "runtimes": [
+                generate_input_dim(input_dimensions, input_dimensions),
+                DEST_INDEX(dest_index),
+                TILE_COUNT(tile_cnt_A),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+                NUM_FACES(num_faces),
+                L1_ACC(l1_acc),
+            ],
+            "variant_stimuli": StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+            ),
+            "dest_acc": dest_acc,
+            "l1_acc": l1_acc,
+            "unpack_to_dest": unpacks_to_dest(formats.input_format, dest_acc, tilize),
+        },
+    )
+    if is_perf:
+        configuration.run(perf_report)
+        return
+
+    _run_functional_pack_l1_acc(
+        configuration, formats, tile_cnt_A, num_faces, golden_tensor
+    )
+
+
+def _run_functional_pack_l1_acc(
+    configuration, formats, tile_count, num_faces, golden_tensor
+):
+    """Run after zero-filling every result tile so L1 accumulation starts from a known state."""
+    configuration.generate_variant_hash()
+    if TestConfig.BUILD_MODE in [BuildMode.PRODUCE, BuildMode.DEFAULT]:
+        configuration.build_elfs()
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
+        pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
+
+    configuration.write_runtimes_to_L1()
+    configuration.variant_stimuli.write(TestConfig.TENSIX_LOCATION)
+
+    zero_tiles = torch.zeros(tile_count * 32 * 32, dtype=golden_tensor.dtype)
+    zero_pack = StimuliConfig.get_packer(formats.output_format)
+    StimuliConfig.write_matrix(
+        zero_tiles,
+        tile_count,
+        zero_pack,
+        configuration.variant_stimuli.buf_res_addr,
+        configuration.variant_stimuli.buf_res_tile_size,
+        num_faces,
+        configuration.variant_stimuli.face_r_dim,
+        TestConfig.TENSIX_LOCATION,
+        configuration.variant_stimuli.write_full_tiles,
+    )
+
+    configuration.run_elf_files()
+    configuration.wait_for_tensix_operations_finished()
+    res_from_L1 = configuration.variant_stimuli.collect_results(
+        TestConfig.TENSIX_LOCATION
+    )
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
+
+    assert passed_test(golden_tensor, res_tensor, formats.output_format)
+
+
+@parametrize(**PACK_L1_ACC_SWEEP)
+def test_pack_l1_acc(
+    formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
+):
+    _run_pack_l1_acc_test(
+        formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index, input_dimensions
+    )
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    dest_acc=[DestAccumulation.No],
+    l1_acc=[L1Accumulation.No, L1Accumulation.Yes],
+    tile_dimensions=[[32, 32]],
+    tilize=[Tilize.No],
+    dest_index=0,
+)
+def test_pack_l1_acc_two_blocked_packs_of_4(
+    formats, dest_acc, l1_acc, tile_dimensions, tilize, dest_index
+):
+    if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+        pytest.skip("Wormhole-specific blocked pack regression")
+
+    _run_pack_l1_acc_test(
+        formats,
+        dest_acc,
+        l1_acc,
+        tile_dimensions,
+        tilize,
+        dest_index,
+        [128, 64],
+        blocks=(2, 4),
+    )

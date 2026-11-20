@@ -18,9 +18,15 @@ from pathlib import Path
 
 import pandas as pd
 
-canonical_test_name = runpy.run_path(
-    str(Path(__file__).with_name("test_name_aliases.py"))
-)["canonical_test_name"]
+# The naming history of every test: renamed tests and renamed CSV columns.
+SCHEMA_CATALOG = (
+    Path(__file__).resolve().parent.parent
+    / "tests"
+    / "python_tests"
+    / "helpers"
+    / "perf"
+    / "test_schemas.py"
+)
 
 # 5 runs of one commit on Blackhole moved at most 1.9% and 25 cycles (#53752).
 DEFAULT_THRESHOLD = 0.02
@@ -53,8 +59,68 @@ def _is_metric(col):
 MODULE_COL = "test_module"
 
 
+_HISTORY = None
+
+
+def _naming_history():
+    """``({old test name: current}, {current test: {old column: current column}})``.
+
+    Read from the schema catalog, the one place a rename is recorded. Without it
+    a renamed test or column would match no baseline point and pass unchecked, so
+    a missing catalog stops the run instead of being skipped.
+    """
+    global _HISTORY
+    if _HISTORY is None:
+        if not SCHEMA_CATALOG.is_file():
+            raise SystemExit(
+                f"{SCHEMA_CATALOG} not found: the perf gate must check it out "
+                "to match renamed tests and columns against the baseline"
+            )
+        catalog = runpy.run_path(str(SCHEMA_CATALOG))
+        tests, columns = {}, {}
+        for name in ("PERF_TEST_SCHEMAS", "PERF_TEST_SCHEMAS_QSR"):
+            for current, entry in catalog[name].items():
+                tests.update(entry.get("test_name_aliases", {}))
+                # A name that is still a live column of the test is not an alias.
+                live = set(entry.get("columns", ()))
+                columns[current] = {
+                    old: new
+                    for old, new in entry.get("aliases", {}).items()
+                    if old not in live
+                }
+        _HISTORY = tests, columns
+    return _HISTORY
+
+
 def _canonical_module(module):
-    return canonical_test_name(module)
+    return _naming_history()[0].get(module, module)
+
+
+def _canonical_columns(frame):
+    """Rename each test's legacy columns to their current names.
+
+    A legacy value never replaces one the current column already holds.
+    """
+    column_aliases = _naming_history()[1]
+    for module in frame[MODULE_COL].dropna().unique():
+        rows = frame[MODULE_COL] == module
+        for old, new in column_aliases.get(module, {}).items():
+            if old not in frame.columns:
+                continue
+            if new not in frame.columns:
+                frame[new] = pd.NA
+            current = frame.loc[rows, new]
+            frame.loc[rows, new] = current.where(current.notna(), frame.loc[rows, old])
+            frame.loc[rows, old] = pd.NA
+    # Only columns emptied above go; a column no alias touched stays as it was.
+    return frame.drop(
+        columns=[
+            c
+            for module_aliases in column_aliases.values()
+            for c in module_aliases
+            if c in frame.columns and frame[c].isna().all()
+        ]
+    )
 
 
 def _is_ignored(col):
@@ -139,14 +205,14 @@ def _module_of(path):
 
 
 def _read_frames(paths):
-    """Read frames and canonicalize legacy module names before point matching."""
+    """Read frames and canonicalize legacy module and column names before point matching."""
     frames = []
     for path in paths:
         frame = pd.read_csv(path)
         if MODULE_COL not in frame.columns:
             frame[MODULE_COL] = _module_of(path)
         frame[MODULE_COL] = frame[MODULE_COL].map(_canonical_module)
-        frames.append(frame)
+        frames.append(_canonical_columns(frame))
     return frames
 
 

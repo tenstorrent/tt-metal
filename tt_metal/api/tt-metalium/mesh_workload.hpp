@@ -16,6 +16,11 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+
+namespace tt::tt_metal {
+struct ProgramSpec;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_metal::distributed {
 
@@ -33,10 +38,25 @@ class MeshWorkload {
     //  - Single Program Multi Device (Completely Homogeneous MeshWorkload)
     //  - Multi Program Multi Device (Completely Heterogeneous MeshWorkload)
     // Runtime args can be set per device for a program: see SetRuntimeArgsPerDevice below (legacy programs) and
-    // experimental::UpdateProgramRunArgsForDevice (Metal 2.0 programs).
+    // update_program_run_args_for_device (Metal 2.0 programs).
 public:
     // Main User-Facing API building blocks
     MeshWorkload();
+
+    // Create a MeshWorkload object from a set of region-mapped ProgramSpecs
+    //
+    // INVARIANT: A successfully constructed MeshWorkload is always valid.
+    //
+    explicit MeshWorkload(
+        MeshDevice& mesh_device, const std::unordered_map<MeshCoordinateRange, ProgramSpec>& program_specs);
+
+    // Create a MeshWorkload object from single ProgramSpec,
+    // to be applied mesh-wide (SPMD)
+    //
+    // INVARIANT: A successfully constructed MeshWorkload is always valid.
+    //
+    explicit MeshWorkload(MeshDevice& mesh_device, const ProgramSpec& program_spec);
+
     ~MeshWorkload();
     MeshWorkload(MeshWorkload&& other) noexcept;
     MeshWorkload& operator=(MeshWorkload&& other) noexcept;
@@ -45,6 +65,29 @@ public:
     void add_program(const MeshCoordinateRange& device_range, Program&& program);
     std::unordered_map<MeshCoordinateRange, Program>& get_programs();
     const std::unordered_map<MeshCoordinateRange, Program>& get_programs() const;
+
+    // Per-device update: set the named run args in `values` to `device`'s own values.
+    // A Program added to a MeshWorkload on a range runs on every device of the range with the same args; this lets one
+    // program serve a range where each chip needs a few different values (a ring rank, a peer chip). Calling again
+    // replaces the values of the args supplied; the others keep theirs. Args without a per-device value use the
+    // program's own values.
+    //
+    // PRE-CONDITION: the Program was created from a ProgramSpec, Program::set_program_run_args has been called on it,
+    // and `device` lies in `program_range` (the range the Program was added with).
+    //
+    // PER-DEVICE VALUES:
+    // - A per-device value lasts until the program's own value of that arg is set again:
+    //   Program::set_program_run_args drops every per-device value, Program::update_program_run_args those of the
+    //   args it supplies, Program::update_tensor_args none. Set them again after such a call.
+    // - Traces and command lists keep the values they captured.
+    // - Calls must be serialized with enqueue and trace / command-list capture of the workload.
+    //
+    // CONSTRAINTS: `values` holds only kernel run args (runtime_arg_values for the nodes given,
+    // common_runtime_arg_values, and their array forms). Tensor args, DFB overrides, varargs and advanced program args
+    // are rejected. Some ranges, devices and capture modes do not support per-device args: see
+    // ArePerDeviceRuntimeArgsSupported.
+    void update_program_run_args_for_device(
+        const MeshCoordinateRange& program_range, const MeshCoordinate& device, const ProgramRunArgs& values);
 
     // For testing purposes only
     void set_last_used_command_queue_for_testing(MeshCommandQueue* mesh_cq);
@@ -78,7 +121,7 @@ private:
 // - `program_range` names the program by the range it was added with. Values are kept for every coordinate of the
 //   range; each host uses its local ones.
 // - Supported in fast dispatch (eager and trace) and slow dispatch; not for Metal 2.0 (ProgramSpec) programs (see
-//   experimental::UpdateProgramRunArgsForDevice). For other limits see ArePerDeviceRuntimeArgsSupported.
+//   MeshWorkload::update_program_run_args_for_device). For other limits see ArePerDeviceRuntimeArgsSupported.
 //
 // CAUTION: inside a field, a device's values win over the Program's own args, including later changes to them; unset
 // a device's values (experimental::UnsetRuntimeArgsForDevice) for it to follow the Program again. This is the opposite

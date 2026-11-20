@@ -162,6 +162,7 @@ jobs:
           sparse-checkout: |
             .github/scripts
             tt_metal/tt-llk/perf
+            tt_metal/tt-llk/tests/python_tests/helpers/perf
           filter: blob:none
 
       - name: Set up Python

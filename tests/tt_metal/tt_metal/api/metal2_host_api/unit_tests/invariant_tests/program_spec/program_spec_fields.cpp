@@ -12,7 +12,7 @@
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -40,7 +40,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateKernelNameFails) {
     spec.kernels.push_back(duplicate_kernel);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name 'dm_kernel'")));
 }
 
@@ -58,7 +58,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateKernelNameFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
 }
 
@@ -70,7 +70,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateDFBNameFails) {
     spec.dataflow_buffers.push_back(duplicate_dfb);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate DataflowBufferSpec name 'dfb_0'")));
 }
@@ -90,7 +90,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateSemaphoreNameFails) {
     spec.semaphores = {sem1, sem2};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate SemaphoreSpec name 'sem_0'")));
 }
 
@@ -106,7 +106,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateScratchpadNameFails) {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate ScratchpadSpec name")));
 }
 
@@ -122,7 +122,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorParameterNameFails) {
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
 }
@@ -137,7 +137,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateSRAMArenaParameterNameFails) {
         SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate SRAMArenaParameter name 'arena'")));
 }
@@ -148,7 +148,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_EmptyKernelsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty work_units too
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("A ProgramSpec must have at least one KernelSpec")));
 }
@@ -162,7 +162,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_EmptyWorkUnitSpecsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty!
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'kernel' is not referenced by any WorkUnitSpec")));
 }
@@ -183,7 +183,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_OverlappingWorkUnitSpecsFails) {
         MakeMinimalWorkUnit("work_unit1", node, {"kernel1"}), MakeMinimalWorkUnit("work_unit2", node, {"kernel2"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlap in target nodes")));
 }
 
@@ -204,7 +204,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleWorkUnitsOnDifferentNodesSucceeds) {
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit0", node0, {"kernel"}), MakeMinimalWorkUnit("work_unit1", node1, {"kernel"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace
