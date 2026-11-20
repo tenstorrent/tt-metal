@@ -573,6 +573,52 @@ void kernel_main() {
         }
     };
 
+    // tilize_once: gate/up K-block b's bf16 sticks of one chunk's rows into this core's cb_x_rm for its compute to
+    // tilize (see issue_x_rm_block in the chunk loop); parameterized by the chunk so the previous expert's down
+    // phase can issue the next expert's first blocks.
+    auto issue_x_rows = [&](uint32_t b, uint32_t first_row_c, uint32_t valid_rows_c, uint32_t count_value_c,
+                            uint32_t x_start_stick_c) {
+        constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
+        const uint32_t col_off_bytes = b * rm_kblock_bytes;
+        cb_x_rm_obj.reserve_back(g_in0_block_tiles_max);
+        uint32_t l1_x = cb_x_rm_obj.get_write_ptr();
+        for (uint32_t m = 0; m < valid_rows_c; ++m) {
+            const uint32_t row_base = (first_row_c + m) * TILE_HEIGHT;
+            const uint32_t real_r =
+                (row_base + TILE_HEIGHT <= count_value_c) ? TILE_HEIGHT : (count_value_c - row_base);
+            for (uint32_t r = 0; r < real_r; ++r) {
+                // x_start_stick_c offsets into this expert's region of the shared row-major buffer (0 when x is
+                // a standalone per-expert buffer). x_indexed: the row's x row comes from the chunk's index slice.
+                uint32_t stick;
+                if constexpr (x_indexed) {
+                    stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_idx_l1)[m * TILE_HEIGHT + r];
+                    // An index past x is a caller bug: leave the row stale rather than read past x.
+                    ASSERT(stick < x_rows);
+                } else {
+                    stick = x_start_stick_c + row_base + r;
+                }
+                if (!x_indexed || stick < x_rows) {
+                    noc_read.async_read(
+                        x_acc_rm,
+                        CoreLocalMem<uint32_t>(l1_x),
+                        rm_kblock_bytes,
+                        {.page_id = stick, .offset_bytes = col_off_bytes},
+                        {});
+                }
+                l1_x += rm_kblock_bytes;
+            }
+            l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
+        }
+    };
+    // x tilize ownership depends only on the K-block and the M-row, the same for every expert and chunk.
+    const uint32_t x_period_any = adaptive_chunk::x_owner_period(GRID_X_NOC, my_mt);
+    auto owns_x_any = [&](uint32_t b) {
+        return b < num_blocks_gu && adaptive_chunk::x_owner_col(b, GRID_X_NOC, my_mt, x_period_any) == my_nt_gu;
+    };
+    bool next_x_prefetched = false;
+    // The next expert's chunk-0 x-row ids were read before this expert's down phase.
+    bool rows_prefetched_next = false;
+
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
     // (counts[global_id]), region offset (start[global_id]) and per-expert
@@ -582,6 +628,7 @@ void kernel_main() {
         // between its last gate/up K-loop and its down phase (see "prefetch" below).
         const bool prefetched = next_prefetched;
         next_prefetched = false;
+
         if (prefetched) {
             // The prefetch only issued its reads (so they never delayed the previous expert's down phase).
             noc_read.async_read_barrier();
@@ -668,6 +715,12 @@ void kernel_main() {
         // are max_chunk; the tail is last, so its start is num_full*max_chunk too).
         const uint32_t per_core_M = adaptive_chunk::per_core_M_for_chunk(chunk, count_tiles, chunk_M_max);
         const uint32_t this_core_first_row = chunk * chunk_M_max + my_mt * per_core_M;
+        // The previous chunk (this expert's, or the previous expert's last) read this chunk's x-row ids and issued
+        // its first x blocks (below the lookahead + 2) before its own down phase; see "next chunk prefetch" below.
+        const bool rows_prefetched = rows_prefetched_next;
+        rows_prefetched_next = false;
+        const bool x_prefetched = next_x_prefetched;
+        next_x_prefetched = false;
 
         // x_indexed: this M-row's x-row ids for the chunk, read once and reused by every gate/up K-block. x_indexed
         // needs a ROW_MAJOR x (tilize_once), whose K-block owner rotates over the M-row's cores, so every core reads
@@ -675,7 +728,7 @@ void kernel_main() {
         // per_core_M of them, and past the last expert's rows the index vector ends. The slice is also clipped to the
         // vector's length: a region offset + count past it is a caller bug, and the rows it would cover keep stale
         // ids (checked against x_rows below, and their output tiles fall outside the output).
-        if (!(prefetched && chunk == 0)) {
+        if (!rows_prefetched) {
             read_row_ids(count_tiles, x_start_stick, per_core_M, this_core_first_row, /*wait=*/true);
         }
 
@@ -712,37 +765,7 @@ void kernel_main() {
         // this core's acks and, on the weight-sender row, its gate read, which cost more
         // than the tilize it saved at small per_core_M.
         auto issue_x_rm_block = [&](uint32_t b) {
-            constexpr uint32_t rm_kblock_bytes = in0_block_w_gu * TILE_HEIGHT * X_RM_ELEM_BYTES;
-            const uint32_t col_off_bytes = b * rm_kblock_bytes;
-            cb_x_rm_obj.reserve_back(g_in0_block_tiles_max);
-            uint32_t l1_x = cb_x_rm_obj.get_write_ptr();
-            for (uint32_t m = 0; m < valid_tile_rows; ++m) {
-                const uint32_t row_base = (this_core_first_row + m) * TILE_HEIGHT;
-                const uint32_t real_r =
-                    (row_base + TILE_HEIGHT <= count_value) ? TILE_HEIGHT : (count_value - row_base);
-                for (uint32_t r = 0; r < real_r; ++r) {
-                    // x_start_stick offsets into this expert's region of the shared row-major buffer (0 when x is
-                    // a standalone per-expert buffer). x_indexed: the row's x row comes from the chunk's index slice.
-                    uint32_t stick;
-                    if constexpr (x_indexed) {
-                        stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row_idx_l1)[m * TILE_HEIGHT + r];
-                        // An index past x is a caller bug: leave the row stale rather than read past x.
-                        ASSERT(stick < x_rows);
-                    } else {
-                        stick = x_start_stick + row_base + r;
-                    }
-                    if (!x_indexed || stick < x_rows) {
-                        noc_read.async_read(
-                            x_acc_rm,
-                            CoreLocalMem<uint32_t>(l1_x),
-                            rm_kblock_bytes,
-                            {.page_id = stick, .offset_bytes = col_off_bytes},
-                            {});
-                    }
-                    l1_x += rm_kblock_bytes;
-                }
-                l1_x += (TILE_HEIGHT - real_r) * rm_kblock_bytes;
-            }
+            issue_x_rows(b, this_core_first_row, valid_tile_rows, count_value, x_start_stick);
         };
         auto finish_x_rm_block = [&]() {
             noc_read.async_read_barrier();
@@ -755,9 +778,13 @@ void kernel_main() {
         if constexpr (tilize_once) {
             // Blocks below A have nothing to hide behind: their owners read them to
             // completion up front. Blocks A..A+1 have no K-block b-A-2 to be issued in.
+            // A prefetched chunk 0 already has them issued: only finish those below A.
+            const bool issued = x_prefetched;
             for (uint32_t b = 0; b < kAhead + 2; ++b) {
                 if (owns_x(b)) {
-                    issue_x_rm_block(b);
+                    if (!issued) {
+                        issue_x_rm_block(b);
+                    }
                     if (b < kAhead) {
                         finish_x_rm_block();
                     }
@@ -1085,6 +1112,45 @@ void kernel_main() {
             }
         }
 
+        // Next chunk prefetch: the x-row ids (blocking: small) of the chunk that runs next -- this expert's next chunk,
+        // else the next expert's chunk 0 -- and, on its x owners, the ISSUE of its first x blocks (below the lookahead
+        // + 2; its chunk prologue only finishes those below A). Here, before this chunk's down phase, every reader
+        // waits for its compute to activate the gate/up output (~12 us at 4 tile-rows per core), and x owners are
+        // never weight senders, so the reads delay neither the down weights nor a down K-block. Without them the next
+        // chunk's first K-block waited for its owner to read the whole block from DRAM on one core (the compute idled
+        // ~20 us per chunk there at 1024 tokens per chunk). Only with >= 2 tile-rows per core: with fewer the
+        // activation is too short to hide the reads (128 tokens per expert: 3 us). Per-core state only.
+        {
+            const bool same_expert = chunk + 1 < effective_chunks;
+            if (per_core_M >= 2 && (same_expert || local_expert_id + 1 < experts_per_chip)) {
+                uint32_t nc_tiles = count_tiles, nc_count = count_value, nc_stick = x_start_stick, nc_chunk = chunk + 1;
+                if (!same_expert) {
+                    const uint32_t ne_global = idx_ptr[local_expert_id + 1];
+                    nc_count = adaptive_chunk::count_in_band(counts_ptr[ne_global], min_active_tokens, max_active_tokens);
+                    nc_tiles = adaptive_chunk::clamp_count_tiles(
+                        (nc_count + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
+                    nc_stick = start_ptr[ne_global];
+                    nc_chunk = 0;
+                }
+                if (nc_tiles > 0) {
+                    const uint32_t nc_pcm = adaptive_chunk::per_core_M_for_chunk(nc_chunk, nc_tiles, chunk_M_max);
+                    const uint32_t nc_first = nc_chunk * chunk_M_max + my_mt * nc_pcm;
+                    const uint32_t nc_valid =
+                        nc_first < nc_tiles ? (nc_tiles - nc_first < nc_pcm ? nc_tiles - nc_first : nc_pcm) : 0;
+                    read_row_ids(nc_tiles, nc_stick, nc_pcm, nc_first, /*wait=*/true);
+                    rows_prefetched_next = true;
+                    if constexpr (tilize_once) {
+                        for (uint32_t b = 0; b < adaptive_chunk::kXTilizeLookahead + 2; ++b) {
+                            if (owns_x_any(b)) {
+                                issue_x_rows(b, nc_first, nc_valid, nc_count, nc_stick);
+                            }
+                        }
+                        next_x_prefetched = true;
+                    }
+                }
+            }
+        }
+
         // -------- PHASE 4 — down matmul feed via L1 mcast of activated + down weight mcast --
         //
         // For each K-block kb (0..num_blocks_d-1=7), exactly one core in this
@@ -1349,17 +1415,6 @@ void kernel_main() {
 #ifdef FUSE_BIAS
                 issue_bias(ne);
 #endif
-                if constexpr (x_indexed) {
-                    const uint32_t ne_global = idx_ptr[ne];
-                    const uint32_t ne_count =
-                        adaptive_chunk::count_in_band(counts_ptr[ne_global], min_active_tokens, max_active_tokens);
-                    const uint32_t ne_tiles = adaptive_chunk::clamp_count_tiles(
-                        (ne_count + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
-                    if (ne_tiles > 0) {
-                        const uint32_t ne_pcm = adaptive_chunk::per_core_M_for_chunk(0, ne_tiles, chunk_M_max);
-                        read_row_ids(ne_tiles, start_ptr[ne_global], ne_pcm, my_mt * ne_pcm, /*wait=*/false);
-                    }
-                }
                 next_prefetched = true;
             }
         }
