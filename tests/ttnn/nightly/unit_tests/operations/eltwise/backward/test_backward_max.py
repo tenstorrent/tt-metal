@@ -56,3 +56,26 @@ def test_bw_max_non_finite_grad(device, dtype, grad_value):
     assert torch.equal(
         grad_other, torch.zeros(shape)
     ), f"loser gradient should be 0, got {grad_other[0, 0, 0, 0].item()}"
+
+
+# A tie used to be detected through other - input, which is NaN for two equal infinities, so both gradients were 0.
+# torch splits the gradient in half at a tie, infinities included.
+@pytest.mark.parametrize("dtype", [ttnn.float32, ttnn.bfloat16], ids=["float32", "bfloat16"])
+def test_bw_max_ties_match_torch(device, dtype):
+    inf = float("inf")
+    pairs = [(inf, inf), (-inf, -inf), (2.0, 2.0), (inf, -inf), (-inf, inf), (inf, 3.0), (-inf, 3.0), (3.0, -inf)]
+    shape = torch.Size([1, 1, 32, 32])
+    a = torch.tensor([p[0] for p in pairs] * 128).reshape(shape)
+    b = torch.tensor([p[1] for p in pairs] * 128).reshape(shape)
+    grad = torch.full(shape, 2.0)
+
+    a_ref, b_ref = a.clone().requires_grad_(True), b.clone().requires_grad_(True)
+    torch.maximum(a_ref, b_ref).backward(grad)
+
+    def to_device(t):
+        return ttnn.from_torch(t, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    grad_a, grad_b = (ttnn.to_torch(t).float() for t in ttnn.max_bw(to_device(grad), to_device(a), to_device(b)))
+
+    assert torch.equal(grad_a, a_ref.grad), f"input gradient differs from torch: {grad_a.flatten()[:8]}"
+    assert torch.equal(grad_b, b_ref.grad), f"other gradient differs from torch: {grad_b.flatten()[:8]}"

@@ -87,10 +87,11 @@ std::vector<Tensor> _min_or_max_bw(
     Tensor t_scale_grad = ttnn::multiply(grad, 0.5f, std::nullopt, output_mem_config);
     Tensor t_sub = ttnn::subtract(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_gtz = ttnn::gtz(t_sub, output_mem_config);
-    Tensor t_sub_eqz = ttnn::eqz(t_sub, output_mem_config);
+    // Compare directly: other - input is NaN for two equal infinities, which would hide the tie.
+    Tensor t_eq = ttnn::eq(other, input, std::nullopt, output_mem_config);
     Tensor t_sub_ltz = ttnn::ltz(t_sub, output_mem_config);
     // Selects rather than mask multiplies: in float32, 0 * inf and 0 * nan are NaN.
-    Tensor tie = ttnn::where(t_sub_eqz, t_scale_grad, 0.0f, output_mem_config);
+    Tensor tie = ttnn::where(t_eq, t_scale_grad, 0.0f, output_mem_config);
     Tensor grad_other = ttnn::where(t_sub_ltz, grad, tie, output_mem_config);
     Tensor grad_input = ttnn::where(t_sub_gtz, grad, tie, output_mem_config);
 
