@@ -35,10 +35,11 @@ using tt::tt_fabric::RoutingDirection;
 // The worker semaphores of one connection: teardown and buffer index.
 constexpr size_t kSemaphoresPerConnection = 2;
 
-// Where one target of a spec goes on a device: the direction of the first hop, and the fabric node of that hop.
+// Where one target of a spec goes on a device: the direction of the first hop, and the fabric node that the
+// connection's packets go to (the neighbour for a direction target, the peer for a peer target).
 struct ResolvedFabricConnectionTarget {
     RoutingDirection direction;
-    FabricNodeId next_hop;
+    FabricNodeId dst;
 };
 
 // The neighbour of `src` on its own mesh in direction target `direction` of `connection`. A 1D fabric has one mesh, so
@@ -58,6 +59,12 @@ FabricNodeId NeighbourInDirection(
         src,
         direction);
     return FabricNodeId(src.mesh_id, chips.front());
+}
+
+// Whether `node` is a fabric node of the system that `control_plane` manages.
+bool IsFabricNodeOfSystem(const tt::tt_fabric::ControlPlane& control_plane, const FabricNodeId& node) {
+    const auto& connectivity = control_plane.get_mesh_graph().get_intra_mesh_connectivity();
+    return *node.mesh_id < connectivity.size() && node.chip_id < connectivity[*node.mesh_id].size();
 }
 
 // Each target of `connection` resolved on the device of `src`, in target order.
@@ -81,7 +88,26 @@ std::vector<ResolvedFabricConnectionTarget> ResolveTargets(
             is_2d_fabric,
             "FabricConnectionsSpec '{}' has 2D targets, but the fabric is not in a 2D mode",
             connection.unique_id);
-        TT_THROW("FabricConnectionsSpec '{}': 2D targets are not supported yet", connection.unique_id);
+        for (const auto& peer : std::get<experimental::Fabric2DTargets>(connection.targets)) {
+            TT_FATAL(
+                peer != src,
+                "FabricConnectionsSpec '{}': peer target {} is the Program's own fabric node",
+                connection.unique_id,
+                peer);
+            TT_FATAL(
+                IsFabricNodeOfSystem(control_plane, peer),
+                "FabricConnectionsSpec '{}': peer target {} is not a fabric node of the system",
+                connection.unique_id,
+                peer);
+            const auto direction = control_plane.get_forwarding_direction(src, peer);
+            TT_FATAL(
+                direction.has_value(),
+                "FabricConnectionsSpec '{}': fabric node {} has no route to peer target {}",
+                connection.unique_id,
+                src,
+                peer);
+            resolved.push_back(ResolvedFabricConnectionTarget{*direction, peer});
+        }
     }
 
     std::set<RoutingDirection> directions;
@@ -162,7 +188,8 @@ FabricConnectionsBySpec RegisterFabricConnections(
         });
         ResolvedFabricConnection& resolved = connections[connection.unique_id];
         resolved.num_targets = static_cast<uint32_t>(targets_by_device.front().size());
-        resolved.words_per_target = FabricConnectionBindingHandle::kWordsPerTarget1D;
+        resolved.words_per_target = is_2d_fabric ? FabricConnectionBindingHandle::kWordsPerTarget2D
+                                                 : FabricConnectionBindingHandle::kWordsPerTarget1D;
         std::ranges::transform(coords, std::back_inserter(resolved.words_by_device), [](const auto& coord) {
             return std::make_pair(coord, std::unordered_map<NodeCoord, std::vector<uint32_t>>{});
         });
@@ -196,12 +223,14 @@ FabricConnectionsBySpec RegisterFabricConnections(
                         link,
                         src);
                     const auto eth_channel = tt::tt_fabric::get_worker_fabric_router_channel(
-                        control_plane, src, target.next_hop, target.direction, link);
-                    tt::tt_fabric::record_worker_fabric_connection_for_emule(
-                        src, target.next_hop, node, target.direction);
+                        control_plane, src, target.dst, target.direction, link);
+                    tt::tt_fabric::record_worker_fabric_connection_for_emule(src, target.dst, node, target.direction);
                     words.insert(
                         words.end(),
                         {static_cast<uint32_t>(eth_channel), semaphores.teardown_id, semaphores.buffer_index_id});
+                    if (is_2d_fabric) {
+                        words.insert(words.end(), {static_cast<uint32_t>(target.dst.chip_id), *target.dst.mesh_id});
+                    }
                 }
             }
         }
