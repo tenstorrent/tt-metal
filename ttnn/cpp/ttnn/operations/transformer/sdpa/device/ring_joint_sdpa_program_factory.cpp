@@ -563,7 +563,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const auto& k_shape = tensor_args.gathered_k.logical_shape();
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = k_shape[1];
-    const uint32_t NHV = tensor_args.v_num_heads();
+    const uint32_t NHV = tensor_args.v_num_heads(args.v_heads_in_row);
     const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
@@ -1589,7 +1589,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             tt::LogOp,
             "v_shape (latent): [B={}, NHV=1, N=0, DH={}]",
             q_shape[0],
-            tensor_args.v_head_dim(args.latent_v_head_dim));
+            tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row));
     }
 
     // q_local_padded_N (Q rows per device) can be shorter than kv_local_padded_N for chunked prefill.
@@ -1600,7 +1600,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t B = q_shape[0];
     const uint32_t NH = q_shape[1];
     const uint32_t NHK = k_shape[1];
-    const uint32_t NHV = tensor_args.v_num_heads();
+    const uint32_t NHV = tensor_args.v_num_heads(args.v_heads_in_row);
     const uint32_t DH = q_shape[3];
     const uint32_t q_local_padded_N = q_shape[2];
     const uint32_t kv_local_padded_N = tensor_args.local_kv_seq_len();
@@ -1621,7 +1621,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // True (unpadded) joint token count. Equals L on the replicated/aligned path; smaller than the
     // padded L when the sharded joint prompt leaves pad rows on the global tail.
     const uint32_t logical_l = joint_input_params.logical_l;
-    const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim);
+    const uint32_t vDH = tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row);
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool k_uses_batch_chain = ring_joint::uses_shared_k_batch_chain(gqa_grouped_kv, NHK);
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
@@ -2517,6 +2517,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
     if (args.output_concat_heads) {
         defines["OUTPUT_CONCAT_HEADS"] = "1";  // the writer packs the heads side by side
+    }
+    if (args.v_heads_in_row) {
+        defines["V_HEADS_IN_ROW"] = "1";  // V is [B, 1, N, NHK * vDH]: the reader offsets each head's columns
     }
     if (args.program_config.has_value() && args.program_config->matmul_math_fidelity.has_value()) {
         TT_FATAL(!fp32_dest_acc_en, "matmul_math_fidelity needs the streaming compute path (fp32_dest_acc_en=false)");
@@ -3996,7 +3999,7 @@ void apply_dynamic_local_n_runtime_args(
     const uint32_t B = tensor_args.input_q.logical_shape()[0];
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
     const uint32_t NHK = tensor_args.gathered_k.logical_shape()[1];
-    const uint32_t NHV = tensor_args.v_num_heads();
+    const uint32_t NHV = tensor_args.v_num_heads(args.v_heads_in_row);
     const bool v_shares_k_buffer = tensor_args.v_shares_k_buffer();
     const bool gqa_grouped_kv = ring_joint::is_gqa_grouped_kv_head_mode(v_shares_k_buffer, NH, NHK, NHV);
     const bool enable_kv_chains = !args.has_sliding_window();

@@ -427,11 +427,11 @@ void validate_dynamic_local_n(const RingJointSDPAParams& args, const RingJointSD
     const auto& k_shape = tensor_args.input_k.logical_shape();
     const auto& v_shape = tensor_args.input_v->logical_shape();
     TT_FATAL(
-        q_shape[1] == k_shape[1] && k_shape[1] == v_shape[1],
+        q_shape[1] == k_shape[1] && k_shape[1] == tensor_args.v_num_heads(args.v_heads_in_row),
         "dynamic_local_n requires MHA (equal Q/K/V head counts). Got Q: {}, K: {}, V: {}",
         q_shape[1],
         k_shape[1],
-        v_shape[1]);
+        tensor_args.v_num_heads(args.v_heads_in_row));
     // The per-chip length word and the output allocation both follow the logical rows, so rows padded beyond
     // them would be computed and written past the output.
     TT_FATAL(
@@ -495,6 +495,33 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
             !args.has_sliding_window() && !args.kv_cache_batch_idx.has_value() && !tensor_args.has_metadata(),
             "RingJointSDPA output_concat_heads: not with the sliding-window or KV-cache paths");
         TT_FATAL(args.latent_v_head_dim == 0, "RingJointSDPA output_concat_heads: not with a latent V head dim");
+    }
+    if (args.v_heads_in_row) {
+        // V as [B, 1, N_local, NHK * vDH]: plain MHA self-attention with its own V (the reader's head offset)
+        TT_FATAL(tensor_args.input_v.has_value(), "RingJointSDPA v_heads_in_row: needs a V tensor");
+        TT_FATAL(!tensor_args.joint_q.has_value(), "RingJointSDPA v_heads_in_row: no joint inputs");
+        TT_FATAL(
+            !args.has_sliding_window() && !args.kv_cache_batch_idx.has_value() && !tensor_args.has_metadata(),
+            "RingJointSDPA v_heads_in_row: not with the sliding-window or KV-cache paths");
+        const auto& q_shape = tensor_args.input_q.logical_shape();
+        const auto& k_shape = tensor_args.input_k.logical_shape();
+        const auto& v_shape = tensor_args.input_v->logical_shape();
+        TT_FATAL(
+            q_shape[1] == k_shape[1] && v_shape[1] == 1 && v_shape[3] == k_shape[1] * k_shape[3] &&
+                v_shape[2] == k_shape[2],
+            "RingJointSDPA v_heads_in_row: V must be [B, 1, N, NH * DH] for Q / K [B, NH, N, DH] (MHA). Got Q heads "
+            "{}, K heads {} x {} over {} rows, V heads {} x {} over {} rows",
+            q_shape[1],
+            k_shape[1],
+            k_shape[3],
+            k_shape[2],
+            v_shape[1],
+            v_shape[3],
+            v_shape[2]);
+        TT_FATAL(
+            tensor_args.gathered_v.has_value() && tensor_args.gathered_v->logical_shape()[1] == 1 &&
+                tensor_args.gathered_v->logical_shape()[3] == v_shape[3],
+            "RingJointSDPA v_heads_in_row: the gathered V buffer must have V's [B, 1, *, NH * DH] layout");
     }
     const auto& ag = args.all_gather_operation_attributes;
     if (ag.full_mesh) {
@@ -717,8 +744,8 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_miss(
     const auto joint_k_shape = has_joint_tensors ? tensor_args.joint_k.value().logical_shape() : q_shape;
     const auto joint_v_shape = has_joint_tensors ? tensor_args.joint_v.value().logical_shape() : q_shape;
     const bool has_indexed_kv_cache = indexed_kv_cache_active(args, tensor_args);
-    const uint32_t NVH = tensor_args.v_num_heads();
-    const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim);
+    const uint32_t NVH = tensor_args.v_num_heads(args.v_heads_in_row);
+    const uint32_t VDH = tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row);
     if (args.program_config->ccl_row_sdpa_start_x.has_value()) {
         const bool gqa_grouped_kv =
             ring_joint::is_gqa_grouped_kv_head_mode(tensor_args.v_shares_k_buffer(), q_shape[1], k_shape[1], NVH);
@@ -1273,7 +1300,7 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
     const bool has_joint_tensors = tensor_args.joint_q.has_value();
-    const auto v_head_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
+    const auto v_head_dim = tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row);
     auto joint_output_shape = input.logical_shape();
     joint_output_shape[2] = 0;
     joint_output_shape[3] = v_head_dim;
@@ -1401,6 +1428,7 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         args.ring_size,
         args.kv_stripe_split,
         args.output_concat_heads,
+        args.v_heads_in_row,
         args.compute_kernel_config,
         args.program_config,
         args.ccl_core_grid_offset,
@@ -1421,8 +1449,8 @@ ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
         tensor_args.has_metadata() ? args.kv_cache_layer_idx : 0u,
         args.circular_kv_cache,
         tensor_args.has_latent_v(),
-        tensor_args.v_num_heads(),
-        tensor_args.v_head_dim(args.latent_v_head_dim),
+        tensor_args.v_num_heads(args.v_heads_in_row),
+        tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row),
         args.sliding_window_size,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args);
@@ -1477,7 +1505,7 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> RingJointSDPADeviceO
         tensor_args.joint_q.has_value() || tensor_args.joint_k.has_value() || tensor_args.joint_v.has_value();
     const uint32_t L = tensor_args.joint_q.has_value() ? tensor_args.joint_q.value().logical_shape()[2] : 0;
     const uint32_t DH = q_shape[3];
-    const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim);
+    const uint32_t DV = tensor_args.v_head_dim(args.latent_v_head_dim, args.v_heads_in_row);
 
     if (args.has_sliding_window() && !has_joint_tensors) {
         const uint32_t q_chunks = tt::div_up(N_local, args.get_q_chunk_size());
@@ -1564,7 +1592,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_l_tensor,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
     const bool dynamic_local_n,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    bool v_heads_in_row) {
     using OperationType = ttnn::prim::RingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -1791,7 +1820,8 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
         circular_kv_cache,
         resolved_kv_stripe_split,
         dynamic_local_n,
-        output_concat_heads);
+        output_concat_heads,
+        v_heads_in_row);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

@@ -142,7 +142,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     // The per-chip padded length is a runtime quantity: one cached program serves every length up to the
     // gathered buffers' capacity. Needs logical_n as a tensor; non-causal MHA without joint tensors.
     bool dynamic_local_n = false,
-    bool output_concat_heads = false);
+    bool output_concat_heads = false,
+    bool v_heads_in_row = false);
 
 std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
     const ttnn::Tensor& input_tensor_q,

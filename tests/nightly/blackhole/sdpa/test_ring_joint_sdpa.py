@@ -867,6 +867,7 @@ def call_sdpa(
     kv_valid_end_tensor=None,
     ccl_core_grid_offset=None,
     output_concat_heads=False,
+    v_heads_in_row=False,
 ):
     """The all-gather runs on column ccl_column, or row-major from ccl_core_grid_offset when given."""
     tt_out, _, _ = ttnn.transformer.ring_joint_scaled_dot_product_attention(
@@ -906,6 +907,7 @@ def call_sdpa(
         circular_kv_cache=circular_kv_cache,
         kv_valid_end_tensor=kv_valid_end_tensor,
         output_concat_heads=output_concat_heads,
+        v_heads_in_row=v_heads_in_row,
     )
     return tt_out
 
@@ -5845,9 +5847,10 @@ def test_ring_joint_attention_sdpa_ccl_row_cores(expect_error):
         close_ring_joint_sdpa_runtime(runtime)
 
 
-def test_ring_joint_attention_sdpa_concat_heads():
+def test_ring_joint_attention_sdpa_concat_heads_and_v_in_row():
     """output_concat_heads writes the heads side by side, [B, 1, N, NH * DH]: byte for byte what nlp_concat_heads makes
-    of the default [B, NH, N, DH] output."""
+    of the default [B, NH, N, DH] output. v_heads_in_row reads V (and its gathered buffer) as [B, 1, N, NH * DH], the
+    QKV projection's layout: the output equals the default byte for byte."""
     mesh_config = MESH_CONFIG
     model = MODEL_CONFIGS["wan2_2_1xGLX"]
     assert not model.is_causal and not model.is_balanced
@@ -5921,6 +5924,13 @@ def test_ring_joint_attention_sdpa_concat_heads():
         default = run(1)
         side_by_side = default.permute(0, 2, 1, 3).reshape(BATCH_SIZE, 1, sq, nhq * model.d_v)
         assert torch.equal(run(3, output_concat_heads=True), side_by_side), "output_concat_heads changed the output"
+        assert nhq == nhk == nhv, "v_heads_in_row is MHA only"
+        v_row = V.permute(0, 2, 1, 3).reshape(BATCH_SIZE, 1, sq, nhv * model.d_v)
+        tt_v_row = to_device(v_row, model.kv_dtype, mesh_dims(2, 3))
+        p_buf_v_row = to_device(torch.zeros_like(v_row), model.kv_dtype, mesh_dims(None, 3))
+        fence_persistent_buffers(mesh_device)
+        in_row = run(1, v=tt_v_row, buf_v=p_buf_v_row, v_heads_in_row=True)
+        assert torch.equal(in_row, default), "v_heads_in_row changed the output"
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 

@@ -53,6 +53,9 @@ struct RingJointSDPAParams {
     // The writer packs the heads side by side, output [B, 1, N_local, NH * vDH] (what nlp_concat_heads makes of
     // [B, NH, N_local, vDH]); self-attention only
     bool output_concat_heads = false;
+    // V arrives as [B, 1, N_local, NHK * vDH], the heads side by side in each row (the QKV projection's v chunk, no
+    // head split); the reader takes head h's columns [h * vDHt, (h + 1) * vDHt). MHA self-attention only
+    bool v_heads_in_row = false;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     RingJointSDPAParams(
@@ -79,7 +82,8 @@ struct RingJointSDPAParams {
         bool circular_kv_cache = false,
         uint32_t kv_stripe_split = 1,
         bool dynamic_local_n = false,
-        bool output_concat_heads = false) :
+        bool output_concat_heads = false,
+        bool v_heads_in_row = false) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         is_causal(is_causal),
@@ -103,7 +107,8 @@ struct RingJointSDPAParams {
         circular_kv_cache(circular_kv_cache),
         kv_stripe_split(kv_stripe_split),
         dynamic_local_n(dynamic_local_n),
-        output_concat_heads(output_concat_heads) {}
+        output_concat_heads(output_concat_heads),
+        v_heads_in_row(v_heads_in_row) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -145,7 +150,8 @@ struct RingJointSDPAParams {
         "dynamic_local_n",
         "all_gather_operation_attributes",
         "all_gather_tensor_args",
-        "output_concat_heads");
+        "output_concat_heads",
+        "v_heads_in_row");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(joint_strategy),
@@ -169,7 +175,8 @@ struct RingJointSDPAParams {
             std::cref(dynamic_local_n),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args),
-            std::cref(output_concat_heads));
+            std::cref(output_concat_heads),
+            std::cref(v_heads_in_row));
     }
 };
 
@@ -240,13 +247,18 @@ struct RingJointSDPAInputs {
     // Latent V copied from the K chunk in L1.
     bool v_shares_k_buffer() const { return has_latent_v() && !has_packed_kv(); }
 
-    uint32_t v_num_heads() const {
-        return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[1])
-                                   : static_cast<uint32_t>(input_k.logical_shape()[1]);
+    // v_heads_in_row: V is [B, 1, N, NHK * vDH] (RingJointSDPAParams::v_heads_in_row)
+    uint32_t v_num_heads(bool v_heads_in_row = false) const {
+        return input_v.has_value() && !v_heads_in_row ? static_cast<uint32_t>(input_v->logical_shape()[1])
+                                                      : static_cast<uint32_t>(input_k.logical_shape()[1]);
     }
 
-    uint32_t v_head_dim(uint32_t latent_v_head_dim) const {
-        return input_v.has_value() ? static_cast<uint32_t>(input_v->logical_shape()[3]) : latent_v_head_dim;
+    uint32_t v_head_dim(uint32_t latent_v_head_dim, bool v_heads_in_row = false) const {
+        if (!input_v.has_value()) {
+            return latent_v_head_dim;
+        }
+        const auto v_width = static_cast<uint32_t>(input_v->logical_shape()[3]);
+        return v_heads_in_row ? v_width / static_cast<uint32_t>(input_k.logical_shape()[1]) : v_width;
     }
 
     // True iff the joint/prompt set is sequence-sharded (L/P per device).

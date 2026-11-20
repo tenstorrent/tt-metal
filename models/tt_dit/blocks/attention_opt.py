@@ -71,6 +71,8 @@ class Attention(Module):
     default_ring_sdpa_chunk_size: tuple[int, int] = {-1: (256, 256)}
     # Ring SDPA writes the heads side by side, so concatenate_heads is a reshape (self-attention only)
     ring_sdpa_concat_heads: bool = False
+    # Ring SDPA reads V in the QKV projection's [1, 1, N, H * D] layout, so V needs no head split (self-attention only)
+    ring_sdpa_v_in_row: bool = False
 
     def __init__(
         self,
@@ -583,8 +585,6 @@ class Attention(Module):
             per_head_norm=self.per_head_norm,
         )
 
-        v = _split_heads(v_flat_c)  # [1, H, M_s+M_p, D]
-
         # No joint stream — dummies handled in the post-processing block below.
         add_q = add_k = add_v = self.dummy_joint_input
         persistent_joint_k = persistent_joint_v = None
@@ -629,6 +629,9 @@ class Attention(Module):
 
         ring_self = self.parallel_config.sequence_parallel.factor > 1 and int(add_q.shape[2]) == 0
         concat_out = self.ring_sdpa_concat_heads and ring_self
+        v_in_row = self.ring_sdpa_v_in_row and ring_self
+        # V [1, H, M_s+M_p, D], or the QKV layout [1, 1, M_s+M_p, H * D] when the ring SDPA reads it in row
+        v = ttnn.unsqueeze(v_flat_c, 0) if v_in_row else _split_heads(v_flat_c)
         if self.parallel_config.sequence_parallel.factor > 1:
             config_length = (
                 sequence_1.shape[1] * self.parallel_config.sequence_parallel.factor
@@ -666,6 +669,7 @@ class Attention(Module):
                 persistent_output_buffer_joint_k=persistent_joint_k,
                 persistent_output_buffer_joint_v=persistent_joint_v,
                 output_concat_heads=concat_out,
+                v_heads_in_row=v_in_row,
             )
         else:
             assert (
