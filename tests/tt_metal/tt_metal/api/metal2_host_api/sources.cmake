@@ -25,9 +25,11 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/data_movement_hardware_config/config_1xx.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/dataflow_buffer_spec/borrowed_memory.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/dataflow_buffer_spec/dataflow_buffer_spec.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/fabric_connections_spec/fabric_connections_spec.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/basic_kernel_info.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/compiler_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/dfb_binding.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/fabric_connection_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/global_semaphore_binding.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/hardware_config.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/kernel_spec/kernel_arguments.cpp
@@ -39,6 +41,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfb_aliasing.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfb_endpoints.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/dfbs_per_node.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/fabric_connections.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/gen1_dm_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/gen2_dm_core_assignment.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/program_spec/prefetcher_pipe_lanes.cpp
@@ -63,6 +66,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/tensor_parameter.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/kernel_hash/tensor_spec_relaxations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/compute_config_lowering.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/fabric_connections_1d.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/graph_tracking.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_args_layout.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/kernel_config.cpp
@@ -97,6 +101,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/compile_time_varargs.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/kernel_args/tt_kernel_shim.cpp
     ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_kernel_defines.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/kernel_compilation_tests/fabric/fabric_connection_bindings.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/binding_loopbacks.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/compute_semaphore.cpp
     ${CMAKE_CURRENT_LIST_DIR}/integration_tests/dfb_placement.cpp
