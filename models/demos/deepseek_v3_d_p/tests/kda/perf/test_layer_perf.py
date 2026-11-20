@@ -19,6 +19,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import tp_axis_is_wrappe
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import make_actual_start
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     deallocate_state,
+    is_4x4_subtorus,
     kda_device_params,
     make_kimi_k3_device_case,
     make_synthetic_kimi_k3_test_case,
@@ -46,9 +47,14 @@ _TIMING_SAMPLES = 5
 _TARGETS_MS = {
     ("SP8xTP4", "untraced"): 1.233,
     ("SP8xTP4", "traced"): 1.14,
+    # 4x4 stage, and the subtorus (no CI leg): fastest untraced / mean traced of 3 runs.
+    ("SP4xTP4", "untraced"): 1.244,
+    ("SP4xTP4", "traced"): 1.161,
+    ("SP4xTP4-subtorus", "untraced"): 1.189,
+    ("SP4xTP4-subtorus", "traced"): 1.125,
 }
 # Galaxy-equivalent layouts outside CI: they report wall time but are not gated.
-_REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2")
+_REPORT_ONLY_LAYOUTS = ("SP4xTP2", "SP2xTP2", "SP4xTP4-sp-axis0", "SP4xTP4-sp-axis0-subtorus")
 # Overrides the chunk's start position for investigation; the performance gates are skipped when it is set.
 _ACTUAL_START_OVERRIDE = os.environ.get("KDA_PERF_ACTUAL_START")
 _GALAXY_TP = 4
@@ -77,6 +83,9 @@ _LOUDBOX_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # LoudBox SP8xTP1 runs Galaxy's SP chain and chunk with Galaxy's 24 heads per chip. Its 8 chips close into a ring, as
 # Galaxy's SP axis does, and so do QuietBox SP4xTP1's 4; FABRIC_2D_TORUS_Y rings only mesh axis 0, so SP takes that axis.
 # As on QuietBox SP4xTP1, it skips the TP reduce-scatter.
+# 4x4 stage: Galaxy's per-chip workload on a 2560-token chunk. "-sp-axis0" swaps SP and TP axes.
+_STAGE_4X4_SEQUENCE = 4 * PREFILL_CHUNK_TOKENS_PER_CHIP
+_STAGE_4X4_ACTUAL_START = 2 * PREFILL_CHUNK_TOKENS_PER_CHIP + 320
 # Like the model's prefill tests, give CCL semaphores their own L1_SMALL region: allocated in L1 on the first call,
 # they would land between the chunk terms and fragment L1, so the traced call would plan ops on less free L1 than
 # the warm-up compiled for.
@@ -219,6 +228,20 @@ def _trace_wall_samples_ms(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4-torus-xy",
         ),
+        pytest.param(
+            (4, 4),
+            0,
+            kda_device_params((4, 4), l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-torus-x-4x4",
+        ),
+        pytest.param(
+            (4, 4),
+            1,
+            kda_device_params((4, 4), l1_small_size=_L1_SMALL_SIZE),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="SP4xTP4-sp-axis0-4x4",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -233,7 +256,11 @@ def test_synthetic_kimi_k3_perf(
     mesh_shape = tuple(mesh_device.shape)
     sequence_parallel_axis = 1 - tensor_parallel_axis
     layout = f"SP{mesh_shape[sequence_parallel_axis]}xTP{mesh_shape[tensor_parallel_axis]}"
-    if layout == "SP8xTP4":
+    if mesh_shape == (4, 4) and sequence_parallel_axis == 0:
+        layout += "-sp-axis0"
+    if mesh_shape == (4, 4) and is_4x4_subtorus():
+        layout += "-subtorus"
+    if layout.startswith(("SP8xTP4", "SP4xTP4")):
         require_high_power(f"kimi_k3 KDA {layout} perf")
     sequence, num_heads, actual_start = {
         "SP8xTP4": (PREFILL_CHUNK_TOKENS, None, _GALAXY_ACTUAL_START),
@@ -241,7 +268,9 @@ def test_synthetic_kimi_k3_perf(
         "SP8xTP1": (PREFILL_CHUNK_TOKENS, _GALAXY_HEADS_PER_CHIP, _GALAXY_ACTUAL_START),
         "SP2xTP2": (_QUIETBOX_SEQUENCE, _QUIETBOX_NUM_HEADS, _QUIETBOX_ACTUAL_START),
         "SP4xTP1": (_QUIETBOX_SP4_SEQUENCE, _QUIETBOX_SP4_NUM_HEADS, _QUIETBOX_SP4_ACTUAL_START),
-    }[layout]
+        "SP4xTP4": (_STAGE_4X4_SEQUENCE, None, _STAGE_4X4_ACTUAL_START),
+        "SP4xTP4-sp-axis0": (_STAGE_4X4_SEQUENCE, None, _STAGE_4X4_ACTUAL_START),
+    }[layout.removesuffix("-subtorus")]
     if _ACTUAL_START_OVERRIDE is not None:
         actual_start = int(_ACTUAL_START_OVERRIDE)
     actual_end = None if actual_start == 0 else actual_start + sequence
