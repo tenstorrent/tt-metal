@@ -38,7 +38,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <internal/mesh_device.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
