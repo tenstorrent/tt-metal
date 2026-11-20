@@ -450,7 +450,8 @@ def guide_example(device):
                 ),
                 dfb_bindings=[E.consumer_of("in", "in"), E.producer_of("out", "out")],
                 runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=["num_tiles"]),
-                # float32 data also needs enable_32_bit_dest and unpack_modes here: the defaults lose its precision.
+                # 32-bit data also needs enable_32_bit_dest=True and unpack_modes={"in": E.UnpackMode.UnpackToDest}
+                # here; with the defaults, or with UnpackToSrc, it loses precision.
                 hw_config=E.ComputeHardwareConfig(),
             ),
         ],
