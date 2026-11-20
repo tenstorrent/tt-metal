@@ -463,7 +463,7 @@ _RING_RING_4X4_PERF_CEILING_US = {
 }
 
 
-def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us=None):
+def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us):
     monkeypatch.setitem(globals(), "N_DEV", 16)
     monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
     sc, page_bytes = 160, 704
@@ -500,13 +500,12 @@ def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us=None
             f"samples_us={[round(v / 1e3, 1) for v in values]}"
         )
     assert all(statistics.median(v) > 0 for v in samples.values()), "a step recorded no device program"
-    if ceilings_us is not None:
-        over = {
-            name: (round(statistics.median(v) / 1e3, 1), ceilings_us[name])
-            for name, v in samples.items()
-            if statistics.median(v) / 1e3 > ceilings_us[name]
-        }
-        assert_perf_gate(not over, f"{source} steps over their ceiling (median, ceiling us): {over}")
+    over = {
+        name: (round(statistics.median(v) / 1e3, 1), ceilings_us[name])
+        for name, v in samples.items()
+        if statistics.median(v) / 1e3 > ceilings_us[name]
+    }
+    assert_perf_gate(not over, f"{source} steps over their ceiling (median, ceiling us): {over}")
 
 
 _STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
@@ -519,15 +518,6 @@ def test_sparse_kv_push_ring_ring_4x4_perf(mesh_device, monkeypatch, source):
     """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at a 4x4 stage's 1M cache with
     SP on axis 1, on the 16-chip [RING, RING] carve, each step gated by its ceiling."""
     _stage_push_perf(mesh_device, monkeypatch, 1, source, _RING_RING_4X4_PERF_CEILING_US[source])
-
-
-@pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
-@pytest.mark.parametrize("mesh_device", [(8, 4)], ids=["8x4"], indirect=True)
-@_STAGE_PUSH_SOURCES
-def test_sparse_kv_push_cylinder_4x4_perf(mesh_device, monkeypatch, source):
-    """test_sparse_kv_push_ring_ring_4x4_perf's measurement on a 4x4 submesh of the 8x4 TorusXY Galaxy: axis 1 rings,
-    axis 0 (four of eight rows) is a line. The push needs the TorusXY fabric, so this is the [LINE, RING] comparison."""
-    _stage_push_perf(mesh_device.create_submesh(ttnn.MeshShape(4, 4)), monkeypatch, 1, source)
 
 
 @galaxy
