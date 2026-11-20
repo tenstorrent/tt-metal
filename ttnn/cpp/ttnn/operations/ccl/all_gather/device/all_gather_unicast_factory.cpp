@@ -4,6 +4,7 @@
 
 #include "all_gather_unicast_factory.hpp"
 #include "all_gather_device_operation.hpp"
+#include "all_gather_factory_common.hpp"
 
 #include <algorithm>
 #include <map>
@@ -34,6 +35,11 @@ namespace {
 // into our output; the writer (CB consumer) unicasts each stripe one hop to the neighbor's output (same
 // address on every device). Direction/topology are runtime args, so both kernels compile once and run on all
 // cores. Two semaphores: barrier_sem (init handshake) and data_valid_sem (relay gate + completion).
+//
+// Glossary:
+//   relay    -- re-forward a received stripe from upstream one hop to downstream.
+//   slice    -- portion of tensor stripes allocated to this (link, worker)
+//   antipode -- on a ring, the device N/2 hops away.
 ////////////////////////////////////////////////////////////////
 
 tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
@@ -52,14 +58,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     ////////////////////////////////////////////////////////////////
     // Fabric setup
-    //
-    // Glossary:
-    //   relay          -- re-forward a received stripe from upstream one hop to downstream.
-    //   slice          -- portion of tensor stripes allocated to this (link, worker)
-    //   sink direction -- a direction that forwards nothing (num_iters == 0), e.g. a line endpoint's dead side.
-    //   sink stripe    -- a stripe consumed here, not relayed onward (a line endpoint's incoming, or a ring
-    //                     antipode).
-    //   antipode       -- on a ring, the device N/2 hops away.
     ////////////////////////////////////////////////////////////////
 
     TT_FATAL(!operation_attributes.is_true_2d(), "all_gather unicast algorithm does not support true 2D topologies");
@@ -94,21 +92,13 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
 
     const uint32_t packet_size = operation_attributes.packet_size;
 
-    ////////////////////////////////////////////////////////////////
-    // Page indexing
-    //
-    // The kernels walk this device's stripe of the output (all_gather_walk.hpp) in units of A bytes and pack the
-    // runs that are contiguous in the output into packets of up to 4 segments. A walk element is one output page, or
-    // one unit when a stripe row is not whole output pages; workers split the elements into contiguous slices.
-    ////////////////////////////////////////////////////////////////
-
     const auto walk_geometry = compute_walk_geometry(
         input_tensor,
         output_tensor.tensor_spec(),
         operation_attributes.dim_from_end,
         num_devices,
         packet_size,
-        /*unicast=*/true);
+        /*reads_output=*/true);
     TT_FATAL(
         walk_geometry.has_value(),
         "all_gather unicast cannot cut {} B input pages and {} B output pages on the relay's read alignment",
@@ -116,7 +106,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         output_tensor.mesh_buffer().page_size());
     const all_gather_walk::WalkGeo& geo = *walk_geometry;
     const uint32_t unit_bytes = geo.unit_bytes;
-    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
+    const uint32_t num_elements = num_walk_elements(geo, input_tensor);
     const uint32_t packet_cap = compute_packet_cap(geo, output_tensor);
 
     ////////////////////////////////////////////////////////////////
@@ -131,7 +121,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     ////////////////////////////////////////////////////////////////
 
     // Num worker cores per direction per link.
-    // This is a major perf knob, below heuristic was determined from extensive test sweeps.
     uint32_t num_links = operation_attributes.axis_num_links[axis];
     const bool is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
     const uint64_t input_bytes = static_cast<uint64_t>(num_elements) * geo.element_units * unit_bytes;
@@ -139,24 +128,21 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         tt::div_up(input_bytes * (num_devices - 1), uint64_t{is_ring ? 2u : 1u} * std::max(1u, num_links) * packet_cap);
     uint32_t workers_per_dir = 1;
     if (is_wormhole) {
-        // WH, one link: the link caps the rate, so 2 workers keep up (ring, 6144 B payload: 3 are 3-13% slower on
-        // bf16 tiles at 2-4 MB) unless short segments cut every packet below the payload (packet_cap <
-        // max_packet_bytes: row-major rows of 1 KB or less per device, bfp8 tiles in one-tile lanes). There 3 are
-        // faster from about 400 packets on the busiest link-direction (ring 1-8 MB: 1-9%; forced-unicast line:
-        // 5-19%) and up to 5% slower below 300.
-        // From two links the chip's NOC caps the rate and 3 workers, with the writer off NOC0 (below), are faster
-        // from 192 KB of input per link (4 links: 2-12%), 3-7% slower at 128 KB.
+        // WH, one link: the link caps the rate, so 2 workers keep up unless short chunks cut every packet below the
+        // payload (packet_cap < max_packet_bytes: row-major rows of 1 KB or less per device, bfp8 tiles in one-tile
+        // lanes); then a 3rd pays off from about 400 packets on the busiest link-direction.
+        // From two links the chip's NOC caps the rate, and a 3rd worker, with the writer off NOC0 (below), pays off
+        // from 192 KB of input per link.
         constexpr uint64_t three_worker_packets = 400, three_worker_link_bytes = 192 * 1024;
         workers_per_dir =
             num_links >= 2
                 ? (input_bytes >= three_worker_link_bytes * num_links ? 3 : 2)
                 : (packet_cap < geo.max_packet_bytes && busiest_link_packets >= three_worker_packets ? 3 : 2);
     } else if (input_tensor.device()->arch() == tt::ARCH::BLACKHOLE) {
-        // 2 workers cannot keep up with a ring's link (3 are 1.4-7% faster at 256 KB - 9 MB); on a line 2 are 10%
-        // faster at 121 packets on the busiest link-direction, 3 as fast or faster from 242. With the mux in the middle
-        // and the writer on NOC1 (below), 4 are up to 11% faster than 3 (8 devices, 2 links, 4-100 MB); packets of 4 KB
-        // or less (short row segments) take a 5th, up to 9% faster than 4 at 4-12 KB payloads, while 5 are up to 12%
-        // slower with full 8 KB packets.
+        // 2 workers cannot keep up with a ring's link. On a line they keep the link busy below 160 packets on the
+        // busiest link-direction; above it more workers are needed: 4 (with the mux in the middle and the writer on
+        // NOC1, below), and a 5th when packets are 4 KB or less (short rows), which cost more per byte. A 5th slows
+        // full packets.
         constexpr uint64_t line_more_worker_packets = 160;
         const uint32_t more_workers = packet_cap <= 4096 ? 5 : 4;
         workers_per_dir = (is_ring || busiest_link_packets >= line_more_worker_packets) ? more_workers : 2;
@@ -195,7 +181,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const uint32_t cores_per_dir = workers_per_dir + 1;
     const uint32_t num_cores_per_link = num_directions * cores_per_dir;
 
-    // all_cores contains workers + mux
     [[maybe_unused]] auto [all_core_range, all_cores] = ttnn::ccl::choose_worker_cores(
         num_links,
         num_cores_per_link,
@@ -215,8 +200,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     // Put each direction's mux and its workers on one core row where the grid allows, directions on distinct rows
     // first, then rows double up; otherwise keep choose_worker_cores' row-major order. Much of a direction's traffic
     // runs along its row's NOC links (reads into its workers, packets to its mux and on to ethernet), so directions
-    // sharing a row share that bandwidth: the row-major order puts three on one row (BH, 2 links: 2.7x slower on a
-    // 26 MB ring, 1.3x on a line).
+    // sharing a row share that bandwidth, and the row-major order can put three on one row.
     auto group_by_row = [&]() {
         std::map<uint32_t, std::vector<CoreCoord>> free_by_row;
         for (const auto& core : corerange_to_cores(available_cores, std::nullopt, /*row_wise=*/true)) {
@@ -241,7 +225,8 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     };
     group_by_row();
-    // BH: the mux in the middle of its direction's cores instead of first, 2-6% faster (2 links, 4-100 MB).
+    // BH: the mux sits in the middle of its direction's cores instead of first, between its workers, so the
+    // worker-to-mux NOC paths are shorter and split across both sides of the row.
     if (!is_wormhole) {
         for (size_t g = 0; g + cores_per_dir <= all_cores.size(); g += cores_per_dir) {
             std::swap(all_cores[g], all_cores[g + (cores_per_dir / 2)]);
@@ -275,12 +260,11 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     }
     const CoreRangeSet worker_core_range(worker_core_set);
 
-    // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy (2 are 12-14%
-    // slower); from 2 workers, 2 buffers are within 3% of 4, except on BH, where 3 are 1-3% faster than 2 (2 links,
-    // 25-100 MB) and more gain nothing. The mux map goes in program-local L1 (a circular buffer on the mux cores), so
-    // it stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its addresses
-    // are offsets until the mux publishes the map's base. It must be placed before add_fabric_mux_v2_to_program and
-    // append_client_connection_rt_args, which read its CB index and semaphore id.
+    // Fabric mux config. One worker per direction needs 4 buffers per channel to keep the link busy; from 2 workers,
+    // 2 suffice (3 on BH; more gain nothing). The mux map goes in program-local L1 (a circular buffer on the mux
+    // cores), so it stays clear of persistent L1 there and the program's L1 validation keeps it below L1 buffers; its
+    // addresses are offsets until the mux publishes the map's base. It must be placed before
+    // add_fabric_mux_v2_to_program and append_client_connection_rt_args, which read its CB index and semaphore id.
     const uint8_t num_buffers_per_channel = workers_per_dir == 1 ? 4 : (is_wormhole ? 2 : 3);
     tt::tt_fabric::FabricMuxV2Config mux_config(
         *mesh_device,
@@ -297,71 +281,46 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     ////////////////////////////////////////////////////////////////
 
     // --- CB sizing ---
-    // One CB page is a slot (all_gather_walk::slot_offsets): up to packets_per_slot packets with their records and the
-    // writer's fabric headers.
+    // A slot (all_gather_walk::slot_offsets): up to packets_per_slot packets with their records and the writer's
+    // fabric headers.
     const uint32_t total_slices = num_links * workers_per_dir;
     const uint32_t packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
-    // WH, one link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines (1 MB, 6144 B
-    // payload: 2 packets per slot instead of 5 are 11% faster; 4352 B, 1-1.5 MB: 3-4%); a line keeps 2 (at 4352 B
-    // it was 4-10% slower with 4 at 512 KB - 1 MB). From two links one packet per slot is 3-8% faster (4 links,
-    // 16 MB), while with one link it is 3-7% slower. BH fills 4 slots too (4-6 MB: 2-11% faster).
+    // WH, one link: a ring fills at least 4 slots per worker iteration, so a short one still pipelines; a line keeps
+    // 2. WH from two links: one packet per slot. BH fills at least 4 slots.
     const bool wh_multi_link = is_wormhole && num_links >= 2;
-    const uint32_t read_bytes_per_barrier = wh_multi_link ? 1 : default_read_bytes_per_barrier;
+    const uint32_t max_packets_per_slot = wh_multi_link ? 1 : kMaxPacketsPerSlot;
     const uint32_t min_slots = (is_ring || !is_wormhole) ? 4 : all_gather_walk::kNumSlots;
     const uint32_t packets_per_slot = compute_packets_per_slot(
-        geo, packet_cap, total_slices, packet_header_size, input_tensor, read_bytes_per_barrier, min_slots);
-    const uint32_t cb_page_size =
+        geo, packet_cap, total_slices, packet_header_size, input_tensor, min_slots, max_packets_per_slot);
+    const uint32_t slot_bytes =
         all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap).slot_bytes;
 
-    // Input and relay CB. A slot is untyped bytes (records, headers, payload); the format only sizes the page.
+    // Input and relay CB: slots of records, headers and payload.
     uint32_t cb0_id = tt::CB::c_in0;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = all_gather_walk::kNumSlots * cb_page_size,
-        .core_ranges = worker_core_range,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb0_id),
-            .data_format = tt::DataFormat::RawUInt8,
-            .page_size = cb_page_size,
-        }}},
-    });
+    desc.cbs.push_back(slot_cb_descriptor(cb0_id, slot_bytes, worker_core_range));
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC1 except on a one-link WH ring (NOC1 is 1-3% slower there); the reader takes the other.
-    // BH: on NOC0 the writer is 11-13% slower on a line, and NOC1 is 3-5% faster on a ring too (2 links). WH from two
-    // links keeps the writer on NOC1 on a ring: on NOC0, with 2 * links mux forwarders, it holds a 4-link ring to
-    // ~7 GB/s per link-direction and slows as workers are added (13-18% slower from 16 MB at 3 workers).
+    // NOCs: the writer is on NOC1 except on a one-link WH ring; the reader takes the other. On a WH ring from two
+    // links, a NOC0 writer shares NOC0 with the 2 * links mux forwarders and holds the ring back.
     const bool writer_on_noc0 = is_wormhole && is_ring && !wh_multi_link;
     const auto writer_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_0 : tt::tt_metal::NOC::NOC_1;
     const auto reader_noc = writer_on_noc0 ? tt::tt_metal::NOC::NOC_1 : tt::tt_metal::NOC::NOC_0;
 
     // Reader
-    std::vector<uint32_t> reader_compile_args = {
-        unit_bytes,            // cut quantum
-        geo.in_page_units,     // input page footprint (units)
-        geo.out_page_units,    // output page footprint (units)
-        geo.stripe_units,      // units this device contributes to one output row
-        num_devices,           // device count (stripe indexing)
-        geo.element_units,     // units per walk element
-        geo.max_packet_bytes,  // fabric packet payload limit
-        geo.dst_cross,         // runs may continue across output pages
-        geo.src_cross,         // runs may continue across input pages
-        packet_cap,            // packet payload cap
-        packets_per_slot,      // packets per CB page
-        packet_header_size,    // fabric packet header size
-        cb0_id,                // cb id
-        cb_page_size,          // cb entry size
-    };
+    std::vector<uint32_t> reader_compile_args;
+    append_walk_ct_args(reader_compile_args, geo, packet_cap);
+    reader_compile_args.insert(reader_compile_args.end(), {packets_per_slot, packet_header_size, cb0_id, slot_bytes});
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer
     std::vector<uint32_t> writer_compile_args = {
-        unit_bytes,               // cut quantum
-        packet_cap,               // packet payload cap
-        packets_per_slot,         // packets per CB page
-        packet_header_size,       // fabric packet header size
-        cb0_id,                   // cb id
-        cb_page_size,             // cb entry size
+        unit_bytes,
+        packet_cap,
+        packets_per_slot,
+        packet_header_size,  // fabric packet header size
+        cb0_id,
+        slot_bytes,
         num_buffers_per_channel,  // mux buffers per channel
     };
 
@@ -398,7 +357,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
 
     // Mux kernels: one fabric connection per active direction per link, to that direction's neighbor. The forwarder
-    // writes every packet into an ethernet core, 1.8-2.3x faster on NOC0 (BH).
+    // writes every packet into an ethernet core, which is faster from NOC0 (BH).
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t dir = 0; dir < num_directions; ++dir) {
             if (dir_active(dir)) {
@@ -415,28 +374,23 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
         }
     }
 
-    // Data_valid cadence: about 2 signals per worker iteration, every 2 to 64 packets. Each signal is a packet: fewer
-    // save link time, more start the downstream relay sooner (BH: 1-packet cadence up to 1.5x slower at 8-26 MB).
-    // BH, 2 links: 1-8% faster at 6-100 MB than 4 signals every 2 to 16 packets. WH: 64 packets (ring, 8-42 MB:
-    // 1.5-4% faster than 16), 2 signals (4 links: 8-13% faster at 4 MB than 4). A one-link WH line keeps 4: its slots
-    // are half an iteration, and 2 signals were 16% slower at 1 MB.
+    // data_valid: about 2 signals per worker iteration, every 2 to 64 packets. Each signal is a packet: fewer signals
+    // save link time, more start the downstream relay sooner. A one-link WH line keeps 4, since its slots are half an
+    // iteration.
     const uint64_t signals_per_iter = (!is_wormhole || is_ring || wh_multi_link) ? 2 : 4;
-    constexpr uint64_t max_cadence_packets = 64;
-    constexpr uint64_t min_cadence_packets = 2;
+    constexpr uint64_t max_packets_per_sync = 64;
+    constexpr uint64_t min_packets_per_sync = 2;
 
     for (uint32_t link = 0; link < num_links; ++link) {
         for (uint32_t w = 0; w < workers_per_dir; ++w) {
-            const uint32_t slice_idx = (link * workers_per_dir) + w;
-            const uint32_t elements_per_slice = num_elements / total_slices;
-            const uint32_t remainder = num_elements % total_slices;
-            const uint32_t slice_start = (slice_idx * elements_per_slice) + std::min(slice_idx, remainder);
-            const uint32_t slice_count = elements_per_slice + (slice_idx < remainder ? 1 : 0);
+            const auto [slice_start, slice_count] =
+                walk_slice(num_elements, total_slices, (link * workers_per_dir) + w);
             const uint32_t half = slice_count / 2;
             const uint32_t iter_units = slice_count * geo.element_units;
             const uint64_t slice_packets = tt::div_up(uint64_t{iter_units} * unit_bytes, uint64_t{packet_cap});
-            const uint64_t cadence_packets =
-                std::clamp(tt::div_up(slice_packets, signals_per_iter), min_cadence_packets, max_cadence_packets);
-            const uint32_t data_valid_cadence = tt::div_up(cadence_packets, uint64_t{packets_per_slot});
+            const uint64_t packets_per_sync =
+                std::clamp(tt::div_up(slice_packets, signals_per_iter), min_packets_per_sync, max_packets_per_sync);
+            const uint32_t slots_per_sync = tt::div_up(packets_per_sync, uint64_t{packets_per_slot});
 
             // Both directions (dir: 0 = forward, 1 = backward). mirror_core is this core's coords, reused as the
             // data_valid_sem target on the neighbor's mirror core; partner_core is the opposite-direction worker
@@ -453,7 +407,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                 const uint32_t num_iters = is_forward ? fwd_iters : bwd_iters;
                 const uint32_t num_recv =
                     is_ring ? num_devices / 2 : (is_forward ? device_idx : num_devices - 1 - device_idx);
-                const bool do_local_write = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
+                const bool local_copy = is_forward ? (fwd_iters > 0) : (fwd_iters == 0);
 
                 // The last iteration walks [final_skip, final_skip + final_count) of the slice: on an even ring the
                 // antipode stripe as a half, the forward direction the first.
@@ -464,23 +418,23 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     final_count = is_forward ? half : (slice_count - half);
                 }
 
-                // Units the upstream delivers into our output (relayed full stripes + sink). The even-ring
-                // antipode arrives as a half, so it contributes final_count instead of a full stripe.
+                // Units the upstream delivers into our output (relayed full stripes plus the last, which stops here).
+                // The even-ring antipode arrives as a half, so it contributes final_count instead of a full stripe.
                 const uint32_t total_units =
                     num_recv * iter_units - (ring_even_split ? (slice_count - final_count) * geo.element_units : 0);
 
                 std::vector<uint32_t> reader_rt_args = {
-                    0u,                        // input tensor address (Buffer* binding)
-                    0u,                        // output tensor address (Buffer* binding)
-                    device_idx,                // this device's index (initial stripe)
-                    stripe_step,               // stripe index step per iteration
-                    num_iters,                 // iterations this direction runs
-                    total_units,               // units upstream delivers (completion wait)
-                    slice_start,               // this worker's slice start (elements)
-                    slice_count,               // this worker's slice length (elements)
-                    final_skip,                // last-iteration slice skip (even-ring split)
-                    final_count,               // last-iteration slice length (even-ring split)
-                    do_local_write ? 1u : 0u,  // write local data into local output on iteration 0
+                    0u,                    // input tensor address (Buffer* binding)
+                    0u,                    // output tensor address (Buffer* binding)
+                    device_idx,            // this device's index (initial stripe)
+                    stripe_step,           // stripe index step per iteration
+                    num_iters,             // iterations this direction runs
+                    total_units,           // units upstream delivers (completion wait)
+                    slice_start,           // this worker's slice start (elements)
+                    slice_count,           // this worker's slice length (elements)
+                    final_skip,            // last-iteration slice skip (even-ring split)
+                    final_count,           // last-iteration slice length (even-ring split)
+                    local_copy ? 1u : 0u,  // write local data into local output on iteration 0
                     data_valid_sem
                         .address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
                 };
@@ -490,7 +444,6 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     {input_tensor.buffer(), output_tensor.buffer()},
                     reader_rt_args);
 
-                // route for Fabric_2D
                 const auto route_node =
                     neighbor.has_value() ? mesh_device->get_fabric_node_id(*neighbor) : sender_fabric_node_id;
                 std::vector<uint32_t> writer_rt_args = {
@@ -505,7 +458,7 @@ tt::tt_metal::ProgramDescriptor build_unicast_descriptor_at(
                     (uint32_t)partner_core.y,         // barrier_sem target (neighbor partner core y)
                     (uint32_t)mirror_core.x,          // data_valid_sem target (neighbor mirror core x)
                     (uint32_t)mirror_core.y,          // data_valid_sem target (neighbor mirror core y)
-                    data_valid_cadence,               // signal data_valid every this many CB pages
+                    slots_per_sync,                   // signal data_valid every this many slots
                     (uint32_t)route_node.chip_id,     // neighbor chip id (packet header 2D route)
                     (uint32_t)(*route_node.mesh_id),  // neighbor mesh id (packet header 2D route)
                 };

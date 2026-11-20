@@ -74,19 +74,19 @@ std::pair<bool, std::string> use_composite_all_gather(
 
     // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
     // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
-    // Resharding (input and output rows differ) cuts rows anywhere on a quantum that is a multiple of the NoC write
+    // Resharding (input and output rows differ) cuts rows anywhere on a unit that is a multiple of the NoC write
     // alignment and of the input's read alignment, so both rows must be multiples of it (then the input is unpadded).
     constexpr uint32_t noc_write_alignment = 16;
-    const uint32_t cut_alignment = std::lcm(noc_write_alignment, input_tensor.mesh_buffer().alignment());
+    const uint32_t unit_alignment = std::lcm(noc_write_alignment, input_tensor.mesh_buffer().alignment());
     if (input_page_size != output_page_size &&
-        (input_page_size % cut_alignment != 0 || output_page_size % cut_alignment != 0)) {
+        (input_page_size % unit_alignment != 0 || output_page_size % unit_alignment != 0)) {
         return {
             true,
             fmt::format(
                 "input and output rows are {} B and {} B; resharding needs both to be multiples of {} B",
                 input_page_size,
                 output_page_size,
-                cut_alignment)};
+                unit_alignment)};
     }
     // matched and concat write a whole *aligned* input page into each output page slot, so the slot
     // must be at least that large. They differ only across memories with unequal alignments.

@@ -4,6 +4,7 @@
 
 #include "all_gather_device_operation.hpp"
 #include "all_gather_device_operation_types.hpp"
+#include "all_gather_factory_common.hpp"
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/math.hpp"
@@ -274,7 +275,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                     args.dim_from_end,
                     args.num_devices,
                     args.packet_size,
-                    /*unicast=*/true)
+                    /*reads_output=*/true)
                     .has_value()) {
         // Limitation: the unicast relay re-reads its own output, so pages resharded on the way (concat or split)
         // must also be cut on the output's read alignment
@@ -292,18 +293,15 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
                 const bool is_2d_fabric = tt::tt_fabric::is_2d_fabric_config(args.fabric_config);
                 if (tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis])) {
-                    // Ring: unicast from 48 KB per device per link (6U Galaxy capped to 1, 2 and 4 links, payloads
-                    // 4352 and 6144 B: crossing at 32-48, 64-96 and 160-192 KB per device). A torus ring of 8 devices
-                    // crosses earlier, as 2D multicast forwards slowly (4 links, 128-160 KB per device: unicast up to
-                    // 18% faster).
+                    // Ring: unicast from 48 KB per device per link. A torus ring of 8 devices crosses earlier (32 KB),
+                    // as 2D multicast forwards slowly.
                     constexpr uint64_t ring_unicast_link_bytes = 48 * 1024, torus_ring_unicast_link_bytes = 32 * 1024;
                     use_unicast = input_bytes >= num_links * ((is_2d_fabric && args.num_devices >= 8)
                                                                   ? torus_ring_unicast_link_bytes
                                                                   : ring_unicast_link_bytes);
                 } else if (is_2d_fabric) {
-                    // Line on a 2D fabric: 2D multicast forwards slowly, so on an 8-device axis unicast is 10-33%
-                    // faster from 2 MB per device (Galaxy, 4 links, payload 4352-6144 B; at 7168 B within 3%). On 4
-                    // devices multicast wins. On a 1D fabric's line multicast wins.
+                    // Line on a 2D fabric: 2D multicast forwards slowly, so unicast wins on an 8-device axis from 2 MB
+                    // per device. On 4 devices, and on a 1D fabric's line, multicast wins.
                     constexpr uint64_t line_2d_unicast_bytes = 2 * 1024 * 1024;
                     use_unicast = args.num_devices >= 8 && input_bytes >= line_2d_unicast_bytes;
                 }
@@ -312,8 +310,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
             case tt::ARCH::BLACKHOLE: {
                 // Multicast sends each packet once, unicast relays it hop by hop at a higher bandwidth but with more
                 // cores to start (workers and a mux per link-direction): unicast wins once enough bytes cross the
-                // busiest link-direction. Measured crossover (2 links, 15168 B payload, bf16 tiles 64 KB - 42 MB,
-                // init handshake included): 1.05 MB on a line, 233 KB on a ring, where both directions carry it.
+                // busiest link-direction (a ring splits them over both directions).
                 const bool is_ring = tt::tt_fabric::is_ring_or_torus(args.axis_topology[axis]);
                 const uint64_t num_links = std::max<uint32_t>(1u, args.axis_num_links[axis]);
                 const uint64_t input_bytes = static_cast<uint64_t>(input_tensor.mesh_buffer().num_pages()) *
@@ -323,7 +320,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 constexpr uint64_t line_unicast_bytes = 1'050'000, ring_unicast_bytes = 233'000;
                 use_unicast = busiest_link_bytes >= (is_ring ? ring_unicast_bytes : line_unicast_bytes);
                 // Except when every device's output stripe sits in one bank: the unicast relay's writes and re-reads
-                // all queue on it (ND-sharded DRAM, 8 MB: multicast 1.3-1.4x faster).
+                // all queue on it.
                 use_unicast = use_unicast && !stripe_in_one_bank(output_spec, args.dim_from_end, args.num_devices);
                 break;
             }
@@ -358,7 +355,7 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     uint32_t packet_size,
-    bool unicast) {
+    bool reads_output) {
     const auto& input_spec = input_tensor.tensor_spec();
     auto read_alignment = [](const tt::tt_metal::TensorSpec& spec) {
         return spec.memory_config().is_dram() ? tt::tt_metal::hal::get_dram_alignment()
@@ -375,7 +372,7 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
     // read alignment (else BH reads (src & ~63) | (dst & 63)) and of the NOC write alignment (the L1 alignment).
     const uint32_t unit_bytes = std::lcm(
         std::lcm(tt::tt_metal::hal::get_l1_alignment(), read_alignment(input_spec)),
-        unicast ? read_alignment(output_spec) : 1u);
+        reads_output ? read_alignment(output_spec) : 1u);
     uint32_t in_page_units = 0;
     uint32_t out_page_units = 0;
     if (input_page_size % unit_bytes == 0 && output_page_size % unit_bytes == 0) {
@@ -447,15 +444,19 @@ std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
 }
 
 uint32_t compute_packet_cap(const all_gather_walk::WalkGeo& geo, const Tensor& output_tensor) {
-    // The output's page stride between banks and its contiguous runs bound how long a packet segment can be.
+    // The output's page stride between banks and its contiguous pages bound how long a packet chunk can be.
     const auto& dist_spec = output_tensor.mesh_buffer().device_local_config().sharding_args.buffer_distribution_spec();
     const uint32_t page_stride =
         dist_spec.has_value()
             ? dist_spec->contiguous_page_stride()
             : output_tensor.device()->allocator()->get_num_banks(output_tensor.memory_config().buffer_type());
-    const uint32_t run_pages =
+    const uint32_t contig_pages =
         dist_spec.has_value() ? dist_spec->num_contiguous_pages(0) : std::numeric_limits<uint32_t>::max();
-    return all_gather_walk::packet_cap(geo, page_stride, run_pages);
+    return all_gather_walk::packet_cap(geo, page_stride, contig_pages);
+}
+
+uint32_t num_walk_elements(const all_gather_walk::WalkGeo& geo, const Tensor& input_tensor) {
+    return input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
 }
 
 uint32_t compute_packets_per_slot(
@@ -464,12 +465,13 @@ uint32_t compute_packets_per_slot(
     uint32_t num_slices,
     uint32_t header_bytes,
     const Tensor& input_tensor,
-    uint32_t read_bytes_per_barrier,
-    uint32_t min_slots) {
+    uint32_t min_slots,
+    uint32_t max_packets_per_slot) {
     // A slot's packets are read behind one read barrier: enough of them to keep read_bytes_per_barrier of reads in
-    // flight, at least min_slots slots per worker iteration, and only as many as fit in L1.
-    constexpr uint32_t max_packets_per_slot = 32;
-    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
+    // flight, at least min_slots slots per worker iteration, and only as many as fit in L1. About 30 KB (two BH
+    // payloads) in flight hides DRAM read latency whatever the fabric payload.
+    constexpr uint32_t read_bytes_per_barrier = 30336;
+    const uint32_t num_elements = num_walk_elements(geo, input_tensor);
     const uint64_t iter_packets = tt::div_up(
         uint64_t{tt::div_up(num_elements, num_slices)} * geo.element_units * geo.unit_bytes, uint64_t{packet_cap});
     uint32_t packets_per_slot = static_cast<uint32_t>(std::clamp<uint64_t>(

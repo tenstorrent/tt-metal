@@ -11,6 +11,7 @@
 #include "all_gather_common.hpp"
 
 using address_t = uint32_t;
+namespace ag = ttnn::operations::ccl::all_gather_walk;
 
 // Store-and-forward reader: CB producer, no fabric. It starts at once: the init handshake gates only the writer's
 // remote sends, so the first slots and the local copy overlap it. Iteration 0 reads this device's stripe from the
@@ -21,40 +22,22 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
     ///////////////////////////////////////////////////
-    constexpr uint32_t unit_bytes = get_compile_time_arg_val(0);
-    constexpr uint32_t in_page_units = get_compile_time_arg_val(1);
-    constexpr uint32_t out_page_units = get_compile_time_arg_val(2);
-    constexpr uint32_t stripe_units = get_compile_time_arg_val(3);
-    constexpr uint32_t num_devices = get_compile_time_arg_val(4);
-    constexpr uint32_t element_units = get_compile_time_arg_val(5);
-    constexpr uint32_t max_packet_bytes = get_compile_time_arg_val(6);
-    constexpr bool dst_cross = get_compile_time_arg_val(7) != 0;
-    constexpr bool src_cross = get_compile_time_arg_val(8) != 0;
-    constexpr uint32_t packet_cap = get_compile_time_arg_val(9);
-    constexpr uint32_t packets_per_slot = get_compile_time_arg_val(10);
-    constexpr uint32_t packet_header_size = get_compile_time_arg_val(11);
-    constexpr uint32_t cb0_id = get_compile_time_arg_val(12);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(13);
-    constexpr auto input_tensor_args = TensorAccessorArgs<14>();
+    constexpr ag::WalkGeo geo = ag::walk_geo_from_ct_args<0>();
+    constexpr uint32_t packet_cap = ag::packet_cap_from_ct_args<0>();
+    constexpr uint32_t packets_per_slot = get_compile_time_arg_val(ag::kWalkCtArgCount + 0);
+    constexpr uint32_t packet_header_size = get_compile_time_arg_val(ag::kWalkCtArgCount + 1);
+    constexpr uint32_t cb0_id = get_compile_time_arg_val(ag::kWalkCtArgCount + 2);
+    constexpr uint32_t slot_bytes = get_compile_time_arg_val(ag::kWalkCtArgCount + 3);
+    constexpr auto input_tensor_args = TensorAccessorArgs<ag::kWalkCtArgCount + 4>();
     constexpr auto output_tensor_args = TensorAccessorArgs<input_tensor_args.next_compile_time_args_offset()>();
 
-    static_assert(
-        packet_cap % unit_bytes == 0 && packet_cap >= unit_bytes && packet_cap <= max_packet_bytes,
-        "the packet cap is a whole number of units within the payload");
-    constexpr ag::SlotLayout lay = ag::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap);
-    static_assert(lay.slot_bytes == cb_page_size, "host and kernel disagree on the slot layout");
+    constexpr uint32_t unit_bytes = geo.unit_bytes;
+    constexpr uint32_t element_units = geo.element_units;
+    constexpr uint32_t num_devices = geo.num_devices;
+    constexpr ag::SlotLayout lay =
+        ag::checked_slot_layout<packets_per_slot, unit_bytes, packet_header_size, packet_cap, slot_bytes>();
     // The most units one slot carries.
     constexpr uint32_t slot_units = packets_per_slot * (packet_cap / unit_bytes);
-    constexpr ag::WalkGeo geo{
-        .unit_bytes = unit_bytes,
-        .in_page_units = in_page_units,
-        .out_page_units = out_page_units,
-        .stripe_units = stripe_units,
-        .num_devices = num_devices,
-        .element_units = element_units,
-        .max_packet_bytes = max_packet_bytes,
-        .dst_cross = dst_cross,
-        .src_cross = src_cross};
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -70,7 +53,7 @@ void kernel_main() {
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t final_skip = get_arg_val<uint32_t>(arg_idx++);  // last iteration: walk positions skipped, taken
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
-    const bool do_local_write = get_arg_val<uint32_t>(arg_idx++) != 0;
+    const bool local_copy = get_arg_val<uint32_t>(arg_idx++) != 0;
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
 
     const auto input_tensor_accessor = TensorAccessor(input_tensor_args, input_tensor_address);
@@ -99,7 +82,7 @@ void kernel_main() {
         walk.init((initial_stripe + iter * stripe_step) % num_devices, slice_start, slice_count, skip, take);
         if (iter == 0) {
             // Local data (our own input tensor)
-            ag::fill_slots(noc, cb, lay, unit_bytes, input_builder, take_units, do_local_write, [](uint32_t) {});
+            ag::fill_slots(noc, cb, lay, unit_bytes, input_builder, take_units, local_copy, [](uint32_t) {});
         } else {
             // Relay: upstream sent its iteration iter - 1 in walk order and signals cumulative units, so the first
             // `skip` elements of that pass precede ours. Wait before reserving: a slot holds at most slot_units, all

@@ -5,6 +5,7 @@
 #include "all_gather_multicast_factory.hpp"
 
 #include "all_gather_device_operation.hpp"
+#include "all_gather_factory_common.hpp"
 
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -92,7 +93,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
     // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
-    auto physical_slot = [&](const MeshCoordinate& neighbor) {
+    auto physical_dir = [&](const MeshCoordinate& neighbor) {
         const auto dir = tt::tt_fabric::get_eth_forwarding_direction(
             *mesh_device, sender_fabric_node_id, mesh_device->get_fabric_node_id(neighbor));
         TT_FATAL(
@@ -102,16 +103,16 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     };
     uint32_t e_dir = 0, w_dir = 0, n_dir = 0, s_dir = 0;
     if (e_coord.has_value()) {
-        e_dir = physical_slot(*e_coord);
+        e_dir = physical_dir(*e_coord);
     }
     if (w_coord.has_value()) {
-        w_dir = physical_slot(*w_coord);
+        w_dir = physical_dir(*w_coord);
     }
     if (n_coord.has_value()) {
-        n_dir = physical_slot(*n_coord);
+        n_dir = physical_dir(*n_coord);
     }
     if (s_coord.has_value()) {
-        s_dir = physical_slot(*s_coord);
+        s_dir = physical_dir(*s_coord);
     }
 
     const uint32_t packet_size = operation_attributes.packet_size;
@@ -147,7 +148,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         min_num_links = fitted_links;
     }
     // Row-major order may put every link's core on one NOC row. Unlike for unicast's link-directions, that is no
-    // bottleneck: a core moves only ~14 GB/s (BH, 26 MB ring); one core per row is within 1% at 8-26 MB, line and ring.
+    // bottleneck: a multicast core moves far less than a row's NOC bandwidth.
     auto [worker_core_range, worker_cores] = ttnn::ccl::choose_worker_cores(
         min_num_links,
         num_workers_per_link,
@@ -164,21 +165,13 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         num_workers_per_link,
         worker_cores.size());
 
-    ////////////////////////////////////////////////////////////////
-    // Page indexing
-    //
-    // The kernels walk this device's stripe of the output (all_gather_walk.hpp) in units of A bytes and pack the
-    // runs that are contiguous in the output into packets of up to 4 segments. A walk element is one output page, or
-    // one unit when a stripe row is not whole output pages; workers split the elements into contiguous slices.
-    ////////////////////////////////////////////////////////////////
-
     const auto walk_geometry = compute_walk_geometry(
         input_tensor,
         output_tensor.tensor_spec(),
         operation_attributes.dim_from_end,
         num_devices,
         packet_size,
-        /*unicast=*/false);
+        /*reads_output=*/false);
     TT_FATAL(
         walk_geometry.has_value(),
         "all_gather multicast cannot cut {} B input pages and {} B output pages on the input's read alignment",
@@ -186,62 +179,42 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         output_tensor.mesh_buffer().page_size());
     const all_gather_walk::WalkGeo& geo = *walk_geometry;
     const uint32_t unit_bytes = geo.unit_bytes;
-    const uint32_t num_elements = input_tensor.mesh_buffer().num_pages() * geo.in_page_units / geo.element_units;
+    const uint32_t num_elements = num_walk_elements(geo, input_tensor);
     const uint32_t packet_cap = compute_packet_cap(geo, output_tensor);
 
     // --- CB sizing ---
-    // One CB page is a slot (all_gather_walk::slot_offsets): up to packets_per_slot packets with their records. The
-    // writer's headers come from the packet header pool, so the slot holds none.
+    // A slot (all_gather_walk::slot_offsets): up to packets_per_slot packets with their records. The writer's headers
+    // come from the packet header pool, so the slot holds none.
     const uint32_t packets_per_slot =
         compute_packets_per_slot(geo, packet_cap, min_num_links, /*header_bytes=*/0, input_tensor);
-    const uint32_t cb_page_size = all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, 0, packet_cap).slot_bytes;
+    const uint32_t slot_bytes = all_gather_walk::slot_offsets(packets_per_slot, unit_bytes, 0, packet_cap).slot_bytes;
 
     ////////////////////////////////////////////////////////////////
     // Circular Buffer and Kernel creation
     ////////////////////////////////////////////////////////////////
 
-    // Input CB. A slot is untyped bytes (records, headers, payload); the format only sizes the page.
+    // Input CB: slots of records and payload.
     uint32_t cb0_id = tt::CB::c_in0;
-    desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = all_gather_walk::kNumSlots * cb_page_size,
-        .core_ranges = worker_core_range,
-        .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(cb0_id),
-            .data_format = tt::DataFormat::RawUInt8,
-            .page_size = cb_page_size,
-        }}},
-    });
+    desc.cbs.push_back(slot_cb_descriptor(cb0_id, slot_bytes, worker_core_range));
 
     // KERNEL CREATION
-    // NOCs: the writer on NOC0 is 1.13x (line) to 1.42x (ring) faster (BH); the reader takes the other.
+    // NOCs: the writer on NOC0 (faster on BH); the reader takes the other.
     // Reader (no fabric: reads the input, writes the local output, fills the CB)
-    std::vector<uint32_t> reader_compile_args = {
-        unit_bytes,            // cut quantum
-        geo.in_page_units,     // input page footprint (units)
-        geo.out_page_units,    // output page footprint (units)
-        geo.stripe_units,      // units this device contributes to one output row
-        num_devices,           // device count (stripe indexing)
-        geo.element_units,     // units per walk element
-        geo.max_packet_bytes,  // fabric packet payload limit
-        geo.dst_cross,         // runs may continue across output pages
-        geo.src_cross,         // runs may continue across input pages
-        packet_cap,            // packet payload cap
-        packets_per_slot,      // packets per CB page
-        cb0_id,                // cb id
-        cb_page_size,          // cb entry size
-    };
+    std::vector<uint32_t> reader_compile_args;
+    append_walk_ct_args(reader_compile_args, geo, packet_cap);
+    reader_compile_args.insert(reader_compile_args.end(), {packets_per_slot, cb0_id, slot_bytes});
     tt::tt_metal::TensorAccessorArgs(input_tensor.buffer()).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(reader_compile_args);
 
     // Writer (covers every direction: E-line, W-line, S-rect, N-rect)
     const uint32_t num_connections = (e_hops > 0) + (w_hops > 0) + (s_hops > 0) + (n_hops > 0);
     std::vector<uint32_t> writer_compile_args = {
-        unit_bytes,        // cut quantum
-        packet_cap,        // packet payload cap
-        packets_per_slot,  // packets per CB page
-        cb0_id,            // cb id
-        cb_page_size,      // cb entry size
-        num_connections,   // num_connections
+        unit_bytes,
+        packet_cap,
+        packets_per_slot,
+        cb0_id,
+        slot_bytes,
+        num_connections,
     };
 
     tt::tt_metal::KernelDescriptor reader_kernel_desc;
@@ -275,16 +248,13 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
 
         // Set runtime args
-        const uint32_t elements_per_link = num_elements / min_num_links;
-        const uint32_t remainder = num_elements % min_num_links;
-        const uint32_t slice_start = (link * elements_per_link) + std::min(link, remainder);
-        const uint32_t slice_count = elements_per_link + (link < remainder ? 1 : 0);
+        const auto [slice_start, slice_count] = walk_slice(num_elements, min_num_links, link);
 
-        // Per-link barrier fan-in = N-1 in every case. Every other chip sends me one atomic_inc:
+        // Every other chip sends each worker one init and one done credit:
         //   1D: e_hops + w_hops (or n_hops + s_hops) along the active axis = axis_size - 1.
         //   2D: every chip in the mesh outside me is covered by exactly one of the 4 mcast packets.
         // Both equal num_devices - 1.
-        uint32_t barrier_wait_value = num_devices - 1;
+        const uint32_t num_peers = num_devices - 1;
 
         // Slots 0 and 1 are tensor addresses. They are placeholders here; emplace replaces them with Buffer*.
         std::vector<uint32_t> reader_rt_args = {
@@ -294,7 +264,7 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
             slice_count,         // this worker's slice length (elements)
             device_idx,          // this device's index (its stripe)
             done_sem.address(),  // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
-            barrier_wait_value,  // done credits to wait for
+            num_peers,           // done credits to wait for
         };
         emplace_runtime_args_with_leading_buffers(
             desc.kernels[reader_kernel_id], core, {input_tensor.buffer(), output_tensor.buffer()}, reader_rt_args);
@@ -305,15 +275,15 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
             done_sem.address(),     // smuggled-rta-ok: persistent GlobalSemaphore (parked on the WorkloadDescriptor)
             virtual_core.x,         // semaphore location (core.x)
             virtual_core.y,         // semaphore location (core.y)
-            barrier_wait_value,     // barrier counter to wait for
-            e_hops,                 // e_hops (E line)
-            w_hops,                 // w_hops (W line)
-            n_hops,                 // n_hops (N spine)
-            s_hops,                 // s_hops (S spine)
-            e_dir,                  // e_dir
-            w_dir,                  // w_dir
-            n_dir,                  // n_dir
-            s_dir,                  // s_dir
+            num_peers,              // init credits to wait for
+            e_hops,                 // E line
+            w_hops,                 // W line
+            n_hops,                 // N spine
+            s_hops,                 // S spine
+            e_dir,
+            w_dir,
+            n_dir,
+            s_dir,
         };
         // Writer connections, in the kernel's order: E-line, W-line (axis 1), then S-rect, N-rect (axis 0).
         std::vector<tt::tt_fabric::FabricNodeId> writer_dst_nodes;
@@ -358,10 +328,7 @@ tt::tt_metal::WorkloadDescriptor AllGatherMulticastFactory::create_workload_desc
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto subdevice_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
-    if (operation_attributes.sub_core_grid.has_value()) {
-        available_cores = available_cores.intersection(operation_attributes.sub_core_grid.value());
-    }
+    const auto available_cores = get_available_worker_cores(operation_attributes, tensor_args.input_tensor);
     ttsl::SmallVector<tt::tt_metal::SubDeviceId> subdevices = {subdevice_id};
 
     // Kernel needs to wait to receive all remote data before exiting, and in some cases needs to wait

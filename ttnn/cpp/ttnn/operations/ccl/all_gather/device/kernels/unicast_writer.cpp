@@ -16,6 +16,7 @@
 
 using address_t = uint32_t;
 namespace fabric_api = tt::tt_fabric::linear::experimental;
+namespace ag = ttnn::operations::ccl::all_gather_walk;
 
 namespace {
 
@@ -30,11 +31,11 @@ FORCE_INLINE void set_route(volatile PACKET_HEADER_TYPE* hdr, uint16_t chip, uin
     }
 }
 
-// When to signal data_valid: after every `every_slots` slots, and always after the last slot of an iteration, so a
+// When to signal data_valid: after every `slots_per_sync` slots, and always after the last slot of an iteration, so a
 // downstream wait target (capped at the iteration's units) is always reached.
-class SignalCadence {
+class SyncCounter {
 public:
-    explicit SignalCadence(uint32_t every_slots) : every_(every_slots) {}
+    explicit SyncCounter(uint32_t slots_per_sync) : every_(slots_per_sync) {}
 
     // Accounts one popped slot; returns the units to signal now (0: not yet).
     uint32_t on_slot(const ag::SlotInfo& info) {
@@ -57,8 +58,8 @@ private:
 // Store-and-forward writer: CB consumer, one channel of its direction's fabric mux. Its one semaphore wait is the init
 // handshake, before its first send, after it has sent its own (see the protocol note in all_gather_common.hpp);
 // otherwise its progress depends only on the CB and the mux. Per slot: encode each packet record into the slot's own
-// header with the fabric setters, send header + payload, signal data_valid at the cadence, flush, pop. Headers live in
-// the slot, so flushing before the pop is what lets both the payload and its header be reused.
+// header with the fabric setters, send header + payload, signal data_valid every slots_per_sync slots, flush, pop.
+// Headers live in the slot, so flushing before the pop is what lets both the payload and its header be reused.
 void kernel_main() {
     ///////////////////////////////////////////////////
     // COMPILE TIME ARGS
@@ -68,13 +69,12 @@ void kernel_main() {
     constexpr uint32_t packets_per_slot = get_compile_time_arg_val(2);
     constexpr uint32_t packet_header_size = get_compile_time_arg_val(3);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(4);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(5);
+    constexpr uint32_t slot_bytes = get_compile_time_arg_val(5);
     constexpr uint32_t mux_num_buffers_per_channel = get_compile_time_arg_val(6);
 
-    constexpr ag::SlotLayout lay = ag::slot_offsets(packets_per_slot, unit_bytes, packet_header_size, packet_cap);
-    static_assert(lay.slot_bytes == cb_page_size, "host and kernel disagree on the slot layout");
+    constexpr ag::SlotLayout lay =
+        ag::checked_slot_layout<packets_per_slot, unit_bytes, packet_header_size, packet_cap, slot_bytes>();
     static_assert(sizeof(PACKET_HEADER_TYPE) <= lay.hdr_stride, "the slot has no room for the fabric packet headers");
-    static_assert(ag::kSegmentsPerPacket <= NOC_SCATTER_WRITE_MAX_CHUNKS, "a packet has more segments than a scatter");
 
     ///////////////////////////////////////////////////
     // RUNTIME ARGS
@@ -85,11 +85,11 @@ void kernel_main() {
     const uint32_t final_count = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const address_t data_valid_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-direction core
-    const uint32_t barrier_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t data_valid_sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
-    const uint32_t data_valid_sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t data_valid_cadence = get_arg_val<uint32_t>(arg_idx++);  // signal data_valid every this many slots
+    const uint32_t barrier_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);  // neighbor opposite-direction core
+    const uint32_t barrier_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t data_valid_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (data_valid_sem target)
+    const uint32_t data_valid_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t slots_per_sync = get_arg_val<uint32_t>(arg_idx++);  // signal data_valid every this many slots
     const uint16_t neighbor_chip_id = get_arg_val<uint32_t>(arg_idx++);
     const uint16_t neighbor_mesh_id = get_arg_val<uint32_t>(arg_idx++);
 
@@ -122,13 +122,13 @@ void kernel_main() {
         &sender,
         signal,
         tt::tt_fabric::NocUnicastAtomicIncCommandHeader{
-            ag::fabric_frame_addr(barrier_sem_noc_x, barrier_sem_noc_y, barrier_sem), 1});
+            ag::noc0_addr(barrier_sem_noc0_x, barrier_sem_noc0_y, barrier_sem), 1});
     noc.async_writes_flushed();
 
     // The headers of every slot are ours for the whole op (the reader never writes them), so each gets its command
     // type and route once: a unicast-write and a scatter-write header per packet. The CB starts at its base, and its
     // pages follow one another.
-    for (uint32_t s = 0, slot = cb.get_read_ptr(); s < ag::kNumSlots; ++s, slot += cb_page_size) {
+    for (uint32_t s = 0, slot = cb.get_read_ptr(); s < ag::kNumSlots; ++s, slot += slot_bytes) {
         for (uint32_t j = 0; j < packets_per_slot; ++j) {
             auto* unicast_hdr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.unicast_header(slot, j));
             fabric_api::fabric_unicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(unicast_hdr, num_hops);
@@ -142,13 +142,13 @@ void kernel_main() {
     // Our data goes into the neighbor's output: wait until it is alive (it sent its init the same way). Our reader
     // fills the slots meanwhile.
     ag::wait_and_consume(barrier_sem, 1);
-    const uint64_t data_valid_addr = ag::fabric_frame_addr(data_valid_sem_noc_x, data_valid_sem_noc_y, data_valid_sem);
+    const uint64_t data_valid_addr = ag::noc0_addr(data_valid_sem_noc0_x, data_valid_sem_noc0_y, data_valid_sem);
 
     ///////////////////////////////////////////////////
     // MAIN
     ///////////////////////////////////////////////////
 
-    SignalCadence cadence(data_valid_cadence);
+    SyncCounter sync(slots_per_sync);
     for (uint32_t iter = 0; iter < num_iters; ++iter) {
         const uint32_t count = (iter + 1 == num_iters) ? final_count : slice_count;
         // An empty pass (empty slice, or an even-ring half of nothing) pushes no slot.
@@ -160,7 +160,7 @@ void kernel_main() {
             for (uint32_t j = 0; j < info.packets; ++j) {
                 const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
                 const uint32_t payload = lay.payload(slot, j);
-                if (rec.segments == 1) {
+                if (rec.num_chunks == 1) {
                     fabric_api::fabric_unicast_noc_unicast_write_with_state<
                         UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                         &sender,
@@ -176,12 +176,12 @@ void kernel_main() {
                         reinterpret_cast<volatile PACKET_HEADER_TYPE*>(lay.scatter_header(slot, j)),
                         payload,
                         tt::tt_fabric::NocUnicastScatterCommandHeader(
-                            rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
+                            rec.dst, rec.chunk_bytes, static_cast<uint8_t>(rec.num_chunks)),
                         rec.payload_bytes);
                 }
             }
             // Same sender as the data, so the channel's FIFO lands the signal after the units it counts.
-            if (const uint32_t units = cadence.on_slot(info)) {
+            if (const uint32_t units = sync.on_slot(info)) {
                 fabric_api::fabric_unicast_noc_unicast_atomic_inc_with_state<
                     UnicastAtomicIncUpdateMask::DstAddr | UnicastAtomicIncUpdateMask::Val>(
                     &sender, signal, tt::tt_fabric::NocUnicastAtomicIncCommandHeader{data_valid_addr, units});

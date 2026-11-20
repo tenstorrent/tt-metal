@@ -13,7 +13,6 @@
 #include "all_gather_device_operation_types.hpp"
 #include "all_gather_multicast_factory.hpp"
 #include "all_gather_unicast_factory.hpp"
-#include "ttnn/operations/ccl/all_gather/shared_with_host/all_gather_walk.hpp"
 
 namespace ttnn::operations::ccl {
 
@@ -42,41 +41,6 @@ tt::tt_metal::TensorSpec compute_output_specs_helper(
     int32_t gather_dim_from_end,
     uint32_t num_devices,
     const std::optional<MemoryConfig>& memory_config);
-
-// The kernels' walk geometry (all_gather_walk.hpp): this device's input pages and the output pages cut into units of
-// a quantum that is a multiple of the NOC write alignment and of the read alignment of every source the kernels read,
-// or nullopt when the pages cannot be cut so. The unicast relay re-reads its own output, so `unicast` adds the
-// output's read alignment.
-std::optional<all_gather_walk::WalkGeo> compute_walk_geometry(
-    const Tensor& input_tensor,
-    const tt::tt_metal::TensorSpec& output_spec,
-    int32_t gather_dim_from_end,
-    uint32_t num_devices,
-    uint32_t packet_size,
-    bool unicast);
-
-// The kernels' packet payload cap for this output (all_gather_walk::packet_cap).
-uint32_t compute_packet_cap(const all_gather_walk::WalkGeo& geo, const Tensor& output_tensor);
-
-// Reads to keep in flight behind one read barrier: about 30 KB hides DRAM read latency whatever the fabric payload (BH:
-// two 15168 B packets per barrier take 24% less worker time per packet than one).
-inline constexpr uint32_t default_read_bytes_per_barrier = 30336;
-
-// Packets per CB slot when the walk elements are split over num_slices workers. header_bytes: the fabric packet header
-// the writer keeps in the slot, 0 for none (all_gather_walk::slot_offsets). read_bytes_per_barrier: the reads behind
-// one read barrier. min_slots: the slots a worker iteration should fill at least (all_gather_walk::kNumSlots, so both
-// work).
-uint32_t compute_packets_per_slot(
-    const all_gather_walk::WalkGeo& geo,
-    uint32_t packet_cap,
-    uint32_t num_slices,
-    uint32_t header_bytes,
-    const Tensor& input_tensor,
-    uint32_t read_bytes_per_barrier = default_read_bytes_per_barrier,
-    uint32_t min_slots = all_gather_walk::kNumSlots);
-
-// Worker cores the op may use: the sub-device's, within sub_core_grid.
-CoreRangeSet get_available_worker_cores(const AllGatherParams& args, const Tensor& input_tensor);
 
 }  // namespace ttnn::operations::ccl
 

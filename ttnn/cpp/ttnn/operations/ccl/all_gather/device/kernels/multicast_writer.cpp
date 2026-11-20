@@ -11,10 +11,23 @@
 
 #include <cstdint>
 
-#include "multicast_common.hpp"
+#ifdef FABRIC_2D
+#include "tt_metal/fabric/hw/inc/mesh/api.h"
+namespace fabric_api = tt::tt_fabric::mesh::experimental;
+using FabricRange = tt::tt_fabric::mesh::experimental::MeshMcastRange;
+inline FabricRange make_fabric_range(uint8_t e, uint8_t w, uint8_t n, uint8_t s) { return FabricRange{e, w, n, s}; }
+#else
+#include "tt_metal/fabric/hw/inc/linear/api.h"
+namespace fabric_api = tt::tt_fabric::linear::experimental;
+using FabricRange = uint8_t;  // under 1D each connection carries a single hop count
+// 1D has a single active direction, so exactly one direction's hop count is nonzero
+inline FabricRange make_fabric_range(uint8_t e, uint8_t w, uint8_t n, uint8_t s) { return e + w + n + s; }
+#endif
+
 #include "all_gather_common.hpp"
 
 using address_t = uint32_t;
+namespace ag = ttnn::operations::ccl::all_gather_walk;
 
 // Multicast writer: CB consumer, owns all fabric. Each packet goes once over every connection (one per direction with
 // a neighbor), and together the connections reach every other device of the collective once. The init and done credits
@@ -27,13 +40,11 @@ void kernel_main() {
     constexpr uint32_t packet_cap = get_compile_time_arg_val(1);
     constexpr uint32_t packets_per_slot = get_compile_time_arg_val(2);
     constexpr uint32_t cb0_id = get_compile_time_arg_val(3);
-    constexpr uint32_t cb_page_size = get_compile_time_arg_val(4);
+    constexpr uint32_t slot_bytes = get_compile_time_arg_val(4);
     constexpr uint32_t num_connections = get_compile_time_arg_val(5);
 
     // Headers come from the pool, so the slot holds none.
-    constexpr ag::SlotLayout lay = ag::slot_offsets(packets_per_slot, unit_bytes, 0, packet_cap);
-    static_assert(lay.slot_bytes == cb_page_size, "host and kernel disagree on the slot layout");
-    static_assert(ag::kSegmentsPerPacket <= NOC_SCATTER_WRITE_MAX_CHUNKS, "a packet has more segments than a scatter");
+    constexpr ag::SlotLayout lay = ag::checked_slot_layout<packets_per_slot, unit_bytes, 0, packet_cap, slot_bytes>();
     // E, W, N and S. The two header sets below need 2 * num_connections of the pool's headers.
     constexpr uint32_t max_connections = 4;
     static_assert(num_connections >= 1 && num_connections <= max_connections, "no route to the other devices");
@@ -45,9 +56,9 @@ void kernel_main() {
     const uint32_t slice_count = get_arg_val<uint32_t>(arg_idx++);
     const address_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const address_t done_sem = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t sem_noc_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (semaphore location)
-    const uint32_t sem_noc_y = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_wait_value = get_arg_val<uint32_t>(arg_idx++);  // init credits to wait for
+    const uint32_t sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);  // mirror core (semaphore location)
+    const uint32_t sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
+    const uint32_t num_init_credits = get_arg_val<uint32_t>(arg_idx++);  // one from every other device
     const uint8_t e_hops = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t w_hops = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t n_hops = get_arg_val<uint32_t>(arg_idx++);
@@ -69,8 +80,8 @@ void kernel_main() {
     tt::tt_fabric::common::experimental::open_connections(fabric_connection, num_connections, arg_for_fab);
 
     // One connection per direction with a neighbor, in the host's order: the E and W lines, then the S and N spines,
-    // which branch E and W at every hop. Each hop count is placed at its physical slot; an absent branch (hop == 0) is
-    // skipped so it can't clobber a live slot.
+    // which branch E and W at every hop. Each hop count is placed at its direction's index; an absent branch (hop == 0)
+    // is skipped so it can't clobber a live direction's hop count.
     FabricRange ranges[max_connections] = {};
     uint32_t conn = 0;
     auto add_connection = [&](uint8_t spine_hops, uint8_t spine_dir, bool branches) {
@@ -110,13 +121,13 @@ void kernel_main() {
             starts,
 #endif
             ranges,
-            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ag::fabric_frame_addr(sem_noc_x, sem_noc_y, sem), 1});
+            tt::tt_fabric::NocUnicastAtomicIncCommandHeader{ag::noc0_addr(sem_noc0_x, sem_noc0_y, sem), 1});
         fabric_api::fabric_multicast_noc_unicast_atomic_inc_with_state<UnicastAtomicIncUpdateMask::None>(
             fabric_connection, unicast_route_id);
         noc.async_writes_flushed();
     };
 
-    // Initialization barrier: tell every other device we are alive (our output exists, and we are done reading the
+    // Init: tell every other device we are alive (our output exists, and we are done reading the
     // previous launch's), then set up the data routes.
     signal_all(barrier_sem);
     fabric_api::fabric_multicast_noc_unicast_write_set_state<UnicastWriteUpdateMask::None>(
@@ -135,7 +146,7 @@ void kernel_main() {
         ranges);
     // Our data goes into every other device's output: wait until all are alive (each sent its init the same way). Our
     // reader fills the slots and does the local copy meanwhile.
-    ag::wait_and_consume(barrier_sem, barrier_wait_value);
+    ag::wait_and_consume(barrier_sem, num_init_credits);
 
     ///////////////////////////////////////////////////
     // MAIN
@@ -150,7 +161,7 @@ void kernel_main() {
             const auto& rec = *reinterpret_cast<const ag::PacketRecord*>(lay.record(slot, j));
             const uint32_t payload = lay.payload(slot, j);
             noc.async_writes_flushed();
-            if (rec.segments == 1) {
+            if (rec.num_chunks == 1) {
                 fabric_api::fabric_multicast_noc_unicast_write_with_state<
                     UnicastWriteUpdateMask::DstAddr | UnicastWriteUpdateMask::PayloadSize>(
                     fabric_connection,
@@ -166,11 +177,11 @@ void kernel_main() {
                     scatter_route_id,
                     payload,
                     tt::tt_fabric::NocUnicastScatterCommandHeader(
-                        rec.dst, rec.bytes, static_cast<uint8_t>(rec.segments)),
+                        rec.dst, rec.chunk_bytes, static_cast<uint8_t>(rec.num_chunks)),
                     rec.payload_bytes);
             }
         }
-        // Wait for Fabric writes to be sent out before popping CB entry
+        // Wait for the fabric writes to leave L1 before popping the slot
         noc.async_writes_flushed();
         cb.pop_front(1);
         iter_end = info.iter_end != 0;
@@ -180,7 +191,7 @@ void kernel_main() {
     // CLEANUP
     ///////////////////////////////////////////////////
 
-    // Completion barrier: after every data packet on the same routes, so each receiver's done count implies our data
+    // Done: after every data packet on the same routes, so each receiver's done count implies our data
     // has landed. Sent even with nothing to send: every reader waits for all of them.
     signal_all(done_sem);
     tt::tt_fabric::common::experimental::close_connections(fabric_connection);
