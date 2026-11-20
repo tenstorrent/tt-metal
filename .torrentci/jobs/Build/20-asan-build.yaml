@@ -1,6 +1,6 @@
 ---
 # Mirrors the PR Gate's ASan build (build-artifact.yaml) as a shadow; never a
-# required check. Runs manually for now.
+# required check. Runs on every merge-queue entry as a Shadow PR Gate member.
 jobs:
   - id: asan-build
     description: Configure and compile tt-metal (ASan, --build-all) in the CI build image

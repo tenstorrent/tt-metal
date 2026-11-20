@@ -1,0 +1,26 @@
+---
+# Runs the Shadow PR Gate dashboard (.torrentci/jobs/Gates/) on every
+# merge-queue entry to build a trend. The dashboard and each job post a
+# `TorrentCI / ...` check on the queue commit. None is required, so GitHub
+# never waits for them.
+triggers:
+  - id: shadow-pr-gate-merge-queue
+    kind: automatic
+    events: [push]
+    # GitHub pushes each queue entry to gh-readonly-queue/main/pr-<n>-<sha>.
+    # `*` also matches `/`.
+    pattern: refs/heads/gh-readonly-queue/main/*
+    # One commit per queue branch, so nothing to supersede.
+    concurrency:
+      group: ref
+      supersede: never
+    # GitHub deletes the queue branch when the entry merges or leaves the
+    # queue; cancel the run then, so dropped entries waste no CPU. If an entry
+    # merges before a job finishes, that job's check on the merged commit shows
+    # as not run (tenstorrent/torrentci#3276).
+    on-ref-retired: cancel
+    # Below pull request work (default 100): nothing waits on this run.
+    priority: 160
+    targets:
+      jobs: []
+      dashboards: [shadow-pr-gate]
