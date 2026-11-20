@@ -34,7 +34,9 @@ source:
   # default merged, the multi pool fix) + this manifest. Build prerequisites in the worktree: submodules
   # initialised (git submodule update --init --recursive) and `runtime` a real directory, not a symlink (the docker
   # build context drops a symlink that points outside it).
-  tt_metal: /home/ttuser/experiments/qwen36_27b/tt-metal-res-pkg2
+  # Branch changh95/qwen38-host-path-fast = the above (058b7271552) + the rows adapter's page-table reload fix
+  # (ae3c7739987: host-sampled decode no longer converts 16 x 4096 block ids one by one every step).
+  tt_metal: /home/ttuser/experiments/qwen38/src/tt-metal
   code:                                # import closure of qwen36_resident.generator_vllm (the adapters) + the DFlash2 drafter
     - qwen36_resident                  # resident engine, kernels, PP prefill, adapters + vllm_models bundle, spec serving
     - models/demos/blackhole/qwen36    # the ttnn DFlash2 drafter (tt/dflash2_tp.py, dflash2.py) and what it imports
@@ -60,7 +62,10 @@ runtime:
   # fix-ttft2's resident-mu-ttft2 6641c17 as resident-mu-sched-ttft2 d5e699c (profiles/resident/sched/
   # plugin_ttft2_merge_note.txt), pushed to the fork as branch resident-mu-sched-ttft2. single-user uses upstream paths
   # only (adaptive block output for DFlash2; the chunk core is off at max_num_seqs 1).
-  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: d5e699c4dca06b1468e6c0f51bdffbdf67820d95}
+  # Then branch changh95/qwen38-host-path-fast on top of d5e699c: host sampling draws unseeded top-k rows from the
+  # top-k candidates (8128097) and applies penalties to the seen tokens only (c221edb): a 16-user step with one
+  # penalized request 187.7 -> 60.7 ms with the adapter fix (device sampling 40.5 ms).
+  plugin: {repo: https://github.com/changh95/vllm-tt-plugin, ref: c221edb65b5597329480f9696fe3061514475ce9}
   extra_models_dir: qwen36_resident/vllm_models    # main_class qwen36_resident.generator_vllm:Qwen36ResidentForCausalLM
 
 serve:                         # common to every profile; a profile's env MERGES over this (it cannot unset a key)
