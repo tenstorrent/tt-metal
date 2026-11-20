@@ -852,7 +852,7 @@ public:
                 continue;
             }
 
-            // Split the sender into pieces, each with at most max_configs_per_piece[s] patterns. 
+            // Split the sender into pieces, each with at most max_configs_per_piece[s] patterns.
             // We use a round-robin approach to distribute the patterns (by distance) evenly across the pieces.
             const size_t num_pieces = tt::div_up(num_patterns, max_configs_per_piece[s]);
             auto patterns = std::move(sender.patterns);
@@ -1045,11 +1045,13 @@ private:
                 uint32_t channels_for_senders_and_sync = 0;
                 for (uint32_t link = 0; link < num_links; link++) {
                     channels_for_senders_and_sync = std::max(
-                        channels_for_senders_and_sync, count_mux_channels_for_senders_and_sync(config, device_id, link));
+                        channels_for_senders_and_sync,
+                        count_mux_channels_for_senders_and_sync(config, device_id, link));
                 }
                 TT_FATAL(
                     channels_for_senders_and_sync < get_max_mux_channels(),
-                    "Device [mesh={}, chip={}] needs {} mux channels for its sender and sync cores on one link, leaving "
+                    "Device [mesh={}, chip={}] needs {} mux channels for its sender and sync cores on one link, "
+                    "leaving "
                     "none of the {} for receivers. Use fewer senders per link.",
                     device_id.mesh_id,
                     device_id.chip_id,
@@ -1097,7 +1099,6 @@ private:
     static constexpr uint32_t MAX_CONFIGS_PER_CORE_CEILING = 64;
     static constexpr uint32_t SAFETY_MARGIN_CORES = 2;
     static constexpr uint32_t DEFAULT_MIN_CONFIGS_PER_CORE = 1;
-
 };
 
 inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
@@ -1201,7 +1202,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     if (needs_payload) {
                         std::map<uint32_t, uint32_t> payload_address_histogram;
                         for (auto* device_resources : dst_device_resources) {
-                            auto& core_resources = device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
+                            auto& core_resources =
+                                device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
                             for (auto addr : core_resources.get_available_payload_chunks()) {
                                 payload_address_histogram[addr]++;
                             }
@@ -1224,7 +1226,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                         std::optional<uint32_t> first_common;
                         bool all_have_counters = true;
                         for (auto* device_resources : dst_device_resources) {
-                            auto& core_resources = device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
+                            auto& core_resources =
+                                device_resources->get_or_create_core_resources(core, CoreType::RECEIVER);
                             const auto counters = core_resources.get_available_atomic_counters();
                             if (counters.empty()) {
                                 all_have_counters = false;

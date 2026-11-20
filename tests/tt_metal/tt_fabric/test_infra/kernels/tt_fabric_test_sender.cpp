@@ -105,7 +105,7 @@ void kernel_main() {
     PERF_HOT(perf_hot_calibrate();)
     // Round-robin packet sending: send one packet from each config per iteration
     uint64_t start_timestamp = get_timestamp();
-    PERF_BD_SUMMARY_SET_SINCE(0, perf_t0);  // S_SETUP
+    PERF_BD_SUMMARY_SET_SINCE(0, perf_t0);               // S_SETUP
     constexpr uint32_t PROGRESS_UPDATE_INTERVAL = 1000;  // Write progress every 1000 loops
 
     // The hot path keeps its per-config state on the stack, which caps its config count (see
@@ -136,10 +136,9 @@ void kernel_main() {
 
         // Free slots per connection, cached across packets.
         uint32_t slot_budget[MAX_NUM_FABRIC_CONNECTIONS] = {};
-        PERF_SCHED(
-            uint64_t sched[PERF_SCHED_NUM_COUNTERS] = {}; uint32_t sched_finish[NUM_TRAFFIC_CONFIGS] = {};
-            uint32_t sched_misses[NUM_TRAFFIC_CONFIGS] = {};
-            const uint32_t sched_t0 = get_timestamp_32b();)
+        PERF_SCHED(uint64_t sched[PERF_SCHED_NUM_COUNTERS] = {}; uint32_t sched_finish[NUM_TRAFFIC_CONFIGS] = {};
+                   uint32_t sched_misses[NUM_TRAFFIC_CONFIGS] = {};
+                   const uint32_t sched_t0 = get_timestamp_32b();)
         auto write_hot_progress = [&]() {
             auto* per_config_results = get_per_config_results(sender_config->get_result_buffer_address());
             uint64_t progress_packets_sent = 0;
@@ -210,8 +209,9 @@ void kernel_main() {
             configs[i]->write_back_hot_state(hot[i]);
             configs[i]->rebind_connections(&sender_config->connections);
         }
-        PERF_SCHED(write_sender_sched(
-                       sender_config->get_result_buffer_address(), sched, sched_finish, sched_misses, NUM_TRAFFIC_CONFIGS);)
+        PERF_SCHED(
+            write_sender_sched(
+                sender_config->get_result_buffer_address(), sched, sched_finish, sched_misses, NUM_TRAFFIC_CONFIGS);)
     } else {
         while (packets_left_to_send) {
             packets_left_to_send = false;

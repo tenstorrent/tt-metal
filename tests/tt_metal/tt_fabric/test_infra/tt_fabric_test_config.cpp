@@ -2650,12 +2650,12 @@ std::pair<std::vector<TrafficPatternConfig>, uint32_t> TestConfigBuilder::create
     // patterns separately
     base_sync_pattern.ftype = topology == tt::tt_fabric::Topology::NeighborExchange
                                   ? ChipSendType::CHIP_UNICAST
-                                  : ChipSendType::CHIP_MULTICAST;   // Global sync across devices
+                                  : ChipSendType::CHIP_MULTICAST;  // Global sync across devices
     // Sync signal via atomic increment
     base_sync_pattern.ntype = NocSendTypeSpec{.type = NocSendType::NOC_UNICAST_ATOMIC_INC};
-    base_sync_pattern.size = 0;                                     // No payload, just sync signal
-    base_sync_pattern.num_packets = 1;                              // Single sync signal
-    base_sync_pattern.atomic_inc_val = 1;                           // Increment by 1
+    base_sync_pattern.size = 0;            // No payload, just sync signal
+    base_sync_pattern.num_packets = 1;     // Single sync signal
+    base_sync_pattern.atomic_inc_val = 1;  // Increment by 1
 
     // Cardinal-direction sync (N/S/E/W). Z-link sync is appended below because
     // the cardinal hop map is keyed by direction and would collapse multi-Z.

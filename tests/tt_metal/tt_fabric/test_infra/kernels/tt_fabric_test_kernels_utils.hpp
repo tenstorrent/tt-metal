@@ -60,7 +60,6 @@ FORCE_INLINE T get_local_arg_val(size_t arg_idx) {
     return local_args_buffer.get_arg_val<T>(arg_idx);
 }
 
-
 // Helper functions for writing test results
 inline void write_test_status(uint32_t result_buffer_base, uint32_t status) {
     auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
@@ -109,7 +108,8 @@ inline void write_perf_breakdown(uint32_t result_buffer_base) {
     auto* result_buffer = reinterpret_cast<tt_l1_ptr uint32_t*>(result_buffer_base);
     for (uint32_t i = 0; i < PERF_BREAKDOWN_NUM_SLOTS; i++) {
         result_buffer[PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * i] = static_cast<uint32_t>(perf_breakdown_slots[i]);
-        result_buffer[PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * i + 1] = static_cast<uint32_t>(perf_breakdown_slots[i] >> 32);
+        result_buffer[PERF_BREAKDOWN_BASE_WORD_INDEX + 2 * i + 1] =
+            static_cast<uint32_t>(perf_breakdown_slots[i] >> 32);
     }
 }
 #else
@@ -335,8 +335,8 @@ struct SequentialDataPattern {
             const uint32_t w6 = buffer_ptr[i + 6];
             const uint32_t w7 = buffer_ptr[i + 7];
             const uint32_t v = start_value + i;
-            const uint32_t diff = (w0 ^ (v + 0)) | (w1 ^ (v + 1)) | (w2 ^ (v + 2)) | (w3 ^ (v + 3)) |
-                                  (w4 ^ (v + 4)) | (w5 ^ (v + 5)) | (w6 ^ (v + 6)) | (w7 ^ (v + 7));
+            const uint32_t diff = (w0 ^ (v + 0)) | (w1 ^ (v + 1)) | (w2 ^ (v + 2)) | (w3 ^ (v + 3)) | (w4 ^ (v + 4)) |
+                                  (w5 ^ (v + 5)) | (w6 ^ (v + 6)) | (w7 ^ (v + 7));
             if (diff != 0) {
                 return false;
             }
@@ -1496,10 +1496,7 @@ struct SenderKernelTrafficConfig {
                     [[maybe_unused]] uint64_t payload_t0 = PERF_BD_DETAIL_NOW();
                     // Send payload without header
                     connection_manager_->template send_payload_without_header<BENCHMARK_MODE>(
-                        connection_ptrs_[i],
-                        connection_indices_[i],
-                        payload_address,
-                        payload_size_bytes);
+                        connection_ptrs_[i], connection_indices_[i], payload_address, payload_size_bytes);
                     PERF_BD_DETAIL_ADD_SINCE(5, payload_t0);  // SD_PAYLOAD_SEND
                 }
                 [[maybe_unused]] uint64_t header_t0 = PERF_BD_DETAIL_NOW();
@@ -1809,8 +1806,7 @@ inline void NocAtomicSenderOperations<EdmSenderT>::parse_and_setup_impl(
     auto fields = NocUnicastAtomicIncFields::build_from_args<true>(arg_idx);
 
     uint64_t noc_addr = get_noc_addr_helper(fields.dst_noc_encoding, fields.dst_address);
-    config->packet_header->to_noc_unicast_atomic_inc(
-        NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
+    config->packet_header->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{noc_addr, fields.atomic_inc_val});
 
     config->noc_fields_.atomic_inc_fields = fields;
     config->payload_size_bytes = 0;

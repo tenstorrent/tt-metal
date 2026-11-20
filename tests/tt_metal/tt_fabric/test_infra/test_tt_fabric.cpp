@@ -222,7 +222,8 @@ int main(int argc, char** argv) {
         bool open_devices_success = false;
         {
             ScopedPhase phase("open_devices");
-            open_devices_success = test_context.open_devices(test_config.fabric_setup, test_config.channel_trimming_mode);
+            open_devices_success =
+                test_context.open_devices(test_config.fabric_setup, test_config.channel_trimming_mode);
         }
         if (!open_devices_success) {
             log_warning(

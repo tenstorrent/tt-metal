@@ -118,10 +118,10 @@ enum SenderSlot : uint32_t {
 // Sender slots with TT_FABRIC_TEST_PERF_SEND_DETAIL=1: the per-packet send path split into steps. Slots 1-4 keep
 // their meaning; setup, close and mux termination are not recorded.
 enum SenderDetailSlot : uint32_t {
-    SD_CREDIT_CHECK = 0,   // receiver credit check
-    SD_PAYLOAD_SEND = 5,   // payload NOC write to the fabric/mux slot
-    SD_HEADER_SEND = 6,    // header NOC write + slot handoff
-    SD_POST = 7,           // after the flush: page pop, address/header advance, seed, credit consume
+    SD_CREDIT_CHECK = 0,  // receiver credit check
+    SD_PAYLOAD_SEND = 5,  // payload NOC write to the fabric/mux slot
+    SD_HEADER_SEND = 6,   // header NOC write + slot handoff
+    SD_POST = 7,          // after the flush: page pop, address/header advance, seed, credit consume
 };
 
 // Hot-state sender scheduling record (TT_FABRIC_TEST_PERF_SCHED=1), from word PERF_SCHED_BASE_WORD_INDEX of the
@@ -169,14 +169,14 @@ struct SchedConfigInfo {
 
 // Receiver slots (cycles unless noted)
 enum ReceiverSlot : uint32_t {
-    R_SETUP = 0,        // kernel start -> main loop start (open credit connections)
-    R_LOOP = 1,         // main validation loop
-    R_VALIDATE = 2,     // payload compare
-    R_ADVANCE = 3,      // advance(): bookkeeping + credit return
-    R_FIRST_PKT = 4,    // loop start -> first packet seen
-    R_POLL_MISS = 5,    // count: polls that found no new data
-    R_CLOSE = 6,        // close credit connections (flush credits)
-    R_MUX_TERM = 7,     // mux termination handshake
+    R_SETUP = 0,      // kernel start -> main loop start (open credit connections)
+    R_LOOP = 1,       // main validation loop
+    R_VALIDATE = 2,   // payload compare
+    R_ADVANCE = 3,    // advance(): bookkeeping + credit return
+    R_FIRST_PKT = 4,  // loop start -> first packet seen
+    R_POLL_MISS = 5,  // count: polls that found no new data
+    R_CLOSE = 6,      // close credit connections (flush credits)
+    R_MUX_TERM = 7,   // mux termination handshake
 };
 
 using Clock = std::chrono::steady_clock;
@@ -240,7 +240,7 @@ public:
         auto kind = src.substr(src.find_last_of('/') + 1);
         kind = kind.substr(0, kind.find('.'));
         for (const char* prefix : {"tt_fabric_test_", "tt_fabric_"}) {
-            if (kind.rfind(prefix, 0) == 0) {
+            if (kind.starts_with(prefix)) {
                 kind = kind.substr(std::string(prefix).size());
                 break;
             }
@@ -262,9 +262,7 @@ public:
     }
 
     // ---- device-side ----
-    void add_sender(const std::vector<uint32_t>& data, uint32_t num_configs) {
-        add_core(sender_, data, num_configs);
-    }
+    void add_sender(const std::vector<uint32_t>& data, uint32_t num_configs) { add_core(sender_, data, num_configs); }
     void add_receiver(const std::vector<uint32_t>& data, uint32_t num_configs) {
         add_core(receiver_, data, num_configs);
     }
@@ -333,7 +331,8 @@ public:
         }
         log_info(
             tt::LogTest,
-            "PERF_BD host test={} total_ms={:.1f}{} kernels={} muxes={} mux_max_full={} mux_max_hdr={} mux_max_total={} "
+            "PERF_BD host test={} total_ms={:.1f}{} kernels={} muxes={} mux_max_full={} mux_max_hdr={} "
+            "mux_max_total={} "
             "zero_writes={}({:.1f}ms,{}B) arg_writes={}({:.1f}ms,{}B)",
             test_name,
             total,
@@ -373,11 +372,23 @@ public:
         run_arg_writes_ += arg_writes_.count;
 
         if (send_detail()) {
-            log_core_stats(test_name, "snd", sender_, {"credit_chk", "loop", "fill", "slot_wait", "flush", "payload_send", "header_send", "post"});
+            log_core_stats(
+                test_name,
+                "snd",
+                sender_,
+                {"credit_chk", "loop", "fill", "slot_wait", "flush", "payload_send", "header_send", "post"});
         } else {
-            log_core_stats(test_name, "snd", sender_, {"setup", "loop", "fill", "slot_wait", "flush", "#credit_blk", "close", "mux_term"});
+            log_core_stats(
+                test_name,
+                "snd",
+                sender_,
+                {"setup", "loop", "fill", "slot_wait", "flush", "#credit_blk", "close", "mux_term"});
         }
-        log_core_stats(test_name, "rcv", receiver_, {"setup", "loop", "validate", "advance", "first_pkt", "#poll_miss", "close", "mux_term"});
+        log_core_stats(
+            test_name,
+            "rcv",
+            receiver_,
+            {"setup", "loop", "validate", "advance", "first_pkt", "#poll_miss", "close", "mux_term"});
         if (sched_.cores > 0) {
             log_sched(test_name);
         }
@@ -429,7 +440,7 @@ public:
 
 private:
     // Phases named "sub_*" are timed inside another phase and are left out of totals.
-    static bool is_nested(const std::string& phase) { return phase.rfind("sub_", 0) == 0; }
+    static bool is_nested(const std::string& phase) { return phase.starts_with("sub_"); }
 
     struct CoreStats {
         std::array<Stat, NUM_SLOTS> slots{};
@@ -468,7 +479,10 @@ private:
             const bool is_count = names[i][0] == '#';
             const double scale = is_count ? 1.0 : 1.0 / cyc_per_us;
             fields += fmt::format(
-                " {}={:.0f}/{:.0f}", is_count ? names[i] + 1 : names[i], s.slots[i].avg() * scale, s.slots[i].max * scale);
+                " {}={:.0f}/{:.0f}",
+                is_count ? names[i] + 1 : names[i],
+                s.slots[i].avg() * scale,
+                s.slots[i].max * scale);
         }
         log_info(
             tt::LogTest,
@@ -542,8 +556,8 @@ private:
     void log_hot_detail(const std::string& test_name) const {
         const double ns_per_cycle = 1000.0 / (aiclk_mhz_ > 0 ? aiclk_mhz_ : 1.0);
         const auto& st = hot_.steps;
-        const double cal = static_cast<double>(st[HS_CALIBRATION]) /
-                           static_cast<double>(PERF_HOT_CALIBRATION_STEPS * hot_.cores);
+        const double cal =
+            static_cast<double>(st[HS_CALIBRATION]) / static_cast<double>(PERF_HOT_CALIBRATION_STEPS * hot_.cores);
         // Steps a send does not have (fill and payload without a payload) are left at 0.
         auto per = [&](uint32_t step, uint64_t count) {
             return count && st[step] ? (static_cast<double>(st[step]) / static_cast<double>(count) - cal) * ns_per_cycle
@@ -572,7 +586,8 @@ private:
         const double period = hot_detail_period();
         log_info(
             tt::LogTest,
-            "PERF_HOT test={} snd cores={} period={:.0f} samples={} calls/pkt={:.3f} cal={:.1f}cyc [ns/pkt] loop={:.1f}{} "
+            "PERF_HOT test={} snd cores={} period={:.0f} samples={} calls/pkt={:.3f} cal={:.1f}cyc [ns/pkt] "
+            "loop={:.1f}{} "
             "sum={:.1f} timing={:.1f}",
             test_name,
             hot_.cores,
