@@ -11,9 +11,10 @@
 //     stop signal from the launcher it did not crash on: exit with the program's code;
 //   - otherwise (a segfault, a SIGKILL, an exit with an error from a program that did not stop the job): print one
 //     "[tt-stop] rank R on HOST (pid P): <how it ended>; stopping the job (exit CODE)" line, which tt-run reads to
-//     name the rank and return CODE, then send SIGTERM to every rank through the launcher (PMIx job control) and
-//     stay up in the dead program's place until the launcher ends the job once the other ranks have closed and
-//     exited (at most TT_METAL_STOP_TIMEOUT_S), so its own exit does not make the launcher kill them mid-close.
+//     name the rank and return CODE, then send SIGTERM to every rank through the launcher (PMIx job control). When
+//     the program was a tt-metal rank (its context wrote "context"), stay up in its place until the launcher ends the
+//     job once the other ranks have closed and exited (at most TT_METAL_STOP_TIMEOUT_S), so this exit does not make
+//     the launcher kill them mid-close.
 // A program killed by a signal is reported with exit 128 + the signal.
 
 #include <pmix.h>
@@ -109,12 +110,13 @@ int main(int argc, char** argv) {
     const bool signalled = WIFSIGNALED(status);
     const int code = signalled ? 128 + WTERMSIG(status) : WEXITSTATUS(status);
 
-    char note[64] = {};
+    char note[256] = {};
     if (status_pipe[0] >= 0) {
         ::fcntl(status_pipe[0], F_SETFL, O_NONBLOCK);  // a helper the program forked may still hold the write end
         (void)!::read(status_pipe[0], note, sizeof note - 1);
     }
     const bool stopped_by_program = std::strstr(note, "stopped") != nullptr;
+    const bool context_rank = std::strstr(note, "context") != nullptr;  // tt-metal's context was up in the program
     // A program killed by a signal other than a stop signal died on its own (a SIGKILL, a segfault), even when a
     // stop reached this wrapper first: across hosts a peer's MPI can see the death and stop the job before this
     // wrapper does, and the job must still name this rank.
@@ -163,6 +165,9 @@ int main(int argc, char** argv) {
     if (rc != PMIX_SUCCESS) {
         std::fprintf(stderr, "[tt-stop] tt-run-rank: PMIx_Job_control: %s\n", PMIx_Error_string(rc));
         return code;
+    }
+    if (!context_rank) {
+        return code;  // the other ranks are not tt-metal ranks waiting at an exit fence: the launcher ends the job
     }
     // Stand in for the dead program at the other ranks' exit fence (DistributedContext::leave_stopped_job), so they
     // leave as soon as they have closed, then stay up: this rank's exit would make the launcher kill a rank that is

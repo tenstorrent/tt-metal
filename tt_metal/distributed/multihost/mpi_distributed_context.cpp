@@ -161,6 +161,13 @@ inline void check_size_fits_int(std::size_t n) {
 
 inline void mpi_check(int error_code, const char* call_text) {
     if (error_code != MPI_SUCCESS) {
+#ifdef MPIX_ERR_PROC_FAILED
+        int error_class = error_code;
+        MPI_Error_class(error_code, &error_class);
+        if (error_class == MPIX_ERR_PROC_FAILED) {
+            job_stop::note_peer_failed();  // bounds this rank's exit fence: the dead peer may never reach it
+        }
+#endif
         int rank = 0;
         MPI_Comm_rank(MPI_COMM_WORLD, &rank);
         // throw with the textual form of the call
@@ -701,6 +708,7 @@ void MPIContext::create(int argc, char** argv) {
         // itself when it fails (distributed_termination.cpp). The watchdog's last resort is MPI_Abort.
         job_stop::set_force_abort([](int code) { MPI_Abort(MPI_COMM_WORLD, code); });
         DistributedContext::install_termination_handler();
+        job_stop::tell_rank_wrapper("context");
     }
 
     g_mpi_launcher_env_layout = parse_launcher_env_layout_from_env(job_world_size);

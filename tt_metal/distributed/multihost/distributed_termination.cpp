@@ -50,6 +50,8 @@ struct sigaction g_previous_sigterm{};
 sem_t g_wake;
 std::atomic<bool> g_watcher_running{false};
 void (*g_force_abort)(int) = nullptr;
+std::atomic<bool> g_peer_failed{false};
+constexpr double kPeerFailedFenceS = 5.0;
 
 constexpr double kDefaultStopTimeoutS = 30.0;
 constexpr double kWatchdogMarginS = 10.0;
@@ -218,6 +220,17 @@ extern "C" void on_sigterm(int signal_number, siginfo_t* info, void* context) {
 namespace job_stop {
 void set_force_abort(void (*force_abort)(int)) { g_force_abort = force_abort; }
 
+void note_peer_failed() { g_peer_failed.store(true); }
+
+void tell_rank_wrapper(const char* word) {
+    const char* fd = std::getenv("TT_RUN_RANK_FD");
+    if (fd == nullptr || *fd == '\0') {
+        return;
+    }
+    const std::string line = std::string(word) + "\n";
+    (void)!::write(std::atoi(fd), line.data(), line.size());
+}
+
 bool launcher_reachable() {
 #ifdef TT_METAL_HAS_PMIX
     return pmix_ready();
@@ -284,7 +297,10 @@ void DistributedContext::leave_stopped_job() {
     if (pmix_ready()) {
         pmix_proc_t all;
         PMIX_LOAD_PROCID(&all, g_me.nspace, PMIX_RANK_WILDCARD);
-        const double timeout = stop_timeout_s();
+        double timeout = stop_timeout_s();
+        if (g_peer_failed.load() && (timeout <= 0.0 || timeout > kPeerFailedFenceS)) {
+            timeout = kPeerFailedFenceS;  // a dead peer's stand-in may never arrive; the launcher ends the job anyway
+        }
         pmix_info_t bound;
         int seconds = static_cast<int>(timeout);
         PMIX_INFO_LOAD(&bound, PMIX_TIMEOUT, &seconds, PMIX_INT);
@@ -301,10 +317,7 @@ void DistributedContext::leave_stopped_job() {
 #endif
     // Under tt-run the wrapper that started this rank (tt-run-rank) is told the stop was handled here, so it does not
     // stop the job again in this rank's place.
-    if (const char* fd = std::getenv("TT_RUN_RANK_FD"); fd != nullptr && *fd != '\0') {
-        static const char kStopped[] = "stopped\n";
-        (void)!::write(std::atoi(fd), kStopped, sizeof kStopped - 1);
-    }
+    job_stop::tell_rank_wrapper("stopped");
     std::fflush(nullptr);
     ::_exit(code);
 }
