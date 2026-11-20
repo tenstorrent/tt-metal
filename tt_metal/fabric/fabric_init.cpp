@@ -27,6 +27,17 @@ bool isFabricUnitTest() { return false; }
 
 namespace tt::tt_fabric {
 
+namespace {
+FabricProgramExtension& fabric_program_extension() {
+    static FabricProgramExtension extension;
+    return extension;
+}
+}  // namespace
+
+void set_fabric_program_extension(FabricProgramExtension extension) {
+    fabric_program_extension() = std::move(extension);
+}
+
 std::unique_ptr<FabricBuildSession> begin_fabric_build_session(tt::tt_metal::MetalEnvImpl& env_impl) {
     if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config())) {
         return nullptr;
@@ -104,6 +115,9 @@ void exchange_fabric_router_channel_layouts(tt::tt_metal::MetalEnvImpl& env_impl
 std::unique_ptr<tt::tt_metal::Program> compile_fabric_program(
     tt::tt_metal::MetalEnvImpl& env_impl, tt::tt_metal::IDevice* device, FabricDeviceBuild build) {
     build.builder->create_kernels();
+    if (const auto& extension = fabric_program_extension()) {
+        extension(device, *build.program);
+    }
     build.program->impl().compile(
         device, env_impl.get_control_plane().get_fabric_context().get_rtoptions().get_fast_dispatch());
     return std::move(build.program);
