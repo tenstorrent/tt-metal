@@ -21,17 +21,18 @@ from helpers.llk_params import (
     BlocksCalculationAlgorithm,
     DataCopyType,
     DestAccumulation,
-    DestSync,
     PerfRunType,
     Transpose,
     UnpackerEngine,
 )
 from helpers.param_config import (
+    flat_axes,
     generate_perf_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     runtime,
     select_perf_tile_sizes,
 )
@@ -82,18 +83,20 @@ def generate_unpack_unary_operand_combinations(
     Returns: List of (format, dest_acc, transpose_en, unpacker_sel, input_dimensions) tuples
     """
     combinations = []
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
+    dest_sync_modes = quasar_dest_sync_modes(is_perf=is_perf)
 
     for fmt in formats_list:
         if not is_valid_data_format_conversion(fmt):
             continue
         in_fmt = fmt.input_format
 
-        dest_acc_modes = (
-            (DestAccumulation.Yes,)
-            if in_fmt.is_32_bit()
-            else (DestAccumulation.No, DestAccumulation.Yes)
-        )
+        if in_fmt.is_32_bit():
+            dest_acc_modes = (DestAccumulation.Yes,)
+        elif in_fmt == DataFormat.Int16:
+            # Int16 in the source registers cannot land in a 32-bit Dest.
+            dest_acc_modes = (DestAccumulation.No,)
+        else:
+            dest_acc_modes = (DestAccumulation.No, DestAccumulation.Yes)
         transpose_modes = (
             (Transpose.No,) if in_fmt.is_32_bit() else (Transpose.No, Transpose.Yes)
         )
@@ -184,8 +187,19 @@ UNPACK_FORMATS = input_output_formats(
         DataFormat.MxInt2,
     ]
 )
+# Column names of the tuples ``generate_unpack_unary_operand_combinations`` returns.
+UNPACK_UNARY_OPERAND_FLAT_NAMES = (
+    "formats",
+    "dest_acc",
+    "dest_sync",
+    "transpose_en",
+    "unpacker_sel",
+    "input_dimensions",
+    "tile_dimensions",
+)
+# Int16 only pairs with itself; it is kept out of the perf sweep below.
 ALL_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
-    UNPACK_FORMATS
+    UNPACK_FORMATS + input_output_formats([DataFormat.Int16])
 )
 PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinations(
     UNPACK_FORMATS,
@@ -195,12 +209,18 @@ PERF_UNPACK_UNARY_OPERAND_COMBINATIONS = generate_unpack_unary_operand_combinati
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc_sync_transpose_unpack_sel_dims=ALL_UNPACK_UNARY_OPERAND_COMBINATIONS,
+    **flat_axes(UNPACK_UNARY_OPERAND_FLAT_NAMES, ALL_UNPACK_UNARY_OPERAND_COMBINATIONS),
     run_types=[[PerfRunType.L1_TO_L1]],
     loop_factor=[1],
 )
 def test_unpack_unary_operand_quasar(
-    formats_dest_acc_sync_transpose_unpack_sel_dims,
+    formats,
+    dest_acc,
+    dest_sync,
+    transpose_en,
+    unpacker_sel,
+    input_dimensions,
+    tile_dimensions,
     run_types,
     loop_factor,
     boot_mode=BootMode.DEFAULT,
@@ -208,16 +228,6 @@ def test_unpack_unary_operand_quasar(
     is_perf=False,
     perf_report=None,
 ):
-    (
-        formats,
-        dest_acc,
-        dest_sync_mode,
-        transpose_en,
-        unpacker_sel,
-        input_dimensions,
-        tile_dimensions,
-    ) = formats_dest_acc_sync_transpose_unpack_sel_dims
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     src_A, tile_cnt_A, src_B, _ = generate_stimuli(
@@ -231,7 +241,7 @@ def test_unpack_unary_operand_quasar(
     num_faces = tile_shape.total_num_faces()
 
     num_blocks, tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -295,7 +305,7 @@ def test_unpack_unary_operand_quasar(
                 if unpacker_sel == UnpackerEngine.UnpB
                 else DataCopyType.A2D
             ),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             UNPACK_TRANS_FACES(transpose_en),
             UNPACK_TRANS_WITHIN_FACE(transpose_en),
         ],

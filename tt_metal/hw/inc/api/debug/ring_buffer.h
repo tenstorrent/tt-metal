@@ -11,15 +11,19 @@
 #if defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_RING_BUFFER) && !defined(FORCE_WATCHER_OFF)
 
 // Ring buffer modes (see DEBUG_RING_BUFFER_MPSC for which cores get which):
-// - Quasar:    MPSC, slot claimed via a NEO cluster semaphore (DM and TRISC caches are not
-//              coherent, so a RISC-V atomic on an L1 word would not serialize between them)
-// - Blackhole: MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
-// - Wormhole:  SPSC, no synchronization between RISCs
+// - Quasar Tensix:   MPSC, slot claimed via a NEO cluster semaphore (DM and TRISC caches are not
+//                    coherent, so a RISC-V atomic on an L1 word would not serialize between them)
+// - Quasar dispatch: MPSC, slot claimed via a RISC-V atomic on a cached head (no NEO registers, and
+//                    only DMs, whose caches are coherent). Each push flushes the head so the host sees it.
+// - Blackhole:       MPSC, slot claimed via a 32-bit RISC-V atomic on the in-mailbox head
+// - Wormhole:        SPSC, no synchronization between RISCs
 
 #if defined(DEBUG_RING_BUFFER_MPSC)
 #include "internal/hw_thread.h"
 #include "risc_common.h"
-#if defined(ARCH_QUASAR)
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+#include "internal/tt-2xx/quasar/cache.h"
+#elif defined(ARCH_QUASAR)
 #include "api/debug/waypoint.h"
 #include "tensix_neo_reg.h"
 // NEO cluster semaphore 31 is reserved for the MPSC head; kernels must not use it. The watcher's
@@ -56,7 +60,10 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
     auto* wrapper = GET_MAILBOX_ADDRESS_DEV(watcher.debug_ring_buf);
     auto* buf = reinterpret_cast<debug_mpsc_ring_buf_msg_t tt_l1_ptr*>(wrapper->data);
 
-#if defined(ARCH_QUASAR)
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // AMOs hang on the uncached alias, so the head is claimed through the cached view.
+    uint32_t pos = __atomic_fetch_add(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 1, __ATOMIC_RELAXED);
+#elif defined(ARCH_QUASAR)
     // A claim past reset_at landed before the rewind, which erases it: wait for the rewind and claim again.
     uint32_t pos;
     while (true) {
@@ -81,6 +88,10 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 
     uint32_t thread_idx = internal_::get_hw_thread_idx();
     __atomic_store_n(&buf->slots[idx].write_id, thread_idx + 1, __ATOMIC_RELEASE);
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    // After the slot writes, so once a push returns the host's head covers it.
+    flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
+#endif
 }
 
 #else  // SPSC ring buffer
@@ -102,11 +113,14 @@ inline __attribute__((always_inline)) void push_to_ring_buffer(uint32_t val) {
 
 #endif  // DEBUG_RING_BUFFER_MPSC
 
-// Quasar: hardware raises GLOBAL_SEMAPHORES/POST_ON_UNINITIALIZED if a semaphore is posted before it
-// is initialized. DM0 firmware does it. The watcher reads it over NoC later, once the core
+// Quasar Tensix: hardware raises GLOBAL_SEMAPHORES/POST_ON_UNINITIALIZED if a semaphore is posted before
+// it is initialized. DM0 firmware does it. The watcher reads it over NoC later, once the core
 // is out of reset.
 inline __attribute__((always_inline)) void init_ring_buffer() {
-#if defined(ARCH_QUASAR)
+#if defined(COMPILE_FOR_DISPATCH_ENGINE)
+    __atomic_store_n(reinterpret_cast<uint32_t*>(MEM_DISPATCH_WATCHER_RING_HEAD), 0, __ATOMIC_RELAXED);
+    flush_l2_cache_line(MEM_DISPATCH_WATCHER_RING_HEAD);
+#elif defined(ARCH_QUASAR)
     watcher_ring_buf_sem_init(0);
 #endif
 }

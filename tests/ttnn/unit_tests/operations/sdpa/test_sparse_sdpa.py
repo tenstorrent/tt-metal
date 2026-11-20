@@ -30,6 +30,7 @@ SCALE_BLOCK_WIDTH = 128
 BF16_KV = ttnn.transformer.SparseKVFormat.BF16
 FP8_KV = ttnn.transformer.SparseKVFormat.FP8_E4M3
 SCALED_FP8_KV = ttnn.transformer.SparseKVFormat.SCALED_FP8
+SCALE = K_DIM**-0.5
 
 # Open the device ONCE per module (not per test) — all tests share one device config, so this avoids the
 # ~1.7s open/close on every test. The program cache persists across tests, which is fine: the recompile and
@@ -37,23 +38,50 @@ SCALED_FP8_KV = ttnn.transformer.SparseKVFormat.SCALED_FP8
 pytestmark = pytest.mark.use_module_device
 
 
-def test_sparse_kv_format_api_is_explicit(expect_error):
-    assert ttnn.transformer.SparseKVFormat.BF16.name == "BF16"
-    assert ttnn.transformer.SparseKVFormat.FP8_E4M3.name == "FP8_E4M3"
-    assert ttnn.transformer.SparseKVFormat.SCALED_FP8.name == "SCALED_FP8"
-    with expect_error(TypeError, "kv_format"):
-        ttnn.transformer.sparse_sdpa(None, None, None, V_DIM)
+def bf16_dev(t, device):
+    return to_dev(t.to(torch.bfloat16), device, ttnn.bfloat16)
 
 
-def make_scaled_kv_cache(device, batch, T, seed, round_scale):
-    """Build a packed cache and its reconstructed BF16 reference."""
+def idx_dev(indices, device):
+    return to_dev(indices.to(torch.int32), device, ttnn.uint32)
+
+
+def scaled_sdpa(tt_q, tt_packed, tt_idx, kc, scale=SCALE, **kwargs):
+    return ttnn.transformer.sparse_sdpa(
+        tt_q, tt_packed, tt_idx, V_DIM, kv_format=SCALED_FP8_KV, scale=scale, k_chunk_size=kc, **kwargs
+    )
+
+
+def nv_pattern(nv_id, TOPK):
+    """Valid keys per query row."""
+    return {
+        "all": lambda s: TOPK,
+        "mixed": lambda s: 1 + (s * 37) % TOPK,
+        "causal": lambda s: min(TOPK, 1 + s * 3),
+    }[nv_id]
+
+
+def assert_pcc_per_token(actual, expected, what=""):
+    """Whole-output PCC >= 0.999 and every query row's PCC >= 0.995."""
+    score = pcc(actual, expected)
+    worst = min(pcc(actual[:, :, s], expected[:, :, s]) for s in range(actual.shape[2]))
+    assert score >= 0.999 and worst >= 0.995, f"{what}PCC {score:.5f}, worst token {worst:.5f}"
+
+
+def make_scaled_kv_cache(device, batch, T, seed, round_scale, block_amax=None):
+    """Build a packed scaled-FP8 cache and its reconstructed BF16 reference. The latent's 128-column scale blocks
+    span 1e-3..1, or have the per-block max |x| given in `block_amax`."""
     gen = torch.Generator().manual_seed(seed)
     latent = torch.randn(batch, 1, T, V_DIM, generator=gen, dtype=torch.float32)
-    block_scales = torch.logspace(-3, 0, steps=V_DIM // SCALE_BLOCK_WIDTH)
-    latent *= block_scales.repeat_interleave(SCALE_BLOCK_WIDTH)
+    if block_amax is None:
+        latent *= torch.logspace(-3, 0, steps=V_DIM // SCALE_BLOCK_WIDTH).repeat_interleave(SCALE_BLOCK_WIDTH)
+    else:
+        blocks = latent.reshape(batch, 1, T, -1, SCALE_BLOCK_WIDTH)
+        blocks = blocks / blocks.abs().amax(-1, keepdim=True) * torch.tensor(block_amax).reshape(-1, 1)
+        latent = blocks.reshape(batch, 1, T, V_DIM)
     rope = torch.randn(batch, 1, T, K_DIM - V_DIM, generator=gen, dtype=torch.float32).to(torch.bfloat16)
 
-    tt_latent = to_dev(latent.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_latent = bf16_dev(latent, device)
     tt_fp8, tt_scales = ttnn.experimental.deepseek_prefill.per_token_cast_to_fp8(
         tt_latent, round_scale_to_power_of_two=round_scale
     )
@@ -65,6 +93,36 @@ def make_scaled_kv_cache(device, batch, T, seed, round_scale):
     )
     reconstructed = torch.cat([ttnn.to_torch(tt_reconstructed).float(), rope.float()], dim=-1)
     return tt_packed, reconstructed
+
+
+def split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim=V_DIM):
+    """True if the program has the split-K merge CBs: more CBs than the whole-token split at S = cores.
+    On a cache miss, NO_DISPATCH builds the program without compiling, running, or caching it.
+    On a cache hit, it reports the cached program."""
+    grid = device.compute_with_storage_grid_size()
+    H, k_dim, topk = tt_q.shape[1], tt_q.shape[3], tt_idx.shape[3]
+    whole_q = to_dev(torch.zeros(1, H, grid.x * grid.y, k_dim, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, grid.x * grid.y, topk, dtype=torch.int32), device, ttnn.uint32)
+
+    def num_cbs(q, idx):
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+        try:
+            ttnn.transformer.sparse_sdpa(
+                q, tt_kv, idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
+            )
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        return sum(node["node_type"] == "circular_buffer_allocate" for node in graph)
+
+    return num_cbs(tt_q, tt_idx) > num_cbs(whole_q, whole_idx)
+
+
+def test_sparse_kv_format_api_is_explicit(expect_error):
+    assert ttnn.transformer.SparseKVFormat.BF16.name == "BF16"
+    assert ttnn.transformer.SparseKVFormat.FP8_E4M3.name == "FP8_E4M3"
+    assert ttnn.transformer.SparseKVFormat.SCALED_FP8.name == "SCALED_FP8"
+    with expect_error(TypeError, "kv_format"):
+        ttnn.transformer.sparse_sdpa(None, None, None, V_DIM)
 
 
 # ---- op runs, output shape/layout correct ----
@@ -103,22 +161,12 @@ def test_sparse_sdpa_scaled_fp8_kv(device, S, T, TOPK, kc, all_valid, round_scal
         H, S, T, TOPK, K_DIM, (lambda s: TOPK) if all_valid else (lambda s: 1 + (s * 7) % TOPK), seed=41
     )
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=42, round_scale=round_scale)
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_q = bf16_dev(q, device)
+    tt_idx = idx_dev(indices, device)
 
     block_cyclic_args = {"block_cyclic_sp_axis": 0, "block_cyclic_chunk_local": S} if kc == TOPK and TOPK == 64 else {}
-    tt_out = ttnn.transformer.sparse_sdpa(
-        tt_q,
-        tt_packed,
-        tt_idx,
-        V_DIM,
-        kv_format=SCALED_FP8_KV,
-        scale=K_DIM**-0.5,
-        k_chunk_size=kc,
-        **block_cyclic_args,
-    )
-
-    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    tt_out = scaled_sdpa(tt_q, tt_packed, tt_idx, kc, **block_cyclic_args)
+    expected = golden(q, reconstructed, indices, SCALE, V_DIM)
     score = pcc(ttnn.to_torch(tt_out), expected)
     assert score >= 0.999, f"scaled FP8 sparse SDPA PCC {score:.5f}"
 
@@ -141,17 +189,8 @@ def test_sparse_sdpa_scaled_fp8_kv_multi_query_tile(device):
     H, S, T, TOPK, kc = 64, 64, 128, 64, 32
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=61)
     tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=62, round_scale=True)
-    out = ttnn.transformer.sparse_sdpa(
-        to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
-        tt_packed,
-        to_dev(indices.to(torch.int32), device, ttnn.uint32),
-        V_DIM,
-        kv_format=SCALED_FP8_KV,
-        scale=K_DIM**-0.5,
-        k_chunk_size=kc,
-    )
-
-    expected = golden(q, reconstructed, indices, K_DIM**-0.5, V_DIM)
+    out = scaled_sdpa(bf16_dev(q, device), tt_packed, idx_dev(indices, device), kc)
+    expected = golden(q, reconstructed, indices, SCALE, V_DIM)
     actual = ttnn.to_torch(out)
     score = pcc(actual, expected)
     tile_scores = [pcc(actual[:, start : start + 32], expected[:, start : start + 32]) for start in (0, 32)]
@@ -165,9 +204,9 @@ def test_sparse_sdpa_scaled_fp8_rejects_malformed_packed_width(device, expect_er
     malformed = to_dev(torch.randn(1, 1, T, 600), device, ttnn.fp8_e4m3)
     with expect_error(RuntimeError, "kv must be"):
         ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            bf16_dev(q, device),
             malformed,
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            idx_dev(indices, device),
             V_DIM,
             kv_format=SCALED_FP8_KV,
         )
@@ -185,9 +224,9 @@ def test_sparse_sdpa_scaled_fp8_rejects_unaligned_rope_offset(device, expect_err
 
     with expect_error(RuntimeError, "scale/RoPE boundary"):
         ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            bf16_dev(q, device),
             packed,
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            idx_dev(indices, device),
             v_dim,
             kv_format=SCALED_FP8_KV,
             k_chunk_size=TOPK,
@@ -200,9 +239,9 @@ def test_sparse_sdpa_rejects_v_dim_larger_than_k_dim(device, expect_error):
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
     with expect_error(RuntimeError, "v_dim must be in"):
         ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
-            to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            bf16_dev(q, device),
+            bf16_dev(kv, device),
+            idx_dev(indices, device),
             K_DIM + 32,
             kv_format=BF16_KV,
         )
@@ -222,9 +261,9 @@ def test_sparse_sdpa_rejects_kv_format_storage_mismatch(device, expect_error, kv
     kv_host = kv.to(torch.bfloat16) if kv_dtype == ttnn.bfloat16 else kv
     with expect_error(RuntimeError, message):
         ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
+            bf16_dev(q, device),
             to_dev(kv_host, device, kv_dtype),
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            idx_dev(indices, device),
             V_DIM,
             kv_format=kv_format,
             k_chunk_size=TOPK,
@@ -239,11 +278,9 @@ def test_sparse_sdpa_output_dtype(device, q_dtype):
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
     q_host = q.to(torch.bfloat16) if q_dtype == ttnn.bfloat16 else q.to(torch.float32)
     tt_q = to_dev(q_host, device, q_dtype)
-    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-    out = ttnn.transformer.sparse_sdpa(
-        tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=K_DIM**-0.5, k_chunk_size=kc
-    )
+    tt_kv = bf16_dev(kv, device)
+    tt_idx = idx_dev(indices, device)
+    out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc)
     assert out.dtype == q_dtype, f"output dtype {out.dtype} != q dtype {q_dtype}"
 
 
@@ -299,19 +336,18 @@ def test_sparse_sdpa_oversized_persistent_kv(device):
     device.clear_program_cache()
     gen = torch.Generator().manual_seed(0)
     kv = torch.randn(1, 1, T_MAX, K_DIM, generator=gen, dtype=torch.float32)
-    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)  # ONE persistent oversized K cache
-    scale = K_DIM**-0.5
+    tt_kv = bf16_dev(kv, device)  # ONE persistent oversized K cache
     for valid_len in (256, 1024):  # each call's queries attend only to the [0, valid_len) populated prefix
         q = torch.randn(1, H, S, K_DIM, generator=gen, dtype=torch.float32)
         indices = torch.empty((1, 1, S, TOPK), dtype=torch.int64)
         for s in range(S):
             indices[0, 0, s, :] = torch.randperm(valid_len, generator=gen)[:TOPK]
-        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_q = bf16_dev(q, device)
+        tt_idx = idx_dev(indices, device)
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc
         )
-        p = pcc(ttnn.to_torch(tt_out), golden(q, kv, indices, scale, V_DIM))
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv, indices, SCALE, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (valid_len={valid_len})"
     n = device.num_program_cache_entries()  # reusing the same oversized buffer must not realloc/recompile
     assert n == 1, f"oversized persistent kv reuse recompiled: {n} program-cache entries (expected 1)"
@@ -337,17 +373,17 @@ def test_sparse_sdpa_block_cyclic_sp1_identity(device):
     for T in Ts:
         q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=T)
         out = ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
-            to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16),  # sp=1 => block-cyclic order == natural
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            bf16_dev(q, device),
+            bf16_dev(kv, device),  # sp=1 => block-cyclic order == natural
+            idx_dev(indices, device),
             V_DIM,
             kv_format=BF16_KV,
-            scale=K_DIM**-0.5,
+            scale=SCALE,
             k_chunk_size=kc,
             block_cyclic_sp_axis=0,
             block_cyclic_chunk_local=S,  # == q_isl (sp=1, tp=1)
         )
-        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, K_DIM**-0.5, V_DIM))
+        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, SCALE, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (sp=1 identity block-cyclic, T={T})"
     # T is hashed for the block-cyclic path (compile-time BC_SHARD_STRIDE_GAP), so each distinct cache size is its own program.
     n = device.num_program_cache_entries()
@@ -362,12 +398,12 @@ def test_sparse_sdpa_block_cyclic_chunk_local_rejected(device, expect_error):
     q, kv_nat, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=1)
     with expect_error(RuntimeError, "block_cyclic_chunk_local"):
         ttnn.transformer.sparse_sdpa(
-            to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16),
-            to_dev(kv_nat.to(torch.bfloat16), device, ttnn.bfloat16),
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            bf16_dev(q, device),
+            bf16_dev(kv_nat, device),
+            idx_dev(indices, device),
             V_DIM,
             kv_format=BF16_KV,
-            scale=K_DIM**-0.5,
+            scale=SCALE,
             k_chunk_size=kc,
             block_cyclic_sp_axis=0,
             block_cyclic_chunk_local=S - 16,  # != S (=q_isl); rejected before dispatch
@@ -391,16 +427,15 @@ def _indexed_inputs(H, S, T, TOPK, B, seed=0):
 def test_sparse_sdpa_indexed_kv_cache(device):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 3
     device.clear_program_cache()
-    scale = K_DIM**-0.5
     q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)  # [B,1,T,K_DIM] shared cache
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_q = bf16_dev(q, device)
+    tt_kv = bf16_dev(kv_full, device)  # [B,1,T,K_DIM] shared cache
+    tt_idx = idx_dev(indices, device)
     for cb in range(B):
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc, cache_batch_idx=cb
         )
-        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))  # golden uses slot cb
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, SCALE, V_DIM))  # golden uses slot cb
         assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb})"
     n = device.num_program_cache_entries()  # changing the indexed slot must NOT recompile
     assert n == 1, f"indexing into a different slot recompiled: {n} program-cache entries (expected 1)"
@@ -415,18 +450,17 @@ def test_sparse_sdpa_indexed_kv_cache(device):
 def test_sparse_sdpa_indexed_addr_change_on_hit(device):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 3
     device.clear_program_cache()
-    scale = K_DIM**-0.5
     keep_alive = []  # hold device tensors so each reallocation lands at a fresh address
     for cb in range(B):
         q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B, seed=cb)  # fresh data + fresh buffers each step
-        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-        tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
-        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+        tt_q = bf16_dev(q, device)
+        tt_kv = bf16_dev(kv_full, device)
+        tt_idx = idx_dev(indices, device)
         keep_alive += [tt_q, tt_kv, tt_idx]
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc, cache_batch_idx=cb
         )
-        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, SCALE, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (cache_batch_idx={cb}, reallocated buffers)"
     n = device.num_program_cache_entries()  # slot + address changes are runtime args, not a recompile
     assert n == 1, f"addr/slot change on hit recompiled: {n} program-cache entries (expected 1)"
@@ -449,10 +483,9 @@ def _nd_sharded_dram_config(device, rows_per_shard, width=K_DIM):
 def test_sparse_sdpa_indexed_nd_sharded_kv(device):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2
     device.clear_program_cache()
-    scale = K_DIM**-0.5
     q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
     nd_cfg = _nd_sharded_dram_config(device, rows_per_shard=T)  # each [1,1,T,K_DIM] slot is one shard
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+    tt_q = bf16_dev(q, device)
     tt_kv = ttnn.from_torch(
         kv_full.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -460,12 +493,12 @@ def test_sparse_sdpa_indexed_nd_sharded_kv(device):
         device=device,
         memory_config=nd_cfg,
     )
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_idx = idx_dev(indices, device)
     for cb in range(B):
         tt_out = ttnn.transformer.sparse_sdpa(
-            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, cache_batch_idx=cb
+            tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc, cache_batch_idx=cb
         )
-        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, scale, V_DIM))
+        p = pcc(ttnn.to_torch(tt_out), golden(q, kv_full[cb : cb + 1], indices, SCALE, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, cache_batch_idx={cb})"
 
 
@@ -473,25 +506,15 @@ def test_sparse_sdpa_indexed_nd_sharded_kv(device):
 def test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv(device):
     """Production cache geometry: one packed ND-sharded cache and a dynamic user/layer slot."""
     H, S, T, TOPK, kc, B = 32, 32, 128, 64, 32, 2
-    scale = K_DIM**-0.5
     q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=51)
     tt_packed, reconstructed = make_scaled_kv_cache(device, B, T, seed=52, round_scale=True)
     tt_packed = ttnn.to_memory_config(tt_packed, _nd_sharded_dram_config(device, T, tt_packed.shape[-1]))
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_q = bf16_dev(q, device)
+    tt_idx = idx_dev(indices, device)
 
     for cache_batch_idx in range(B):
-        out = ttnn.transformer.sparse_sdpa(
-            tt_q,
-            tt_packed,
-            tt_idx,
-            V_DIM,
-            kv_format=SCALED_FP8_KV,
-            scale=scale,
-            k_chunk_size=kc,
-            cache_batch_idx=cache_batch_idx,
-        )
-        expected = golden(q, reconstructed[cache_batch_idx : cache_batch_idx + 1], indices, scale, V_DIM)
+        out = scaled_sdpa(tt_q, tt_packed, tt_idx, kc, cache_batch_idx=cache_batch_idx)
+        expected = golden(q, reconstructed[cache_batch_idx : cache_batch_idx + 1], indices, SCALE, V_DIM)
         score = pcc(ttnn.to_torch(out), expected)
         assert score >= 0.99, f"scaled ND-sharded PCC {score:.5f} (slot={cache_batch_idx})"
 
@@ -505,11 +528,10 @@ def test_sparse_sdpa_scaled_fp8_indexed_nd_sharded_kv(device):
 def test_sparse_sdpa_nd_sharded_kv_len_change(device):
     H, S, TOPK, kc = 32, 64, 64, 32
     device.clear_program_cache()
-    scale = K_DIM**-0.5
     nd_cfg = _nd_sharded_dram_config(device, rows_per_shard=128)  # FIXED shard shape, independent of T
     for T in (256, 512):  # multiples of 128; same shard spec, different T (different shard count)
         q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
-        tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
+        tt_q = bf16_dev(q, device)
         tt_kv = ttnn.from_torch(
             kv.to(torch.bfloat16),
             dtype=ttnn.bfloat16,
@@ -517,9 +539,9 @@ def test_sparse_sdpa_nd_sharded_kv_len_change(device):
             device=device,
             memory_config=nd_cfg,
         )
-        tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
-        out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=scale, k_chunk_size=kc)
-        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, scale, V_DIM))
+        tt_idx = idx_dev(indices, device)
+        out = ttnn.transformer.sparse_sdpa(tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, scale=SCALE, k_chunk_size=kc)
+        p = pcc(ttnn.to_torch(out), golden(q, kv, indices, SCALE, V_DIM))
         assert p >= 0.99, f"PCC {p:.5f} (nd-sharded, T={T})"
     assert device.num_program_cache_entries() == 2, "sharded kv must recompile per shape (2 distinct T -> 2 entries)"
 
@@ -532,9 +554,9 @@ def test_sparse_sdpa_indexed_oob_rejected_on_hit(device, expect_error):
     H, S, T, TOPK, kc, B = 32, 64, 256, 64, 32, 2
     device.clear_program_cache()
     q, kv_full, indices = _indexed_inputs(H, S, T, TOPK, B)
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_kv = to_dev(kv_full.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_q = bf16_dev(q, device)
+    tt_kv = bf16_dev(kv_full, device)
+    tt_idx = idx_dev(indices, device)
     ttnn.transformer.sparse_sdpa(
         tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc, cache_batch_idx=0
     )  # miss: builds
@@ -552,9 +574,9 @@ def test_sparse_sdpa_bad_layout_rejected_on_hit(device, expect_error):
     H, S, T, TOPK, kc = 32, 64, 256, 64, 32
     device.clear_program_cache()
     q, kv, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK)
-    tt_q = to_dev(q.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_kv = to_dev(kv.to(torch.bfloat16), device, ttnn.bfloat16)
-    tt_idx = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_q = bf16_dev(q, device)
+    tt_kv = bf16_dev(kv, device)
+    tt_idx = idx_dev(indices, device)
     ttnn.transformer.sparse_sdpa(
         tt_q, tt_kv, tt_idx, V_DIM, kv_format=BF16_KV, k_chunk_size=kc
     )  # miss: builds the row-major program
@@ -570,7 +592,7 @@ def test_sparse_sdpa_attention_sink(device, H, S, TOPK, dim, kc):
     q, kv, indices, sinks, scale = make_attention_sink_inputs(H, S, TOPK, dim)
     tt_q = to_dev(q, device, ttnn.bfloat16)
     tt_kv = to_dev(kv, device, ttnn.bfloat16)
-    tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_indices = idx_dev(indices, device)
     tt_sink = to_dev(sinks, device, ttnn.bfloat16)
     out = ttnn.transformer.sparse_sdpa(
         tt_q, tt_kv, tt_indices, dim, kv_format=BF16_KV, scale=scale, k_chunk_size=kc, attention_sink=tt_sink
@@ -609,7 +631,7 @@ def test_sparse_sdpa_attention_sink_cache(device):
     tt_q = to_dev(torch.zeros(1, H, S, dim), device, ttnn.bfloat16)
     tt_kv = to_dev(torch.ones(1, 1, 32, dim), device, ttnn.bfloat16)
     indices = torch.arange(32).reshape(1, 1, 1, 32).expand(1, 1, S, 32).contiguous()
-    tt_indices = to_dev(indices.to(torch.int32), device, ttnn.uint32)
+    tt_indices = idx_dev(indices, device)
     sink_tensors = []  # keep allocations alive to guarantee distinct addresses on cache hits
     for value in (None, 0.0, 16.0, -32.0, None):
         sink = None
@@ -646,7 +668,7 @@ def test_sparse_sdpa_attention_sink_validation(device, expect_error, invalid):
         ttnn.transformer.sparse_sdpa(
             to_dev(q, device, ttnn.bfloat16),
             to_dev(kv, device, ttnn.bfloat16),
-            to_dev(indices.to(torch.int32), device, ttnn.uint32),
+            idx_dev(indices, device),
             64,
             kv_format=BF16_KV,
             k_chunk_size=32,
@@ -678,7 +700,7 @@ def test_sparse_sdpa_attention_sink_dense_parity(device):
     sparse = ttnn.transformer.sparse_sdpa(
         to_dev(q, device, ttnn.bfloat16),
         to_dev(kv, device, ttnn.bfloat16),
-        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        idx_dev(indices, device),
         dim,
         kv_format=BF16_KV,
         scale=scale,
@@ -727,7 +749,7 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
     out = ttnn.transformer.sparse_sdpa(
         to_dev(q, device, ttnn.bfloat16),
         to_dev(kv, device, ttnn.bfloat16),
-        to_dev(indices.to(torch.int32), device, ttnn.uint32),
+        idx_dev(indices, device),
         dim,
         kv_format=BF16_KV,
         scale=scale,
@@ -738,3 +760,234 @@ def test_sparse_sdpa_deepseek_attention_sink(device, scale):
     probs = torch.cat([logits, model_sink.expand(1, H, S, 1)], dim=-1).softmax(dim=-1)[..., :-1]
     expected = probs @ kv.float()
     torch.testing.assert_close(ttnn.to_torch(out).float(), expected, atol=0.012, rtol=0.01)
+
+
+def check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed):
+    """Scaled-FP8 KV: split-K is (or is not) planned as expected, and the output matches the golden per token."""
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_pattern(nv_id, TOPK), seed=seed)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=seed + 1, round_scale=True)
+    tt_q = bf16_dev(q, device)
+    tt_idx = idx_dev(indices, device)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc) == split, f"expected split-K {split}"
+    out = scaled_sdpa(tt_q, tt_packed, tt_idx, kc)
+    assert_pcc_per_token(ttnn.to_torch(out), golden(q, reconstructed, indices, SCALE, V_DIM))
+
+
+# ---- split-K work distribution (S > cores, S % cores != 0): tokens straddling two cores are merged ----
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id,split",
+    [
+        (64, 160, 4096, 2048, 128, "all", True),  # GLM per-chip shape (16 chunks/token)
+        (64, 160, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments, masks in either segment
+        (32, 250, 1024, 512, 128, "causal", True),  # 2+ tokens/core, prefill-like valid counts
+        (64, None, 1024, 256, 64, "mixed", True),  # 1 token + a sliver per core: S = cores + 10
+        (128, 160, 1024, 512, 128, "mixed", True),  # Sqt=4: the merge fills DST
+        (96, 160, 1024, 512, 128, "mixed", True),  # Sqt=3
+        (128, 160, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k(device, H, S, T, TOPK, kc, nv_id, split):
+    """Split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    S = cores + 10 if S is None else S
+    if S <= cores:
+        pytest.skip(f"split-K needs S > cores ({cores})")
+    check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed=71)
+
+
+# ---- split-K for S < cores (small chunks, e.g. GLM chunk 1024/2048 -> 32/64 rows per chip): <= 2 cores per token ----
+@run_for_blackhole()
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,kc,nv_id,split",
+    [
+        (64, 32, 4096, 2048, 128, "all", True),  # GLM chunk 1024 per chip: 64 cores, half a token each
+        (64, 64, 4096, 2048, 128, "all", True),  # GLM chunk 2048: 96 cores, 2/3 token each (HEAD+TAIL cores)
+        (64, 32, 1024, 512, 128, "mixed", True),  # sentinel tails: empty HEAD segments
+        (64, 64, 1024, 512, 128, "causal", True),  # prefill-like valid counts
+        (32, 40, 1024, 256, 64, "mixed", True),  # 4 chunks/token, odd S
+        (128, 32, 4096, 1344, 448, "mixed", False),  # split-K CBs over the L1 budget: whole-token split
+    ],
+)
+def test_sparse_sdpa_scaled_fp8_split_k_small_s(device, H, S, T, TOPK, kc, nv_id, split):
+    """Small-S split-K must run (or fall back) as expected and match the torch golden (PCC), incl. sentinel tails."""
+    grid = device.compute_with_storage_grid_size()
+    if S >= grid.x * grid.y:
+        pytest.skip("needs S < cores")
+    check_scaled_split_k(device, H, S, T, TOPK, kc, nv_id, split, seed=73)
+
+
+# ---- BF16 and plain FP8 KV: split-K only when every token gets two cores (2S <= cores), e.g. Qwen 3.8 QSA ----
+@run_for_blackhole()
+@pytest.mark.parametrize("kv_dtype", [ttnn.bfloat16, ttnn.fp8_e4m3], ids=["bf16", "fp8"])
+@pytest.mark.parametrize(
+    "H,S,T,TOPK,k_dim,v_dim,kc,nv_id,split",
+    [
+        (64, 32, 4096, 2048, K_DIM, V_DIM, 128, "all", True),  # GLM chunk 1024 per chip: half a token per core
+        (64, 32, 1024, 512, K_DIM, V_DIM, 128, "mixed", True),  # sentinel tails
+        (64, 40, 1024, 512, K_DIM, V_DIM, 128, "causal", True),  # prefill-like valid counts
+        (128, 16, 1024, 512, K_DIM, V_DIM, 64, "mixed", True),  # Sqt=4
+        (32, 1, 4096, 2048, 512, 256, 32, "all", True),  # Qwen 3.8 QSA decode: 1 row, 64 chunks on 2 cores
+        (32, 5, 4096, 2080, 512, 256, 32, "mixed", True),  # QSA rows with 65 chunks: 32 + 33 per token
+        (64, 64, 1024, 512, K_DIM, V_DIM, 128, "all", False),  # 2S > cores: whole-token split
+        (64, 160, 1024, 512, K_DIM, V_DIM, 128, "mixed", False),  # S > cores: whole-token split
+    ],
+)
+def test_sparse_sdpa_split_k_kv_formats(device, kv_dtype, H, S, T, TOPK, k_dim, v_dim, kc, nv_id, split):
+    """BF16 and plain FP8 KV must use split-K only when 2S <= cores and match the torch golden (PCC)."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if split != (2 * S <= cores):
+        pytest.skip(f"case needs 2S {'<=' if split else '>'} cores ({cores})")
+    q, kv, indices = make_inputs(H, S, T, TOPK, k_dim, nv_pattern(nv_id, TOPK), seed=77)
+    fp8 = kv_dtype == ttnn.fp8_e4m3
+    kv_format = FP8_KV if fp8 else BF16_KV
+    tt_q = bf16_dev(q, device)
+    tt_kv = to_dev(kv if fp8 else kv.to(torch.bfloat16), device, kv_dtype)
+    tt_idx = idx_dev(indices, device)
+    assert split_k_ran(device, tt_q, tt_kv, tt_idx, kv_format, kc, v_dim) == split, f"expected split-K {split}"
+    out = ttnn.transformer.sparse_sdpa(
+        tt_q, tt_kv, tt_idx, v_dim, kv_format=kv_format, scale=k_dim**-0.5, k_chunk_size=kc
+    )
+    kv_held = kv.to(torch.float8_e4m3fn if fp8 else torch.bfloat16).float()
+    assert_pcc_per_token(ttnn.to_torch(out), golden(q, kv_held, indices, k_dim**-0.5, v_dim))
+
+
+# ---- the split-K plan reads the free L1, so the program hash includes it: less free L1 must give a new program ----
+@run_for_blackhole()
+def test_sparse_sdpa_split_k_plan_follows_free_l1(device):
+    """An L1 tensor that leaves room for the whole-token CBs but not for the split-K CBs must give a new
+    whole-token program. A cache hit would reuse the split-K program, whose CB region overlaps the tensor."""
+    H, S, T, TOPK, kc = 64, 160, 4096, 2048, 128
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    if S <= cores or S % cores == 0:
+        pytest.skip(f"split-K needs S > cores ({cores}) and S % cores != 0")
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=75)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=76, round_scale=True)
+    tt_q = bf16_dev(q, device)
+    tt_idx = idx_dev(indices, device)
+    whole_q = to_dev(torch.zeros(1, H, cores, K_DIM, dtype=torch.bfloat16), device, ttnn.bfloat16)
+    whole_idx = to_dev(torch.zeros(1, 1, cores, TOPK, dtype=torch.int32), device, ttnn.uint32)
+    expected = golden(q, reconstructed, indices, SCALE, V_DIM)
+
+    def run(q_in, idx_in):
+        """Run the op. Return the output and the end of the CB region (0 on a program-cache hit)."""
+        ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+        try:
+            out = scaled_sdpa(q_in, tt_packed, idx_in, kc)
+        finally:
+            graph = ttnn.graph.end_graph_capture()
+        cbs = [node["params"] for node in graph if node["node_type"] == "circular_buffer_allocate"]
+        return out, max((int(p["address"]) + int(p["size"]) for p in cbs), default=0)
+
+    def l1_tensor(tiles_per_core):
+        shape = [1, 1, cores * tiles_per_core * 32, 32]
+        mem = ttnn.create_sharded_memory_config(shape, ttnn.CoreGrid(y=grid.y, x=grid.x), ttnn.ShardStrategy.HEIGHT)
+        data = torch.randn(shape, dtype=torch.bfloat16)
+        return data, ttnn.from_torch(
+            data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem
+        )
+
+    device.clear_program_cache()
+    out_split, split_end = run(tt_q, tt_idx)
+    _, whole_end = run(whole_q, whole_idx)
+    assert split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    assert 0 < whole_end < split_end, f"CB region ends: whole-token {whole_end}, split-K {split_end}"
+
+    # L1 tensors are allocated top-down, so a one-tile probe finds the top of the free L1.
+    _, probe = l1_tensor(1)
+    top = probe.buffer_address() + 2048
+    ttnn.deallocate(probe)
+    data, blocker = l1_tensor(-(-(top - (whole_end + split_end) // 2) // 2048))
+    low = blocker.buffer_address()
+    assert whole_end <= low < split_end, f"L1 tensor at {low}, not in [{whole_end}, {split_end})"
+
+    assert not split_k_ran(device, tt_q, tt_packed, tt_idx, SCALED_FP8_KV, kc)
+    entries = device.num_program_cache_entries()
+    out_whole, whole_run_end = run(tt_q, tt_idx)
+    assert device.num_program_cache_entries() == entries + 1, "less free L1 must give a new program"
+    assert 0 < whole_run_end <= low, f"CB region ends at {whole_run_end}, L1 tensor starts at {low}"
+    assert torch.equal(ttnn.to_torch(blocker), data), "the op wrote over the L1 tensor"
+    ttnn.deallocate(blocker)
+    for name, out in (("split-K", out_split), ("whole-token", out_whole)):
+        score = pcc(ttnn.to_torch(out), expected)
+        assert score >= 0.999, f"{name} PCC {score:.5f}"
+
+
+# ---- production shapes: 160 query rows per chip (more rows than cores, not a multiple of the core count), all
+#      heads after the head-to-sequence reshard (GLM-5.3: 64, Kimi K3.1: 96), TOPK=2048, k_chunk=128, scaled-FP8 KV ----
+@run_for_blackhole()
+@pytest.mark.parametrize("H", [64, 96], ids=["glm53", "k31"])
+@pytest.mark.parametrize("nv_id", ["all", "causal"])
+def test_sparse_sdpa_production_pcc(device, H, nv_id):
+    S, T, TOPK, kc = 160, 8192, 2048, 128
+    nv_fn = {"all": lambda s: TOPK, "causal": lambda s: min(TOPK, 1 + s * 13)}[nv_id]
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, nv_fn, seed=81)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=82, round_scale=True)
+    out = scaled_sdpa(bf16_dev(q, device), tt_packed, idx_dev(indices, device), kc)
+    assert_pcc_per_token(ttnn.to_torch(out), golden(q, reconstructed, indices, SCALE, V_DIM), f"H={H} ")
+
+
+# ---- fused-dequant edge cases on a small scaled-FP8 shape ----
+SMALL_SCALED_SHAPE = (32, 32, 256, 128, 64)  # H, S, T, TOPK, kc
+
+# Per-128-column block amax: below the cast's 1e-4 clamp, just above it (an unrounded scale of ~2^-22.1),
+# mid-range, and large (a power-of-two scale of 2^7, the top FP16 binade after the 2^9 offset).
+SCALE_RANGE_AMAX = (5e-5, 1.05e-4, 3.0, 4.0e4)
+
+
+@run_for_blackhole()
+@pytest.mark.parametrize("round_scale", [True, False], ids=["pow2_scale", "arbitrary_scale"])
+def test_sparse_sdpa_scaled_fp8_scale_range(device, round_scale):
+    """Checks magnitudes per scale block, not just correlation (PCC passes for a uniformly rescaled output)."""
+    H, S, T, TOPK, kc = SMALL_SCALED_SHAPE
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 7) % TOPK, seed=91)
+    # Zero Q's latent so the scores come from the BF16 RoPE alone: the 4e4 block would otherwise make the logits
+    # so large that rounding decides the softmax. The output still reads every dequantized latent block as V.
+    q[..., :V_DIM] = 0
+    tt_packed, reconstructed = make_scaled_kv_cache(
+        device, 1, T, seed=92, round_scale=round_scale, block_amax=SCALE_RANGE_AMAX
+    )
+    out = scaled_sdpa(bf16_dev(q, device), tt_packed, idx_dev(indices, device), kc)
+    actual = ttnn.to_torch(out).float()
+    expected = golden(q, reconstructed, indices, SCALE, V_DIM)
+    for b, amax in enumerate(SCALE_RANGE_AMAX):
+        cols = slice(b * SCALE_BLOCK_WIDTH, (b + 1) * SCALE_BLOCK_WIDTH)
+        ref = expected[..., cols].abs().max()
+        err = (actual[..., cols] - expected[..., cols]).abs().max() / ref
+        assert err < 0.03, f"block {b} (amax {amax}): max error {err:.4f} of the block's max |out| {ref:.3e}"
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_scaled_fp8_attention_sink(device):
+    """Scaled FP8 KV with an attention sink keeps the two-pass dequant."""
+    H, S, T, TOPK, kc = SMALL_SCALED_SHAPE
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: 1 + (s * 7) % TOPK, seed=93)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=94, round_scale=True)
+    sinks = (torch.linspace(-4, 8, H) / SCALE).reshape(1, 1, 1, H).to(torch.bfloat16)
+    tt_sinks = to_dev(sinks, device, ttnn.bfloat16)
+    out = scaled_sdpa(bf16_dev(q, device), tt_packed, idx_dev(indices, device), kc, attention_sink=tt_sinks)
+    actual = ttnn.to_torch(out).float()
+    expected = golden(q, reconstructed, indices, SCALE, V_DIM, attention_sink=sinks.float().reshape(1, H, 1, 1))
+    score = pcc(actual, expected)
+    assert score >= 0.999, f"scaled FP8 + sink PCC {score:.5f}"
+    torch.testing.assert_close(actual, expected, atol=0.05, rtol=0.05)  # latent values up to ~4
+
+
+@run_for_blackhole()
+def test_sparse_sdpa_scaled_fp8_kv_fp8_q(device):
+    """FP8 Q with scaled FP8 KV: the fused-dequant Q prescale runs on the BFP8 cb_q_in."""
+    H, S, T, TOPK, kc = SMALL_SCALED_SHAPE
+    q, _, indices = make_inputs(H, S, T, TOPK, K_DIM, lambda s: TOPK, seed=95)
+    tt_packed, reconstructed = make_scaled_kv_cache(device, 1, T, seed=96, round_scale=True)
+    tt_q = to_dev(q.to(torch.float32), device, ttnn.fp8_e4m3)
+    out = scaled_sdpa(tt_q, tt_packed, idx_dev(indices, device), kc)
+    actual = ttnn.to_torch(ttnn.typecast(out, ttnn.bfloat16)).float()  # no FP8 to_torch
+    expected = golden(q.to(torch.float8_e4m3fn).float(), reconstructed, indices, SCALE, V_DIM)  # the Q the op sees
+    score = pcc(actual, expected)
+    assert score >= 0.99, f"FP8 Q + scaled FP8 KV PCC {score:.5f}"
+    # FP8 output: compare magnitudes coarsely (PCC alone would pass a rescaled output).
+    ratio = actual.norm() / expected.norm()
+    assert 0.95 < ratio < 1.05, f"output norm ratio {ratio:.4f}"

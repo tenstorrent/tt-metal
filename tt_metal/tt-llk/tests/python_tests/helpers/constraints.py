@@ -10,6 +10,7 @@ from helpers.data_format_inference import effective_dest_acc
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import TILE_DIMENSIONS
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -24,8 +25,8 @@ def get_valid_dest_accumulation_modes(formats):
 
     Constraints (all architectures):
     - Dest accumulation must be ENABLED for the following format combination:
-        - Input format is 32bit integer format
-        Reason: HW limitation, Unpacker cannot unpack 32bit integer formats into SrcA and SrcB registers
+        - Input format is 32-bit
+        Reason: HW limitation, Unpacker cannot unpack 32-bit formats into SrcA and SrcB registers
 
     Constraints (Wormhole/Blackhole only):
     - Dest accumulation must be ENABLED for the following format combinations:
@@ -46,7 +47,7 @@ def get_valid_dest_accumulation_modes(formats):
     chip_arch = get_chip_architecture()
     in_fmt, out_fmt = formats.input, formats.output
 
-    if in_fmt in [DataFormat.Int32, DataFormat.UInt32]:
+    if in_fmt.is_32_bit():
         return [DestAccumulation.Yes]
 
     if chip_arch == ChipArchitecture.QUASAR:
@@ -139,6 +140,17 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
         ):
             return [MathFidelity.LoFi]
 
+    else:
+        # Wormhole/Blackhole: the SrcA layout is narrower than Quasar's, so the caps differ.
+        # Integer and block-float inputs are already exact at LoFi, Float16_b reaches full
+        # precision at HiFi2, and Float32 needs the high phases (HiFi3/HiFi4).
+        if format.input == DataFormat.Int8 or format.input.is_block_float():
+            return [MathFidelity.LoFi]
+        if format.input == DataFormat.Float16_b:
+            return [MathFidelity.LoFi, MathFidelity.HiFi2]
+        if format.input == DataFormat.Float32:
+            return [MathFidelity.HiFi3, MathFidelity.HiFi4]
+
     # HiFi2 will multiply BFP8 and BFP8_b in full precision, skip HiFi3 and HiFi4
     if PERF_RUN and format.input in [DataFormat.Bfp8_b, DataFormat.Bfp8]:
         return [MathFidelity.LoFi, MathFidelity.HiFi2]
@@ -152,12 +164,15 @@ def get_valid_math_fidelities(format, operation=None, PERF_RUN: bool = False):
     ]:
         return [MathFidelity.LoFi]
 
-    return [
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ]
+    return list(ALL_MATH_FIDELITIES)
+
+
+# Elementwise FPU binary operations that support reuse_dest, shared by WH/BH and Quasar.
+REUSE_DEST_MATH_OPS = [
+    MathOperation.Elwadd,
+    MathOperation.Elwsub,
+    MathOperation.Elwmul,
+]
 
 
 def get_perf_math_operations():

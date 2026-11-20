@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from helpers.constraints import get_valid_math_fidelities
 from helpers.llk_params import (
     BroadcastType,
     DestAccumulation,
@@ -14,7 +15,6 @@ from helpers.perf.core import ALL_PERF_RUN_TYPES
 from test_eltwise_binary import (
     BFP4_PERF_MATH_OPS,
     DEST_REUSE_MATH_OPS,
-    _get_valid_math_fidelity,
     _run_eltwise_binary_dest_reuse_test,
     _run_eltwise_binary_test,
     get_base_perf_formats,
@@ -39,8 +39,8 @@ PERF_LOOP_FACTOR = 32
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=get_base_perf_formats,
-    math_op=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    mathop=lambda formats: get_eltwise_binary_math_ops(formats, is_perf=True),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_perf_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -57,7 +57,7 @@ def test_perf_eltwise_binary(
     dest_sync,
     unpack_to_dest,
     formats,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     tile_dimensions,
@@ -73,7 +73,7 @@ def test_perf_eltwise_binary(
         unpack_to_dest,
         formats,
         BroadcastType.None_,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -92,8 +92,8 @@ def test_perf_eltwise_binary(
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
     formats=lambda: get_bfp4_formats(),
-    math_op=BFP4_PERF_MATH_OPS,
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    mathop=BFP4_PERF_MATH_OPS,
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=[Transpose.No],
     tile_dimensions=lambda transpose_srca: get_eltwise_binary_perf_tile_dimensions(
         transpose_srca, BroadcastType.None_
@@ -110,7 +110,7 @@ def test_perf_eltwise_binary_bfp4_b(
     dest_sync,
     unpack_to_dest,
     formats,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     tile_dimensions,
@@ -126,7 +126,7 @@ def test_perf_eltwise_binary_bfp4_b(
         unpack_to_dest,
         formats,
         BroadcastType.None_,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -145,12 +145,12 @@ def test_perf_eltwise_binary_bfp4_b(
         EltwiseBinaryReuseDestType.DEST_TO_SRCA,
         EltwiseBinaryReuseDestType.DEST_TO_SRCB,
     ],
-    math_op=DEST_REUSE_MATH_OPS,
+    mathop=DEST_REUSE_MATH_OPS,
     formats=get_dest_reuse_formats,
     dest_acc=[DestAccumulation.No],
     dest_sync=[DestSync.Half],
     unpack_to_dest=[False],
-    math_fidelity=lambda formats, math_op: _get_valid_math_fidelity(formats, math_op),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     tile_dimensions=lambda: get_dest_reuse_perf_tile_dimensions(),
     input_dimensions=get_dest_reuse_perf_input_dimensions,
     output_dimensions=get_dest_reuse_perf_output_dimensions,
@@ -161,7 +161,7 @@ def test_perf_eltwise_binary_bfp4_b(
 def test_perf_eltwise_binary_dest_reuse(
     perf_report,
     reuse_dest_type,
-    math_op,
+    mathop,
     formats,
     dest_acc,
     dest_sync,
@@ -176,7 +176,7 @@ def test_perf_eltwise_binary_dest_reuse(
 ):
     _run_eltwise_binary_dest_reuse_test(
         reuse_dest_type,
-        math_op,
+        mathop,
         formats,
         dest_acc,
         dest_sync,

@@ -11,7 +11,8 @@
 # Commands:
 #   count     Count test variants (collection-only; outputs integer to stdout)
 #   compile   Run compile-producer step (parallel, no flock needed)
-#   simulate  Run the consumer step (flock-serialised, no xdist).
+#   simulate  Run the consumer step (flock-serialised; serial, except --perf
+#             on silicon, which uses --dist loadgroup -n <consumer-jobs>).
 #             Quasar uses the UMD simulator; Blackhole/Wormhole run on silicon.
 #   run       compile + simulate in sequence (most common agent use case)
 #
@@ -26,6 +27,7 @@
 # Optional:
 #   --maxfail  N      Stop after N failures (simulate/run; omit for verification)
 #   --k        EXPR   pytest -k filter expression
+#   --op       OP     SFPU op filter for --perf sweeps (pytest --op; repeatable)
 #   --test-id  ID     Full parametrize ID for a single variant run
 #                     (single-quotes, brackets, commas are safe — no escaping needed)
 #   --port     PORT   Deprecated, ignored
@@ -38,6 +40,30 @@
 #   --sim-path PATH   Override TT_UMD_SIMULATOR_PATH
 #                     (default: /proj_sw/user_dev/$USER/tt-umd-simulators/build/emu-<arch>-1x3)
 #   --speed-of-light  Pass pytest --speed-of-light (compile-time formats / SOL path).
+#   --perf            Perf sweep with CI's build: selects -m perf (and
+#                     --mode perf for SFPU sweep modules), sets
+#                     TT_LLK_DISABLE_ASSERTS=1 for Wormhole/Blackhole and =0
+#                     for Quasar, and on silicon runs the consumer with
+#                     --dist loadgroup -n <consumer-jobs>.
+#                     Unlike CI it does not stop at the first failure. Asserts
+#                     off is the Wormhole/Blackhole CI build; Quasar perf CI
+#                     keeps them by default. Prints the report
+#                     directory in a RUN_LLK_TESTS_PERF_REPORT line, marked
+#                     partial when the consumer did not pass. Selecting no perf
+#                     variant is exit 4. A run tag is single-use.
+#   --run-tag  TAG    Perf report directory name, perf_data/runs/<TAG>
+#                     (sets PERF_RUN_TAG; default local-<utc timestamp>-<pid>;
+#                     an existing report directory is refused, again under the
+#                     lock, which only serialises runs sharing that lock)
+#   --keep-runs N     Perf run directories to retain (sets PERF_KEEP_RUNS;
+#                     default 10; 0 keeps all). Raise it for A/B or repeat series.
+#   --consumer-jobs N Silicon consumer parallelism in --perf mode (default: 15,
+#                     as CI). 0 runs the consumer serially.
+#   --perf-counters   Pass --enable-perf-counters (a separate report kind).
+#   --dump-perf-counters
+#                     Also write raw counter values (<module>.counters.csv).
+#   --keep-asserts    In --perf mode, keep LLK_ASSERT compiled in. This is the
+#                     Quasar default and differs from Wormhole/Blackhole CI.
 #   --no-split        Skip compile-producer step; run pytest --run-simulator without
 #                     --compile-consumer (combined compile+run in one pytest invocation).
 #                     Use for issue-solver tests that don't pre-build ELFs.
@@ -53,7 +79,8 @@
 #   1  One or more tests failed
 #   2  Compile step failed  (only from the 'run' command)
 #   3  Environment error (flock timeout, venv missing)
-#   4  Usage / validation error (missing required options)
+#   4  Usage / validation error (missing required options). With --perf also:
+#      an invalid or already used --run-tag, or no perf variants selected
 #
 # Agents invoke this via the Bash tool with timeout: 1800000 (synchronous,
 # never run_in_background). The script blocks until completion and returns one
@@ -82,6 +109,11 @@
 
 # ── Parse ────────────────────────────────────────────────────────────────────
 
+# The help text is the header comment, up to the Parse marker.
+_print_help() {
+  sed -n '2,/^# ── Parse/{/^# ── Parse/d;s/^# \{0,1\}//p}' "$0"
+}
+
 CMD="${1:-}"
 shift 2>/dev/null || true
 
@@ -90,6 +122,7 @@ ARCH=""
 TEST_FILES=()
 MAXFAIL=""
 K_FILTER=""
+OP_FILTERS=()
 TEST_ID=""
 TIMEOUT="600"
 JOBS="15"
@@ -98,6 +131,15 @@ LOCK_TIMEOUT="900"
 SIM_PATH=""
 NO_SPLIT="false"
 SPEED_OF_LIGHT="false"
+PERF="false"
+RUN_TAG=""
+KEEP_RUNS=""
+CONSUMER_JOBS="15"
+CONSUMER_JOBS_SET="false"
+PERF_REPORT_DIR=""
+PERF_COUNTERS="false"
+DUMP_PERF_COUNTERS="false"
+KEEP_ASSERTS="false"
 LOG_DIR=""
 VERBOSE="false"
 
@@ -108,6 +150,7 @@ while [[ $# -gt 0 ]]; do
     --test)          TEST_FILES+=("$2"); shift 2 ;;
     --maxfail)       MAXFAIL="$2";       shift 2 ;;
     --k)             K_FILTER="$2";      shift 2 ;;
+    --op)            OP_FILTERS+=("$2"); shift 2 ;;
     --test-id)       TEST_ID="$2";       shift 2 ;;
     --port)          shift 2 ;;
     --timeout)       TIMEOUT="$2";       shift 2 ;;
@@ -117,10 +160,17 @@ while [[ $# -gt 0 ]]; do
     --sim-path)      SIM_PATH="$2";      shift 2 ;;
     --log-dir)       LOG_DIR="$2";       shift 2 ;;
     --speed-of-light) SPEED_OF_LIGHT="true"; shift ;;
+    --perf)          PERF="true";        shift   ;;
+    --run-tag)       RUN_TAG="$2";       shift 2 ;;
+    --keep-runs)     KEEP_RUNS="$2";     shift 2 ;;
+    --consumer-jobs) CONSUMER_JOBS="$2"; CONSUMER_JOBS_SET="true"; shift 2 ;;
+    --perf-counters) PERF_COUNTERS="true"; shift ;;
+    --dump-perf-counters) DUMP_PERF_COUNTERS="true"; shift ;;
+    --keep-asserts)  KEEP_ASSERTS="true"; shift  ;;
     --no-split)      NO_SPLIT="true";    shift   ;;
     --verbose|-v)    VERBOSE="true";     shift   ;;
     --help|-h)
-      sed -n 's/^# \{0,1\}//p' "$0" | head -60
+      _print_help
       exit 0
       ;;
     *)
@@ -183,7 +233,7 @@ _validate() {
 
   if [[ ! -d "$VENV" ]]; then
     echo "ERROR: venv not found: ${VENV}" >&2
-    echo "       Run 'CHIP_ARCH=${ARCH} ./setup_testing_env.sh' in ${WORKTREE}/tests/ first." >&2
+    echo "       Run 'bash ./setup_external_testing_env.sh' (needs sudo) in ${WORKTREE}/tests/ first." >&2
     exit 3
   fi
   if [[ ! -d "$TEST_DIR" ]]; then
@@ -209,6 +259,9 @@ _validate() {
     LOCKFILE="/tmp/tt-llk-test-${ARCH}.lock"
   fi
 
+  # An inherited LLK_HOME would compile another tree and write its perf_data.
+  export LLK_HOME="${WORKTREE}"
+
   # Mode inferred from arch: quasar runs against the UMD simulator; blackhole
   # and wormhole run against physical silicon. Hardware mode skips the
   # --run-simulator flag and TT_UMD_SIMULATOR_PATH.
@@ -217,6 +270,82 @@ _validate() {
     blackhole|wormhole)  MODE="hardware"  ;;
     *)                   MODE="simulator" ;;
   esac
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ -n "$MAXFAIL" && ( "$CMD" == "run" || "$CMD" == "simulate" ) ]]; then
+      echo "WARNING: --maxfail ${MAXFAIL} with --perf: the report is partial if the sweep stops early." >&2
+    fi
+    if [[ -z "$RUN_TAG" ]]; then
+      RUN_TAG="local-$(date -u +%Y%m%dT%H%M%SZ)-$$"
+    fi
+    # The report writer prunes this path's siblings, so refuse absolute or ../ tags.
+    if [[ ! "$RUN_TAG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+      echo "ERROR: --run-tag must match [A-Za-z0-9][A-Za-z0-9._-]*, got '${RUN_TAG}'" >&2
+      exit 4
+    fi
+    PERF_REPORT_DIR="${WORKTREE}/perf_data/runs/${RUN_TAG}"
+    # The report writer only replaces what this sweep produces, so a reused tag
+    # mixes old and new rows.
+    if [[ "$CMD" == "run" || "$CMD" == "simulate" ]] && [[ -e "$PERF_REPORT_DIR" ]]; then
+      echo "ERROR: perf report directory already exists: ${PERF_REPORT_DIR}" >&2
+      echo "       Pick a new --run-tag." >&2
+      exit 4
+    fi
+    if [[ -n "$KEEP_RUNS" && ! "$KEEP_RUNS" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: --keep-runs must be a non-negative integer, got '${KEEP_RUNS}'" >&2
+      exit 4
+    fi
+    if [[ ! "$CONSUMER_JOBS" =~ ^[0-9]+$ ]]; then
+      echo "ERROR: --consumer-jobs must be a non-negative integer, got '${CONSUMER_JOBS}'" >&2
+      exit 4
+    fi
+    # A leading zero would otherwise read as octal ("08" is an error).
+    CONSUMER_JOBS=$((10#$CONSUMER_JOBS))
+    local op
+    for op in ${OP_FILTERS+"${OP_FILTERS[@]}"}; do
+      if [[ ! "$op" =~ ^[A-Za-z0-9_]+$ ]]; then
+        echo "ERROR: --op must be an SFPU op name, got '${op}'" >&2
+        exit 4
+      fi
+    done
+  elif [[ -n "$RUN_TAG$KEEP_RUNS${OP_FILTERS[*]}" || "$CONSUMER_JOBS_SET$PERF_COUNTERS$DUMP_PERF_COUNTERS$KEEP_ASSERTS" == *true* ]]; then
+    echo "ERROR: --op, --run-tag, --keep-runs, --consumer-jobs, --perf-counters, --dump-perf-counters and --keep-asserts need --perf" >&2
+    exit 4
+  fi
+}
+
+# pytest exit 5 means nothing was collected. Under --perf that is a module or
+# --k with no perf variants, not a failure.
+_no_perf_variants() {
+  echo "ERROR: no perf variants selected in $(_test_label)${K_FILTER:+ with --k '${K_FILTER}'}${OP_FILTERS[*]:+ with --op ${OP_FILTERS[*]}}${TEST_ID:+ (--test-id)}" >&2
+}
+
+# pytest selection and report flags shared by every phase of a --perf run, so
+# count, compile and simulate select the same variants.
+_perf_pytest_args() {
+  PERF_PYTEST_ARGS=()
+  [[ "$PERF" == "true" ]] || return 0
+  PERF_PYTEST_ARGS=(-m perf --mode perf)
+  [[ "$PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--enable-perf-counters)
+  [[ "$DUMP_PERF_COUNTERS" == "true" ]] && PERF_PYTEST_ARGS+=(--dump-perf-counters)
+  local op
+  for op in ${OP_FILTERS+"${OP_FILTERS[@]}"}; do
+    PERF_PYTEST_ARGS+=(--op "$op")
+  done
+  return 0
+}
+
+# --perf build env: asserts off on Wormhole/Blackhole and on for Quasar, as in CI.
+_perf_env_prefix() {
+  PERF_ENV=()
+  [[ "$PERF" == "true" ]] || return 0
+  # Set both ways, so an exported TT_LLK_DISABLE_ASSERTS cannot override the flag.
+  if [[ "$KEEP_ASSERTS" == "true" || "$ARCH" == "quasar" ]]; then
+    PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=0)
+  else
+    PERF_ENV+=(TT_LLK_DISABLE_ASSERTS=1)
+  fi
+  return 0
 }
 
 # ── count ─────────────────────────────────────────────────────────────────────
@@ -228,13 +357,17 @@ _do_count() {
   _validate
   _vlog "count: $(_test_label) (arch=${ARCH})"
 
+  _perf_pytest_args
+  local -a solflag=()
+  [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
   local output exit_code
   exit_code=0
   output=$(
     # shellcheck disable=SC1091
     source "${VENV}/bin/activate"
     cd "${TEST_DIR}"
-    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q "${TEST_FILES[@]}" 2>&1
+    CHIP_ARCH="${ARCH}" pytest --compile-producer --co -q ${solflag+"${solflag[@]}"} \
+      ${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"} "${TEST_FILES[@]}" 2>&1
   ) || exit_code=$?
 
   # Show collection log to the agent (stderr stays visible in Bash tool output)
@@ -242,6 +375,7 @@ _do_count() {
 
   if [[ $exit_code -ne 0 ]]; then
     echo "0"
+    [[ "$PERF" == "true" && $exit_code -eq 5 ]] && return 0
     return "$exit_code"
   fi
 
@@ -266,6 +400,9 @@ _do_compile() {
   local -a kflag=()
   local -a solflag=()
   [[ "$SPEED_OF_LIGHT" == "true" ]] && solflag=(--speed-of-light)
+  _perf_pytest_args
+  _perf_env_prefix
+  solflag+=(${PERF_PYTEST_ARGS+"${PERF_PYTEST_ARGS[@]}"})
   local -a pytest_targets=("${TEST_FILES[@]}")
   local target_label="$(_test_label)"
   if [[ -n "$TEST_ID" ]]; then
@@ -277,22 +414,36 @@ _do_compile() {
 
   _vlog "compile: ${target_label} (arch=${ARCH}, -n ${JOBS}${kflag[*]:+, -k '${K_FILTER}'}$([[ "$SPEED_OF_LIGHT" == true ]] && echo ', sol'))"
 
+  local compile_exit
+
   if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
+      env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
+        pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     ) > >(tee -a "${LOG_DIR}/compile.log") 2> >(tee -a "${LOG_DIR}/compile.log" >&2)
+    compile_exit=$?
   else
     (
       # shellcheck disable=SC1091
       source "${VENV}/bin/activate"
       cd "${TEST_DIR}"
-      CHIP_ARCH="${ARCH}" pytest --compile-producer -n "${JOBS}" "${solflag[@]}" "${kflag[@]}" "${pytest_targets[@]}"
+      env ${PERF_ENV+"${PERF_ENV[@]}"} CHIP_ARCH="${ARCH}" \
+        pytest --compile-producer -n "${JOBS}" ${solflag+"${solflag[@]}"} ${kflag+"${kflag[@]}"} "${pytest_targets[@]}"
     )
+    compile_exit=$?
   fi
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ $compile_exit -eq 5 ]]; then
+      _no_perf_variants
+      return 4
+    fi
+  fi
+  return "$compile_exit"
 }
 
 # ── simulate ──────────────────────────────────────────────────────────────────
@@ -310,15 +461,17 @@ _do_simulate() {
   fi
 
   # Remove temp scripts left by runs that died before their trap fired
-  find /tmp -maxdepth 1 -name 'llk_run_sim_*.sh' -mmin +60 -delete 2>/dev/null || true
+  find /tmp -maxdepth 1 \( -name 'llk_run_sim_*.sh' -o -name 'llk_run_sim_*.sh.tag-taken' \) -mmin +60 -delete 2>/dev/null || true
 
   # Write the pytest invocation to a temp file so that:
   #   1. flock can use "flock LOCK bash SCRIPT" without inline quoting nightmares
   #   2. TEST_ID values (single-quotes, brackets, commas) are literal, not shell-expanded
-  local sim_script
+  local sim_script tag_taken
+  local report_dir="${PERF_REPORT_DIR}"
   sim_script=$(mktemp /tmp/llk_run_sim_XXXXXX.sh)
-  # Trap ensures the temp file is removed even on SIGTERM / SIGINT
-  trap 'rm -f "${sim_script}"' EXIT INT TERM
+  tag_taken="${sim_script}.tag-taken"
+  # Trap ensures the temp files are removed even on SIGTERM / SIGINT
+  trap 'rm -f "${sim_script}" "${tag_taken}"' EXIT INT TERM
 
   # Build the pytest flags string.
   # Simulator mode adds --run-simulator; hardware mode targets silicon directly.
@@ -331,6 +484,14 @@ _do_simulate() {
   [[ "$NO_SPLIT" == "false" ]] && pytest_flags="${pytest_flags} --compile-consumer"
   [[ "$SPEED_OF_LIGHT" == "true" ]] && pytest_flags="${pytest_flags} --speed-of-light"
   [[ -n "$MAXFAIL" ]] && pytest_flags="${pytest_flags} --maxfail=${MAXFAIL}"
+  _perf_pytest_args
+  _perf_env_prefix
+  if [[ "$PERF" == "true" ]]; then
+    pytest_flags="${pytest_flags} ${PERF_PYTEST_ARGS[*]}"
+    if [[ "$MODE" == "hardware" && "$CONSUMER_JOBS" -gt 0 ]]; then
+      pytest_flags="${pytest_flags} --dist loadgroup -n ${CONSUMER_JOBS}"
+    fi
+  fi
 
   # Determine the test target (file, -k filter, or single variant by ID)
   local pytest_target
@@ -355,8 +516,25 @@ _do_simulate() {
     printf 'set -u\n\n'
     printf 'source %q\n' "${VENV}/bin/activate"
     printf 'cd %q\n\n' "${TEST_DIR}"
+    if [[ "$PERF" == "true" ]]; then
+      # Checked again under the lock: a run queued behind another with the same
+      # tag must not append to its report.
+      printf 'if [[ -e %q ]]; then\n' "${report_dir}"
+      printf '  echo %q >&2\n' "ERROR: perf report directory already exists: ${report_dir}"
+      printf '  : >%q\n' "${tag_taken}"
+      printf '  exit 4\n'
+      printf 'fi\n\n'
+    fi
     if [[ "$MODE" == "simulator" ]]; then
       printf 'TT_UMD_SIMULATOR_PATH=%q \\\n' "${SIM_PATH}"
+    fi
+    if [[ "$PERF" == "true" ]]; then
+      local perf_var
+      for perf_var in ${PERF_ENV+"${PERF_ENV[@]}"}; do
+        printf '  %s \\\n' "${perf_var}"
+      done
+      printf '  PERF_RUN_TAG=%q \\\n' "${RUN_TAG}"
+      [[ -n "$KEEP_RUNS" ]] && printf '  PERF_KEEP_RUNS=%q \\\n' "${KEEP_RUNS}"
     fi
     printf '  CHIP_ARCH=%q \\\n' "${ARCH}"
     printf '  pytest %s %s\n' "${pytest_flags}" "${pytest_target}"
@@ -395,8 +573,28 @@ _do_simulate() {
     sim_exit=$?
   fi
 
-  rm -f "${sim_script}"
+  if [[ "$PERF" == "true" && $sim_exit -eq 5 ]]; then
+    _no_perf_variants
+    sim_exit=4
+  fi
+
+  local tag_was_taken=false
+  [[ -e "$tag_taken" ]] && tag_was_taken=true
+  rm -f "${sim_script}" "${tag_taken}"
   trap - EXIT INT TERM
+
+  if [[ "$PERF" == "true" ]]; then
+    if [[ "$tag_was_taken" == "true" ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === none (${report_dir} was written by another run; pick a new --run-tag)" >&2
+      sim_exit=4
+    elif [[ -d "$report_dir" && $sim_exit -ne 0 ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir} (partial: consumer exit ${sim_exit})" >&2
+    elif [[ -d "$report_dir" ]]; then
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === ${report_dir}" >&2
+    else
+      echo "=== RUN_LLK_TESTS_PERF_REPORT === none (expected ${report_dir}; every case deselected or the consumer never finished)" >&2
+    fi
+  fi
 
   return "$sim_exit"
 }
@@ -412,6 +610,7 @@ _do_run() {
   if [[ "$NO_SPLIT" == "false" ]]; then
     _do_compile
     local compile_exit=$?
+    [[ $compile_exit -eq 4 ]] && return 4
     if [[ $compile_exit -ne 0 ]]; then
       echo "ERROR: compile step failed (exit ${compile_exit})" >&2
       return 2
@@ -429,7 +628,7 @@ case "${CMD}" in
   simulate) _do_simulate ;;
   run)      _do_run      ;;
   help|--help|-h)
-    sed -n 's/^# \{0,1\}//p' "$0" | head -60
+    _print_help
     exit 0
     ;;
   "")

@@ -6,7 +6,6 @@
 #include <tt-metalium/experimental/udm/mesh_builder.hpp>
 #include <tt-metalium/experimental/udm/mesh_utils.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/mesh_device.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <array>

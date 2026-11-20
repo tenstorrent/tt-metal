@@ -32,8 +32,8 @@ def assign_numpy(tensor, array: np.ndarray, *, layout=ttnn.Layout.TILE, mapper=N
     dtype = tensor.dtype()
     if dtype not in _NUMPY_DTYPES:
         raise ValueError(f"assign_numpy: unsupported tensor dtype {dtype} (only FLOAT32 and BFLOAT16)")
-    # from_numpy reads the buffer in C order and rejects read-only arrays; copy only when the array is neither.
-    values = np.require(array, dtype=_NUMPY_DTYPES[dtype], requirements=["C", "W"])
+    # A C-contiguous array takes from_numpy's no-copy fast path; strided and read-only arrays also work.
+    values = np.require(array, dtype=_NUMPY_DTYPES[dtype], requirements=["C"])
     values = values.reshape((1,) * max(0, tensor.get_rank() - values.ndim) + values.shape)
     loaded = cpp.autograd.Tensor.from_numpy(values, layout=layout, new_type=dtype, mapper=mapper)
     if tuple(loaded.shape()) != tuple(tensor.shape()):

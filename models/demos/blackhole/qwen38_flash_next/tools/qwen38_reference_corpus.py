@@ -53,7 +53,7 @@ MODEL_DIR = Path(__file__).resolve().parents[1]
 REPO_ROOT = MODEL_DIR.parents[3]
 REFERENCE_DIR = Path(__file__).with_name("reference")
 ACCEPTANCE_RECORDS = Path(__file__).with_name("acceptance") / "greedy-prompts.jsonl"
-TALE_OF_TWO_CITIES = REPO_ROOT / "models" / "tt_transformers" / "tests" / "tale-of-two-cities.txt.bz2"
+TALE_OF_TWO_CITIES = REPO_ROOT / "models" / "ttt_compat" / "tests" / "tale-of-two-cities.txt.bz2"
 
 CORPUS_ID = "Q38-REF-v1"
 MANIFEST_NAME = "corpus-q38-ref-v1.json"

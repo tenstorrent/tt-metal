@@ -29,8 +29,8 @@ from dataclasses import dataclass
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     DestAccumulation,
-    MathFidelity,
     StochasticRounding,
     Transpose,
 )
@@ -110,12 +110,7 @@ def _tiny_matmul_layout(in0_tile_r_dim: int):
         same=False,
     ),
     dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
     in0_tile_r_dim=[8, 4, 2, 1],
     do_restore=[True, False],
 )
