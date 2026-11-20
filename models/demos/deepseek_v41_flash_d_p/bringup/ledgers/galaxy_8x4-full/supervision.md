@@ -830,3 +830,7 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   /data/dnijemcevic/bringup/handoff_20261118/drafts/tt_d_gen_packed_ask.md (not sent). The plan's queue is done; the
   orchestrator has exited; the runner holds the box idle. Nothing pushed.
 - 08:20 UTC FRAMEWORK: the orchestrator died after PB.5C's commit on a torn read of history_state.chunks (key 'W.1' in two chunk files mid-rewrite; healthy seconds later, no record lost; the run was at its end). Fixed: F291, ChunkedJson.read retries a torn view (selftest). PB.5C PASS is recorded.
+- 08:25 UTC DECIDED: PB.6L queued (not an invented goal: the owner's binding 20:55 rule "the per-segment history
+  all-gather must be HIDDEN if at all possible" is met at 139k / mixed but not at ~1M: 11.9 of 12.7 ms exposed, 40.2k
+  tok/s; the attention section 97 ms there vs ~30 at 139k). Gate: oracle bit-identical, exposed frac at 1M <= 0.25, no
+  regression of the two targets. Orchestrator relaunched --until PB.6L --attempts 20.
