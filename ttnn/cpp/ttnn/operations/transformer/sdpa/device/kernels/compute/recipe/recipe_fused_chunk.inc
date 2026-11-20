@@ -60,6 +60,19 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             srca = cb;
         }
     };
+    // Unpack-B: Q is the only srcB operand that may not be BF16 (a BFP8 / BFP4 Q); every other srcB operand here (P,
+    // the maxima, the identity scale) is BF16. A BFP Q switches srcB around its matmuls; a BF16 Q compiles this out.
+    constexpr bool q_srcb_switch = sdpa_unpack_format_changed<cb_qkt_im, cb_q_in>();
+    auto srcb_to_q = [&]() {
+        if constexpr (q_srcb_switch) {
+            reconfig_data_format_srcb(cb_qkt_im, cb_q_in);
+        }
+    };
+    auto srcb_from_q = [&]() {
+        if constexpr (q_srcb_switch) {
+            reconfig_data_format_srcb(cb_q_in, cb_qkt_im);
+        }
+    };
     auto set_pack = [&](uint32_t cb) {
         if (cb != pack_cb) {
             pack_reconfig_data_format(pack_cb, cb);
@@ -157,11 +170,13 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         tile_regs_acquire();
         uint32_t in0_index = row0 * DHt;
         uint32_t in1_index = col0;
+        srcb_to_q();
         for (uint32_t inner = 0; inner < DHt; ++inner) {
             matmul_block_no_mop(cb_q_in, cb_kt_in, in0_index, in1_index, 0, true, sbw, h, DHt);
             in0_index++;
             in1_index += KT;
         }
+        srcb_from_q();
         // - m_ref: M (row r's m in column 0) x (-e0 transposed: -1 in row 0). Both operands are exact in one
         // fidelity phase (m_ref has 7 significant bits for srcB, -1 has one for srcA), so a HiFi build replays
         // its image once here, and only its inner 0-15 half (the rest multiplies zeros).
@@ -380,10 +395,12 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         recipe_mm_init(cb_q_in, cb_kt_in, true, sbw, h, DHt);
         set_pack(cb_qkt_im);
         configure_row_pack_width(cb_qkt_im, sbw);
+        srcb_to_q();
         for (uint32_t kb = 0; kb < n_kb; ++kb) {
             blocked_matmul_and_pack<true, KT, KT>(
                 cb_q_in, cb_kt_in, cb_qkt_im, row0 * DHt, kb * sbw, gi, kb * sbw, sbw, h, DHt, DHt, true);
         }
+        srcb_from_q();
         pack_to_unpack_barrier();
         set_srca(cb_qkt_im);
         set_pack(cur.max);

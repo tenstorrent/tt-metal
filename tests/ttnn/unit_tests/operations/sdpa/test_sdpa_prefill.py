@@ -870,8 +870,11 @@ def _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype):
         is_causal=True,
         program_config=program_config,
         compute_kernel_config=compute_kernel_config,
+        precision=ttnn.SDPAPrecision.ACCURATE,  # FP32 accumulation (compute_kernel_config is ignored)
         attention_sink=to_dev(S, sink_dtype),
     )
+    # The sink as stored (BFP8 / BFP4 round it): the op reads that value.
+    S = ttnn.to_torch(to_dev(S, sink_dtype)).float()[:, :, :1, :1]
     gt = reference_sdpa_with_attention_sinks(Q, K.repeat(1, nh, 1, 1), V.repeat(1, nh, 1, 1), S, is_causal=True)
     return ttnn.to_torch(tt_out)[:, :, :s, :], gt
 
@@ -882,10 +885,12 @@ def test_sdpa_attention_sink_bf16_with_fp32_dest_acc(device, reset_seeds):
     assert passing, pcc
 
 
+# The recipes read a BFP8 / BFP4 sink directly (the reader converts its value to FP32) at every precision.
 @pytest.mark.parametrize("sink_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
-def test_sdpa_attention_sink_rejects_block_float_with_fp32_dest_acc(device, sink_dtype, expect_error):
-    with expect_error(RuntimeError, "Attention sink must be BF16 when fp32_dest_acc_en=true"):
-        _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype)
+def test_sdpa_attention_sink_block_float_with_fp32_dest_acc(device, sink_dtype, reset_seeds):
+    tt_out, gt = _run_sdpa_with_sink_fp32_dest_acc(device, sink_dtype)
+    passing, pcc = comp_pcc(gt, tt_out, 0.994)
+    assert passing, pcc
 
 
 # The nightly prefill file sweeps the masked fraction and chunk sizes at S 2048 and 4096.
