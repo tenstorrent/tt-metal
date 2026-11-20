@@ -4,12 +4,14 @@
 """CPU-only tests for the allowlisted checkpoint deserialization (no device, no weights file needed)."""
 
 import io
+import os
 import pickle
+from pathlib import Path
 
 import numpy as np
 import pytest
 
-from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_model import _RestrictedUnpickler
+from models.experimental.panoptic_deeplab.reference.restricted_pickle import RestrictedUnpickler, load_restricted_pickle
 
 _SENTINEL = []
 
@@ -30,7 +32,7 @@ def _blob_calling_boom() -> bytes:
 
 
 def _load(blob: bytes):
-    return _RestrictedUnpickler(io.BytesIO(blob), encoding="latin1").load()
+    return RestrictedUnpickler(io.BytesIO(blob), encoding="latin1").load()
 
 
 # Protocol 2 is what Detectron2 checkpoints use and exercises the allowed _codecs.encode path.
@@ -58,3 +60,30 @@ def test_disallowed_callable_is_rejected_without_running(expect_error):
     with expect_error(pickle.UnpicklingError, "Forbidden global"):
         _load(_blob_calling_boom())
     assert not _SENTINEL, "disallowed callable was invoked during unpickling"
+
+
+_WEIGHTS_FILENAME = "model_final_bd324a.pkl"
+_WEIGHTS_CANDIDATES = [
+    Path(__file__).resolve().parents[1] / "weights" / _WEIGHTS_FILENAME,
+    Path("/tmp/ttnn_model_cache/model_weights/vision-models/panoptic_deeplab") / _WEIGHTS_FILENAME,
+]
+
+
+def _find_weights():
+    env_path = os.environ.get("PANOPTIC_DEEPLAB_WEIGHTS")
+    candidates = ([Path(env_path)] if env_path else []) + _WEIGHTS_CANDIDATES
+    return next((p for p in candidates if p.is_file()), None)
+
+
+def test_real_detectron2_checkpoint_loads_with_allowlist():
+    """Validates the allowlist against the real upstream checkpoint; skipped where the weights aren't downloaded."""
+    weights_path = _find_weights()
+    if weights_path is None:
+        pytest.skip(f"{_WEIGHTS_FILENAME} not found (set PANOPTIC_DEEPLAB_WEIGHTS or place it in weights/)")
+    with open(weights_path, "rb") as f:
+        ckpt = load_restricted_pickle(f)
+    state_dict = ckpt["model"] if "model" in ckpt else ckpt
+    assert len(state_dict) > 0
+    arrays = {k: v for k, v in state_dict.items() if hasattr(v, "shape")}
+    assert arrays, "no tensor entries found in checkpoint"
+    assert all(isinstance(v, np.ndarray) for v in arrays.values())
