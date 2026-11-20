@@ -1284,29 +1284,57 @@ def test_high_bw_all_gather_galaxy_cylinder_4x4_perf(mesh_device):
     )
 
 
-# The 16-chip stage meshes of one Galaxy, each a 4x4 mesh whose axis 1 rings: the [RING, RING] sub-torus carve
-# (SUBTORUS_4X4_ENV, TorusXY) and one tray half, [LINE, RING] (TorusX). Same payload matrix and floors machinery as
-# the 8x4 cylinder gate; the floors are per fabric because the carve's closed axis 0 adds a Hamiltonian cycle.
-_SUBTORUS_4X4_PERF_FABRICS = [
-    pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_XY), id="ring_ring"),
-    pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X), id="line_ring"),
-]
-
-
-@run_for_blackhole("Blackhole Galaxy 4x4 stage perf requires Blackhole")
-@pytest.mark.skipif(
+# The 16-chip stage meshes of one Galaxy: the [RING, RING] sub-torus carve (SUBTORUS_4X4_ENV, TorusXY) and one tray half,
+# [LINE, RING] (TorusX, run_4x4_stage_tests.sh). Same payload matrix as the 8x4 cylinder gate, 2 links.
+_STAGE_4X4_PERF_NEEDS_16_CHIPS = pytest.mark.skipif(
     ttnn.get_num_devices() != 16,
     reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
 )
-@pytest.mark.parametrize("device_params", _SUBTORUS_4X4_PERF_FABRICS, indirect=True)
+
+# [RING, RING] floors per case: 95% of the lowest of 3 runs (3 processes, 7 samples each, one 110-A Galaxy). Lowest seen:
+# 55K 156.9 / 145.6 / 156.7 / 141.5 GB/s, 512K 175.3 / 175.6 / 176.3 / 174.6 (bf16 row-major, fp8, bf16 tiled, bfloat8).
+# The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137, so each floor is above the
+# line layout's: a carve that falls back to the cylinder's cycles fails. Override every floor with
+# TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
+_RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = {
+    55_040: {"bf16_row_major": 149.0, "fp8_row_major": 138.0, "bf16_tiled": 148.0, "bfloat8_tiled": 134.0},
+    512 * 1024: {"bf16_row_major": 166.0, "fp8_row_major": 166.0, "bf16_tiled": 167.0, "bfloat8_tiled": 165.0},
+}
+if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
+    _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS"])
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 [RING, RING] perf requires Blackhole")
+@_STAGE_4X4_PERF_NEEDS_16_CHIPS
+@pytest.mark.parametrize("device_params", [_FABRIC_2D_TORUS_XY_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
-def test_high_bw_all_gather_subtorus_4x4_perf(mesh_device):
-    """Bandwidth of the 16-rank full-mesh gather on a 4x4 stage mesh, each measurement paired with a correctness run."""
+def test_high_bw_all_gather_ring_ring_4x4_perf(mesh_device):
+    """Bandwidth floors of the 16-rank full-mesh gather on the [RING, RING] carve, each paired with a correctness run."""
     assert tuple(mesh_device.shape) == (4, 4)
     _run_high_bw_all_gather_ci_perf(
         mesh_device,
         cluster_axis=None,
-        min_bandwidth_gbps=float(os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_SUBTORUS_MIN_GBPS", "0")),
+        min_bandwidth_gbps=_RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS,
+        global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
+        num_links=2,
+    )
+
+
+@run_for_blackhole("Blackhole Galaxy 4x4 [LINE, RING] perf requires Blackhole")
+@_STAGE_4X4_PERF_NEEDS_16_CHIPS
+@pytest.mark.parametrize(
+    "device_params",
+    [pytest.param(_device_params(ttnn.FabricConfig.FABRIC_2D_TORUS_X), id="fabric_2d_torus_x")],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
+def test_high_bw_all_gather_line_ring_4x4_perf(mesh_device):
+    """The [RING, RING] carve's measurement on one tray half, [LINE, RING]. Record-only: the comparison."""
+    assert tuple(mesh_device.shape) == (4, 4)
+    _run_high_bw_all_gather_ci_perf(
+        mesh_device,
+        cluster_axis=None,
+        min_bandwidth_gbps=0.0,
         global_rows_cases=_GALAXY_CYLINDER_CI_PERF_GLOBAL_ROWS,
         num_links=2,
     )

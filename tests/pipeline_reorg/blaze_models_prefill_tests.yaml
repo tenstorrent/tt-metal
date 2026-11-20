@@ -865,11 +865,15 @@
       # (run_subtorus_4x4_tests.sh narrows the box and fails unless every selected row passed and none skipped):
       # GLM sparse MLA on the carve (sparse KV push owner index, tt_ccl torus links) and the whole-mesh
       # high_bw_all_gather on both rings. The full set is models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_all.sh.
-      timeout -k 2m 12m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
         set -e
         export OMP_NUM_THREADS=$(nproc)
         models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py
-        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k "not perf"
+        # CCL perf gates of the carve: the whole-mesh high_bw_all_gather bandwidth floors, and the sparse KV push's plan,
+        # table gather and push ceilings at a stage's 1M cache.
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf
       '
     )
 
@@ -896,7 +900,7 @@
       # The sum of the bounds of the sections that were here before the 4x4 [RING, RING] section (32 + 20 + 20 + 25 + 40 + 40).
       # The sub-torus section (12) and the sparse KV push step's longer bound (+10) are not added: the leg's slowest
       # run on record is 93 min and the sub-torus section takes about 4 min on CI.
-      timeout: 177
+      timeout: 187
       tier: 2
       release_ready: false
   owner_id: U09LK84G4TF  # Nikola Milicevic

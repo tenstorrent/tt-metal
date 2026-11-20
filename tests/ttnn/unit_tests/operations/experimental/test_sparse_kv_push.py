@@ -18,6 +18,7 @@ import pytest
 import torch
 
 import ttnn
+from models.common.ci_failure import assert_perf_gate
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
@@ -452,14 +453,28 @@ def _device_ns_by_step(mesh_device, run):
     return totals
 
 
-def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source):
+# Per top-k source and step: the slowest median of 3 runs (3 processes, 7 samples each, one 110-A Galaxy) plus 10%, in us.
+_RING_RING_4X4_PERF_CEILING_US = {
+    "random": {"plan": 317, "table gather": 76, "push all rows": 358, "push prefix": 357, "push rest": 107},
+    "14": {"plan": 220, "table gather": 72, "push all rows": 455, "push prefix": 442, "push rest": 141},
+    "62": {"plan": 231, "table gather": 76, "push all rows": 1286, "push prefix": 1273, "push rest": 126},
+}
+
+
+def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source, ceilings_us=None):
     monkeypatch.setitem(globals(), "N_DEV", 16)
     monkeypatch.setitem(globals(), "SP_AXIS", sp_axis)
     sc, page_bytes = 160, 704
     idx = _stage_topk(source)
     cache = _cache(mesh_device, 2, _STAGE_CACHE_ROWS, sc, page_bytes // 4)
     push = Push(
-        mesh_device, cache, idx, max_rows=_STAGE_CACHE_ROWS, sc=sc, page_bytes=page_bytes, chunk_start=_STAGE_CHUNK_START
+        mesh_device,
+        cache,
+        idx,
+        max_rows=_STAGE_CACHE_ROWS,
+        sc=sc,
+        page_bytes=page_bytes,
+        chunk_start=_STAGE_CHUNK_START,
     )
     out = _filled_buffer(mesh_device, push.rows, push.width)
     parts = {"push all rows": Part.ALL, "push prefix": Part.PREFIX, "push rest": Part.REST}
@@ -483,6 +498,13 @@ def _stage_push_perf(mesh_device, monkeypatch, sp_axis, source):
             f"samples_us={[round(v / 1e3, 1) for v in values]}"
         )
     assert all(statistics.median(v) > 0 for v in samples.values()), "a step recorded no device program"
+    if ceilings_us is not None:
+        over = {
+            name: (round(statistics.median(v) / 1e3, 1), ceilings_us[name])
+            for name, v in samples.items()
+            if statistics.median(v) / 1e3 > ceilings_us[name]
+        }
+        assert_perf_gate(not over, f"{source} steps over their ceiling (median, ceiling us): {over}")
 
 
 _STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], ids=["random", "glm_l14", "glm_l62"])
@@ -493,8 +515,8 @@ _STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], 
 @_STAGE_PUSH_SOURCES
 def test_sparse_kv_push_ring_ring_4x4_perf(mesh_device, monkeypatch, source):
     """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at a 4x4 stage's 1M cache with
-    SP on axis 1, on the 16-chip [RING, RING] carve. Record-only: prints the median and the samples."""
-    _stage_push_perf(mesh_device, monkeypatch, 1, source)
+    SP on axis 1, on the 16-chip [RING, RING] carve, each step gated by its ceiling."""
+    _stage_push_perf(mesh_device, monkeypatch, 1, source, _RING_RING_4X4_PERF_CEILING_US[source])
 
 
 @pytest.mark.parametrize("device_params", [_device_params()], indirect=True)
