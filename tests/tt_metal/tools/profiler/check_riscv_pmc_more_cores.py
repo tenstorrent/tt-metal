@@ -31,7 +31,9 @@ IDS = {9092: "counts", 9093: "cycles", 9094: "events"}
 def run(env_extra):
     if os.path.exists(LOG):
         os.remove(LOG)
-    env = dict(os.environ, TT_METAL_SLOW_DISPATCH_MODE="1", TT_METAL_DEVICE_PROFILER="1", **env_extra)
+    env = dict(os.environ, TT_METAL_SLOW_DISPATCH_MODE="1", TT_METAL_DEVICE_PROFILER="1")
+    env.pop("TT_METAL_PROFILE_RISCV_PMC", None)
+    env.update(env_extra)
     result = subprocess.run([BINARY], cwd=REPO, env=env, capture_output=True, text=True)
     sys.stdout.write(result.stdout[-2000:])
     if result.returncode != 0:
@@ -40,7 +42,8 @@ def run(env_extra):
     with open(LOG, newline="") as f:
         f.readline()
         rows = list(csv.DictReader((line.replace(", ", ",") for line in f)))
-    return rows
+    idle = [line for line in result.stdout.splitlines() if line.startswith("idle ethernet cores:")]
+    return rows, int(idle[0].split(":", 1)[1]) if idle else None
 
 
 def pmc_by_core(rows):
@@ -62,14 +65,17 @@ def check(cond, what):
 def main():
     ok = True
 
-    rows = run({})
+    rows, _ = run({})
     ok &= check(not pmc_by_core(rows), "off: no capture marker in the log")
     ok &= check(not any(r["RISC processor type"].strip() == "ERISC" for r in rows), "off: no idle ethernet row")
 
-    rows = run({"TT_METAL_PROFILE_RISCV_PMC": f"{EV3:#x},{EV4:#x}"})
+    rows, launched = run({"TT_METAL_PROFILE_RISCV_PMC": f"{EV3:#x},{EV4:#x}"})
     ok &= check({r["RISC processor type"].strip() for r in rows} <= {"ERISC"}, "on: ERISC is the only profiler RISC")
     cores = pmc_by_core(rows)
-    ok &= check(len(cores) > 0, f"on: {len(cores)} idle ethernet cores have capture markers")
+    ok &= check(
+        launched is not None and len(cores) == launched,
+        f"on: {len(cores)} of {launched} launched idle ethernet cores have capture markers",
+    )
     for core, markers in sorted(cores.items()):
         kinds = [k for _, k, _ in markers]
         good = all(kinds.count(k) == LAUNCHES for k in IDS.values())
