@@ -17,9 +17,11 @@ FLUX3_KLEIN_DEFAULT_SIZE = (2048, 2048)
 # The distilled checkpoint's step count.
 FLUX3_KLEIN_NUM_INFERENCE_STEPS = 16
 
-# A reference is fitted, aspect kept and never cropped, to a canvas of at most 4 MP with sides of 64-4096 px.
-FLUX3_KLEIN_MAX_REFERENCES = 1
+# A single reference is fitted, aspect kept and never cropped, to a canvas of at most 4 MP with sides of 64-4096 px.
+# Each of several references (up to 10, BFL's limit) is fitted under 1 MP and centre-cropped to the 16 px grid.
+FLUX3_KLEIN_MAX_REFERENCES = 10
 FLUX3_KLEIN_REFERENCE_MAX_PIXELS = 4 * 1024 * 1024
+FLUX3_KLEIN_MULTI_REFERENCE_MAX_PIXELS = 1024 * 1024
 FLUX3_KLEIN_REFERENCE_MIN_SIDE = 64
 FLUX3_KLEIN_REFERENCE_MAX_SIDE = 4096
 

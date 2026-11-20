@@ -52,6 +52,7 @@ from .packing import (
 from .policy import (
     FLUX3_KLEIN_DEFAULT_SIZE,
     FLUX3_KLEIN_MAX_REFERENCES,
+    FLUX3_KLEIN_MULTI_REFERENCE_MAX_PIXELS,
     FLUX3_KLEIN_REFERENCE_MAX_PIXELS,
     FLUX3_KLEIN_REFERENCE_MAX_SIDE,
     FLUX3_KLEIN_REFERENCE_MIN_SIDE,
@@ -68,6 +69,11 @@ MAX_REFERENCES = FLUX3_KLEIN_MAX_REFERENCES
 MATCH_MAX_PIXELS = FLUX3_KLEIN_REFERENCE_MAX_PIXELS
 MIN_SIDE, MAX_SIDE = FLUX3_KLEIN_REFERENCE_MIN_SIDE, FLUX3_KLEIN_REFERENCE_MAX_SIDE
 REFERENCE_TOKEN_BUCKETS = (4096, MATCH_MAX_PIXELS // DOWNSAMPLING_RATIO**2)
+MULTI_REFERENCE_MAX_PIXELS = FLUX3_KLEIN_MULTI_REFERENCE_MAX_PIXELS
+# Several references: 1, 2, 4 or all 10 references of 1 MP each fill a bucket.
+MULTI_REFERENCE_TOKEN_BUCKETS = tuple(
+    n * MULTI_REFERENCE_MAX_PIXELS // DOWNSAMPLING_RATIO**2 for n in (1, 2, 4, MAX_REFERENCES)
+)
 WARMUP_PROMPT = "warmup"
 # Plans (RoPE tables, modulation / row-gather indices) kept on device: ~200 MB host-built each at 4096.
 PLAN_CACHE_SIZE = 8
@@ -132,10 +138,24 @@ def prepare_reference(image: Image.Image) -> Image.Image:
     return Image.fromarray(np.pad(np.asarray(image), padding, mode=mode))
 
 
-def reference_bucket(tokens: int) -> int:
-    if tokens > REFERENCE_TOKEN_BUCKETS[-1]:
-        raise ValueError(f"{tokens} reference tokens exceed {REFERENCE_TOKEN_BUCKETS[-1]}")
-    return next(b for b in REFERENCE_TOKEN_BUCKETS if tokens <= b)
+def prepare_multi_reference(image: Image.Image) -> Image.Image:
+    """BFL's reference of a multi-reference edit (pipeline.prepare_multi_reference): RGB, fitted under 1 MP (sides
+    floored), centre-cropped to the 16 px grid."""
+    image = ImageOps.exif_transpose(image).convert("RGB")
+    width, height = image.size
+    if width * height > MULTI_REFERENCE_MAX_PIXELS:
+        scale = math.sqrt(MULTI_REFERENCE_MAX_PIXELS / (width * height))
+        width, height = int(width * scale), int(height * scale)
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+    w, h = width // DOWNSAMPLING_RATIO * DOWNSAMPLING_RATIO, height // DOWNSAMPLING_RATIO * DOWNSAMPLING_RATIO
+    left, top = (width - w) // 2, (height - h) // 2
+    return image.crop((left, top, left + w, top + h))
+
+
+def reference_bucket(tokens: int, buckets: tuple[int, ...] = REFERENCE_TOKEN_BUCKETS) -> int:
+    if tokens > buckets[-1]:
+        raise ValueError(f"{tokens} reference tokens exceed {buckets[-1]}")
+    return next(b for b in buckets if tokens <= b)
 
 
 # combine_cfg and euler_update compute in fp32 and round to bf16 where the reference computes in bf16.
@@ -261,14 +281,20 @@ class Flux3KleinPipeline:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
         bucket (a square reference that fills the bucket), at each text bucket of that layout (a long prompt reaches the
         larger ones), two steps each (every step runs the same programs), and the VAE encoder on every reference
-        canvas. A reference of any other shape runs its bucket's DiT programs and its canvas's encoder programs."""
+        canvas. A reference of any other shape runs its bucket's DiT programs and its canvas's encoder programs.
+        The multi-reference buckets the single reference lacks run with 1 MP square references."""
+        multi = [b for b in MULTI_REFERENCE_TOKEN_BUCKETS if b not in REFERENCE_TOKEN_BUCKETS]
         for canvas in REFERENCE_CANVASES:
             self._vae.encode(Image.new("RGB", canvas))
         for model in self._transformers:
             for size in sizes:
-                for bucket in (None, *REFERENCE_TOKEN_BUCKETS):
+                for bucket in (None, *REFERENCE_TOKEN_BUCKETS, *multi):
                     images = ()
-                    if bucket is not None:
+                    if bucket in multi:
+                        n = bucket // MULTI_REFERENCE_TOKEN_BUCKETS[0]
+                        side = math.isqrt(MULTI_REFERENCE_TOKEN_BUCKETS[0]) * DOWNSAMPLING_RATIO
+                        images = (Image.new("RGB", (side, side)),) * n
+                    elif bucket is not None:
                         side = math.isqrt(bucket) * DOWNSAMPLING_RATIO
                         images = (Image.new("RGB", (side, side)),)
                     request = Flux3KleinRequest(
@@ -283,7 +309,7 @@ class Flux3KleinPipeline:
         if request.height != request.width or request.width not in SIZES:
             raise ValueError(f"{request.width}x{request.height} is not one of the served sizes {SIZES} (square)")
         if len(request.images) > MAX_REFERENCES:
-            raise ValueError(f"at most {MAX_REFERENCES} reference image")
+            raise ValueError(f"at most {MAX_REFERENCES} reference images")
         if request.model == "distilled" and request.guidance not in (None, 1.0):
             raise ValueError("the distilled model takes no guidance")
 
@@ -300,17 +326,15 @@ class Flux3KleinPipeline:
         steps = request.steps or STEPS[request.model]
         guidance = GUIDANCE[request.model] if request.guidance is None else request.guidance
         guidance = None if request.model == "distilled" else guidance
-        reference = None
-        if request.images:
-            reference = request.images[0]
-            if not isinstance(reference, Image.Image):
-                reference = Image.open(reference)
-        canvas = None if reference is None else prepare_reference(reference)
-        ref_bucket = (
-            0
-            if canvas is None
-            else reference_bucket((canvas.width // DOWNSAMPLING_RATIO) * (canvas.height // DOWNSAMPLING_RATIO))
-        )
+        references = [r if isinstance(r, Image.Image) else Image.open(r) for r in request.images]
+        reference = references[0] if references else None
+        if len(references) > 1:
+            canvases = [prepare_multi_reference(r) for r in references]
+        else:
+            canvases = [prepare_reference(r) for r in references]
+        ref_tokens = sum((c.width // DOWNSAMPLING_RATIO) * (c.height // DOWNSAMPLING_RATIO) for c in canvases)
+        buckets = MULTI_REFERENCE_TOKEN_BUCKETS if len(canvases) > 1 else REFERENCE_TOKEN_BUCKETS
+        ref_bucket = reference_bucket(ref_tokens, buckets) if canvases else 0
         timings = {}
 
         t0 = time.time()
@@ -329,17 +353,29 @@ class Flux3KleinPipeline:
 
         t0 = time.time()
         image_cond = None
-        if canvas is not None:
+        if canvases:
             if size == max(SIZES):
                 self._free_other_plans(math.prod(latent_shape(size, size)), ref_bucket)
-            rh, rw = latent_shape(canvas.height, canvas.width)
-            image_cond = (self._vae.encode(canvas), reference_ids(rh, rw, 0))
+            tokens, ids = [], []
+            for index, canvas in enumerate(canvases):
+                tokens.append(self._vae.encode(canvas))
+                ids.append(reference_ids(*latent_shape(canvas.height, canvas.width), index))
+            image_cond = (torch.cat(tokens), torch.cat(ids))
         timings["encode_reference"] = time.time() - t0
 
         t0 = time.time()
         noise, x_host = latent_job.result()
         state, cached_steps = self._denoise(
-            request.model, noise, image_ids(h, w), text, image_cond, steps, guidance, request.cache, x_host=x_host
+            request.model,
+            noise,
+            image_ids(h, w),
+            text,
+            image_cond,
+            ref_bucket,
+            steps,
+            guidance,
+            request.cache,
+            x_host=x_host,
         )
         ttnn.deallocate(text[0])
         timings["denoise"] = time.time() - t0
@@ -405,6 +441,7 @@ class Flux3KleinPipeline:
         ids: torch.Tensor,
         text: tuple[torch.Tensor, torch.Tensor, int],
         image_cond: tuple[torch.Tensor, torch.Tensor] | None,
+        cond_rows: int,
         steps: int,
         guidance: float | None,
         cache_config: DBCacheConfig | None,
@@ -413,7 +450,6 @@ class Flux3KleinPipeline:
         transformer = self._transformers[model]
         sp = transformer.sp_factor
         cond_valid = 0 if image_cond is None else image_cond[0].shape[0]
-        cond_rows = 0 if image_cond is None else reference_bucket(cond_valid)
         cond_embedded = None
         if image_cond is not None:
             tokens = self._upload_rows(pad_rows(image_cond[0], cond_rows), sp)

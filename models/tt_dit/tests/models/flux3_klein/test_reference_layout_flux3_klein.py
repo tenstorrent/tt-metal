@@ -2,9 +2,10 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Host-only checks of the single-reference rule and the reference token layout. No device needed.
+"""Host-only checks of the single- and multi-reference rules and the reference token layout. No device needed.
 
-The canvas sizes are BFL's own (reference/src/flux3/pipeline.py reference_canvas, evaluated on these inputs). A reference
+The canvas sizes are BFL's own (reference/src/flux3/pipeline.py reference_canvas and prepare_multi_reference, evaluated
+on these inputs). A reference
 padded to its token bucket must put every masked row (text past text_valid, the bucket's pad, alignment) after every
 attended row, and a reference that fills its bucket must keep the unpadded layout.
 """
@@ -18,7 +19,10 @@ from PIL import Image
 
 from ....models.transformers.flux3_klein.transformer_flux3_klein import MODES, Flux3KleinSequenceLayout
 from ....pipelines.flux3_klein.pipeline_flux3_klein import (
+    MAX_REFERENCES,
+    MULTI_REFERENCE_TOKEN_BUCKETS,
     REFERENCE_TOKEN_BUCKETS,
+    prepare_multi_reference,
     prepare_reference,
     reference_bucket,
     reference_canvas,
@@ -37,6 +41,17 @@ BFL_CANVAS = {
     (2048, 2048): ((2048, 2048), (2048, 2048)),
     (1366, 768): ((1366, 768), (1376, 768)),
     (3840, 2160): ((2717, 1528), (2720, 1536)),
+}
+
+BFL_MULTI = {
+    (1024, 1024): (1024, 1024),
+    (2048, 2048): (1024, 1024),
+    (4000, 3000): (1168, 880),
+    (1600, 900): (1360, 768),
+    (300, 200): (288, 192),
+    (3840, 2160): (1360, 768),
+    (1366, 768): (1360, 752),
+    (50, 40): (48, 32),
 }
 
 
@@ -69,11 +84,30 @@ def test_reference_bucket(expect_error):
         reference_bucket(16385)
 
 
+@pytest.mark.parametrize("size", list(BFL_MULTI))
+def test_prepare_multi_reference_matches_bfl(size):
+    assert prepare_multi_reference(Image.new("RGB", size)).size == BFL_MULTI[size]
+
+
+def test_multi_reference_buckets(expect_error):
+    assert MAX_REFERENCES == 10
+    assert MULTI_REFERENCE_TOKEN_BUCKETS == (4096, 8192, 16384, 40960)
+    for n in (1, 2, 4, 10):
+        assert reference_bucket(n * 4096, MULTI_REFERENCE_TOKEN_BUCKETS) == n * 4096
+    assert reference_bucket(4097, MULTI_REFERENCE_TOKEN_BUCKETS) == 8192
+    assert reference_bucket(3 * 4096, MULTI_REFERENCE_TOKEN_BUCKETS) == 16384
+    with expect_error(ValueError, "40961 reference tokens exceed 40960"):
+        reference_bucket(40961, MULTI_REFERENCE_TOKEN_BUCKETS)
+
+
 def _layout(cond_valid: int, cond_rows: int, text: int = 512, text_valid: int = 300, image: int = 4096, sp: int = 8):
     return Flux3KleinSequenceLayout(sp, {"image": image, "image_cond": cond_rows, "text": text}, text_valid, cond_valid)
 
 
-@pytest.mark.parametrize("cond_valid, cond_rows", [(4096, 4096), (2584, 4096), (10625, 16384), (16384, 16384), (0, 0)])
+@pytest.mark.parametrize(
+    "cond_valid, cond_rows",
+    [(4096, 4096), (2584, 4096), (10625, 16384), (16384, 16384), (0, 0), (8192, 8192), (12288, 16384), (40960, 40960)],
+)
 def test_masked_rows_after_attended(cond_valid, cond_rows):
     layout = _layout(cond_valid, cond_rows)
     rows = layout.single_rows()
