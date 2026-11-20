@@ -725,6 +725,17 @@ notes:
     (fresh starts AND fresh slots AND real partial last chunks AND a replay). PB.9X: make every one of them a runtime value
     (prepared-program values / page copies / runtime-arg slices), and warm-up must be a finite enumerable set (no build
     in serving).'
+- id: OV-69
+  tasks:
+  - PB.9X*
+  status: open
+  t: '2026-11-20T19:55:06'
+  text: 'OWNER 2026-11-20 20:20: no second upload of the token ids. Today the host reads the engine''s ids back (needed:
+    the engram hash, engrams stay on the host by owner decision) and then re-uploads them in natural order for the embedding
+    (model.py:2151 from_torch; adapter.py:247-260 server_rows reorder). Do the reorder ON THE DEVICE from the engine''s
+    input tensor (one prepared gather / page copy into natural order, positions from the descriptor), the embedding reads
+    that; the host keeps only the readback for the engram job. Applies to the single-request, lane and glued paths. Record
+    ids_uploads_per_chunk (== 0) next to the builds count; bit-identical.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
