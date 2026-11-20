@@ -113,7 +113,9 @@ PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode
 # it); members without an own slice keep the post-landing block pivot. 0 = block pivot everywhere.
 OWN_PIVOT = int(os.environ.get("AGRMS_OWN_PIVOT", "1"))
 OUT_DEPTH = 2
-OUT_UNIT_CAP = 4  # writer batch: small enough that the stores overlap the normalize of the same tile-row
+OUT_UNIT_CAP = int(
+    os.environ.get("AGRMS_OUT_UNIT", "4")
+)  # writer batch: small enough that the stores overlap the normalize of the same tile-row
 COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
 OCC_TILES_PER_MEMBER = 4  # base op occupancy floor
 K_SYM_MAX = 8  # symmetric partial all-gather cap (base op K_SYM_MAX_INTERLEAVED); owner combine beyond
@@ -1000,7 +1002,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
     def class_cts(kk: int, mmk: MemberMap):
         """(reader, compute, writer) CT args of one member class."""
         reader_ct = [tile_bytes, mmk.pitch, geo.sw, geo.v, x_elem, SEM_LANDED, SEM_OWN_LOADED] + list(x_acc)
-        compute_ct = [kk, mmk.pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp]
+        # [6] norm_block: ln FPU normalize tiles per DEST block = the writer's cb_out unit (single source: fit_unit)
+        compute_ct = [kk, mmk.pitch, n_stat, dp.max_fin if dense else 0, dp.max_fout if dense else 0, gp, fit_unit[kk]]
         writer_ct = writer_ct_of(kk, mmk.pitch, fit_unit[kk])
         return reader_ct, compute_ct, writer_ct
 

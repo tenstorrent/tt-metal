@@ -88,6 +88,11 @@ constexpr uint32_t pitch = get_compile_time_arg_val(1);
 constexpr uint32_t n_stat = get_compile_time_arg_val(2);
 constexpr uint32_t max_fin = get_compile_time_arg_val(3);  // dense: foreign slots per tile-row
 constexpr uint32_t gather_pages = get_compile_time_arg_val(5);  // owner combine: gather tiles per owned row
+// ln FPU normalize: tiles per DEST block (each chain step inits once per block; <= the writer's cb_out unit so a
+// block's reserve never waits on the writer's partial unit). Clamped to DEST capacity.
+constexpr uint32_t norm_block_arg = get_compile_time_arg_val(6);
+constexpr uint32_t norm_block =
+    norm_block_arg < compute_kernel_lib::DEST_AUTO_LIMIT ? norm_block_arg : compute_kernel_lib::DEST_AUTO_LIMIT;
 #ifdef AGRMS_DENSE
 #include "api/compute/matmul.h"
 constexpr uint32_t norm_out_cb = cb_norm;  // the member block is assembled into dense output tiles afterwards
@@ -242,6 +247,9 @@ ALWI void sum_squares_block(uint32_t rows, uint32_t core_w, uint32_t stride) {
 // dest-reuse step of a chain (SrcaIn) switches the math-side srcA format to the DEST width (cb_rowstat = T_acc) and the
 // last one (SrcaOut) restores the chain head's (cb_x) for the next tile (unpack + math: a math-only switch leaves
 // the bias in place, measured); a no-op when the formats agree (fp32 input, or 16-bit DEST).
+// Blocked chains (IterationShape::block_size(blk), element-major over the block's DEST slots): the switch is made on
+// the block's first tile and the restore after its last one (column wt of Wt; constructed with (blk, Wt)); the default
+// blk = 1 switches per tile.
 template <EltwiseBinaryType Op, BroadcastType BT, InputSpec In, bool SrcaIn = true, bool SrcaOut = true>
 struct DestReuseBcast : DestReuseBinary<
                             (Op == EltwiseBinaryType::ELWMUL ? BinaryFpuOp::Mul : BinaryFpuOp::Add),
@@ -252,8 +260,11 @@ struct DestReuseBcast : DestReuseBinary<
         In,
         DestReuseType::DEST_TO_SRCA>;
     static constexpr uint32_t GCb = In.cb_id;
+    uint32_t blk = 1;   // tiles per chain block
+    uint32_t wt_n = 0;  // walk width (Wt): a row's last block may be short
     constexpr DestReuseBcast() noexcept = default;
     constexpr explicit DestReuseBcast(uint32_t base) noexcept : Base(base) {}
+    constexpr DestReuseBcast(uint32_t block, uint32_t walk_w) noexcept : blk(block), wt_n(walk_w) {}
 
     static ALWI void init() {
         state_configure(GCb, __builtin_LINE());
@@ -269,13 +280,17 @@ struct DestReuseBcast : DestReuseBinary<
                 i_flat, ht, wt, this->row_stride);
         const uint32_t dst = to_u32(Base::DstSlot) + slot_offset;
         if constexpr (SrcaIn) {
-            reconfig_data_format_srca(cb_x, cb_rowstat);
+            if (wt % blk == 0) {
+                reconfig_data_format_srca(cb_x, cb_rowstat);
+            }
         }
         UNPACK((llk_unpack_A<BT, true, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(GCb, in_idx)));
         MATH((llk_math_eltwise_binary<Op, BT, DST_ACCUM_MODE, MATH_FIDELITY, EltwiseBinaryReuseDestType::DEST_TO_SRCA>(
             GCb, GCb, dst, true)));
         if constexpr (SrcaOut) {
-            reconfig_data_format_srca(cb_rowstat, cb_x);
+            if ((wt + 1) % blk == 0 || wt + 1 == wt_n) {
+                reconfig_data_format_srca(cb_rowstat, cb_x);
+            }
         }
     }
 };
@@ -1455,7 +1470,8 @@ ALWI void centered_moments_block_fpu(uint32_t rows, uint32_t core_w) {
     cb_pop_front(cb_cent, rows * core_w);
 }
 
-// normalize: (x - K_g) [FPU, exact] * inv_std (bcast col) + shift (bcast col) [* gamma] [+ beta] (dest reuse)
+// normalize: (x - K_g) [FPU, exact] * inv_std (bcast col) + shift (bcast col) [* gamma] [+ beta] (dest reuse), blocked:
+// each step runs over norm_block DEST slots per init (5 inits + one srcA switch pair per block instead of per tile)
 ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto x_in = input(
         cb_x,
@@ -1474,22 +1490,22 @@ ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
     constexpr auto beta_in = input(cb_beta, WaitPolicy::None, PopPolicy::None, InputTileMapping::Row);
 #endif
     eltwise_chain(
-        IterationShape::grid(rows, core_w),
+        IterationShape::grid(rows, core_w).block_size(norm_block),
         BinaryFpu<BinaryFpuOp::Sub, x_in, kg_in>{StridedTileRange{0, pitch}},
         // srcA switched to the DEST width once (first step) and restored once (last step), see DestReuseBcast
-        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, inv_in, true, false>{},
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::COL, inv_in, true, false>{norm_block, core_w},
         DestReuseBcast < EltwiseBinaryType::ELWADD,
         BroadcastType::COL,
         shift_in,
         false,
-        !kHasGamma && !kHasBeta > {},
+        !kHasGamma && !kHasBeta > {norm_block, core_w},
 #ifdef AGRMS_HAS_GAMMA
-        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, gamma_in, false, !kHasBeta>{},
+        DestReuseBcast<EltwiseBinaryType::ELWMUL, BroadcastType::ROW, gamma_in, false, !kHasBeta>{norm_block, core_w},
 #endif
 #ifdef AGRMS_HAS_BETA
-        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, beta_in, false, true>{},
+        DestReuseBcast<EltwiseBinaryType::ELWADD, BroadcastType::ROW, beta_in, false, true>{norm_block, core_w},
 #endif
-        PackTile<output(norm_out_cb)>{});
+        PackTile<output(norm_out_cb, ReservePolicy::PerBlockSize, PushPolicy::PerBlockSize)>{});
 }
 #else
 ALWI void normalize_block(uint32_t rows, uint32_t core_w) {
