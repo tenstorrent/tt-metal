@@ -272,7 +272,20 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as e:
         print(e)
         return 2
-    if args.quad and not args.co and (err := gwdt_quad.checkout_error(repo, hosts)):
+    try:
+        checkout_skip = gwdt_quad.checkout_skip_level(os.environ.get(gwdt_quad.SKIP_CHECKOUT_ENV))
+    except ValueError as e:
+        print(f"error: {e}")
+        return 2
+    if args.quad and not args.co and checkout_skip != gwdt_quad.CHECKOUT_FULL:
+        skipped = "the checkout check" if checkout_skip == gwdt_quad.CHECKOUT_OFF else "the uncommitted-changes check"
+        print(f"note: {gwdt_quad.SKIP_CHECKOUT_ENV}={checkout_skip}: skipping {skipped}")
+    if (
+        args.quad
+        and not args.co
+        and checkout_skip != gwdt_quad.CHECKOUT_OFF
+        and (err := gwdt_quad.checkout_error(repo, hosts, dirty=checkout_skip == gwdt_quad.CHECKOUT_FULL))
+    ):
         print(
             "error: --quad needs the same tt-metal checkout on every host (commit and uncommitted changes, outside "
             f"{gwdt_quad.LAUNCHER_ONLY}); {err}.\nSync the checkouts and rerun."

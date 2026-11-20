@@ -373,7 +373,7 @@ def test_quad_aborts_when_run_dir_not_shared(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
     monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
     monkeypatch.setattr(gwdt_quad, "shared_dir_error", lambda d, hosts: f"{d} is not visible from h3")
-    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts, **kw: None)
     monkeypatch.setattr(gwdt, "run_all", lambda *a, **k: pytest.fail("steps ran"))
     assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
     out = capsys.readouterr().out
@@ -485,8 +485,47 @@ def test_quad_aborts_when_checkouts_differ(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
     monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
     monkeypatch.setattr(gwdt_quad, "shared_dir_error", lambda d, hosts: pytest.fail("shared-dir probe ran"))
-    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts: "h2 is at bbbbbbbbbbb")
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts, **kw: "h2 is at bbbbbbbbbbb")
     monkeypatch.setattr(gwdt, "run_all", lambda *a, **k: pytest.fail("steps ran"))
     assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
     assert "same tt-metal checkout" in capsys.readouterr().out
     assert not list(tmp_path.rglob("LOG_*")), "a commit mismatch must not leave a run dir behind"
+
+
+def test_checkout_commit_only_ignores_uncommitted_changes(monkeypatch):
+    _fake_checkouts(monkeypatch, {"h0": _out(A), "h1": _out(A, "f" * 40, "x.py"), "h2": _out(B), "h3": _out(A)})
+    assert gwdt_quad.checkout_error(REPO, HOSTS, dirty=False) == f"{REPO} here is at {A[:11]}, but h2 is at {B[:11]}"
+
+
+def test_checkout_skip_level():
+    assert [gwdt_quad.checkout_skip_level(v) for v in (None, "", "0", "1", "2")] == [0, 0, 0, 1, 2]
+    with pytest.raises(ValueError, match="GWDT_SKIP_CHECKOUT_CHECK='yes'"):
+        gwdt_quad.checkout_skip_level("yes")
+
+
+@pytest.mark.parametrize("level, dirty", [("0", True), ("1", False), ("2", None)])
+def test_quad_checkout_skip_env(tmp_path, monkeypatch, capsys, level, dirty):
+    """0 runs the full check, 1 compares commits only, 2 skips it; the run then stops at the shared-dir probe."""
+    import galaxy_workload_deployment_test as gwdt
+
+    seen = []
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setenv("GWDT_SKIP_CHECKOUT_CHECK", level)
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts, dirty: seen.append(dirty))
+    monkeypatch.setattr(gwdt_quad, "shared_dir_error", lambda d, hosts: "not shared")
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    assert seen == ([] if dirty is None else [dirty])
+    assert ("note: GWDT_SKIP_CHECKOUT_CHECK" in capsys.readouterr().out) == (level != "0")
+
+
+def test_quad_checkout_skip_env_rejects_bad_value(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setenv("GWDT_SKIP_CHECKOUT_CHECK", "3")
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda *a, **k: pytest.fail("check ran"))
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    assert "use 0 (full check), 1 (commit only) or 2 (no check)" in capsys.readouterr().out
+    assert not list(tmp_path.rglob("LOG_*"))

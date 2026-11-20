@@ -387,10 +387,26 @@ def _changes(c: Checkout) -> str:
     return f"uncommitted changes to {', '.join(c.files[:SHOWN_FILES])}{more}"
 
 
-def checkout_error(repo: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S) -> str | None:
+# GWDT_SKIP_CHECKOUT_CHECK: 0 (default) commit + uncommitted changes, 1 commit only, 2 no check.
+SKIP_CHECKOUT_ENV = "GWDT_SKIP_CHECKOUT_CHECK"
+CHECKOUT_FULL, CHECKOUT_COMMIT_ONLY, CHECKOUT_OFF = 0, 1, 2
+
+
+def checkout_skip_level(value: str | None) -> int:
+    if value in (None, ""):
+        return CHECKOUT_FULL
+    if value not in ("0", "1", "2"):
+        raise ValueError(f"{SKIP_CHECKOUT_ENV}={value!r}: use 0 (full check), 1 (commit only) or 2 (no check)")
+    return int(value)
+
+
+def checkout_error(
+    repo: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S, dirty: bool = True
+) -> str | None:
     """None when every host has `repo` at this host's commit with the same uncommitted changes, else which hosts
     differ. Every rank runs the code at the same path on its own host, so a stale or locally edited checkout fails
-    as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that code runs only here."""
+    as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that code runs only here. With dirty=False
+    only the commits are compared."""
     local = _checkout(repo, socket.gethostname(), timeout_s)
     if local is None:
         return f"cannot read the git checkout {repo} here"
@@ -403,10 +419,11 @@ def checkout_error(repo: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_T
             off.append(f"{_short(h)} has no readable git checkout at {repo}")
         elif c.head != local.head:
             off.append(f"{_short(h)} is at {c.head[:11]}")
-        elif c.fingerprint != local.fingerprint:
+        elif dirty and c.fingerprint != local.fingerprint:
             off.append(f"{_short(h)} has {_changes(c)}")
     if off:
-        return f"{repo} here is at {local.head[:11]} with {_changes(local)}, but {'; '.join(off)}"
+        here = f"{local.head[:11]} with {_changes(local)}" if dirty else local.head[:11]
+        return f"{repo} here is at {here}, but {'; '.join(off)}"
     return None
 
 
