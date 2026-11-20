@@ -24,12 +24,12 @@ from quasar.test_matmul_quasar import test_matmul as run_matmul
     input_tile_dimensions=runtime(FULL_MATMUL_SHAPES),
     format=MATMUL_FORMAT,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(
             dest_acc,
-            dest_sync_mode,
+            dest_sync,
             exact_dest_fill=True,
             is_perf=True,
         )
@@ -46,7 +46,7 @@ def test_perf_matmul_quasar(
     input_tile_dimensions,
     matmul_tile_dims,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     format,
     register_format_hint,
@@ -60,7 +60,7 @@ def test_perf_matmul_quasar(
         input_tile_dimensions,
         matmul_tile_dims,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         register_format_hint,
@@ -79,12 +79,12 @@ def test_perf_matmul_quasar(
     input_tile_dimensions=runtime(TINY_MATMUL_SHAPE_CASES),
     format=NON_MX_MATMUL_FORMATS,
     math_fidelity=lambda format: get_valid_math_fidelities(format),
-    dest_sync_mode=lambda: quasar_dest_sync_modes(is_perf=True),
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=True),
     dest_acc=matmul_dest_acc_modes,
     matmul_tile_dims=runtime(
-        lambda dest_acc, dest_sync_mode: matmul_tile_dimensions(
+        lambda dest_acc, dest_sync: matmul_tile_dimensions(
             dest_acc,
-            dest_sync_mode,
+            dest_sync,
             exact_dest_fill=True,
             is_perf=True,
         )
@@ -100,7 +100,7 @@ def test_perf_matmul_tiny_quasar(
     perf_report,
     input_tile_dimensions,
     math_fidelity,
-    dest_sync_mode,
+    dest_sync,
     dest_acc,
     matmul_tile_dims,
     format,
@@ -115,7 +115,7 @@ def test_perf_matmul_tiny_quasar(
         input_tile_dimensions,
         matmul_tile_dims,
         math_fidelity,
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         format,
         register_format_hint,

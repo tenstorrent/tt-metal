@@ -7,7 +7,7 @@
  *
  * Consumers (both must be updated together if the compile-time or runtime arg
  * layout below changes):
- *   - ttnn::experimental::prim::DitFusedDistributedRmsnormMeshWorkloadFactory
+ *   - ttnn::experimental::prim::DitFusedDistributedRmsnormProgramFactory
  *   - ttnn::experimental::prim::DitFusedDistributedGroupnormMeshWorkloadFactory
  *
  * The description below is written in terms of the RMSNorm caller (128 B
@@ -63,38 +63,44 @@
 #endif
 
 // ---------- compile-time args ----------
+// The same on every chip: what differs per chip (its device index and fabric routes) is in runtime args, so the
+// callers' per-chip programs can run as one program with per-device runtime args.
 constexpr uint32_t packet_cb = get_compile_time_arg_val(0);  // outbound packet buffer (unit_packet x2)
 constexpr uint32_t reserved_packet_header_cb = get_compile_time_arg_val(1);
 constexpr uint32_t ring_size = get_compile_time_arg_val(2);
-constexpr uint32_t my_device_index = get_compile_time_arg_val(3);
-constexpr uint32_t num_targets_forward = get_compile_time_arg_val(4);
-constexpr uint32_t num_targets_backward = get_compile_time_arg_val(5);
-constexpr uint32_t forwarder_index = get_compile_time_arg_val(6);  // which link/group on this chip
-constexpr uint32_t num_forwarders = get_compile_time_arg_val(7);
-constexpr uint32_t group_size = get_compile_time_arg_val(8);  // workers in this forwarder's group
+constexpr uint32_t forwarder_index = get_compile_time_arg_val(3);  // which link/group on this chip
+constexpr uint32_t num_forwarders = get_compile_time_arg_val(4);
+constexpr uint32_t group_size = get_compile_time_arg_val(5);  // workers in this forwarder's group
 #ifndef DIT_NORM_RUNTIME_ROWS
-constexpr uint32_t max_rounds = get_compile_time_arg_val(9);  // ceil(num_tile_rows / num_workers)
+constexpr uint32_t max_rounds = get_compile_time_arg_val(6);  // ceil(num_tile_rows / num_workers)
 #endif
-constexpr uint32_t stick_bytes = get_compile_time_arg_val(10);  // 128 (32 fp32)
+constexpr uint32_t stick_bytes = get_compile_time_arg_val(7);  // 128 (32 fp32)
 #ifndef DIT_NORM_RUNTIME_ROWS
-constexpr uint32_t num_chunks_per_device =
-    get_compile_time_arg_val(11);  // = num_forwarders * max_rounds (pages/device)
+constexpr uint32_t num_chunks_per_device = get_compile_time_arg_val(8);  // = num_forwarders * max_rounds (pages/device)
 #endif
 // Grid-uniform semaphore ids (created on the whole core grid -> same L1 addr on
 // every worker + forwarder core, so no cross-core address args are needed).
-constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(12);  // workers inc; forwarder waits
-constexpr uint32_t go_sem_id = get_compile_time_arg_val(13);       // forwarder incs; workers wait
-constexpr auto stats_dram_args = TensorAccessorArgs<14>();
-constexpr auto forward_route =
-    ccl_routing_utils::get_line_multicast_route_info_from_args<stats_dram_args.next_compile_time_args_offset()>();
-constexpr auto backward_route = ccl_routing_utils::get_line_multicast_route_info_from_args<
-    stats_dram_args.next_compile_time_args_offset() + ccl_routing_utils::num_line_multicast_args>();
+constexpr uint32_t arrival_sem_id = get_compile_time_arg_val(9);  // workers inc; forwarder waits
+constexpr uint32_t go_sem_id = get_compile_time_arg_val(10);      // forwarder incs; workers wait
+constexpr auto stats_dram_args = TensorAccessorArgs<11>();
 #ifdef DIT_NORM_RUNTIME_ROWS
-constexpr uint32_t rows_args_offset =
-    stats_dram_args.next_compile_time_args_offset() + 2 * ccl_routing_utils::num_line_multicast_args;
+constexpr uint32_t rows_args_offset = stats_dram_args.next_compile_time_args_offset();
 constexpr uint32_t num_workers = get_compile_time_arg_val(rows_args_offset);
 constexpr uint32_t workers_per_forwarder = get_compile_time_arg_val(rows_args_offset + 1);
 #endif
+
+// A line-multicast route from ccl_routing_utils::num_line_multicast_args runtime args, in the order
+// ttnn::ccl::get_forward_backward_line_mcast_configuration writes them.
+inline ccl_routing_utils::line_multicast_route_info_t line_multicast_route_from_rt_args(size_t& arg_idx) {
+    ccl_routing_utils::line_multicast_route_info_t route{};
+    route.dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.e_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    route.s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++));
+    return route;
+}
 
 void kernel_main() {
     size_t arg_idx = 0;
@@ -102,6 +108,10 @@ void kernel_main() {
     // out_ready_sem: a GlobalSemaphore — PEER forwarders fuse-inc it over fabric
     // (same L1 addr on every chip). Local pointer for the wait + reset.
     const uint32_t out_ready_sem_addr = get_arg_val<uint32_t>(arg_idx++);
+    // This chip's position on the ring and its forward / backward line-multicast routes.
+    const uint32_t my_device_index = get_arg_val<uint32_t>(arg_idx++);
+    const auto forward_route = line_multicast_route_from_rt_args(arg_idx);
+    const auto backward_route = line_multicast_route_from_rt_args(arg_idx);
     // group worker NoC coords (x,y) x group_size, then present_count[r]. Sized by
     // the constexpr CT args (group_size / max_rounds) so large-row configs (e.g.
     // wan self_sp4_N18944 -> 592 tile-rows / 32 workers = 19 rounds) don't overflow

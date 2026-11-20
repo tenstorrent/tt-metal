@@ -322,9 +322,9 @@ ProgramDescriptor build_descriptor_at(
         gather.compile_time_args = std::move(gather_ct_args);
         gather.named_compile_time_args = named_ct_args;
         gather.config = ReaderConfigDescriptor{};
-        // The caller's arrival semaphore, which `override_runtime_arguments` rewrites on a hit.
+        // The caller's arrival semaphore, whose address is part of the program hash.
         gather.emplace_common_runtime_args({static_cast<uint32_t>(
-            semaphore->address())});  // smuggled-rta-ok: caller's GlobalSemaphore, patched per hit
+            semaphore->address())});  // smuggled-rta-ok: caller's GlobalSemaphore, its address is hashed
         desc.kernels.push_back(std::move(gather));
         tt::tt_metal::KernelHandle gather_kernel = desc.kernels.size() - 1;
         TT_FATAL(gather_kernel == kGatherKernel, "the gather kernel must be the program's fourth");
@@ -380,18 +380,6 @@ tt::tt_metal::WorkloadDescriptor AttnResBlockStatsProgramFactory::create_workloa
              build_descriptor_at(operation_attributes, coord, tensor_args, tensor_return_value)});
     }
     return workload;
-}
-
-void AttnResBlockStatsProgramFactory::override_runtime_arguments(
-    tt::tt_metal::Program& program,
-    const AttnResBlockStatsParams& operation_attributes,
-    const AttnResBlockStatsInputs& /*tensor_args*/,
-    Tensor& /*tensor_return_value*/,
-    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
-    // The semaphore is left out of the program hash, so a hit may carry another one.
-    if (operation_attributes.semaphore.has_value()) {
-        GetCommonRuntimeArgs(program, kGatherKernel)[0] = operation_attributes.semaphore->address();
-    }
 }
 
 }  // namespace ttnn::experimental::prim
