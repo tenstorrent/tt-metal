@@ -839,6 +839,7 @@ class MultichipDecoder(OptimizedDecoder):
                 exp_approx_mode=self.policy.sdpa_exp_approx,
             ),
             compute_kernel_config=attention_compute,
+            precision=ttnn.SDPAPrecision.ACCURATE if attention_compute.fp32_dest_acc_en else None,
         )
         y = ttnn.reshape(ttnn.transformer.concatenate_heads(y), (1, 1, hidden_states.shape[-2], 1536))
         return self._finish(hidden_states, self._linear(y, self.projections["o_proj"]), prefill=True)
