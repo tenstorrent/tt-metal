@@ -104,7 +104,8 @@ def test_gdn_decode_step_batched_vs_reference(device, B, fast_mode, fp32_state):
     assert torch.equal(h_t[B:], inp["h"][B:]) and torch.equal(hist_t[B:], hist_host[B:]), "idle rows changed"
 
 
-def test_gdn_decode_step_requires_conv_inputs(device, expect_error):
+def test_gdn_decode_step_refuses_unsupported_inputs(device, expect_error):
+    """conv_hist and conv_taps are required, fp32_state needs fast_mode, and key_dim must equal value_dim."""
     inp = inputs(1, seed=0)
     consts = consts_dev(device, inp)
     x = tile_dev(device, token_rows(1, torch.Generator().manual_seed(0)).reshape(1, 1, W), ttnn.bfloat16)
@@ -114,3 +115,5 @@ def test_gdn_decode_step_requires_conv_inputs(device, expect_error):
         run(x, consts, state, None, True, True)
     with expect_error(RuntimeError, "fp32_state needs fast_mode"):
         run(x, consts, state, hist, False, True)
+    with expect_error(RuntimeError, "must equal value_dim"):
+        run(x, consts, state, hist, True, True, key_dim=64)

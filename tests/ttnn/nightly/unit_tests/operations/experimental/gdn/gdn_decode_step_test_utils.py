@@ -5,6 +5,7 @@
 The shapes are one Qwen3.8 GDN layer at TP=8 on one device: 6 value heads, 2 key heads, 128-wide heads.
 """
 
+import pytest
 import torch
 from loguru import logger
 
@@ -23,6 +24,13 @@ BMAX = 32
 # (fast_mode, fp32_state); the model runs (True, True)
 MODES = [(False, False), (True, False), (True, True)]
 MODE_IDS = ["default", "fast", "fast_fp32_state"]
+MODEL_MODE = (True, True)  # (fast_mode, fp32_state) as the model runs it
+# One device per module; the trace region is for the tests that capture a trace.
+DEVICE_PARAMS = {"trace_region_size": 16_000_000}
+DETERMINISM_RUNS = 10
+PERF_MARGIN = 0.05  # the device-time band of the perf tests, on both sides of the measured value
+K_HEADS = 4  # KvBlocks: heads 0..3 in the K block, heads 4..5 and the whole history in the V block
+FP32_PAGE, BF16_PAGE, BF8_PAGE = 4096, 2048, 1088
 # NRMSE gates of assert_close_to_reference: the worst (row, value head) NRMSE against the torch reference measured on a
 # P150 over the reference tests, plus headroom. The output's NRMSE depends on its dtype more than on the mode (measured
 # worst 9.9e-3 for float32 outputs, 2.0e-2 for bfloat16 outputs); the state's on the mode (5.5e-3, 5.5e-3, 4.4e-3).
@@ -178,7 +186,7 @@ def consts_dev(device, inp):
     }
 
 
-def run(x, consts, state, hist, fast_mode, fp32_state, output_dtype=ttnn.bfloat16, **paged):
+def run(x, consts, state, hist, fast_mode, fp32_state, output_dtype=ttnn.bfloat16, key_dim=DK, value_dim=DV, **paged):
     """gdn_decode_step with the test shapes; `paged` passes state_page_idx, state_pool2 and conv_hist_pool2."""
     return ttnn.experimental.gdn.gdn_decode_step(
         x,
@@ -188,8 +196,8 @@ def run(x, consts, state, hist, fast_mode, fp32_state, output_dtype=ttnn.bfloat1
         consts["w"],
         NV,
         NK,
-        DK,
-        DV,
+        key_dim,
+        value_dim,
         scale=SCALE,
         output_dtype=output_dtype,
         conv_hist=hist,
@@ -215,3 +223,123 @@ def default_step(device, x, consts, h_rows, hist2_rows, fast_mode, fp32_state):
     out = ttnn.to_torch(run(x, consts, state_dev, hist_dev, fast_mode, fp32_state))
     h_t, hist_t = ttnn.to_torch(state_dev), ttnn.to_torch(hist_dev)
     return out, [h_t[b] for b in range(b_count)], [to_pooled(hist_t[b], b) for b in range(b_count)]
+
+
+# ---- the layout of the 1024-token cache blocks of a TP=8 Qwen3.8 layer slot
+
+
+def fp32_tile_raw(t):
+    """[n, 32, 32] fp32 tiles -> [n, 1024] int32 in device byte order (four 16x16 faces)."""
+    return t.reshape(-1, 2, 16, 2, 16).permute(0, 1, 3, 2, 4).reshape(-1, 1024).view(torch.int32)
+
+
+def raw_fp32_tile(raw):
+    return raw.view(torch.float32).reshape(-1, 2, 2, 16, 16).permute(0, 1, 3, 2, 4).reshape(-1, 32, 32)
+
+
+def bf16_tile_raw(t):
+    return t.reshape(-1, 2, 16, 2, 16).permute(0, 1, 3, 2, 4).reshape(-1, 1024).view(torch.int16)
+
+
+class KvBlocks:
+    """One layer slot of a TP=8 Qwen3.8 model: bfloat8_b K and V caches [N, 1, 1024, 256], one 1024-token block per
+    request. A block holds 34,816 bytes per DRAM bank in each of K and V (8.5 fp32 pages), 64 whole fp32 pages per
+    block in K: one request's GDN state (6 heads of 16 fp32 pages, 384 KiB) plus its history (24 bf16 pages, 48 KiB)
+    does not fit K alone. Heads 0..3 go to the first whole fp32 page rows of the K block, heads 4..5 to the first ones
+    of the V block, and the history to the last three bf16 page rows of the V block.
+
+    Host content is kept as the pages of fp32 views of K and V (whole buffers for even N)."""
+
+    def __init__(self, device, num_blocks, gen):
+        assert num_blocks % 2 == 0
+        self.device, self.n = device, num_blocks
+        self.nb = device.dram_grid_size().x * device.dram_grid_size().y
+        tiles_per_block = 1024 * 256 // 1024
+        self.s = tiles_per_block // self.nb * BF8_PAGE  # bytes per bank per block
+        self.hist_tiles = tiles_per_block * BF8_PAGE // BF16_PAGE
+        self.hist_first = self.hist_tiles - -(-NV * HP // self.nb) * self.nb
+        self.rec_pages = self.nb * (num_blocks * self.s // FP32_PAGE)
+        bf8 = lambda: ttnn.from_torch(
+            torch.zeros(num_blocks, 1, 1024, 256), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device
+        )
+        self.k, self.v = bf8(), bf8()
+        view_shape = [self.rec_pages // 8, 1, DK // 2, DV]
+        check = self.s % FP32_PAGE == 0
+        self.rec_k = ttnn.experimental.alias_view(self.k, view_shape, ttnn.float32, check_slices=check)
+        self.rec_v = ttnn.experimental.alias_view(self.v, view_shape, ttnn.float32, check_slices=check)
+        self.hist = ttnn.experimental.alias_view(self.v, [num_blocks, self.hist_tiles, 32, 32], ttnn.bfloat16)
+        # random fp32 pages stand for the attention contents of K and V
+        self.k_pages = torch.randn(self.rec_pages, 32, 32, generator=gen)
+        self.v_pages = torch.randn(self.rec_pages, 32, 32, generator=gen)
+
+    def first_page(self, block):
+        """First whole fp32 page of `block` in either view: its first whole page row times the bank count."""
+        return self.nb * -(-block * self.s // FP32_PAGE)
+
+    def state_page(self, block, h):
+        """(pool, first fp32 page) of head h of the request in `block`."""
+        p = self.first_page(block)
+        return (0, p + h * KV) if h < K_HEADS else (1, p + (h - K_HEADS) * KV)
+
+    def hist_page(self, block, h):
+        return block * self.hist_tiles + self.hist_first + h * HP
+
+    def index_host(self, blocks):
+        rows = [[self.state_page(b, h)[1] + (self.rec_pages if h >= K_HEADS else 0) for b in blocks] for h in range(NV)]
+        rows += [[self.hist_page(b, h) for b in blocks] for h in range(NV)]
+        return torch.tensor(rows, dtype=torch.int32)
+
+    def _v_slot(self, q2):
+        """bf16 page q2 of V -> (fp32 page, int16 offset) holding its bytes."""
+        row = q2 // self.nb
+        return q2 % self.nb + self.nb * (row // 2), (row % 2) * 1024
+
+    def place(self, entries):
+        """Host: for each (block, state [NV, DK, DV], paged history [NV, 4, 32, 32]), the request in the block holds
+        that state and history."""
+        for block, h_state, _ in entries:
+            for h in range(NV):
+                pool, page = self.state_page(block, h)
+                (self.k_pages, self.v_pages)[pool][page : page + KV] = tiles(h_state[h])
+        raw16 = fp32_tile_raw(self.v_pages).view(torch.int16)
+        for block, _, hist2 in entries:
+            for h in range(NV):
+                for s, t in enumerate(bf16_tile_raw(hist2[h])):
+                    q, off = self._v_slot(self.hist_page(block, h) + s)
+                    raw16[q, off : off + 1024] = t
+        self.v_pages = raw_fp32_tile(raw16.view(torch.int32))
+
+    def write(self):
+        for view, pages in ((self.rec_k, self.k_pages), (self.rec_v, self.v_pages)):
+            host = pages.reshape(self.rec_pages // 8, 2, 4, 32, 32).permute(0, 1, 3, 2, 4).reshape(-1, 1, DK // 2, DV)
+            ttnn.copy_host_to_device_tensor(ttnn.from_torch(host, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT), view)
+
+    def read(self):
+        """Device -> (K fp32 pages, V fp32 pages, history bf16 pages [N * hist_tiles, 32, 32])."""
+        k, v = (tiles(ttnn.to_torch(view)) for view in (self.rec_k, self.rec_v))
+        return k, v, ttnn.to_torch(self.hist).reshape(-1, 32, 32)
+
+    def owned(self, blocks):
+        """Masks of the fp32 K and V pages and the bf16 history pages the requests in `blocks` own."""
+        k_mask = torch.zeros(self.rec_pages, dtype=torch.bool)
+        v_mask = torch.zeros(self.rec_pages, dtype=torch.bool)
+        h_mask = torch.zeros(self.n * self.hist_tiles, dtype=torch.bool)
+        for blk in blocks:
+            for h in range(NV):
+                pool, page = self.state_page(blk, h)
+                (k_mask, v_mask)[pool][page : page + KV] = True
+                hp = self.hist_page(blk, h)
+                h_mask[hp : hp + HP] = True
+                for q2 in range(hp, hp + HP):
+                    v_mask[self._v_slot(q2)[0]] = True
+        return k_mask, v_mask, h_mask
+
+    def run(self, x, consts, idx):
+        return run(x, consts, self.rec_k, self.hist, *MODEL_MODE, state_page_idx=idx, state_pool2=self.rec_v)
+
+
+def kv_blocks_or_skip(device, num_blocks, gen):
+    banks = device.dram_grid_size().x * device.dram_grid_size().y
+    if (1024 * 256 // 1024) % banks:
+        pytest.skip(f"a 1024-token block does not spread evenly over {banks} DRAM banks")
+    return KvBlocks(device, num_blocks, gen)

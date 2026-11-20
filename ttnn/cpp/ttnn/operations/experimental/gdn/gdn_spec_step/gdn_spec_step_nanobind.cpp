@@ -66,7 +66,7 @@ void bind_gdn_spec_step(nb::module_& mod) {
                 value_blocks > 1: the head's blocks split the gate math); 128 = each value block normalizes / gates
                 only its own output columns; 1024 = narrow gate reads (with 2: the gate reads fetch only the face rows
                 they use). Bits that need value_blocks > 1 have no effect without it. All bits: 1274.
-            hnew_depth (int): must be 2. max_users (int): default 0 (= B). The user count M the ctrl page is laid out
+            max_users (int): default 0 (= B). The user count M the ctrl page is laid out
                 for; with ``ring_page_idx`` it can exceed B, and the op runs users 0 .. B-1 of that page: their start
                 words sit at ``1 + M + u*Nv + h`` (and, with conv_hist, ``1 + M + M*Nv + u*Nv + h``). So one ctrl page
                 serves a verify of any leading subset of its users; ``ring_page_idx`` keeps one row per user.
@@ -105,7 +105,6 @@ void bind_gdn_spec_step(nb::module_& mod) {
         nb::arg("scale") = nb::none(),
         nb::arg("l2_epsilon") = 1e-6f,
         nb::arg("norm_epsilon") = 1e-6f,
-        nb::arg("hnew_depth") = 2,
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("output_dtype") = ttnn::DataType::BFLOAT16,

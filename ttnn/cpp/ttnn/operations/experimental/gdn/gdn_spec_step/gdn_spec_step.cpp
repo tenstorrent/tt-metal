@@ -29,7 +29,6 @@ ttnn::Tensor gdn_spec_step(
     std::optional<float> scale,
     float l2_epsilon,
     float norm_epsilon,
-    uint32_t hnew_depth,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     DataType output_dtype,
@@ -44,13 +43,6 @@ ttnn::Tensor gdn_spec_step(
     TT_FATAL(
         qkvzab.storage_type() == StorageType::DEVICE && qkvzab.buffer() != nullptr,
         "gdn_spec_step: qkvzab must be an allocated device tensor");
-    TT_FATAL(hnew_depth == 2, "gdn_spec_step: hnew_depth must be 2 (got {})", hnew_depth);
-    TT_FATAL(
-        max_users == 0 || max_users == B || (max_users > B && ring_page_idx.has_value()),
-        "gdn_spec_step: max_users must be 0, B, or with ring_page_idx larger than B (got {}, B = {}); without "
-        "ring_page_idx the ring is laid out for exactly B users",
-        max_users,
-        B);
     const auto output_memory_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
     const auto kernel_config = init_device_compute_kernel_config(
         qkvzab.device()->arch(),

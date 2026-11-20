@@ -7,7 +7,7 @@ writes into win[1 - par], or, with conv_hist, slots 1..3 of gdn_decode_step's pa
 takes the state after token t.
 
 The states live in 1024-token bfloat8_b K / V cache blocks of a TP=8 layer slot through alias_view (KvBlocks of
-test_gdn_decode_step_paged.py: heads 0..3 in K, heads 4..5 in V). Every per-position output, state and history is
+gdn_decode_step_test_utils.py: heads 0..3 in K, heads 4..5 in V). Every per-position output, state and history is
 compared with gdn_decode_step run token by token from the same start state, bit for bit, and with the torch
 reference. The value_blocks / kernel_opts programs the qwen36 model runs are compared with the minimal program and with
 the sequential decode, bit for bit, in both history modes."""
@@ -24,40 +24,38 @@ from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.gdn_decode_step_test_utils import (
     AZ,
+    DETERMINISM_RUNS,
+    DEVICE_PARAMS,
     DK,
     DV,
     HP,
     KV,
     MODE_IDS,
+    MODEL_MODE,
     MODES,
     NK,
     NV,
+    PERF_MARGIN,
     SCALE,
     VD,
     C,
     W,
     assert_close_to_reference,
+    bf16_tile_raw,
     bits,
     consts_dev,
+    fp32_tile_raw,
     from_pooled,
     inputs,
+    kv_blocks_or_skip,
     pack_rows,
+    raw_fp32_tile,
     run,
     step_reference,
     tile_dev,
     tiles,
     to_pooled,
     token_rows,
-)
-from tests.ttnn.nightly.unit_tests.operations.experimental.gdn.test_gdn_decode_step_paged import (
-    DETERMINISM_RUNS,
-    DEVICE_PARAMS,
-    MODEL_MODE,
-    PERF_MARGIN,
-    _bf16_tile_raw,
-    _fp32_tile_raw,
-    _kv_blocks_or_skip,
-    _raw_fp32_tile,
 )
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
@@ -191,7 +189,7 @@ class Verify:
     def windows(self):
         return self.win_dev[0], self.win_dev[1]
 
-    def run(self, consts, taps, users=None, **kw):
+    def run(self, consts, taps, users=None, key_dim=DK, value_dim=DV, **kw):
         """``users``: run only users 0 .. users-1 of the ctrl page and index (default all B)."""
         return ttnn.experimental.gdn.gdn_spec_step(
             self.qkv,
@@ -204,8 +202,8 @@ class Verify:
             consts["w"],
             NV,
             NK,
-            DK,
-            DV,
+            key_dim,
+            value_dim,
             self.T,
             self.B if users is None else users,
             AZ,
@@ -300,7 +298,7 @@ def test_spec_step_matches_sequential_decode(device, B, K_draft, fast_mode, fp32
     inp = inputs(B, seed=B + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = Verify(device, kv, B, T, gen, starts, dests, par=(B + T) & 1, mode=mode)
@@ -411,7 +409,7 @@ def check_options_against_minimal_and_decode(device, B, T, opts, seed, fp32_gate
     starts, dests = distinct_blocks(B, T, n, torch.Generator().manual_seed(seed))
     runs = {}
     for name in ("minimal", opts):
-        kv = _kv_blocks_or_skip(device, n, torch.Generator().manual_seed(seed + 1))
+        kv = kv_blocks_or_skip(device, n, torch.Generator().manual_seed(seed + 1))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         kv.write()
         gen = torch.Generator().manual_seed(seed + 2)
@@ -467,7 +465,7 @@ def test_spec_step_destination_aliases_the_start(device, K_draft, alias_at):
     starts = [1 + u * (T + 1) for u in range(B)]
     pos = 0 if alias_at == "first" else T - 1
     dests = [[starts[u] if t == pos else starts[u] + 1 + t for t in range(T)] for u in range(B)]
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = Verify(device, kv, B, T, gen, starts, dests)
@@ -498,7 +496,7 @@ def test_spec_step_padding_rows(device, B, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     for u in nulls:
         starts[u], dests[u] = 0, [0] * T
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in live + list(held)])
     for h in range(NV):
         pool, page = kv.state_page(0, h)
@@ -530,7 +528,7 @@ def test_spec_step_ignores_destination_contents(device, poison):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     results = []
     for fill in (None, float(poison)):
-        kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(3))
+        kv = kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(3))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         if fill is not None:
             for u in range(B):
@@ -635,7 +633,7 @@ def test_spec_step_chained_verifies(device, K_draft, fast_mode, fp32_state):
     inp = inputs(B, seed=400 + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     n, starts, sets = chain_blocks(B, T, steps, gen)
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     run_chain(device, kv, B, T, gen, inp, consts, taps, steps, (fast_mode, fp32_state), starts, sets)
@@ -654,7 +652,7 @@ def test_spec_step_trace_follows_index_contents(device, K_draft, B, opts):
     inp = inputs(B, seed=500 + T)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     n, starts, sets = chain_blocks(B, T, steps, gen)
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     run_chain(device, kv, B, T, gen, inp, consts, taps, steps, MODEL_MODE, starts, sets, trace=True, opts=opts)
@@ -671,7 +669,7 @@ def test_spec_step_program_cache_follows_new_buffers(device, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     first, entries = None, None
     for allocation in range(2):
-        kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(8))
+        kv = kv_blocks_or_skip(device, num_blocks_for(B, T), torch.Generator().manual_seed(8))
         kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
         kv.write()
         v = Verify(device, kv, B, T, torch.Generator().manual_seed(9), starts, dests)
@@ -693,23 +691,24 @@ def test_spec_step_program_cache_follows_new_buffers(device, opts):
 
 
 def test_spec_step_refuses_unsupported_options(device, expect_error):
-    """hnew_depth accepts only its default; max_users is 0, B, or above B with a ctrl page of that many users;
-    value_blocks is at most 4; kernel_opts accepts only the GdnSpecStepKernelOpt bits, and only with fast_mode and
-    fp32_state. fp32_state needs fast_mode, and B * Nv cores must fit the grid."""
+    """key_dim must equal value_dim, and value_dim is at most 128; max_users is 0, B, or above B with a ctrl page of
+    that many users; value_blocks is at most 4; kernel_opts accepts only the GdnSpecStepKernelOpt bits, and only with
+    fast_mode and fp32_state. fp32_state needs fast_mode, and B * Nv cores must fit the grid."""
     B, T = 2, 4
     gen = torch.Generator().manual_seed(0)
     inp = inputs(B, seed=0)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     v = Verify(device, kv, B, T, gen, starts, dests)
     for kw, msg in [
         (dict(value_blocks=5), "value_blocks must be in"),
         (dict(kernel_opts=ALL_KERNEL_OPTS | 1), "unsupported kernel_opts bits 0x1"),
         (dict(kernel_opts=4), "unsupported kernel_opts bits 0x4"),
         (dict(kernel_opts=256 | 512), "unsupported kernel_opts bits 0x300"),
-        (dict(hnew_depth=4), "hnew_depth must be 2"),
-        (dict(max_users=B - 1), "max_users must be 0, B, or with ring_page_idx larger than B"),
+        (dict(key_dim=64), "must equal value_dim"),
+        (dict(key_dim=256, value_dim=256), "must be <= 128"),
+        (dict(max_users=B - 1), "or, with ring_page_idx, larger than B"),
         (dict(max_users=B + 1), "ctrl must be one row-major page"),  # the ctrl page holds B users only
     ]:
         with expect_error(RuntimeError, msg):
@@ -726,7 +725,7 @@ def test_spec_step_refuses_unsupported_options(device, expect_error):
         v.run(consts, taps)
     grid = device.compute_with_storage_grid_size()
     big = grid.x * grid.y // NV + 1
-    kv_big = _kv_blocks_or_skip(device, 2, gen)
+    kv_big = kv_blocks_or_skip(device, 2, gen)
     vb = Verify(device, kv_big, big, 1, gen, [0] * big, [[0]] * big)
     with expect_error(RuntimeError, "exceed"):
         vb.run(consts, taps)
@@ -766,13 +765,13 @@ def expected_pages_hist(kv, writes):
     """expected_pages with the history: writes = [(block, state [NV, DK, DV], paged history [NV, 4, 32, 32])]. Slots
     1..3 of the block's history pages take the history; slot 0 keeps its bytes."""
     k, v = expected_pages(kv, [(block, state) for block, state, _ in writes])
-    raw16 = _fp32_tile_raw(v).view(torch.int16)
+    raw16 = fp32_tile_raw(v).view(torch.int16)
     for block, _, hist in writes:
         for h in range(NV):
             for s in range(1, HP):
                 q, off = kv._v_slot(kv.hist_page(block, h) + s)
-                raw16[q, off : off + 1024] = _bf16_tile_raw(hist[h, s])[0]
-    return k, _raw_fp32_tile(raw16.view(torch.int32))
+                raw16[q, off : off + 1024] = bf16_tile_raw(hist[h, s])[0]
+    return k, raw_fp32_tile(raw16.view(torch.int32))
 
 
 @pytest.mark.parametrize("K_draft", [1, 3])
@@ -786,7 +785,7 @@ def test_spec_step_history_pages_match_sequential_decode(device, B, K_draft):
     inp = inputs(B, seed=B + T + 7)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = HistVerify(device, kv, B, T, gen, starts, dests, par=(B + T) & 1)
@@ -837,7 +836,7 @@ def test_spec_step_history_pages_chain_through_blocks(device, K_draft, B, opts):
     for s in range(steps):
         alias = s % T  # position whose destination is the step's start block
         sets[s] = [[None if t == alias else d for t, d in enumerate(row)] for row in sets[s]]
-    kv = _kv_blocks_or_skip(device, n, gen)
+    kv = kv_blocks_or_skip(device, n, gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
 
@@ -898,7 +897,7 @@ def test_spec_step_history_pages_padding_rows(device, B, opts):
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
     for u in nulls:
         starts[u], dests[u] = 0, [0] * T
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in live + list(held)])
     for h in range(NV):
         pool, page = kv.state_page(0, h)
@@ -928,7 +927,7 @@ def test_spec_step_history_pages_refuse_bad_layouts(device, expect_error):
     inp = inputs(B, seed=1)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     v = Verify(device, kv, B, T, gen, starts, dests)
     with expect_error(RuntimeError, "pass either win_a and win_b"):
         v.run(consts, taps, conv_hist=kv.hist)
@@ -952,7 +951,7 @@ def test_spec_step_long_verifies(device, K_draft, B, hist):
     inp = inputs(B, seed=B + T + 3)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     v = (HistVerify if hist else Verify)(device, kv, B, T, gen, starts, dests)
@@ -984,7 +983,7 @@ def test_spec_step_history_pages_run_the_leading_users_of_a_wider_ctrl_page(devi
     inp = inputs(M, seed=3100 + b)
     consts, taps = consts_dev(device, inp), spec_taps(device, inp)
     starts, dests = distinct_blocks(M, T, num_blocks_for(M, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(M, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(M, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(M)])
     kv.write()
     v = HistVerify(device, kv, M, T, gen, starts, dests)
@@ -1013,7 +1012,7 @@ def _model_verify(device, B, T, seed, hist=True):
     for key in ("dtb", "nea"):
         consts[key] = tile_dev(device, inp[key].float(), ttnn.float32)
     starts, dests = distinct_blocks(B, T, num_blocks_for(B, T), gen)
-    kv = _kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
+    kv = kv_blocks_or_skip(device, num_blocks_for(B, T), gen)
     kv.place([(starts[u], inp["h"][u], inp["hist2"][u]) for u in range(B)])
     kv.write()
     if hist:
