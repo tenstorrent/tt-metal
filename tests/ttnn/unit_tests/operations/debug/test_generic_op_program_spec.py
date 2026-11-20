@@ -1147,7 +1147,8 @@ def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
 def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     """Every call merges the output's tensor topology from the labels of io_tensors, the output's own included: a call
     that raises after the label changes and a prepare_generic_op call too. The merged label can be 1-D, and other
-    tensors keep their labels. The labels that the note in generic_op's docstring builds are ttnn's own."""
+    tensors keep their labels. The labels that the note in generic_op's docstring builds are ttnn's own, and a split one
+    put on the output stays through later calls."""
     torch.manual_seed(29)
     sharded = ttnn.from_torch(
         torch.rand([2, 1, 32, 32]).to(torch.bfloat16),
@@ -1167,7 +1168,8 @@ def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     assert split == input_label
 
     # exp over the sharded input writes different data on each device, split along dim 0 as the input is, and the
-    # merged label says so, in the input's 1-D form.
+    # merged label says so, in the input's 1-D form: after a call that raises after the label changes, after
+    # prepare_generic_op, and after a call that runs. The input keeps its label.
     spec, run_args = exp_program(sharded, output)
     run_args.tensor_args = {"input": sharded, "output": output, "extra": sharded}
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
@@ -1176,9 +1178,10 @@ def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     output.update_tensor_topology(allocated)
     E.prepare_generic_op([sharded, output], *exp_program(sharded, output))
     assert output.tensor_topology() == split
-    assert sharded.tensor_topology() == input_label
+    output.update_tensor_topology(allocated)
     E.generic_op([sharded, output], *exp_program(sharded, output))
     assert output.tensor_topology() == split
+    assert sharded.tensor_topology() == input_label
 
     # exp over an input replicated from the host writes the same data on every device, and the merged label says so,
     # in the input's 1-D form. Given the note's label for it, the output gets the merged one back on the next call.
@@ -1193,6 +1196,23 @@ def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
     assert output.tensor_topology() == same
     E.generic_op([replicated, output], *exp_program(replicated, output))
     assert output.tensor_topology() == merged
+
+    # Mul on the first device and add on the second, over inputs replicated from the host, write different data on
+    # each device, which the merged label misses. The note's split label fixes that, and it stays through the next
+    # call, since the output's own label is part of the merge and a split label wins it.
+    _, a, b, out = inputs(mesh_device, seed=31)
+    mul_spec, mul_args = mul_program(a, b, out)
+    add_spec, add_args = mul_program(a, b, out)
+    kernels = add_spec.kernels
+    kernels[1].compiler_options = E.KernelSpec.CompilerOptions(defines={"BINARY_ADD": "1"})
+    add_spec.kernels = kernels
+    spec = E.MeshProgramSpec(programs=[(one_device(0), mul_spec), (one_device(1), add_spec)])
+    run_args = E.MeshProgramRunArgs(programs=[(one_device(0), mul_args), (one_device(1), add_args)])
+    E.generic_op([a, b, out], spec, run_args)
+    assert out.tensor_topology() == merged
+    out.update_tensor_topology(split)
+    E.generic_op([a, b, out], spec, run_args)
+    assert out.tensor_topology() == split
 
 
 def test_mesh_form(device):
