@@ -94,6 +94,63 @@ extern "C" void __emule_fabric_record_conn(uint32_t src, uint32_t wx, uint32_t w
 extern "C" int __emule_gchip_for_node(uint32_t mesh_id, uint32_t chip_id);
 #endif
 
+void record_worker_fabric_connection_for_emule(
+    [[maybe_unused]] const FabricNodeId& src_fabric_node_id,
+    [[maybe_unused]] const FabricNodeId& dst_fabric_node_id,
+    [[maybe_unused]] const tt::tt_metal::CoreCoord& worker_core,
+    [[maybe_unused]] RoutingDirection forwarding_direction) {
+#if defined(TT_METAL_USE_EMULE)
+    // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
+    // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
+    // Resolved through emule's registry, not the control plane: under multi-rank the DESTINATION
+    // is routinely a node on a peer rank's mesh, which has no local physical chip id.
+    const int emule_src = __emule_gchip_for_node(*src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
+    const int emule_dst = __emule_gchip_for_node(*dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
+    TT_FATAL(
+        emule_src >= 0 && emule_dst >= 0,
+        "emule could not name a fabric connection's endpoints globally. Src: {} -> {}, Dst: {} -> {}",
+        src_fabric_node_id,
+        emule_src,
+        dst_fabric_node_id,
+        emule_dst);
+    __emule_fabric_record_conn(
+        static_cast<uint32_t>(emule_src),
+        static_cast<uint32_t>(worker_core.x),
+        static_cast<uint32_t>(worker_core.y),
+        static_cast<uint32_t>(forwarding_direction),
+        static_cast<uint32_t>(emule_dst));
+#endif
+}
+
+chan_id_t get_worker_fabric_router_channel(
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection forwarding_direction,
+    uint32_t link_idx) {
+    const auto candidate_eth_chans =
+        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction);
+    TT_FATAL(
+        link_idx < candidate_eth_chans.size(),
+        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
+        link_idx,
+        candidate_eth_chans.size(),
+        src_fabric_node_id,
+        dst_fabric_node_id);
+
+    const auto forwarding_links = get_forwarding_link_indices_in_direction(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction);
+    TT_FATAL(
+        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
+        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
+        link_idx,
+        src_fabric_node_id,
+        dst_fabric_node_id,
+        forwarding_links);
+
+    return candidate_eth_chans[link_idx];
+}
+
 template <typename ProgramOrDescriptor>
 void append_fabric_connection_rt_args(
     const FabricContext& fabric_context,
@@ -151,27 +208,8 @@ void append_fabric_connection_rt_args(
         src_fabric_node_id,
         dst_fabric_node_id);
 
-    const auto candidate_eth_chans =
-        control_plane.get_active_fabric_eth_channels_in_direction(src_fabric_node_id, forwarding_direction.value());
-    TT_FATAL(
-        link_idx < candidate_eth_chans.size(),
-        "Requested link index {} is out of bounds. {} ethernet channels available to forward b/w src {} and dst {}",
-        link_idx,
-        candidate_eth_chans.size(),
-        src_fabric_node_id,
-        dst_fabric_node_id);
-
-    const auto forwarding_links = get_forwarding_link_indices_in_direction(
-        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value());
-    TT_FATAL(
-        std::find(forwarding_links.begin(), forwarding_links.end(), link_idx) != forwarding_links.end(),
-        "Requested link index {} cannot be used for forwarding b/w src {} and dst {}. Valid forwarding links are {}",
-        link_idx,
-        src_fabric_node_id,
-        dst_fabric_node_id,
-        forwarding_links);
-
-    const auto fabric_router_channel = candidate_eth_chans[link_idx];
+    const auto fabric_router_channel = get_worker_fabric_router_channel(
+        control_plane, src_fabric_node_id, dst_fabric_node_id, forwarding_direction.value(), link_idx);
 
     uint32_t worker_teardown_semaphore_id;
     uint32_t worker_buffer_index_semaphore_id;
@@ -204,27 +242,8 @@ void append_fabric_connection_rt_args(
     if (core_type == CoreType::WORKER) {
         append_worker_to_fabric_edm_sender_rt_args(
             fabric_router_channel, worker_teardown_semaphore_id, worker_buffer_index_semaphore_id, worker_args);
-#if defined(TT_METAL_USE_EMULE)
-        // Record (src_chip, worker_core, forwarding_direction, neighbor_chip) for the emule teleport's 1D
-        // dst resolution. Called per connection in fwd-then-bwd order (matches the kernel's read order).
-        // Resolved through emule's registry, not the control plane: under multi-rank the DESTINATION
-        // is routinely a node on a peer rank's mesh, which has no local physical chip id.
-        const int emule_src = __emule_gchip_for_node(*src_fabric_node_id.mesh_id, src_fabric_node_id.chip_id);
-        const int emule_dst = __emule_gchip_for_node(*dst_fabric_node_id.mesh_id, dst_fabric_node_id.chip_id);
-        TT_FATAL(
-            emule_src >= 0 && emule_dst >= 0,
-            "emule could not name a fabric connection's endpoints globally. Src: {} -> {}, Dst: {} -> {}",
-            src_fabric_node_id,
-            emule_src,
-            dst_fabric_node_id,
-            emule_dst);
-        __emule_fabric_record_conn(
-            static_cast<uint32_t>(emule_src),
-            static_cast<uint32_t>(worker_core.x),
-            static_cast<uint32_t>(worker_core.y),
-            static_cast<uint32_t>(forwarding_direction.value()),
-            static_cast<uint32_t>(emule_dst));
-#endif
+        record_worker_fabric_connection_for_emule(
+            src_fabric_node_id, dst_fabric_node_id, worker_core, forwarding_direction.value());
     } else {
         // TODO: will be deprecated. currently for ethernet dispatch case
         //       ethernet core need to have same memory mapping as worker

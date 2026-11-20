@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <optional>
 #include <unordered_map>
 
 #include <tt-logger/tt-logger.hpp>
@@ -21,7 +22,23 @@
 
 namespace tt::tt_metal {
 
-Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) {
+namespace {
+
+// The coordinate of the device of `range`, if the range has exactly one device.
+std::optional<distributed::MeshCoordinate> SingleDeviceOf(const distributed::MeshCoordinateRange& range) {
+    if (range.shape().mesh_size() != 1) {
+        return std::nullopt;
+    }
+    return range.start_coord();
+}
+
+}  // namespace
+
+// `device`: the coordinate of the one device that the Program runs on, if the caller knows it.
+Program BuildProgramFromSpec(
+    distributed::MeshDevice& mesh_device,
+    const std::optional<distributed::MeshCoordinate>& device,
+    const ProgramSpec& spec) {
     log_debug(tt::LogMetal, "Creating Program from ProgramSpec ({})", spec.name);
     MetalContext& metal_ctx = mesh_device.impl().metal_context();
 
@@ -32,7 +49,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
     ValidateProgramSpec(spec, collected, metal_ctx, *mesh_device.allocator());
 
     // Step 2: Build the program
-    return BuildProgram(mesh_device, spec, collected, metal_ctx);
+    return BuildProgram(mesh_device, device, spec, collected, metal_ctx);
 }
 
 // ============================================================================
@@ -40,7 +57,7 @@ Program BuildProgramFromSpec(distributed::MeshDevice& mesh_device, const Program
 // ============================================================================
 
 Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) :
-    Program(BuildProgramFromSpec(mesh_device, spec)) {
+    Program(BuildProgramFromSpec(mesh_device, std::nullopt, spec)) {
     impl().compile_and_allocate(&mesh_device, false);
 }
 
@@ -56,15 +73,15 @@ distributed::MeshWorkload::MeshWorkload(
             "Device range {} is outside MeshDevice shape {}",
             device_range,
             mesh_device.shape());
-        impl().add_program(device_range, BuildProgramFromSpec(mesh_device, program_spec));
+        impl().add_program(device_range, BuildProgramFromSpec(mesh_device, SingleDeviceOf(device_range), program_spec));
     }
     impl().compile(&mesh_device);
 }
 
 distributed::MeshWorkload::MeshWorkload(distributed::MeshDevice& mesh_device, const ProgramSpec& program_spec) :
     MeshWorkload() {
-    impl().add_program(
-        distributed::MeshCoordinateRange(mesh_device.shape()), BuildProgramFromSpec(mesh_device, program_spec));
+    const distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    impl().add_program(device_range, BuildProgramFromSpec(mesh_device, SingleDeviceOf(device_range), program_spec));
     impl().compile(&mesh_device);
 }
 

@@ -76,6 +76,24 @@ std::vector<uint32_t> get_forwarding_link_indices_in_direction(
     const FabricNodeId& dst_fabric_node_id,
     RoutingDirection direction);
 
+// The ethernet channel of the fabric router that a worker on `src_fabric_node_id` connects to, to send toward
+// `dst_fabric_node_id` in `forwarding_direction` over link `link_idx`.
+// Throws if `link_idx` is not a forwarding link from `src_fabric_node_id` to `dst_fabric_node_id` in that direction.
+chan_id_t get_worker_fabric_router_channel(
+    const ControlPlane& control_plane,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    RoutingDirection forwarding_direction,
+    uint32_t link_idx);
+
+// Records a worker's fabric connection from `src_fabric_node_id` toward `dst_fabric_node_id` for the emulator, which
+// has no fabric router. Does nothing outside emulator builds.
+void record_worker_fabric_connection_for_emule(
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id,
+    const tt::tt_metal::CoreCoord& worker_core,
+    RoutingDirection forwarding_direction);
+
 // Context-explicit form of the public get_forwarding_link_indices: resolves the forwarding direction and the link
 // indices from `control_plane` instead of the default MetalContext's. Returns {} when there is no forwarding direction.
 std::vector<uint32_t> get_forwarding_link_indices(

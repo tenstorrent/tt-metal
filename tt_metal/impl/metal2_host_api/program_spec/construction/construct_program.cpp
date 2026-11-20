@@ -26,6 +26,7 @@ namespace tt::tt_metal {
 
 Program BuildProgram(
     distributed::MeshDevice& mesh_device,
+    [[maybe_unused]] const std::optional<distributed::MeshCoordinate>& device,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     [[maybe_unused]] MetalContext& metal_ctx) {
