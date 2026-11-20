@@ -23,12 +23,14 @@ notes:
 - id: OV-3
   tasks:
   - '*'
-  status: open
+  status: closed
   t: '2026-10-26T14:06:33'
   text: 'Owner rule (2026-10-26): never pad, duplicate or otherwise inflate work to get around a kernel or fork limit (e.g.
     zero-padding a weight to a size an op accepts). That is a performance penalty in a model meant to be realistic. Extend
     or fix the kernel / fork instead (forks first), with its own tests; if that is impossible in the step, stop and say
     so.'
+  closed: '2026-11-20T23:04:40'
+  why_closed: 'MB.2: fixed-shape gathers for one program shape (rule 20), not padding for a kernel limit; accepted'
 - id: OV-4
   tasks:
   - FIX.1
