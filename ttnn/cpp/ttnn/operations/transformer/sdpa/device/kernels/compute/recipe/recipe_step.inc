@@ -6,7 +6,7 @@
 // SDPA_RECIPE_COLD defined around the include as these functions' attributes: with fused chunks the reduce path (a Q
 // chunk's first K chunk, redone groups) and normalization are cold, so out of line and size-optimized (also their
 // lambdas, which take the enclosing function's optimization) to fit the ring kernels in the kernel config buffer;
-// every other build keeps them at the kernel's level. recipe::fused_active picks the copy (sdpa_segment_v2).
+// every other build keeps them at the kernel's level. recipe::fused_active picks the copy (sdpa_recipe_segment).
 
 // abs_row: pack the maxima at that absolute row of an already-published out_cb (a fused chunk's redo)
 // instead of appending them.
@@ -1885,7 +1885,7 @@ ALWI bool recipe_fused_chunk_step(
 }
 
 // One Q chunk over k_num_chunks K chunks: the online-softmax loop for recipes B-E. Called once per Q chunk
-// by sdpa_standard_v2 (dense and joint). A caller may split one Q chunk's K range into several segments,
+// by sdpa_recipe_q_chunks (dense and joint). A caller may split one Q chunk's K range into several segments,
 // setting final_segment on the last.
 template <
     uint32_t Sq_chunk_t,
@@ -1907,7 +1907,7 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
-ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
+ALWI void sdpa_recipe_segment(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     static_assert(Sq_chunk_t >= 1 && Sq_chunk_t <= kRecipeMaxQTiles && vDHt <= DHt && vDHt >= 1);
     ASSERT(k_num_chunks > 0);
     auto& prev = state.prev;

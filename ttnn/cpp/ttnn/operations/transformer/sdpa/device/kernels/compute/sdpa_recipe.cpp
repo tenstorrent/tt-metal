@@ -45,7 +45,7 @@ constexpr uint32_t cb_qk = 6, cb_out_a = 8, cb_out_b = 9, cb_max_a = 10, cb_max_
 // B-E: FP32 recipes process one Q tile row per group; paired BF16 recipes two (the host pads odd chunks).
 void recipe_run(uint32_t jobs) {
     constexpr uint32_t subblock_h = recipe::fp32 ? 1 : 2;
-    sdpa_standard_v2<
+    sdpa_recipe_q_chunks<
         q_tiles,
         k_tiles,
         d_tiles,

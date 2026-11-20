@@ -722,9 +722,9 @@ template <
     uint32_t cb_recip_scratch,
     uint32_t cb_normalized_out,
     bool independent_q_release = false>
-ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
+ALWI void sdpa_recipe_segment(RecipeAccumulatorState& state, uint32_t k_num_chunks, bool final_segment, bool release_q) {
     if constexpr (recipe::fused_active) {
-        recipe_cold_step::sdpa_segment_v2<
+        recipe_cold_step::sdpa_recipe_segment<
             Sq_chunk_t,
             Sk_chunk_t,
             DHt,
@@ -745,7 +745,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
             cb_normalized_out,
             independent_q_release>(state, k_num_chunks, final_segment, release_q);
     } else {
-        recipe_hot_step::sdpa_segment_v2<
+        recipe_hot_step::sdpa_recipe_segment<
             Sq_chunk_t,
             Sk_chunk_t,
             DHt,
@@ -769,7 +769,7 @@ ALWI void sdpa_segment_v2(RecipeAccumulatorState& state, uint32_t k_num_chunks, 
 }
 
 template <uint32_t... Configuration>
-void sdpa_standard_v2(
+void sdpa_recipe_q_chunks(
     uint32_t q_chunks_per_core,
     uint32_t k_num_chunks,
     uint32_t cb_out_im_A,
@@ -787,6 +787,6 @@ void sdpa_standard_v2(
         if constexpr (recipe::sink) {
             recipe_read_sink();
         }
-        sdpa_segment_v2<Configuration...>(state, k_num_chunks, true, true);
+        sdpa_recipe_segment<Configuration...>(state, k_num_chunks, true, true);
     }
 }
