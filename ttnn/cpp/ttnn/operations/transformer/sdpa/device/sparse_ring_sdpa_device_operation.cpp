@@ -344,6 +344,20 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         mask.logical_shape());
     const uint32_t nkc_local = tt::div_up(N_local_kv, args.get_k_chunk_size());
     TT_FATAL(nkc_local <= 64, "SparseRingSDPA: at most 64 K pieces per shard ({} given)", nkc_local);
+    if (tensor_args.has_logical_n_tensor()) {
+        // The reader reads page 0, element 0 as a raw 32-bit word at every dispatch; the value is the caller's
+        // contract (1 to N_local * ring_size, clamped on device).
+        const auto& t = *tensor_args.logical_n_tensor;
+        TT_FATAL(
+            t.dtype() == DataType::UINT32 || t.dtype() == DataType::INT32,
+            "logical_n_tensor must be uint32 or int32, got {}",
+            t.dtype());
+        TT_FATAL(
+            t.storage_type() == StorageType::DEVICE && t.buffer() != nullptr &&
+                t.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+            "logical_n_tensor must be allocated in DRAM");
+        TT_FATAL(t.logical_volume() == 1, "logical_n_tensor must hold one value, got volume {}", t.logical_volume());
+    }
 }
 
 void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(
@@ -394,10 +408,16 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     if (tensor_args.head_weights.has_value()) {
         input_tensors.push_back(*tensor_args.head_weights);
     }
+    // With logical_n_tensor the kernels take the length from the tensor: the host value leaves the key (0 cannot
+    // collide with a keyed length, which is validated > 0), so every length of the padded shape shares one program.
+    if (tensor_args.has_logical_n_tensor()) {
+        input_tensors.push_back(*tensor_args.logical_n_tensor);
+    }
+    const std::size_t keyed_logical_n = tensor_args.has_logical_n_tensor() ? 0 : args.logical_n;
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
         args.scale,
-        args.logical_n,
+        keyed_logical_n,
         args.ring_size,
         args.compute_kernel_config,
         args.program_config,
@@ -489,7 +509,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<ttnn::Tensor>& head_weights,
     const std::vector<uint32_t>& dense_q_blocks,
     bool output_token_major,
-    std::optional<DataType> output_dtype) {
+    std::optional<DataType> output_dtype,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
     TT_FATAL(
         pooled_k.has_value() == pooled_v.has_value(),
@@ -565,7 +586,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         .pooled_k = pooled_k,
         .pooled_v = pooled_v,
         .block_counts = block_counts,
-        .head_weights = head_weights};
+        .head_weights = head_weights,
+        .logical_n_tensor = logical_n_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }

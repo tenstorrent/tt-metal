@@ -16,6 +16,9 @@
 #include "sparse_dyn_split.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+#include "sparse_ring_length.hpp"
+#endif
 
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
@@ -71,7 +74,17 @@ void kernel_main() {
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
     constexpr auto head_weights_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // Runtime logical length (logical_n_tensor): its accessor follows head_weights' only when the tensor is given.
+    constexpr bool kLogicalNTensor = true;
+    constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
+    constexpr auto logical_n_args = TensorAccessorArgs<head_weights_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = logical_n_args.next_compile_time_args_offset();
+#else
+    constexpr bool kLogicalNTensor = false;
+    constexpr uint32_t kLengthWordsOffset = 0;
     constexpr uint32_t chains_base_offset = head_weights_args.next_compile_time_args_offset();
+#endif
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -100,8 +113,8 @@ void kernel_main() {
         argidx++;
     }
 
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx += 4;
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(true, argidx);
 
@@ -134,7 +147,6 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t dyn_core_index = get_arg_val<uint32_t>(sparse_args_base + 7);
     const uint32_t pooled_bias_table_base = sparse_args_base + 8;
     const uint32_t group_members_base = sparse_args_base + 8 + pooled_bias_gen::kTableWords;
-    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
     constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
     constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
     constexpr uint32_t mask_n_blocks_pad = get_named_compile_time_arg_val("mask_n_blocks_pad");
@@ -169,6 +181,37 @@ void kernel_main() {
     constexpr uint32_t v_cb_entry_tiles = v_chunk_tiles;
 
     Noc noc;
+
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // The length from the tensor and what follows from it (the runtime args logical_nt and active_ring_iter_mask
+    // hold the padded length's values). The plan page is free scratch until the dynamic split / first plan.
+    uint32_t logical_n_tokens = 0;
+    {
+        CircularBuffer cb_plan(cb_sparse_plan);
+        cb_plan.reserve_back(1);
+        const auto len = sparse_ring_length::read<
+            full_mesh_rank_mapping,
+            ring_size,
+            kv_local_padded_Nt,
+            Sk_chunk_t,
+            num_local_k_chunks,
+            chunk_size_t,
+            kv_region_Nt>(
+            noc,
+            logical_n_args,
+            get_common_arg_val<uint32_t>(SPARSE_LOGICAL_N_ARG),
+            cb_plan.get_write_ptr(),
+            fused_op_receiver.seq,
+            mesh_rows,
+            mesh_cols,
+            snake_orientation);
+        logical_n_tokens = len.logical_n;
+        logical_nt = len.logical_nt;
+        active_ring_iter_mask = len.active_ring_iter_mask;
+    }
+#else
+    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
+#endif
 
     constexpr uint32_t dyn_mode = get_named_compile_time_arg_val("dyn_mode");
     constexpr bool dyn_all_grouped = get_named_compile_time_arg_val("dyn_all_grouped") == 1;
@@ -229,6 +272,19 @@ void kernel_main() {
             dn.n_dense = dn.n_dense < sparse_dyn_split::kMaxDense ? dn.n_dense : sparse_dyn_split::kMaxDense;
             for (uint32_t i = 0; i < dn.n_dense; ++i) {
                 dn.pos[i] = get_common_arg_val<uint32_t>(dyn_dense_base + 2 + i);
+            }
+            if constexpr (kLogicalNTensor) {
+                // A dense row's kept count (the full key blocks inside logical_n) from the live length; the host's
+                // n_full counted the padded length.
+                constexpr uint32_t shard_tokens = kv_local_padded_Nt * 32;
+                constexpr uint32_t full_per_shard = shard_tokens / pooled_bias_gen::kBlockTokens;
+                dn.n_full = 0;
+                for (uint32_t sh = 0; sh < ring_size; ++sh) {
+                    if (logical_n_tokens > sh * shard_tokens) {
+                        const uint32_t f = (logical_n_tokens - sh * shard_tokens) / pooled_bias_gen::kBlockTokens;
+                        dn.n_full += f < full_per_shard ? f : full_per_shard;
+                    }
+                }
             }
         }
         sparse_dyn_split::Entry e;
@@ -394,6 +450,15 @@ void kernel_main() {
         r[0] = global_q_start;
         r[1] = global_q_end;
     };
+    // logical_n_tensor: the derived length words for compute (it cannot read DRAM).
+    [[maybe_unused]] const auto write_length_words = [&](uint32_t page) {
+        if constexpr (kLogicalNTensor) {
+            CoreLocalMem<volatile uint32_t> r(page + kLengthWordsOffset);
+            r[0] = logical_n_tokens;
+            r[1] = logical_nt;
+            r[2] = active_ring_iter_mask;
+        }
+    };
     [[maybe_unused]] volatile tt_l1_ptr uint8_t* counts_table = nullptr;
     if constexpr (has_block_counts) {
         CircularBuffer cb_counts(cb_block_counts);
@@ -420,11 +485,15 @@ void kernel_main() {
         if constexpr (dyn_mode == 2) {
             write_dyn_range(cb_counts.get_write_ptr());
         }
+        write_length_words(cb_counts.get_write_ptr());
         cb_counts.push_back(1);
-    } else if constexpr (dyn_mode == 2) {
+    } else if constexpr (dyn_mode == 2 || kLogicalNTensor) {
         CircularBuffer cb_counts(cb_block_counts);
         cb_counts.reserve_back(1);
-        write_dyn_range(cb_counts.get_write_ptr());
+        if constexpr (dyn_mode == 2) {
+            write_dyn_range(cb_counts.get_write_ptr());
+        }
+        write_length_words(cb_counts.get_write_ptr());
         cb_counts.push_back(1);
     }
     const auto block_count = [&](uint32_t s, uint32_t b) -> uint32_t {

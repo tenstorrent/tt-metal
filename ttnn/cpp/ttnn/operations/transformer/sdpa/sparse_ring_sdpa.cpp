@@ -37,7 +37,8 @@ ttnn::Tensor sparse_ring_sdpa(
     const std::optional<ttnn::Tensor>& head_weights,
     const std::vector<uint32_t>& dense_q_blocks,
     bool output_token_major,
-    std::optional<DataType> output_dtype) {
+    std::optional<DataType> output_dtype,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -66,7 +67,8 @@ ttnn::Tensor sparse_ring_sdpa(
         head_weights,
         dense_q_blocks,
         output_token_major,
-        output_dtype);
+        output_dtype,
+        logical_n_tensor);
     return output_tensors[prim::SPARSE_RING_SDPA_OUTPUT_IDX];
 }
 

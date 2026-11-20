@@ -146,14 +146,15 @@ struct CheckedRuntimeArgList {
 RingWorkMasks build_ring_work_masks(
     const ttnn::prim::SparseRingSDPAParams& args,
     const ttnn::prim::SparseRingSDPAInputs& tensor_args,
-    const RingWritePlan& ring_write_plan) {
+    const RingWritePlan& ring_write_plan,
+    uint32_t logical_n) {
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     TT_FATAL(
         ring_size <= std::numeric_limits<uint32_t>::digits,
         "SparseRingSDPA host ring-work masks support up to {} ring iterations. Got ring_size={}",
         std::numeric_limits<uint32_t>::digits,
         ring_size);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(logical_n, tt::constants::TILE_HEIGHT);
     const uint32_t kv_local_padded_Nt = tensor_args.local_kv_seq_len() / tt::constants::TILE_HEIGHT;
     const uint32_t k_chunk_tile_count = args.get_k_chunk_size() / tt::constants::TILE_HEIGHT;
     const uint32_t num_local_k_chunks = tt::div_up(tensor_args.local_kv_seq_len(), args.get_k_chunk_size());
@@ -324,10 +325,16 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t gathered_padded_Nt = gathered_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t vDHt = vDH / tt::constants::TILE_WIDTH;
-    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan);
+    // logical_n_tensor: the kernels read the length on device (reader and writer read the tensor and derive logical_nt
+    // and the ring mask, the reader also the dense-row cost; compute takes them from the counts page). Every host value
+    // that would carry the length is then the padded length, so the program does not depend on the host logical_n.
+    const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
+    const uint32_t host_logical_n =
+        has_logical_n_tensor ? kv_local_padded_N * ring_size : static_cast<uint32_t>(args.logical_n);
+    const RingWorkMasks ring_work_masks = build_ring_work_masks(args, tensor_args, ring_write_plan, host_logical_n);
     const RingJointRuntimeArgLayout runtime_arg_layout =
         get_runtime_arg_layout(use_head_chain, k_uses_batch_chain, gqa_grouped_kv);
-    const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
+    const uint32_t logical_nt = tt::div_up(host_logical_n, tt::constants::TILE_HEIGHT);
     constexpr uint32_t kUnusedQMappingWord = 0;
 
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
@@ -353,7 +360,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
 
-    const uint32_t compile_time_logical_n = static_cast<uint32_t>(args.logical_n);
+    // With logical_n_tensor the compile-time length slots hold 0 (the kernels gate on SPARSE_LOGICAL_N_TENSOR).
+    const uint32_t compile_time_logical_n = has_logical_n_tensor ? 0u : static_cast<uint32_t>(args.logical_n);
+    const uint32_t compile_time_logical_nt = has_logical_n_tensor ? 0u : logical_nt;
     const uint32_t compile_time_global_n_partial_col = compile_time_logical_n % tt::constants::TILE_HEIGHT;
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
@@ -610,6 +619,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     tt::tt_metal::Buffer* const head_weights_buf =
         tensor_args.head_weights.has_value() ? tensor_args.head_weights->buffer() : nullptr;
     TensorAccessorArgs(head_weights_buf).append_to(reader_compile_time_args);
+    tt::tt_metal::Buffer* const logical_n_buf = has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr;
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(reader_compile_time_args);
+    }
 
     struct ChainSemaphores {
         uint32_t sender_id;
@@ -724,6 +737,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
+    if (has_logical_n_tensor) {
+        TensorAccessorArgs(logical_n_buf).append_to(writer_compile_time_args);
+    }
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -734,7 +750,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         q_local_padded_Nt,
         kv_local_padded_Nt,
         compile_time_logical_n,
-        logical_nt,
+        compile_time_logical_nt,
         0,
         0,
         num_local_q_chunks,
@@ -847,11 +863,21 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const bool has_block_counts = tensor_args.block_counts.has_value();
     const uint32_t block_counts_bytes = tt::round_up(mask_n_blocks_pad, 32u);
     const bool dyn_on_requested = tensor_args.head_weights.has_value() && sparse_ring_dyn_split() == 2;
-    const bool has_counts_page = has_block_counts || dyn_on_requested;
+    // The counts page: the clamped block counts (block_counts), then the dynamic split's Q range, then
+    // (logical_n_tensor) the reader's derived length words for compute: logical_n, logical_nt, active_ring_iter_mask.
+    const bool has_counts_page = has_block_counts || dyn_on_requested || has_logical_n_tensor;
     const uint32_t dyn_range_offset = has_block_counts ? block_counts_bytes : 0u;
-    const uint32_t counts_page_bytes = (has_block_counts ? block_counts_bytes : 0u) + (dyn_on_requested ? 32u : 0u);
+    const uint32_t length_words_offset = dyn_range_offset + (dyn_on_requested ? 32u : 0u);
+    const uint32_t counts_page_bytes = length_words_offset + (has_logical_n_tensor ? 32u : 0u);
+    if (has_logical_n_tensor) {
+        // All kernels: the byte offset of the derived length words in the counts page.
+        defines["SPARSE_LOGICAL_N_TENSOR"] = std::to_string(length_words_offset);
+    }
+    // Key-bias tiles mask a block's columns past its last token. A runtime length can end mid-tile at any call.
     const uint32_t key_bias_tiles =
-        (has_block_counts || args.logical_n % tt::constants::TILE_WIDTH != 0) ? 2 * (Sk_chunk_t / block_tiles) : 0u;
+        (has_block_counts || has_logical_n_tensor || args.logical_n % tt::constants::TILE_WIDTH != 0)
+            ? 2 * (Sk_chunk_t / block_tiles)
+            : 0u;
     struct CbLayout {
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
@@ -1079,9 +1105,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 for (uint32_t sh = 0; sh < ring_size; ++sh) {
                     for (uint32_t b = 0; b * block_tokens < kv_local_padded_N; ++b) {
                         const uint64_t lo = uint64_t(sh) * kv_local_padded_N + uint64_t(b) * block_tokens;
-                        dense_n_full += ((b + 1) * block_tokens <= kv_local_padded_N && lo + block_tokens <= args.logical_n)
-                                            ? 1u
-                                            : 0u;
+                        const bool full = (b + 1) * block_tokens <= kv_local_padded_N;
+                        dense_n_full += (full && lo + block_tokens <= host_logical_n) ? 1u : 0u;
                     }
                 }
                 log_info(
@@ -1557,7 +1582,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"pooled_chunks", pooled_chunks},
         {"pooled_last_tiles", pooled_last_tiles},
         {"mask_row_bytes", mask_row_bytes},
-        {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"sparse_logical_n", compile_time_logical_n},
         {"cb_sparse_plan", cb_sparse_plan},
         {"cb_pooled_bias", cb_pooled_bias},
         {"has_block_counts", has_block_counts ? 1u : 0u},
@@ -1821,10 +1846,24 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (dyn_dense_on) {
         reader_common_args.insert(reader_common_args.end(), dyn_dense_words.begin(), dyn_dense_words.end());
     }
-    if (!reader_common_args.empty()) {
+    if (has_logical_n_tensor) {
+        // Then the logical_n tensor's address, a buffer binding (re-patched on a cache hit).
+        reader_kernel.defines.emplace_back("SPARSE_LOGICAL_N_ARG", std::to_string(reader_common_args.size()));
+        KernelDescriptor::RTArgList common_args;
+        common_args.append(reader_common_args);
+        common_args.push_back(logical_n_buf);
+        reader_kernel.emplace_common_runtime_args(common_args);
+    } else if (!reader_common_args.empty()) {
         reader_kernel.common_runtime_args = reader_common_args;
     }
-    if (!q_perm_words.empty()) {
+    if (has_logical_n_tensor) {
+        // The writer reads the length too (its ring mask): the address after the Q table.
+        writer_kernel.defines.emplace_back("SPARSE_LOGICAL_N_WRITER_ARG", std::to_string(q_perm_words.size()));
+        KernelDescriptor::RTArgList common_args;
+        common_args.append(q_perm_words);
+        common_args.push_back(logical_n_buf);
+        writer_kernel.emplace_common_runtime_args(common_args);
+    } else if (!q_perm_words.empty()) {
         writer_kernel.common_runtime_args = q_perm_words;
     }
     desc.kernels.push_back(std::move(reader_kernel));

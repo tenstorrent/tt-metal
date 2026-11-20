@@ -18,6 +18,9 @@
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+#include "sparse_ring_length.hpp"
+#endif
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
@@ -70,7 +73,13 @@ void kernel_main() {
 
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // Runtime logical length (logical_n_tensor): its accessor follows the output's only when the tensor is given.
+    constexpr auto logical_n_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
+    constexpr uint32_t cb_arg_offset = logical_n_args.next_compile_time_args_offset();
+#else
     constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
+#endif
 
     static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
     static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
@@ -79,8 +88,8 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
     argidx++;
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(false, argidx);
 
@@ -91,6 +100,32 @@ void kernel_main() {
     constexpr uint32_t tile_bytes = get_tile_size(cb_out);
 
     Noc noc;
+
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    {
+        // The writer reads the length itself (the reader's copy sits in a page compute pops) for the ring mask: the
+        // runtime args hold the padded length's values. cb_col_identity is unused until generated below.
+        constexpr uint32_t num_local_k_chunks = get_compile_time_arg_val(13);
+        const auto len = sparse_ring_length::read<
+            full_mesh_rank_mapping,
+            ring_size,
+            kv_local_padded_Nt,
+            Sk_chunk_t,
+            num_local_k_chunks,
+            chunk_size_t,
+            kv_region_Nt>(
+            noc,
+            logical_n_args,
+            get_common_arg_val<uint32_t>(SPARSE_LOGICAL_N_WRITER_ARG),
+            CircularBuffer(cb_col_identity).get_write_ptr(),
+            fused_op_receiver.seq,
+            mesh_rows,
+            mesh_cols,
+            snake_orientation);
+        logical_nt = len.logical_nt;
+        active_ring_iter_mask = len.active_ring_iter_mask;
+    }
+#endif
 
     const auto out_writer = TensorAccessor(out_args, out_addr);
     constexpr bool output_has_no_padding = q_local_padded_Nt % Sq_chunk_t == 0;

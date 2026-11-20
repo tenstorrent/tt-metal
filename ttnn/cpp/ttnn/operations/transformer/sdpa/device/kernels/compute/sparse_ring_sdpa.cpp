@@ -34,14 +34,23 @@ void kernel_main() {
     constexpr uint32_t qk_subblock_w = get_compile_time_arg_val(17);
     constexpr uint32_t scale_fp32 = get_compile_time_arg_val(26);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(27) == 1;
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // Runtime logical length (logical_n_tensor): the reader leaves logical_n, logical_nt and active_ring_iter_mask in
+    // the counts page at this byte offset; the global-N mask path is always built and gated per ring iteration.
+    constexpr bool kLogicalNTensor = true;
+    constexpr uint32_t kLengthWordsOffset = SPARSE_LOGICAL_N_TENSOR;
+#else
+    constexpr bool kLogicalNTensor = false;
     constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(28);
+#endif
     constexpr uint32_t chunk_size_t = get_compile_time_arg_val(34);
     constexpr uint32_t kv_region_Nt = q_local_padded_Nt;
     static_assert(kv_region_Nt * ring_size == chunk_size_t, "chunk_size_t must span one KV region per ring rank");
     static_assert(use_streaming_compute, "the resident step runs on the streaming compute path (fp32_dest_acc_en off)");
 
     constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
+    constexpr bool global_n_has_padding =
+        logical_n_compile % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0 || kLogicalNTensor;
     constexpr uint32_t local_n_padded_tiles = local_n_has_padding ? Sk_chunk_t - (kv_local_padded_Nt % Sk_chunk_t) : 0;
 
     uint32_t argidx = 0;
@@ -51,9 +60,9 @@ void kernel_main() {
     const uint32_t ring_index_runtime = get_arg_val<uint32_t>(argidx++);
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
-    const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
+    uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
     argidx += 4;
-    const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
+    uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
     constexpr uint32_t cb_arg_offset = 49;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
@@ -96,11 +105,18 @@ void kernel_main() {
     CircularBuffer(cb_identity_scale_in).wait_front(1);
     [[maybe_unused]] const volatile uint8_t* block_counts = nullptr;
     constexpr uint32_t dyn_mode = get_named_compile_time_arg_val("dyn_mode");
-    if constexpr (has_block_counts || dyn_mode == 2) {
+    if constexpr (has_block_counts || dyn_mode == 2 || kLogicalNTensor) {
         CircularBuffer(cb_block_counts).wait_front(1);
         block_counts = reinterpret_cast<const volatile uint8_t*>(ckernel::get_tile_address(cb_block_counts, 0));
         invalidate_l1_cache();
     }
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    const volatile uint32_t* length_words =
+        reinterpret_cast<const volatile uint32_t*>(block_counts + kLengthWordsOffset);
+    const uint32_t global_n_partial_col = length_words[0] % tt::constants::TILE_HEIGHT;
+    logical_nt = length_words[1];
+    active_ring_iter_mask = length_words[2];
+#endif
     if constexpr (dyn_mode == 2) {
         constexpr uint32_t dyn_range_offset = get_named_compile_time_arg_val("dyn_range_offset");
         const volatile uint32_t* range = reinterpret_cast<const volatile uint32_t*>(block_counts + dyn_range_offset);
@@ -207,7 +223,7 @@ void kernel_main() {
                 block_counts);
         }
     }
-    if constexpr (has_block_counts || dyn_mode == 2) {
+    if constexpr (has_block_counts || dyn_mode == 2 || kLogicalNTensor) {
         CircularBuffer(cb_block_counts).pop_front(1);
     }
 }

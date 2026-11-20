@@ -17,13 +17,14 @@ inputs and checks the sparse output against:
 Small geometries gate on 0.999 PCC to the reference. Production lengths (MiniMax-H3 5 / 10 / 15 s) gate against the
 dense op's own accuracy on the same inputs (_check_vs_dense_floor). The cases cover: keep-all, random densities,
 ragged shards with partial last blocks, Q blocks that keep nothing, BFP8 inputs, determinism, new inputs on a cached
-program, and several Q passes. Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production
+program, several Q passes, and the runtime logical length (logical_n_tensor: one program, and one trace, for every
+length of a padded shape). Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring); production
 lengths are skipped on CI.
 """
 
 import math
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 import torch
@@ -42,6 +43,8 @@ HEADS_PER_DEVICE = 14
 D = 128
 KEEP_ALL = 1.0
 SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
+# One captured sparse op (test_runtime_len_trace_replay) with ample headroom.
+TRACE_REGION_SIZE = 8 * 1024 * 1024
 
 
 def _pad32(n):
@@ -176,7 +179,7 @@ def dense_reference(q, k, v, logical_n, scale, heads, shards, rows):
 
 @pytest.fixture(scope="module")
 def runtime():
-    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG)
+    rt = open_ring_joint_sdpa_runtime(MESH_CONFIG, trace_region_size=TRACE_REGION_SIZE)
     yield rt
     close_ring_joint_sdpa_runtime(rt)
 
@@ -226,8 +229,23 @@ class Case:
         )
         self.dims = dims
 
-    def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT):
-        return ttnn.from_torch(x, dtype=dtype, layout=layout, device=self.rt.mesh_device, mesh_mapper=self.mapper(d))
+    def _upload(self, x, d, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, on_device=True):
+        device = self.rt.mesh_device if on_device else None
+        return ttnn.from_torch(x, dtype=dtype, layout=layout, device=device, mesh_mapper=self.mapper(d))
+
+    def length_tensor(self, n, on_device=True):
+        """The logical_n_tensor input: [1, 1, 1, 1] uint32, replicated (on_device=False: the host twin that
+        ttnn.copy_host_to_device_tensor rewrites it with)."""
+        x = torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1)
+        return self._upload(
+            x, self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, on_device=on_device
+        )
+
+    def head_weights(self, seed):
+        """A head_weights input (per (head, shard) kept-block counts, any values: they only steer the dynamic split)."""
+        g = torch.Generator().manual_seed(seed)
+        x = torch.randint(0, 64, (1, 1, HEADS_PER_DEVICE * self.S, 8), generator=g)
+        return self._upload(x, self.dims(None, None), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
     def quantize(self, x):
         """x rounded to the case's dtype on the host, so the reference sees exactly what the device reads."""
@@ -260,10 +278,16 @@ class Case:
         pooled=True,
         dense_floor=False,
         counts=None,
+        logical_n_tensor=None,
+        host_logical_n=None,
+        head_weights=None,
+        dense_q_blocks=(),
     ):
         """pooled=False omits pooled K / V: kept blocks only. dense_floor=True (with
         want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
-        block_counts input ([S * nb_pad] real tokens per global block), also used by the pooling and the reference."""
+        block_counts input ([S * nb_pad] real tokens per global block), also used by the pooling and the reference.
+        logical_n_tensor: the op's runtime length input (holding geo.logical_n); host_logical_n: the logical_n
+        argument instead of geo.logical_n (a placeholder with the tensor). head_weights / dense_q_blocks: the op's."""
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims, dtype=self.dtype) for x in (q, k, v))
         pooled_k, pooled_v = (self.quantize(pool(x, geo, self.S, counts)) for x in (k, v))
@@ -289,7 +313,7 @@ class Case:
             t_pv,
             persistent_output_buffer_k=self.buf_k,
             persistent_output_buffer_v=self.buf_v,
-            logical_n=geo.logical_n,
+            logical_n=geo.logical_n if host_logical_n is None else host_logical_n,
             program_config=self.sparse_config,
             compute_kernel_config=rt.compute_kernel_config,
             dim=2,
@@ -304,6 +328,9 @@ class Case:
             block_size=BLOCK,
             q_blocks_per_pass=q_blocks_per_pass,
             block_counts=t_counts,
+            head_weights=head_weights,
+            dense_q_blocks=list(dense_q_blocks),
+            logical_n_tensor=logical_n_tensor,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -516,3 +543,148 @@ def test_production_15s(runtime, density):
     mask = make_mask(geo, case.S, case.H, density=density, seed=16)
     r = case.run(*case.inputs(16), mask, want_ref="slice", dense_floor=True)
     _check_vs_dense_floor(f"15s d{density}", r, _density(mask, geo, case.S))
+
+
+# Runtime logical length (logical_n_tensor): per geometry, three lengths of the same padded shape - the full length, one
+# ending mid-tile, and one leaving the last shard empty (also mid-tile).
+RUNTIME_LEN_GEOMETRIES = {"r1024k256": ALIGNED["r1024k256"], "r1184k512": RAGGED["r1184k512"]}
+
+
+def _runtime_lengths(geo, S):
+    full = S * geo.rows
+    return [full, full - 472, (S - 1) * geo.rows - 40]
+
+
+def _dense_rows(mask, geo, S, blocks):
+    """The global Q blocks `blocks` (shard * nb + local block) keep every full block, as Sol's exact prefix rows."""
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1).to(torch.int64)
+    for g in blocks:
+        mask[g // geo.nb(), :, g % geo.nb()] = full
+    return mask
+
+
+@pytest.mark.parametrize("dyn", [False, True], ids=["even_split", "dyn_split"])
+@pytest.mark.parametrize("geom", list(RUNTIME_LEN_GEOMETRIES))
+def test_runtime_len_one_program(runtime, geom, dyn, monkeypatch):
+    """logical_n_tensor: three lengths of one padded shape run on ONE cached program (the host logical_n a fixed
+    placeholder), each bit-identical to the per-length program without the tensor. dyn_split also runs the dynamic Q
+    split with dense Q blocks, whose cost (a dense row's kept blocks) the reader recounts from the live length."""
+    base = RUNTIME_LEN_GEOMETRIES[geom]
+    case = Case(runtime, base)
+    S = case.S
+    lengths = _runtime_lengths(base, S)
+    extra = {}
+    dense = []
+    if dyn:
+        monkeypatch.setenv("TT_SPARSE_RING_DYN_SPLIT", "on")
+        dense = [1, base.nb() + 3]
+        extra = dict(head_weights=case.head_weights(41), dense_q_blocks=dense)
+    q, k, v = case.inputs(41)
+    masks = []
+    for n in lengths:
+        geo = replace(base, logical_n=n)
+        masks.append(_dense_rows(make_mask(geo, S, case.H, density=0.2, seed=41), geo, S, dense))
+
+    dev = runtime.mesh_device
+    refs = []
+    start = dev.num_program_cache_entries()
+    for n, mask in zip(lengths, masks):
+        case.geo = replace(base, logical_n=n)
+        refs.append(case.run(q, k, v, mask, want_dense=False, want_ref=False, **extra)["sparse"])
+    tag = f"runtime_len {geom} {'dyn' if dyn else 'even'}"
+    new_programs = dev.num_program_cache_entries() - start
+    logger.info(f"[{tag}] without the tensor: {new_programs} new programs for {len(lengths)} lengths")
+
+    t_len = case.length_tensor(lengths[0])
+    added = []
+    for i, (n, mask) in enumerate(zip(lengths, masks)):
+        case.geo = replace(base, logical_n=n)
+        ttnn.copy_host_to_device_tensor(case.length_tensor(n, on_device=False), t_len)
+        before = dev.num_program_cache_entries()
+        got = case.run(
+            q, k, v, mask, want_dense=False, want_ref=False, logical_n_tensor=t_len, host_logical_n=lengths[0], **extra
+        )["sparse"]
+        added.append(dev.num_program_cache_entries() - before)
+        same = torch.equal(got, refs[i])
+        diff = (got - refs[i]).abs().max().item()
+        logger.info(f"[{tag}] logical_n {n}: new programs {added[-1]}, bit-identical {same}, max |diff| {diff:.3e}")
+        assert same, f"logical_n {n}: differs from the per-length program, max |diff| {diff:.3e}"
+    assert added == [1, 0, 0], f"program cache entries added per call {added}: expected one program for every length"
+
+
+def test_runtime_len_trace_replay(runtime):
+    """One trace captured at one length, replayed at others with only the inputs and logical_n_tensor rewritten in
+    place: each replay bit-identical to the per-length program without the tensor."""
+    base = RUNTIME_LEN_GEOMETRIES["r1184k512"]
+    case = Case(runtime, base)
+    rt, S = runtime, case.S
+    dev = rt.mesh_device
+    lengths = _runtime_lengths(base, S)
+    q, k, v = case.inputs(43)
+    per_len = []
+    refs = []
+    for n in lengths:
+        case.geo = geo = replace(base, logical_n=n)
+        mask = make_mask(geo, S, case.H, density=0.2, seed=43)
+        pooled = [case.quantize(pool(x, geo, S)) for x in (k, v)]
+        per_len.append((mask, pooled))
+        refs.append(case.run(q, k, v, mask, want_dense=False, want_ref=False)["sparse"])
+
+    tq, tk, tv = (case._upload(x, case.seq_dims) for x in (q, k, v))
+    mask_args = (case.dims(0, 1), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    t_mask = case._upload(per_len[0][0], *mask_args)
+    t_pk, t_pv = (case._upload(x, case.dims(None, 1)) for x in per_len[0][1])
+    t_len = case.length_tensor(lengths[0])
+
+    def call():
+        return ttnn.transformer.sparse_ring_sdpa(
+            tq,
+            tk,
+            tv,
+            t_mask,
+            t_pk,
+            t_pv,
+            persistent_output_buffer_k=case.buf_k,
+            persistent_output_buffer_v=case.buf_v,
+            logical_n=lengths[0],
+            program_config=case.sparse_config,
+            compute_kernel_config=rt.compute_kernel_config,
+            dim=2,
+            multi_device_global_semaphore=rt.ccl_semaphore_handles,
+            num_links=rt.num_links,
+            cluster_axis=rt.sp_axis,
+            mesh_device=dev,
+            topology=rt.topology,
+            subdevice_id=rt.worker_sub_device_id,
+            ccl_core_grid_offset=(rt.ccl_column, 0),
+            use_column_major_ccl=True,
+            block_size=BLOCK,
+            logical_n_tensor=t_len,
+        )
+
+    ttnn.deallocate(call())
+    ttnn.synchronize_device(dev)
+    trace_id = ttnn.begin_trace_capture(dev, cq_id=0)
+    out = call()
+    ttnn.end_trace_capture(dev, trace_id, cq_id=0)
+    ttnn.synchronize_device(dev)
+    try:
+        for i in [1, 2, 0, 2, 1]:
+            n = lengths[i]
+            mask, (pk, pv) = per_len[i]
+            ttnn.copy_host_to_device_tensor(case._upload(mask, *mask_args, on_device=False), t_mask)
+            ttnn.copy_host_to_device_tensor(case._upload(pk, case.dims(None, 1), on_device=False), t_pk)
+            ttnn.copy_host_to_device_tensor(case._upload(pv, case.dims(None, 1), on_device=False), t_pv)
+            ttnn.copy_host_to_device_tensor(case.length_tensor(n, on_device=False), t_len)
+            ttnn.execute_trace(dev, trace_id, cq_id=0, blocking=False)
+            ttnn.synchronize_device(dev)
+            got = ttnn.to_torch(out, mesh_composer=case.composer).float()[:, :, :n]
+            same = torch.equal(got, refs[i])
+            diff = (got - refs[i]).abs().max().item()
+            logger.info(
+                f"[runtime_len trace] replay at logical_n {n} (captured at {lengths[0]}): bit-identical {same}, "
+                f"max |diff| {diff:.3e}"
+            )
+            assert same, f"replay at logical_n {n}: max |diff| {diff:.3e}"
+    finally:
+        ttnn.release_trace(dev, trace_id)

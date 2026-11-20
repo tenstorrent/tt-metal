@@ -111,8 +111,14 @@ struct SparseRingSDPAInputs {
     std::optional<Tensor> pooled_v;
     std::optional<Tensor> block_counts;
     std::optional<Tensor> head_weights;
+    // Runtime logical length: [1, 1, 1, 1] uint32 on device, read by the kernels at every dispatch (trace replays
+    // too). With it, logical_n (the host value) is a placeholder kept out of the program hash, so one program serves
+    // every length of the padded shape.
+    std::optional<Tensor> logical_n_tensor;
 
     bool pooled_route() const { return pooled_k.has_value(); }
+
+    bool has_logical_n_tensor() const { return logical_n_tensor.has_value(); }
 
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 };

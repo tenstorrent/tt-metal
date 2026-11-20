@@ -208,7 +208,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     const std::optional<ttnn::Tensor>& head_weights,
     const std::vector<uint32_t>& dense_q_blocks,
     bool output_token_major,
-    std::optional<DataType> output_dtype) {
+    std::optional<DataType> output_dtype,
+    const std::optional<ttnn::Tensor>& logical_n_tensor) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -238,7 +239,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         head_weights,
         dense_q_blocks,
         output_token_major,
-        output_dtype);
+        output_dtype,
+        logical_n_tensor);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -960,6 +962,10 @@ void bind_sdpa(nb::module_& mod) {
                 layout) instead of [1, H, N/ring_size, D]. Defaults to False.
             output_dtype (ttnn.DataType, optional): bfloat16 (default) or bfloat8_b: the final output only; the
                 running output accumulator keeps its own (Float32) format.
+            logical_n_tensor (ttnn.Tensor, optional): [1, 1, 1, 1] uint32 in DRAM, replicated: the logical length,
+                read on device at every call (and trace replay), so the host may rewrite it in place
+                (ttnn.copy_host_to_device_tensor) between calls. logical_n is then only a placeholder and leaves the
+                program cache key: one program serves every length of the padded shape. Defaults to None.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q (or token-major, see above).
@@ -993,7 +999,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("head_weights").noconvert() = nb::none(),
         nb::arg("dense_q_blocks") = std::vector<uint32_t>{},
         nb::arg("output_token_major") = false,
-        nb::arg("output_dtype") = nb::none());
+        nb::arg("output_dtype") = nb::none(),
+        nb::arg("logical_n_tensor").noconvert() = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

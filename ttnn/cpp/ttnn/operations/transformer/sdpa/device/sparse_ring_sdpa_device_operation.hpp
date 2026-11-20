@@ -63,6 +63,9 @@ SparseRingSDPAResult sparse_ring_sdpa(
     // concatenate_heads layout), optionally in another dtype (bfloat8_b for a BFP8 consumer). Defaults = today's
     // [1, H, N/ring_size, D] bf16.
     bool output_token_major = false,
-    std::optional<DataType> output_dtype = std::nullopt);
+    std::optional<DataType> output_dtype = std::nullopt,
+    // Runtime logical length ([1, 1, 1, 1] uint32 DRAM): the kernels read it at every dispatch and logical_n leaves
+    // the program hash (one program per padded shape). Defaults to None: logical_n compiled in.
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
 
 }  // namespace ttnn::prim

@@ -46,5 +46,8 @@ ttnn::Tensor sparse_ring_sdpa(
     // concatenate_heads layout), optionally in another dtype (bfloat8_b for a BFP8 consumer). Defaults = today's
     // [1, H, N/ring_size, D] bf16.
     bool output_token_major = false,
-    std::optional<DataType> output_dtype = std::nullopt);
+    std::optional<DataType> output_dtype = std::nullopt,
+    // Runtime logical length ([1, 1, 1, 1] uint32 DRAM, rewritten in place between calls / trace replays): one
+    // program for every length of the padded shape; logical_n is then a placeholder. Defaults to None.
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
 }

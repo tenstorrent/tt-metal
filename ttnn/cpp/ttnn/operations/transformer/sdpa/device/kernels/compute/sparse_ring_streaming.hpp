@@ -1123,7 +1123,13 @@ void sdpa_ring_resident(
     };
     constexpr uint32_t kMaskNb = get_named_compile_time_arg_val("mask_nb");
     [[maybe_unused]] constexpr uint32_t kMaskNbPad = get_named_compile_time_arg_val("mask_nb_pad");
+#if defined(SPARSE_LOGICAL_N_TENSOR)
+    // Runtime logical length: word 0 of the reader's length words in the counts page.
+    [[maybe_unused]] const uint32_t kLogicalN =
+        reinterpret_cast<const volatile uint32_t*>(block_counts + SPARSE_LOGICAL_N_TENSOR)[0];
+#else
     [[maybe_unused]] constexpr uint32_t kLogicalN = get_named_compile_time_arg_val("sparse_logical_n");
+#endif
     const auto blk_count = [&](uint32_t b) -> uint32_t {
         if (b >= kMaskNb) {
             return 0;
