@@ -430,11 +430,14 @@ def run_diag(
         links_phase = Phase(name="links")
         t0 = time.time()
 
-        def sweep_reset() -> bool:
-            if not skip_reset:
-                aer_mark()
-                run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run)
-            return not skip_reset
+        def sweep_reset() -> str:
+            """ "" when the reset ran clean, else why the sweep is skipped."""
+            if skip_reset:
+                return "no reset (--skip-reset)"
+            aer_mark()
+            run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run)
+            failed = any(c.name == "post_test_reset_ok" and c.status == FAIL for c in links_phase.checks)
+            return "reset failed" if failed else ""
 
         _guarded(
             links_phase,

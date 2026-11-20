@@ -4,8 +4,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """A loopable fabric-in-the-loop reduced repro for one chip's ethernet hang. Run with TT_VISIBLE_DEVICES set to
 the chips under test only (the mesh opens over exactly those chips).
---mode ag       1xN mesh, FABRIC_1D: ttnn.all_gather(dim=2, cluster_axis=1) of a [1,1,16384,16384] bf16 DRAM tensor
-                per chip (512 MiB in per chip)
+1xN mesh, FABRIC_1D: ttnn.all_gather(dim=2, cluster_axis=1) of a [1,1,16384,16384] bf16 DRAM tensor per chip
+(512 MiB in per chip).
 Link data: each chip sends its own host-built bit pattern (link_pattern.py: walking ones and
 zeros, seeded by mesh index). Launch 0 and the last launch are compared bit for bit with it on the host, every slab on
 every chip; each other launch is compared on the device with launch 0's checked output, and read back bit for bit only
@@ -20,7 +20,6 @@ import sys
 import time
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--mode", choices=["ag"], required=True)
 ap.add_argument("--n", type=int, default=2, help="mesh width")
 ap.add_argument("--seconds", type=float, default=300)
 ap.add_argument("--rows", required=True)
@@ -111,22 +110,19 @@ try:
             del g
         return n
 
-    def dev_flags(ys, refs):
+    def dev_flags(y, ref):
         """per receiver: did any element differ from the checked launch-0 output (ne, then max, on the device)."""
-        out = []
-        for y, rf in zip(ys, refs):
-            f = ttnn.ne(y, rf, memory_config=DRAM)
-            mx = ttnn.max(f)
-            ttnn.deallocate(f)
-            out.append([float(ttnn.to_torch(t).float().max()) > 0 for t in ttnn.get_device_tensors(mx)])
-            ttnn.deallocate(mx)
+        f = ttnn.ne(y, ref, memory_config=DRAM)
+        mx = ttnn.max(f)
+        ttnn.deallocate(f)
+        out = [float(ttnn.to_torch(t).float().max()) > 0 for t in ttnn.get_device_tensors(mx)]
+        ttnn.deallocate(mx)
         return out
 
-    devcmp, refs = True, None
+    devcmp, ref = True, None
     per = H * W * 2
     row(
         event="setup",
-        mode=a.mode,
         fabric="FABRIC_1D",
         two_erisc_off=os.environ.get("TT_METAL_DISABLE_FABRIC_TWO_ERISC"),
         visible=vis,
@@ -152,8 +148,8 @@ try:
             mism = host_check(i, outs)
         elif devcmp:
             try:
-                fl = dev_flags([y], refs)
-                want = [o for o in outs if any(f[o[0]] for f in fl)]
+                fl = dev_flags(y, ref)
+                want = [o for o in outs if fl[o[0]]]
                 mism = host_check(i, want) if want else 0
                 if want and not mism:  # the device saw a difference the readback no longer holds
                     row(event="linkdata_transient", i=i, recv=[o[0] for o in want])
@@ -165,7 +161,7 @@ try:
             r.update(verify="ok" if mism == 0 else "MISMATCH", mismatches=mism)
             bad += mism > 0
         if i == 0 and mism == 0 and not last:  # launch 0 is the host-checked reference for the device compare
-            refs = [y]
+            ref = y
             r.update(devcmp=devcmp)
             row(**r)
             i += 1
@@ -175,8 +171,8 @@ try:
         ttnn.deallocate(y)
         row(**r)
         i += 1
-    for t in refs or []:
-        ttnn.deallocate(t)
+    if ref is not None:
+        ttnn.deallocate(ref)
     row(event="end", iters=i, verify_failures=bad, devcmp=devcmp)
 finally:
     with ss.closing():  # a TERM during the close waits for it
