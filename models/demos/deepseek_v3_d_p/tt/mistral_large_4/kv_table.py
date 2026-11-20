@@ -207,9 +207,9 @@ def read_slot_kv_and_check_pcc(
     shared-KV layer's region is compared with its source's golden."""
     from loguru import logger
     from safetensors.torch import load_file
-    from tests.ttnn.utils_for_testing import comp_pcc
 
     from models.demos.deepseek_v3_d_p.tt.mistral_large_4.settings import settings
+    from tests.ttnn.utils_for_testing import comp_pcc
 
     D = ttnn.experimental.disaggregation
     cid = {table.config_name(c): c for c in range(table.num_configs())}
