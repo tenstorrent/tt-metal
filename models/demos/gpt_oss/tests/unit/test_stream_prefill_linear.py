@@ -107,7 +107,7 @@ def _bias_of(layout, spec):
     return b
 
 
-def _check(k, n, m_tiles, order=None, x_tile=BF16, budget=BUDGET, out_width=None, seed=0):
+def _check(k, n, m_tiles, order=None, x_tile=BF16, budget=BUDGET, out_width=None, seed=0, grid=None):
     gen = torch.Generator().manual_seed(seed)
     w = torch.randn(k, n, generator=gen)
     bias = torch.randn(n, generator=gen)
@@ -115,7 +115,7 @@ def _check(k, n, m_tiles, order=None, x_tile=BF16, budget=BUDGET, out_width=None
     spec = sp.StreamSpec(k, n, BANKS, order)
     assert layout.shape == (spec.rows, BANKS * TILE)
     out_tiles = (out_width or n) // TILE
-    plan = sp.plan_work(spec, m_tiles, CORES, x_tile, BF8, BF16, budget, out_tiles)
+    plan = sp.plan_work(spec, m_tiles, CORES, x_tile, BF8, BF16, budget, out_tiles, grid)
     x = torch.randn(m_tiles * TILE, k, generator=gen)
     got = sp.reference_linear(x, layout, spec, plan, out_tiles)
     b = _bias_of(layout, spec)
@@ -152,6 +152,24 @@ def test_qkv_kv_first_order(m_tiles):
     assert spec.C == 5 and spec.real == [5] * BANKS
     assert plan.resident, plan  # the core's columns are read once
     _coverage(spec, plan, m_tiles, n // TILE)
+
+
+@pytest.mark.parametrize("m_tiles", [32, 256])
+def test_qkv_x_multicast(m_tiles):
+    """With the grid given, long QKV prefills multicast x: the chunks of one row range form one grid row (<= 11 cores,
+    <= 10 row ranges, the first core of each row reads x), the result and the writer's pages are unchanged."""
+    k, n = 2880, 1280
+    order = st.qkv_column_order(n // TILE, 16 * 64 // TILE, BANKS)
+    spec, plan = _check(k, n, m_tiles, order, grid=(11, 10))
+    assert plan.group >= 2 and len(plan.items) % plan.group == 0 and len(plan.items) // plan.group <= 10
+    assert plan.group <= 11
+    for i, it in enumerate(plan.items):
+        x, y = plan.core(i, 11)
+        group_items = plan.items[y * plan.group : (y + 1) * plan.group]
+        assert all(g.m0 == it.m0 and g.m_cnt == it.m_cnt for g in group_items), "a row's cores share the x rows"
+    _coverage(spec, plan, m_tiles, n // TILE)
+    no_mc = sp.plan_work(spec, m_tiles, CORES, BF16, BF8, BF16, BUDGET)
+    assert plan.cost <= no_mc.cost
 
 
 def test_o_proj_bf8_input():

@@ -37,7 +37,30 @@ from pathlib import Path
 TILE = 32
 KERNEL_DIR = Path(__file__).parent / "fused_decode" / "kernels"
 NBIAS = 4  # fused_decode/stream.py NBIAS (the bias terms of a stream column; asserted equal on device)
-MAX_RT = 4  # output rows per DST block (FP32 DST, half sync: 4 tiles)
+MAX_RT = 4  # output tiles per DST block (FP32 DST, half sync: 4 tiles)
+
+
+def block_shape(rows):
+    """(rt, ct) of the compute kernel's DST blocks in an M block of `rows` row tiles: rt rows (the last block of the M
+    block may have fewer) by ct consecutive weight columns (the last column block may have fewer), rt * ct <= MAX_RT.
+    The x rows of K = 2880 fill L1 fast, so an M block is often 1 or 2 rows: the columns fill the DST block then
+    (stream_prefill_compute.cpp)."""
+    rt = min(rows, MAX_RT)
+    return rt, MAX_RT // rt
+
+
+def dst_blocks(rows, cols):
+    """The DST blocks of one M block and weight group, in compute order: (r0, rt, c0, ct) for column blocks of ct
+    columns, then row blocks of rt rows; each block's tiles in row-major order (row r, then column c)."""
+    rt_m, ct_m = block_shape(rows)
+    out = []
+    for c0 in range(0, cols, ct_m):
+        ct = min(ct_m, cols - c0)
+        for r0 in range(0, rows, rt_m):
+            out.append((r0, min(rt_m, rows - r0), c0, ct))
+    return out
+
+
 MAX_MB = 8  # row tiles per M block (L1 permitting)
 L1_CAP = 900 * 1024  # circular-buffer bytes per core at most
 L1_MARGIN = 16 * 1024  # kept free below the lowest L1 buffer
@@ -95,8 +118,16 @@ class WorkItem:
 class WorkPlan:
     """plan_work's result: the items (one per core), the block geometry and the circular-buffer sizes."""
 
-    def __init__(self, items, MB, G, resident, x_bufs, cost):
+    def __init__(self, items, MB, G, resident, x_bufs, cost, group=0):
         self.items, self.MB, self.G, self.resident, self.x_bufs, self.cost = items, MB, G, resident, x_bufs, cost
+        # x multicast (group > 0): the items of one row range are one grid row of `group` cores (item i on core
+        # (i % group, i // group)); its first core reads the x blocks and multicasts them to the others.
+        self.group = group
+
+    def core(self, i, gx):
+        """Grid core (x, y) of item i."""
+        g = self.group or gx
+        return i % g, i // g
 
     @property
     def w_pages(self):
@@ -106,7 +137,9 @@ class WorkPlan:
     def __repr__(self):
         return (
             f"WorkPlan({len(self.items)} cores, MB {self.MB}, G {self.G}, resident {self.resident}, "
-            f"x_bufs {self.x_bufs}, cost {self.cost * 1e6:.1f} us)"
+            f"x_bufs {self.x_bufs}, cost {self.cost * 1e6:.1f} us"
+            + (f", x multicast over {self.group} cores" if self.group else "")
+            + ")"
         )
 
 
@@ -133,12 +166,17 @@ def _geometry(chunk, rows, kt, x_tile, w_tile, out_tile, budget):
     return None
 
 
-def plan_work(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, out_tiles=None):
+def plan_work(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, out_tiles=None, grid=None):
     """The work split of one call: per bank its real slots in `ns` chunks of <= chunk columns (one core each) times
     `pm` ranges of output row tiles, minimizing a rough time estimate max(DRAM bytes / bandwidth, the busiest bank's
     weight bytes / its share, the busiest core's reads / a core's bandwidth, its tile multiplies): x is read once per
     column chunk (P_N times), the weights once per row range (P_M times; per M block when not resident). out_tiles
-    (> spec.n_tiles): the extra zero output columns, split over the chunks of each row range."""
+    (> spec.n_tiles): the extra zero output columns, split over the chunks of each row range.
+
+    grid (gx, gy): also consider multicasting x. The column chunks of one row range are then one grid row (at most gx,
+    and at most gy row ranges), its first core reads each x block from DRAM and multicasts it to the others, so x is
+    read once per row range instead of once per chunk (8x for QKV at 8K: x bandwidth bound). The cheaper of the two
+    modes is taken."""
     assert m_tiles >= 1
     out_tiles = spec.n_tiles if out_tiles is None else out_tiles
     assert out_tiles >= spec.n_tiles
@@ -148,38 +186,29 @@ def plan_work(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, out_tile
     w_total = sum(spec.real) * kt * w_tile
     x_total = m_tiles * spec.kx * x_tile
     best = None
-    for ns in range(1, R + 1):
-        chunk = -(-R // ns)
-        if ns > 1 and chunk == -(-R // (ns - 1)):
-            continue  # the same chunk size as ns - 1
-        pn = sum(-(-spec.real[b] // chunk) for b in active)
-        if pn > n_cores:
-            break
-        seen = set()
-        for pm in range(1, min(m_tiles, n_cores // pn) + 1):
-            rows = -(-m_tiles // pm)
-            pm_eff = -(-m_tiles // rows)
-            if pm_eff in seen:
-                continue
-            seen.add(pm_eff)
-            geo = _geometry(chunk, rows, kt, x_tile, w_tile, out_tile, budget)
-            if geo is None:
-                continue
-            G, MB, resident, x_bufs, _ = geo
-            passes = 1 if resident else -(-rows // MB)
-            w_reads = pm_eff * w_total * passes
-            bank_reads = pm_eff * R * kt * w_tile * passes
-            t = max(
-                (w_reads + pn * x_total) / DRAM_BW,
-                bank_reads / (DRAM_BW / spec.banks),
-                (rows * spec.kx * x_tile + passes * chunk * kt * w_tile) / CORE_BW,
-                rows * chunk * kt * TILE_MM_S,
-            )
-            key = (t, pn * pm_eff)
-            if best is None or key < best[0]:
-                best = (key, chunk, rows, geo)
+    modes = [(False, n_cores, None)]
+    if grid is not None:
+        modes.append((True, grid[0] * grid[1], grid))
+    for mcast, cores_avail, g in modes:
+        best = _plan_search(
+            spec,
+            m_tiles,
+            cores_avail,
+            x_tile,
+            w_tile,
+            out_tile,
+            budget,
+            active,
+            R,
+            kt,
+            w_total,
+            x_total,
+            mcast,
+            g,
+            best,
+        )
     assert best is not None, f"no work split fits {budget} bytes of L1 (K {spec.k}, N {spec.n}, {m_tiles} row tiles)"
-    (t, _), chunk, rows, (G, MB, resident, x_bufs, _) = best
+    (t, _), chunk, rows, (G, MB, resident, x_bufs, _), mcast = best
     items = []
     for m0 in range(0, m_tiles, rows):
         m_cnt = min(rows, m_tiles - m0)
@@ -192,9 +221,52 @@ def plan_work(spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, out_tile
             it.z0 = spec.n_tiles + extra * i // len(row_items)
             it.z1 = spec.n_tiles + extra * (i + 1) // len(row_items)
         items += row_items
-    assert len(items) <= n_cores
+    assert len(items) <= (grid[0] * grid[1] if mcast else n_cores)
     assert all(it.cols <= MAX_WRITER_COLS for it in items)
-    return WorkPlan(items, MB, G, resident, x_bufs, t)
+    group = sum(-(-spec.real[b] // chunk) for b in active) if mcast else 0
+    return WorkPlan(items, MB, G, resident, x_bufs, t, group)
+
+
+def _plan_search(
+    spec, m_tiles, n_cores, x_tile, w_tile, out_tile, budget, active, R, kt, w_total, x_total, mcast, grid, best
+):
+    """plan_work's search over (column chunk, row ranges) in one mode; returns the best (key, chunk, rows, geometry,
+    mcast) so far."""
+    for ns in range(1, R + 1):
+        chunk = -(-R // ns)
+        if ns > 1 and chunk == -(-R // (ns - 1)):
+            continue  # the same chunk size as ns - 1
+        pn = sum(-(-spec.real[b] // chunk) for b in active)
+        if pn > n_cores:
+            break
+        if mcast and (pn < 2 or pn > grid[0]):
+            continue  # multicast needs >= 2 chunks in one grid row
+        seen = set()
+        pm_max = min(m_tiles, grid[1] if mcast else n_cores // pn)
+        for pm in range(1, pm_max + 1):
+            rows = -(-m_tiles // pm)
+            pm_eff = -(-m_tiles // rows)
+            if pm_eff in seen:
+                continue
+            seen.add(pm_eff)
+            geo = _geometry(chunk, rows, kt, x_tile, w_tile, out_tile, budget)
+            if geo is None:
+                continue
+            G, MB, resident, x_bufs, _ = geo
+            passes = 1 if resident else -(-rows // MB)
+            w_reads = pm_eff * w_total * passes
+            bank_reads = pm_eff * R * kt * w_tile * passes
+            x_reads = x_total if mcast else pn * x_total
+            t = max(
+                (w_reads + x_reads) / DRAM_BW,
+                bank_reads / (DRAM_BW / spec.banks),
+                (rows * spec.kx * x_tile + passes * chunk * kt * w_tile) / CORE_BW,
+                rows * chunk * kt * TILE_MM_S,
+            )
+            key = (t, pn * pm_eff)
+            if best is None or key < best[0]:
+                best = (key, chunk, rows, geo, mcast)
+    return best
 
 
 # ---- the kernels' loops in torch (tests/unit/test_stream_prefill_linear.py) ----
@@ -206,10 +278,8 @@ def compute_order(item, plan):
     for mb in range(0, item.m_cnt, plan.MB):
         rows = min(plan.MB, item.m_cnt - mb)
         for g in range(0, item.cols, plan.G):
-            for c in range(g, min(g + plan.G, item.cols)):
-                for r0 in range(0, rows, MAX_RT):
-                    for r in range(r0, min(r0 + MAX_RT, rows)):
-                        out.append((mb + r, c))
+            for r0, rt, c0, ct in dst_blocks(rows, min(plan.G, item.cols - g)):
+                out += [(mb + r, g + c) for r in range(r0, r0 + rt) for c in range(c0, c0 + ct)]
     return out
 
 
@@ -220,10 +290,12 @@ def writer_pages(item, plan, columns, out_tiles):
     for mb in range(0, item.m_cnt, plan.MB):
         rows = min(plan.MB, item.m_cnt - mb)
         for g in range(0, item.cols, plan.G):
-            for c in range(g, min(g + plan.G, item.cols)):
-                for r0 in range(0, rows, MAX_RT):
-                    for r in range(r0, min(r0 + MAX_RT, rows)):
-                        pages.append((item.m0 + mb + r) * out_tiles + columns[c])
+            for r0, rt, c0, ct in dst_blocks(rows, min(plan.G, item.cols - g)):
+                pages += [
+                    (item.m0 + mb + r) * out_tiles + columns[g + c]
+                    for r in range(r0, r0 + rt)
+                    for c in range(c0, c0 + ct)
+                ]
     return pages
 
 
@@ -254,7 +326,7 @@ def reference_linear(x, layout, spec, plan, out_tiles=None):
                 row = it.m0 + r
                 out[row * TILE : (row + 1) * TILE, z * TILE : (z + 1) * TILE] = 0
 
-        # the weight group(s) as the reader lays them out in cb_w: tile (c, k) at c * kt + k
+        # the weights as stored (the reader lays each group out in cb_w as tile (k, c) at k * G + c)
         def w_tile(c, k):
             t = (it.j0 + c) * spec.kt + k
             return shard[t * TILE : (t + 1) * TILE]
@@ -268,9 +340,9 @@ def reference_linear(x, layout, spec, plan, out_tiles=None):
                 xr = xd[row * TILE : (row + 1) * TILE]
                 block.append([xr[:, k * TILE : (k + 1) * TILE] for k in range(spec.kx)] + [ones])
             for g in range(0, it.cols, plan.G):
-                for c in range(g, min(g + plan.G, it.cols)):
-                    for r0 in range(0, rows, MAX_RT):
-                        for r in range(r0, min(r0 + MAX_RT, rows)):
+                for r0, rt, c0, ct in dst_blocks(rows, min(plan.G, it.cols - g)):
+                    for r in range(r0, r0 + rt):
+                        for c in range(g + c0, g + c0 + ct):
                             acc = torch.zeros(TILE, TILE, dtype=torch.float64)
                             for k in range(spec.kt):
                                 acc += block[r][k] @ w_tile(c, k)
@@ -396,13 +468,21 @@ class StreamPrefillLinear:
         key += (str(x.memory_config()), str(out.memory_config()))  # (the tensor accessors' compile-time args)
         cached = self._programs.get(key)
         if cached is None:
-            plan = plan_work(spec, m_tiles, grid.x * grid.y, x_tile, w_tile, o_tile, budget, out_tiles)
-            cached = self._programs[key] = (plan, self._descriptors(plan, x, stream, ones, out, out_dtype, grid))
-        plan, (kernels, cbs) = cached
+            plan = plan_work(
+                spec, m_tiles, grid.x * grid.y, x_tile, w_tile, o_tile, budget, out_tiles, (grid.x, grid.y)
+            )
+            kernels, cbs, sems = self._descriptors(plan, x, stream, ones, out, out_dtype, grid)
+            # The program is fixed by the key (the addresses are common runtime args, which the cache hit patches): a
+            # custom hash skips hashing every core's runtime args on each call (the host time of a call at 1K).
+            phash = hash(("StreamPrefillLinear", spec.k, spec.n, tuple(spec.order), self.math_fidelity) + key)
+            cached = self._programs[key] = (plan, kernels, cbs, sems, phash & ((1 << 64) - 1))
+        plan, kernels, cbs, sems, phash = cached
         # Only the buffer addresses change between calls (common runtime args; the program hash ignores their values).
         kernels[0].common_runtime_args = [stream.buffer_address(), x.buffer_address(), ones.buffer_address()]
         kernels[1].common_runtime_args = [out.buffer_address()]
-        ttnn.generic_op([x, stream, ones, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
+        desc = ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        desc.custom_program_hash = phash
+        ttnn.generic_op([x, stream, ones, out], desc)
         return out
 
     def _descriptors(self, plan, x, stream, ones, out, out_dtype, grid):
@@ -413,8 +493,15 @@ class StreamPrefillLinear:
 
         spec = self.spec
         x_tile, w_tile, o_tile = TILE_BYTES[x.dtype], TILE_BYTES[stream.dtype], TILE_BYTES[out_dtype]
-        cores = _core_ranges(ttnn, len(plan.items), grid.x)
+        if plan.group:
+            rows_used = len(plan.items) // plan.group
+            cores = ttnn.CoreRangeSet(
+                [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(plan.group - 1, rows_used - 1))]
+            )
+        else:
+            cores = _core_ranges(ttnn, len(plan.items), grid.x)
         cb_x, cb_w, cb_out, cb_zero = 0, 1, 16, 17
+        ready_sem, valid_sem = 0, 1  # x multicast handshake (plan.group)
 
         def cb(index, dtype, page, pages):
             return ttnn.CBDescriptor(
@@ -432,13 +519,31 @@ class StreamPrefillLinear:
         if out_tiles > spec.n_tiles:
             cbs.append(cb(cb_zero, out_dtype, o_tile, 1))
         reader_rt, compute_rt, writer_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        noc = self.mesh_device.worker_core_from_logical_core
         for i, it in enumerate(plan.items):
-            cx, cy = i % grid.x, i // grid.x
-            reader_rt[cx][cy] = [it.bank, it.j0 * spec.kt * w_tile, it.cols, it.m0, it.m_cnt]
+            cx, cy = plan.core(i, grid.x)
+            args = [it.bank, it.j0 * spec.kt * w_tile, it.cols, it.m0, it.m_cnt]
+            if plan.group:
+                # [is_sender, multicast rectangle (receivers: cores 1..group-1 of the row), receivers, sender]
+                first, last = noc(ttnn.CoreCoord(1, cy)), noc(ttnn.CoreCoord(plan.group - 1, cy))
+                sender = noc(ttnn.CoreCoord(0, cy))
+                args += [int(cx == 0), first.x, first.y, last.x, last.y, plan.group - 1, sender.x, sender.y]
+            reader_rt[cx][cy] = args
             compute_rt[cx][cy] = [it.cols, it.m_cnt]
             writer_rt[cx][cy] = [it.m0, it.m_cnt, it.cols, it.z0, it.z1] + spec.columns(it.bank, it.j0, it.cols)
         resident = int(plan.resident)
-        reader_ct = [cb_x, cb_w, spec.kx, w_tile, plan.MB, plan.G, resident]
+        reader_ct = [
+            cb_x,
+            cb_w,
+            spec.kx,
+            w_tile,
+            plan.MB,
+            plan.G,
+            resident,
+            int(bool(plan.group)),
+            ready_sem,
+            valid_sem,
+        ]
         reader_ct += ttnn.TensorAccessorArgs(x).get_compile_time_args()
         reader_ct += ttnn.TensorAccessorArgs(ones).get_compile_time_args()
         compute_ct = [cb_x, cb_w, cb_out, spec.kt, plan.MB, plan.G, resident]
@@ -473,7 +578,13 @@ class StreamPrefillLinear:
                 ),
             ),
         ]
-        return kernels, cbs
+        sems = []
+        if plan.group:
+            sems = [
+                ttnn.SemaphoreDescriptor(ready_sem, ttnn.CoreType.WORKER, cores, 0),
+                ttnn.SemaphoreDescriptor(valid_sem, ttnn.CoreType.WORKER, cores, 0),
+            ]
+        return kernels, cbs, sems
 
 
 def resplit_vocab(logits, tp, vd, per_device, cluster_axis):

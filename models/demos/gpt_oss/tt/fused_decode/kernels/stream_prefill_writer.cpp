@@ -4,9 +4,10 @@
 // Prefill matmul on a decode stream weight, writer (BRISC, NOC1) (tt/stream_prefill_linear.py StreamPrefillLinear).
 // First the zero output columns [z0, z1) of this core's rows (output width > N: the LM head's power-of-two padding),
 // from one zeroed page (all-zero bytes are 0 in BF16 and BFP8_b); then the compute kernel's tiles in its order (M block
-// -> weight group -> column -> DST block of rows -> row) to tile (row, col[c]) of the [.., M, NT * 32] output, col[c]
-// the logical output column of the core's slot c (the stream's slot order undone). The compute pushes one tile at a
-// time; the writer takes a DST block's tiles (at most RT) together and waits for their writes once per block. cb_out
+// -> weight group -> DST block (column blocks, then row blocks) -> row -> column) to tile (row, col[c]) of the
+// [.., M, NT * 32] output, col[c] the logical output column of the core's slot c (the stream's slot order undone). The
+// compute pushes one tile at a time; the writer takes a DST block's tiles (at most DST_TILES) together and waits for
+// their writes once per block. cb_out
 // holds CB_PAGES = 2 RT pages (stream_prefill_linear.py). A block whose tiles would wrap around the CB's end is taken
 // in two parts, the tiles up to the end and then the rest: taking it in one piece across the end wrote wrong tiles
 // (cores with 3, 5, 6 or 7 rows per column; 8K prefill and the all-position LM head gave NaN / garbage logits).
@@ -33,8 +34,8 @@ void kernel_main() {
     constexpr uint32_t MB = get_compile_time_arg_val(3);
     constexpr uint32_t G = get_compile_time_arg_val(4);
     constexpr auto out_args = TensorAccessorArgs<5>();
-    constexpr uint32_t RT = 4;             // stream_prefill_compute.cpp
-    constexpr uint32_t CB_PAGES = 2 * RT;  // cb_out pages (stream_prefill_linear.py: 2 * MAX_RT)
+    constexpr uint32_t DST_TILES = 4;             // stream_prefill_compute.cpp
+    constexpr uint32_t CB_PAGES = 2 * DST_TILES;  // cb_out pages (stream_prefill_linear.py: 2 * MAX_RT)
     const uint32_t tile = get_tile_size(cb_out);
     const auto s_out = TensorAccessor(out_args, out_addr, tile);
     // cb_out's first page (no tile has been taken yet) and its end, for blocks that wrap
@@ -59,24 +60,32 @@ void kernel_main() {
     const uint32_t n_groups = (cols + G - 1) / G;
     for (uint32_t mb = 0; mb < m_cnt; mb += MB) {
         const uint32_t rows = m_cnt - mb < MB ? m_cnt - mb : MB;
+        const uint32_t rt_m = rows < DST_TILES ? rows : DST_TILES;
+        const uint32_t ct_m = DST_TILES / rt_m;
         for (uint32_t g = 0; g < n_groups; ++g) {
             const uint32_t gc = cols - g * G < G ? cols - g * G : G;
-            for (uint32_t c = 0; c < gc; ++c) {
-                const uint32_t col = get_arg_val<uint32_t>(COL_ARG + g * G + c);
-                for (uint32_t r0 = 0; r0 < rows;) {  // the compute's DST blocks of rows, in row order
-                    // at most RT tiles, and never past the CB's end (the next part starts at its first page)
-                    const uint32_t to_end = (cb_end - get_read_ptr(cb_out)) / tile;
-                    uint32_t rt = rows - r0 < RT ? rows - r0 : RT;
-                    rt = rt < to_end ? rt : to_end;
-                    cb_wait_front(cb_out, rt);
-                    uint32_t l1 = get_read_ptr(cb_out);
-                    for (uint32_t r = r0; r < r0 + rt; ++r) {
-                        noc_async_write(l1, s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
-                        l1 += tile;
+            for (uint32_t c0 = 0; c0 < gc; c0 += ct_m) {
+                const uint32_t ct = gc - c0 < ct_m ? gc - c0 : ct_m;
+                for (uint32_t r0 = 0; r0 < rows; r0 += rt_m) {
+                    const uint32_t rt = rows - r0 < rt_m ? rows - r0 : rt_m;
+                    // the block's rt * ct tiles (row-major), taken never past the CB's end (the next part starts at
+                    // its first page)
+                    for (uint32_t i = 0; i < rt * ct;) {
+                        const uint32_t to_end = (cb_end - get_read_ptr(cb_out)) / tile;
+                        uint32_t n = rt * ct - i;
+                        n = n < to_end ? n : to_end;
+                        cb_wait_front(cb_out, n);
+                        uint32_t l1 = get_read_ptr(cb_out);
+                        for (uint32_t j = i; j < i + n; ++j) {
+                            const uint32_t r = r0 + j / ct;
+                            const uint32_t col = get_arg_val<uint32_t>(COL_ARG + g * G + c0 + j % ct);
+                            noc_async_write(l1, s_out.get_noc_addr((m0 + mb + r) * NT + col), tile);
+                            l1 += tile;
+                        }
+                        noc_async_writes_flushed();
+                        cb_pop_front(cb_out, n);
+                        i += n;
                     }
-                    noc_async_writes_flushed();
-                    cb_pop_front(cb_out, rt);
-                    r0 += rt;
                 }
             }
         }
