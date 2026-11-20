@@ -582,7 +582,14 @@ bool is_intermesh_vc_disabled(const tt::tt_metal::distributed::MeshDevice& mesh_
            fabric_context.get_builder_context().get_intermesh_vc_config().intermesh_vc_disabled;
 }
 
-FabricConfig GetFabricConfig() { return tt::tt_metal::MetalContext::instance().get_fabric_config(); }
+FabricConfig GetFabricConfig(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return mesh_device.impl().metal_env().get_fabric_config();
+}
+
+FabricConfig GetFabricConfig() {
+    // TODO(#52020): resolves the default context; deprecated in favour of the MeshDevice form.
+    return tt::tt_metal::MetalContext::instance().get_fabric_config();
+}
 
 void SetFabricConfig(
     FabricConfig fabric_config,

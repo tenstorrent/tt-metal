@@ -15,8 +15,8 @@
 #include <tt_stl/strong_type.hpp>
 
 #include "algorithms/allocator_algorithm.hpp"
-#include "core_coord.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>
 #include "allocator_state.hpp"
 
 namespace tt::tt_metal {

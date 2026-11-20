@@ -604,6 +604,36 @@ Tensor reduce(
             dt != DataType::INT32 && dt != DataType::UINT32, "ttnn.mean does not support integer inputs - got {}.", dt);
     }
 
+    // A BFLOAT8_B tile shares one exponent per 16-lane block of a row. The -inf / +inf Max / Min pad written into the
+    // tile padding below ends up in blocks that also hold real lanes (the last block of each input row when the width
+    // is not a multiple of 16, and the Min-over-W results of a partial tile row), sets their exponent, and the real
+    // lanes are packed as 0. Reduce in BFLOAT16, where every lane has its own exponent; the typecast back zeroes the
+    // result's padding before packing it.
+    if constexpr (
+        reduce_type == reduction_common::ReduceType::Max || reduce_type == reduction_common::ReduceType::Min) {
+        const auto& shape = input_tensor_arg.logical_shape();
+        if (input_tensor_arg.dtype() == DataType::BFLOAT8_B && input_tensor_arg.layout() == TILE_LAYOUT &&
+            (shape[-2] % tt::constants::TILE_HEIGHT != 0 || shape[-1] % tt::constants::TILE_WIDTH != 0)) {
+            const DataType block_dtype = input_tensor_arg.dtype();
+            Tensor as_bf16 =
+                ttnn::typecast(input_tensor_arg, DataType::BFLOAT16, std::nullopt, std::nullopt, sub_core_grids);
+            Tensor result = reduce<reduce_type>(
+                as_bf16,
+                dim_arg,
+                keepdim,
+                memory_config_arg,
+                compute_kernel_config,
+                scalar,
+                sub_core_grids,
+                fast_and_approximate_mode,
+                output_layout);
+            if (result.layout() != TILE_LAYOUT) {
+                return result;
+            }
+            return ttnn::typecast(result, block_dtype, std::nullopt, std::nullopt, sub_core_grids);
+        }
+    }
+
     ttsl::SmallVector<int> dim = reduction_common::generate_reduce_dim(input_tensor_arg, dim_arg);
     const auto& arg_shape = input_tensor_arg.logical_shape();
     const int rank = static_cast<int>(arg_shape.rank());

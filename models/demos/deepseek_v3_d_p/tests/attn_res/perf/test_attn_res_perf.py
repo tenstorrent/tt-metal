@@ -184,7 +184,7 @@ def test_attn_res_layer_perf(request, mesh_device, device_params, layer):
                 "layout": layout,
                 "layer": layer,
                 "mode": mode,
-                "fabric_config": ttnn.get_fabric_config().name,
+                "fabric_config": ttnn.get_fabric_config(mesh_device).name,
                 "tokens": num_tokens,
                 "first_layer": LAYER,
                 "layers_per_sample": per_call,

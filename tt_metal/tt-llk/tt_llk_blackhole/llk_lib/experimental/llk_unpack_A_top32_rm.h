@@ -92,9 +92,6 @@ inline void _llk_unpack_A_top32_rm_(
         TTI_UNPACR(SrcA, 0b01'00'01'00, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
     }
 
-    // T6::SEMGET for context release
-    t6_semaphore_get(semaphore::UNPACK_SYNC);
-
     if (unpack_to_dest)
     {
         if (ckernel::unpacker::is_32bit_input(unpack_src_format, unpack_dst_format))
@@ -102,6 +99,10 @@ inline void _llk_unpack_A_top32_rm_(
             unpack_to_dest_tile_done(unp_cfg_context, unpack_dst_format);
         }
     }
+
+    // T6::SEMGET for context release, after unpack_to_dest_tile_done's config writes so that
+    // configure_unpack_AB's wait_for_idle also waits for them
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
 
     // Switch unpacker config context
     switch_config_context(unp_cfg_context);
