@@ -26,7 +26,7 @@ as ``ttnn.uint8``. In Python, argument values are integers from 0 to 2**32 - 1.
 An example
 **********
 
-This program computes ``exp(x)`` for every element of a tensor in DRAM. On each core a reader kernel copies tiles
+This program computes ``exp(x)`` for every element of a tensor in DRAM. On each node a reader kernel copies tiles
 from the input tensor into a buffer, a compute kernel applies ``exp`` to each tile, and a writer kernel copies the
 results to the output tensor. The three kernels already exist in TT-NN. With ``torch`` and ``ttnn`` imported and
 ``device`` an open device:
@@ -38,8 +38,9 @@ results to the output tensor. The three kernels already exist in TT-NN. With ``t
    :dedent: 4
 
 A ``WorkUnitSpec`` runs its kernels on each of its ``target_nodes``. A node is a block of the chip's grid at an x, y
-coordinate, such as a Tensix core; like TT-NN's ``ttnn.CoreCoord``, this guide calls it a core. A program can have
-several work units, each running some of the program's kernels on its own cores, and a kernel can be in more than one.
+coordinate, such as a Tensix core, and Python names one with a ``ttnn.CoreCoord``; the RISC-V cores that run the
+kernels are inside it. A program can have several work units, each running some of the program's kernels on its own
+nodes, and a kernel can be in more than one.
 
 A kernel's ``source`` is the path of its source file: an absolute path, or one that Metal looks up in the current
 directory, then in ``TT_METAL_KERNEL_PATH``, the system kernel directory and the tt-metal root, where it finds the
@@ -57,19 +58,19 @@ example's buffers and their accessors share the names ``in`` and ``out``.
 What a kernel needs, where you set it, and how the kernel reaches it:
 
 - **A value fixed at compile time**: ``KernelSpec.compile_time_args``. In the kernel: ``get_arg(args::<name>)``.
-- **A value per core**: a name in ``RuntimeArgSchema.runtime_arg_names``, and the values in
+- **A value per node**: a name in ``RuntimeArgSchema.runtime_arg_names``, and the values in
   ``KernelRunArgs.runtime_arg_values``. In the kernel: ``get_arg(args::<name>)``.
-- **A value shared by all cores**: a name in ``RuntimeArgSchema.common_runtime_arg_names``, and the value in
+- **A value shared by all nodes**: a name in ``RuntimeArgSchema.common_runtime_arg_names``, and the value in
   ``KernelRunArgs.common_runtime_arg_values``. In the kernel: ``get_arg(args::<name>)``.
 - **A list of values fixed at compile time**: ``KernelSpec.compile_time_array_args``. In the kernel:
   ``get_arg(args::<name>)[i]``.
-- **A list of values per core**: an ``ArrayArgDecl`` (``name`` and ``size``) in ``RuntimeArgSchema.runtime_array_args``,
+- **A list of values per node**: an ``ArrayArgDecl`` (``name`` and ``size``) in ``RuntimeArgSchema.runtime_array_args``,
   and the values in ``KernelRunArgs.runtime_array_arg_values``. In the kernel: ``get_arg(args::<name>)[i]``.
-- **A list of values shared by all cores**: an ``ArrayArgDecl`` in ``RuntimeArgSchema.common_runtime_array_args``, and
+- **A list of values shared by all nodes**: an ``ArrayArgDecl`` in ``RuntimeArgSchema.common_runtime_array_args``, and
   the values in ``KernelRunArgs.common_runtime_array_arg_values``. In the kernel: ``get_arg(args::<name>)[i]``.
 - **A tensor**: a ``TensorParameter`` and a ``TensorBinding``, and the tensor in ``ProgramRunArgs.tensor_args``. In the
   kernel: ``TensorAccessor(tensor::<accessor_name>)``, or ``LocalTensorAccessor<T>(tensor::<accessor_name>)`` for the
-  core's own shard in L1.
+  node's own shard in L1.
 - **A buffer between two kernels**: a ``DataflowBufferSpec``, with a producer and a consumer binding. In the kernel:
   ``DataflowBuffer(dfb::<accessor_name>)``.
 - **A buffer on a sharded tensor's memory**: a ``DataflowBufferSpec`` whose ``borrowed_from`` names the
@@ -78,8 +79,8 @@ What a kernel needs, where you set it, and how the kernel reaches it:
 - **Private scratch memory**: a ``ScratchpadSpec`` and a ``ScratchpadBinding``. In the kernel:
   ``Scratchpad<T>(scratch::<accessor_name>)``.
 
-An array has the same length on every core, and ``get_arg(args::<name>).size()`` gives it. For a list whose length
-differs from core to core, such as a list of core coordinates, declare the longest length and pass each core's count
+An array has the same length on every node, and ``get_arg(args::<name>).size()`` gives it. For a list whose length
+differs from node to node, such as a list of node coordinates, declare the longest length and pass each node's count
 in another argument. Python has no varargs, the positional arguments that Metal 2.0 keeps only to ease migration:
 array arguments replace them.
 
@@ -99,9 +100,13 @@ Tensors
 last; ``generic_op`` returns the last entry, or, when the tensors are not all on the same devices, only its parts on the
 devices of the tensor that is on the fewest devices (see "Running on a mesh"). Each tensor must be on the device and
 match its parameter's ``TensorSpec``, unless the parameter's ``TensorSpecRelaxations`` allow a difference, such as a
-dynamic shape. Bind each tensor parameter to a tensor that ``io_tensors`` lists, or to a view of one that holds every
-device its program runs on: the per-device views of a tensor, from ``ttnn.get_device_tensors``, share its
-``MeshTensor``, which is all Metal binds, so a view that misses one of those devices would read data it does not hold.
+dynamic shape. Bind each tensor parameter to a tensor that ``io_tensors`` lists.
+
+.. note::
+
+   A tensor parameter can also be bound to a per-device view of a listed tensor, from ``ttnn.get_device_tensors``,
+   if the view holds every device its program runs on: on each device it runs on, a program reads that device's part
+   of the tensor, whichever view is bound.
 
 Calls and the program cache
 ***************************
@@ -123,8 +128,8 @@ could give two different programs the same cache entry.
 Every call checks its run args against the spec before Metal sees them: each kernel gets exactly the runtime arguments
 and arrays it declares, each array with its declared length, each tensor parameter gets a tensor from ``io_tensors``
 that matches it, and each dataflow buffer (DFB) size override names a buffer of the spec, at most once and with no size
-of 0. Whether every core got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on,
-which it is not by default; with it off, a core that a later call leaves out keeps its previous values. A DFB size
+of 0. Whether every node got its values is checked on later calls only when ``ttnn.CONFIG.validate_program_args`` is on,
+which it is not by default; with it off, a node that a later call leaves out keeps its previous values. A DFB size
 override in ``ProgramRunArgs.dfb_run_overrides`` stays in effect for later calls that reuse the cached program,
 including calls with an equal spec from other code, until a call changes it. ``prepare_generic_op`` with a program that
 is already cached applies its run args to it the same way, even if the preparation then fails.
@@ -171,8 +176,8 @@ reader_unary_interleaved_start_id_metal2.cpp_).
 - Tensor addresses passed as arguments become bound tensors: ``TensorAccessor`` built from an address and
   ``TensorAccessorArgs`` becomes ``TensorAccessor(tensor::src)``.
 - On the host, each ``CBDescriptor`` becomes a ``DataflowBufferSpec`` with its bindings, and a kernel's runtime
-  arguments, a list of values per core, become ``KernelRunArgs.runtime_arg_values``: a dict from each argument name to a
-  dict from core to value.
+  arguments, a list of values per node, become ``KernelRunArgs.runtime_arg_values``: a dict from each argument name to a
+  dict from node (a ``ttnn.CoreCoord``) to value.
 
 On Wormhole and Blackhole the loops that move and compute data can stay as they are (eltwise_sfpu_metal2.cpp_ also
 splits its loop with ``dram_read::for_each_chunk``, which is not part of the move). On Quasar the circular-buffer calls
