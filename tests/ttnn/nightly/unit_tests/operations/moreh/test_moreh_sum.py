@@ -620,7 +620,6 @@ def test_moreh_sum_int32_rejects_other_output_dtype(device, output_dtype, expect
         ttnn.moreh_sum(x, dim=3, keepdim=True, output=out)
 
 
-
 @pytest.mark.parametrize(
     "input_shape, dim",
     [
@@ -649,3 +648,4 @@ def test_moreh_sum_empty_dims(device, input_shape, dim, dtype, use_provide_outpu
     result = ttnn.operations.moreh.sum(tt_input, dim=dim, keepdim=True, output=tt_output)
     assert list(result.shape) == list(torch_output.shape)
     assert torch.equal(ttnn.to_torch(result).to(torch_dtype), torch_output)
+
