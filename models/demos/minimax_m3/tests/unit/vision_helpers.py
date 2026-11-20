@@ -23,7 +23,7 @@ import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
 from models.demos.minimax_m3.tt.vision import common
 from models.demos.minimax_m3.tt.vision.config import MiniMaxM3VisionConfig
-from tests.ttnn.utils_for_testing import comp_relative_frobenius
+from tt_py_test_utils_common.utils_for_testing import comp_relative_frobenius
 
 # Patch grid (t, h, w) of one image: its size in pixels divided by the 14 pixel patch. The ids name the grid in
 # patches, never as AxB: the Galaxy leg selects -k "8x4", which the pixel size "448x448" would contain.
