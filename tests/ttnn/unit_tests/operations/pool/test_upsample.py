@@ -659,3 +659,12 @@ def test_upsample_nearest_float_rejects_uint32_overflow(device, expect_error):
     )
     with expect_error(RuntimeError, "overflows uint32"):
         ttnn.upsample(input_tensor, [1e10, 1.0], mode="nearest")
+
+
+@pytest.mark.parametrize("scale_factor", [0, [0, 2], [2, 0], 0.5])
+def test_upsample_bilinear_rejects_scale_below_one(device, scale_factor, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.randn(1, 8, 8, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "bilinear upsample requires scale factors >= 1"):
+        ttnn.upsample(input_tensor, scale_factor, mode="bilinear")
