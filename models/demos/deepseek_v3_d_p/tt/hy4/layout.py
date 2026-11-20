@@ -60,7 +60,9 @@ SC1_CHIPS = 32
 # (sparse_sdpa_device_operation.cpp). ttMLA's sparse path all-to-alls heads to sequence before the op
 # (reshards_heads_to_seq), so every chip attends with all 64 heads at any TP, and SC1's planned core (64 heads
 # over the local KV stripe, LSE merge) does too. Context-parallel KV over all 32 chips and EP32 routed experts
-# (256 / 32 = 8 per chip) already run in the dev layout, which is the same 8x4 mesh with the same SP / TP axes.
+# (256 / 32 = 8 per chip) already run in the dev layout, which is the same 8x4 mesh with the same SP / TP axes. The
+# KV stripe is pinned to 128-token blocks (prefill chunk 4096) on that mesh, SP 8 on axis 0 x TP 4 on axis 1: block b
+# on linear chip b % 32 = 4 * row + col, the row-major mesh order (tt/hy4/kv_cache.py, #65886).
 # The 2D-TP shared expert and dense layer-0 FFN (#65890) are ``TtMlp2D`` (tt/moe/tt_mlp_2d.py: hidden over TP, axis 1,
 # intermediate over SP, axis 0), which the prefill block builds when the model config sets FFN_2D_TP; the tp32 layout
 # does (``ffn_2d_tp`` below, ``Hy4TP32Config``).
