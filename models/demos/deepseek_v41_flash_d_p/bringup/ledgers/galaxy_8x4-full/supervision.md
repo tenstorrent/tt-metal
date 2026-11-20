@@ -834,3 +834,23 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   all-gather must be HIDDEN if at all possible" is met at 139k / mixed but not at ~1M: 11.9 of 12.7 ms exposed, 40.2k
   tok/s; the attention section 97 ms there vs ~30 at 139k). Gate: oracle bit-identical, exposed frac at 1M <= 0.25, no
   regression of the two targets. Orchestrator relaunched --until PB.6L --attempts 20.
+- 09:00 UTC OWNER (binding): new task GLUED variable-length packing (up to 6 segments back to back in 8192 rows, no
+  lane alignment / padding between segments, splits continue in a later chunk, per-row segment ids, per-segment
+  groups / tails / carry, 6 slots' 1M histories in DRAM, oracle unchanged, keep the 4-lane path, measure 5 x 1.6k,
+  4 x 2k vs 74.6k, AgentX-sampled mixes incl. splits on glued and fixed lanes, overhead vs segment count 1..6). Queued
+  as PB.7 after PB.6L: written now (scratchpad add_pb7.py), applied to tasks.yaml when PB.6L stops (no tasks.yaml
+  edit while an agent runs), then the orchestrator runs --until PB.7.
+- 09:10 UTC OWNER (binding): new task mhc_post: take two ideas from Milan Alimpic's op (feed lands in L1; interleaved
+  W-slice cores + fused SFPU mix) + our hc transposes into OUR P.83 fork, no port; keep at >= ~1 ms device a chunk
+  behind a call-time switch; gate: op bit-identity (or reference limits with the reason), determinism, the full accept
+  gate in one fresh 40-layer process, walls at 5120 and packed 8192. Branch / commits verified locally (db6a1caa5d6,
+  f1bdc1a4c93). DECIDED: split into PB.8 (agent; the 5120 accept gate = P.83's, A/B on MHC_POST_V2, ab_mode full) and
+  PB.8P (scripted: the packed 8192 oracle, reference and walls with the switch on): one model geometry a gate (F283
+  refuses 5120 and 8192 in one gate). Queued after PB.7 via scratchpad add_pb8.py (dry-run valid), applied with PB.7's
+  patch when PB.6L stops; the orchestrator then runs --until PB.8P.
+- 11:01 UTC PB.6L attempt 1 done; its gate run: 4x2k@~1M 156.7 ms = 52.3k serving tok/s (was 203.6 / 40.2k; gathers
+  exposed 0.163, was 0.94), mixed 124.6 = 65.7k, 4x2k@139k 109.2 = 75.0k, 4xp50 108.1 = 59.2k, 1x2k 89.1; oracle all 0.
+  KNOWLEDGE CONTRADICTED DS41-334 (agent: its fix line is out of date; of the 1M attention section's 97 ms, 45 were
+  index-key decodes, DS41-336). It failed only the path check on results/PB.6L_packed_walls.md (same as PB.5C):
+  FRAMEWORK. Paused, aborted attempt 2 (OV-64), F292: core.gate.outputs_in includes results/<task>_*.md (selftest),
+  classified PB.6L as framework so the resume runs only the gate's unpassed units and commits, no new agent.

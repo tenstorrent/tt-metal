@@ -2862,3 +2862,9 @@ the dashboard export) sees a key that moved chunks in both. read() now retries a
 mid-replace, half-written JSON) for ~5 s before raising; a duplicate that persists is still an error. Selftest:
 test_ledger_chunks.py::test_a_torn_view_mid_write_is_retried_not_an_error. Not done: a write that is atomic across
 files (a generation directory swapped in one rename).
+
+## F292 (DeepSeek-V4.1 PB.5C / PB.6L, 2026-11-20): a gate test's markdown table is the task's own output
+PB.5C attempt 1 and PB.6L attempt 1 failed only on the path check for results/<task>_packed_walls.md, which the packed
+walls test writes next to results/<task>.json. core.gate.outputs_in (F55: results/<task>.json and <task>_*.json are the
+gate's outputs: allowed for the agent, deleted before the gate, committed with it) now also lists results/<task>_*.md.
+Selftest: test_fork_capture_programs.py::test_a_tests_markdown_table_is_a_gate_output.

@@ -655,6 +655,23 @@ notes:
     position), and the one-ring indexer path is the one measured in every case incl. mixed. Keep the per-segment-ring fallback
     for unequal capacities (correct, tested), but it is not the serving path. If one capacity at 1M for 4 slots does not
     fit next to the model, record the DRAM numbers and use the largest capacity that fits for all 4 (say which).'
+- id: OV-63
+  tasks:
+  - PB.5C
+  status: open
+  t: '2026-11-20T08:00:20'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.5C_packed_walls.md,
+    which my brief told the walls test to write: my error. That file is now an allowed path. Your work in the tree stands;
+    do not redo passed runs: finish (fix DS41-335 test_dram AttributeError if not yet), run the gate''s walls once, exit.'
+- id: OV-64
+  tasks:
+  - PB.6L
+  status: open
+  t: '2026-11-20T11:01:42'
+  text: 'The overseer stopped attempt 2 (perf): Overseer: attempt 1 failed only on the path check for results/PB.6L_packed_walls.md,
+    which the walls test writes by design: a framework gap, fixed (F292: a task may write its own results/<task>_* files).
+    Your attempt-1 work and its gate run stand (every metric ok: 1M exposed 0.163, 4x2k 75.0k, mixed 65.7k). Do not redo
+    anything; exit.'
 fixes:
 - id: FIX.1
   title: 'Owner order: no padding to get around a kernel limit'
@@ -1424,3 +1441,7 @@ classified:
     kind: framework
     why: ''
     t: '2026-11-18T21:54:34'
+  PB.6L:
+    kind: framework
+    why: ''
+    t: '2026-11-20T11:02:24'
