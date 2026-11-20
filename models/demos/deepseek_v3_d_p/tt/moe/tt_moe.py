@@ -645,7 +645,7 @@ class TtMoe(LightweightModule):
                     spans.append((j, o, c))
             flat = base.reshape(-1, base.shape[-1])
             iv = flat.view(torch.int16) if flat.dtype == torch.bfloat16 else flat.view(torch.int32)
-            ndiff_runs, first_bad = 0, None
+            ndiff_runs, first_bad, sigs = 0, None, {}
             for r in range(reps):
                 o_t = self.routed_expert(dispatched, counts, offsets)
                 cur = rd(o_t, k).reshape(-1, base.shape[-1])
@@ -657,14 +657,23 @@ class TtMoe(LightweightModule):
                     if first_bad is None:
                         rr, cc = torch.nonzero(bad, as_tuple=True)
                         experts = sorted({j for j, o, c in spans if bool(((rr >= o) & (rr < o + c)).any())})
+                        vals = ", ".join(
+                            f"({int(a)},{int(b)}) {float(flat[a, b]):.6g}->{float(cur[a, b]):.6g}"
+                            for a, b in list(zip(rr.tolist(), cc.tolist()))[:16]
+                        )
                         first_bad = (
                             f"run {r}: {int(bad.sum())} elems, rows {int(rr.min())}..{int(rr.max())} "
                             f"({int(torch.unique(rr).numel())} rows), cols {int(cc.min())}..{int(cc.max())}, "
-                            f"local experts {experts}"
+                            f"local experts {experts}; counts numel {int(cnt.numel())} offsets numel {int(off.numel())}; "
+                            f"(row,col) first->this: {vals}"
                         )
+                    rr, cc = torch.nonzero(bad, as_tuple=True)
+                    sig = hash((tuple(rr.tolist()), tuple(cc.tolist()), tuple(ci[bad].tolist())))
+                    sigs[sig] = sigs.get(sig, 0) + 1
             logger.info(
                 f"[v41 0169] expert repeat layer {getattr(self, 'layer_idx', '?')} chip {k}: {ndiff_runs} of {reps} re-runs "
-                f"differ from the first; spans (expert, offset, count) {spans}; dtype {base.dtype}; first diff: {first_bad}"
+                f"differ from the first ({len(sigs)} distinct differing outputs, runs each {sorted(sigs.values())}); "
+                f"spans (expert, offset, count) {spans}; dtype {base.dtype}; first diff: {first_bad}"
             )
 
     _dump_traced_warned = False  # see the traced-path branch below; warn once per process
