@@ -76,6 +76,18 @@ def test_every_generator_comes_back_exactly():
     assert (host_draws(), ctx.get_generator_state()) == expected
 
 
+def test_numpy_state_right_after_seeding_comes_back():
+    """Right after ``np.random.seed`` numpy's position is 624, one past its last word, so the next draw regenerates the
+    words. The position check takes 624."""
+    np.random.seed(17)
+    block = capture_rng(world_rank=0)
+    assert block["ranks"]["0"]["numpy"]["pos"] == 624
+    expected = float(np.random.random())
+    np.random.seed(18)
+    assert "rng.numpy" in restore_rng(block, world_rank=0)
+    assert float(np.random.random()) == expected
+
+
 def test_generator_without_stored_state_warns(monkeypatch):
     """A generator the checkpoint holds no state for keeps its state, with a warning."""
     block = capture_rng(world_rank=0)
