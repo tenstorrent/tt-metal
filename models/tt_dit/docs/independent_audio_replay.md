@@ -86,6 +86,21 @@ If all stage flags opt out, `requested` remains true but every stage stays eager
 with zero captures/replays. A retry after failed capture eagerly warms again;
 its first successful capture still has zero replays.
 
+## Capture hold: allocation after capture (task #6000)
+
+A trace bakes the addresses of the intermediates its ops allocate and free during
+capture, and rewrites them on every replay. Freed, those addresses went back to
+the DRAM free list, so a buffer a later job allocated (a served ref2va clip after a
+warm capture, for example) could land on one and be overwritten by the next audio
+replay. The vocoder, mel decoder and BWE tracers now pass
+`hold_capture_frees=True`: `ttnn.set_trace_capture_hold` is set around
+`begin_trace_capture`, the allocator keeps every DRAM range freed during that
+capture reserved, and `release_trace` returns them. Cost: the capture's DRAM
+intermediates without reuse between them, held for the trace's lifetime
+(`Tracer.capture_hold_bytes`, per bank). L1 is not held (L1 tensors do not live
+across a replay call). With the hold, a warm-captured audio trace is safe for later
+jobs of any shape, so ltx-server's H3 ref2va warm may capture it.
+
 ## CPU regression checks
 
 Run directly without device-aware conftest imports:

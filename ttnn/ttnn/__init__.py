@@ -128,6 +128,8 @@ from ttnn._ttnn.operations.trace import (
     end_trace_capture,
     execute_trace as _ttnn_execute_trace,
     release_trace,
+    set_trace_capture_hold,
+    trace_capture_hold_bytes,
 )
 
 from ttnn._ttnn.operations.debug import (

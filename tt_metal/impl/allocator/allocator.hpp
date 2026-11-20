@@ -78,6 +78,16 @@ public:
     void deallocate_buffer(Buffer* buffer);
     void deallocate_buffers();
 
+    // Capture hold (ltx-rt, task #6000). While a hold is open, a freed DRAM buffer's address stays
+    // reserved instead of returning to the free list. A trace bakes its intermediates' addresses and
+    // rewrites them on every replay; without the hold, a buffer allocated after capture can land on a
+    // freed intermediate and is overwritten by the next replay. end_capture_hold returns a token for
+    // the held ranges; release_capture_hold frees them (when the trace is released).
+    void begin_capture_hold();
+    std::uint64_t end_capture_hold();
+    void release_capture_hold(std::uint64_t token);
+    std::size_t capture_hold_bytes(std::uint64_t token) const;
+
     std::unordered_set<Buffer*> get_allocated_buffers() const;
     size_t get_num_allocated_buffers() const;
     // Live DRAM allocations as disjoint per-bank [begin, end) ranges in address order. Scans every allocation.
@@ -231,6 +241,12 @@ private:
 
     // Keep tracker-only state after the allocator's original fields so the
     // compiled-in feature does not perturb their cache layout when tracking is disabled.
+    // Capture hold state (see begin_capture_hold), guarded by mutex_.
+    int capture_hold_depth_ = 0;
+    std::vector<std::pair<DeviceAddr, DeviceAddr>> capture_held_dram_;  // (address, size)
+    std::uint64_t next_capture_hold_token_ = 1;
+    std::unordered_map<std::uint64_t, std::vector<std::pair<DeviceAddr, DeviceAddr>>> held_dram_by_token_;
+
     bool allocations_unsafe_ = false;
     const bool tracking_enabled_;
     const bool traceback_capture_enabled_;

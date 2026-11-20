@@ -540,7 +540,10 @@ class Vocoder(Module):
 
         return ttnn.from_torch(x_BTC_torch, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=self.dtype)
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    # hold_capture_frees: a later job's buffers must not land on this trace's intermediates (task #6000).
+    @traced_function(
+        device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False, hold_capture_frees=True
+    )
     def _forward_device(self, x_dev: ttnn.Tensor) -> ttnn.Tensor:
         """Pure-device graph: conv_pre → partition → ups/AMP stack → act_post → conv_post →
         T-gather. Fixed-shape device in/out, so this region is trace-capturable."""

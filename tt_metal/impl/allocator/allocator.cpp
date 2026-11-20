@@ -317,7 +317,13 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     }
 
     switch (buffer_type) {
-        case BufferType::DRAM: dram_manager_->deallocate_buffer(address); break;
+        case BufferType::DRAM:
+            if (capture_hold_depth_ > 0) [[unlikely]] {
+                capture_held_dram_.emplace_back(address, buffer->aligned_size_per_bank());
+            } else {
+                dram_manager_->deallocate_buffer(address);
+            }
+            break;
         case BufferType::L1: l1_manager_->deallocate_buffer(address); break;
         case BufferType::L1_SMALL: l1_small_manager_->deallocate_buffer(address); break;
         case BufferType::TRACE: trace_buffer_manager_->deallocate_buffer(address); break;
@@ -333,6 +339,9 @@ void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
 
 void AllocatorImpl::deallocate_buffers() {
     std::lock_guard<std::mutex> lock(mutex_);
+    // deallocate_all frees every range, the held ones included: drop the hold records with them.
+    capture_held_dram_.clear();
+    held_dram_by_token_.clear();
     dram_manager_->deallocate_all();
     l1_manager_->deallocate_all();
     l1_small_manager_->deallocate_all();
@@ -340,6 +349,47 @@ void AllocatorImpl::deallocate_buffers() {
     if (tracking_enabled_ && !unsafe_allocation_contexts_.empty()) [[unlikely]] {
         this->record_all_deallocations();
     }
+}
+
+void AllocatorImpl::begin_capture_hold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(capture_hold_depth_ == 0, "capture hold is already open; nested trace captures cannot hold");
+    capture_hold_depth_ = 1;
+    capture_held_dram_.clear();
+}
+
+std::uint64_t AllocatorImpl::end_capture_hold() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    TT_FATAL(capture_hold_depth_ == 1, "end_capture_hold without begin_capture_hold");
+    capture_hold_depth_ = 0;
+    const auto token = next_capture_hold_token_++;
+    held_dram_by_token_.emplace(token, std::move(capture_held_dram_));
+    capture_held_dram_.clear();
+    return token;
+}
+
+void AllocatorImpl::release_capture_hold(std::uint64_t token) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = held_dram_by_token_.find(token);
+    if (it == held_dram_by_token_.end()) {
+        return;  // already freed by deallocate_buffers
+    }
+    for (const auto& [address, size] : it->second) {
+        dram_manager_->deallocate_buffer(address);
+    }
+    held_dram_by_token_.erase(it);
+}
+
+std::size_t AllocatorImpl::capture_hold_bytes(std::uint64_t token) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = held_dram_by_token_.find(token);
+    std::size_t total = 0;
+    if (it != held_dram_by_token_.end()) {
+        for (const auto& [address, size] : it->second) {
+            total += size;
+        }
+    }
+    return total;
 }
 
 void AllocatorImpl::set_hybrid_device_allocators(const std::vector<AllocatorImpl*>& device_allocators) {

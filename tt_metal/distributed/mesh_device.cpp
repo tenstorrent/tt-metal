@@ -1714,6 +1714,19 @@ void MeshDeviceImpl::release_mesh_trace(const MeshTraceId& trace_id) {
     tt::tt_metal::experimental::inspector::ReleaseTraceDebugEntries(trace_id);
 
     this->unregister_active_trace(trace_id);
+
+    // The trace no longer replays: its held intermediates can go back to the free list.
+    if (auto it = capture_hold_by_trace_.find(trace_id); it != capture_hold_by_trace_.end()) {
+        it->second.first->release_capture_hold(it->second.second);
+        capture_hold_by_trace_.erase(it);
+    }
+}
+
+void MeshDeviceImpl::set_trace_capture_hold(bool enabled) { trace_capture_hold_ = enabled; }
+
+std::size_t MeshDeviceImpl::trace_capture_hold_bytes(const MeshTraceId& trace_id) const {
+    auto it = capture_hold_by_trace_.find(trace_id);
+    return it == capture_hold_by_trace_.end() ? 0 : it->second.first->capture_hold_bytes(it->second.second);
 }
 
 std::shared_ptr<MeshTraceBuffer> MeshDeviceImpl::get_mesh_trace(const MeshTraceId& trace_id) {
@@ -1759,6 +1772,10 @@ void MeshDeviceImpl::begin_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id
     if (trace_region_size == 0) {
         this->allocator_impl()->begin_dram_high_water_mark_tracking();
     }
+    if (trace_capture_hold_) {
+        capture_hold_allocator_ = this->allocator_impl().get();
+        capture_hold_allocator_->begin_capture_hold();
+    }
     this->mesh_command_queues_[cq_id]->record_begin(trace_id, trace_desc);
 }
 
@@ -1768,6 +1785,13 @@ void MeshDeviceImpl::end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id) 
     // Register the trace on any exit, including thrown exceptions, so subsequent allocations are treated
     // conservatively until the trace is released.
     auto register_trace_on_exit = ttsl::make_cleanup([this, trace_id]() { this->register_active_trace(trace_id); });
+    // Close the capture hold on any exit; the held DRAM stays reserved until release_mesh_trace.
+    auto close_capture_hold_on_exit = ttsl::make_cleanup([this, trace_id]() {
+        if (capture_hold_allocator_ != nullptr) {
+            capture_hold_by_trace_[trace_id] = {capture_hold_allocator_, capture_hold_allocator_->end_capture_hold()};
+            capture_hold_allocator_ = nullptr;
+        }
+    });
 
     TT_FATAL(
         this->mesh_command_queues_[cq_id]->trace_id() == trace_id,
@@ -2339,6 +2363,10 @@ void MeshDevice::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, b
     pimpl_->replay_mesh_trace(cq_id, trace_id, blocking);
 }
 void MeshDevice::release_mesh_trace(const MeshTraceId& trace_id) { pimpl_->release_mesh_trace(trace_id); }
+void MeshDevice::set_trace_capture_hold(bool enabled) { pimpl_->set_trace_capture_hold(enabled); }
+std::size_t MeshDevice::trace_capture_hold_bytes(const MeshTraceId& trace_id) const {
+    return pimpl_->trace_capture_hold_bytes(trace_id);
+}
 std::shared_ptr<MeshTraceBuffer> MeshDevice::get_mesh_trace(const MeshTraceId& trace_id) {
     return pimpl_->get_mesh_trace(trace_id);
 }

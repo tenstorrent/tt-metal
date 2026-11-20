@@ -130,6 +130,7 @@ class Tracer:
         device: ttnn.MeshDevice,
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         ...
 
@@ -142,6 +143,7 @@ class Tracer:
         devices: Sequence[ttnn.MeshDevice],
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         ...
 
@@ -154,6 +156,7 @@ class Tracer:
         devices: Sequence[ttnn.MeshDevice] | None = None,
         prep_run: bool = True,
         clone_prep_inputs: bool = True,
+        hold_capture_frees: bool = False,
     ) -> None:
         """Initialize the tracer.
 
@@ -170,6 +173,10 @@ class Tracer:
             devices: Multiple devices on which to capture and execute the trace simultaneously.
             prep_run: Whether to run the function once before capturing the trace.
             clone_prep_inputs: Whether to clone tensor inputs for the preparation run.
+            hold_capture_frees: Keep the DRAM the function frees during capture reserved until the
+                trace is released (``ttnn.set_trace_capture_hold``), so buffers allocated after
+                capture (a later job's) cannot land on the trace's intermediates and be overwritten
+                by a replay. Costs those intermediates without reuse, for the trace's lifetime.
         """
         if (device is None) == (devices is None):
             msg = "exactly one of 'device' or 'devices' must be provided"
@@ -188,6 +195,9 @@ class Tracer:
         self._devices: tuple[ttnn.MeshDevice, ...] = tuple(devices)
         self._prep_run = prep_run
         self._clone_prep_inputs = clone_prep_inputs
+        self._hold_capture_frees = hold_capture_frees
+        # Per-bank DRAM bytes the last capture holds (0 when the hold is off or unsupported).
+        self.capture_hold_bytes = 0
         self._args: tuple[Any, ...] = ()
         self._kwargs: dict[str, Any] = {}
         self._outputs: Any = None
@@ -338,7 +348,7 @@ class Tracer:
     def _record(self, *, cq_id: int, blocking_execution: bool, execute: bool) -> None:
         # capture trace
         logger.debug("capturing trace...")
-        trace_ids = tuple(ttnn.begin_trace_capture(d, cq_id=cq_id) for d in self._devices)
+        trace_ids = self._begin_capture(cq_id)
         try:
             try:
                 outputs = self._function(*self._args, **self._kwargs)
@@ -355,6 +365,10 @@ class Tracer:
         for d in self._devices:
             Tracer._traces_live[d.id()] += 1
         self._trace_ids = trace_ids
+        if self._hold_capture_frees and hasattr(ttnn, "trace_capture_hold_bytes"):
+            self.capture_hold_bytes = max(
+                ttnn.trace_capture_hold_bytes(d, t) for d, t in zip(self._devices, trace_ids, strict=True)
+            )
         self._outputs = outputs
         self.capture_count += 1
 
@@ -363,6 +377,29 @@ class Tracer:
             # actually compute outputs.
             for d, trace_id in zip(self._devices, trace_ids, strict=True):
                 ttnn.execute_trace(d, trace_id, cq_id=cq_id, blocking=blocking_execution)
+
+    def _begin_capture(self, cq_id: int) -> tuple[ttnn.MeshTraceId, ...]:
+        hold = self._hold_capture_frees
+        if hold and not hasattr(ttnn, "set_trace_capture_hold"):
+            msg = "hold_capture_frees needs ttnn.set_trace_capture_hold (ltx-rt task #6000)"
+            raise RuntimeError(msg)
+        trace_ids: list[ttnn.MeshTraceId] = []
+        try:
+            for d in self._devices:
+                # The hold binds to the capture begun while it is set; clear it right after.
+                if hold:
+                    ttnn.set_trace_capture_hold(d, True)
+                try:
+                    trace_ids.append(ttnn.begin_trace_capture(d, cq_id=cq_id))
+                finally:
+                    if hold:
+                        ttnn.set_trace_capture_hold(d, False)
+        except BaseException:
+            for d, trace_id in zip(self._devices, trace_ids):
+                ttnn.end_trace_capture(d, trace_id, cq_id=cq_id)
+                ttnn.release_trace(d, trace_id)
+            raise
+        return tuple(trace_ids)
 
     def _execute(
         self,
@@ -641,6 +678,7 @@ def traced_function(
     inject_mesh_device: bool = False,
     prep_run: bool = True,
     clone_prep_inputs: bool = True,
+    hold_capture_frees: bool = False,
 ) -> Any:
     """Decorator that adds optional tracing to any function or method via the ``Tracer`` class.
 
@@ -730,6 +768,7 @@ def traced_function(
             function. Mutually exclusive with ``device=``.
         prep_run: Forwarded to ``Tracer.__init__``.
         clone_prep_inputs: Forwarded to ``Tracer.__init__``.
+        hold_capture_frees: Forwarded to ``Tracer.__init__``.
     """
 
     def _resolve_device(context: Any) -> ttnn.MeshDevice:
@@ -853,6 +892,7 @@ def traced_function(
                         device=mesh_device_val,
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
+                        hold_capture_frees=hold_capture_frees,
                     )
                 return _tracers_auto[key](*bound.args, **bound.kwargs, **tracer_call_kwargs)
 
@@ -871,6 +911,7 @@ def traced_function(
                         device=_resolve_device(context),
                         prep_run=prep_run,
                         clone_prep_inputs=clone_prep_inputs,
+                        hold_capture_frees=hold_capture_frees,
                     )
                 return store[store_key](*rest, **kwargs)
 

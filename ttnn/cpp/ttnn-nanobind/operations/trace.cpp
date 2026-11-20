@@ -45,6 +45,27 @@ void py_module(nb::module_& mod) {
         "trace_allocation_diagnostics_enabled", []() { return tt::tt_metal::trace_allocation_diagnostics_enabled(); });
 
     mod.def(
+        "set_trace_capture_hold",
+        [](MeshDevice* device, bool enabled) { device->set_trace_capture_hold(enabled); },
+        nb::arg("mesh_device"),
+        nb::arg("enabled"),
+        R"doc(
+            While enabled, a trace capture begun on this mesh device keeps every DRAM buffer freed during the
+            capture reserved until that trace is released. The trace rewrites its intermediates' addresses on
+            every replay; the hold stops a buffer allocated after capture from landing on one of them.
+            Costs the capture's intermediates without reuse between them, held for the trace's lifetime.
+        )doc");
+
+    mod.def(
+        "trace_capture_hold_bytes",
+        [](MeshDevice* device, MeshTraceId trace_id) { return device->trace_capture_hold_bytes(trace_id); },
+        nb::arg("mesh_device"),
+        nb::arg("trace_id"),
+        R"doc(
+            DRAM bytes per bank held for the trace by set_trace_capture_hold (0 when none).
+        )doc");
+
+    mod.def(
         "begin_trace_capture",
         [](MeshDevice* device, std::optional<ttnn::QueueId> cq_id) {
             return ttnn::operations::trace::begin_trace_capture(device, cq_id);

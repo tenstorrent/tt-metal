@@ -192,6 +192,9 @@ private:
 
     std::unique_ptr<SubDeviceManagerTracker> sub_device_manager_tracker_;
     uint32_t trace_buffers_size_ = 0;
+    bool trace_capture_hold_ = false;
+    AllocatorImpl* capture_hold_allocator_ = nullptr;
+    std::unordered_map<MeshTraceId, std::pair<AllocatorImpl*, std::uint64_t>> capture_hold_by_trace_;
     uint32_t max_num_eth_cores_ = 0;
     std::shared_ptr<ThreadPool> dispatch_thread_pool_;
     std::shared_ptr<ThreadPool> reader_thread_pool_;
@@ -372,6 +375,10 @@ public:
     void end_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id);
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
+    // Capture hold (task #6000): see AllocatorImpl::begin_capture_hold. Applies to captures begun
+    // while set; the held DRAM is freed when that trace is released.
+    void set_trace_capture_hold(bool enabled);
+    std::size_t trace_capture_hold_bytes(const MeshTraceId& trace_id) const;
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;

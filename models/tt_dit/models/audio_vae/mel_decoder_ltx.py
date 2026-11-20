@@ -463,7 +463,10 @@ class MelDecoder(Module):
             sample_bhwc_padded, device=self.mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16
         )
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    # hold_capture_frees: a later job's buffers must not land on this trace's intermediates (task #6000).
+    @traced_function(
+        device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False, hold_capture_frees=True
+    )
     def _forward_device(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """The pure on-device decode graph (conv_in → conv_out). Captured for trace replay."""
         x = self.conv_in(x)

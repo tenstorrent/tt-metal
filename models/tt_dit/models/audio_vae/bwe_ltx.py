@@ -328,7 +328,10 @@ class VocoderWithBWE(Module):
             tracer.release_trace()
         self.mel_stft.stft_fn._window_indices.clear()
 
-    @traced_function(device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False)
+    # hold_capture_frees: a later job's buffers must not land on this trace's intermediates (task #6000).
+    @traced_function(
+        device=lambda self: self.mesh_device, prep_run=False, clone_prep_inputs=False, hold_capture_frees=True
+    )
     def _forward_device_chain(self, mel_BTC: ttnn.Tensor, length_low: int, output_length: int) -> ttnn.Tensor:
         """One trace owns all temporaries, so no output crosses an older independent trace.
 

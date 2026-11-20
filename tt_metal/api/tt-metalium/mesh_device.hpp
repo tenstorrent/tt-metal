@@ -188,6 +188,9 @@ public:
         "MeshTraceId&, bool) will be removed after September 9th, 2026.")]]
     void replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_id, bool blocking);
     void release_mesh_trace(const MeshTraceId& trace_id);
+    // Keep DRAM freed during a capture reserved until that trace is released (task #6000).
+    void set_trace_capture_hold(bool enabled);
+    std::size_t trace_capture_hold_bytes(const MeshTraceId& trace_id) const;
     std::shared_ptr<MeshTraceBuffer> get_mesh_trace(const MeshTraceId& trace_id);
     uint32_t get_trace_buffers_size() const override;
     void set_trace_buffers_size(uint32_t size) override;
