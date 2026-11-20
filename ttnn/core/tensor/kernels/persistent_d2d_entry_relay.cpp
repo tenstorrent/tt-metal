@@ -15,7 +15,7 @@
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/core_local_mem.h"
-#include "ttnn/core/tensor/kernels/d2d_relay_common.hpp"
+#include "d2d_relay_common.hpp"
 
 constexpr uint32_t terminate_value = get_named_compile_time_arg_val("terminate_value");
 constexpr uint32_t termination_addr = get_named_compile_time_arg_val("termination_addr");
@@ -25,6 +25,9 @@ constexpr uint32_t z_lanes = get_named_compile_time_arg_val("z_lanes");  // arri
 constexpr uint32_t num_slots = get_named_compile_time_arg_val("num_slots");
 constexpr uint32_t own_slot = get_named_compile_time_arg_val("own_slot");  // num_slots = none
 constexpr uint32_t page_size = get_named_compile_time_arg_val("page_size");
+// Bytes of one ring slot (relay_slot_bytes): a page, or a group of pages packed into one packet.
+constexpr uint32_t max_page_size = get_named_compile_time_arg_val("max_page_size");
+constexpr uint32_t num_extra_segments = get_named_compile_time_arg_val("num_extra_segments");
 constexpr uint32_t max_payload = get_named_compile_time_arg_val("max_payload");
 constexpr uint32_t total_pages = get_named_compile_time_arg_val("total_pages");
 constexpr uint32_t half_pages = get_named_compile_time_arg_val("half_pages");  // master [0, half) when 2 lanes
@@ -59,6 +62,7 @@ constexpr uint32_t exit_cable_acked_base = get_named_compile_time_arg_val("exit_
 // In-mesh connections this lane holds, one per first-hop direction toward its targets.
 constexpr uint32_t num_dir_conns = get_named_compile_time_arg_val("num_dir_conns");
 constexpr auto tensor_args = TensorAccessorArgs<0>();
+constexpr uint32_t extra_segments_ct_offset = tensor_args.next_compile_time_args_offset();
 
 static_assert(num_slots >= 1 && num_slots <= 32, "pending set is a 32-bit mask");
 static_assert(num_dir_conns <= 4, "at most one connection per in-mesh direction");
@@ -67,11 +71,14 @@ constexpr uint32_t kRingDepth = d2d_relay::floor_pow2(ring_slots);
 constexpr uint32_t kTridBase = 1u + (is_master ? 0u : kRingDepth);
 static_assert(2u * kRingDepth <= 15u, "two lanes of trids must fit in 0..15");
 
-// Per-slot runtime args, same layout for both lanes, in the field order of Target below.
-constexpr uint32_t kSlotArgs = 11;
+// Per-slot runtime args, same layout for both lanes: the fields of Target below in order, then
+// a (staging, backing) address pair per extra segment.
+constexpr uint32_t kTargetArgs = 11;
+constexpr uint32_t kSlotArgs = kTargetArgs + (2 * num_extra_segments);
 
 struct Target {
     uint32_t src_addr, dst_addr, chip, mesh, noc_x, noc_y, fifo_addr, bytes_sent_addr, lanes, master_conn, sub_conn;
+    size_t extra_arg;  // RT index of the extra segments' address pairs
 };
 
 FORCE_INLINE Target target_at(size_t slot_args, uint32_t k) {
@@ -87,12 +94,13 @@ FORCE_INLINE Target target_at(size_t slot_args, uint32_t k) {
         get_arg_val<uint32_t>(b + 7),
         get_arg_val<uint32_t>(b + 8),
         get_arg_val<uint32_t>(b + 9),
-        get_arg_val<uint32_t>(b + 10)};
+        get_arg_val<uint32_t>(b + 10),
+        b + kTargetArgs};
 }
 
-// Copy pages [start, end) of staging k into the target's backing, then Flush-increment the
-// target's bytes_sent in the same packet as the last write: the receiver kernel counts one
-// increment per lane.
+// Copy this lane's pages of each extra segment, then pages [start, end) of staging k into the
+// target's backing, then Flush-increment the target's bytes_sent in the same packet as the last
+// write: the receiver kernel counts one increment per lane.
 FORCE_INLINE void copy_to_target(
     const Noc& noc,
     tt::tt_fabric::WorkerToFabricEdmSender& conn,
@@ -104,9 +112,11 @@ FORCE_INLINE void copy_to_target(
     bool with_metadata,
     uint32_t md_l1_addr) {
     d2d_relay::set_route(data_header, t.chip, t.mesh);
+    d2d_relay::stream_extra_segments<num_extra_segments, extra_segments_ct_offset, max_payload, max_page_size, kRingDepth, kTridBase>(
+        noc, conn, cb_l1_addr, t.extra_arg, is_master, t.lanes > 1, data_header);
     auto in_acc = TensorAccessor(tensor_args, t.src_addr);
     auto out_acc = TensorAccessor(tensor_args, t.dst_addr);
-    d2d_relay::stream_pages_then_inc<page_size, max_payload, kRingDepth, kTridBase>(
+    d2d_relay::stream_pages_then_inc<page_size, max_payload, max_page_size, kRingDepth, kTridBase>(
         noc,
         conn,
         in_acc,
@@ -144,7 +154,7 @@ void kernel_main() {
 
     Noc noc(noc_index);
     CircularBuffer scratch(scratch_cb);
-    const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * page_size);
+    const uint32_t cb_l1_addr = scratch.get_write_ptr() + (is_master ? 0u : kRingDepth * max_page_size);
     reset_noc_trid_barrier_counter(NOC_CLEAR_OUTSTANDING_REQ_MASK, noc_index);
 
     if constexpr (!is_master) {

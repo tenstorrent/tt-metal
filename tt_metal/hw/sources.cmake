@@ -174,6 +174,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/experimental/sdpa_custom_mm.h
     inc/api/compute/experimental/sdpa_custom_mm_reuse_dest_srcb.h
     inc/api/compute/experimental/sdpa_sub_custom.h
+    inc/api/compute/experimental/sfpu_binary_bcast_pack.h
     inc/api/compute/experimental/sdpa_weighted_reduce.h
     inc/api/compute/experimental/semaphore_compute_impl.h
     inc/api/compute/experimental/sinkhorn.h
@@ -217,7 +218,6 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/transpose.h
     inc/api/compute/triangle_solve.h
     inc/api/compute/transpose_dest.h
-    inc/api/compute/untilize.h
     inc/api/compute/welford.h
     inc/api/compute/xlogy.h
     inc/api/lock.h
@@ -237,6 +237,8 @@ set(HW_JIT_API_HEADERS
     inc/api/dataflow/noc_semaphore.h
     inc/api/dataflow/semaphore_dm_impl.h
     inc/api/dataflow/semaphore_binding_token.h
+    inc/api/dataflow/global_semaphore.h
+    inc/api/dataflow/global_semaphore_binding_token.h
     inc/api/core_local_mem.h
     inc/api/tensor/noc_traits.h
     inc/hostdev/buf_rw_common.h
@@ -254,7 +256,6 @@ set(HW_JIT_API_HEADERS
     inc/hostdev/rta_constants.h
     inc/hostdev/socket.h
     inc/hostdev/fabric_edm_packet_header.hpp
-    inc/hostdev/fabric_direction_table_interface.h
     inc/hostdev/fabric_routing_path_interface.h
     inc/internal/hw_thread.h
     inc/internal/profiler/event_metadata.hpp
@@ -291,8 +292,10 @@ set(HW_JIT_API_HEADERS
     inc/internal/debug/assert_common.h
     inc/internal/debug/dprint_buffer.h
     inc/internal/debug/fw_debug.h
+    inc/internal/debug/node_range.h
     inc/internal/debug/noc_zero_guard.h
     inc/internal/debug/sanitize.h
+    inc/internal/debug/sanitize_multicast_destination.h
     inc/internal/debug/shared_noc_cmd_buf.h
     inc/internal/debug/stack_usage.h
     inc/internal/debug/watcher_common.h
@@ -409,6 +412,18 @@ set(HW_JIT_API_HEADERS
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_cluster_plic_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_overlay_llk_tile_counters_reg.h
     inc/internal/tt-2xx/tt-2.0.2/meta/registers/tt_rocc_accel_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/fds_registers/tt_fds_dispatch_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/fds_registers/tt_fds_tensixneo_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/overlay_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/memory_port_cacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/memory_port_noncacheable_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_cache_controller_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_cluster_clint_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_cluster_ctrl_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_cluster_ctrl_t6_l1_csr_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_cluster_plic_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_overlay_llk_tile_counters_reg.h
+    inc/internal/tt-2xx/tt-2.0.3/meta/registers/tt_rocc_accel_reg.h
     inc/internal/tt-2xx/quasar/overlay/addrgen_api.hpp
     inc/internal/tt-2xx/quasar/overlay/addrgen_state.h
     inc/internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp

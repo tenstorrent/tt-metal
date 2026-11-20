@@ -13,7 +13,7 @@
 #include "rtoptions.hpp"
 #include "dev_mem_map.h"
 #include "eth_fw_api.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "hostdev/l1_ecc_halt_constants.h"
 #include "llrt/hal.hpp"
 #include "noc/noc_overlay_parameters.h"
@@ -175,6 +175,11 @@ public:
     std::vector<std::string> defines(const Params& params) const override {
         auto defines = HalJitBuildQueryBase::defines(params);
         defines.push_back("ARCH_BLACKHOLE");
+        // ttsim does not model every config register (PACK_GLOBAL_CFG_CTL). UMD picks ttsim over RTL emulation by
+        // the same .so test.
+        if (params.rtoptions.get_simulator_path().extension() == ".so") {
+            defines.push_back("TT_METAL_TTSIM");
+        }
         // Push back the physical erisc id
         if (params.core_type == HalProgrammableCoreType::ACTIVE_ETH) {
             if (enable_2_erisc_mode_) {
@@ -483,6 +488,7 @@ void Hal::initialize_bh(
     this->num_nocs_ = NUM_NOCS;
     this->noc_node_id_ = NOC_NODE_ID;
     this->noc_node_id_mask_ = NOC_NODE_ID_MASK;
+    this->noc_addr_local_bits_ = NOC_ADDR_LOCAL_BITS;
     this->noc_addr_node_id_bits_ = NOC_ADDR_NODE_ID_BITS;
     this->noc_max_burst_size_bytes_ = NOC_MAX_BURST_SIZE;
     this->noc_encoding_reg_ = COORDINATE_VIRTUALIZATION_ENABLED ? NOC_CFG(NOC_ID_LOGICAL) : NOC_NODE_ID;

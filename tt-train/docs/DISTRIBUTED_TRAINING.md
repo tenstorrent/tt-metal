@@ -579,8 +579,9 @@ export TT_METAL_RUNTIME_ROOT=/path/to/tt-metal
 ### 3. Run Training
 
 ```bash
-./build/examples/nano_gpt/nano_gpt \
-    --config configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
+cd "$TT_METAL_RUNTIME_ROOT"
+./build/tt-train/sources/examples/nano_gpt/nano_gpt \
+    --config tt-train/configs/training_configs/training_llama8b_tp_ddp_galaxy.yaml
 ```
 
 ### 4. What Happens
@@ -670,7 +671,7 @@ export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_RUNTIME_ROOT/tt-train/configs/mgd/bh_ga
 
 **Error**: `"ParallelismContext is already initialized."`
 
-**Cause**: `initialize_parallelism_context()` is being called more than once. The parallelism context can only be initialized once per training session.
+**Cause**: `initialize_parallelism_context()` is being called more than once for the same open device. The parallelism context describes the mesh it was built for, so it can only be initialized once per open device; `close_device()` clears it, and it must be initialized again after the next device is opened.
 
 **Solution**:
 1. **Check for duplicate initialization**: Ensure `initialize_parallelism_context()` is called exactly once in your code flow. Common causes:

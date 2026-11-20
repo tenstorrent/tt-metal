@@ -8,7 +8,7 @@ import pytest
 import ttnn
 from models.experimental.swin_s.reference.shifted_window_attention import ShiftedWindowAttention
 from models.experimental.swin_s.tt.tt_shifted_window_attention import TtShiftedWindowAttention
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import preprocess_model_parameters, preprocess_linear_weight, preprocess_linear_bias
 from models.experimental.swin_s.common import load_torch_model, SWIN_S_L1_SMALL_SIZE
 from models.experimental.swin_s.tt.common import (
