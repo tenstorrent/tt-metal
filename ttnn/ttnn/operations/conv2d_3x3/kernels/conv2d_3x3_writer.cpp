@@ -1378,8 +1378,8 @@ void kernel_main() {
     [[maybe_unused]] uint32_t round0_pushed = 0;
     auto issue_weight_k_block = [&]() {
         if (sd_w0 == 1) {
-            MaybeDeviceZoneScope("writer_weight_fetch");
             // Slab-direct round 0 (taken early): wait for it, serving the fill.
+            MaybeDeviceZoneScope("writer_weight_fetch");
             if (sd_w_issued_early) {
                 MaybeDeviceZoneScope("writer_sd_weight_land");
                 while (!sd_w0_try()) {
