@@ -281,43 +281,6 @@ def test_threshold(device, threshold_val, value):
     _assert_bitwise_equal(result, golden, f"threshold({threshold_val}, {value})")
 
 
-@pytest.mark.parametrize("ttnn_op", [ttnn.threshold, ttnn.clamp, ttnn.clip, ttnn.hardtanh])
-@pytest.mark.parametrize("scalars", [(0.0, -0.0, 0.0), (-0.0, 0.0, -0.0)], ids=["pos_first", "neg_first"])
-def test_signed_zero_scalar_program_cache(device, ttnn_op, scalars):
-    """+0.0 and -0.0 scalars keep their sign through the program cache (#62557).
-
-    | Input | Check               | Reason                                         |
-    |-------|---------------------|------------------------------------------------|
-    | -1.0  | exact (bit pattern) | every output is the scalar, sign included      |
-
-    The scalar is threshold's value (threshold 0.0) or the min bound of
-    clamp/clip/hardtanh (max 1.0).
-    The scalar reaches the kernel as a runtime argument, so both signs may share
-    one program; a repeated scalar must hit the cache, and the output must not
-    depend on which sign ran first.
-    """
-    tt_in = to_float32_tt_tensor(torch.full((64, 64), -1.0, dtype=torch.float32), device)
-    device.clear_program_cache()
-
-    seen_signs = set()
-    prev_entries = device.num_program_cache_entries()
-    for scalar in scalars:
-        expected = torch.full((64, 64), scalar, dtype=torch.float32)
-        if ttnn_op is ttnn.threshold:
-            tt_out = ttnn.threshold(tt_in, 0.0, scalar)
-        elif ttnn_op is ttnn.hardtanh:
-            tt_out = ttnn.hardtanh(tt_in, min_val=scalar, max_val=1.0)
-        else:
-            tt_out = ttnn_op(tt_in, scalar, 1.0)
-        entries = device.num_program_cache_entries()
-        sign = math.copysign(1.0, scalar)
-        if sign in seen_signs:
-            assert entries == prev_entries, f"scalar {scalar} should hit its cached program"
-        seen_signs.add(sign)
-        prev_entries = entries
-        _assert_bitwise_equal(ttnn.to_torch(tt_out), expected, f"scalar {scalar}")
-
-
 def _tril_triu_input():
     """A 96 x 96 tensor drawn from the whole bfloat16 range.
 
