@@ -215,6 +215,8 @@ def test_hy4_prefill_ihc_mtp(variant, config_only, mesh_device, device_params, n
         **common,
     )
     assert transformer.ihc_head is not None and transformer.norm is not None
+    if missing:  # as TtHy4Runtime does after a rebuild: the MLA files written now are in the current RoPE frames
+        hc.stamp_mla_cache(cache, range(TRUNK))
     del trunk_sd, mtp_sd
 
     kvpe_cache = init_mla_kv_cache(

@@ -252,6 +252,8 @@ def test_hy4_prefill_ihc_layers_vs_golden(
         sp_axis=sp_axis,
         chunk_size=smoke.CHUNK_SIZE,
     )
+    if missing:  # as TtHy4Runtime does after a rebuild: the MLA files written now are in the current RoPE frames
+        hc.stamp_mla_cache(cache, range(NUM_LAYERS))
 
     kv_rows = {r["layer"]: r for r in kv.table()}
     logger.info("Hy4 prefill with iHC vs golden (layout glm_prefill_sp8_tp4: SP 8 on axis 0, TP 4 on axis 1):")
