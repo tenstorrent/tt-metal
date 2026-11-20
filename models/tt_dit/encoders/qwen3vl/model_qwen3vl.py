@@ -730,6 +730,7 @@ class Qwen3VlAttention(Module):
                 is_causal=attention_bias is None,
                 program_config=self._sdpa_program_config(q.shape[2]),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
 
         x = ttnn.transformer.concatenate_heads(x, runtime_rows=self._dynamic_length)

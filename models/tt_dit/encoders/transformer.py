@@ -1078,6 +1078,7 @@ class Attention(Module):
             is_causal=attn_bias is None,
             program_config=self._sdpa_program_config(padded_q_seq_len, padded_kv_seq_len),
             compute_kernel_config=self._hifi_compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         del q, k, v
 

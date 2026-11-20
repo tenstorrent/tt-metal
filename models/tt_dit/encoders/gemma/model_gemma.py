@@ -279,6 +279,7 @@ class GemmaAttention(Module):
             scale=1.0 / math.sqrt(self.head_dim),
             program_config=self.sdpa_config,
             compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
 
         # Concat heads: (B, H, seq, D) → (B, seq, H*D)

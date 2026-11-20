@@ -504,6 +504,7 @@ class VisionAttention(Module):
                 scale=self.scale,
                 program_config=self._windowed_program_config(seq_len),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
             if cu_seqlens[0] != 0 or cu_seqlens[-1] != seq_len:
@@ -523,6 +524,7 @@ class VisionAttention(Module):
                 scale=self.scale,
                 program_config=self._windowed_program_config(seq_len),
                 compute_kernel_config=self._sdpa_compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 cu_window_seqlens=cu_window,
             )
         attn = ttnn.experimental.nlp_concat_heads(attn, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -607,6 +609,7 @@ class VisionAttention(Module):
             scale=self.scale,
             program_config=self._windowed_program_config(local_seq_len),
             compute_kernel_config=self._sdpa_compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             cu_window_seqlens=cu_window,
             windowed_q_token_offset_tensor=q_offsets,
         )

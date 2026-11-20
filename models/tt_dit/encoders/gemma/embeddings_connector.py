@@ -205,6 +205,7 @@ class ConnectorBlock(Module):
             is_causal=False,
             program_config=sdpa_config,
             compute_kernel_config=self.compute_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )  # (B, n_local_heads, T, D)
 
         # Per-head gate applied in BHNE, before concatenate_heads: gates = 2*sigmoid(...) are
