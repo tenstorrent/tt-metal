@@ -667,6 +667,8 @@ class TtBasicTransformerBlock:
         self.fused_qkv = flow_fused_qkv()
         self.fused_sdpa = flow_fused_sdpa()
         self.cc = flow_matmul_config(device)
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.sdpa_precision = ttnn.SDPAPrecision.ACCURATE if self.cc is not None and self.cc.fp32_dest_acc_en else None
         self.sdpa_program_config = (
             ttnn.SDPAProgramConfig(
                 compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
@@ -732,6 +734,7 @@ class TtBasicTransformerBlock:
             scale=self.scale,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.cc,
+            precision=self.sdpa_precision,
         )
         return out if dt == ttnn.bfloat16 else ttnn.typecast(out, dt)
 
