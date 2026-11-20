@@ -6,7 +6,7 @@ import contextlib
 import torch
 import torch.nn.functional as F
 import ttnn
-from tests.ttnn.utils_for_testing import check_with_pcc
+from tt_py_test_utils_common.utils_for_testing import check_with_pcc
 from loguru import logger
 import math
 from models.common.utility_functions import is_blackhole

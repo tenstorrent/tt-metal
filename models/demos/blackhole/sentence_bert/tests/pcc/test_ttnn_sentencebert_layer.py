@@ -12,7 +12,7 @@ from models.demos.blackhole.sentence_bert.ttnn.common import custom_preprocessor
 from models.demos.sentence_bert.common import load_torch_model
 from models.demos.sentence_bert.reference.sentence_bert import BertLayer
 from models.demos.sentence_bert.ttnn.ttnn_sentencebert_layer import TtnnSentenceBertLayer
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @pytest.mark.parametrize(

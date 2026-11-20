@@ -55,7 +55,15 @@ class RMSNorm(Module):
         *,
         compute_kernel_config=None,
         program_config: ttnn.LayerNormDefaultProgramConfig | ttnn.LayerNormShardedMultiCoreProgramConfig | None = None,
+        row_capacity: int | None = None,
     ) -> ttnn.Tensor:
+        """`row_capacity` (largest row count of dim -2, a multiple of 32) selects a program that serves every
+        row count up to it; its result is close to, not bit-identical with, the default one."""
+        if row_capacity is not None:
+            if program_config is not None:
+                msg = "row_capacity takes no program_config"
+                raise ValueError(msg)
+            return self._forward_row_capacity(x, compute_kernel_config, row_capacity)
         return ttnn.experimental.dit_rms_norm_unary_fused(
             x,
             weight=self.weight.data if self.weight is not None else None,
@@ -65,6 +73,26 @@ class RMSNorm(Module):
             compute_kernel_config=compute_kernel_config,
             activation=self.fused_activation,
         )
+
+    def _forward_row_capacity(self, x: ttnn.Tensor, compute_kernel_config, row_capacity: int) -> ttnn.Tensor:
+        if self.bias is not None or self.fused_activation is not None:
+            msg = "row_capacity supports neither a bias nor a fused activation"
+            raise ValueError(msg)
+        shape = list(x.shape)
+        folded = [1, math.prod(shape[:-2]), *shape[-2:]]
+        # The fused distributed RMSNorm without a cluster axis normalizes each [1, batch, N, C] row locally.
+        x = ttnn.experimental.dit_fused_distributed_rmsnorm(
+            x if shape == folded else ttnn.reshape(x, folded),
+            None,
+            self.mesh_device,
+            [],
+            topology=ttnn.Topology.Linear,
+            epsilon=self.norm_eps,
+            weight=self.weight.data if self.weight is not None else None,
+            compute_kernel_config=compute_kernel_config,
+            row_capacity=row_capacity * folded[1],
+        )
+        return x if shape == folded else ttnn.reshape(x, shape)
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         if "weight" in state:
