@@ -2,13 +2,14 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per (4, 2) group of a Blackhole Galaxy. Each
-process sees only its chips (TT_VISIBLE_DEVICES), opens them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group
-(GROUP_PCIE_IDS, the default) or two groups in two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one
-Python GIL."""
+"""FLUX 3 Klein data parallel across processes: one Flux3KleinPipeline per group of a Blackhole Galaxy, (4, 2) by
+default (DP4) or a 16-chip (2, 8) / (4, 4) group (DP2). Each process sees only its chips (TT_VISIBLE_DEVICES), opens
+them as one mesh (TT_MESH_GRAPH_DESC_PATH) and serves one group (GROUP_PCIE_IDS, the default) or two (4, 2) groups in
+two threads (HALF_PCIE_IDS), so the groups' host dispatch does not share one Python GIL."""
 
 from __future__ import annotations
 
+import math
 import multiprocessing
 import os
 import queue
@@ -20,9 +21,13 @@ from pathlib import Path
 from loguru import logger
 
 GROUP_SHAPE = (4, 2)
-GROUP_CHIPS = GROUP_SHAPE[0] * GROUP_SHAPE[1]
+# Each group shape's (sp_axis, tp_axis): the sequence runs on the group's ring axis. (2, 8) keeps the Galaxy's 8-chip
+# ring (SP8 x TP2); (4, 4) is a 4x4 half (SP4 x TP4, the TP axis a line).
+GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1)}
+# By process mesh shape: one (4, 2) group, two of them or one (4, 4) group, one (2, 8) group.
 MESH_GRAPH_DESCRIPTORS = {
-    groups: Path(__file__).with_name(f"dp_group_4x{2 * groups}_mesh_graph_descriptor.textproto") for groups in (1, 2)
+    shape: Path(__file__).with_name(f"dp_group_{shape[0]}x{shape[1]}_mesh_graph_descriptor.textproto")
+    for shape in ((4, 2), (4, 4), (2, 8))
 }
 
 # The PCIe devices (/dev/tenstorrent/N) of the processes. One group each: FABRIC_1D_RING needs the 4-chip axis to close a
@@ -33,31 +38,36 @@ GROUP_PCIE_IDS = tuple(tuple(range(first, 32, 4)) for first in (0, 2, 3))
 HALF_PCIE_IDS = tuple(tuple(i for i in range(32) if i % 4 in columns) for columns in ((0, 1), (2, 3)))
 
 
-def process_groups(pcie_ids: Sequence[int]) -> int:
-    groups, rest = divmod(len(set(pcie_ids)), GROUP_CHIPS)
-    if rest or len(set(pcie_ids)) != len(pcie_ids) or groups not in MESH_GRAPH_DESCRIPTORS:
-        raise ValueError(f"a process needs 8 or 16 distinct chips, got {list(pcie_ids)}")
+def process_shape(groups: int, group_shape: tuple[int, int] = GROUP_SHAPE) -> tuple[int, int]:
+    return group_shape[0], group_shape[1] * groups
+
+
+def process_groups(pcie_ids: Sequence[int], group_shape: tuple[int, int] = GROUP_SHAPE) -> int:
+    groups, rest = divmod(len(set(pcie_ids)), math.prod(group_shape))
+    if rest or len(set(pcie_ids)) != len(pcie_ids) or process_shape(groups, group_shape) not in MESH_GRAPH_DESCRIPTORS:
+        raise ValueError(f"a process needs 8 or 16 distinct chips of whole {group_shape} groups, got {list(pcie_ids)}")
     return groups
 
 
-def group_env(pcie_ids: Sequence[int]) -> dict[str, str]:
-    """The variables that give a process only these chips, opened as one (4, 2 x groups) mesh."""
+def group_env(pcie_ids: Sequence[int], group_shape: tuple[int, int] = GROUP_SHAPE) -> dict[str, str]:
+    """The variables that give a process only these chips, opened as one mesh of its groups side by side."""
+    shape = process_shape(process_groups(pcie_ids, group_shape), group_shape)
     return {
         "TT_VISIBLE_DEVICES": ",".join(str(i) for i in sorted(pcie_ids)),
-        "TT_MESH_GRAPH_DESC_PATH": str(MESH_GRAPH_DESCRIPTORS[process_groups(pcie_ids)]),
+        "TT_MESH_GRAPH_DESC_PATH": str(MESH_GRAPH_DESCRIPTORS[shape]),
     }
 
 
-def open_group_mesh(groups: int = 1):
-    """In a process: its (4, 2 x groups) mesh with 8 KB packets, as the one-process DP4. One group: FABRIC_1D_RING. Two:
+def open_group_mesh(shape: tuple[int, int] = GROUP_SHAPE):
+    """In a process: its mesh with 8 KB packets, as the one-process DP4. A 2-chip axis: FABRIC_1D_RING. (4, 4):
     FABRIC_2D_TORUS_Y, a ring on the 4-chip axis only."""
     import ttnn
 
     router = ttnn.FabricRouterConfig()
     router.max_packet_payload_size_bytes = 8192
-    fabric = ttnn.FabricConfig.FABRIC_1D_RING if groups == 1 else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
+    fabric = ttnn.FabricConfig.FABRIC_1D_RING if 2 in shape else ttnn.FabricConfig.FABRIC_2D_TORUS_Y
     ttnn.set_fabric_config(fabric, router_config=router)
-    return ttnn.open_mesh_device(ttnn.MeshShape(GROUP_SHAPE[0], GROUP_SHAPE[1] * groups), l1_small_size=65536)
+    return ttnn.open_mesh_device(ttnn.MeshShape(*shape), l1_small_size=65536)
 
 
 def _send_error(conns, e: Exception) -> None:
@@ -80,7 +90,12 @@ def _answer(conn, pipeline) -> None:
         conn.close()  # a loop that dies (a request that does not unpickle) fails the parent's request instead of hanging it
 
 
-def serve(conns: Sequence, pipeline_kwargs: Mapping, warmup: bool | Sequence[int]) -> None:
+def serve(
+    conns: Sequence,
+    pipeline_kwargs: Mapping,
+    warmup: bool | Sequence[int],
+    group_shape: tuple[int, int] = GROUP_SHAPE,
+) -> None:
     """A process: one pipeline per group (`conns`, one per group), each warmed (every served shape, or `warmup` sizes);
     then each group answers its requests in its own thread until it gets None."""
     import ttnn
@@ -88,15 +103,16 @@ def serve(conns: Sequence, pipeline_kwargs: Mapping, warmup: bool | Sequence[int
     from .pipeline_flux3_klein import Flux3KleinPipeline
 
     try:
-        mesh = open_group_mesh(len(conns))
+        mesh = open_group_mesh(process_shape(len(conns), group_shape))
     except Exception as e:  # noqa: BLE001
         _send_error(conns, e)
         return
     pipelines = []
+    sp_axis, tp_axis = GROUP_AXES[group_shape]
     try:
-        submeshes = mesh.create_submeshes(ttnn.MeshShape(*GROUP_SHAPE)) if len(conns) > 1 else [mesh]
+        submeshes = mesh.create_submeshes(ttnn.MeshShape(*group_shape)) if len(conns) > 1 else [mesh]
         for submesh in submeshes:
-            pipelines.append(Flux3KleinPipeline.create(submesh, sp_axis=0, tp_axis=1, **pipeline_kwargs))
+            pipelines.append(Flux3KleinPipeline.create(submesh, sp_axis=sp_axis, tp_axis=tp_axis, **pipeline_kwargs))
             if warmup is True:
                 pipelines[-1].warmup()
             elif warmup:
@@ -120,6 +136,8 @@ class Flux3KleinProcessGroups:
         with Flux3KleinProcessGroups() as groups:  # or Flux3KleinProcessGroups(HALF_PCIE_IDS)
             results = groups.generate(requests)
 
+    DP2, one 16-chip group per process: Flux3KleinProcessGroups(sets, group_shape=(2, 8)), or (4, 4) on HALF_PCIE_IDS.
+
     A group whose process dies fails the request it holds and is dropped (logged, `alive_groups` shrinks); once none
     is left, every request fails. A hung device hangs its request, as in one process."""
 
@@ -127,6 +145,7 @@ class Flux3KleinProcessGroups:
         self,
         processes: Iterable[Sequence[int]] = GROUP_PCIE_IDS,
         *,
+        group_shape: tuple[int, int] = GROUP_SHAPE,
         warmup: bool | Sequence[int] = True,
         **pipeline_kwargs,
     ) -> None:
@@ -139,10 +158,12 @@ class Flux3KleinProcessGroups:
         self._lock = threading.Lock()
         try:
             for pcie_ids in processes:
-                env = group_env(pcie_ids)
-                pipes = [context.Pipe() for _ in range(process_groups(pcie_ids))]
+                env = group_env(pcie_ids, group_shape)
+                pipes = [context.Pipe() for _ in range(process_groups(pcie_ids, group_shape))]
                 children = [child for _, child in pipes]
-                process = context.Process(target=serve, args=(children, pipeline_kwargs, warmup), daemon=True)
+                process = context.Process(
+                    target=serve, args=(children, pipeline_kwargs, warmup, tuple(group_shape)), daemon=True
+                )
                 saved = {key: os.environ.get(key) for key in env}
                 os.environ.update(env)  # a spawned child starts with the parent's environment
                 try:
