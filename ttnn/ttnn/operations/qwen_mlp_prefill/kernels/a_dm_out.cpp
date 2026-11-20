@@ -15,7 +15,7 @@ void kernel_main() {
     constexpr uint32_t gather_depth = CT_ARG("gather_depth");
     constexpr uint32_t own_bytes = a_tiles * tile_bytes;
     constexpr uint32_t gather_bytes = CT_ARG("gather_tiles") * tile_bytes;
-    const Rect b_grid = RECT("b_grid");
+    const Rect b_grid = RECT("b_rect");
     const Rect row_sources{
         RT_ARG("row_x_start"), RT_ARG("row_y"), RT_ARG("collector_x") - 1, RT_ARG("row_y"), RT_ARG("row_cores") - 1};
     const uint32_t row_cores = RT_ARG("row_cores");
@@ -26,16 +26,23 @@ void kernel_main() {
 
     const auto w_gate_up = TensorAccessor(
         TensorAccessorArgs<CT_ARG("ta_w_gate_up")>(), RT_ARG("w_gate_up_addr"), CT_ARG("tile_bytes_bfp4"));
-    load_resident_weights(
+    SharedWeights<decltype(w_gate_up)> shared_weights{
         noc,
         w_gate_up,
-        CT_ARG("cb_wg"),
+        CircularBuffer(CT_ARG("cb_wg")),
+        Semaphore<>(CT_ARG("sem_a_weights")),
+        {RT_ARG("partner_x"), RT_ARG("partner_y")},
         CT_ARG("tile_bytes_bfp4"),
-        CT_ARG("h_tiles"),
         CT_ARG("gate_up_tiles"),
-        0,
         2 * a_tiles * RT_ARG("index"),
-        2 * a_tiles);
+        2 * a_tiles,
+        CT_ARG("weight_chunk_rows"),
+        CT_ARG("h_tiles") / CT_ARG("weight_chunk_rows"),
+        CT_ARG("group"),
+        CT_ARG("groups"),
+        CT_ARG("weight_reads_in_flight")};
+    shared_weights.start();
+    shared_weights.finish();
 
     for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
         const uint32_t slot = m % depth;

@@ -29,10 +29,27 @@ struct Rect {
             linked);
     }
 
+    void write_including_source(const Noc& noc, uint32_t src, uint32_t dst, uint32_t bytes) const {
+        noc.async_write_multicast<NocOptions::MCAST_INCL_SRC>(
+            CoreLocalMem<uint32_t>(src),
+            MulticastEndpoint{},
+            bytes,
+            cores,
+            {},
+            {.noc_x_start = x_start, .noc_y_start = y_start, .noc_x_end = x_end, .noc_y_end = y_end, .addr = dst});
+    }
+
     void increment(const Noc& noc, Semaphore<>& semaphore, uint32_t value) const {
+        increment_except(noc, semaphore, value, ~0u, ~0u);
+    }
+
+    void increment_except(
+        const Noc& noc, Semaphore<>& semaphore, uint32_t value, uint32_t except_x, uint32_t except_y) const {
         for (uint32_t x = x_start; x <= x_end; x++) {
             for (uint32_t y = y_start; y <= y_end; y++) {
-                semaphore.up(noc, x, y, value);
+                if (x != except_x || y != except_y) {
+                    semaphore.up(noc, x, y, value);
+                }
             }
         }
     }

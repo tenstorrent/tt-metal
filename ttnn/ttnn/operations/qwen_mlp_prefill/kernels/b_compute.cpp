@@ -12,6 +12,7 @@
 void kernel_main() {
     constexpr uint32_t k_tiles = CT_ARG("i_tiles");
     constexpr uint32_t columns = CT_ARG("b_tiles_per_core");
+    constexpr uint32_t chunk_rows = CT_ARG("weight_chunk_rows");
     constexpr uint32_t remote_sources = CT_ARG("remote_sources");
     constexpr bool owner = CT_ARG("owner") == 1;
     constexpr uint32_t lag = CT_ARG("owner_lag");
@@ -30,7 +31,6 @@ void kernel_main() {
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_a, cb_wd, cb_partial);
     matmul_block_init(cb_a, cb_wd, false, columns, 1, k_tiles);
-    weights.wait_front(k_tiles * columns);
 
     for (uint32_t step = 0; step < rows + (owner ? lag : 0); step++) {
         if (step < rows) {
@@ -39,6 +39,9 @@ void kernel_main() {
             partial.reserve_back(columns);
             tile_regs_acquire();
             for (uint32_t k = 0; k < k_tiles; k++) {
+                if (step == 0 && k % chunk_rows == 0) {
+                    weights.wait_front((k + chunk_rows < k_tiles ? k + chunk_rows : k_tiles) * columns);
+                }
                 matmul_block(cb_a, cb_wd, k, k * columns, 0, false, columns, 1, k_tiles);
             }
             tile_regs_commit();

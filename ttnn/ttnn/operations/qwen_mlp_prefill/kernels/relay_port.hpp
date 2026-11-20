@@ -6,7 +6,8 @@
 #include "rect.hpp"
 #include "ring.hpp"
 
-// Queue of messages from one B core into one relay core: two slots, each a message header followed by the payload.
+// Queue of messages from one B core into one relay core: relay_slots slots, each a message header followed by the
+// payload.
 struct RelayPort {
     uint32_t x;
     uint32_t y;
@@ -25,8 +26,8 @@ struct RelayPort {
         uint32_t dst_y,
         uint32_t dst_address,
         uint32_t semaphore_address) {
-        if (pushes >= 2) {
-            free.wait_min(pushes - 1);
+        if (pushes >= CT_ARG("relay_slots")) {
+            free.wait_min(pushes + 1 - CT_ARG("relay_slots"));
         }
         volatile tt_l1_ptr Message* message = reinterpret_cast<volatile tt_l1_ptr Message*>(header_scratch);
         message->kind = kind;
@@ -37,7 +38,7 @@ struct RelayPort {
         message->dst_address = dst_address;
         message->semaphore_address = semaphore_address;
         message->sequence = pushes + 1;
-        const uint32_t slot = slots + (pushes & 1) * CT_ARG("relay_slot_bytes");
+        const uint32_t slot = slots + (pushes % CT_ARG("relay_slots")) * CT_ARG("relay_slot_bytes");
         if (kind == MessageKind::Data) {
             noc.async_write(
                 CoreLocalMem<uint32_t>(payload_address),

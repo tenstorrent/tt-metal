@@ -26,7 +26,7 @@ void kernel_main() {
         packet_headers[i] = PacketHeaderPool::allocate_header();
     }
 
-    for (uint32_t slot = 0; slot < 2 * sources; slot++) {
+    for (uint32_t slot = 0; slot < CT_ARG("relay_slots") * sources; slot++) {
         reinterpret_cast<volatile tt_l1_ptr Message*>(slots + slot * slot_bytes)->sequence = 0;
     }
     {
@@ -53,7 +53,8 @@ void kernel_main() {
     uint32_t remaining = sources;
     while (remaining != 0) {
         for (uint32_t source = 0; source < sources; source++) {
-            const uint32_t slot = slots + (source * 2 + (consumed[source] & 1)) * slot_bytes;
+            const uint32_t slot =
+                slots + (source * CT_ARG("relay_slots") + consumed[source] % CT_ARG("relay_slots")) * slot_bytes;
             const volatile tt_l1_ptr Message* message = reinterpret_cast<volatile tt_l1_ptr Message*>(slot);
             if (message->sequence != consumed[source] + 1) {
                 continue;

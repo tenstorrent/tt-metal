@@ -14,6 +14,7 @@
 void kernel_main() {
     constexpr uint32_t k_tiles = CT_ARG("h_tiles");
     constexpr uint32_t columns = CT_ARG("a_columns_per_core");
+    constexpr uint32_t chunk_rows = CT_ARG("weight_chunk_rows");
     constexpr uint32_t pair = 2;
     constexpr uint32_t scale_tile = 2;
     constexpr uint32_t cb_n = CT_ARG("cb_n");
@@ -26,7 +27,6 @@ void kernel_main() {
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_n, cb_wg, cb_a_out);
     PACK((swiglu_tile_init()));
     matmul_block_init(cb_n, cb_wg, false, pair, 1, k_tiles);
-    weights.wait_front(k_tiles * columns);
 
     for (uint32_t m = 0; m < CT_ARG("rows"); m++) {
         n.wait_front(CT_ARG("n_row_tiles"));
@@ -36,6 +36,9 @@ void kernel_main() {
             tile_regs_acquire();
 
             for (uint32_t k = 0; k < k_tiles; k++) {
+                if (m == 0 && k % chunk_rows == 0) {
+                    weights.wait_front((k + chunk_rows) * columns);
+                }
                 matmul_block(cb_n, cb_wg, k, k * columns + first, 0, false, pair, 1, k_tiles);
             }
 
