@@ -8,11 +8,19 @@
 
 #include "ckernel.h"
 #include "llk_defs.h"
+#include "tensor_shape.h"
 
 // Globals
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
+
+// A narrow tile is one face wide: 32x16 (2x1 faces) or 16x16 (one face). The legacy helper would make 2 faces 1x2.
+inline ckernel::TensorShape sweep_tensor_shape(const bool narrow_tile, const std::uint32_t num_faces)
+{
+    return narrow_tile ? ckernel::make_tensor_shape(ckernel::FACE_R_DIM, ckernel::MAX_FACE_C_DIM, num_faces, 1 /* num_faces_c_dim */)
+                       : ckernel::make_tensor_shape_from_legacy(ckernel::FACE_R_DIM, num_faces);
+}
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -35,11 +43,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces));
     _llk_unpack_configure_stoch_rnd_<STOCHASTIC_RND>();
 
-    const std::uint32_t num_faces = params.num_faces;
-    // A narrow tile is one face wide: 32x16 (2x1 faces) or 16x16 (one face). The legacy helper would make 2 faces 1x2.
-    const ckernel::TensorShape tensor_shape = params.NARROW_TILE
-                                                  ? ckernel::make_tensor_shape(FACE_R_DIM, ckernel::MAX_FACE_C_DIM, num_faces, 1 /* num_faces_c_dim */)
-                                                  : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, num_faces);
+    const std::uint32_t num_faces           = params.num_faces;
+    const ckernel::TensorShape tensor_shape = sweep_tensor_shape(params.NARROW_TILE, num_faces);
 
     // Initialize tilize unpacker
     _llk_unpack_tilize_init_wrapper_(formats.unpack_A_src, formats.unpack_A_dst, params.BLOCK_CT_DIM, tensor_shape);
@@ -78,10 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
     const FormatConfig& formats = params.formats;
 #endif
-    // A narrow tile is one face wide: 32x16 (2x1 faces) or 16x16 (one face). The legacy helper would make 2 faces 1x2.
-    const ckernel::TensorShape tensor_shape = params.NARROW_TILE
-                                                  ? ckernel::make_tensor_shape(FACE_R_DIM, MAX_FACE_C_DIM, params.num_faces, 1 /* num_faces_c_dim */)
-                                                  : ckernel::make_tensor_shape_from_legacy(FACE_R_DIM, params.num_faces);
+    const ckernel::TensorShape tensor_shape = sweep_tensor_shape(params.NARROW_TILE, params.num_faces);
     // Copy srca to dest with tilize flag
     _llk_math_eltwise_unary_datacopy_init_wrapper_<
         DataCopyType::A2D,
