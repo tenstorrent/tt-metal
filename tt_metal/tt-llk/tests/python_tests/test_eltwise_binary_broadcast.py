@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-from helpers.constraints import get_valid_eltwise_binary_math_fidelities
+from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat
 from helpers.llk_params import (
     BroadcastType,
@@ -36,10 +36,8 @@ ELTWISE_BINARY_BROADCAST_TYPES = [
     unpack_to_dest=[False],
     formats=lambda dest_acc: _get_valid_formats(dest_acc),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_op=lambda formats: get_eltwise_binary_math_ops(formats),
-    math_fidelity=lambda formats, math_op: get_valid_eltwise_binary_math_fidelities(
-        formats, math_op
-    ),
+    mathop=lambda formats: get_eltwise_binary_math_ops(formats),
+    math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
     transpose_srca=get_eltwise_binary_transpose,
     tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
         transpose_srca, broadcast_type
@@ -59,7 +57,7 @@ def test_eltwise_binary_broadcast(
     unpack_to_dest,
     formats,
     broadcast_type,
-    math_op,
+    mathop,
     math_fidelity,
     transpose_srca,
     input_dimensions,
@@ -72,7 +70,7 @@ def test_eltwise_binary_broadcast(
         unpack_to_dest,
         formats,
         broadcast_type,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -87,9 +85,9 @@ def test_eltwise_binary_broadcast(
     unpack_to_dest=[False],
     formats=get_bfp4_formats(),
     broadcast_type=ELTWISE_BINARY_BROADCAST_TYPES,
-    math_fidelity=lambda formats: get_valid_eltwise_binary_math_fidelities(formats),
+    math_fidelity=lambda formats: get_valid_math_fidelities(formats),
     transpose_srca=Transpose.No,
-    math_op=BFP4_MATH_OPS,
+    mathop=BFP4_MATH_OPS,
     tile_dimensions=lambda transpose_srca, broadcast_type: get_eltwise_binary_tile_dimensions(
         transpose_srca, broadcast_type
     ),
@@ -110,7 +108,7 @@ def test_eltwise_binary_bfp4_b_broadcast(
     broadcast_type,
     math_fidelity,
     transpose_srca,
-    math_op,
+    mathop,
     input_dimensions,
     tile_dimensions,
     acc_to_dest,
@@ -121,7 +119,7 @@ def test_eltwise_binary_bfp4_b_broadcast(
         unpack_to_dest,
         formats,
         broadcast_type,
-        math_op,
+        mathop,
         math_fidelity,
         transpose_srca,
         input_dimensions,
@@ -160,7 +158,7 @@ SRCB_SHAPE_CASES = {
     formats=input_output_formats([DataFormat.Float16_b]),
     broadcast_type=list(SRCB_SHAPE_CASES),
     tile_shapes=lambda broadcast_type: SRCB_SHAPE_CASES[broadcast_type],
-    math_op=[MathOperation.Elwadd, MathOperation.Elwmul],
+    mathop=[MathOperation.Elwadd, MathOperation.Elwmul],
     # Only 32x32 SrcA tiles transpose, and scalar broadcast does not support it.
     transpose_srca=lambda broadcast_type, tile_shapes: (
         [Transpose.No, Transpose.Yes]
@@ -169,7 +167,7 @@ SRCB_SHAPE_CASES = {
     ),
 )
 def test_eltwise_binary_broadcast_srcb_shape(
-    formats, broadcast_type, tile_shapes, math_op, transpose_srca
+    formats, broadcast_type, tile_shapes, mathop, transpose_srca
 ):
     """SrcB unpacks from its own tile shape, not SrcA's."""
     tile_dimensions, tile_dimensions_B = tile_shapes
@@ -179,8 +177,8 @@ def test_eltwise_binary_broadcast_srcb_shape(
         False,
         formats,
         broadcast_type,
-        math_op,
-        get_valid_eltwise_binary_math_fidelities(formats, math_op)[-1],
+        mathop,
+        get_valid_math_fidelities(formats, mathop)[-1],
         transpose_srca,
         [tile_dimensions[0] * 2, tile_dimensions[1] * 2],
         tile_dimensions,

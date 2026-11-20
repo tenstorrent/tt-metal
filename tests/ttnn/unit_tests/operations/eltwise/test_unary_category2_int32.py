@@ -59,7 +59,7 @@ Accuracy criteria
 | relu_max, relu_min,   | 0, ±1, ±6, ±100, ±(2^24 + 1),  | all         | exact |
 | fill, maximum,        | 123456789, INT32_MIN,          |             |       |
 | minimum               | INT32_MAX                      |             |       |
-| bitwise_and, _or,     | 0, -1, 0xFF, 0x0F0F0F0F,       | all         | exact |
+| bitwise_and, _or,     | 0, ±1, 0xFF, 0x0F0F0F0F,       | all         | exact |
 | _xor                  | -0xABCD, INT32_MIN, INT32_MAX  |             |       |
 | bitwise_left_shift,   | 0, 1, 4, 16, 30, 31, 32        | all         | exact |
 | bitwise_right_shift,  |                                |             |       |
@@ -67,7 +67,7 @@ Accuracy criteria
 """
 
 SCALARS = [0, 1, -1, 6, -6, 100, -100, 2**24 + 1, -(2**24 + 1), 123456789, INT32_MIN, INT32_MAX]
-BITMASKS = [0, -1, 0xFF, 0x0F0F0F0F, -0xABCD, INT32_MIN, INT32_MAX]
+BITMASKS = [0, 1, -1, 0xFF, 0x0F0F0F0F, -0xABCD, INT32_MIN, INT32_MAX]
 SHIFTS = [0, 1, 4, 16, 30, 31, 32]
 
 

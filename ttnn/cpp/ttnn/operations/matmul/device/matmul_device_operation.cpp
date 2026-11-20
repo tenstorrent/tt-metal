@@ -47,6 +47,10 @@ void validate_matmul_operand_basics(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
     TT_FATAL(
+        !input_tensor_a.is_sharded() || input_tensor_a.shard_spec().has_value(),
+        "Sharded input A needs a 2D shard spec, and its ND shard spec does not flatten to a height-, width- or "
+        "block-sharded layout. Pass an interleaved A, or omit program_config so that matmul moves A to DRAM.");
+    TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
     TT_FATAL(
