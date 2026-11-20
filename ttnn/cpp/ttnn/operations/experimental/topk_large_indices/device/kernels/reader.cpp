@@ -323,8 +323,9 @@ FORCE_INLINE void two_level_run(
     // first core's right after the row's stage 2, the second core's once the first table page has arrived from its
     // partner.
     constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
-    // The cores in row mode while units remain, counted on the coordinator: with split_rows_first at most a cap of them
-    // take rows, so the rest keep claiming units and phase 1 does not stall behind the rows.
+    // The cores in row mode while units remain, counted on the coordinator: with split_rows_first about a cap of them
+    // take rows (the count each core gets back is an estimate, see below), so the rest keep claiming units and phase 1
+    // does not stall behind the rows.
     const uint64_t rows_counter = get_noc_addr(
         get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
         get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
@@ -335,8 +336,8 @@ FORCE_INLINE void two_level_run(
     // is not reliable: the atomic barrier can complete before it lands, it goes to whatever return address the buffer
     // holds when it does, and under load a core can get another claim's value. The increments themselves and NoC reads
     // are reliable, so correctness rests on those:
-    // - A claim waits for claim_word to change (a core's claims return increasing values, and the word starts at
-    //   0xFFFFFFFF), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
+    // - A claim waits for claim_word to change from the core's last value (the word starts at 0xFFFFFFFF, which no
+    //   claim returns), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
     //   absorbs, or a unit nobody does, which its row's owner repairs (see below).
     // - The other atomics (the cleared count and the row counter) use the register-write buffer, unused by this kernel
     //   otherwise, with rows_word as its return address, so their values never land in claim_word. The row counter's
@@ -552,6 +553,7 @@ FORCE_INLINE void two_level_run(
                 // Past the last unit, or no value came (its unit is then missing): the counter itself says whether
                 // units remain.
                 units_left = read_counter() < units.total;
+                continue;
             }
         } else if (repairing) {
             // The repair walks this core's done words once, from repair_next: each missing unit is done once.
@@ -572,8 +574,8 @@ FORCE_INLINE void two_level_run(
         if (rows_done == local_rows && !half_pending) {
             break;
         }
-        // Nothing to do: this core waits for its rows' units. If it has waited repair_after since every unit was
-        // claimed, one went missing (see the claims above), and the core does its rows' missing units itself.
+        // Nothing to do: every unit is claimed, and this core waits for its rows' units. If it has waited repair_after,
+        // one went missing (see the claims above), and the core does its rows' missing units itself.
         if constexpr (!has_block_max) {
             const uint32_t now = get_timestamp_32b();
             if (!idle) {

@@ -222,6 +222,13 @@ void validate_runtime_args(const operation_attributes_t& attrs, const tensor_arg
             program::two_level_max_rows_per_core,
             num_rows,
             num_cores);
+        // With the caller's maxima a core still tracks its finished rows in a 32-bit mask.
+        TT_FATAL(
+            !tensor_args.block_max_tensor.has_value() || num_rows <= uint64_t{32} * num_cores,
+            "topk_large_indices two-level selection with block_max_tensor gives each core at most 32 rows: {} rows "
+            "over {} cores",
+            num_rows,
+            num_cores);
         TT_FATAL(
             !(tensor_args.block_max_tensor.has_value() && tensor_args.block_max_output.has_value()),
             "topk_large_indices block_max_output receives computed maxima; with block_max_tensor none are computed");

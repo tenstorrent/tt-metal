@@ -7,7 +7,8 @@
 // Shared by the three kernels of a two-level program. A two-level program selects each row's top k from the
 // maxima of 32-key blocks first, then from the keys of the 2048 selected blocks only:
 //   stage 1 (phase 1, every core): block maxima of all rows, claimed by the cores in 32-tile units (reader: tiles;
-//            compute: tilize + max reduce; writer: maxima to the maxima tensor, then a count on the row's owner);
+//            compute: tilize + max reduce; writer: maxima to the maxima tensor, then the unit's done word on the
+//            row's owner);
 //   stage 2 (each core its rows, as soon as a row's maxima are complete, between phase-1 units): top-2048 of the
 //            row's maxima -> selected block ids (compute), ascending block table (writer);
 //   stage 3: the selected blocks gathered into one 65,536-key candidate row (reader), its exact top-2048
