@@ -551,34 +551,42 @@ def test_all_gather_dtype(
     )
 
 
+# multiple disjoint cores
+SUBGRID_DISJOINT = ttnn.CoreRangeSet(
+    [
+        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
+        ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
+    ]
+)
+
+
 @skip_for_blackhole("Requires wormhole_b0 to run")
 @pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
 @pytest.mark.parametrize(
-    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters",
+    "ag_output_shape, dim, layout, ag_input_dtype, enable_trace, num_iters, sub_core_grids",
     [
-        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
-        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10),  # perf
-        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1),  # check
+        ([1, 1, 3072, 8192], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, SUBGRID_DISJOINT),  # perf
+        ([1, 1, 352, 5120], 3, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, SUBGRID_DISJOINT),  # check
+        ([1, 8, 512, 512], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16, True, 10, SUBGRID_DISJOINT),  # perf
+        ([1, 1, 512, 48], 2, ttnn.TILE_LAYOUT, ttnn.bfloat16, False, 1, SUBGRID_DISJOINT),  # check
+        # 1 worker per direction: direct fabric connection, relayed
+        (
+            [1, 8, 512, 512],
+            1,
+            ttnn.TILE_LAYOUT,
+            ttnn.bfloat16,
+            False,
+            1,
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(4, 0))]),
+        ),
     ],
     ids=[
         "dit_shape-perf",  # this one triggers the default chunks_per_sync
         "sd35_prompt-check",
         "gather_dim_1-perf",
         "gather_dim_2_padded_dim_3-check",
+        "direct_connection-check",
     ],
-)
-@pytest.mark.parametrize(
-    "sub_core_grids",
-    (
-        # multiple disjoint cores
-        ttnn.CoreRangeSet(
-            [
-                ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 6)),
-                ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 6)),
-            ]
-        ),
-    ),
 )
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",

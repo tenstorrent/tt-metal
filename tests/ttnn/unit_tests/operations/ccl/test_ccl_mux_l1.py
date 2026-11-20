@@ -85,8 +85,9 @@ def _run_strided_all_gather(mesh_device, enable_trace):
 
 
 def _run_all_gather(mesh_device, enable_trace):
-    # FabricMuxV2Config, WorkloadDescriptor unicast factory, which ttnn.all_gather takes on every architecture under
-    # FABRIC_1D_NEIGHBOR_EXCHANGE. Under FABRIC_1D it would take multicast here, which has no mux.
+    # FabricMuxV2Config, WorkloadDescriptor unicast factory: ttnn.all_gather takes it under
+    # FABRIC_1D_NEIGHBOR_EXCHANGE and runs a mux on WH and BH (2 or more workers per direction). Under FABRIC_1D it
+    # would take multicast here, which has no mux.
     run_all_gather_impl(
         mesh_device,
         ag_output_shape=[1, 1, 256, 2048],
@@ -131,7 +132,7 @@ def test_ccl_mux_keeps_persistent_l1(mesh_device, enable_trace, ccl_op):
     _check_mux_keeps_persistent_l1(mesh_device, ccl_op, lambda: CCL_RUNNERS[ccl_op](mesh_device, enable_trace))
 
 
-# ttnn.all_gather takes its mux path (the unicast factory) under FABRIC_1D_NEIGHBOR_EXCHANGE on a (1, 2) mesh.
+# On WH and BH, ttnn.all_gather takes its mux path (the unicast factory) under FABRIC_1D_NEIGHBOR_EXCHANGE.
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 @pytest.mark.parametrize("device_params", [NEIGHBOR_EXCHANGE_DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("enable_trace", [False, True], ids=["eager", "trace"])
