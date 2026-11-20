@@ -462,9 +462,6 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
         }
     }
 
-    // Free L1 reserved by the dispatch kernels
-    device_manager->release_dispatch_l1();
-
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
     // init_command_queue_host call can safely replace sysmem_manager_ without dangling references
     for (const auto& device : active_devices) {

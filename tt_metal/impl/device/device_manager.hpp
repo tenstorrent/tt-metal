@@ -58,8 +58,6 @@ public:
     // re-enable fast dispatch after it was disabled at runtime.
     void initialize_dispatch_firmware(bool force_recreate_topology);
     void reset_dispatch_topology();
-    // Frees L1 reserved by the dispatch kernels
-    void release_dispatch_l1();
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_cores(ChipId dev_id) const;
     const std::unordered_set<CoreCoord>& get_virtual_dispatch_routing_cores(ChipId dev_id) const;
 

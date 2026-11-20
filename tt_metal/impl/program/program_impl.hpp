@@ -209,12 +209,8 @@ public:
     // Finalize program offsets for all programs in the group
     void finalize_offsets();
 
-    // Write runtime args for all programs in the group, into `kernel_config_buffer` for Tensix cores when one is given
-    void write_runtime_args(
-        bool force_slow_dispatch, const experimental::KernelConfigBufferImpl* kernel_config_buffer = nullptr);
-
-    // The group's programs with their devices
-    std::vector<std::pair<IDevice*, Program*>> programs();
+    // Write runtime args for all programs in the group
+    void write_runtime_args(bool force_slow_dispatch);
 
     // Remove and return a program from the compile group
     std::unique_ptr<Program> remove_program(IDevice* device);
@@ -412,6 +408,11 @@ public:
     // Whether this program's kernel config fits the KERNEL_CONFIG window of `core_type` on `device`. The program
     // must be finalized.
     bool kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const;
+
+    // Marks a fast-dispatch kernels' program. Its Tensix KERNEL_CONFIG window ends at DEFAULT_UNRESERVED, where the
+    // dispatch kernels' own L1 starts, rather than at the allocator's l1_unreserved_base, which a large
+    // worker_l1_size pulls below it.
+    void set_runs_on_dispatch_cores() { runs_on_dispatch_cores_ = true; }
 
     // The same check for programs laid out together, as a MeshWorkload's are: `program` is any of them,
     // since they share one layout, and the getters name the kernels of all of them, for the error's
@@ -916,6 +917,7 @@ private:
     ProgramTransferInfo program_transfer_info;
 
     bool finalized_{false};
+    bool runs_on_dispatch_cores_{false};
     bool program_run_args_initialized_{false};
     PerDeviceRunArgDrops per_device_run_arg_drops_;
     // Used only when devices do not have virtualization enabled and used to check that programs are only rerun on

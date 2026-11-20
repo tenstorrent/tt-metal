@@ -29,7 +29,6 @@
 #include "distributed/sd_mesh_command_queue.hpp"
 #include "impl/allocator/allocator.hpp"
 #include "impl/buffers/buffer_impl.hpp"
-#include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "program_impl.hpp"
 #include "slow_dispatch.hpp"
@@ -82,7 +81,6 @@ const KernelConfigBufferImpl::Shards& KernelConfigBufferImpl::at(ChipId device_i
 }
 
 ChipId KernelConfigBufferImpl::device_id(const distributed::MeshCoordinate& device_coord) const {
-    TT_FATAL(mesh_device_ != nullptr, "This kernel config buffer is per device: address it by device id");
     TT_FATAL(
         mesh_device_->impl().is_local(device_coord),
         "Kernel config buffer has no shard on the device at {}, which is not on this host",
@@ -212,17 +210,6 @@ KernelConfigBuffer CreateKernelConfigBuffer(
     return KernelConfigBuffer(std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address, &device));
 }
 
-std::shared_ptr<KernelConfigBufferImpl> CreateKernelConfigBuffer(
-    const std::vector<std::pair<IDevice*, Program*>>& programs, bool lockstep_address) {
-    std::vector<KernelConfigBufferImpl::Shards> shards;
-    for (const auto& [device, program] : programs) {
-        auto device_shards = allocate_shards(*device, *program, lockstep_address);
-        std::move(device_shards.begin(), device_shards.end(), std::back_inserter(shards));
-    }
-    TT_FATAL(!shards.empty(), "The programs have no Tensix kernels, so no kernel config block");
-    return std::make_shared<KernelConfigBufferImpl>(std::move(shards), lockstep_address);
-}
-
 void EnqueueMeshWorkload(
     distributed::MeshCommandQueue& mesh_cq,
     distributed::MeshWorkload& workload,
@@ -239,7 +226,7 @@ void EnqueueMeshWorkload(
     TT_FATAL(
         buffer_device == &device,
         "Kernel config buffer is allocated on MeshDevice {}, but the workload is enqueued on MeshDevice {}",
-        buffer_device != nullptr ? std::to_string(buffer_device->id()) : std::string("(none)"),
+        buffer_device->id(),
         device.id());
     // Short-circuit for inactive MeshDevices (no-op), as distributed::EnqueueMeshWorkload does.
     if (device.get_device_ids().empty()) {

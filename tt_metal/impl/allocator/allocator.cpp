@@ -296,23 +296,6 @@ DeviceAddr AllocatorImpl::allocate_buffer(Buffer* buffer) {
     return address;
 }
 
-void AllocatorImpl::reserve_per_core_range(const CoreCoord& logical_core, DeviceAddr address, DeviceAddr size) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    TT_FATAL(
-        config_->allocator_mode == AllocatorMode::HYBRID,
-        "Reserving a per-core L1 range requires AllocatorMode::HYBRID");
-    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    const auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(logical_core).at(0);
-    l1_manager_->mark_allocated(AllocatorID{bank_id + 1}, address, size);
-}
-
-void AllocatorImpl::release_per_core_range(const CoreCoord& logical_core, DeviceAddr address) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    using AllocatorID = BankManager::AllocatorDependencies::AllocatorID;
-    const auto bank_id = logical_core_to_bank_ids_.at(BufferType::L1).at(logical_core).at(0);
-    l1_manager_->mark_deallocated(AllocatorID{bank_id + 1}, address);
-}
-
 void AllocatorImpl::deallocate_buffer(Buffer* buffer) {
     std::lock_guard<std::mutex> lock(mutex_);
     auto address = buffer->address();

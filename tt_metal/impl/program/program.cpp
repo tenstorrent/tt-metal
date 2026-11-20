@@ -115,11 +115,16 @@ namespace {
 
 using namespace tt::tt_metal;
 
-size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
+// `runs_on_dispatch_cores`: see ProgramImpl::set_runs_on_dispatch_cores.
+size_t get_ringbuffer_size(
+    IDevice* device, HalProgrammableCoreType programmable_core_type, bool runs_on_dispatch_cores = false) {
     const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     if (programmable_core_type == HalProgrammableCoreType::TENSIX) {
-        return device->allocator_impl()->get_config().l1_unreserved_base -
-               hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
+        const DeviceAddr window_end =
+            runs_on_dispatch_cores
+                ? hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::DEFAULT_UNRESERVED)
+                : device->allocator_impl()->get_config().l1_unreserved_base;
+        return window_end - hal.get_dev_addr(HalProgrammableCoreType::TENSIX, HalL1MemAddrType::KERNEL_CONFIG);
     }
     return hal.get_dev_size(programmable_core_type, HalL1MemAddrType::KERNEL_CONFIG);
 }
@@ -3924,7 +3929,8 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
         HalProgrammableCoreType programmable_core_type = hal.get_programmable_core_type(index);
         const ProgramOffsetsState& state = states[index];
 
-        size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+        size_t max_size = get_ringbuffer_size(
+            device, programmable_core_type, !programs.empty() && programs.front()->runs_on_dispatch_cores_);
         const auto breakdown = [&] {
             return program_config_breakdown(
                 metal_ctx, programmable_core_type, state, kernel_groups_getter(index), kernels_getter(index));
@@ -3987,7 +3993,7 @@ uint32_t detail::ProgramImpl::finalize_program_offsets(
 bool detail::ProgramImpl::kernel_config_fits_window(IDevice* device, HalProgrammableCoreType core_type) const {
     const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
     return program_config_sizes_[hal.get_programmable_core_type_index(core_type)] <=
-           get_ringbuffer_size(device, core_type);
+           get_ringbuffer_size(device, core_type, runs_on_dispatch_cores_);
 }
 
 void detail::ProgramImpl::check_no_tensix_semaphores() const {
@@ -4056,7 +4062,8 @@ void detail::ProgramImpl::check_kernel_config_fits(
             }
         } else {
             const uint32_t size = program.program_config_sizes_[index];
-            const size_t max_size = get_ringbuffer_size(device, programmable_core_type);
+            const size_t max_size =
+                get_ringbuffer_size(device, programmable_core_type, program.runs_on_dispatch_cores_);
             // The layout finalize stored on the program, for the breakdown.
             const ProgramConfig& config = program.get_program_config(index);
             ProgramOffsetsState state;
@@ -4120,27 +4127,11 @@ void detail::ProgramCompileGroup::finalize_offsets() {
     }
 }
 
-void detail::ProgramCompileGroup::write_runtime_args(
-    bool force_slow_dispatch, const experimental::KernelConfigBufferImpl* kernel_config_buffer) {
+void detail::ProgramCompileGroup::write_runtime_args(bool force_slow_dispatch) {
     std::lock_guard lock(mutex_);
     for (auto& [device, program] : program_device_map_) {
-        slow_dispatch::WriteRuntimeArgsToDevice(
-            *device,
-            *program,
-            force_slow_dispatch,
-            kernel_config_buffer != nullptr && kernel_config_buffer->has_shard_on(device->id()) ? kernel_config_buffer
-                                                                                                : nullptr);
+        slow_dispatch::WriteRuntimeArgsToDevice(*device, *program, force_slow_dispatch);
     }
-}
-
-std::vector<std::pair<IDevice*, Program*>> detail::ProgramCompileGroup::programs() {
-    std::lock_guard lock(mutex_);
-    std::vector<std::pair<IDevice*, Program*>> result;
-    result.reserve(program_device_map_.size());
-    for (auto& [device, program] : program_device_map_) {
-        result.emplace_back(device, program.get());
-    }
-    return result;
 }
 
 std::unique_ptr<Program> detail::ProgramCompileGroup::remove_program(tt::tt_metal::IDevice* device) {
