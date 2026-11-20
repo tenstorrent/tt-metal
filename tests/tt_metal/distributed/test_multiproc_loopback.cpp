@@ -14,6 +14,7 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <numeric>
 #include <string>
@@ -58,12 +59,14 @@ constexpr LoopbackConfig loopback_configs[] = {
 
 const MeshCoreCoord SOCKET_CORE = {MeshCoordinate(0, 0), CoreCoord(0, 0)};
 
+// drive_from_launcher, if set, runs on the launcher's own sockets after the kernel is enqueued.
 void run_launcher(
     const std::shared_ptr<MeshDevice>& mesh_device,
     H2DMode h2d_mode,
     const LoopbackConfig& cfg,
     uint32_t num_iterations,
-    const std::string& socket_id_suffix) {
+    const std::string& socket_id_suffix,
+    const std::function<void(H2DSocket&, D2HSocket&)>& drive_from_launcher = {}) {
     const auto& socket_core = SOCKET_CORE;
     std::string h2d_socket_id = fmt::format("test_h2d_xproc_{}", socket_id_suffix);
     std::string d2h_socket_id = fmt::format("test_d2h_xproc_{}", socket_id_suffix);
@@ -108,6 +111,9 @@ void run_launcher(
     auto mesh_workload = MeshWorkload();
     mesh_workload.add_program(MeshCoordinateRange(socket_core.device_coord), std::move(program));
     EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    if (drive_from_launcher) {
+        drive_from_launcher(h2d_socket, d2h_socket);
+    }
     Finish(mesh_device->mesh_command_queue());
 }
 
@@ -432,6 +438,59 @@ TEST_F(MultiProcLoopbackFixture, UnevenIterDistribution) {
             run_launcher(mesh_device_, h2d_mode, cfg, total_iters, suffix);
         } else {
             run_sequential_connectors(cfg, iters_per_connector, suffix);
+        }
+        test_counter++;
+    }
+}
+
+// The launcher drives the kernel's last iterations through its own sockets after a connector stopped mid-ring.
+// The connector moved the counters and FIFO pointers in the shared connector state only, so the launcher's
+// barrier() must reload all of them: with a stale write_ptr its pages land in a slot the device does not read.
+TEST_F(MultiProcLoopbackFixture, LauncherResumesAfterConnector) {
+    if (rank_ == 0) {
+        if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+            GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+        }
+    }
+
+    // 144 pages per iteration on a 15-page ring, so 7 connector iterations end 3 pages into the ring.
+    const LoopbackConfig cfg = {16512, 1088, 156672};
+    constexpr uint32_t CONNECTOR_ITERS = 7;
+    constexpr uint32_t TOTAL_ITERS = 12;
+    const auto& world = DistributedContext::get_world_context();
+    const uint32_t data_size_words = cfg.data_size / sizeof(uint32_t);
+    std::vector<uint32_t> src_vec(data_size_words * TOTAL_ITERS);
+    std::vector<uint32_t> dst_vec(data_size_words * TOTAL_ITERS, 0);
+    std::iota(src_vec.begin(), src_vec.end(), 0);
+
+    for (auto h2d_mode : {H2DMode::HOST_PUSH, H2DMode::DEVICE_PULL}) {
+        std::string suffix = fmt::format("resume_{}", test_counter);
+        std::fill(dst_vec.begin(), dst_vec.end(), 0);
+        if (rank_ == 0) {
+            run_launcher(mesh_device_, h2d_mode, cfg, TOTAL_ITERS, suffix, [&](H2DSocket& h2d, D2HSocket& d2h) {
+                world->barrier();  // the connector has drained and detached
+                h2d.barrier();
+                d2h.barrier();
+                h2d.set_page_size(cfg.page_size);
+                d2h.set_page_size(cfg.page_size);
+                drive_iter_range(h2d, d2h, src_vec.data(), dst_vec.data(), cfg, CONNECTOR_ITERS, TOTAL_ITERS);
+                h2d.barrier();
+                d2h.barrier();
+            });
+            const size_t first = static_cast<size_t>(data_size_words) * CONNECTOR_ITERS;
+            EXPECT_TRUE(std::equal(src_vec.begin() + first, src_vec.end(), dst_vec.begin() + first))
+                << "Launcher pages after the connector came back wrong (mode=" << static_cast<int>(h2d_mode) << ")";
+        } else {
+            {
+                auto h2d_socket = H2DSocket::connect(fmt::format("test_h2d_xproc_{}", suffix), 30000);
+                auto d2h_socket = D2HSocket::connect(fmt::format("test_d2h_xproc_{}", suffix), 30000);
+                h2d_socket->set_page_size(cfg.page_size);
+                d2h_socket->set_page_size(cfg.page_size);
+                drive_iter_range(*h2d_socket, *d2h_socket, src_vec.data(), dst_vec.data(), cfg, 0, CONNECTOR_ITERS);
+                h2d_socket->barrier();
+                d2h_socket->barrier();
+            }
+            world->barrier();
         }
         test_counter++;
     }
