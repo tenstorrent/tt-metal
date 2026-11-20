@@ -161,7 +161,9 @@ def test_tile_entry_unaligned_shape(device, entry, in_dtype, out_dtype):
     run_tile_entry(device, entry, in_dtype, out_dtype, shape=[1, 1, 50, 40])
 
 
-@pytest.mark.parametrize("entry", ["to_memory_config_interleaved", "to_memory_config_sharded", "interleaved_to_sharded"])
+@pytest.mark.parametrize(
+    "entry", ["to_memory_config_interleaved", "to_memory_config_sharded", "interleaved_to_sharded"]
+)
 @pytest.mark.parametrize("in_dtype, out_dtype", [(ttnn.int32, ttnn.float32), (ttnn.float32, ttnn.int32)])
 def test_row_major_input_memory_entries(device, entry, in_dtype, out_dtype):
     # ROW_MAJOR inputs take the typecast row-major path before (or after) the move.
