@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.tests.fused_op_unit_tests.mla.test_rope_deepseek i
 from models.demos.deepseek_v3.utils.config_dataclass import SliceConfig
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def run_fwd_decode_q_rope_nope_with_trace(

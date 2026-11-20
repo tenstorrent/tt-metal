@@ -91,6 +91,7 @@ Core
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
    ttnn.copy_host_to_device_tensor_partial
+   ttnn.cpu_shards
    ttnn.deallocate
    ttnn.dump_tensor
    ttnn.from_device
@@ -537,6 +538,7 @@ Transformer
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
    ttnn.transformer.scaled_dot_product_attention_decode
+   ttnn.transformer.sparse_ring_sdpa
    ttnn.transformer.sparse_sdpa
    ttnn.transformer.sparse_sdpa_msa
    ttnn.transformer.split_query_key_value_and_split_heads

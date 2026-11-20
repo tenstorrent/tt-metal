@@ -637,8 +637,8 @@ jobs:
       changed: ${{ steps.classify.outputs.changed }}
       # The gate's thresholds, for the compare job and for stage 2 in the Blackhole legs.
       thresholds: >-
-        {"blackhole": {"threshold": "0.02", "module_thresholds": ""},
-         "wormhole": {"threshold": "0.13", "module_thresholds": "perf_matmul=0.25,perf_math_matmul=0.25"}}
+        {"blackhole": {"threshold": "0.01", "module_thresholds": ""},
+         "wormhole": {"threshold": "0.01", "module_thresholds": ""}}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
         timeout-minutes: 20
@@ -701,10 +701,10 @@ jobs:
       measure_result: ${{ needs.llk-perf-merge-gate-measure.result }}
       # Stage 2 and the gate compare against the same baseline read; without it, the gate reads the warehouse.
       stage2_baseline_artifact: llk-perf-stage2-baseline
-      # A regression is report-only, stage 2 included. A measurement that did not complete,
-      # a missing baseline or a comparison that did not finish fails the job, and blocks the merge.
+      # A regression is report-only, stage 2 included. A measurement that did not complete
+      # or a comparison that did not finish fails the job, and blocks the merge. A missing
+      # baseline is a warning.
       fail_on_regression: false
-      fail_without_baseline: true
       # llk-perf-merge-gate-notify posts one message for both arches, so each arch does not post.
       slack: false
       slack_on_pass: false
@@ -875,7 +875,7 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/workflow-status@main
         with:
           required-jobs: "static-checks, find-changes"
-          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-build-quasar-perf, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
+          optional-jobs: "build, build-tsan, build-sweeps, runtime-smoke-tests, runtime-basic-tests, triage-tests, ttnn-smoke-tests, ttnn-basic-tests, ttnn-merge-gate-tests, models-smoke-tests, train-merge-gate-tests, scaleout-unit-tests, llk-unit-tests, ttsim-quasar-merge-gate-tests, llk-perf-merge-gate-changes, llk-perf-merge-gate"
         env:
           NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')

@@ -208,7 +208,8 @@ jobs:
 
   blaze-merge-gate:
     needs: [build-artifact-profiler]
-    if: ${{ !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
+    # Disabled blaze merge gate until TT_BLAZE_PAT token is restored: https://tenstorrent.atlassian.net/browse/RELEASE-134
+    if: ${{ false && !cancelled() && github.ref != 'refs/heads/stable' && needs.build-artifact-profiler.result == 'success' }}
     permissions:
       contents: read
     # TT_BLAZE_PAT -- the default GITHUB_TOKEN cannot dispatch another repo.
@@ -776,7 +777,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: stable
           inputs: |
             {
@@ -810,7 +813,9 @@ jobs:
         uses: benc-uk/workflow-dispatch@v1
         with:
           workflow: package-and-release.yaml
-          token: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          # github.token is enough: this workflow grants actions: write, and
+          # workflow_dispatch is one of the two events the built-in token may raise.
+          token: ${{ github.token }}
           ref: ${{ needs.create-tag.outputs.version }}
           inputs: |
             {

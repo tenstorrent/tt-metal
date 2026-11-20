@@ -114,7 +114,9 @@
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 4 --group 4 -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
-      timeout: 40
+      # Was 40. Since 2026-11-12 the CI kernel cache is unreachable from these runners, so every kernel compiles
+      # from scratch and the group takes about 50 minutes instead of 23. Back to 40 once the cache is restored.
+      timeout: 55
     bh_p100:
       timeout: 40
     bh_p150b_civ2:

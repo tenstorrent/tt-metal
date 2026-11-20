@@ -11,7 +11,7 @@ import pytest
 from models.experimental.uniad.reference.planning_head import PlanningHeadSingleMode
 from models.experimental.uniad.tt.ttnn_planning_head import TtPlanningHeadSingleMode
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from ttnn.model_preprocessing import (
     preprocess_model_parameters,
     preprocess_linear_weight,
