@@ -35,20 +35,17 @@ namespace {
 
 namespace fs = std::filesystem;
 
-// This file's directory, and the reference descriptors one level up. Located from the source path, so the test runs
-// from any working directory.
-const fs::path kVclusterDir = fs::path(__FILE__).parent_path();
-const fs::path kKeraunosDir = kVclusterDir.parent_path();
-const fs::path kManifests = kVclusterDir / "manifests";
+// The Keraunos fabric test directory, located from the source path, so the test runs from any working directory.
+const fs::path kKeraunosDir = fs::path(__FILE__).parent_path().parent_path();
 
-// SPEC-0011: the package descriptor is UMD tests/soc_descs/mmk.yaml. VCLUSTER_PACKAGE_SOC_DESC overrides it, for a tree
-// whose UMD checkout is elsewhere.
+// SPEC-0011: the package descriptor is UMD descriptors/soc_descs/mmk.yaml. VCLUSTER_PACKAGE_SOC_DESC overrides it, for
+// a tree whose UMD checkout is elsewhere.
 fs::path package_soc_desc() {
     if (const char* path = std::getenv("VCLUSTER_PACKAGE_SOC_DESC"); path != nullptr && *path != '\0') {
         return path;
     }
     return kKeraunosDir.parent_path().parent_path().parent_path().parent_path() /
-           "tt_metal/third_party/umd/tests/soc_descs/mmk.yaml";
+           "tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml";
 }
 
 // A fresh, empty directory under gtest's temp dir, named for this process so that two runs cannot remove each other's,
@@ -214,8 +211,6 @@ std::string textproto_canonical(const fs::path& path) {
     return textproto_canonical(tokens, i);
 }
 
-Manifest manifest_file(std::string_view name) { return load_manifest(kManifests / name); }
-
 // The line of SPEC-0011 § Manifest as text, A on tile 0, M on tiles 1 and 2, B on tile 3, both links on the NOC: the
 // base the refusal tests edit. It passes check_manifest with the package's facts.
 constexpr std::string_view kLine = R"yaml(
@@ -305,7 +300,7 @@ Manifest checked(std::string_view yaml, const fs::path& package = package_soc_de
 // tile pairs (0, 1) and (2, 3) of 26ww45.eth-pcs-output-inter.
 TEST(VclusterDescriptors, PackageFacts) {
     const PackageFacts facts = package_facts(package_soc_desc());
-    EXPECT_EQ(facts.cores, (std::vector<CceId>{{0, 0}, {1, 0}, {2, 0}, {3, 0}}));
+    EXPECT_EQ(facts.cores, (std::vector<CceId>{{0, 0}, {1, 0}, {2, 0}, {3, 0}, {0, 1}, {1, 1}, {2, 1}, {3, 1}}));
     EXPECT_EQ(facts.harts_per_cce, 8u);
     EXPECT_EQ(facts.sram_bytes_per_cce, 4194304u);
     std::set<std::pair<uint32_t, uint32_t>> pairs;
@@ -315,23 +310,16 @@ TEST(VclusterDescriptors, PackageFacts) {
     EXPECT_EQ(pairs, (std::set<std::pair<uint32_t, uint32_t>>{{0, 1}, {2, 3}}));
 }
 
-// The three manifests pass the checks with the package's facts.
+// The manifests of manifests/ pass the checks with the package's facts.
 TEST(VclusterDescriptors, ManifestsPassChecks) {
-    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml"}) {
+    const fs::path manifests = fs::path(__FILE__).parent_path() / "manifests";
+    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml", "line3_noc.yaml", "pair2_eth.yaml"}) {
         SCOPED_TRACE(name);
-        EXPECT_TRUE(check_manifest(manifest_file(name), package_facts(package_soc_desc())).empty());
+        EXPECT_TRUE(check_manifest(load_manifest(manifests / name), package_facts(package_soc_desc())).empty());
     }
 }
 
 // --- noc_links ---------------------------------------------------------------------------------------------------
-
-// § Verification 1: no pair, {(0, 1)} and {(0, 1), (1, 2)} for the three manifests.
-TEST(VclusterDescriptors, NocLinksOfTheManifests) {
-    using Pairs = std::vector<std::pair<uint32_t, uint32_t>>;
-    EXPECT_EQ(noc_links(manifest_file("line3_eth.yaml")), Pairs{});
-    EXPECT_EQ(noc_links(manifest_file("line3_am.yaml")), (Pairs{{0, 1}}));
-    EXPECT_EQ(noc_links(manifest_file("line3_noc.yaml")), (Pairs{{0, 1}, {1, 2}}));
-}
 
 // § Link kinds: each pair is its ends' fabric_chip, lower first, in link order, and only noc links count.
 TEST(VclusterDescriptors, NocLinksLowerFirstInLinkOrder) {
@@ -348,36 +336,55 @@ TEST(VclusterDescriptors, NocLinksLowerFirstInLinkOrder) {
 
 // --- generate_descriptors: the reference output ------------------------------------------------------------------
 
-// § Descriptors generated from the manifest, reference output: line3_noc.yaml generates files equal, as parsed data,
-// to the hand-written descriptors of the three-device line.
-TEST(VclusterDescriptors, Line3MatchesHandWritten) {
+// § Descriptors generated from the manifest, for the line of three: each device's eth and keraunos.cores are its
+// routers' package entries in port order, the four DRAM views go 2, 1, 1 in list order, the cluster descriptor has one
+// connection a link and the mesh is [ 1, 3 ].
+TEST(VclusterDescriptors, Line3) {
     const TempDir out("line3");
-    const GeneratedDescriptors g =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
+    const YAML::Node package = YAML::LoadFile(package_soc_desc().string());
+    ASSERT_EQ(package["dram_views"].size(), 4u);
     ASSERT_EQ(g.soc_descs.size(), 3u);
-    const char* chips[] = {"a", "m", "b"};
+    const std::vector<std::vector<size_t>> tiles = {{0}, {1, 2}, {3}};
+    const std::vector<std::vector<size_t>> views = {{0, 1}, {2}, {3}};
     for (size_t chip = 0; chip < 3; ++chip) {
-        SCOPED_TRACE(chips[chip]);
+        SCOPED_TRACE(chip);
         EXPECT_EQ(g.soc_descs[chip], out.path() / ("chip_" + std::to_string(chip) + "_soc_desc.yaml"));
-        EXPECT_EQ(
-            yaml_file_difference(
-                g.soc_descs[chip], kKeraunosDir / ("keraunos_3chip_" + std::string(chips[chip]) + "_soc_desc.yaml")),
-            "");
+        const YAML::Node soc = YAML::LoadFile(g.soc_descs[chip].string());
+        ASSERT_EQ(soc["eth"].size(), tiles[chip].size());
+        ASSERT_EQ(soc["keraunos"]["cores"].size(), tiles[chip].size());
+        for (size_t port = 0; port < tiles[chip].size(); ++port) {
+            // The package lists CCE0 of tile t at index t.
+            const YAML::Node entry = package["keraunos"]["cores"][tiles[chip][port]];
+            EXPECT_EQ(soc["eth"][port].Scalar(), entry["core"].Scalar());
+            EXPECT_EQ(yaml_difference(soc["keraunos"]["cores"][port], entry), "");
+        }
+        ASSERT_EQ(soc["dram_views"].size(), views[chip].size());
+        for (size_t i = 0; i < views[chip].size(); ++i) {
+            EXPECT_EQ(yaml_difference(soc["dram_views"][i], package["dram_views"][views[chip][i]]), "");
+        }
     }
     EXPECT_EQ(g.cluster_desc, out.path() / "cluster_desc.yaml");
-    EXPECT_EQ(yaml_file_difference(g.cluster_desc, kKeraunosDir / "keraunos_3chip_cluster_desc.yaml"), "");
-    EXPECT_EQ(g.mesh_graph_desc, out.path() / "mesh_graph_descriptor.textproto");
+    const YAML::Node cluster = YAML::LoadFile(g.cluster_desc.string());
     EXPECT_EQ(
-        textproto_canonical(g.mesh_graph_desc),
-        textproto_canonical(kKeraunosDir / "keraunos_1x3_mesh_graph_descriptor.textproto"));
+        yaml_difference(
+            cluster["ethernet_connections"],
+            YAML::Load("[[{chip: 0, chan: 0}, {chip: 1, chan: 0}], [{chip: 1, chan: 1}, {chip: 2, chan: 0}]]")),
+        "");
+    EXPECT_EQ(
+        yaml_difference(
+            cluster["chip_unique_ids"], YAML::Load("{0: 5497558138880, 1: 5497558138881, 2: 5497558138882}")),
+        "");
+    EXPECT_EQ(g.mesh_graph_desc, out.path() / "mesh_graph_descriptor.textproto");
+    EXPECT_NE(textproto_canonical(g.mesh_graph_desc).find("dims[1,3]"), std::string::npos)
+        << textproto_canonical(g.mesh_graph_desc);
 }
 
 // § Descriptors: "Every other key is copied unchanged": a generated SoC descriptor differs from the package's only in
 // eth, keraunos.cores and dram_views.
 TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     const TempDir out("copies");
-    const GeneratedDescriptors g =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     const YAML::Node package = YAML::LoadFile(package_soc_desc().string());
     for (const auto& soc : g.soc_descs) {
         SCOPED_TRACE(soc.string());
@@ -390,15 +397,18 @@ TEST(VclusterDescriptors, SocDescCopiesThePackage) {
     }
 }
 
-// § Verification 1: a backend is in none of the files, so the three manifests generate the same descriptors.
+// § Verification 1: a backend is in none of the files, so the line generates the same descriptors whatever its links'
+// backends.
 TEST(VclusterDescriptors, BackendInNoFile) {
     const TempDir noc("noc");
-    const GeneratedDescriptors ref =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), noc.path());
-    for (const auto* name : {"line3_eth.yaml", "line3_am.yaml"}) {
-        SCOPED_TRACE(name);
-        const TempDir out(std::string("backend_") + name);
-        const GeneratedDescriptors g = generate_descriptors(manifest_file(name), package_soc_desc(), out.path());
+    const GeneratedDescriptors ref = generate_descriptors(checked(kLine), package_soc_desc(), noc.path());
+    const std::string am =
+        line_with({{"b: {device: B, port: 0}, backend: noc", "b: {device: B, port: 0}, backend: ethernet"}});
+    const std::string eth =
+        replaced(am, "b: {device: M, port: 0}, backend: noc", "b: {device: M, port: 0}, backend: ethernet");
+    for (const auto& text : {am, eth}) {
+        const TempDir out("backend");
+        const GeneratedDescriptors g = generate_descriptors(checked(text), package_soc_desc(), out.path());
         ASSERT_EQ(g.soc_descs.size(), ref.soc_descs.size());
         for (size_t chip = 0; chip < g.soc_descs.size(); ++chip) {
             EXPECT_EQ(read_text(g.soc_descs[chip]), read_text(ref.soc_descs[chip]));
@@ -442,8 +452,7 @@ std::vector<std::string> env_lines(const fs::path& path) {
 // absolute path of the package descriptor given, is the last line of both, after those three.
 TEST(VclusterDescriptors, EnvFiles) {
     const TempDir out("env");
-    const GeneratedDescriptors g =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
     EXPECT_EQ(g.env_emu, out.path() / "env.emu");
     EXPECT_EQ(g.env_mock, out.path() / "env.mock");
     std::string socs;
@@ -479,7 +488,7 @@ TEST(VclusterDescriptors, EnvFilesPackagePathAbsolute) {
     const TempDir out("env_relative");
     const fs::path relative = fs::relative(package_soc_desc());
     ASSERT_TRUE(relative.is_relative()) << relative;
-    const GeneratedDescriptors g = generate_descriptors(manifest_file("line3_eth.yaml"), relative, out.path());
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), relative, out.path());
     for (const auto& env_file : {g.env_emu, g.env_mock}) {
         const std::vector<std::string> lines = env_lines(env_file);
         ASSERT_EQ(lines.size(), 4u) << env_file;
@@ -496,15 +505,15 @@ TEST(VclusterDescriptors, ReplacesExistingFiles) {
     const TempDir out("replace");
     write_text(out.path() / "cluster_desc.yaml", "stale: true\n");
     write_text(out.path() / "env.emu", "STALE=1\n");
-    const GeneratedDescriptors g =
-        generate_descriptors(manifest_file("line3_noc.yaml"), package_soc_desc(), out.path());
-    EXPECT_EQ(yaml_file_difference(g.cluster_desc, kKeraunosDir / "keraunos_3chip_cluster_desc.yaml"), "");
+    const GeneratedDescriptors g = generate_descriptors(checked(kLine), package_soc_desc(), out.path());
+    EXPECT_FALSE(YAML::LoadFile(g.cluster_desc.string())["stale"]);
     EXPECT_EQ(read_text(g.env_emu).find("STALE"), std::string::npos);
 }
 
 // § Verification 1: a two-device manifest generates a [ 1, 2 ] mesh and two SoC descriptors whose DRAM views are
-// disjoint and together are the package's. With 4 programmable views and 2 devices, device 0 takes views 0 to 2 and
-// device 1 view 3.
+// disjoint and together are the package's. With 4 programmable views and 2 devices, device 0 takes views 0 and 1 and
+// device 1 views 2 and 3: Metal takes a power of two of DRAM banks. Each device's idle slot is an Ethernet core of its
+// descriptor, after the router in port order, and is in no connection.
 TEST(VclusterDescriptors, TwoDevices) {
     const Manifest m = checked(R"yaml(
 version: 1
@@ -512,17 +521,19 @@ devices:
   - name: A
     fabric_chip: 0
     slots:
+      - {tile: 2, cce: 0, hart: 0, role: idle, port: 1}
       - {tile: 0, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 0, cce: 0, hart: 1, role: worker}
     regions:
       - {tile: 0, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 2, cce: 0, base: 0x0, size: 0x400000}
   - name: B
     fabric_chip: 1
     slots:
       - {tile: 1, cce: 0, hart: 0, role: router, port: 0}
-      - {tile: 1, cce: 0, hart: 1, role: worker}
+      - {tile: 3, cce: 0, hart: 0, role: idle, port: 1}
     regions:
       - {tile: 1, cce: 0, base: 0x0, size: 0x400000}
+      - {tile: 3, cce: 0, base: 0x0, size: 0x400000}
 links:
   - {a: {device: A, port: 0}, b: {device: B, port: 0}, backend: ethernet}
 )yaml");
@@ -535,14 +546,16 @@ links:
     const YAML::Node a = YAML::LoadFile(g.soc_descs[0].string());
     const YAML::Node b = YAML::LoadFile(g.soc_descs[1].string());
     ASSERT_EQ(package_views.size(), 4u);
-    ASSERT_EQ(a["dram_views"].size(), 3u);
-    ASSERT_EQ(b["dram_views"].size(), 1u);
-    for (size_t i = 0; i < 3; ++i) {
+    ASSERT_EQ(a["dram_views"].size(), 2u);
+    ASSERT_EQ(b["dram_views"].size(), 2u);
+    for (size_t i = 0; i < 2; ++i) {
         EXPECT_EQ(yaml_difference(a["dram_views"][i], package_views[i]), "") << "device 0 view " << i;
+        EXPECT_EQ(yaml_difference(b["dram_views"][i], package_views[2 + i]), "") << "device 1 view " << i;
     }
-    EXPECT_EQ(yaml_difference(b["dram_views"][0], package_views[3]), "") << "device 1 view";
-    EXPECT_EQ(YAML::LoadFile(g.soc_descs[0].string())["eth"][0].Scalar(), "4-0");
-    EXPECT_EQ(YAML::LoadFile(g.soc_descs[1].string())["eth"][0].Scalar(), "4-1");
+    EXPECT_EQ(yaml_difference(a["eth"], YAML::Load("[4-0, 4-2]")), "");
+    EXPECT_EQ(yaml_difference(b["eth"], YAML::Load("[4-1, 4-3]")), "");
+    EXPECT_EQ(a["keraunos"]["cores"].size(), 2u);
+    EXPECT_EQ(b["keraunos"]["cores"][1]["hsio"].as<int>(), 3);
     const YAML::Node cluster = YAML::LoadFile(g.cluster_desc.string());
     EXPECT_EQ(cluster["arch"].size(), 2u);
     ASSERT_EQ(cluster["ethernet_connections"].size(), 1u);
@@ -559,8 +572,10 @@ TEST(VclusterDescriptors, EthInPortOrder) {
           "      - {tile: 2, cce: 0, hart: 0, role: router, port: 1}\n      - {tile: 1, cce: 0, hart: 0, role: router, "
           "port: 0}\n"}}));
     const TempDir out("order");
+    const TempDir line("order_line");
     const GeneratedDescriptors g = generate_descriptors(m, package_soc_desc(), out.path());
-    EXPECT_EQ(yaml_file_difference(g.soc_descs[1], kKeraunosDir / "keraunos_3chip_m_soc_desc.yaml"), "");
+    const GeneratedDescriptors ref = generate_descriptors(checked(kLine), package_soc_desc(), line.path());
+    EXPECT_EQ(yaml_file_difference(g.soc_descs[1], ref.soc_descs[1]), "");
 }
 
 // --- generate_descriptors: refusals G1 to G5 ---------------------------------------------------------------------
@@ -622,9 +637,7 @@ TEST(VclusterDescriptors, G6ViewNotProgrammable) {
 // keraunos.cores still lists, so the checks still accept B on tile 3.
 TEST(VclusterDescriptors, G4NotAnEthernetCore) {
     const TempDir dir("g4");
-    write_text(
-        dir.path() / "package.yaml",
-        replaced(read_text(package_soc_desc()), "[4-0, 4-1, 4-2, 4-3]", "[4-0, 4-1, 4-2]"));
+    write_text(dir.path() / "package.yaml", replaced(read_text(package_soc_desc()), "4-2, 4-3, 5-0", "4-2, 5-0"));
     EXPECT_EQ(refusals(checked(kLine, dir.path() / "package.yaml"), dir.path() / "package.yaml"), Refusals{4});
 }
 
@@ -662,8 +675,10 @@ TEST(VclusterDescriptors, ConnectionLowerChipFirst) {
          {"{a: {device: M, port: 1}, b: {device: B, port: 0}, backend: noc}",
           "{a: {device: B, port: 0}, b: {device: M, port: 1}, backend: noc}"}}));
     const TempDir out("lower_first");
+    const TempDir line("lower_first_line");
     const GeneratedDescriptors g = generate_descriptors(m, package_soc_desc(), out.path());
-    EXPECT_EQ(yaml_file_difference(g.cluster_desc, kKeraunosDir / "keraunos_3chip_cluster_desc.yaml"), "");
+    const GeneratedDescriptors ref = generate_descriptors(checked(kLine), package_soc_desc(), line.path());
+    EXPECT_EQ(yaml_file_difference(g.cluster_desc, ref.cluster_desc), "");
 }
 
 // The generator lists every refusal that holds: G2 and G5 together.

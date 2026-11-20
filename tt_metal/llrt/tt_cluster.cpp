@@ -7,7 +7,7 @@
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
-#include <core_coord.hpp>
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -34,7 +34,7 @@
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "get_platform_architecture.hpp"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
@@ -61,7 +61,11 @@ namespace {
 inline std::string get_soc_description_file(
     const tt::ARCH& arch, tt::TargetDevice target_device, const tt::llrt::RunTimeOptions& rtoptions) {
     if (target_device == tt::TargetDevice::Simulator) {
-        return tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
+        // A wh/bh ttsim image may ship no SoC descriptor; it then models the full silicon grid below.
+        std::string sim_soc_desc = tt::tt_metal::find_simulator_soc_descriptor_path(rtoptions.get_simulator_path());
+        if (!sim_soc_desc.empty()) {
+            return sim_soc_desc;
+        }
     }
     std::string path = rtoptions.get_root_dir();
     if (path.back() != '/') {
@@ -324,9 +328,7 @@ tt::tt_metal::ClusterType Cluster::get_cluster_type_from_cluster_desc(
         // simulator types for that fallback, but prefer a supplied/discovered descriptor below so direct simulation
         // is classified the same way as silicon (for example, a discovered two-chip N300 remains an N300).
         if (rtoptions.get_simulator_enabled()) {
-            auto soc_desc =
-                tt::umd::SimulationChip::get_soc_descriptor_path_from_simulator_path(rtoptions.get_simulator_path());
-            auto arch = tt::umd::SocDescriptor::get_arch_from_soc_descriptor_path(soc_desc);
+            auto arch = tt::tt_metal::get_simulator_architecture(rtoptions.get_simulator_path());
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return tt::tt_metal::ClusterType::SIMULATOR_WORMHOLE_B0;
             }
@@ -450,6 +452,11 @@ bool Cluster::is_base_routing_fw_enabled(tt::tt_metal::ClusterType cluster_type)
 
 bool Cluster::is_iommu_enabled() const { return this->iommu_enabled_; }
 
+bool Cluster::needs_d2h_hugepage_fallback() const {
+    TT_ASSERT(this->hal_ != nullptr, "Hal is not set. Need to call set_hal() first.");
+    return !this->hal_->get_supports_64_bit_pcie_addressing() && !this->iommu_enabled_;
+}
+
 bool Cluster::is_read_only_page_pinning_supported() const { return this->read_only_page_pinning_supported_; }
 
 Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
@@ -486,7 +493,7 @@ void Cluster::detect_arch_and_target() {
         log_warning(tt::LogDevice, "Using chippy emu_axi device mode");
     }
     if (this->target_type_ == tt::TargetDevice::GrendelJtag) {
-        log_warning(tt::LogDevice, "Using chippy Grendel JTAG attach mode");
+        log_warning(tt::LogDevice, "Using Grendel JTAG attach mode");
     }
 
     TT_FATAL(
@@ -647,11 +654,12 @@ void Cluster::assign_mem_channels_to_devices(
 }
 
 void Cluster::get_metal_desc_from_tt_desc() {
-    std::string silicon_dram_metadata_yaml;
-    if (this->target_type_ == TargetDevice::Silicon) {
-        // UMD uses arch-default soc descriptors without sdesc_path; device_descriptor_file_path is empty until we set
-        // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
-        silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
+    // UMD uses arch-default soc descriptors on silicon, and on a ttsim image that ships no soc_descriptor.yaml, so
+    // device_descriptor_file_path is empty until we set it on a copy (public field on tt::umd::SocDescriptor) for
+    // metal_SocDescriptor's dram_views YAML load.
+    std::string default_dram_metadata_yaml;
+    if (this->target_type_ == TargetDevice::Silicon || this->target_type_ == TargetDevice::Simulator) {
+        default_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     }
     // The 1x3, 2x3 and 2x3_DISPATCH emulator models back less DRAM than their soc descriptor declares.
     // They are recognised by the simulator directory name and their DRAM size is clamped to what they back,
@@ -710,8 +718,9 @@ void Cluster::get_metal_desc_from_tt_desc() {
                                      .asic_location = this->get_cluster_desc()->get_asic_location(id),
                                  })
                            : driver_soc;
-        if (this->target_type_ == TargetDevice::Silicon) {
-            umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
+        if (this->target_type_ == TargetDevice::Silicon ||
+            (this->target_type_ == TargetDevice::Simulator && umd_soc.device_descriptor_file_path.empty())) {
+            umd_soc.device_descriptor_file_path = default_dram_metadata_yaml;
         }
         std::optional<uint64_t> dram_view_size_limit;
         if (emulator_model != nullptr && !dram_uncapped) {
@@ -1084,6 +1093,25 @@ tt::tt_metal::CoreCoord Cluster::get_physical_coordinate_from_logical_coordinate
     }
     const auto& soc_desc = this->get_soc_desc(chip_id);
     return soc_desc.get_physical_core_from_logical_core(logical_coord, core_type);
+}
+
+uint32_t Cluster::get_keraunos_eth_cce(ChipId chip, tt::tt_metal::CoreCoord virtual_core) const {
+    if (this->arch() != tt::ARCH::QUASAR) {
+        return 0;
+    }
+    const auto& soc = this->get_soc_desc(chip);
+    const auto& keraunos = soc.get_arch_descriptor().get_keraunos();
+    if (keraunos.cores.empty()) {
+        return 0;
+    }
+    const tt_xy_pair noc0 = soc.translate_coord_to(
+        tt_xy_pair(virtual_core.x, virtual_core.y), CoordSystem::TRANSLATED, CoordSystem::NOC0);
+    for (const auto& core : keraunos.cores) {
+        if (core.coord == noc0) {
+            return core.eth_cce;
+        }
+    }
+    return 0;
 }
 
 tt::tt_metal::CoreCoord Cluster::get_logical_ethernet_core_from_virtual(ChipId chip, tt::tt_metal::CoreCoord core) const {
