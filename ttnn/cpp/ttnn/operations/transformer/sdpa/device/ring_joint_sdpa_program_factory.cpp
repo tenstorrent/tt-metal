@@ -18,6 +18,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
 #include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/tensor/tensor_ops.hpp"
 
 #include <algorithm>
 #include <array>
@@ -983,6 +984,9 @@ void apply_ring_joint_scalar_runtime_args(
 namespace ttnn::prim {
 
 namespace {
+
+// Where create_mesh_workload puts the state checkpoint buffer after the op's outputs while the programs are built.
+constexpr size_t kStateTensorSlot = RING_JOINT_SDPA_STATS_OUTPUT_IDX + 1;
 
 // ---- Per-core Q work and K/V store-and-forward chains: functions of num_q_chunks, rebuilt on the host
 // when the dynamic-length path sees a new per-chip length (apply_dynamic_local_n_runtime_args).
@@ -2113,8 +2117,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
-    // The recipe state checkpoints of cores with several Q chunks (internal output tensor).
-    TensorAccessorArgs(output_tensors.at(RING_JOINT_SDPA_STATE_OUTPUT_IDX).buffer()).append_to(writer_compile_time_args);
+    // The recipe state checkpoints of cores with several Q chunks: the cached program's own buffer, which
+    // create_mesh_workload appends to the outputs while the program is built (kStateTensorSlot).
+    const Tensor& state_tensor = output_tensors.at(kStateTensorSlot);
+    TensorAccessorArgs(state_tensor.buffer()).append_to(writer_compile_time_args);
     if (kv_pad_from_metadata) {
         TensorAccessorArgs(tensor_args.kv_actual_isl->buffer()).append_to(writer_compile_time_args);
         if (tensor_args.has_kv_valid_end()) {
@@ -2978,7 +2984,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         writer_common_args.push_back(out_buf);
         writer_common_args.push_back(joint_out_buf);
         writer_common_args.push_back(stats_buf);
-        writer_common_args.push_back(output_tensors.at(RING_JOINT_SDPA_STATE_OUTPUT_IDX).buffer());
+        // A plain address, not a binding: a hit's outputs do not carry the state buffer, which never moves.
+        writer_common_args.push_back(static_cast<uint32_t>(state_tensor.buffer()->address()));
         TT_FATAL(
             writer_common_args.size == ring_joint::kWriterAddressCommonArgCount,
             "RingJoint writer address common args: kernel expects {}, got {}",
@@ -3771,14 +3778,21 @@ RingJointSDPAMeshWorkloadFactory::cached_mesh_workload_t RingJointSDPAMeshWorklo
     if (route.has_value()) {
         CMAKE_UNIQUE_NAMESPACE::apply_full_mesh_route(args, *route);
     }
+    // The state checkpoints live in a buffer the cached workload owns (allocated once here, not per call); the
+    // descriptor build finds it after the outputs.
+    TT_FATAL(output_tensors.size() == kStateTensorSlot, "RingJointSDPA expects {} outputs", kStateTensorSlot);
+    output_tensors.push_back(create_device_tensor(ring_joint_state_spec(args, tensor_args), tensor_args.input_q.device()));
     auto descriptor_cached =
         descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
+    Tensor state = std::move(output_tensors.back());
+    output_tensors.pop_back();
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
     for (auto& [range, program] : descriptor_cached.workload.get_programs()) {
         auto& shared = shared_variables[range];
         shared.descriptor = std::move(descriptor_cached.shared_variables.at(range));
         shared.semaphore_patch = record_ring_joint_semaphore_arg_patch(program, args, tensor_args, range.start_coord());
         shared.full_mesh_route = route;
+        shared.state = state;
     }
     return {std::move(descriptor_cached.workload), std::move(shared_variables)};
 }

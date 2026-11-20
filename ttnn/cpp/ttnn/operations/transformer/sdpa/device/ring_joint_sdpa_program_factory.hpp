@@ -55,6 +55,8 @@ struct RingJointSDPAMeshWorkloadFactory {
         typename descriptor_adapter_t::shared_variables_t descriptor;
         ttnn::experimental::prim::ring_attention_all_gather_async_dynamic::SemaphoreArgPatch semaphore_patch;
         std::optional<FullMeshRoute> full_mesh_route;
+        // The recipe state checkpoint buffer the programs write (ring_joint_state_spec), alive with the cache entry.
+        std::optional<Tensor> state;
     };
     using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
 

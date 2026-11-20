@@ -1239,6 +1239,32 @@ void RingJointSDPADeviceOperation::validate_on_program_cache_hit(
     }
 }
 
+tt::tt_metal::TensorSpec ring_joint_state_spec(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    const auto& input = tensor_args.input_q;
+    const auto v_head_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
+    const uint32_t joint_padded_seq = tensor_args.joint_q.has_value() ? tensor_args.joint_q->padded_shape()[2] : 0;
+    // The recipe state checkpoints (kernels/recipe_state_layout.hpp): a header page and the raw O, maxima and denominator
+    // planes of every Q chunk, for cores with several Q chunks (a one-device ring never checkpoints: one page).
+    using State = ::sdpa::streaming::StateTransfer;
+    const uint32_t q_tiles = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
+    const bool fp32_maxima = args.precision == ttnn::operations::transformer::SDPAPrecision::BALANCED ||
+                             args.precision == ttnn::operations::transformer::SDPAPrecision::ACCURATE;
+    const uint32_t state_pages =
+        State::page_count(q_tiles, v_head_dim / tt::constants::TILE_WIDTH, fp32_maxima ? 4096 : 2048) + 1;
+    // dynamic_local_n: the gathered buffers' capacity bounds the per-chip length the program serves.
+    const uint32_t local_rows = args.dynamic_local_n
+                                    ? tensor_args.gathered_k.padded_shape()[2] / static_cast<uint32_t>(args.ring_size)
+                                    : input.padded_shape()[2];
+    const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
+                              (tt::div_up(local_rows, args.get_q_chunk_size()) +
+                               tt::div_up(joint_padded_seq, args.get_q_chunk_size()));
+    const ttnn::Shape state_shape{
+        1, 1, args.ring_size == 1 ? tt::constants::TILE_HEIGHT : q_blocks * state_pages * tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH};
+
+    return tt::tt_metal::TensorSpec(state_shape, TensorLayout(DataType::UINT32, PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}));
+}
+
 RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
@@ -1264,34 +1290,13 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = v_head_dim;
 
-    // The recipe state checkpoints (kernels/recipe_state_layout.hpp): a header page and the raw O, maxima and denominator
-    // planes of every Q chunk, for cores with several Q chunks (a one-device ring never checkpoints: one page).
-    using State = ::sdpa::streaming::StateTransfer;
-    const uint32_t q_tiles = args.get_q_chunk_size() / tt::constants::TILE_HEIGHT;
-    const bool fp32_maxima = args.precision == ttnn::operations::transformer::SDPAPrecision::BALANCED ||
-                             args.precision == ttnn::operations::transformer::SDPAPrecision::ACCURATE;
-    const uint32_t state_pages =
-        State::page_count(q_tiles, v_head_dim / tt::constants::TILE_WIDTH, fp32_maxima ? 4096 : 2048) + 1;
-    // dynamic_local_n: the gathered buffers' capacity bounds the per-chip length the program serves.
-    const uint32_t local_rows = args.dynamic_local_n
-                                    ? tensor_args.gathered_k.padded_shape()[2] / static_cast<uint32_t>(args.ring_size)
-                                    : input.padded_shape()[2];
-    const uint32_t q_blocks = input.logical_shape()[0] * input.logical_shape()[1] *
-                              (tt::div_up(local_rows, args.get_q_chunk_size()) +
-                               tt::div_up(joint_padded_seq, args.get_q_chunk_size()));
-    const ttnn::Shape state_shape{
-        1, 1, args.ring_size == 1 ? tt::constants::TILE_HEIGHT : q_blocks * state_pages * tt::constants::TILE_HEIGHT,
-        tt::constants::TILE_WIDTH};
-
     return {
         tt::tt_metal::TensorSpec(
             out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        tt::tt_metal::TensorSpec(
-            state_shape, TensorLayout(DataType::UINT32, PageConfig(Layout::TILE), tt::tt_metal::MemoryConfig{}))};
+            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
 RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
@@ -1301,7 +1306,6 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
         create_device_tensor(output_specs[RING_JOINT_SDPA_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
         create_device_tensor(output_specs[RING_JOINT_SDPA_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[RING_JOINT_SDPA_STATE_OUTPUT_IDX], tensor_args.input_q.device()),
     };
 }
 

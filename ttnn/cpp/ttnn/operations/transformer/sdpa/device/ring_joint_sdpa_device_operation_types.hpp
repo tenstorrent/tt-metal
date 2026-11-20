@@ -264,13 +264,15 @@ inline bool indexed_kv_cache_active(const RingJointSDPAParams& args, const RingJ
 constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
 constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
-// The recipe state checkpoints of cores with several Q chunks (internal; recipe_state_layout.hpp).
-constexpr size_t RING_JOINT_SDPA_STATE_OUTPUT_IDX = 3;
 
-// RingJointSDPAResult is a vector of 4 tensors: [output, joint_output, stats_output, state]
+// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
 using RingJointSDPAResult = Tensors;
 
-// RingJointSDPAResultSpec is a vector of 4 TensorSpecs: [output, joint_output, stats_output, state]
+// RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
 using RingJointSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
+
+// The recipe state checkpoints of cores with several Q chunks (recipe_state_layout.hpp): a DRAM buffer the cached
+// program owns (allocated on the program-cache miss), not a per-call output.
+tt::tt_metal::TensorSpec ring_joint_state_spec(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
 }  // namespace ttnn::prim
