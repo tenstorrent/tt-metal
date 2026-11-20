@@ -1,0 +1,38 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_bias_epi.py
+BE: {"case": "fd16", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.161636, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.1636746, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.n", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.503142, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.n", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.5050576, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.r", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.8230007, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.r", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208613.8248737, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.nr", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.140493, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.nr", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.142189, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.4608662, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.4628465, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm.nr", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.7639482, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm.nr", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208614.7657282, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.0641158, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.0659018, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSED
+BE: {"case": "fd16.n", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.3499174, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.n", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.351556, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSED
+BE: {"case": "fd16.r", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.623826, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.r", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.6257093, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSED
+BE: {"case": "fd16.nr", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.92373, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "fd16.nr", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208615.9253416, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSED
+BE: {"case": "s2rm", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208616.21474, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208616.2167914, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSED
+BE: {"case": "s2rm.nr", "variant": "base", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208616.5072725, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+BE: {"case": "s2rm.nr", "variant": "rec", "knobs": {}, "ablate": "", "log": "r13_k1", "t": 1795208616.5089738, "status": "error", "error": "conv2d_3x3: hw_alignment='hw_non_aligned' not in SUPPORTED ['hw_aligned']"}
+PASSEDUP_FRONT_INLINE: real pass took 1.7s
+============================== 6 passed in 6.24s ===============================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_21_03_40/ops_perf_results_2026_11_20_21_03_40.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 0m20s (20s total, device-lock-acquired -> exit)

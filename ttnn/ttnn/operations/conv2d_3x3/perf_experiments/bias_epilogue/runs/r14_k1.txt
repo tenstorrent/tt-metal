@@ -1,0 +1,8 @@
+fdk1|base	40360	[40360]
+fdk1|rec	40627	[40627]
+fdk1.n|base	40452	[40452]
+fdk1.n|rec	40387	[40387]
+fdk1.r|base	40864	[40864]
+fdk1.r|rec	41036	[41036]
+fdk1.nr|base	40719	[40719]
+fdk1.nr|rec	40801	[40801]

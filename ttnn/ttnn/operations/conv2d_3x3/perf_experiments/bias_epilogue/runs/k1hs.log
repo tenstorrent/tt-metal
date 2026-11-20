@@ -1,0 +1,41 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 21:06:14] SAFE_PYTEST: waiting for device (20s) — holder pid=2905872 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2905863 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh fin5 idx41,idx35,s64x300_c256_p1,s1028x1000_c32_p1 base,rec BRO_"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_panoptic_be.py
+BE_PAN: {"layer": "hs_rm16_s1", "idx": 45, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999992340171984, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1", "idx": 45, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999992340171984, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1", "idx": 45, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999992340171984, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:17.981 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=6876ns, avg=6932.8ns, max=6992ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm16_s1_relu", "idx": 46, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999988579544651, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_relu", "idx": 46, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999988579544651, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_relu", "idx": 46, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999988579544651, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:18.460 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=6824ns, avg=6935.0ns, max=6995ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm16_s1_nb", "idx": 47, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999994261701, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_nb", "idx": 47, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999994261701, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_nb", "idx": 47, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": false, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999994261701, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:18.921 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=4845ns, avg=5263.2ns, max=5517ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm16_s1_nb_relu", "idx": 48, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999992462264082, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_nb_relu", "idx": 48, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999992462264082, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm16_s1_nb_relu", "idx": 48, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": false, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999992462264082, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:19.397 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=5268ns, avg=5395.5ns, max=5526ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm8_s2", "idx": 49, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.99999923858158, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2", "idx": 49, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.99999923858158, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2", "idx": 49, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.99999923858158, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:19.858 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=6152ns, avg=6260.2ns, max=6321ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm8_s2_relu", "idx": 50, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999988866570817, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_relu", "idx": 50, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999988866570817, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_relu", "idx": 50, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999988866570817, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:20.330 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=6171ns, avg=6253.3ns, max=6307ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm8_s2_nb", "idx": 51, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999994433121235, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_nb", "idx": 51, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999994433121235, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_nb", "idx": 51, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": false, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999994433121235, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:20.801 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=4306ns, avg=4419.7ns, max=4553ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "hs_rm8_s2_nb_relu", "idx": 52, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999991711924556, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_nb_relu", "idx": 52, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9999991711924556, "bit_identical_to_first": true}
+BE_PAN: {"layer": "hs_rm8_s2_nb_relu", "idx": 52, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": false, "sharded": true, "tile_input": false, "kb": 1, "resident": false}, "pcc": 0.9999991711924556, "bit_identical_to_first": true}
+PASSED2026-11-20 21:07:21.262 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=4398ns, avg=4489.8ns, max=4576ns (profiler_analysis.cpp:729)
+======================== 8 passed, 45 skipped in 39.09s ========================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_21_07_30/ops_perf_results_2026_11_20_21_07_30.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 0m58s (58s total, device-lock-acquired -> exit)

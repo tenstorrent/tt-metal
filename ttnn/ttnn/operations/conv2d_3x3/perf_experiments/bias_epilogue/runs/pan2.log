@@ -1,0 +1,36 @@
+SAFE_PYTEST: Waiting for device lock...
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_panoptic_be.py
+BE_PAN: {"layer": "res5.0.conv2 @ LoFi [perf]", "idx": 31, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997603568482513, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.0.conv2 @ LoFi [perf]", "idx": 31, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997603568482513, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.0.conv2 @ LoFi [perf]", "idx": 31, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.9997603568482513, "bit_identical_to_first": true}
+PASSED2026-11-20 20:54:55.131 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=25073ns, avg=25353.8ns, max=25884ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res5.1.conv2 @ LoFi [perf]", "idx": 32, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997619451337292, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.1.conv2 @ LoFi [perf]", "idx": 32, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997619451337292, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.1.conv2 @ LoFi [perf]", "idx": 32, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.9997619451337292, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:04.645 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=25077ns, avg=25567.0ns, max=26081ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res5.2.conv2 @ LoFi [perf]", "idx": 33, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997617911014355, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.2.conv2 @ LoFi [perf]", "idx": 33, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997617911014355, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res5.2.conv2 @ LoFi [perf]", "idx": 33, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.9997617911014355, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:13.865 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=24279ns, avg=24576.2ns, max=24981ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "idx": 34, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.99976286436412, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "idx": 34, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.99976286436412, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.1 (x2 heads) @ LoFi [perf]", "idx": 34, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.99976286436412, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:17.581 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=44248ns, avg=44593.0ns, max=44809ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "idx": 35, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997621231787268, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "idx": 35, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997621231787268, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.2 (x2 heads) @ LoFi [perf]", "idx": 35, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.9997621231787268, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:20.565 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=40072ns, avg=40691.8ns, max=42187ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "idx": 36, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9998293504315522, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "idx": 36, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9998293504315522, "bit_identical_to_first": true}
+BE_PAN: {"layer": "aspp.convs.3 (x2 heads, 1024-ch slice) @ LoFi [perf]", "idx": 36, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": false, "sharded": true, "tile_input": true, "kb": 3, "resident": false}, "pcc": 0.9998293504315522, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:23.433 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=18903ns, avg=19578.2ns, max=20551ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "idx": 37, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997617585541493, "bit_identical_to_first": true}
+BE_PAN: {"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "idx": 37, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997617585541493, "bit_identical_to_first": true}
+BE_PAN: {"layer": "semantic decoder.res3.fuse_conv.0 @ LoFi [perf]", "idx": 37, "variant": "ilv2", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "epi": {"kblock_walk": false, "epi_walk": false, "has_bias": true, "sharded": true, "tile_input": true, "kb": 6, "resident": false}, "pcc": 0.9997617585541493, "bit_identical_to_first": true}
+PASSED2026-11-20 20:55:24.347 | info     |           Metal | Device kernel duration perf summary (device=0): count=6, min=33643ns, avg=33839.5ns, max=34043ns (profiler_analysis.cpp:729)
+================== 7 passed, 38 skipped in 118.20s (0:01:58) ===================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_20_57_18/ops_perf_results_2026_11_20_20_57_18.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 4m00s (240s total, device-lock-acquired -> exit)

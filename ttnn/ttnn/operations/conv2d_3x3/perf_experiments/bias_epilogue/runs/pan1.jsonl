@@ -1,0 +1,16 @@
+{"layer": "stem.conv1 @ LoFi [perf]", "idx": 23, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9998243683934455, "bit_identical_to_first": true}
+{"layer": "stem.conv1 @ LoFi [perf]", "idx": 23, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9998243683934455, "bit_identical_to_first": true}
+{"layer": "stem.conv2 @ LoFi [perf]", "idx": 24, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997605158885796, "bit_identical_to_first": true}
+{"layer": "stem.conv2 @ LoFi [perf]", "idx": 24, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997605158885796, "bit_identical_to_first": true}
+{"layer": "stem.conv3 @ LoFi [perf]", "idx": 25, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997607897258318, "bit_identical_to_first": true}
+{"layer": "stem.conv3 @ LoFi [perf]", "idx": 25, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997607897258318, "bit_identical_to_first": true}
+{"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "idx": 26, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997599360448955, "bit_identical_to_first": true}
+{"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "idx": 26, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997599360448955, "bit_identical_to_first": true}
+{"layer": "res3.0.conv2 @ LoFi [perf]", "idx": 27, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.999758791274303, "bit_identical_to_first": true}
+{"layer": "res3.0.conv2 @ LoFi [perf]", "idx": 27, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.999758791274303, "bit_identical_to_first": true}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "idx": 28, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997591578181617, "bit_identical_to_first": true}
+{"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "idx": 28, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997591578181617, "bit_identical_to_first": true}
+{"layer": "res4.0.conv2 @ LoFi [perf]", "idx": 29, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.999761731060664, "bit_identical_to_first": true}
+{"layer": "res4.0.conv2 @ LoFi [perf]", "idx": 29, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.999761731060664, "bit_identical_to_first": true}
+{"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "idx": 30, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997626604675195, "bit_identical_to_first": true}
+{"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "idx": 30, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997626604675195, "bit_identical_to_first": true}

@@ -1,0 +1,33 @@
+SAFE_PYTEST: Waiting for device lock...
+[2026-11-20 20:51:36] SAFE_PYTEST: waiting for device (20s) — holder pid=2807062 cmd="/bin/bash scripts/run_safe_pytest.sh --profile --run-all ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/test_bro.py " parent pid=2807044 cmd="/bin/bash ttnn/ttnn/operations/conv2d_3x3/perf_experiments/band_refill_overlap/run.sh dsD s514x1000_c64_p1,s1026x1000_c32_p1,s300x700_c96_p1,s400x600_"
+SAFE_PYTEST: Device lock acquired
+SAFE_PYTEST: dispatch_timeout=5s
+SAFE_PYTEST: env UP_FRONT_INLINE=1 UP_FRONT_COLLECT=1 UP_FRONT_REAL_ALLOC=1 UP_FRONT_COLLECT_WORKERS=64 PYTHONPATH=/localdev/pmilojevic/workspaces/opgen:/localdev/pmilojevic/workspaces/opgen python -m tracy -r -m pytest -p tests.plugins.up_front_collect ttnn/ttnn/operations/conv2d_3x3/perf_experiments/bias_epilogue/test_panoptic_be.py
+BE_PAN: {"layer": "stem.conv1 @ LoFi [perf]", "idx": 23, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9998243683934455, "bit_identical_to_first": true}
+BE_PAN: {"layer": "stem.conv1 @ LoFi [perf]", "idx": 23, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9998243683934455, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:29.070 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=9766ns, avg=9897.5ns, max=10003ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "stem.conv2 @ LoFi [perf]", "idx": 24, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997605158885796, "bit_identical_to_first": true}
+BE_PAN: {"layer": "stem.conv2 @ LoFi [perf]", "idx": 24, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997605158885796, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:30.087 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=26000ns, avg=26059.5ns, max=26161ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "stem.conv3 @ LoFi [perf]", "idx": 25, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997607897258318, "bit_identical_to_first": true}
+BE_PAN: {"layer": "stem.conv3 @ LoFi [perf]", "idx": 25, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997607897258318, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:31.493 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=46617ns, avg=46675.8ns, max=46724ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "idx": 26, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997599360448955, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res2.{0,1,2}.conv2 @ LoFi [perf]", "idx": 26, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997599360448955, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:32.215 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=9024ns, avg=9278.0ns, max=9498ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res3.0.conv2 @ LoFi [perf]", "idx": 27, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.999758791274303, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res3.0.conv2 @ LoFi [perf]", "idx": 27, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.999758791274303, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:32.728 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=13172ns, avg=13249.0ns, max=13362ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "idx": 28, "variant": "base", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997591578181617, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res3.{1,2,3}.conv2 + instance res3.fuse_conv.1 @ LoFi [perf]", "idx": 28, "variant": "rec", "memory_layout": "TensorMemoryLayout.HEIGHT_SHARDED", "pcc": 0.9997591578181617, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:33.366 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=9105ns, avg=9175.2ns, max=9207ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res4.0.conv2 @ LoFi [perf]", "idx": 29, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.999761731060664, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res4.0.conv2 @ LoFi [perf]", "idx": 29, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.999761731060664, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:34.169 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=10083ns, avg=10112.2ns, max=10144ns (profiler_analysis.cpp:729)
+BE_PAN: {"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "idx": 30, "variant": "base", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997626604675195, "bit_identical_to_first": true}
+BE_PAN: {"layer": "res4.{1..5}.conv2 @ LoFi [perf]", "idx": 30, "variant": "rec", "memory_layout": "TensorMemoryLayout.BLOCK_SHARDED", "pcc": 0.9997626604675195, "bit_identical_to_first": true}
+PASSED2026-11-20 20:52:35.096 | info     |           Metal | Device kernel duration perf summary (device=0): count=4, min=9740ns, avg=9843.0ns, max=9904ns (profiler_analysis.cpp:729)
+======================== 8 passed, 37 skipped in 40.76s ========================
+SAFE_PYTEST: PROFILER CSV: /localdev/pmilojevic/workspaces/opgen/generated/profiler/reports/2026_11_20_20_52_53/ops_perf_results_2026_11_20_20_52_53.csv
+SAFE_PYTEST_RESULT: PASS
+SAFE_PYTEST_TOTAL_RUNTIME: 1m05s (65s total, device-lock-acquired -> exit)

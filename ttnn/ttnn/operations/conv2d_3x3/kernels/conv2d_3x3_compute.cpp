@@ -1,11 +1,11 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-// conv2d_3x3 compute: per M-block, [untilize_footprint (TILE input)] then tilize_matmul_block
-// (matmul_block with tilize as its PreKBlockFn, fp32 packer-L1 accumulation over the K walk) then
-// finalize_block (row-broadcast bias add). No bias: the last K-block packs straight to the output CB
-// and finalize_block is empty. ReLU applies only to the final value: the bias-add pack, or the last
-// K-block's pack without bias.
+// conv2d_3x3 compute: per M-block, [untilize_footprint (TILE input)] then the K-blocked walk
+// (conv2d_3x3_kblock_walk.hpp: the tilize hook per K-block, fp32 packer-L1 accumulation over the K walk). With a bias
+// the last K-block runs the row-broadcast bias add on its row groups as they are packed (a batch behind the matmul);
+// without one the last K-block reloads the partials and packs straight to the output CB. ReLU applies only to the
+// final value: the bias-add pack, or the last K-block's pack without bias.
 //
 // Strided-window im2col (stride 2): compute tilizes each unit in place at a 2-pixel row stride (window_tilize).
 //
@@ -76,6 +76,7 @@
 #include "conv2d_3x3_lean_tilize.hpp"
 #include "conv2d_3x3_padded_slab.hpp"
 #include "conv2d_3x3_slab_direct.hpp"
+#include "conv2d_3x3_kblock_walk.hpp"
 #ifdef CONV2D_3X3_TAP_SHIFT
 #include "conv2d_3x3_tap_shift.hpp"
 #endif
@@ -1150,8 +1151,6 @@ void kernel_main() {
     static_assert(in0_stream_rows % out_subblock_h == 0);
     static_assert(in0_groups == 1 || (face_direct && num_k_blocks == 1 && !k_split));
     static_assert(bias_stream_groups > 0);
-    constexpr auto bias_shape =
-        ckl::BiasAddShape::of(in0_num_subblocks, in1_num_subblocks, out_subblock_h, out_subblock_w, block_n_tiles);
     static_assert(block_m_tiles % combine_subblock_h == 0 && out_n_tiles % combine_subblock_w == 0);
     constexpr auto combine_bias_shape = ckl::BiasAddShape::of(
         block_m_tiles / combine_subblock_h,
@@ -2199,91 +2198,56 @@ void kernel_main() {
                 input_tiles_dfb.pop_front(slab_rows * c_in_tiles);
             }
 #endif
-            // With a bias the last K-block packs into the partials too (Interm), so the partials block is caller-owned:
-            // one reserve before the walk and one push after it, as on the K-split walk. With the helper's own
-            // per-row-group reserve / push, the unpacker drained (waited for and popped) every row group of each
-            // non-last K-block, so at every K-block boundary it waited for the pack of the K-block's last subblock
-            // before unpacking the next K-block. Without a bias the last K-block reloads the partials (Out target),
-            // which needs the helper's pushes: unchanged. Same matmuls, packs and order: bit-identical. Measured
-            // (Blackhole p150b, unzoned, medians of 3): res3.0 @ LoFi 13442 -> 12975 ns; changelog Perf 13
-            // (s2_build_walk_overlap).
-            constexpr bool caller_owns_partials = has_bias;
+            // The K-blocked walk (conv2d_3x3_kblock_walk.hpp): caller-owned partials over the K-blocks; with a bias the
+            // bias pass runs inside the last K-block, bias_batch_groups row groups behind its matmul (the output CB's
+            // depth in row groups, so the writer drains one batch while the next multiplies); without one the last
+            // K-block reloads the partials and packs the output.
             MaybeDeviceZoneScope("compute_matmul_walk");
-            if constexpr (caller_owns_partials) {
-                partials.reserve_back(partials_tiles);
-            }
+            constexpr uint32_t bias_batch_groups = 2;
 #ifdef WEIGHTS_RESIDENT
             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
             using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
             const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
-            ckl::matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/true,
-                last_block_target,
-                ckl::OutputCBLayout::TileRowMajor,
-                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::NoWaitNoPop,
-                ckl::NoPostCompute,
-                WrPre,
-                ckl::NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                ckl::NoKBlockInnerDimFn,
-                CenterTapIn0<center_mode, cb_center_tiles>,
-                ResidentIn1Offset<wr_round_tiles>,
-                caller_owns_partials>(
-                im2col_tiles,
-                weights,
-                output_tiles,
-                partials,
-                mm_shape,
-                {},
-                wr_pre,
-                /*in1_per_core_w=*/block_n_tiles,
-                /*out_row_width=*/block_n_tiles,
-                {},
-                {},
-                CenterTapIn0<center_mode, cb_center_tiles>{},
-                ResidentIn1Offset<wr_round_tiles>{});
+            conv2d_3x3::kblock_walk::walk<
+                has_bias,
+                bias_batch_groups,
+                /*in1_resident=*/true,
+                apply_relu,
+                cb_im2col_tiles,
+                cb_weights,
+                cb_matmul_partials,
+                cb_output_tiles,
+                cb_bias,
+                out_n_tiles,
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_h,
+                out_subblock_w,
+                block_k_tiles,
+                num_k_blocks>(
+                wr_pre, CenterTapIn0<center_mode, cb_center_tiles>{}, ResidentIn1Offset<wr_round_tiles>{});
 #else
-            ckl::matmul_block<
-                /*transpose=*/false,
-                /*packer_l1_acc=*/true,
-                last_block_target,
-                ckl::OutputCBLayout::TileRowMajor,
-                ckl::matmul_config::InitMode::ShortAfterPreKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::InputPolicy::WaitAndPopPerKBlock,
-                ckl::NoPostCompute,
-                PreKBlockFn,
-                ckl::NoPostKBlock,
-                /*untilize_block_ct_dim=*/0,
-                ckl::NoKBlockInnerDimFn,
-                CenterTapIn0<center_mode, cb_center_tiles>,
-                ckl::NoIn1BaseOffset,
-                caller_owns_partials>(
-                im2col_tiles,
-                weights,
-                output_tiles,
-                partials,
-                mm_shape,
-                {},
-                pre_k_block,
-                /*in1_per_core_w=*/block_n_tiles,
-                /*out_row_width=*/block_n_tiles,
-                {},
-                {},
-                CenterTapIn0<center_mode, cb_center_tiles>{});
+            conv2d_3x3::kblock_walk::walk<
+                has_bias,
+                bias_batch_groups,
+                /*in1_resident=*/false,
+                apply_relu,
+                cb_im2col_tiles,
+                cb_weights,
+                cb_matmul_partials,
+                cb_output_tiles,
+                cb_bias,
+                out_n_tiles,
+                in0_num_subblocks,
+                in1_num_subblocks,
+                out_subblock_h,
+                out_subblock_w,
+                block_k_tiles,
+                num_k_blocks>(pre_k_block, CenterTapIn0<center_mode, cb_center_tiles>{}, ckl::NoIn1BaseOffset{});
 #endif
-            if constexpr (caller_owns_partials) {
-                partials.push_back(partials_tiles);
-            }
         }
 
-        if constexpr (has_bias && !k_split && in0_groups == 1 && !slab_direct) {
-            add_bias(bias_shape);
-        }
         if constexpr (apply_relu) {
             pack_relu_config(ReluConfig::none());
         }
