@@ -32,11 +32,11 @@ struct RecipeDenseOptions;  // sdpa_recipe.hpp
 enum class RecipeOp : uint8_t { Dense, Joint, Ring, ExpRing };
 
 // Q/K chunk tile counts the chooser enumerates. Candidates outside the supported geometry are
-// filtered by `recipe_geometry_rejection`; this range only bounds the search to where the cost
-// model is fitted: Q from 128 rows and K from 256 to 512 rows (shorter only when the whole
-// sequence is shorter). Smaller blocks are overhead-dominated and K > 512 is not yet measured;
-// a caller may still pass any supported chunk explicitly (any tile-aligned geometry for B-E). When nothing in
-// this range fits L1 (large head dims), the search extends down to one-tile chunks.
+// filtered by `recipe_geometry_rejection`; this range only bounds the search to the blockings the
+// recipe kernels are tuned and tested for: Q from 128 rows and K from 256 to 512 rows (FAST: to
+// 1024; shorter only when the whole sequence is shorter). A caller may still pass any supported
+// chunk explicitly (any tile-aligned geometry for B-E). When nothing in this range fits L1 (large
+// head dims), the search extends down to one-tile chunks.
 inline constexpr uint32_t kRecipeSearchMinQTiles = 4;
 inline constexpr uint32_t kRecipeSearchMaxQTiles = 32;
 inline constexpr uint32_t kRecipeSearchMinKTiles = 8;
@@ -122,6 +122,8 @@ struct RecipeBlockingProblem {
     // joint K rows that are not tile multiples (a K tail at every K chunk size).
     bool attention_sink = false;
     bool k_rows_unaligned = false;
+    // The device is Wormhole (else Blackhole): the cost model's clock, DRAM and NoC quantities.
+    bool wormhole = false;
     // Orders problems for the chooser's memo.
     std::strong_ordering operator<=>(const RecipeBlockingProblem&) const = default;
 };
@@ -130,7 +132,7 @@ struct RecipeBlocking {
     uint32_t q_chunk_size = 0;
     uint32_t k_chunk_size = 0;
     tt::tt_metal::CoreCoord grid{0, 0};
-    double cost = 0.0;           // modeled makespan, arbitrary units (comparable within one problem)
+    double cost = 0.0;           // modeled makespan of the busiest core, in Tensix cycles
     uint32_t jobs_per_core = 0;  // Q chunks on the busiest core (exp ring: passes)
     RecipeL1Estimate l1{};
 };
