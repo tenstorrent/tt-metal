@@ -76,6 +76,7 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& logical_l_tensor = std::nullopt,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor = std::nullopt,
     bool dynamic_local_n = false,
-    bool output_concat_heads = false);
+    bool output_concat_heads = false,
+    bool v_heads_in_row = false);
 
 }  // namespace ttnn::prim

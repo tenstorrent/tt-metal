@@ -246,7 +246,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     std::optional<uint32_t> kv_cache_layer_idx,
     const std::optional<ttnn::Tensor>& kv_valid_end_tensor,
     bool dynamic_local_n,
-    bool output_concat_heads) {
+    bool output_concat_heads,
+    bool v_heads_in_row) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -316,7 +317,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         logical_l_tensor,
         kv_valid_end_tensor,
         dynamic_local_n,
-        output_concat_heads);
+        output_concat_heads,
+        v_heads_in_row);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
