@@ -1417,6 +1417,34 @@ TABLE = {
         "prepared copy program (tt/lane_rows.py); off = PB.3H. The same bytes at the same rows (data moves, row-local "
         "ops). Default off (the task's: on = the change; the gate sets it)",
     ),
+    "PACKED_GLUED": Setting(
+        "off",
+        ("off", "on"),
+        "PB.7 (OWNER 2026-11-20 09:00), read per chunk (CALL-TIME, listed in bringup/hooks.py batch_call_settings). With "
+        "PACKED=on: on = a chunk is a glued chunk (tt/packed.GluedChunk): up to 6 segments back to back in the chunk's "
+        "8192 rows, any lengths, no lane alignment or padding between them (only the chunk's tail is pad), a request "
+        "that does not fit split at a kv block and continued in a later chunk; the engine sends the segments' ids back "
+        "to back (drafts/tt_d_gen_packed_ask.md) and the model computes each segment's rows [start, cap) back to back "
+        "(model rows). A glued chunk that is a lane chunk (every segment at row k 2048, <= 2048 rows: GluedChunk.as_lanes) "
+        "runs the accepted lane path (every PACKED_* switch as set); any other glued chunk runs its token-wise work once "
+        "and each segment's attention steps on its rows moved to rows [0, n) (tt/packed_device.GluedMover: today's "
+        "steps, PB.3's v1 loop with row moves). off = the accepted 4-lane path (ChunkDescriptor). Default off (the "
+        "task's: on = the change; the gate sets it)",
+    ),
+    "MOE_HEAD_ORDER": Setting(
+        "free",
+        ("free", "source"),
+        "PB.7 attempt 2 (overseer OV-65, DS41-339 / DS41-341; load-time: the MoE block's head plan). MOE_IMPL=block, "
+        "MOE_BLOCK_SRC=block, OWN_ROWS=on only. free = the fused moe_head's cross-TP sums in an order that does not "
+        "depend on which TP chip owns a token row (fork options MoEBlockConfig.shared_scatter_columns and "
+        "router_canonical_sum): the shared expert reduced by COLUMNS (y [S/SP, H/TP], each column's partials added in "
+        "its column block's ring order, the ring halves by matmul core column; then one TP all_to_all into the chip's "
+        "owner rows before the y_own + se add, tt/moe_block_v2_adapter, +~0.1 ms device a layer) and the router's "
+        "logits partials summed in chip order (0 + 1 + .. once every one is in). A glued segment then gives the same "
+        "bits wherever it lands in the chunk. A block whose chunk needs splits / row blocks / padding rows (the block's "
+        "own tail) falls back to source. source = the fork's source order (the rows scatter: a row's adds in its "
+        "destination chip's ring order, 1 bf16 ulp across TP chips; the router: the owner's partial first)",
+    ),
     "PACKED_LONG_HIDE": Setting(
         "off",
         ("off", "on"),

@@ -882,3 +882,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   out of every PB brief into bringup/PACKED_RULES.md (briefs point to it; tasks.yaml 463 KB); PB.7's brief now opens
   with the DS41-339 fix requirement (a new brief = a new A/B key, so the resume starts agent attempt 2 instead of
   re-asking); PB.7B's packed-oracle unit carries PACKED_GLUED_ONECALL too (one model configuration a gate).
+- 13:48 UTC PB.7 attempt 2 done, WAITING; verified the gate's units myself (all PASS on the current code) and metrics:
+  glued segment equivalence 0, split vs alone 0, slot digests 0, alone vs today 0, determinism 0; lanes still 0;
+  every glued segment within limits (final hidden 0.132 / 0.242, top-5 1.0). Fixes in the moe_head fork, behind
+  options: DS41-339 shared-expert reduce by columns, DS41-341 router logits partials in an owner-independent order
+  (KNOWLEDGE CONTRADICTED DS41-339: its cause was incomplete). Walls: glued 4x2k (lane chunk) 71.8k (lanes were 74.6-
+  75.0k before: the order-free reduces cost ~1.5 ms; still >= 67k), 5 x 1.6k glued 16.1k vs lanes 39.6k, AgentX mixes
+  glued 20.6 / 25.4 / 16.1k vs lanes 32.4 / 29.8 / 36.7k (the row-move loop: PB.7B's job), 6 x 1M glued 10.4k; DRAM
+  headroom with 6 x 1M histories 6.9 GB. DECIDED: accept (correctness is the goal of PB.7; speed is PB.7B).

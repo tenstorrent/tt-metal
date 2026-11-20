@@ -127,12 +127,16 @@ public:
         int scatter,
         uint32_t links,
         uint32_t max_pass_width,
-        bool compact_reduce_scatter_zones);
+        bool compact_reduce_scatter_zones,
+        bool column_halves = false);
 
     uint32_t tp_size, engine_columns, engine_rows, row_tiles_per_core, hidden_tiles, links, max_pass_width,
         chunk_row_tiles, num_cores;
     int scatter;
     bool compact_reduce_scatter_zones;
+    // (scatter -1, MoEBlockConfig.shared_scatter_columns) the ring's halves by core column (half_split_column), not
+    // by core index: a row's tiles then take one ring order whatever core row (chunk row) they land on
+    bool column_halves = false;
     ReduceScatterKind kind;
     ReduceScatterTransport transport;
     uint32_t core_block_tiles = 0;

@@ -421,15 +421,17 @@ class DS41PrefillRuntime:
         end and global_write_start; the engine input in lane-natural order). Every served layer is acked once per
         segment (host sink: sink.layers_completed(g, g + 1, slot, start, end) for each segment after the layer's
         sync; D2H: one outbound_socket_service_sync a segment). PACKED=off refuses (prefill_chunk is today's path)."""
-        from ..packed_device import packed_on
+        from ..packed_device import as_run_desc, packed_on
 
         if not packed_on():
             raise ValueError("prefill_packed needs PACKED=on (PACKED=off: prefill_chunk, one request a chunk)")
         c, m = self.config.chunk_size, self.config.max_seq_len
         assert int(descriptor.chunk) == c, (descriptor.chunk, c)
         assert self.gap_feed is None, "PACKED=on serves a contiguous layer range"
+        glued = getattr(descriptor, "glued", False)  # PB.7 (PACKED_GLUED=on): segments back to back
         for _, s in descriptor.live():
-            assert s.start % 32 == 0 and s.start < s.end and s.start + descriptor.lane_rows <= m, (s, m)
+            span = s.length if glued else descriptor.lane_rows
+            assert s.start % 32 == 0 and s.start < s.end and s.start + span <= m, (s, m)
             assert 0 <= int(s.slot) < kv_cache.contract.num_users, (s.slot, kv_cache.contract.num_users)
         ttnn = self._ttnn
         model = self.model
@@ -443,9 +445,10 @@ class DS41PrefillRuntime:
             for _, s in live:
                 SNAPSHOT_ENDS[int(s.slot)] = int(s.end)
                 WINDOW_UNWRITTEN[int(s.slot)] = frozenset(model.decoder) if model.skip_mode == "decode" else frozenset()
-        ids = self._host_ids_packed(input_tensor, descriptor)
+        ids = self._host_ids_packed(input_tensor, descriptor)  # (model rows: a glued chunk's segments back to back)
+        run_desc = as_run_desc(descriptor)  # (PB.7: a glued chunk that is a lane chunk runs the lane path)
         last = False if model.skip_mode == "decode" else None
-        model.begin_packed(descriptor, ids, states, last=last)
+        model.begin_packed(run_desc, ids, states, last=last)
         try:
             from ..model import SKIPPED
 

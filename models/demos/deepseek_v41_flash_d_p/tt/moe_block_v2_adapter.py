@@ -200,29 +200,51 @@ class TtMoEBlockV2Layer:
         )
 
     # ------------------------------------------------------------------ the block (one a mesh and chunk)
+    def _want_cols(self) -> bool:
+        """MOE_HEAD_ORDER=free (PB.7, DS41-339 / DS41-341): the head's shared expert reduced by columns and its router's
+        logits summed in chip order; the OWN_ROWS path only (it adds se itself: the block's own tail takes the rows
+        scatter)."""
+        return settings.get("MOE_HEAD_ORDER") == "free" and self.own_rows
+
+    def _build_block(self, cols: bool):
+        mb = _mb()
+        cfg = mb.MoEBlockConfig(chunk_tokens=self.chunk, num_links=LINKS, persist_l1_small=True)
+        cfg.combine_snap = COMBINE_SNAP
+        cfg.shared_scatter_columns = bool(cols)
+        cfg.router_canonical_sum = bool(cols)
+        t0 = time.time()
+        res = mb.MoEBlockResources(self.mesh, self.dims, cfg, self.dtypes)
+        blk = _ForkMoEBlock(
+            self.mesh,
+            res,
+            dtypes=self.dtypes,
+            max_tokens_per_expert=max(self.chunk, 256),
+            layout=mb.FlatLayoutOptions(weights_nk=True, x_min_piece_bytes=x_min_piece_bytes()),
+        )
+        logger.info(
+            f"MOE_BLOCK_V2 chunk={self.chunk}: built in {time.time() - t0:.1f} s, accumulators "
+            f"{blk.accumulators}, {blk.splits} splits, head row blocks {blk.row_blocks}, pad rows {blk.pad_rows}, "
+            f"arena {blk.arena_spec.memory_config.shard_spec.shape[0] * 64 >> 10} KB a core, fabric payload "
+            f"{res.fabric_max_payload_bytes() if hasattr(res, 'fabric_max_payload_bytes') else '?'} B, "
+            f"flat layout {blk.expert_kw['layout']}, head order {'free (se by columns, router sum in chip order)' if cols else 'source'}"
+        )
+        return res, blk
+
     def block(self):
-        key = (id(self.mesh), self.chunk, x_min_piece_bytes())
+        want = self._want_cols()
+        key = (id(self.mesh), self.chunk, x_min_piece_bytes(), want)
         hit = _BLOCKS.get(key)
         if hit is None or hit[0] is not self.mesh:
-            mb = _mb()
-            cfg = mb.MoEBlockConfig(chunk_tokens=self.chunk, num_links=LINKS, persist_l1_small=True)
-            cfg.combine_snap = COMBINE_SNAP
-            t0 = time.time()
-            res = mb.MoEBlockResources(self.mesh, self.dims, cfg, self.dtypes)
-            blk = _ForkMoEBlock(
-                self.mesh,
-                res,
-                dtypes=self.dtypes,
-                max_tokens_per_expert=max(self.chunk, 256),
-                layout=mb.FlatLayoutOptions(weights_nk=True, x_min_piece_bytes=x_min_piece_bytes()),
-            )
-            logger.info(
-                f"MOE_BLOCK_V2 chunk={self.chunk}: built in {time.time() - t0:.1f} s, accumulators "
-                f"{blk.accumulators}, {blk.splits} splits, head row blocks {blk.row_blocks}, pad rows {blk.pad_rows}, "
-                f"arena {blk.arena_spec.memory_config.shard_spec.shape[0] * 64 >> 10} KB a core, fabric payload "
-                f"{res.fabric_max_payload_bytes() if hasattr(res, 'fabric_max_payload_bytes') else '?'} B, "
-                f"flat layout {blk.expert_kw['layout']}"
-            )
+            res, blk = self._build_block(want)
+            if want and not self._one_call(blk):  # (the block's own tail: the rows scatter)
+                logger.warning(
+                    f"MOE_BLOCK_V2 chunk={self.chunk}: MOE_HEAD_ORDER=free needs one call (splits {blk.splits}, row blocks "
+                    f"{blk.row_blocks}, pad rows {blk.pad_rows}): this chunk's block keeps the source order"
+                )
+                res.release()
+                res, blk = self._build_block(False)
+                want = False
+            blk._ds41_se_cols = want
             hit = _BLOCKS[key] = (self.mesh, res, blk)
         return hit[2]
 
@@ -524,6 +546,11 @@ class TtMoEBlockV2Layer:
         )
         ttnn.deallocate(arena)
         se = head.shared_expert_output
+        se_cols = getattr(blk, "_ds41_se_cols", False)
+        if se_cols:  # (MOE_HEAD_ORDER=free: se [S/SP, H/TP] -> the chip's owner rows [S/(SP TP), H], as y_own's)
+            se = ttnn.experimental.all_to_all_async_generic(
+                se, in_dim=3, out_dim=2, num_links=2, memory_config=DRAM, cluster_axis=TP_AXIS
+            )
         assert tuple(y_own.shape)[-2:] == tuple(x_own.shape)[-2:] and tuple(se.shape)[-2:] == tuple(x_own.shape)[-2:], (
             f"MOE_BLOCK_SRC=block OWN_ROWS: owner rows y {tuple(y_own.shape)}, shared {tuple(se.shape)}, x "
             f"{tuple(x_own.shape)}"
@@ -537,9 +564,13 @@ class TtMoEBlockV2Layer:
         if ob is not None:
             ttnn.add(yt, se, memory_config=DRAM, output_tensor=ob, sub_core_grids=sub_cores(yt))  # (FIX.36: rule 18)
             dealloc(yt)
+            if se_cols:
+                dealloc(se)
             return ob
         out = ttnn.add(yt, se, memory_config=DRAM, sub_core_grids=sub_cores(yt))
         dealloc(yt)
+        if se_cols:
+            dealloc(se)
         return out
 
 

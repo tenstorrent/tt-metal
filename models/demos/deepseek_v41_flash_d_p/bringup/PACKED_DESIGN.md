@@ -39,6 +39,16 @@ between two lanes of one SP row stay routed). Verified lane-equivalent by constr
 (`tests/packed/test_packed_moe_block.py`: permuted / different / hot companions, other lanes, pad lanes routed or
 not: A's rows bit-identical) and by the oracle with PACKED_MOE=on.
 
+PB.7 (PACKED_GLUED=on, `tt/packed.GluedChunk`): up to 6 segments back to back in the chunk's rows, any lengths (only the
+tail is pad); model rows = each segment's computed rows [start, cap) back to back (whole tiles under block-aligned
+starts); a request that does not fit is split at the last kv block (`GluedChunk.fill` / `split`). A glued chunk that is
+a lane chunk (`as_lanes`, e.g. 4 x 2048) runs the lane path above, bit for bit; any other runs the token-wise work once
+and each segment's attention on its rows moved to rows [0, n) (`packed_device.GluedMover`, v1: one attention call and
+two whole-chunk gathers a segment a layer: 5 x 1600 at 139k 496 ms vs 2 lane chunks 203 ms). Engram rows: tile-row
+views of the staging (`TtEngramRows.fill_tp_glued`). Not row-position invariant yet (DS41-339): the fused MoE head's
+shared-expert reduce-scatter adds in an order that depends on the row's TP chip. v2 (per-row segment arguments in the
+window / sparse_sdpa / indexer / top-k ops, no moves) is what makes glued faster than lanes.
+
 Contents: 1 geometry and the key fact, 2 the descriptor, 3 per-chunk quantities, 4 non-row-local ops, 5 attention and
 the cross-chip pieces, 6 pipelining and hiding per-segment costs, 7 DRAM at 1M, 8 8192 on today's tree, 9 test plan,
 10 projected time, 11 owner decisions, 12 PB.2-PB.4 estimates.

@@ -1909,7 +1909,11 @@ class TtDS41Model:
         self.wait_engram()  # (a job of the last chunk whose layer did not run)
         ids = tokens.reshape(-1).long()
         assert ids.numel() == self.chunk, (ids.numel(), self.chunk)
-        lr = desc.lane_rows
+        glued = getattr(desc, "glued", False)  # PB.7 (PACKED_GLUED=on): segments back to back (tt/packed.GluedChunk)
+        if glued:
+            assert desc.prefill_end == settings.get("PREFILL_END"), (desc.prefill_end, settings.get("PREFILL_END"))
+            assert desc.tile_aligned(), "PACKED_GLUED: every segment's model rows whole tiles (block-aligned starts)"
+        lr = None if glued else desc.lane_rows
         segs, idle = [], []
         for lane, s in desc.live():
             st = states[lane]
@@ -1918,8 +1922,8 @@ class TtDS41Model:
             if run_end <= s.start:  # (PREFILL_END=cap: nothing below cap: its snapshot at cap and its acks only)
                 idle.append(SegRun(lane, s, st, run_end))
                 continue
-            off = lane * lr
-            st.note_tokens(ids[off : off + lr], s.start, run_end)
+            off = desc.lane_off(lane) if glued else lane * lr
+            st.note_tokens(ids[off : off + (run_end - s.start if glued else lr)], s.start, run_end)
             self.state = st
             self.begin_chunk(None, s.start, last=last, write_start=s.gws, engram=False)
             segs.append(SegRun(lane, s, st, run_end, {f: getattr(self, f) for f in FIELDS}))
@@ -1930,7 +1934,10 @@ class TtDS41Model:
         if segs:
             pk.enter(segs[0])
         if self.engram and segs:
-            self._begin_engram_packed(ids, desc, segs)
+            if glued:
+                self._begin_engram_glued(ids, desc, segs)
+            else:
+                self._begin_engram_packed(ids, desc, segs)
 
     def end_packed(self) -> None:
         """PB.3: the packed chunk is over (the slot caches' buffer keys back to today's)."""
@@ -1967,6 +1974,38 @@ class TtDS41Model:
             dev = rows.allocate_tp(ids.numel(), rows.upload_pieces(ids.numel()))  # (PB.3K: pieces, non-blocking)
             self._engram_dev[i] = dev
             job = (rows.fill_tp_lanes, dev, lanes, self._hide_threads)
+            if first is None:
+                first = i
+                self._engram_jobs[i] = self._engram_pool.submit(*job)
+            else:
+                self._engram_pending[i] = job
+        self._hide_trigger = None if first is None else first + self._hide_defer
+
+    def _begin_engram_glued(self, ids: torch.Tensor, desc, segs: list) -> None:
+        """PB.7 (PACKED_GLUED=on): _begin_engram_packed for a glued chunk: every engram layer's rows in one host job
+        (TtEngramRows.fill_tp_glued: each segment hashed with its own slot's tail over its own model rows, which may
+        start inside a chip's share; the tail pad zero)."""
+        assert self._engram_pool is not None and self._host_hide, "PACKED=on: ENGRAM_ASYNC=on with HOST_HIDE=on"
+        assert all(i in self._engram_full for i in self.engram), "PACKED=on: the TP-sharded engram rows (HOST_HIDE)"
+        by_lane = {r.lane: r for r in segs}
+        first = None
+        for i, rows in self.engram.items():
+            jobs = []
+            for k in range(desc.lanes):
+                r = by_lane.get(k)
+                if r is None:  # (a segment that computes nothing: no model rows)
+                    continue
+                off, v = desc.lane_off(k), r.run_end - r.start
+                lid = ids[off : off + v].contiguous()
+                tail = rows.new_tail() if r.start == 0 else r.state.tail[i]
+                tail = tail.long().clone().contiguous()
+                new_tail = rows.next_tail(lid, tail, v)
+                r.state.tail[i] = new_tail
+                jobs.append((off, lid, tail, new_tail.long().contiguous()))
+            _free(self._engram_dev.pop(i, None))
+            dev = rows.allocate_tp(ids.numel(), rows.upload_pieces(ids.numel()))
+            self._engram_dev[i] = dev
+            job = (rows.fill_tp_glued, dev, jobs, self.chunk, self._hide_threads)
             if first is None:
                 first = i
                 self._engram_jobs[i] = self._engram_pool.submit(*job)

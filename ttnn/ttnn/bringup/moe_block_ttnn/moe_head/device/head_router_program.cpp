@@ -444,6 +444,7 @@ std::vector<KernelDescriptor> ChipProgram::router(std::vector<CBDescriptor>& cbs
         // (padded: its row tiles of padding only: no sums, top-K, rows or route words - router_compute.cpp)
         padded_chunk_args(router_compute, padded);
         named_arg(router_compute, names::kSpRows, model.mesh_rows);
+        named_arg(router_compute, names::kRouterCanonicalSum, model.config.shape.router_canonical_sum ? 1 : 0);
         named_arg(router_compute, names::kTpColumns, model.mesh_columns);
         define(
             input_feeder,

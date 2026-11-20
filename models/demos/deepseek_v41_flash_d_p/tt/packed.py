@@ -338,3 +338,222 @@ def history_bytes_per_chip(
     keys = [-(-r // sp) * index_key_bytes * sources for r in rows]
     table = max(tab) if (per_lane and tab) else sum(tab)
     return {"table": table, "index_keys": sum(keys), "total": table + sum(keys)}
+
+
+# ============================================================================================= glued (PB.7)
+GLUED_MAX = 6  # PB.7 (owner 2026-11-20): up to 6 segments a glued chunk
+
+
+def real_prefix(chunk: int, sp: int, v: torch.Tensor) -> tuple[list[int], bool]:
+    """ChunkDescriptor.moe_real_prefix's rule for any [chunk] bool of real rows (a function of the rows only)."""
+    v = v.reshape(-1).bool()
+    assert v.numel() == chunk and chunk % sp == 0, (v.numel(), chunk, sp)
+    w = chunk // sp
+    out, exact = [], True
+    for r in range(sp):
+        row = v[r * w : (r + 1) * w]
+        idx = torch.nonzero(row).reshape(-1)
+        n = int(idx[-1]) + 1 if idx.numel() else 0
+        exact = exact and bool(row[:n].all())
+        out.append(n)
+    return out, exact
+
+
+@dataclass(frozen=True)
+class GluedChunk:
+    """PB.7 (OWNER 2026-11-20, PACKED_GLUED=on): a chunk of ``chunk`` rows holding up to GLUED_MAX segments BACK TO
+    BACK, any lengths: no lane alignment, no padding between segments (only the chunk's tail is pad).
+
+    Two row layouts:
+        engine rows    what tt-d-gen sends (drafts/tt_d_gen_packed_ask.md): segment k's ids [start, end) at rows
+                       [in_off(k), in_off(k) + length), in_off(k) = the lengths before it; pad (PAD_ID) after the last
+        model rows     what the model computes ("internal"): segment k's COMPUTED rows [start, run_end) (PREFILL_END:
+                       cap = decode's cap of end, P.49; end = every row) at rows [lane_off(k), lane_off(k) + rows(k)),
+                       lane_off(k) = the computed rows before it; the chunk's tail pad. The rows [run_end, end) of a
+                       segment are pad in both layouts (today's chunk computes nothing past cap either), so dropping
+                       them keeps every computed row and no pad between segments. Under cap with block-aligned starts
+                       every segment's model rows are whole tiles (32 x k), so a segment never shares a tile row.
+    ``lane_off`` / ``live`` / ``pack_ids`` / ``row_positions`` keep ChunkDescriptor's names (a "lane" is a segment's
+    index here) so the CPU reference's packed forward (reference/packed_ref.forward_packed) runs a glued chunk as is.
+
+    A request that does not fit the rows left is SPLIT (``split``): its first part ends on the last kv block that fits
+    (a non-last chunk of a request ends on a block, as today's chunked prefill: its whole first part is computed) and
+    the rest is a segment of a later chunk starting there (its own slot, its own write_start); the model does not know
+    the next chunk."""
+
+    chunk: int
+    segments: tuple = field(default_factory=tuple)
+    prefill_end: str = "cap"
+    block: int = KV_BLOCK
+
+    glued = True
+
+    def __post_init__(self):
+        n = len(self.segments)
+        assert 1 <= n <= GLUED_MAX, f"a glued chunk holds 1..{GLUED_MAX} segments, got {n}"
+        assert all(s is not None for s in self.segments), "a glued chunk has no empty lanes"
+        assert (
+            sum(s.length for s in self.segments) <= self.chunk
+        ), f"glued segments of {sum(s.length for s in self.segments)} rows > chunk {self.chunk}"
+        slots = [s.slot for s in self.segments]
+        assert len(slots) == len(set(slots)), f"two segments of one slot in a chunk: {slots}"
+
+    # ---------------------------------------------------------------- geometry
+    @property
+    def lanes(self) -> int:
+        return len(self.segments)
+
+    def rows(self, k: int) -> int:
+        """Model rows of segment k: its computed rows (run_end - start, >= 0)."""
+        s = self.segments[k]
+        return max(0, s.run_end(self.prefill_end, self.block) - s.start)
+
+    def in_off(self, k: int) -> int:
+        """Engine row of segment k's first id."""
+        return sum(s.length for s in self.segments[:k])
+
+    def lane_off(self, k: int) -> int:
+        """Model row of segment k's first computed row."""
+        return sum(self.rows(j) for j in range(k))
+
+    def used_rows(self) -> int:
+        return self.lane_off(self.lanes)
+
+    def live(self) -> list[tuple[int, Segment]]:
+        return list(enumerate(self.segments))
+
+    def new_tokens(self) -> int:
+        return sum(s.length for s in self.segments)
+
+    def tile_aligned(self) -> bool:
+        """Every segment's model rows start on a tile row (the device path's condition)."""
+        return all(self.lane_off(k) % 32 == 0 for k in range(self.lanes))
+
+    # ---------------------------------------------------------------- per row (model rows)
+    def row_seg(self) -> torch.Tensor:
+        """[chunk] int64: each model row's segment, -1 for the tail pad."""
+        out = torch.full((self.chunk,), -1, dtype=torch.int64)
+        for k in range(self.lanes):
+            out[self.lane_off(k) : self.lane_off(k) + self.rows(k)] = k
+        return out
+
+    def row_positions(self) -> torch.Tensor:
+        """[chunk] int64: each model row's position; the tail pad continues the last segment (never read)."""
+        out = torch.empty(self.chunk, dtype=torch.int64)
+        out[:] = torch.arange(self.chunk, dtype=torch.int64)
+        for k, s in self.live():
+            a = self.lane_off(k)
+            out[a : a + self.rows(k)] = s.start + torch.arange(self.rows(k), dtype=torch.int64)
+        u = self.used_rows()
+        if self.lanes and u < self.chunk:
+            k = self.lanes - 1
+            out[u:] = self.segments[k].start + self.rows(k) + torch.arange(self.chunk - u, dtype=torch.int64)
+        return out
+
+    def row_valid(self) -> torch.Tensor:
+        return self.row_seg() >= 0
+
+    def row_writes(self) -> torch.Tensor:
+        out = torch.zeros(self.chunk, dtype=torch.bool)
+        for k, s in self.live():
+            lo, hi = write_range(s, self.prefill_end, self.block)
+            if hi > lo:
+                out[self.lane_off(k) + lo - s.start : self.lane_off(k) + hi - s.start] = True
+        return out
+
+    def row_slot(self) -> torch.Tensor:
+        seg = self.row_seg()
+        slots = torch.tensor([s.slot for s in self.segments] + [-1], dtype=torch.int64)
+        return slots[seg]
+
+    def same_segment(self) -> torch.Tensor:
+        seg = self.row_seg()
+        return (seg.unsqueeze(1) == seg.unsqueeze(0)) & (seg.unsqueeze(1) >= 0)
+
+    def causal_mask(self) -> torch.Tensor:
+        pos = self.row_positions()
+        return self.same_segment() & (pos.unsqueeze(0) <= pos.unsqueeze(1))
+
+    # ---------------------------------------------------------------- ids
+    def engine_ids(self, ids_per_seg: list, pad: int = PAD_ID) -> torch.Tensor:
+        """[chunk] engine-order ids: segment k's [length] ids at rows in_off(k).., ``pad`` after the last."""
+        out = torch.full((self.chunk,), pad, dtype=torch.int64)
+        for k, s in self.live():
+            ids = torch.as_tensor(ids_per_seg[k], dtype=torch.int64).reshape(-1)
+            assert ids.numel() == s.length, (k, ids.numel(), s.length)
+            out[self.in_off(k) : self.in_off(k) + s.length] = ids
+        return out
+
+    def model_ids(self, engine: torch.Tensor, pad: int = PAD_ID) -> torch.Tensor:
+        """Engine-order ids [chunk] -> model-order ids [chunk] (each segment's computed rows; ``pad`` elsewhere)."""
+        engine = engine.reshape(-1)
+        out = torch.full((self.chunk,), pad, dtype=torch.int64)
+        for k in range(self.lanes):
+            a, n = self.lane_off(k), self.rows(k)
+            out[a : a + n] = engine[self.in_off(k) : self.in_off(k) + n]
+        return out
+
+    def pack_ids(self, ids_per_lane: list, pad: int = PAD_ID) -> torch.Tensor:
+        """[chunk] model-order ids from each segment's [length] ids (ChunkDescriptor.pack_ids' name)."""
+        return self.model_ids(self.engine_ids(ids_per_lane, pad), pad)
+
+    def unpack_rows(self, t: torch.Tensor) -> list:
+        assert t.shape[0] == self.chunk, (tuple(t.shape), self.chunk)
+        return [t[self.lane_off(k) : self.lane_off(k) + self.rows(k)] for k in range(self.lanes)]
+
+    # ---------------------------------------------------------------- mesh
+    def chip_segments(self, sp: int, tp: int) -> list[list[int]]:
+        """Per chip (chip-linear q = r tp + c: model rows [q R, (q + 1) R)) the segments whose rows it holds."""
+        n = sp * tp
+        per = self.chunk // n
+        seg = self.row_seg()
+        return [sorted({int(x) for x in seg[q * per : (q + 1) * per].tolist() if x >= 0}) for q in range(n)]
+
+    def moe_real_prefix(self, sp: int, valid: torch.Tensor | None = None) -> tuple[list[int], bool]:
+        return real_prefix(self.chunk, sp, self.row_valid() if valid is None else valid)
+
+    def as_lanes(self, lanes: int = LANES) -> "ChunkDescriptor | None":
+        """The same chunk as fixed lanes (ChunkDescriptor.packed), when it is one: every segment at model row k L
+        (L = chunk / lanes) and at most L engine rows long. Then the glued chunk IS that lane chunk (same model rows,
+        same per-chip segments) and runs the accepted lane path (PACKED_ATTN_ONECALL etc.), bit for bit."""
+        L = self.chunk // lanes
+        if self.lanes > lanes:
+            return None
+        for k, s in self.live():
+            if self.lane_off(k) != k * L or s.length > L:
+                return None
+        return ChunkDescriptor.packed(self.chunk, list(self.segments), lanes=lanes)
+
+    # ---------------------------------------------------------------- packing (the harness / the draft's packer)
+    @classmethod
+    def fill(
+        cls, chunk: int, requests: list, prefill_end: str = "cap", block: int = KV_BLOCK, max_segs: int = GLUED_MAX
+    ):
+        """Pack ``requests`` (Segment, in order) into one glued chunk: back to back while rows and segment slots are
+        left; the first that does not fit is SPLIT (``split``). Returns (GluedChunk, the rest: [the split's
+        continuation] + the requests not taken)."""
+        segs, left, rest = [], chunk, list(requests)
+        while rest and len(segs) < max_segs and left > 0:
+            s = rest[0]
+            if s.length <= left:
+                segs.append(rest.pop(0))
+                left -= s.length
+                continue
+            first, cont = split(s, left, block)
+            if first is not None:
+                segs.append(first)
+                rest[0] = cont
+            break
+        return cls(chunk, tuple(segs), prefill_end, block), rest
+
+
+def split(s: Segment, rows: int, block: int = KV_BLOCK) -> tuple:
+    """Split request ``s`` to fit ``rows`` engine rows: (first part, continuation). The first part ends on the last kv
+    block boundary that fits (position e1 = (start + rows) // block x block, > start; a non-last chunk ends on a block,
+    so its cap is its end and every row of it is computed); the continuation starts at e1 with the same slot and
+    write_start (a replay's frontier carries over). (None, s) when no block boundary fits."""
+    e1 = (s.start + rows) // block * block
+    if e1 <= s.start:
+        return None, s
+    assert e1 < s.end, (s, rows)
+    return Segment(s.slot, s.start, e1, s.write_start), Segment(s.slot, e1, s.end, s.write_start)

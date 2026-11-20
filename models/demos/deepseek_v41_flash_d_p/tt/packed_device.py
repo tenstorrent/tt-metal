@@ -44,6 +44,22 @@ def packed_on() -> bool:
     return settings.get("PACKED") == "on"
 
 
+def glued_on() -> bool:
+    """PB.7 PACKED_GLUED=on (call-time, bringup/hooks.py batch_call_settings): chunks are tt/packed.GluedChunk."""
+    return settings.get("PACKED_GLUED") == "on"
+
+
+def as_run_desc(desc):
+    """PB.7: the descriptor a chunk runs as. A glued chunk that is a lane chunk (GluedChunk.as_lanes: every segment
+    at model row k L, <= L rows; the same model rows and per-chip segments) runs the accepted lane path
+    (ChunkDescriptor); any other glued chunk runs as itself (PackedChunk's glued moves)."""
+    if getattr(desc, "glued", False):
+        assert glued_on(), "a glued chunk needs PACKED_GLUED=on"
+        lanes = desc.as_lanes()
+        return desc if lanes is None else lanes
+    return desc
+
+
 @dataclass
 class SegRun:
     """One segment of a packed chunk on the device: its lane, the descriptor's Segment, its slot state, its run end
@@ -149,6 +165,85 @@ class LaneMover:
         return out
 
 
+class GluedMover:
+    """PB.7 (PACKED_GLUED=on, a glued chunk that is not a lane chunk): moves a segment's model rows [off, off + n)
+    (off a whole tile row, any chip) to rows [0, n) (chip 0 on) and back. The chips' own rows (each chip [1, 1, q, W],
+    chip-linear q = r TP + c, rows [q R, (q + 1) R)) are gathered over the whole mesh (TP then SP: [1, chips, q, W] on
+    every chip), flattened to the chunk's rows [1, 1, chunk, W], rolled by ``off`` rows (two slices at tile rows and
+    a concat) and partitioned back. Data moves only (exact); the rows past the segment (other segments' rows, rolled)
+    are today's pad rows past its run end."""
+
+    def __init__(self, mesh, chunk: int):
+        self.mesh = mesh
+        self.sp, self.tp = int(mesh.shape[SP_AXIS]), int(mesh.shape[TP_AXIS])
+        self.n = self.sp * self.tp
+        self.chunk = int(chunk)
+        self.q = self.chunk // self.n
+        self._lm = LaneMover.__new__(LaneMover)  # (its "mesh" gather / partition: whole chip blocks)
+        self._lm.mesh, self._lm.sp, self._lm.tp, self._lm.mode = mesh, self.sp, self.tp, "mesh"
+        self._zeros = {}
+
+    def gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, 1, q, W] each chip -> the chunk's rows [1, 1, chunk, W] on every chip."""
+        g = self._lm.gather(t)
+        s = list(g.shape)
+        out = ttnn.reshape(g, [1, 1, s[1] * s[2], s[3]])
+        return out
+
+    def _rows(self, g: ttnn.Tensor, a: int, b: int) -> ttnn.Tensor:
+        s = list(g.shape)
+        return ttnn.slice(g, [0, 0, a, 0], [1, 1, b, s[3]], memory_config=DRAM, sub_core_grids=sub_cores(g))
+
+    def _partition(self, flat: ttnn.Tensor) -> ttnn.Tensor:
+        s = list(flat.shape)
+        blocks = ttnn.reshape(flat, [1, self.n, self.q, s[3]])
+        return self._lm.partition(blocks)
+
+    def to_row0(self, g: ttnn.Tensor, off: int) -> ttnn.Tensor:
+        """The gathered rows ``g`` [1, 1, chunk, W] rolled up by ``off`` rows -> each chip its own rows."""
+        assert 0 < off < self.chunk and off % 32 == 0, off
+        a, b = self._rows(g, off, self.chunk), self._rows(g, 0, off)
+        rolled = ttnn.concat([a, b], dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+        dealloc(a)
+        dealloc(b)
+        out = self._partition(rolled)
+        dealloc(rolled)
+        return out
+
+    def part(self, y: ttnn.Tensor, n: int) -> ttnn.Tensor:
+        """A segment's output (each chip its own rows, the segment at rows [0, n)) -> its rows [1, 1, n, W] on every
+        chip."""
+        g = self.gather(y)
+        out = self._rows(g, 0, n)
+        dealloc(g)
+        return out
+
+    def zeros(self, n: int, like: ttnn.Tensor) -> ttnn.Tensor:
+        """[1, 1, n, W] zeros (the chunk's tail pad rows), made once a shape (a constant)."""
+        s = list(like.shape)
+        key = (n, s[3], like.dtype)
+        z = self._zeros.get(key)
+        if z is None or not z.is_allocated():
+            z = ttnn.zeros(
+                [1, 1, n, s[3]], dtype=like.dtype, layout=ttnn.TILE_LAYOUT, device=self.mesh, memory_config=DRAM
+            )
+            ccl.pin(self.mesh, z)
+            self._zeros[key] = z
+        return z
+
+    def assemble(self, parts: list, used: int) -> ttnn.Tensor:
+        """Model-ordered [1, 1, n_k, W] parts (segment k's rows, back to back from row 0) + the tail pad's zeros ->
+        each chip its own rows [1, 1, q, W]."""
+        parts = list(parts)
+        if used < self.chunk:
+            parts.append(self.zeros(self.chunk - used, parts[0]))
+        f = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2, memory_config=DRAM, sub_core_grids=sub_cores())
+        out = self._partition(f)
+        if len(parts) > 1:
+            dealloc(f)
+        return out
+
+
 _LANE_KEYS: set = set()  # (mesh id, kind, key) of the per-lane buffers acquired (held for the process: v1)
 
 
@@ -230,12 +325,18 @@ class PackedChunk:
         self.model, self.desc = model, desc
         self.segs = segs  # SegRun of the segments that compute (lane order)
         self.idle = idle  # SegRun of the segments with cap <= start (snapshot at cap and acks only)
-        self.trivial = len(segs) == 1 and segs[0].lane == 0  # (today's chunk: nothing moves)
+        self.glued = getattr(desc, "glued", False)  # PB.7: a glued chunk that is not a lane chunk (moves by rows)
+        self.trivial = len(segs) == 1 and segs[0].lane == 0 and desc.lane_off(0) == 0  # (today's chunk: nothing moves)
         self.prefetched = False  # (TtDS41Model.take_engram_rows: once a chunk)
-        self.mover = None if self.trivial else LaneMover(model.mesh, model.chunk, desc.lanes)
+        if self.trivial:
+            self.mover = None
+        elif self.glued:
+            self.mover = GluedMover(model.mesh, model.chunk)
+        else:
+            self.mover = LaneMover(model.mesh, model.chunk, desc.lanes)
         # PB.3A (PACKED_ATTN_ONECALL=on, read per chunk): the attention once a layer over every lane (no moves)
         self.oc = None
-        if not self.trivial and segs:
+        if not self.trivial and segs and not self.glued:
             from .packed_onecall import OneCall, onecall_on
 
             if onecall_on():
@@ -248,7 +349,7 @@ class PackedChunk:
 
             valid = torch.zeros(desc.chunk, dtype=torch.bool)
             for r in segs:
-                o = r.lane * desc.lane_rows
+                o = desc.lane_off(r.lane)
                 valid[o : o + max(0, r.run_end - r.start)] = True
             self.moe_span = MoEPadSpan.of(model.mesh, desc.chunk).span(desc, valid)
 
@@ -391,6 +492,8 @@ class PackedChunk:
             return self._seg_steps(block, self.segs[0], x)
         if self.oc is not None:  # PB.3A (PACKED_ATTN_ONECALL=on): once over every lane
             return self.oc.attention(block, x)
+        if self.glued:
+            return self._glued_attention(block, x)
         mv = self.mover
         g = mv.gather(x) if any(r.lane for r in self.segs) else None
         xs = {r.lane: (x if r.lane == 0 else mv.to_lane0(g, r.lane)) for r in self.segs}
@@ -410,10 +513,44 @@ class PackedChunk:
             dealloc(p)
         return out
 
+    def _glued_attention(self, block, x: ttnn.Tensor) -> ttnn.Tensor:
+        """PB.7: a glued chunk's attention, segment by segment: its model rows moved to rows [0, n) (GluedMover),
+        today's steps at its start (as PB.3's v1 loop), its output rows back at its model rows; the tail pad zero."""
+        mv, desc = self.mover, self.desc
+        offs = {r.lane: desc.lane_off(r.lane) for r in self.segs}
+        g = mv.gather(x) if any(offs.values()) else None
+        parts = []
+        for r in self.segs:
+            off = offs[r.lane]
+            xr = x if off == 0 else mv.to_row0(g, off)
+            y = self._seg_steps(block, r, xr)
+            parts.append(mv.part(y, r.run_end - r.start))  # (before the next segment: y may be a load-time site)
+            dealloc(y)
+            if xr is not x:
+                dealloc(xr)
+        if g is not None:
+            dealloc(g)
+        out = mv.assemble(parts, sum(r.run_end - r.start for r in self.segs))
+        for p in parts:
+            dealloc(p)
+        return out
+
     def compress_only(self, block, x: ttnn.Tensor) -> None:
         """DECODER_SKIP (kv_only, layer 20): the compressor of every segment (the KV head's served writes)."""
         if self.trivial:
             self._seg_steps(block, self.segs[0], x, names=("compressor",))
+            return
+        if self.glued:  # PB.7: each segment's rows moved to rows [0, n)
+            mv = self.mover
+            offs = {r.lane: self.desc.lane_off(r.lane) for r in self.segs}
+            g = mv.gather(x) if any(offs.values()) else None
+            for r in self.segs:
+                xr = x if offs[r.lane] == 0 else mv.to_row0(g, offs[r.lane])
+                self._seg_steps(block, r, xr, names=("compressor",))
+                if xr is not x:
+                    dealloc(xr)
+            if g is not None:
+                dealloc(g)
             return
         if self.oc is not None:  # PB.3A (PACKED_ATTN_ONECALL=on)
             self.oc.compress_only(block, x)
@@ -438,9 +575,13 @@ def run_chunk(model, desc, tokens, states: list, layers: list, last=None, on_lay
     from .model import SKIPPED
 
     ids = tokens.reshape(-1).long().clone()
-    for lane, s in desc.live():  # (PAD_ID past each segment's run end, as the adapter's read of the engine input)
-        n = max(0, prefill_end(s.end) - s.start)
-        ids[lane * desc.lane_rows + n : (lane + 1) * desc.lane_rows] = PAD
+    desc = as_run_desc(desc)  # PB.7: a glued chunk (model-order ids, PAD past the used rows) or its lane form
+    if getattr(desc, "glued", False):
+        ids[desc.used_rows() :] = PAD
+    else:
+        for lane, s in desc.live():  # (PAD_ID past each segment's run end, as the adapter's read of the engine input)
+            n = max(0, prefill_end(s.end) - s.start)
+            ids[lane * desc.lane_rows + n : (lane + 1) * desc.lane_rows] = PAD
     if packed_on():
         model.begin_packed(desc, ids, states, last=last)
         try:
@@ -491,6 +632,8 @@ def ids_from_input(mesh, inp, desc):
         got = torch.cat([ttnn.to_torch(h).reshape(-1).to(torch.int64) & 0xFFFFFFFF for h in hs])
     else:
         got = torch.cat([ttnn.to_torch(dev[r * tp]).reshape(-1).to(torch.int64) & 0xFFFFFFFF for r in range(sp)])
+    if getattr(desc, "glued", False):  # PB.7: engine rows back to back -> model rows (each segment's computed rows)
+        return desc.model_ids(got, pad=PAD)
     nat = torch.full((desc.chunk,), PAD, dtype=torch.int64)
     lr = desc.lane_rows
     for lane, s in desc.live():
@@ -505,7 +648,10 @@ def make_input(mesh, desc, ids_per_lane):
     import torch
 
     sp = int(mesh.shape[SP_AXIS])
-    nat = desc.pack_ids(ids_per_lane, pad=PAD)
+    if getattr(desc, "glued", False):  # PB.7: engine order, segments back to back (drafts/tt_d_gen_packed_ask.md)
+        nat = desc.engine_ids(ids_per_lane, pad=PAD)
+    else:
+        nat = desc.pack_ids(ids_per_lane, pad=PAD)
     return ttnn.from_torch(
         nat.reshape(sp, 1, desc.chunk // sp).to(torch.uint32),
         dtype=ttnn.uint32,

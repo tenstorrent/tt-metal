@@ -329,7 +329,8 @@ std::shared_ptr<const HeadModel> make_head_model(
         shape.reduce_scatter_dim(),
         shape.links,
         kDestTiles / row_tiles_per_core,
-        layout.compact_reduce_scatter_zones);
+        layout.compact_reduce_scatter_zones,
+        shape.scatter_columns);
     SharedExpertArgs sizing_args;
     sizing_args.rows = shape.rows;
     sizing_args.hidden_dim = shape.hidden_dim;

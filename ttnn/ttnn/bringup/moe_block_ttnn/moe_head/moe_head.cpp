@@ -62,6 +62,8 @@ HeadShape head_shape_of(
     shape.router_candidates = dims.num_experts * dims.router.fold;
     shape.top_k = dims.top_k;
     shape.latent = dims.latent_dim;
+    shape.scatter_columns = config.shared_scatter_columns;
+    shape.router_canonical_sum = config.router_canonical_sum;
     shape.fold = dims.router.fold;
     shape.links = config.num_links;
     shape.ring = topology.wrap_x;
@@ -115,7 +117,8 @@ std::vector<uint32_t> row_block_counts(MoEBlockResources& resources) {
     const auto& topology = resources.topology();
     const uint32_t rows = config.split_tokens() / topology.R, tp_size = topology.C, hidden = resources.dims().emb_dim;
     const uint32_t banks = resources.mesh_device().allocator()->get_num_banks(tt::tt_metal::BufferType::DRAM);
-    const bool latent = resources.dims().latent_dim.has_value();
+    // (y by columns - a latent, or MoEBlockConfig.shared_scatter_columns: y's pages as x's)
+    const bool latent = resources.dims().latent_dim.has_value() || resources.config().shared_scatter_columns;
     constexpr uint32_t tile = tt::constants::TILE_HEIGHT;
     std::vector<uint32_t> out;
     for (uint32_t k = 1; k <= 64; ++k) {

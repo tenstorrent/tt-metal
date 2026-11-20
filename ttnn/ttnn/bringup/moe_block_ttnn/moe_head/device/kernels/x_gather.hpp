@@ -54,6 +54,9 @@ constexpr uint32_t latent_chunk_bytes = get_named_compile_time_arg_val(x_gather_
 constexpr uint32_t reduce_scatter_passes = get_named_compile_time_arg_val(x_gather_names::kReduceScatterPasses);
 // a padded forward (padded_rows.hpp): the row chunks up to the last with a real row only
 constexpr bool skip_padding_chunks = get_named_compile_time_arg_val(x_gather_names::kSkipPaddingChunks) != 0;
+// the reduce-scatter's blocks are column blocks (MoEBlockConfig.shared_scatter_columns): every block of a core holds
+// all of its rows
+constexpr bool reduce_scatter_columns = get_named_compile_time_arg_val(x_gather_names::kReduceScatterColumns) != 0;
 
 constexpr uint32_t packets_per_k_step = (k_step_tiles + tiles_per_packet - 1) / tiles_per_packet;
 constexpr uint32_t packets_per_row_tile = k_steps_per_shard * packets_per_k_step;
@@ -157,7 +160,9 @@ FORCE_INLINE bool x_gather_block_real(uint32_t chunk, uint32_t core, uint32_t bl
         const uint32_t core_row = core / engine_columns;
         for (uint32_t r = 0; r < row_tiles_per_core; ++r) {
             const uint32_t chunk_row_tile = core_row * row_tiles_per_core + r;
-            if (chunk_row_tile / (chunk_row_tiles / tp_size) == block && x_gather_tile_real(chunk, chunk_row_tile)) {
+            // (columns: the core's sub-block of any block holds every row of its row tiles)
+            const bool in_block = reduce_scatter_columns || chunk_row_tile / (chunk_row_tiles / tp_size) == block;
+            if (in_block && x_gather_tile_real(chunk, chunk_row_tile)) {
                 return true;
             }
         }

@@ -317,7 +317,8 @@ std::vector<KernelDescriptor> ChipProgram::gather(std::vector<CBDescriptor>& cbs
         {names::kTpSize, model.tp_size},
         {names::kXGatherHandoffBytes, model.handoff_bytes},
         {names::kLatentChunkBytes, sizing.row_chunks > 1 ? sizing.latent_pages * kBf16TileBytes : 0},
-        {names::kReduceScatterPasses, num_passes}};
+        {names::kReduceScatterPasses, num_passes},
+        {names::kReduceScatterColumns, reduce_scatter.column_halves ? 1 : 0}};
     auto set_port_named_args = [&](KernelDescriptor& kernel_descriptor) {
         for (const auto& [name, value] : port_named_args) {
             named_arg(kernel_descriptor, name, value);

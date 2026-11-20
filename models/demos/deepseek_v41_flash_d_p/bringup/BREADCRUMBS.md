@@ -2013,3 +2013,143 @@
   0.03 / 3.21, 1.47 / 1.61, 0.16 / 3.06, 0.34 / 2.88, tails 0.08), 4x2k_p139264 109.2 (75.0k), mixed 124.6 (65.7k),
   4xp50_p139264 108.1, 1x2k_p139264 89.1; DRAM 40-layer at 1M 23.08 GiB a chip (the 12 item record buffers +~0.06).
   Table: results/PB.6L_packed_walls.md (written by the walls test).
+
+## PPB.7 (PB.7 perf, attempt 1): glued packed prefill (PACKED_GLUED off | on)
+
+Plan and expectation (written before the first load):
+- Descriptor `tt/packed.GluedChunk`: up to 6 segments back to back, engine rows = each segment's [start, end) ids
+  back to back; model rows = each segment's computed rows [start, cap) back to back (PREFILL_END=cap drops [cap, end),
+  which today's chunk does not compute either: no pad between segments, only the tail). Block-aligned starts make
+  every segment's model rows whole tiles. `GluedChunk.fill` / `split`: a request that does not fit is split at the last
+  kv block that fits (a non-last chunk ends on a block, as today's chunked prefill); the rest is a later chunk's segment.
+- DECIDED (OV-58): two device paths behind PACKED_GLUED=on. (a) A glued chunk that IS a lane chunk (every segment at
+  model row k 2048, <= 2048 rows: `as_lanes`, e.g. 4 x 2k) runs the accepted lane path (onecall, gather hide, MoE pad)
+  unchanged: same rows, same per-chip segments, so bit-identical and not slower on 4 x 2k by construction. (b) Any other
+  glued chunk (segments sharing chips, spanning chips) runs the token-wise work once and each segment's attention
+  steps on its rows moved to rows [0, n) (`packed_device.GluedMover`: gather the chips' rows, roll by the segment's
+  tile-row offset, partition; today's steps; rows back) = PB.3's v1 loop with row moves instead of lane moves. Why:
+  every per-chip lane argument of the onecall path (sparse_sdpa kv_lane_of_chip, the indexer fork's per-chip lane
+  starts / kv_lens, the window region classes and carries, top-k valid lengths, the served-write rows) assumes one
+  segment a chip starting at a chip boundary; per-row segment arguments in those forks are the next step (v2), not
+  reachable in this attempt with correctness first. (b) is correct by construction (data moves + today's steps) and
+  gives the oracle and the walls a baseline.
+- Engram: `TtEngramRows.fill_tp_glued`: the staging shares cut into tile rows (TILE bfp8 bytes are tile rows in
+  order), one C++ job a segment over its tile rows with its own slot's tail; the tail pad zero. Same host job count.
+- Expected saving per chunk: 4 x 2k: 0 (the lane path). Unaligned mixes (5 x 1600 etc.): path (b) costs ~one
+  attention section (~25-30 ms device at 139k) a segment over the lane path's one call, so glued 5 x 1600 is expected
+  SLOWER per chunk than 4 x p50 lanes (~108 ms) by ~3-4 attention sections (~+90 ms device, host +~10 ms launches);
+  its rows are 98 % real vs 78 %: a net LOSS until v2. Measured by test_glued_walls (agentx mixes, lanes vs glued).
+- Loads: the oracle / reference need the gate's 40-layer accuracy load (bit-identity over every layer; iteration with
+  DS41_PACKED_LAYERS on the held model); the walls need the 21-layer performance load (DECODER_SKIP=decode walls).
+- Built: `tt/packed.GluedChunk` / `split` / `real_prefix`; `tt/packed_device.py` (`glued_on`, `as_run_desc`,
+  `GluedMover`, PackedChunk's glued attention / compress_only, run_chunk / ids_from_input / make_input for glued);
+  `TtDS41Model.begin_packed` (glued model rows), `_begin_engram_glued`; `TtEngramRows.fill_tp_glued` (C++ / numba /
+  mmap branches); adapter `prefill_packed` takes a GluedChunk; Setting PACKED_GLUED (call-time, hooks
+  batch_call_settings). Tests: tests/packed/test_glued_cpu.py (CPU rung), test_glued_oracle.py, test_glued_reference.py,
+  test_glued_walls.py, test_glued_probe.py (diagnostic, not gated). Draft: drafts/tt_d_gen_packed_ask.md "Revision
+  2026-11-20" (copied to handoff_20261118/drafts/).
+- CPU rung (`python -m pytest -q tests/packed/test_glued_cpu.py`, BRINGUP_SPEC set, ~5 min): descriptor math on every box,
+  the CPU reference glued (segments of 37..90 rows back to back) == alone == today's single header, split == chunked
+  alone, determinism: all bit-identical (2 passed).
+- Device oracle, rung 1 (layers 0-3, DS41_PACKED_LAYERS=0,1,2,3 on the gate's 40-layer load): alone vs today 0,
+  determinism 0, glued4 (the lane chunk) 0, segments at model row 0 0; every segment moved off row 0 differs from layer
+  0 on (max 0.25 by layer 3; split 0.094; 60 digest mismatches from layer 1 on).
+- Probe (tests/packed/test_glued_probe.py, layer 0): the GluedMover vs a host roll at offsets 32..4096: 0 (exact);
+  [Q, O] (O at row 0 as segment 1: the segment-index machinery, regions, per-lane buffers) vs O alone: 0; [I, O] (O
+  moved 128 rows): exactly the 384 rows whose TP chip changed differ (rows that moved inside their chip: identical),
+  1 bf16 ulp (0.0156), every stream column, cache writes identical. Cause: the fused MoE head's shared-expert
+  reduce-scatter (bidirectional ring, bf16 arrival / output zones): a row's add order depends on its destination TP
+  chip; DS41-128's mechanism, fixed for tp_sum by column blocks, not in moe_head. New entry DS41-339.
+- DECIDED (OV-58): no placement fixes it (a segment's rows would have to keep their TP column: 5 x 1600 needs 2560
+  rows in column 0 of 2048); the fix is an order-free shared-expert reduce in the moe_head fork (fp32 / int32-snap
+  zones, 2x the RS bytes and L1, or a fixed-order reduce then scatter), a fused-kernel change with hang risk, left for
+  the next task. The oracle reports it (segment equivalence / split / digests != 0).
+- Walls (first run, the gate's walls env, GLUED_WALL_RUNS=3; one 21-layer load):
+  | case | side | chunks | wall ms | new tok/s | chunk 0 device ms |
+  | 4x2k_p139264 | glued (= lane chunk) | 1 | 112.4 | 72.9k (>= 67k) | 100.0 |
+  | 5x1600_p139264 | glued (row moves) | 1 | 496.3 | 16.1k | 484.6 |
+  | 5x1600_p139264 | lanes | 2 (4 + 1) | 111.0 + 91.7 | 39.5k | 97.1 |
+  The glued v1 attention costs ~77 ms device a segment (5 segments: 484 vs 100): two whole-chunk gathers of x / y
+  (64 MB a chip) and today's attention over the whole 8192 geometry a segment a layer. Worse than expected
+  (expected ~+90 ms; measured +385 ms): the moves, not the attention, dominate.
+- Next (v2, what makes glued faster than lanes): per-row segment arguments instead of per-chip lanes in the window
+  region / carries, sparse_sdpa's kv table selector, the indexer ring's starts / kv_lens and the top-k valid lengths
+  (forks), so one attention call covers every segment with no moves; and DS41-339's order-free shared-expert reduce.
+- Gate (`gate PB.7 --check`, after the last code edit, pre-commit clean): FAIL PB.7 on the glued oracle (40 layers):
+  FAIL glued_segment_equiv_max_abs_diff = 1024.0 (need == 0); FAIL glued_split_vs_alone_max_abs_diff = 1184.0 (need
+  == 0); FAIL glued_slot_digest_mismatches = 684 (need == 0); ok glued_alone_vs_today 0.0, glued_determinism 0.0,
+  determinism_max_abs_diff 0.0. Cause DS41-339 (layer 0: 1 bf16 ulp on the rows whose TP chip changed, then grown
+  through 40 layers). Units run after it (`--check --unit`): PASS test_packed_oracle (lane path unchanged: lane equiv
+  0, alone vs today 0, digests 0, determinism 0); PASS test_glued_reference (every glued segment and the split one vs
+  the golden within the existing limits: final rel 0.130-0.134, top5 1.0, top1 1.0). Per the brief: no profile, no
+  measure after an accuracy failure.
+- Walls (gate run, 5 runs a chunk; table results/PB.7_glued_walls.md): glued 4x2k_p139264 (lane chunk) 112.3 ms =
+  72,975 new tok/s (>= 67k); n1 (one 8192 segment = today's chunk) 98.8 ms; each moved segment +~95-140 ms (n2 241.1,
+  n3 325.7, n5 496.6, n6 583.3; n4 = lanes 111.2); 5x1600 glued 497.0 vs lanes 200.6 (2 chunks); 6x_p1m 773.9 ms,
+  DRAM 25.11 GiB a chip 40-layer with six 1M slots resident (glued_dram_headroom_gb_6x_p1m 6.886). AgentX mixes
+  (quantile-sampled, seeds 1-3): glued 20.7k / 25.3k / 16.2k vs lanes 32.5k / 29.9k / 37.0k new tok/s; real rows
+  glued 96 / 86 / 85 % vs lanes 41 / 43 / 51 % (3-4 glued chunks vs 5-8 lane chunks): at a lane chunk's wall
+  (~110-120 ms) a glued chunk would give ~2x the lanes' tok/s on these mixes: v2's prize.
+- Re-run: CPU `PYTHONPATH=$PWD python -m pytest -q models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_cpu.py`;
+  device: the gate's unit commands through the runner (`resident submit --cmd "<gate env> scripts/run_safe_pytest.sh
+  --run-all --no-precompile <file>"`); iteration DS41_PACKED_LAYERS=0,1,2,3 (oracle), GLUED_WALL_CASES /
+  GLUED_WALL_RUNS (walls); probe tests/packed/test_glued_probe.py (DS41_PACKED_LAYERS=0).
+
+## PPB.7 (PB.7 perf, attempt 2): DS41-339 fixed at the cause (moe_head shared expert reduced by columns)
+
+- Plan (OV-65, before the first device run): the moe_head fork already has a columns scatter (scatter -1, Kimi-K3's
+  latent path): every output column's adds run in its column block's ring order, never in the order of the TP chip
+  that owns the row (DS41-128's mechanism, the tp_sum fix by columns). New fork option
+  `MoEBlockConfig.shared_scatter_columns` (default off = the source's rows scatter): HeadShape.scatter_columns ->
+  reduce_scatter_dim -1 without a latent, and the ring's halves split by matmul core COLUMN (the -1 path split them by
+  core index = by core row, i.e. by row again). The model (Setting SE_SCATTER=cols) then turns y [S/SP, H/TP] into
+  owner rows with one TP all-to-all (all_to_all_async_generic in_dim 3 -> out_dim 2, the OWN_ROWS path's own
+  converse) before the y_own + se add. Butterfly / int32-snap zones rejected: a new transport schedule or 2x the RS
+  bytes inside a fused kernel; the columns path is built and tested upstream.
+- Expected cost per 8192 chunk: + one TP all-to-all of [1024, 1280] bf16 a chip a layer (~0.06-0.1 ms device: the
+  engram_kv a2a of [640, 6400] is 0.10-0.16 ms) -> +1.3-2 ms device over 21 layers (walls), +2.5-4 ms over 40; host
+  +~0.03 ms a layer (one op launch). The RS bytes are unchanged (3 of 4 blocks either way).
+- Op test first (no model load: mesh-only): tests/test_moe_head_scatter_columns.py (fork check
+  ttnn/ttnn/bringup/moe_block_ttnn/tests/test_shared_scatter_columns.py): rows rolled 32 within every SP row.
+- Op test (resident, mesh only, 0 model loads): PASS. rows scatter (off) chunk 2048, rows rolled 32: 1024 of 2048
+  rows differ, max 0.015625 (1 bf16 ulp) = the reproduction; columns (on) chunk 2048 and 8192: 0 rows differ,
+  determinism 0, pcc vs torch 0.99956 (off 0.99957), one row block (8192: GY 8 MT 2 NCH 2 GX 11).
+- Load (one line, PACKED_RULES): the device oracle needs the gate's 40-layer accuracy load (OV-61: one load per gate);
+  iteration on it with DS41_PACKED_LAYERS=0,1,2,3 first (call-time), the full oracle after on the same held model.
+- Gotcha 1 (DS41-340): the op test planned without the model's core cap in the runner's process, which froze the
+  process's moe_block cap at 0x0; the next model test died (TT_FATAL core cap). Fixed in the test (set_max_grid with
+  tt/cores.max_grid first); cost one --fresh process.
+- Gotcha 2 (a real bug, found by the 4-layer oracle: alone vs today 7.5, every segment): the port kernels skip a
+  sub-block whose rows are all padding (x_gather_block_real) reading `block` as a ROW block; by columns a block is a
+  column block, so a packed chunk's (actual_end) real rows lost partials. Fix: named arg reduce_scatter_columns (=
+  the option): a core's sub-block of any block is live when any of its row tiles is real. The op test now also runs a
+  padded chunk (real rows vs the unpadded call: 0).
+- Oracle rung (layers 0-3, the gate's 40-layer load, DS41_PACKED_LAYERS=0,1,2,3): alone vs today 0, segment
+  equivalence 0, split vs alone 0, slot digests 0, determinism 0 (attempt 1: 0.25 / 0.094 / 60 from layer 0).
+- Fork regression with the option off: not run (PACKED_RULES: no fork suites on the 8x4); off = the source's programs
+  (reduce_scatter_dim -2, half() and the new named arg 0 unchanged); the op test's off case runs it.
+- Ops / cores (rule 18): the head's matmul cores unchanged (11 x 8 = 88 at 8192); + one stock
+  all_to_all_async_generic a layer (CCL, not a matmul).
+- Gate check #1 (after the columns fix; 1193 s): glued oracle 40 layers FAIL segment equiv 7.0, split 704, digests
+  102 (alone vs today 0, determinism 0); only glued1 H (from layer 32) and glued2 P (from layer 20) left. Walls ok:
+  4x2k_p139264 73,140 new tok/s (>= 67k), 5x1600 16.1k, agentx glued 20.6k / 25.4k / 16.1k vs lanes 32.6k / 29.9k /
+  36.9k, DRAM headroom 6x_p1m 6.886 GB; determinism 0.
+- Probe tests/packed/test_glued_probe_layer.py (diagnostic, not gated; DS41_PACKED_LAYERS=0..20, GLUED_PROBE_LAYER=20,
+  glued2 vs P alone): layers 0-19 0; layer 20: attention input / q_a / kv / attention / output bit-identical; the layer
+  output differs in ONE row (1358 of 1600, 0.031, 1071 columns) -> the MoE. Cause DS41-341: the fused head's router
+  adds the owner chip's fp32 logits partial first, then the arrivals in the owner's order (router_compute.cpp,
+  head_model.cpp arrival_order): last-bit logits differences by owner chip, a rare gate-weight flip. Fix: fork option
+  MoEBlockConfig.router_canonical_sum (chip order once all are in). Probe again: layer 20 0 rows.
+- DECIDED (OV-58): one model Setting for both fork options, renamed MOE_HEAD_ORDER=free|source (default free;
+  load-time). The op test now also checks the routing rows (ids + gate-weight bits) of moved rows (on: 0).
+- Gate check #2 (`gate PB.7 --check`, after the last code edit, hooks clean except the orchestrator's dashboard HTML
+  size check): PASS PB.7. Glued oracle 40 layers: segment equiv 0, alone vs today 0, split vs alone 0, slot digests
+  0, determinism 0; packed oracle lane equiv 0, alone vs today 0; glued reference every gseg within its limits
+  (top5 1.0); walls 4x2k_p139264 71,830 new tok/s (gate #1, columns only: 73,140; attempt 1, source order: 72,975),
+  5x1600 16.1k, agentx glued 20.6k / 25.4k / 16.1k vs lanes 32.4k / 29.8k / 36.7k, DRAM headroom 6x_p1m 6.886 GB;
+  determinism 0. `orchestrator measure --task PB.7` (quick, switch on): rc 0, no limit exceeded.
+- Cost of MOE_HEAD_ORDER=free on the 4 x 2k lane chunk: ~-1.2 ms a chunk vs attempt 1 (112.4 -> ~114 ms; the
+  se all_to_all a layer + the router's adds after the last arrival), within the run-to-run spread seen before.
+- Re-run: op test `resident submit --cmd "scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/test_moe_head_scatter_columns.py"` (mesh only); probe: the gate's glued env
+  + DS41_PACKED_LAYERS=0,..,20 GLUED_PROBE_LAYER=20 tests/packed/test_glued_probe_layer.py; gate `gate PB.7 --check`.

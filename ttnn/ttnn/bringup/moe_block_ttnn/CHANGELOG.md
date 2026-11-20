@@ -71,3 +71,39 @@ clash with the stock ops); flat_routed_expert_weights.py binds `ttnn._ttnn.opera
   rewrites only common args, one program for the mesh - the per-core patch loop cached_slots shortened is gone.
 - `MoEDtypes.shared_activations` bf8 / `shared_pack_precise` (P.37): the new moe_head is a different engine; not ported
   (the shared expert's x / h stay bf16 - more precise than the reference's fp8, the model's ladder decides).
+
+### shared_scatter_columns: the shared expert reduced by columns without a latent (2026-11-20, deepseek_v41_flash_d_p PB.7)
+- What: `MoEBlockConfig.shared_scatter_columns` (default false = the source's rows scatter, same programs and plans):
+  true = `HeadShape.scatter_columns` -> `reduce_scatter_dim()` -1 without a latent (the columns scatter Kimi-K3's latent
+  path already runs: y [rows, H / TP]), and `ReduceScatterPlan(column_halves)`: the RingBalanced halves split by matmul
+  core column (`half_split_column` over the block columns' widths, as the rows scatter splits its columns) instead of
+  by core index (= by core row, i.e. by the row again). `row_block_counts` sizes y's pages as x's then. The caller turns
+  y into owner rows itself (a TP all-to-all); MoEBlock's tail takes the rows scatter only. With padding rows
+  (actual_start / actual_end) the port kernels' skip of an all-padding sub-block (x_gather_block_real) reads a column
+  block as every row of the core (named arg `reduce_scatter_columns`), not as a row block.
+- Why: DS41-339. The rows scatter adds a row's TP partials in its destination chip's ring order (bf16 relays), so the
+  same token row gives other bits (1 bf16 ulp) when it lands on another TP chip: a packed chunk's segment placed off
+  a mesh-row boundary differs from the same request alone. By columns every output column's adds run in its column
+  block's ring order whatever row it is.
+- Measured (8x4, DeepSeek-V4.1 dims, chunk 2048 / 8192, rows rolled 32 inside every SP row): off 1024 of 2048 rows
+  differ (0.015625); on 0 rows, determinism 0, PCC vs torch 0.99956 (off 0.99957), one row block, 88 matmul cores
+  (11 x 8, as off).
+- Needed by: deepseek_v41_flash_d_p PB.7 (Setting MOE_HEAD_ORDER=free)
+- Files: common/{moe_block_config.hpp,common_nanobind.cpp}, moe_head/moe_head.cpp, moe_head/device/{head_plan.hpp,
+  head_plan.cpp,head_model.cpp,head_sizing.hpp,head_sizing.cpp}, tests/test_shared_scatter_columns.py
+
+### router_canonical_sum: the router's TP logits partials summed in chip order (2026-11-20, deepseek_v41_flash_d_p PB.7)
+- What: `MoEBlockConfig.router_canonical_sum` (default false = the source's sum) -> `HeadShape.router_canonical_sum` ->
+  router_compute's named arg `router_canonical_sum`: the arrivals are waited for as before (the reader's fixed order) but
+  not added as they come; the score pass sums ((chip 0's + chip 1's) + ...) in fp32 DEST, the owner's own partial
+  (cb_logits) at its chip's turn, chip c's arrival from slot c < owner ? c : c - 1. Off: the owner's partial first,
+  then the arrivals in the owner's predicted landing order (head_model.cpp arrival_order).
+- Why: DS41-341. The source's order depends on the chip that owns the token, so a token's fp32 logits differ in the last
+  bits with its TP chip; now and then a gate weight's bf16 rounding (or a near-tied pick) flips: deepseek_v41_flash_d_p's
+  glued segment differed from alone in 1 of 1600 rows at layer 20 (0.031) after shared_scatter_columns fixed the rest.
+- Measured: op test (tests/test_shared_scatter_columns.py, both options): routing rows of rows moved across TP chips
+  identical (0 of 2048 / 8192); model probe layer 20: 0 rows differ (was 1). Cost: the adds after the last arrival
+  instead of as they come (expert_tiles fp32 adds a row tile).
+- Needed by: deepseek_v41_flash_d_p PB.7 (Setting MOE_HEAD_ORDER=free sets both options)
+- Files: common/{moe_block_config.hpp,common_nanobind.cpp}, moe_head/moe_head.cpp, moe_head/device/{head_plan.hpp,
+  head_router_program.cpp,kernels/head_named_args.hpp,kernels/compute/router_compute.cpp}
