@@ -456,10 +456,12 @@ def _device_ns_by_step(mesh_device, run):
 
 
 # Per top-k source and step: the slowest median of 3 runs (3 processes, 7 samples each, one 110-A Galaxy) plus 10%, in us.
+# The table gather is short and noisy (CI samples 57-78 us), so its ceilings for the GLM L14 and L62 top-k sit about 15%
+# over the CI medians (67.8 and 73.5 us) instead.
 _RING_RING_4X4_PERF_CEILING_US = {
     "random": {"plan": 317, "table gather": 76, "push all rows": 358, "push prefix": 357, "push rest": 107},
-    "14": {"plan": 220, "table gather": 72, "push all rows": 455, "push prefix": 442, "push rest": 141},
-    "62": {"plan": 231, "table gather": 76, "push all rows": 1286, "push prefix": 1273, "push rest": 126},
+    "14": {"plan": 220, "table gather": 78, "push all rows": 455, "push prefix": 442, "push rest": 141},
+    "62": {"plan": 231, "table gather": 85, "push all rows": 1286, "push prefix": 1273, "push rest": 126},
 }
 
 

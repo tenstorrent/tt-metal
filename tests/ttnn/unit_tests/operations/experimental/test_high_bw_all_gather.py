@@ -1291,14 +1291,16 @@ _STAGE_4X4_PERF_NEEDS_16_CHIPS = pytest.mark.skipif(
     reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
 )
 
-# [RING, RING] floors per case: 95% of the lowest of 3 runs (3 processes, 7 samples each, one 110-A Galaxy). Lowest seen:
-# 55K 156.9 / 145.6 / 156.7 / 141.5 GB/s, 512K 175.3 / 175.6 / 176.3 / 174.6 (bf16 row-major, fp8, bf16 tiled, bfloat8).
+# [RING, RING] floors per case: 95% of the lowest value seen on the CI runners (GLM components leg, two runs on two
+# runners). Lowest on CI: 55K 147.8 / 139.6 / 151.4 / 135.3 GB/s, 512K 170.0 / 167.5 / 167.9 / 166.6 (bf16 row-major,
+# fp8, bf16 tiled, bfloat8). A development Galaxy (110-A) reads up to 6% more: 55K 156.9 / 145.6 / 156.7 / 141.5,
+# 512K 175.3 / 175.6 / 176.3 / 174.6.
 # The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137, so each floor is above the
 # line layout's: a carve that falls back to the cylinder's cycles fails. Override every floor with
 # TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
 _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = {
-    55_040: {"bf16_row_major": 149.0, "fp8_row_major": 138.0, "bf16_tiled": 148.0, "bfloat8_tiled": 134.0},
-    512 * 1024: {"bf16_row_major": 166.0, "fp8_row_major": 166.0, "bf16_tiled": 167.0, "bfloat8_tiled": 165.0},
+    55_040: {"bf16_row_major": 140.0, "fp8_row_major": 132.0, "bf16_tiled": 143.0, "bfloat8_tiled": 128.0},
+    512 * 1024: {"bf16_row_major": 161.0, "fp8_row_major": 159.0, "bf16_tiled": 159.0, "bfloat8_tiled": 158.0},
 }
 if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
     _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS"])
