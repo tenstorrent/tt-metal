@@ -53,7 +53,7 @@ LANDING_DEPTH = 3
 OWNER_LAG = 2
 MESSAGE_BYTES = 32
 RELAY_SLOT_BYTES = MESSAGE_BYTES + PACKET_BYTES
-RELAY_SLOTS = 2
+RELAY_SLOTS = 1
 
 # B column (x - B_FIRST_X) -> block: the output block it computes belongs to chip (chip + block) % CHIPS
 BLOCK_OF_COLUMN = [2, 1, 3, 0]
@@ -63,12 +63,12 @@ OWNER_BLOCK = 0
 # block -> (ring direction, hops, relay index) used to send a partial segment to its owner chip
 PARTIAL_ROUTE = {1: (0, 1, 1), 2: (0, 2, 0), 3: (1, 1, 2)}
 RELAY_COUNT = 4
-RELAY_CORE_LIST = [(B_FIRST_X, 4), (B_FIRST_X + 1, 4), (B_FIRST_X + 2, 4), (B_FIRST_X + 2, 9)]
+RELAY_CORE_LIST = [(B_FIRST_X, 4), (B_FIRST_X + 1, 4), (B_FIRST_X + 2, 4), (B_FIRST_X + 2, 3)]
 FLAG_BYTES = 16
 FLAG_WORDS = 16
 
 # CB_N on the A rectangle (norm core included) and CB_A on the B cores are each the first CB of their cores, so they share an L1 address;
-# the relay slots on the other B cores and the first landing CB on the owner cores are each the second CB, so they share one too
+# the landing buffers start at the second CB of every B core and the relay slots (other B cores) follow the first landing buffer, so every B core can address both
 CB_N = 0
 CB_A = 0
 CB_NORM_WEIGHT = 1

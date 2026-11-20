@@ -274,15 +274,18 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, grou
         _cb(L.CB_WG, bfp4, L.BFP4_TILE_BYTES, t * 2 * L.A_TILES_PER_CORE, a_all),
         _cb(L.CB_A_OUT, act, L.ACT_TILE_BYTES, L.A_OUT_DEPTH * L.A_TILES_PER_CORE, a_all),
         _cb(L.CB_GATHER, act, L.ACT_TILE_BYTES, L.GATHER_DEPTH * L.GATHER_TILES, a_all),
+        *[_cb(L.CB_LANDING + i, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, owner_all) for i in range(L.CHIPS - 1)],
         *(
-            [_cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, L.RELAY_SLOTS * max_relay_sources, other_all)]
-            if other_all is not None and chips > 1
+            [
+                _cb(L.CB_LANDING, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, other_all),
+                _cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, L.RELAY_SLOTS * max_relay_sources, other_all),
+            ]
+            if other_all is not None
             else []
         ),
-        *[_cb(L.CB_LANDING + i, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, owner_all) for i in range(L.CHIPS - 1)],
         _cb(L.CB_WD, bfp4, L.BFP4_TILE_BYTES, L.INTERMEDIATE_TILES * seg, b_all),
         _cb(L.CB_PARTIAL_OWN, bf16, L.BF16_TILE_BYTES, (owner_lag + 1) * seg, owner_all),
-        _cb(L.CB_H, bf16, L.BF16_TILE_BYTES, (owner_lag + 1) * seg, owner_all),
+        _cb(L.CB_H, bf16, L.BF16_TILE_BYTES, 2 * seg, owner_all),
         _cb(L.CB_Y, bf16, L.BF16_TILE_BYTES, 2 * seg, owner_all),
         *([_cb(L.CB_SEND, bf16, L.BF16_TILE_BYTES, 2 * seg, other_all)] if other_all is not None else []),
         _cb(L.CB_MESSAGE, ttnn.uint32, 64, 1, b_all),
@@ -341,7 +344,6 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, grou
                     **group_named,
                     "owner": owner,
                     "remote_sources": remote_sources,
-                    "cb_relay_slots": L.CB_LANDING if owner else L.CB_RELAY_SLOTS,
                 },
             )
     relay_kernels = []
