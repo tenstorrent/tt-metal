@@ -125,7 +125,7 @@ tt::tt_metal::distributed::MeshWorkload build_worker_workload(
         const uint32_t consumed_counter_addr =
             static_cast<uint32_t>(service.get_consumed_counter_addr(coord));
 
-        auto program = tt::tt_metal::CreateProgram();
+        auto program = tt::tt_metal::CreateProgram(*mesh_device);
 
         auto cb_cfg = tt::tt_metal::CircularBufferConfig(
                           page_size, {{scratch_cb_index, tt::DataFormat::UInt32}})
