@@ -547,7 +547,7 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // Bias CBs (FUSE_BIAS): double-buffered, per_core_N_gu (gate/up) + per_core_N_d
         // (down) tiles each. Keep in sync with the CB allocations in the "Bias CBs" section.
         total += static_cast<uint64_t>(2 * (2 * per_core_N_gu + per_core_N_d)) * bias_ts;
-        total += static_cast<uint64_t>(2) * pages_scratch_bytes;  // cb_pages_reader + cb_pages_writer
+        total += static_cast<uint64_t>(3) * pages_scratch_bytes;  // cb_pages_reader (2 rows) + cb_pages_writer
         if (has_zero_row) {
             total += rm_out_row_bytes;  // cb_zero_row
         }
@@ -1000,7 +1000,8 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         make_cb(CB_ZERO_ROW, tt::DataFormat::Float16_b, /*tiles=*/1, rm_out_row_bytes);
     }
     if (from_pages) {
-        make_cb(CB_PAGES_READER, tt::DataFormat::UInt32, /*tiles=*/1, pages_scratch_bytes);
+        // Two rows: the reader loads the next expert's row while this expert's down phase still reads its own.
+        make_cb(CB_PAGES_READER, tt::DataFormat::UInt32, /*tiles=*/2, pages_scratch_bytes);
         make_cb(CB_PAGES_WRITER, tt::DataFormat::UInt32, /*tiles=*/1, pages_scratch_bytes);
     }
     if (op.x_indexed) {

@@ -36,12 +36,15 @@
 // x_indexed: read nbytes of the x_row_index page (UINT32 x-row ids) at offset_bytes into l1. A template so the
 // accessor at kOffset (absent from the compile-time args when x_indexed is off) is only built when enabled.
 template <bool kEnabled, uint32_t kOffset>
-FORCE_INLINE void read_x_row_idx(Noc& noc, uint32_t idx_addr, uint32_t l1, uint32_t nbytes, uint32_t offset_bytes) {
+FORCE_INLINE void read_x_row_idx(
+    Noc& noc, uint32_t idx_addr, uint32_t l1, uint32_t nbytes, uint32_t offset_bytes, bool wait = true) {
     if constexpr (kEnabled) {
         constexpr auto args = TensorAccessorArgs<kOffset>();
         const auto acc = TensorAccessor(args, idx_addr);
         noc.async_read(acc, CoreLocalMem<uint32_t>(l1), nbytes, {.page_id = 0, .offset_bytes = offset_bytes}, {});
-        noc.async_read_barrier();
+        if (wait) {
+            noc.async_read_barrier();
+        }
     }
 }
 
@@ -257,7 +260,7 @@ void kernel_main() {
     const auto pages_acc = TensorAccessor(pages_args, get_common_arg_val<uint32_t>(COMMON_WEIGHTS + 2));
     // This expert's table row: gate entries [0, N_gate_tiles_full), then up's, then down's; 2 words each.
     CircularBuffer cb_weight_pages_obj(cb_weight_pages);
-    cb_weight_pages_obj.reserve_back(1);
+    cb_weight_pages_obj.reserve_back(2);  // two rows: this expert's and the next one's (cross-expert prefetch)
     const uint32_t pages_l1 = cb_weight_pages_obj.get_write_ptr();
     constexpr uint32_t kEntryBytes = 2 * sizeof(uint32_t);
 #else
@@ -468,28 +471,136 @@ void kernel_main() {
     Semaphore<> mcast_done_sem(get_arg_val<uint32_t>(MCAST_SEM_RT + 1));
     uint32_t mc_seq = 0;
 
+    // ---- per-expert loads, also issued one expert ahead (cross-expert prefetch) ----
+    bool next_prefetched = false;
+#ifdef WEIGHT_PAGES
+    const uint32_t pages_row_bytes = pages_acc.get_aligned_page_size();
+    auto pages_slot = [&](uint32_t eid) { return pages_l1 + (eid & 1) * pages_row_bytes; };
+    // Only the weight senders read weights; every read that uses the row is issued after this barrier.
+    auto read_pages = [&](uint32_t eid, bool wait) {
+        if (is_in1_sender) {
+            noc_read.async_read(
+                pages_acc, CoreLocalMem<uint32_t>(pages_slot(eid)), pages_row_bytes, {.page_id = eid}, {});
+            if (wait) {
+                noc_read.async_read_barrier();
+            }
+        }
+    };
+#endif
+#ifdef FUSE_BIAS
+    // Expert eid's N-column slice of its (1, N) biases into the next slot of the double-buffered bias CBs. The compute
+    // kernel wait_fronts then pops at the end of each expert. Bias is a single tile-row tensor, so the DRAM page index
+    // == tile column. Phantom columns (col >= actual N) are zero-filled so the bias add cannot turn a phantom column
+    // into Inf/NaN; those columns are discarded either way (gate/up by the down phase's K bound, down by the writer).
+    auto issue_bias = [&](uint32_t eid) {
+            const uint32_t gbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + eid);
+            const uint32_t ubias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 1 * experts_per_chip + eid);
+            const uint32_t dbias_addr =
+                get_common_arg_val<uint32_t>(COMMON_BIAS + 2 * experts_per_chip + eid);
+            const auto gate_bias_acc = TensorAccessor(gate_bias_args, gbias_addr, get_tile_size(cb_gate_bias));
+            const auto up_bias_acc = TensorAccessor(up_bias_args, ubias_addr, get_tile_size(cb_up_bias));
+            const auto down_bias_acc = TensorAccessor(down_bias_args, dbias_addr, get_tile_size(cb_down_bias));
+            const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
+            cb_gate_bias_obj.reserve_back(per_core_N_gu);
+            cb_up_bias_obj.reserve_back(per_core_N_gu);
+            uint32_t lg = cb_gate_bias_obj.get_write_ptr();
+            uint32_t lu = cb_up_bias_obj.get_write_ptr();
+            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
+                const uint32_t col = my_nt_gu * per_core_N_gu + n;
+                if (col < N_gate_tiles_full) {
+                    noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
+                    noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
+                } else {
+                    volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
+                    volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
+                    for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
+                        pg[i] = 0;
+                        pu[i] = 0;
+                    }
+                }
+                lg += gbias_tb;
+                lu += gbias_tb;
+            }
+            const uint32_t dbias_tb = get_tile_size(cb_down_bias);
+            cb_down_bias_obj.reserve_back(per_core_N_d);
+            uint32_t ld = cb_down_bias_obj.get_write_ptr();
+            for (uint32_t n = 0; n < per_core_N_d; ++n) {
+                const uint32_t col = my_nt_d * per_core_N_d + n;
+                if (col < N_down_tiles_full) {
+                    noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
+                } else {
+                    volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
+                    for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
+                        pd[i] = 0;
+                    }
+                }
+                ld += dbias_tb;
+            }
+    };
+    // After the reads issue_bias started have landed (a read barrier).
+    auto push_bias = [&]() {
+        cb_gate_bias_obj.push_back(per_core_N_gu);
+        cb_up_bias_obj.push_back(per_core_N_gu);
+        cb_down_bias_obj.push_back(per_core_N_d);
+    };
+#endif
+    // x_indexed: this M-row's x-row ids of one chunk (see the chunk loop), read once and reused by every gate/up
+    // K-block.
+    auto read_row_ids = [&](uint32_t count_tiles_c,
+                            uint32_t x_start_stick_c,
+                            uint32_t per_core_M_c,
+                            uint32_t first_row_c,
+                            bool wait) {
+        if constexpr (x_indexed) {
+            const uint32_t first_entry = x_start_stick_c + first_row_c * TILE_HEIGHT;
+            if (first_row_c < count_tiles_c && first_entry < x_row_index_len) {
+                const uint32_t remaining_tile_rows = count_tiles_c - first_row_c;
+                const uint32_t index_tile_rows = remaining_tile_rows < per_core_M_c ? remaining_tile_rows : per_core_M_c;
+                const uint32_t wanted_entries = index_tile_rows * TILE_HEIGHT;
+                const uint32_t left_entries = x_row_index_len - first_entry;
+                ASSERT(wanted_entries <= left_entries);
+                const uint32_t entries = wanted_entries < left_entries ? wanted_entries : left_entries;
+                read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
+                    noc_read,
+                    get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
+                    row_idx_l1,
+                    entries * static_cast<uint32_t>(sizeof(uint32_t)),
+                    first_entry * static_cast<uint32_t>(sizeof(uint32_t)),
+                    wait);
+            }
+        }
+    };
+
     // ======================= per-local-expert loop =======================
     // Per expert we resolve its global id (idx_table[e]), token count
     // (counts[global_id]), region offset (start[global_id]) and per-expert
     // weight base addresses, then drive the same chunked matmul pipeline.
     for (uint32_t local_expert_id = 0; local_expert_id < experts_per_chip; ++local_expert_id) {
-#ifdef WEIGHT_PAGES
-        // This expert's table row. Only the weight senders read weights; every read below that uses the row is
-        // issued after this barrier, and the previous expert's reads were all barriered before it is overwritten.
-        if (is_in1_sender) {
-            noc_read.async_read(
-                pages_acc,
-                CoreLocalMem<uint32_t>(pages_l1),
-                pages_acc.get_aligned_page_size(),
-                {.page_id = local_expert_id},
-                {});
+        // Cross-expert prefetch: the previous expert loaded this one's table row, biases and chunk-0 x-row ids
+        // between its last gate/up K-loop and its down phase (see "prefetch" below).
+        const bool prefetched = next_prefetched;
+        next_prefetched = false;
+        if (prefetched) {
+            // The prefetch only issued its reads (so they never delayed the previous expert's down phase).
             noc_read.async_read_barrier();
+#ifdef FUSE_BIAS
+            push_bias();
+#endif
         }
-        const auto gate_acc = unified_routed_expert_ffn::make_weight_table(gu_src_acc, pages_l1, gu_k_stride);
+#ifdef WEIGHT_PAGES
+        // This expert's table row, in slot (expert % 2): the next expert's row loads into the other slot while this
+        // expert's down phase still reads this one.
+        const uint32_t pages_e = pages_slot(local_expert_id);
+        if (!prefetched) {
+            read_pages(local_expert_id, /*wait=*/true);
+        }
+        const auto gate_acc = unified_routed_expert_ffn::make_weight_table(gu_src_acc, pages_e, gu_k_stride);
         const auto up_acc = unified_routed_expert_ffn::make_weight_table(
-            gu_src_acc, pages_l1 + N_gate_tiles_full * kEntryBytes, gu_k_stride);
+            gu_src_acc, pages_e + N_gate_tiles_full * kEntryBytes, gu_k_stride);
         const auto down_acc = unified_routed_expert_ffn::make_weight_table(
-            d_src_acc, pages_l1 + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
+            d_src_acc, pages_e + 2 * N_gate_tiles_full * kEntryBytes, d_k_stride);
 #else
         // Per-expert weight accessors, built from the shared layout descriptors
         // and this expert's base addresses (runtime-arg arrays after start).
@@ -539,65 +650,10 @@ void kernel_main() {
         const uint32_t M_bound = (count_tiles < M_tiles_full) ? count_tiles : M_tiles_full;
 
 #ifdef FUSE_BIAS
-        // This expert's N-column slice of its (1, N) biases. The compute
-        // kernel wait_fronts then pops at the end of this expert so the next
-        // expert can reuse its slot of the double-buffered bias CBs. Bias is a single
-        // tile-row tensor, so the DRAM page index == tile column. Phantom
-        // columns (col >= actual N) are zero-filled: unlike the per-K-block
-        // weight reads this runs once per expert, so the fill is cheap, and it
-        // keeps the bias add from turning a phantom column into Inf/NaN. Those
-        // columns are discarded either way — the gate/up ones by the down
-        // phase's K bound, the down ones by the writer.
-        {
-            const uint32_t gbias_addr =
-                get_common_arg_val<uint32_t>(COMMON_BIAS + 0 * experts_per_chip + local_expert_id);
-            const uint32_t ubias_addr =
-                get_common_arg_val<uint32_t>(COMMON_BIAS + 1 * experts_per_chip + local_expert_id);
-            const uint32_t dbias_addr =
-                get_common_arg_val<uint32_t>(COMMON_BIAS + 2 * experts_per_chip + local_expert_id);
-            const auto gate_bias_acc = TensorAccessor(gate_bias_args, gbias_addr, get_tile_size(cb_gate_bias));
-            const auto up_bias_acc = TensorAccessor(up_bias_args, ubias_addr, get_tile_size(cb_up_bias));
-            const auto down_bias_acc = TensorAccessor(down_bias_args, dbias_addr, get_tile_size(cb_down_bias));
-            const uint32_t gbias_tb = get_tile_size(cb_gate_bias);
-            cb_gate_bias_obj.reserve_back(per_core_N_gu);
-            cb_up_bias_obj.reserve_back(per_core_N_gu);
-            uint32_t lg = cb_gate_bias_obj.get_write_ptr();
-            uint32_t lu = cb_up_bias_obj.get_write_ptr();
-            for (uint32_t n = 0; n < per_core_N_gu; ++n) {
-                const uint32_t col = my_nt_gu * per_core_N_gu + n;
-                if (col < N_gate_tiles_full) {
-                    noc_read.async_read(gate_bias_acc, CoreLocalMem<uint32_t>(lg), gbias_tb, {.page_id = col}, {});
-                    noc_read.async_read(up_bias_acc, CoreLocalMem<uint32_t>(lu), gbias_tb, {.page_id = col}, {});
-                } else {
-                    volatile tt_l1_ptr uint64_t* pg = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lg);
-                    volatile tt_l1_ptr uint64_t* pu = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(lu);
-                    for (uint32_t i = 0; i < gbias_tb / 8; ++i) {
-                        pg[i] = 0;
-                        pu[i] = 0;
-                    }
-                }
-                lg += gbias_tb;
-                lu += gbias_tb;
-            }
-            const uint32_t dbias_tb = get_tile_size(cb_down_bias);
-            cb_down_bias_obj.reserve_back(per_core_N_d);
-            uint32_t ld = cb_down_bias_obj.get_write_ptr();
-            for (uint32_t n = 0; n < per_core_N_d; ++n) {
-                const uint32_t col = my_nt_d * per_core_N_d + n;
-                if (col < N_down_tiles_full) {
-                    noc_read.async_read(down_bias_acc, CoreLocalMem<uint32_t>(ld), dbias_tb, {.page_id = col}, {});
-                } else {
-                    volatile tt_l1_ptr uint64_t* pd = reinterpret_cast<volatile tt_l1_ptr uint64_t*>(ld);
-                    for (uint32_t i = 0; i < dbias_tb / 8; ++i) {
-                        pd[i] = 0;
-                    }
-                }
-                ld += dbias_tb;
-            }
+        if (!prefetched) {
+            issue_bias(local_expert_id);
             noc_read.async_read_barrier();
-            cb_gate_bias_obj.push_back(per_core_N_gu);
-            cb_up_bias_obj.push_back(per_core_N_gu);
-            cb_down_bias_obj.push_back(per_core_N_d);
+            push_bias();
         }
 #endif
 
@@ -619,22 +675,8 @@ void kernel_main() {
         // per_core_M of them, and past the last expert's rows the index vector ends. The slice is also clipped to the
         // vector's length: a region offset + count past it is a caller bug, and the rows it would cover keep stale
         // ids (checked against x_rows below, and their output tiles fall outside the output).
-        if constexpr (x_indexed) {
-            const uint32_t first_entry = x_start_stick + this_core_first_row * TILE_HEIGHT;
-            if (this_core_first_row < count_tiles && first_entry < x_row_index_len) {
-                const uint32_t remaining_tile_rows = count_tiles - this_core_first_row;
-                const uint32_t index_tile_rows = remaining_tile_rows < per_core_M ? remaining_tile_rows : per_core_M;
-                const uint32_t wanted_entries = index_tile_rows * TILE_HEIGHT;
-                const uint32_t left_entries = x_row_index_len - first_entry;
-                ASSERT(wanted_entries <= left_entries);
-                const uint32_t entries = wanted_entries < left_entries ? wanted_entries : left_entries;
-                read_x_row_idx<x_indexed, idx_rows_accessor_offset>(
-                    noc_read,
-                    get_common_arg_val<uint32_t>(COMMON_ROW_IDX),
-                    row_idx_l1,
-                    entries * static_cast<uint32_t>(sizeof(uint32_t)),
-                    first_entry * static_cast<uint32_t>(sizeof(uint32_t)));
-            }
+        if (!(prefetched && chunk == 0)) {
+            read_row_ids(count_tiles, x_start_stick, per_core_M, this_core_first_row, /*wait=*/true);
         }
 
         // -------- PHASES 1+2 fused — push x ONCE per K-block, then gate then up.
@@ -1293,6 +1335,33 @@ void kernel_main() {
                 in1_valid_sem.wait(IN1_VALID);
             }
             cb_in1_down_obj.push_back(d_in1_block_num_tiles);
+
+            // Cross-expert prefetch, once per expert (at the end of the first down K-block, so the reads delay
+            // neither its weight nor its activated multicast): ISSUE the reads of the next expert's table row, biases and chunk-0 x-row ids (no
+            // barrier: the next expert's start waits for them and pushes the biases). They land during this expert's
+            // down phase instead of in front of the next expert's first K-block, where they cost ~10 us of every
+            // expert on gpt-oss-20b's tensor-parallel experts (32 per chip per layer).
+            if (kb == 0 && chunk + 1 == effective_chunks && local_expert_id + 1 < experts_per_chip) {
+                const uint32_t ne = local_expert_id + 1;
+#ifdef WEIGHT_PAGES
+                read_pages(ne, /*wait=*/false);
+#endif
+#ifdef FUSE_BIAS
+                issue_bias(ne);
+#endif
+                if constexpr (x_indexed) {
+                    const uint32_t ne_global = idx_ptr[ne];
+                    const uint32_t ne_count =
+                        adaptive_chunk::count_in_band(counts_ptr[ne_global], min_active_tokens, max_active_tokens);
+                    const uint32_t ne_tiles = adaptive_chunk::clamp_count_tiles(
+                        (ne_count + TILE_HEIGHT - 1) / TILE_HEIGHT, chunk_M_max, num_chunks_max, M_tiles_full);
+                    if (ne_tiles > 0) {
+                        const uint32_t ne_pcm = adaptive_chunk::per_core_M_for_chunk(0, ne_tiles, chunk_M_max);
+                        read_row_ids(ne_tiles, start_ptr[ne_global], ne_pcm, my_mt * ne_pcm, /*wait=*/false);
+                    }
+                }
+                next_prefetched = true;
+            }
         }
     }  // end chunk loop
     }  // end per-local-expert loop
