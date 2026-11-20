@@ -17,6 +17,15 @@ def test_concat(device):
     logger.debug(f"Concatenated Tensor Shape: {concatenated_tensor.shape}")  # Shape([1, 1, 64, 64])
 
 
+def test_assign(device):
+    # Create a tensor in DRAM
+    input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Copy the tensor into a new tensor in L1
+    output_tensor = ttnn.assign(input_tensor, memory_config=ttnn.L1_MEMORY_CONFIG)
+    logger.debug(f"Assigned Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_nonzero(device):
     # Create a rank-4 tensor with three non-zero elements
     input_tensor = torch.zeros((1, 1, 1, 32), dtype=torch.bfloat16)
