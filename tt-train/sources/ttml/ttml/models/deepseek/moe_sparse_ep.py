@@ -162,9 +162,8 @@ class SparseMoEEP(MoE):
             output = ttml.ops.distributed.all_reduce(output, noop_backward=True, cluster_axis=self.cluster_axis)
             output = self._memory_snapshot(output, "AFTER_ALL_REDUCE")
 
-        # Shared experts: not EP-sharded by default — they replicate work and
-        # don't need an all_reduce. If a downstream change makes them EP/TP,
-        # plug in the appropriate collective.
+        # Shared experts: their weights are sharded on the EP axis when it exists, and
+        # DeepSeekMLP all-reduces its own output then, so shared_out is replicated like output.
         if self.shared_experts is not None:
             x_shared = self._memory_snapshot(x, "BEFORE_SHARED")
             shared_out = self.shared_experts(x_shared)

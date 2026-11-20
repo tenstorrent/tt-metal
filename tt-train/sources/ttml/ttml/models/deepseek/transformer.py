@@ -55,12 +55,21 @@ class DeepSeekMLP(AbstractModuleBase):
             self.w2 = LinearLayer(inter_dim, dim, has_bias=False)
 
     def forward(self, x: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
-        return ttml.ops.swiglu.swiglu(
+        # The fused op bypasses the parallel layers' forwards, so their collectives are added here:
+        # the broadcast ColumnParallelLinear does on its input (all-reduces the input grad in backward)
+        # and the all-reduce RowParallelLinear does on its partial output.
+        tp = isinstance(self.w2, RowParallelLinear)
+        if tp:
+            x = ttml.ops.distributed.broadcast(x, self.w1.cluster_axis)
+        y = ttml.ops.swiglu.swiglu(
             x,
             self.w1.weight.tensor,
             self.w2.weight.tensor,
             self.w3.weight.tensor,
         )
+        if tp:
+            y = ttml.ops.distributed.all_reduce(y, True, self.w2.cluster_axis)
+        return y
 
 
 def resolve_moe_ep_axis(config) -> str | None:
