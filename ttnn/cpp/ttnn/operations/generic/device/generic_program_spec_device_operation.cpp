@@ -411,21 +411,6 @@ void check_tensors_on_program_devices(const SpecAttributes& attributes, const te
     }
 }
 
-// A name for a message, with each NUL character written as \0: a NUL would end the message on its way to Python, and
-// put a raw NUL byte in logs.
-std::string printable(std::string_view name) {
-    std::string text;
-    text.reserve(name.size());
-    for (const char character : name) {
-        if (character == '\0') {
-            text += "\\0";
-        } else {
-            text += character;
-        }
-    }
-    return text;
-}
-
 std::string device_list(const std::vector<ttnn::MeshCoordinate>& devices) {
     std::string text;
     for (const auto& device : devices) {
@@ -452,7 +437,7 @@ void check_tensor_views(const SpecAttributes& attributes) {
                     "those devices in io_tensors; with a MeshProgramSpec, bind the view only in the run args of a "
                     "range on them. Binding the whole tensor instead reads each device's own part, which is the view's "
                     "data only if every device holds the same data",
-                    printable(view.name),
+                    view.name,
                     device_list(view.devices),
                     device);
             }

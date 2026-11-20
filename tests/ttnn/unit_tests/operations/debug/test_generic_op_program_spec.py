@@ -1150,12 +1150,6 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(past_the_mesh, run_args)]),
         )
 
-    # A name may hold a NUL character, which the message writes as \0.
-    spec, run_args = exp_program(second_input, first_output)
-    rename_tensor_parameter(spec, run_args, "input", "in\x00put")
-    with expect_error(RuntimeError, r"tensor_args\['in\\0put'\] holds devices"):
-        E.generic_op([first_input, first_output], spec, run_args)
-
     # A Python subclass of the run args is checked too.
     class SubclassRunArgs(E.ProgramRunArgs):
         pass
@@ -1222,6 +1216,17 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     )
     result = ttnn.to_torch(output, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
     assert_close(torch.exp(torch_input), result)
+
+    # Views are not part of the cache key, so a call that hits a cached program gets the check too, with
+    # validate_program_args off as well: here the second device's view in a program on the first device.
+    ttnn.CONFIG.validate_program_args = False
+    output = zeros()
+    output_view = ttnn.get_device_tensors(output)[0]
+    spec, run_args = exp_program(second_input, output_view)
+    entries = mesh_device.num_program_cache_entries()
+    with expect_error(RuntimeError, message):
+        E.generic_op([first_input, output_view], spec, run_args)
+    assert mesh_device.num_program_cache_entries() == entries
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
