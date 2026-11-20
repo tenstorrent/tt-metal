@@ -267,7 +267,7 @@ inline void _llk_unpack_A_mop_config_(
  * @note Asserted unsupported: COL broadcast on tiles other than 32x32; transpose_of_faces on faces
  *       shorter than 16 rows or on 2-face tiles; within-face transpose on faces shorter than 16 rows or
  *       with unpack to dest (any tile); ROW broadcast with unpack to dest on 32x16;
- *       ROW broadcast with acc_to_dest on tiles other than 32x32.
+ *       ROW broadcast with acc_to_dest on 32x16.
  * @note Call @ref _llk_unpack_A_uninit_ as the matching teardown; it is currently a no-op
  *       because unpacker X counters are reprogrammed by init.
  * @ref _llk_unpack_A_ is the matching execute call.
@@ -299,9 +299,12 @@ inline void _llk_unpack_A_init_(
     // Within-face transpose swaps rows and columns of a 16x16 face; a face with fewer rows gives wrong
     // output. Broadcast MOPs read L1 through SrcB, which the within-face transpose does not touch.
     LLK_ASSERT(BType != BroadcastType::NONE || within_face_16x16_transpose == 0 || face_r_dim == MAX_FACE_R_DIM, "Within-face transpose requires 16-row faces");
-    // WH stop-gap: the ROW acc_to_dest MOP unpacks SrcB faces in 32x32 order regardless of the tile
-    // shape; the face-grid MOP is parked (tt-metal#47328).
-    LLK_ASSERT(BType != BroadcastType::ROW || !acc_to_dest || num_faces == MAX_NUM_FACES, "Row broadcast with acc_to_dest supports only 32x32 tiles");
+    // The ROW acc_to_dest MOP unpacks SrcB faces 0, 1, 0, 1 as for a 32x32 tile; on smaller tiles
+    // the repeats land in SrcB banks the tile never reads. A 2x1 face grid is asserted, matching
+    // the math-side ROW datacopy assert (tt-metal#47328).
+    LLK_ASSERT(
+        !(BType == BroadcastType::ROW && acc_to_dest && is_tensor_shape_2x1_face_grid(tensor_shape)),
+        "Row broadcast with acc_to_dest does not support 32x16 tiles");
     LLK_ASSERT(
         is_unpacker_format_conversion_supported_dest(static_cast<DataFormat>(unpack_src_format), static_cast<DataFormat>(unpack_dst_format), unpack_to_dest),
         "Unsupported unpacker format conversion.");
