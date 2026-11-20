@@ -1253,7 +1253,14 @@ class ResidentModel:
             sems.append(ttnn.SemaphoreDescriptor(id=SEM_GROUP, core_ranges=head_grid, initial_value=0))
 
             # every kernel: multi-user rows mode (active_rows.hpp)
-            common_named = [("rows_mode", int(self.rows)), ("gdn_layers", self.n_gdn), ("groups", self.groups)]
+            # (row_tiles: batch x 32 tiles per row group in the mixers' row buffer, gdn_head_reader.cpp)
+            common_named = [
+                ("rows_mode", int(self.rows)),
+                ("gdn_layers", self.n_gdn),
+                ("groups", self.groups),
+                ("row_tiles", row_w // TILE),
+                ("o_tiles", d.gv // TILE),  # the streamers' o_in tiles per row group (gdn_head_writer.cpp)
+            ]
 
             def kernel(src, core_ranges, ct, rt, config, named=()):
                 return ttnn.KernelDescriptor(

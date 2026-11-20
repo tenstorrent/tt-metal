@@ -41,6 +41,10 @@ constexpr uint32_t st = Kt * Vt;
 constexpr uint32_t cb_s_new_out = 24, cb_out = 28, cb_stage = 22;
 constexpr uint32_t kBf16Tile = 2048, kF32Tile = 4096, kFaceBytes = 512, kFaceRow = 32;
 constexpr uint32_t kRowTile = 64 * batch;
+// row groups (active_rows.hpp): the stage and the streamers' o_in hold one block per group (stage block Vt tiles,
+// o_in block o_tiles tiles); users are global rows g * batch + u; the state tensor holds groups * batch users
+constexpr uint32_t o_tiles = get_named_compile_time_arg_val("o_tiles");
+constexpr uint32_t kUsers = batch * groups;
 
 void kernel_main() {
     const uint32_t state = get_arg_val<uint32_t>(0);
@@ -71,9 +75,9 @@ void kernel_main() {
         cur = *slot_sem - 1;
     }
 
-    // the stage rows of users r0 .. r0 + nu, zeroed
+    // the stage rows of users r0 .. r0 + nu of every group, zeroed
     auto zero_rows = [&](uint32_t r0) {
-        for (uint32_t t = 0; t < Vt; t++) {
+        for (uint32_t t = 0; t < groups * Vt; t++) {
             for (uint32_t f = 0; f < 2; f++) {
                 volatile tt_l1_ptr uint32_t* p =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(stage + t * kRowTile + (f * batch + r0) * kFaceRow);
@@ -87,7 +91,7 @@ void kernel_main() {
     // with none sends nothing (its count would run ahead of the busy cores' rows), its rows are zeroed here instead
     uint32_t busy = cores - 1;
     // this core's users that run this step (see the reader)
-    uint32_t act[batch], n = 0;
+    uint32_t act[kUsers], n = 0;
     {
         uint32_t mask = ~0u;
         if constexpr (rows_mode) {
@@ -100,7 +104,11 @@ void kernel_main() {
             if (collector) {
                 busy = 0;
                 for (uint32_t g = 1; g < cores; g++) {  // core g of the head takes users g nu .. (g + 1) nu
-                    if ((mask >> (g * nu)) & ((1u << nu) - 1)) {
+                    bool any = false;                   // (in any row group)
+                    for (uint32_t gr = 0; gr < groups; gr++) {
+                        any |= ((mask >> (gr * batch + g * nu)) & ((1u << nu) - 1)) != 0;
+                    }
+                    if (any) {
                         busy++;
                     } else {
                         zero_rows(g * nu);
@@ -108,9 +116,11 @@ void kernel_main() {
                 }
             }
         }
-        for (uint32_t u = u0; u < u0 + nu; u++) {
-            if ((mask >> u) & 1) {
-                act[n++] = u;
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            for (uint32_t u = u0; u < u0 + nu; u++) {
+                if ((mask >> (gr * batch + u)) & 1) {
+                    act[n++] = gr * batch + u;
+                }
             }
         }
     }
@@ -118,8 +128,8 @@ void kernel_main() {
     // into every streamer
     auto layer_out = [&](uint32_t l) {
         if (!collector) {
-            // users u0 .. u0 + nu are contiguous face rows of every tile
-            for (uint32_t t = 0; t < Vt; t++) {
+            // users u0 .. u0 + nu are contiguous face rows of every tile (of every group's block)
+            for (uint32_t t = 0; t < groups * Vt; t++) {
                 for (uint32_t f = 0; f < 2; f++) {
                     const uint32_t off = t * kRowTile + (f * batch + u0) * kFaceRow;
                     noc_async_write(stage + off, get_noc_addr(cx, cy, stage + off), nu * kFaceRow);
@@ -132,7 +142,12 @@ void kernel_main() {
             for (uint32_t s = 0; s < num_streamers; s++) {
                 const uint32_t px = get_arg_val<uint32_t>(peers_base + 2 * s);
                 const uint32_t py = get_arg_val<uint32_t>(peers_base + 2 * s + 1);
-                noc_async_write(stage, get_noc_addr(px, py, o_in + head * Vt * kRowTile), Vt * kRowTile);
+                for (uint32_t gr = 0; gr < groups; gr++) {
+                    noc_async_write(
+                        stage + gr * Vt * kRowTile,
+                        get_noc_addr(px, py, o_in + (gr * o_tiles + head * Vt) * kRowTile),
+                        Vt * kRowTile);
+                }
             }
             noc_async_write_barrier();
             for (uint32_t s = 0; s < num_streamers; s++) {
@@ -151,12 +166,12 @@ void kernel_main() {
             }
             continue;
         }
-        const uint32_t u = act[k];
+        const uint32_t r = act[k], u = r % batch, gblk = (r / batch) * Vt * kRowTile;
         const uint32_t set = l % copies;
         cb_wait_front(cb_out, Vt);
         const uint32_t out = get_read_ptr(cb_out);
         for (uint32_t t = 0; t < Vt; t++) {
-            const uint32_t dst = stage + t * kRowTile + u * kFaceRow;
+            const uint32_t dst = stage + gblk + t * kRowTile + u * kFaceRow;
             noc_async_read(get_noc_addr(out + t * kBf16Tile), dst, kFaceRow);
             noc_async_read(get_noc_addr(out + t * kBf16Tile + kFaceBytes), dst + batch * kFaceRow, kFaceRow);
         }
@@ -169,7 +184,7 @@ void kernel_main() {
         if (ts_addr && k == 0) {
             ts[l * 4 + 2] = *clk;
         }
-        const uint32_t first = ((set * num_heads + head) * batch + (verify ? (cur + u) % batch : u)) * st;
+        const uint32_t first = ((set * num_heads + head) * kUsers + (verify ? (cur + u) % batch : r)) * st;
         for (uint32_t t = 0; t < st; t++) {
             noc_async_write_page(first + t, state_dram, get_read_ptr(cb_s_new_out) + t * kF32Tile);
         }

@@ -45,6 +45,10 @@ constexpr uint32_t batch = get_compile_time_arg_val(8);
 constexpr bool verify = get_compile_time_arg_val(9) != 0;
 constexpr uint32_t sem_slot = get_compile_time_arg_val(10);
 constexpr uint32_t st = Kt * Vt;
+// row groups (active_rows.hpp): the row buffer holds `groups` blocks of row_tiles batch x 32 tiles (group g's users at
+// block g), the state tensor [copies][heads][groups * batch][Kt * Vt]; a user is its global row g * batch + u
+constexpr uint32_t row_tiles = get_named_compile_time_arg_val("row_tiles");
+constexpr uint32_t kUsers = batch * groups;
 // token state word: the state slot row 0 continues from (verify; past the R positions of R > 2 rows)
 constexpr uint32_t kTokSlot = batch > 2 ? 15 : 4;
 
@@ -160,7 +164,7 @@ void kernel_main() {
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_slot)) = cur + 1;
     }
     // this core's users that run this step (rows mode: those with their active bit; see active_rows.hpp)
-    uint32_t act[batch], n = 0;
+    uint32_t act[kUsers], n = 0;
     {
         uint32_t mask = ~0u;
         if constexpr (rows_mode) {
@@ -169,9 +173,11 @@ void kernel_main() {
             noc_async_read_barrier();
             mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(scratch)[kTokActive];
         }
-        for (uint32_t u = u0; u < u0 + nu; u++) {
-            if ((mask >> u) & 1) {
-                act[n++] = u;
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            for (uint32_t u = u0; u < u0 + nu; u++) {
+                if ((mask >> (gr * batch + u)) & 1) {
+                    act[n++] = gr * batch + u;
+                }
             }
         }
         if constexpr (rows_mode) {
@@ -185,12 +191,18 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* rows_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_rows));
     volatile tt_l1_ptr uint32_t* state_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_state));
-    volatile tt_l1_ptr uint16_t* a_row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rows + a_tile * kRowTile);
-    volatile tt_l1_ptr uint16_t* b_row = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rows + b_tile * kRowTile);
+    // (a / b rows of group gr at block gr of the row buffer)
+    auto a_row = [&](uint32_t gr) {
+        return reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rows + (gr * row_tiles + a_tile) * kRowTile);
+    };
+    auto b_row = [&](uint32_t gr) {
+        return reinterpret_cast<volatile tt_l1_ptr uint16_t*>(rows + (gr * row_tiles + b_tile) * kRowTile);
+    };
     // element c of user u in a row tile
     auto elem = [](uint32_t c, uint32_t u) { return (c / 16) * 16 * batch + u * 16 + c % 16; };
     for (uint32_t i = 0; i < layers * n; i++) {
-        const uint32_t l = i / n, k = i % n, u = act[k];
+        const uint32_t l = i / n, k = i % n, r = act[k], gr = r / batch, u = r % batch;
+        const uint32_t grows = rows + gr * row_tiles * kRowTile;  // this user's group block of the row buffer
         const uint32_t set = l % copies;
         // the user's state and the norm weight do not depend on the rows: land them first
         if (l >= copies) {
@@ -206,7 +218,7 @@ void kernel_main() {
             noc_async_read_barrier();
             cb_push_back(cb_s_mm, st);
         } else {
-            const uint32_t first = ((set * num_heads + head) * batch + (verify ? cur : u)) * st;
+            const uint32_t first = ((set * num_heads + head) * kUsers + (verify ? cur : r)) * st;
             push_pages(cb_s_mm, state_dram, first, st, kF32Tile);  // then a local copy: one DRAM read per state
             noc_async_read(get_noc_addr(get_read_ptr(cb_s_mm)), get_write_ptr(cb_s_in), st * kF32Tile);
             noc_async_read_barrier();
@@ -219,18 +231,18 @@ void kernel_main() {
                 ts[l * 4 + 0] = *clk;
             }
         }
-        place_rows(cb_q_in, rows, q_tile, Kt, u);
-        place_rows(cb_k_in, rows, k_tile, Kt, u);
+        place_rows(cb_q_in, grows, q_tile, Kt, u);
+        place_rows(cb_k_in, grows, k_tile, Kt, u);
         // a/b are the only scalars read by the RISC: the row buffer is written by other cores
         invalidate_l1_cache();
-        const uint32_t a_bits = static_cast<uint32_t>(a_row[elem(a_elem, u)]) << 16;
-        const uint32_t b_bits = static_cast<uint32_t>(b_row[elem(b_elem, u)]) << 16;
+        const uint32_t a_bits = static_cast<uint32_t>(a_row(gr)[elem(a_elem, u)]) << 16;
+        const uint32_t b_bits = static_cast<uint32_t>(b_row(gr)[elem(b_elem, u)]) << 16;
         push_fill(cb_a_full, a_bits);
         push_fill(cb_dt_bias_full, get_arg_val<uint32_t>(gates_base + 2 * set));
         push_fill(cb_neg_a_full, get_arg_val<uint32_t>(gates_base + 2 * set + 1));
         push_fill(cb_b_full, b_bits);
-        place_rows(cb_v_in, rows, v_tile, Vt, u);
-        place_rows(cb_z_in, rows, z_tile, Vt, u);
+        place_rows(cb_v_in, grows, v_tile, Vt, u);
+        place_rows(cb_z_in, grows, z_tile, Vt, u);
         if (ts_addr && k + 1 == n) {
             ts[l * 4 + 1] = *clk;
         }
