@@ -423,6 +423,11 @@ session's private memory (owner, said many times; 2026-10-30): memory stays on o
 next overseer never sees it.
 
 Standing owner decisions (moved here from private memory, 2026-10-30):
+- No infeasible shortcuts, checked BEFORE accepting (owner, 2026-11-20): before accepting any serving-path task, the
+  overseer checks the deliverable itself for host-side per-chunk derivation (tables, indices, masks built in Python),
+  per-layout / per-position program builds, caches that only repeated test traffic hits, and inputs tt-d-gen would not
+  send; a result that depends on one is rejected and reported as a shortcut, never accepted or quoted as a number
+  (DeepSeek-V4.1 PB.7 / PB.7B: glued numbers accepted while the host built per-layout tables and programs rebuilt).
 - Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
   set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
   path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never

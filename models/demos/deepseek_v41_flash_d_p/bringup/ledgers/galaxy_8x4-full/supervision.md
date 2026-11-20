@@ -938,3 +938,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
 - 19:10 UTC OWNER principle: serving never rebuilds (after warm-up no program build on the request path). Written into the skill's standing decisions and PACKED_RULES.md; PB.T's fast tier gets packed_fast_program_builds_after_warmup == 0 (patch add_pb9t_rule.py, applied at PB.7C's stop).
 - 19:40 UTC OWNER (angry, rightly): the measurement system had a hole: every wall timed a repeated position after a warm-up at it, misses refused, so per-chunk program builds were never seen. F294: the clean wall labels itself WARM / REPEATED POSITION (chunk_wall_fresh = 0); the honest fresh walls are PB.9F / PB.9F5 (next), the fixes PB.9X / PB.9X5, the 0-builds check in every accept gate via PB.T's fast tier. My failure: I never questioned the warm-up method.
 - 19:50 UTC OWNER: why is anything built on the host? It must not be: the glued path derives window index lists / row positions / valid lengths / pad words / piece tables in Python per new layout and uploads them (~12 ms a new layout; PB.7B called it '~5 per-chunk table uploads' and I let it pass). Rule (PACKED_RULES.md, note OV-67 to PB.7C / PB.9* / PB.T): the host writes ids + descriptor only, one upload; everything else derived on device; glued_new_layout_ms <= ~1 ms. PB.7C's gate gets glued_new_layout_ms* <= 1.5 when it next stops (add_hostrule.py).
+- 19:58 UTC OWNER: shortcuts again ("no solutions that are not practically feasible"). My failure: I accepted PB.7
+  (437e310b596) and PB.7B (561fc994f0f) and quoted their walls while the glued path built per-layout tables on the
+  host and rebuilt programs per layout. WITHDRAWN as serving numbers: PB.7 / PB.7B glued walls (incl. 57.4 / 52.7 /
+  47.0k AgentX, 59.5k 5 x 1.6k) and PB.7C's interim 42.6k; fixed-lane 73.6-75.0k and the 4x2k / mixed targets "met"
+  are UNVERIFIED until PB.9F's fresh walls. Their correctness results (oracles bit-identical) stand. From now on no
+  packing number is accepted or reported without: one host upload a chunk (ids + descriptor), host ms a new layout
+  <= ~1, 0 program builds after warm-up, fresh layouts. Skill: the overseer checks the deliverable for host
+  derivation / per-layout state BEFORE accepting.
