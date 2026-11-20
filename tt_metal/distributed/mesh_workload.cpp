@@ -1051,8 +1051,8 @@ void MeshWorkloadImpl::finalize_offsets(MeshDevice* mesh_device) {
     set_finalized(max_program_kernels_sizeB, mesh_device->id());
 }
 
-void MeshWorkloadImpl::check_circular_buffers_bound() const {
-    for (const auto& [_, program] : programs_) {
+void MeshWorkloadImpl::check_circular_buffers_bound() {
+    for (auto& [_, program] : programs_) {
         program.impl().check_circular_buffers_bound();
     }
 }

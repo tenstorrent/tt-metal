@@ -1490,7 +1490,7 @@ CBHandle detail::ProgramImpl::add_circular_buffer_(const std::shared_ptr<Circula
     }
 
     this->circular_buffers_.push_back(circular_buffer);
-    this->circular_buffers_known_bound_ = false;
+    this->circular_buffers_bound_ = false;
     this->circular_buffer_by_id_.insert({circular_buffer->id(), circular_buffer});
     return circular_buffer->id();
 }
@@ -3694,15 +3694,15 @@ std::span<const std::shared_ptr<CircularBufferImpl>> detail::ProgramImpl::circul
     return circular_buffers_;
 }
 
-void detail::ProgramImpl::check_circular_buffers_bound() const {
+void detail::ProgramImpl::check_circular_buffers_bound() {
     // A bound CB stays bound, so a passing check holds until a CB is added.
-    if (circular_buffers_known_bound_) {
+    if (circular_buffers_bound_) {
         return;
     }
     for (const auto& circular_buffer : circular_buffers_) {
         circular_buffer->check_bound();
     }
-    circular_buffers_known_bound_ = true;
+    circular_buffers_bound_ = true;
 }
 
 std::vector<std::shared_ptr<CircularBuffer>> Program::circular_buffers() const {
