@@ -22,7 +22,7 @@ MAX_NEW_TOKENS = 32
 
 @pytest.fixture(scope="module")
 def sampler():
-    with open_sampler(dummy_weights=False, model_source=MODEL_ID) as s:
+    with open_sampler(dummy_weights=False, model_source=MODEL_ID, max_seq_len=256) as s:
         yield s
 
 
