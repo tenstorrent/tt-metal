@@ -170,7 +170,7 @@ class CanvasVaeEncoder(Flux2VaeEncoder):
         h = r.conv1.forward(r.norm1.forward(x, masks(x)))
         h = r.conv2.forward(r.norm2.forward(h, masks(h)))
         if r.conv_shortcut is not None:
-            x = r.conv_shortcut.forward(x)
+            x = r.conv_shortcut.forward(x, use_persistent_buffer=False)
         return x + h
 
     def _attention(self, attn: VaeAttention, x: ttnn.Tensor, masks: CanvasMasks) -> ttnn.Tensor:
