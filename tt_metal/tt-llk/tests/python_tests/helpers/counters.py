@@ -437,6 +437,24 @@ def parse_noc_groups(text: str, arch=None) -> int:
     return mask
 
 
+def noc_groups_include(mask: int, group: str) -> bool:
+    """True when a --perf-noc-counters mask selects the named group."""
+    return bool(mask & (1 << _llk_headers.NOC_GROUPS.index(group)))
+
+
+def router_option_covers_every_path(option: int, arch=None) -> bool:
+    """True when a --perf-router-counters option counts every output port bank and every virtual channel."""
+    name = _arch_name(arch)
+    consts = _llk_headers.router_constants()
+    every = _llk_headers.router_option(
+        name, consts["VC_MASK_ALL"] | consts["BANKS_ALL"]
+    )
+    selected = _llk_headers.router_option(name, option)
+    return set(selected.banks) == set(every.banks) and set(selected.vcs) == set(
+        every.vcs
+    )
+
+
 def parse_router_option(text: str, arch=None) -> int:
     """Option mask of --perf-router-counters: a number (virtual channel bits 0 to 15, bank bits from 16, bit 24 keeps the
     channels apart) or ALL (every channel, every bank), optionally +PER_VC."""
@@ -528,9 +546,13 @@ def decode_riscv_block(words, arch, thread: str, zone_name: str, token) -> list[
         family_row(zone_name, bank, "cycles", -1, launch.mcycle, launch.mcycle),
         family_row(zone_name, bank, "instructions", -1, launch.mcycle, launch.minstret),
     ]
+    label3, label4 = named["event3"], named["event4"]
+    if label3 == label4:
+        # Rows with one name are averaged on export, so two counters armed alike keep their counter number.
+        label3, label4 = f"{label3}@pmc3", f"{label4}@pmc4"
     for label, select, count in (
-        (named["event3"], event3, launch.pmc3),
-        (named["event4"], event4, launch.pmc4),
+        (label3, event3, launch.pmc3),
+        (label4, event4, launch.pmc4),
     ):
         if label != "DISABLED":
             rows.append(

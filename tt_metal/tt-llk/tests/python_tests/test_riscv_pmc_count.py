@@ -42,6 +42,8 @@ def test_riscv_pmc_counts_a_known_loop():
         input_output_formats([DataFormat.Float16_b])[0],
         run_types=[PerfRunType.L1_TO_L1],
     )
+    if not configuration.run_configs:
+        pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
     configuration.templates, configuration.runtimes, configuration.current_run_type = (
         configuration.run_configs[0]
     )
