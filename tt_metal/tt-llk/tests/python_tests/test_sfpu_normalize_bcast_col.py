@@ -16,6 +16,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, MathOperation, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 
@@ -41,19 +42,19 @@ LAYOUTS = {
 
 @dataclass
 class NORM_COL_LAYOUT(TemplateParameter):
-    var: str = "FT"
-    layout: str = "A_in"
-    runtime: int = 0
+    norm_c_var: str = "FT"
+    norm_c_layout: str = "A_in"
+    norm_c_runtime: int = 0
 
     def convert_to_cpp(self) -> str:
         # FT has no second tile; its slot in the layout is simply left unused.
-        d, s, m, i, seq = LAYOUTS[self.layout]
-        na = 1 if self.var == "FT" else 2
-        nout = 2 if self.var == "TT" else 1
+        d, s, m, i, seq = LAYOUTS[self.norm_c_layout]
+        na = 1 if self.norm_c_var == "FT" else 2
+        nout = 2 if self.norm_c_var == "TT" else 1
         return (
-            f"#define NORM_C_VAR {VARS[self.var]}\n#define NORM_C_NA {na}\n#define NORM_C_NOUT {nout}\n"
+            f"#define NORM_C_VAR {VARS[self.norm_c_var]}\n#define NORM_C_NA {na}\n#define NORM_C_NOUT {nout}\n"
             f"#define NORM_C_IN0 {d}\n#define NORM_C_IN1 {s}\n#define NORM_C_IN2 {m}\n#define NORM_C_IN3 {i}\n#define NORM_C_OUT {d}\n"
-            f"#define NORM_C_PACK0 {d}\n#define NORM_C_PACK1 {s}\n#define NORM_C_SEQ {seq}\n#define NORM_C_RUNTIME {self.runtime}"
+            f"#define NORM_C_PACK0 {d}\n#define NORM_C_PACK1 {s}\n#define NORM_C_SEQ {seq}\n#define NORM_C_RUNTIME {self.norm_c_runtime}"
         )
 
 
@@ -129,7 +130,7 @@ def _check(res, golden, fmt, inter):
     ), f"{bad}/{int(fin.sum())} finite lanes off (max abs err {float(err.max())})"
 
 
-def run_norm_col(case):
+def run_norm_col(case, is_perf=False, perf_report=None, run_types=None, loop_factor=1):
     if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
         pytest.skip("sfpu_normalize_bcast_col is not supported on Quasar")
     case = case[0] if isinstance(case, tuple) else case
@@ -164,7 +165,7 @@ def run_norm_col(case):
             F.TILE_COUNT(len(a_tiles) + 2),
             F.NUM_BLOCKS(num_blocks),
             F.NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            F.LOOP_FACTOR(1),
+            F.LOOP_FACTOR(loop_factor),
             F.NUM_FACES(),
             F.ZERO_POINT(0),
             F.OUT_ZERO_POINT(0),
@@ -183,11 +184,14 @@ def run_norm_col(case):
         "unpack_to_dest": F.unpacks_to_dest(fmt, dest_acc),
         "compile_time_formats": True,
     }
-    cfg = F.create_test_or_perf_config(
-        is_perf=False,
-        run_types=F._resolve_perf_args(False, None, None),
+    cfg = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=F._resolve_perf_args(is_perf, perf_report, run_types),
         test_config_kwargs=kwargs,
     )
+    if is_perf:
+        cfg.run(perf_report)
+        return
     res_from_L1 = cfg.run().result
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
