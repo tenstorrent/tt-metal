@@ -51,18 +51,19 @@ void bind_generic_operation(nb::module_& mod) {
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
             input, fix the label after each call, ``ttnn.experimental.prepare_generic_op`` included, with
-            ``output.update_tensor_topology(topology)``, which moves no data. When every tensor in io_tensors is on
-            every device of the mesh, build the topology from the mesh's shape, one placement for each mesh axis, and
-            the output's own device coordinates::
+            ``output.update_tensor_topology(topology)``, which moves no data. For an output on every device of the
+            mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
-                placements = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]  # one for each mesh axis
-                output.update_tensor_topology(ttnn.TensorTopology(output.device().shape, placements, coords))
+                shape = output.device().shape
+                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor:
+                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
+                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
 
-            ``ttnn.PlacementShard(dim)`` says that the data is split along tensor dimension ``dim`` across that mesh
-            axis, and ``ttnn.PlacementReplicate()`` that it is the same along it. A tensor dimension can be split
-            across one mesh axis only: ttnn's ops relabel any other axis it is split across as replicated. Fix
-            another output tensor's label the same way if the program changes how its data is placed.
+            A label can also give each axis of the mesh's shape a ``ttnn.PlacementShard(dim)`` or a
+            ``ttnn.PlacementReplicate()``, but ttnn's ops keep a tensor dimension split across one mesh axis only.
+            Fix another tensor's label the same way if the program changes how its data is placed.
 
         Example:
             Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
@@ -213,19 +214,20 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
             run args against the spec, so a call that raises can still change it.
 
             If the program places the output's data otherwise, such as the same data on every device from a sharded
-            input, fix the label after each call, ``prepare_generic_op`` included, with
-            ``output.update_tensor_topology(topology)``, which moves no data. When every tensor in io_tensors is on
-            every device of the mesh, build the topology from the mesh's shape, one placement for each mesh axis, and
-            the output's own device coordinates::
+            input, fix the label after each call, ``ttnn.experimental.prepare_generic_op`` included, with
+            ``output.update_tensor_topology(topology)``, which moves no data. For an output on every device of the
+            mesh, build the label that ttnn gives its own tensors with that layout, from the output's devices::
 
                 coords = output.tensor_topology().mesh_coords()
-                placements = [ttnn.PlacementReplicate(), ttnn.PlacementShard(0)]  # one for each mesh axis
-                output.update_tensor_topology(ttnn.TensorTopology(output.device().shape, placements, coords))
+                shape = output.device().shape
+                # The same data on every device, as ttnn.allocate_tensor_on_device labels a tensor:
+                same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+                # Split along tensor dimension dim, device by device, as ttnn.shard_tensor_to_mesh_mapper does:
+                split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(dim)], coords)
 
-            ``ttnn.PlacementShard(dim)`` says that the data is split along tensor dimension ``dim`` across that mesh
-            axis, and ``ttnn.PlacementReplicate()`` that it is the same along it. A tensor dimension can be split
-            across one mesh axis only: ttnn's ops relabel any other axis it is split across as replicated. Fix
-            another tensor's label the same way if the program changes how its data is placed.
+            A label can also give each axis of the mesh's shape a ``ttnn.PlacementShard(dim)`` or a
+            ``ttnn.PlacementReplicate()``, but ttnn's ops keep a tensor dimension split across one mesh axis only.
+            Fix another tensor's label the same way if the program changes how its data is placed.
 
         Raises:
             RuntimeError: If the run args do not match the spec, naming the kernel, argument, tensor parameter or

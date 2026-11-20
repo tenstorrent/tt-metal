@@ -1145,52 +1145,54 @@ def test_one_program_runs_on_every_device_of_its_tensors(mesh_device):
 
 @pytest.mark.parametrize("mesh_device", [(1, 2)], indirect=True)
 def test_the_output_label_after_a_call_and_its_fix(mesh_device, expect_error):
-    """Every call merges the output's tensor topology from the labels of io_tensors, the output's own included, even a
-    call that raises, and the merged label can be 1-D. The note in generic_op's docstring fixes it with a label built
-    from the mesh's shape, one placement for each mesh axis, which a later call keeps when it shards the output."""
-    replicate, shard = ttnn.PlacementReplicate(), ttnn.PlacementShard(0)
-
-    def label(output, placements):
-        return ttnn.TensorTopology(output.device().shape, placements, output.tensor_topology().mesh_coords())
-
-    def topology(shape, placements, coords):
-        return ttnn.TensorTopology(ttnn.MeshShape(shape), placements, coords)
-
+    """Every call merges the output's tensor topology from the labels of io_tensors, the output's own included: a call
+    that raises after the label changes and a prepare_generic_op call too. The merged label can be 1-D, and other
+    tensors keep their labels. The labels that the note in generic_op's docstring builds are ttnn's own."""
     torch.manual_seed(29)
-    # The same data on every device from a sharded input: each call labels the output sharded, so the fix follows it.
     sharded = ttnn.from_torch(
         torch.rand([2, 1, 32, 32]).to(torch.bfloat16),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=0),
+        mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(mesh_device, 0),
     )
     output = ttnn.allocate_tensor_on_device(sharded.spec, mesh_device)
-    allocated = output.tensor_topology()
-    coords = allocated.mesh_coords()
-    assert allocated == topology([1, 2], [replicate, replicate], coords)
+    allocated, input_label = output.tensor_topology(), sharded.tensor_topology()
+
+    # The note's two labels for an output on every device: those of a fresh allocation and of the sharded input.
+    coords = output.tensor_topology().mesh_coords()
+    shape = output.device().shape
+    same = ttnn.TensorTopology(shape, [ttnn.PlacementReplicate()] * shape.dims(), coords)
+    split = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementShard(0)], coords)
+    assert same == allocated
+    assert split == input_label
+
+    # exp over the sharded input writes different data on each device, split along dim 0 as the input is, and the
+    # merged label says so, in the input's 1-D form.
     spec, run_args = exp_program(sharded, output)
     run_args.tensor_args = {"input": sharded, "output": output, "extra": sharded}
     with expect_error(RuntimeError, "has a tensor for 'extra', which the ProgramSpec does not declare"):
         E.generic_op([sharded, output], spec, run_args)
-    assert output.tensor_topology() == topology([2], [shard], coords)
-    output.update_tensor_topology(label(output, [replicate, replicate]))
-    assert output.tensor_topology() == allocated
+    assert output.tensor_topology() == split
+    output.update_tensor_topology(allocated)
+    E.prepare_generic_op([sharded, output], *exp_program(sharded, output))
+    assert output.tensor_topology() == split
+    assert sharded.tensor_topology() == input_label
     E.generic_op([sharded, output], *exp_program(sharded, output))
-    assert output.tensor_topology() == topology([2], [shard], coords)
-    output.update_tensor_topology(label(output, [replicate, replicate]))
-    assert output.tensor_topology() == allocated
+    assert output.tensor_topology() == split
 
-    # Different data on each device from an input replicated from the host, whose label is 1-D: the output takes it.
+    # exp over an input replicated from the host writes the same data on every device, and the merged label says so,
+    # in the input's 1-D form. Given the note's label for it, the output gets the merged one back on the next call.
     replicated = ttnn.from_torch(
         torch.rand([1, 1, 32, 32]).to(torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=mesh_device
     )
     output = ttnn.allocate_tensor_on_device(replicated.spec, mesh_device)
     E.generic_op([replicated, output], *exp_program(replicated, output))
-    assert output.tensor_topology() == topology([2], [replicate], coords)
-    output.update_tensor_topology(label(output, [replicate, shard]))
-    assert output.tensor_topology() == topology([1, 2], [replicate, shard], coords)
+    merged = ttnn.TensorTopology(ttnn.MeshShape([len(coords)]), [ttnn.PlacementReplicate()], coords)
+    assert output.tensor_topology() == merged
+    output.update_tensor_topology(same)
+    assert output.tensor_topology() == same
     E.generic_op([replicated, output], *exp_program(replicated, output))
-    assert output.tensor_topology() == topology([1, 2], [replicate, shard], coords)
+    assert output.tensor_topology() == merged
 
 
 def test_mesh_form(device):
