@@ -728,15 +728,15 @@ ttnn/core/prefetcher_pipe.cpp @jbaumanTT @abhullar-tt
 ttnn/api/ttnn/prefetcher_pipe.hpp @jbaumanTT @abhullar-tt
 ttnn/ttnn/_experimental/tensor_prefetcher_matmul.py @jbaumanTT @abhullar-tt
 # Bindings and tests for fabric, mesh sockets and disaggregation.
-ttnn/cpp/ttnn-nanobind/fabric.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/fabric.* @nsextonTT @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
+ttnn/cpp/ttnn-nanobind/mesh_socket.* @nsextonTT @tenstorrent/metalium-developers-metal-distributed
 tests/ttnn/unit_tests/base_functionality/*fabric* @razorback3 @dongjin-na @bbradelTT
-ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/disaggregation.* @nsextonTT @SeanNijjar @ubcheema
 tests/ttnn/unit_tests/base_functionality/test_kv_chunk_table_strided_bindings.py @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for code other teams own.
 tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.py @razorback3 @dongjin-na @bbradelTT
-ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @nnyamagoudar-TT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
 ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
