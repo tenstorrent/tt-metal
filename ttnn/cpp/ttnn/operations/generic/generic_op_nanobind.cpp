@@ -81,7 +81,9 @@ void bind_generic_operation(nb::module_& mod) {
     doc += OUTPUT_LABEL_FIX;
     doc += R"doc(
         Example:
-            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples
+            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op.py for usage examples. For the Metal 2.0
+            ProgramSpec form, see ttnn.experimental.generic_op and the TT-NN guide "Running your own kernels with
+            generic_op and a ProgramSpec".
         )doc";
 
     // Overload for MeshProgramDescriptor (explicit mesh control)

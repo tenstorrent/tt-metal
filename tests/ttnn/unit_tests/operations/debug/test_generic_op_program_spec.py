@@ -415,7 +415,7 @@ def guide_example(device):
     num_tiles = 8
     torch_input = torch.rand([1, num_tiles, 32, 32]).to(torch.bfloat16)
     input_tensor = ttnn.from_torch(
-        torch_input, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        torch_input, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
     )
     # generic_op does not create its output: preallocate it.
     output_tensor = ttnn.allocate_tensor_on_device(input_tensor.spec, device)
