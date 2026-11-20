@@ -7,16 +7,11 @@
 #include <cmath>
 
 #include "binary_op_dtype_policy.hpp"
-#include <tt_stl/assert.hpp>
-#include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
 
 namespace ttnn::operations::binary::utils {
-
-using ttnn::operations::unary::EltwiseUnaryWithParam;
-using ttnn::operations::unary::UnaryOpType;
 
 bool is_typecast(tt::tt_metal::DataType input, tt::tt_metal::DataType output) {
     using enum tt::tt_metal::DataType;
