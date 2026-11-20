@@ -4,16 +4,14 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
 
-#include "core_coord.hpp"
 #include "dispatch/kernel_config/relay_mux.hpp"
 #include "fd_kernel.hpp"
-#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "impl/context/context_descriptor.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 
 namespace tt::tt_metal {
 
@@ -35,9 +33,7 @@ struct dispatch_static_config_t {
     std::optional<uint32_t> packed_write_max_unicast_sub_cmds;  // 19
     std::optional<uint32_t> dispatch_s_sync_sem_base_addr;
     std::optional<uint32_t> max_num_worker_sems;
-    std::optional<uint32_t> max_num_go_signal_noc_data_entries;
     std::optional<uint32_t> mcast_go_signal_addr;
-    std::optional<uint32_t> unicast_go_signal_addr;
     std::optional<uint32_t> distributed_dispatcher;
     std::optional<uint32_t> first_stream_used;
     std::optional<uint32_t> completion_counter_offset;
@@ -115,7 +111,6 @@ public:
         dispatch_core_manager& dispatch_core_manager,
         const GetControlPlaneFn& get_control_plane = {},
         const GetDispatchQueryManagerFn& get_dispatch_query_manager = {},
-        const GetMaxNumEthCoresFn& get_max_num_eth_cores = {},
         const GetReadsDispatchCoresFn& get_reads_dispatch_cores = {});
 
     void CreateKernel() override;

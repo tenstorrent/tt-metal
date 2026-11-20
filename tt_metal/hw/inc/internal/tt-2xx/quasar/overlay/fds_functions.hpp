@@ -119,12 +119,20 @@ inline void fds_clear_neo_status(uint32_t neo_inst) {
         TT_FDS_DISPATCH_TENSIX_TO_DISPATCH_0__REG_ADDR + (neo_inst * sizeof(uint32_t)), 0x0);
 }
 
-// Read the done status for the specified group ID: a live per-lane mask, not a latch, and not gated
-// by the enable register. Group 0 is the idle value on the wire, so group 0's status is the map of
-// lanes currently carrying nothing.
+// Read the done status for the specified group ID: a per-lane mask, live on some IP variants and sticky
+// on others (see fds_write_group_status), and not gated by the enable register. Group 0 is the idle value
+// on the wire, so group 0's status is the map of lanes currently carrying nothing.
 inline uint32_t fds_read_group_status(uint32_t group_id) {
     return __builtin_riscv_ttrocc_fds_intf_read(
         TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
+}
+
+// Write the done status for the specified group ID. Where group status is sticky, a bit stays set until
+// written to zero, and writing one keeps a bit without setting it, so the zero bits of lanes_to_keep
+// clear those lanes. Where group status is live, the write is ignored.
+inline void fds_write_group_status(uint32_t group_id, uint32_t lanes_to_keep) {
+    __builtin_riscv_ttrocc_fds_intf_write(
+        TT_FDS_DISPATCH_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), lanes_to_keep);
 }
 
 // Read how many enabled NEOs have signalled done for the specified group ID
@@ -196,10 +204,16 @@ inline uint32_t fds_read_auto_dispatch_outbox_address() {
     return __builtin_riscv_ttrocc_fds_intf_read(TT_FDS_TENSIXNEO_AUTO_DISPATCH_OUTBOX_ADDRESS_REG_ADDR);
 }
 
-// Read the go status for the specified group ID: a live per-lane mask, not a latch
+// Read the go status for the specified group ID: a per-lane mask, live on some IP variants and sticky on others
 inline uint32_t fds_read_group_status(uint32_t group_id) {
     return __builtin_riscv_ttrocc_fds_intf_read(
         TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)));
+}
+
+// Write the go status for the specified group ID. Same semantics as the dispatch-side function.
+inline void fds_write_group_status(uint32_t group_id, uint32_t lanes_to_keep) {
+    __builtin_riscv_ttrocc_fds_intf_write(
+        TT_FDS_TENSIXNEO_GROUPID_STATUS_0__REG_ADDR + (group_id * sizeof(uint32_t)), lanes_to_keep);
 }
 
 // Read the raw go value the specified dispatch instance is driving into this NEO

@@ -6,6 +6,7 @@ import dataclasses
 
 import pathlib
 import sys
+import threading
 import types
 
 from contextlib import contextmanager
@@ -18,6 +19,8 @@ from loguru import logger
 
 import ttnn
 import ttnn.operation_tracer
+from ttnn.command_list import CmdListParam, call_with_cmd_list_params, has_cmd_list_param
+from ttnn.comparison import comp_pcc, comp_ulp
 from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_DIAGNOSTICS, TRACE_ALLOC_TRACKING
 
 
@@ -127,8 +130,6 @@ def compare_tensors_using_pcc(
 ):
     import numbers
     import torch
-
-    from models.common.utility_functions import comp_pcc, comp_ulp
 
     golden_outputs, outputs = _split_complex_outputs(golden_outputs, outputs)
     if isinstance(golden_outputs, (list, tuple, dict)) or isinstance(outputs, (list, tuple, dict)):
@@ -745,11 +746,14 @@ def get_tensor_report_record(tensor):
         address = None
         memory_config = None
         buffer_type = None
-        if ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE) and tensor.is_allocated():
-            memory_config = ttnn.get_memory_config(tensor)
-            device_id = tensor.device().id()
-            address = tensor.buffer_address()
+        is_device_tensor = ttnn.has_storage_type_of(tensor, ttnn.DEVICE_STORAGE_TYPE)
+        if is_device_tensor:
+            # From the TensorSpec, so a deallocated tensor still says where it lived (matches graph capture)
+            memory_config = tensor.memory_config()
             buffer_type = memory_config.buffer_type.value
+            if tensor.is_allocated():
+                device_id = tensor.device().id()
+                address = tensor.buffer_address()
 
         return {
             "tensor_id": int(tensor.tensor_id),
@@ -760,6 +764,7 @@ def get_tensor_report_record(tensor):
             "device_id": device_id,
             "address": address,
             "buffer_type": buffer_type,
+            "storage_type": "DEVICE" if is_device_tensor else "HOST",
         }
 
     if isinstance(tensor, torch.Tensor):
@@ -772,6 +777,7 @@ def get_tensor_report_record(tensor):
             "device_id": None,
             "address": None,
             "buffer_type": None,
+            "storage_type": "HOST",
         }
 
     raise RuntimeError(f"Unsupported tensor report record type: {type(tensor)}")
@@ -788,7 +794,25 @@ def set_output_tensor_id_decorator(function):
     return call_wrapper
 
 
-OPERATION_CALL_STACK = []
+class _OperationCallStack(threading.local):
+    def __init__(self):
+        self.frames = []
+        self.operation_id = None
+
+
+# Per thread: an operation running on another thread must not make this thread's operation look nested.
+_operation_call_stack = _OperationCallStack()
+
+
+def get_current_operation_id():
+    """ID of the top-level operation running on the calling thread."""
+    return _operation_call_stack.operation_id
+
+
+def __getattr__(name):
+    if name == "OPERATION_CALL_STACK":
+        return _operation_call_stack.frames
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
 def _complex_tensor_to_torch(complex_tensor, convert_component):
@@ -1211,6 +1235,8 @@ class FastOperation:
         )
 
     def __call__(self, *function_args, **function_kwargs):
+        if CmdListParam.any_created and has_cmd_list_param(function_args, function_kwargs):
+            return call_with_cmd_list_params(self, function_args, function_kwargs)
         if self._requires_slow_runtime():
             return self._slow_operation_instance()(*function_args, **function_kwargs)
 
@@ -1534,8 +1560,7 @@ class Operation:
         def runtime_decorator(function):
             @wraps(function)
             def call_wrapper(*function_args, **function_kwargs):
-                operation_id = ttnn._ttnn.get_python_operation_id()
-                is_top_level_operation = len(OPERATION_CALL_STACK) == 1
+                is_top_level_operation = len(_operation_call_stack.frames) == 1
 
                 decorated_function = function
 
@@ -1683,16 +1708,19 @@ class Operation:
         self.__doc__ = "\n".join(docstring_lines)
 
     def __call__(self, *function_args, **function_kwargs):
+        if CmdListParam.any_created and has_cmd_list_param(function_args, function_kwargs):
+            return call_with_cmd_list_params(self, function_args, function_kwargs)
         recording = ttnn.graph.is_python_io_recording_enabled()
         if recording:
             ttnn.graph.track_function_start(self.python_fully_qualified_name)
+        call_stack = _operation_call_stack.frames
         try:
-            if not OPERATION_CALL_STACK:
-                ttnn._ttnn.fetch_and_increment_python_operation_id()
-            OPERATION_CALL_STACK.append(self.python_fully_qualified_name)
+            if not call_stack:
+                _operation_call_stack.operation_id = ttnn._ttnn.fetch_and_increment_python_operation_id() + 1
+            call_stack.append(self.python_fully_qualified_name)
             output = self.decorated_function(*function_args, **function_kwargs)
         finally:
-            OPERATION_CALL_STACK.pop()
+            call_stack.pop()
             if recording:
                 ttnn.graph.track_function_end()
         return output

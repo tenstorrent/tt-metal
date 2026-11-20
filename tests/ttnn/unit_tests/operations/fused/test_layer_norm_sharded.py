@@ -6,7 +6,7 @@ import pytest
 import torch
 import ttnn
 
-from models.common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
+from tt_py_test_utils_common.utility_functions import is_watcher_enabled, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     layernorm_test_main,
     single_stage_param_sets,
@@ -22,11 +22,14 @@ from tests.ttnn.unit_tests.operations.fused.sharded_test_utils import (
     non_rectangular_width_shard_config,
     NON_RECTANGULAR_GRID_CASES,
     NON_RECTANGULAR_GRID_IDS,
+    LINE_GRID_1D_MCAST_CASES,
+    LINE_GRID_1D_MCAST_IDS,
+    line_width_shard_config,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES,
     UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS,
 )
 from tests.ttnn.unit_tests.operations.test_utils import TILE_WIDTH
-from tests.ttnn.utils_for_testing import assert_numeric_metrics
+from tests.ttnn.utils_for_testing import assert_numeric_metrics, merge_gate_subset
 
 
 @pytest.mark.parametrize("h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt", single_stage_param_sets())
@@ -203,10 +206,30 @@ def test_layer_norm_sharded_tile_backend_does_not_require_reciprocal(device):
     )
 
 
-@pytest.mark.parametrize("use_welford", [True, False])
-@pytest.mark.parametrize("two_stage", [True, False])
-@pytest.mark.parametrize("tensor_type", ["ascending_values_repeated_rows", "random"])
-@pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
+# random input: every two_stage/use_welford pair in bf16.
+_LAYER_NORM_RESIDUAL_MERGE_GATE = {
+    (True, True, "random", torch.bfloat16),
+    (True, False, "random", torch.bfloat16),
+    (False, True, "random", torch.bfloat16),
+    (False, False, "random", torch.bfloat16),
+    # fp32 with both on trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp, which hangs the
+    # device under TT_METAL_LLK_ASSERTS=1. Re-gate (True, True, "random", torch.float32) once #60764 is fixed.
+}
+
+
+@pytest.mark.parametrize(
+    *merge_gate_subset(
+        {
+            "dtype": [torch.bfloat16, torch.float32],
+            "tensor_type": ["ascending_values_repeated_rows", "random"],
+            "two_stage": [True, False],
+            "use_welford": [True, False],
+        },
+        keep=lambda use_welford, two_stage, tensor_type, dtype: (
+            (use_welford, two_stage, tensor_type, dtype) in _LAYER_NORM_RESIDUAL_MERGE_GATE
+        ),
+    )
+)
 def test_layer_norm_sharded_with_weight_and_bias_and_residual(device, use_welford, two_stage, tensor_type, dtype):
     torch.manual_seed(0)
     h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
@@ -535,15 +558,82 @@ def test_layer_norm_sharded_1d_mcast_with_grid_offset(device, grid_offset, use_w
     )
 
 
-# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
-# tile-aligned-uneven and non-tile-aligned widths). Covers both the legacy path and Welford.
 @pytest.mark.parametrize(
-    "dtype", [ttnn.bfloat16, ttnn.float32, ttnn.bfloat8_b], ids=["bfloat16", "float32", "bfloat8_b"]
+    ("start", "end", "h", "w", "orientation"), LINE_GRID_1D_MCAST_CASES, ids=LINE_GRID_1D_MCAST_IDS
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
-@pytest.mark.parametrize(
-    ("w", "num_cores_w"), UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, ids=UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS
-)
+def test_layer_norm_sharded_1d_mcast_line_grid(device, start, end, h, w, orientation, use_welford):
+    torch.manual_seed(0)
+    sharded_mem_config, block_wt = line_width_shard_config(device, start, end, h, w, orientation)
+
+    torch_input = generate_input_tensor(h, w, "random", torch.bfloat16)
+    ref_output = torch.nn.functional.layer_norm(torch_input, [w])
+
+    tt_input = ttnn.from_torch(
+        torch_input,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=sharded_mem_config,
+    )
+
+    output = ttnn_layer_norm_sharded(
+        device,
+        tt_input,
+        use_welford,
+        block_ht=h // 32,
+        block_wt=block_wt,
+        subblock_w=4,
+    )
+
+    if use_welford:
+        pcc_threshold = 0.99975
+        rtol = 0.14
+        atol = 0.085
+        frobenius_threshold = 0.02
+    else:
+        pcc_threshold = 0.9999
+        rtol = 0.065
+        atol = 0.065
+        frobenius_threshold = 0.014
+    assert_numeric_metrics(
+        ref_output,
+        output,
+        pcc_threshold=pcc_threshold,
+        rtol=rtol,
+        atol=atol,
+        frobenius_threshold=frobenius_threshold,
+    )
+
+
+# Geometry cases (see UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES in sharded_test_utils.py for the covered
+# tile-aligned-uneven and non-tile-aligned widths). Covers both the legacy path and Welford.
+_LAYER_NORM_UNEVEN_MERGE_GATE = {
+    (72, 2, False, ttnn.bfloat16),  # w72_c2_nonaligned legacy
+    (72, 2, True, ttnn.bfloat16),  # w72_c2_nonaligned welford
+    (200, 3, False, ttnn.bfloat16),  # w200_c3_nonaligned legacy
+    # w200_c3_nonaligned welford fp32 trips the unp_A_dst_format LLK assert in layernorm_sharded_welford.cpp,
+    # which hangs the device under TT_METAL_LLK_ASSERTS=1. Re-gate (200, 3, True, ttnn.float32) once #60764 is fixed.
+    (224, 3, True, ttnn.bfloat8_b),  # w224_c3 welford
+}
+
+
+# One parametrize with explicit ids, so the ids stay those of the stacked decorators (width-backend-dtype).
+_LAYER_NORM_UNEVEN_PARAMS = [
+    pytest.param(
+        w,
+        cores,
+        use_welford,
+        dtype,
+        id=f"{width_id}-{backend_id}-{dtype_id}",
+        marks=pytest.mark.merge_gate if (w, cores, use_welford, dtype) in _LAYER_NORM_UNEVEN_MERGE_GATE else (),
+    )
+    for (w, cores), width_id in zip(UNEVEN_MULTICORE_LOGICAL_WIDTH_CASES, UNEVEN_MULTICORE_LOGICAL_WIDTH_IDS)
+    for use_welford, backend_id in ((False, "legacy"), (True, "welford"))
+    for dtype, dtype_id in ((ttnn.bfloat16, "bfloat16"), (ttnn.float32, "float32"), (ttnn.bfloat8_b, "bfloat8_b"))
+]
+
+
+@pytest.mark.parametrize("w, num_cores_w, use_welford, dtype", _LAYER_NORM_UNEVEN_PARAMS)
 def test_layer_norm_sharded_uneven_multicore_logical_width(device, w, num_cores_w, use_welford, dtype):
     run_sharded_norm_logical_width_multicore(
         device, is_rmsnorm=False, w=w, num_cores_w=num_cores_w, dtype=dtype, use_welford=use_welford
@@ -654,8 +744,9 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, 
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("use_weight_bias", [False, True], ids=["no_weight_bias", "weight_bias"])
+@pytest.mark.parametrize("h", [32, 64])
 def test_layer_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias, h
 ):
     """A shard grid with a partially-filled trailing line is not a rectangle, so the reduction multicasts
     over a bounding box larger than the active cores. The result must still match torch, including when the
@@ -663,7 +754,6 @@ def test_layer_norm_sharded_width_non_rectangular_grid(
     orientations (which select different mcast core-range topologies in the factory)."""
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,
@@ -853,3 +943,49 @@ def test_layer_norm_sharded_subblock_w_zero(device, expect_error, norm, use_welf
             )
         else:
             ttnn_rms_norm_sharded(device, tt_input, block_ht=h // 32, block_wt=shard_w // 32, subblock_w=0)
+
+
+# The residual of a sharded layer_norm / rms_norm may have a different dtype than the input. Its DFB used to be
+# declared with the input's data format and tile size, so the residual was misread (or, when the input tile is
+# larger than the residual tile, the program failed to build). Reference: fp64 on the values stored on device.
+@pytest.mark.parametrize(
+    "input_dtype, residual_dtype",
+    [
+        (ttnn.bfloat16, ttnn.float32),
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.float32, ttnn.bfloat16),
+        (ttnn.float32, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+        (ttnn.bfloat8_b, ttnn.float32),
+    ],
+)
+@pytest.mark.parametrize("two_stage", [False, True])
+@pytest.mark.parametrize("op, use_welford", [("layer_norm", False), ("layer_norm", True), ("rms_norm", False)])
+def test_sharded_norm_residual_dtype_differs_from_input(
+    device, input_dtype, residual_dtype, two_stage, op, use_welford
+):
+    torch.manual_seed(0)
+    h, w, num_cores_h, num_cores_w, block_ht, block_wt, subblock_wt = simple_size_params(two_stage)
+    mem_config = create_sharded_mem_config(h, w, num_cores_h, num_cores_w, two_stage)
+    tt_input = ttnn.from_torch(
+        torch.randn((h, w)), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    tt_residual = ttnn.from_torch(
+        torch.randn((h, w)), dtype=residual_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config
+    )
+    x = ttnn.to_torch(tt_input).double() + ttnn.to_torch(tt_residual).double()
+
+    if op == "layer_norm":
+        output = ttnn_layer_norm_sharded(
+            device, tt_input, use_welford, block_ht, block_wt, subblock_wt, residual=tt_residual
+        )
+        expected = torch.nn.functional.layer_norm(x, [w], eps=1e-12)
+    else:
+        output = ttnn_rms_norm_sharded(device, tt_input, block_ht, block_wt, subblock_wt, residual=tt_residual)
+        expected = x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + 1e-12)
+
+    output = output.double().reshape(expected.shape)
+    pcc = torch.corrcoef(torch.stack([output.flatten(), expected.flatten()]))[0, 1].item()
+    max_abs = (output - expected).abs().max().item()
+    # The interleaved path with the same dtypes reaches PCC >= 0.99995 and max abs error <= 0.06 here.
+    assert pcc > 0.9999 and max_abs < 0.1, f"pcc={pcc:.6f} max_abs={max_abs:.4g}"

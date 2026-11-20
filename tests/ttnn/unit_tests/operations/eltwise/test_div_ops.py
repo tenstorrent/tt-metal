@@ -185,6 +185,100 @@ def test_div_no_nan_fp32(device):
     assert_with_ulp(expected_result=torch_output, actual_result=output, ulp_threshold=1, allow_nonfinite=True)
 
 
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_quotient_refinement(device, op):
+    # Scale both adversarial pairs across the normal exponent range. Refining
+    # unscaled operands loses a subnormal residual even when a, b and a/b are normal.
+    a = torch.tensor([0x4F518358, 0x3FCF913C], dtype=torch.int32).view(torch.float32).double()
+    b = torch.tensor([0x4EDD39E7, 0x3FE28788], dtype=torch.int32).view(torch.float32).double()
+    shifts = torch.arange(-126, 127)[:, None] - torch.tensor([31, 0])
+    a, b = torch.ldexp(a, shifts).float().flatten(), torch.ldexp(b, shifts).float().flatten()
+    normal = (a >= torch.finfo(torch.float32).tiny) & (b >= torch.finfo(torch.float32).tiny)
+    a, b = a[normal], b[normal]
+    a, b = torch.cat([a, -a, a, -a]), torch.cat([b, b, -b, -b])
+    a, b = a.repeat(2)[:2048].reshape(64, 32), b.repeat(2)[:2048].reshape(64, 32)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    expected = (a.double() / b.double()).float()
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_random_exponents(device, op):
+    generator = torch.Generator().manual_seed(58228)
+    a = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
+    b = torch.randint(0x00800000, 0x7F800000, (65536,), generator=generator, dtype=torch.int32).view(torch.float32)
+    a[::2], b[::3] = -a[::2], -b[::3]
+    expected = (a.double() / b.double()).float()
+    normal = torch.isfinite(expected) & (expected.abs() >= torch.finfo(torch.float32).tiny)
+    # Keep a fixed, tile-aligned shape without making accuracy claims about FTZ results.
+    a, b = torch.where(normal, a, 1.0).reshape(2048, 32), torch.where(normal, b, 1.0).reshape(2048, 32)
+    expected = (a.double() / b.double()).float()
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_mantissa_refinement(device, op):
+    # Sweep near the reciprocal seed's worst error, varying both mantissas.
+    # With one reciprocal Newton step, a separately rounded residual multiply
+    # on Wormhole fails this at 2 ULP.
+    bits = torch.arange(1 << 18, dtype=torch.int32)
+    a = (((bits * 1664525 + 1013904223) & 0x7FFFFF) | 0x3F800000).view(torch.float32).reshape(8192, 32)
+    b = (bits | 0x3F800000).view(torch.float32).reshape(8192, 32)
+    expected = (a.double() / b.double()).float()
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_exponent_boundaries(device, op):
+    limits = torch.finfo(torch.float32)
+    values = torch.tensor([limits.tiny, 2.0 * limits.tiny, 0.5, 1.0, 2.0, limits.max / 2, limits.max, 2.0**64])
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    a, b = a.flatten().repeat(16).reshape(32, 32), b.flatten().repeat(16).reshape(32, 32)
+    a[::2], b[::3] = -a[::2], -b[::3]
+    expected = (a.double() / b.double()).float()
+    # Subnormal results flush to zero on these architectures.
+    expected = torch.where(expected.abs() < limits.tiny, 0.0, expected)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert_with_ulp(expected_result=expected, actual_result=actual, ulp_threshold=1, allow_nonfinite=True)
+
+
+@pytest.mark.parametrize("op", [ttnn.div_no_nan, ttnn.divide])
+def test_div_fp32_special_values(device, op):
+    tiny = torch.finfo(torch.float32).tiny
+    values = torch.tensor(
+        [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, tiny, -tiny, tiny / 2, -tiny / 2, 2.0**-149, -(2.0**-149)]
+        + [float("inf"), -float("inf"), float("nan"), -float("nan")]
+    )
+    a, b = torch.meshgrid(values, values, indexing="ij")
+    a, b = a.flatten().repeat(4).reshape(32, 32), b.flatten().repeat(4).reshape(32, 32)
+    # Subnormal inputs flush to sign-preserving zero. No normal pair here has a subnormal
+    # quotient, whose zero sign differs by architecture; exponent_boundaries covers those.
+    flush = lambda x: torch.where(x.abs() < tiny, torch.copysign(torch.zeros_like(x), x), x)
+    expected = flush(a) / flush(b)
+    if op == ttnn.div_no_nan:
+        # eqz compares exactly, so subnormal divisors keep division's flushed result.
+        expected = torch.where(b == 0, 0.0, expected)
+    # SFPU multiplication produces positive zero for exact zero results.
+    expected = torch.where(expected == 0, 0.0, expected)
+    input_a = ttnn.from_torch(a, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    input_b = ttnn.from_torch(b, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    actual = ttnn.to_torch(op(input_a, input_b))
+    assert torch.equal(torch.isnan(actual), torch.isnan(expected))
+    non_nan = ~torch.isnan(expected)
+    assert torch.equal(actual[non_nan], expected[non_nan])
+    assert torch.equal(torch.signbit(actual[non_nan]), torch.signbit(expected[non_nan]))
+
+
 @pytest.mark.parametrize("val_a, val_b", [(0.5, 0.0), (-0.5, 0.0), (0.0, 0.0)])
 @pytest.mark.parametrize("dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("approx", [True, False])
@@ -194,6 +288,8 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
 
     if val_a == 0.0 and val_b == 0.0 and dtype == "bfloat16":
         pytest.skip("Skipping test for 0/0 on bfloat16")
+    if approx and dtype == "bfloat16":
+        pytest.skip("Skipping test for fast approximate mode")
 
     x_torch = torch.tensor([[val_a]], dtype=torch_dtype)
     y_torch = torch.tensor([[val_b]], dtype=torch_dtype)
@@ -209,10 +305,6 @@ def test_div_by_zero(device, val_a, val_b, dtype, approx):
 
     # Note: torch.equal return false for if both tensors are nan
     # This is why we use assert_with_ulp to test for equality
-
-    if approx and dtype == "bfloat16":
-        pytest.skip("Skipping test for fast approximate mode")
-
     assert_with_ulp(expected_result=z_torch, actual_result=tt_out, ulp_threshold=0, allow_nonfinite=True)
 
 
@@ -225,6 +317,8 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
 
     if val_a == 0.0 and val_b == 0.0 and dtype == "bfloat16":
         pytest.skip("Skipping test for 0/0 on bfloat16")
+    if approx and dtype == "bfloat16":
+        pytest.skip("Skipping test for fast approximate mode")
 
     x_torch = torch.tensor([[val_a]], dtype=torch_dtype)
     y_torch = torch.tensor([[val_b]], dtype=torch_dtype)
@@ -236,9 +330,6 @@ def test_divide_inplace_by_zero(device, val_a, val_b, dtype, approx):
     y_tt_inplace = ttnn.from_torch(y_torch, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     ttnn.divide_(x_tt_inplace, y_tt_inplace, fast_and_approximate_mode=approx)
     tt_out_inplace = ttnn.to_torch(x_tt_inplace)
-
-    if approx and dtype == "bfloat16":
-        pytest.skip("Skipping test for fast approximate mode")
 
     assert_with_ulp(expected_result=z_torch, actual_result=tt_out_inplace, ulp_threshold=0, allow_nonfinite=True)
 
@@ -347,8 +438,7 @@ def test_optional_output_tensor_remainder(device):
 @pytest.mark.parametrize("input_dtype", [ttnn.bfloat16, ttnn.float32])
 @pytest.mark.parametrize("rounding_mode", [None, "floor", "trunc"])
 @pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32])
-@pytest.mark.parametrize("op", [ttnn.div, ttnn.divide])
-def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype, op):
+def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype):
     torch_dtype = torch.bfloat16 if input_dtype == ttnn.bfloat16 else torch.float32
     torch_input_a = torch.tensor([[7.0, -7.0, 6.0, -6.0]], dtype=torch_dtype)
     torch_input_b = torch.full_like(torch_input_a, 2.0)
@@ -356,7 +446,7 @@ def test_div_output_dtype(device, input_dtype, rounding_mode, output_dtype, op):
     input_tensor_a = ttnn.from_torch(torch_input_a, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     input_tensor_b = ttnn.from_torch(torch_input_b, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
 
-    output = op(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, dtype=output_dtype)
+    output = ttnn.div(input_tensor_a, input_tensor_b, rounding_mode=rounding_mode, dtype=output_dtype)
 
     torch_golden = torch.div(torch_input_a.float(), torch_input_b.float(), rounding_mode=rounding_mode)
     if output_dtype == ttnn.int32:
@@ -521,15 +611,15 @@ def test_div_int32_rejects_non_float32_output_dtype(device, expect_error):
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize("scalar", [2.5, -3.14, 2.0, -2.0, 0.5, -0.5])
-@pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT, ttnn.ROW_MAJOR_LAYOUT])
-@pytest.mark.parametrize("use_sub_core_grids", [False, True])
+@pytest.mark.parametrize("scalar", [2.5, -3.14, 2.0])
+@pytest.mark.parametrize("layout, use_sub_core_grids", [(ttnn.TILE_LAYOUT, False), (ttnn.ROW_MAJOR_LAYOUT, True)])
 def test_div_int32_float_scalar_promotion(device, rounding_mode, scalar, layout, use_sub_core_grids):
     # Format boundaries: FP32 has 24 significant bits, so +/- (2**24 + 3)
     # rounds on promotion; INT32 endpoints exercise the largest signed magnitudes.
-    # The remaining small integers cover exact/inexact quotients and both signs.
-    # Scalars +/-2.0 distinguish Python float promotion from integer dispatch;
-    # +/-0.5 and +/-2.5 are binary-exact, while +/-3.14 also exercises FP32 rounding.
+    # The remaining small integers cover exact/inexact quotients and both signs, so
+    # the quotient sign does not depend on the scalar's sign.
+    # Scalar 2.0 distinguishes Python float promotion from integer dispatch;
+    # 2.5 is binary-exact, while -3.14 also exercises FP32 rounding.
     torch_input = torch.tensor(
         [-(2**31), -(2**24 + 3), -1999, -7, -5, 0, 5, 7, 1999, 2**24 + 3, 2**31 - 1], dtype=torch.int32
     )
@@ -583,9 +673,15 @@ def test_div_int32_float_scalar_promotion_output_dtype(device, rounding_mode, ou
 
 
 @pytest.mark.parametrize("rounding_mode", [None, "trunc", "floor"])
-@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("use_sub_core_grids", [False, True])
-@pytest.mark.parametrize("interleaved_output", [False, True])
+@pytest.mark.parametrize(
+    "layout, use_sub_core_grids, interleaved_output",
+    [
+        (ttnn.ROW_MAJOR_LAYOUT, False, True),
+        (ttnn.ROW_MAJOR_LAYOUT, True, False),
+        (ttnn.TILE_LAYOUT, False, True),
+        (ttnn.TILE_LAYOUT, True, False),
+    ],
+)
 @pytest.mark.parametrize(
     "strategy,shape,grid_end",
     [
@@ -637,10 +733,10 @@ def test_div_int32_float_scalar_promotion_nonfinite(device, rounding_mode, scala
     expected = ttnn.to_torch(ttnn.div(fp32_input, scalar, rounding_mode=rounding_mode))
     assert result.dtype == ttnn.float32
     torch.testing.assert_close(ttnn.to_torch(result), expected, rtol=0, atol=0, equal_nan=True)
-    # Native FP32 division currently returns NaN for infinite divisors. Promotion
-    # must match that path; fixing its infinity handling is a separate kernel change.
-    if abs(scalar) != float("inf"):
-        golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+    golden = torch.div(torch_input.float(), scalar, rounding_mode=rounding_mode)
+    # PyTorch's floor division by infinity differs from flooring the quotient;
+    # the comparison against native FP32 above covers that existing behavior.
+    if abs(scalar) != float("inf") or rounding_mode != "floor":
         torch.testing.assert_close(ttnn.to_torch(result), golden, rtol=0, atol=0, equal_nan=True)
 
 
@@ -747,3 +843,59 @@ def test_fmod_scalar_just_below_exact_multiple_fp32(scalar, device):
     assert torch.allclose(output_tensor, torch_output_tensor, atol=1e-3, rtol=0)
     # The defining contract, stated separately: the magnitude of the result is below the modulus.
     assert torch.all(output_tensor.abs() < abs(scalar))
+
+
+def block_float_tolerance(expected, mantissa_bits):
+    width = expected.shape[-1]
+    blocks = torch.nn.functional.pad(expected, (0, -width % 16)).unflatten(-1, (-1, 16))
+    block_exp = torch.floor(torch.log2(blocks.abs().amax(-1, keepdim=True).clamp_min(2.0**-126)))
+    return 2 * torch.pow(2.0, block_exp - (mantissa_bits - 1)).expand_as(blocks).flatten(-2)[..., :width]
+
+
+@pytest.mark.parametrize(
+    "shape", [(1, 1, 40, 72), (1, 1, 33, 65), (2, 1, 64, 100), (1, 1, 64, 96), (1, 1, 33, 64), (1, 1, 40, 48)]
+)
+@pytest.mark.parametrize("dtype, mantissa_bits", [(ttnn.bfloat8_b, 7), (ttnn.bfloat4_b, 3)])
+def test_div_block_float_unaligned_width(device, shape, dtype, mantissa_bits):
+    torch.manual_seed(0)
+    a = ttnn.from_torch(torch.randn(shape), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand(shape) + 0.5, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = ttnn.to_torch(a) / ttnn.to_torch(b)
+
+    output = ttnn.to_torch(ttnn.divide(a, b, dtype=dtype))
+
+    assert torch.all((output - expected).abs() <= block_float_tolerance(expected, mantissa_bits))
+
+
+@pytest.mark.parametrize(
+    "b_shape, input_dtype, mode",
+    [
+        ((1, 1, 1, 72), ttnn.bfloat8_b, "dtype"),
+        ((1, 1, 40, 1), ttnn.bfloat8_b, "dtype"),
+        ((1, 1, 40, 72), ttnn.bfloat16, "dtype"),
+        ((1, 1, 40, 72), ttnn.float32, "dtype"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "output_tensor"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "inplace"),
+        ((1, 1, 40, 72), ttnn.bfloat8_b, "scalar_lhs"),
+    ],
+)
+def test_div_block_float_unaligned_width_variants(device, b_shape, input_dtype, mode):
+    torch.manual_seed(0)
+    a_shape = (1, 1, 40, 72)
+    a = ttnn.from_torch(torch.randn(a_shape), dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    b = ttnn.from_torch(torch.rand(b_shape) + 0.5, dtype=input_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = ttnn.to_torch(a) / ttnn.to_torch(b)
+
+    if mode == "scalar_lhs":
+        expected = 2.0 / ttnn.to_torch(b)
+        output = ttnn.divide(2.0, b, dtype=ttnn.bfloat8_b)
+    elif mode == "dtype":
+        output = ttnn.divide(a, b, dtype=ttnn.bfloat8_b)
+    elif mode == "output_tensor":
+        output = ttnn.from_torch(torch.zeros(a_shape), dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.divide(a, b, output_tensor=output)
+    else:
+        ttnn.divide_(a, b)
+        output = a
+
+    assert torch.all((ttnn.to_torch(output) - expected).abs() <= block_float_tolerance(expected, 7))

@@ -26,10 +26,11 @@ points. Per cell the script measures:
 The cached prefix is prefilled once per row (per user slot); each cell then appends only its new
 chunks at that offset, so the prefix stays intact and every cell sees exactly `cached` tokens.
 Each row gets its own runner launch with the KV capacity fitted to `cached + MAX_NEW` (51200): the
-dense layers gather the whole cache shard per chunk, so an over-sized cache would skew the numbers.
-Idle TTFT is wall-clock between the producer (on rank 0's host) and the last rank (another host),
-so the hosts must be NTP-synced; `h2d_ms` in the JSONL (push -> rank 0 compute start, same host) is
-the skew-free part. TTFT under load is the closed-loop TTFT of `USERS` zero-think-time users (the
+MSA index_k gather moves close to the whole slot capacity per chunk on a 1D fabric, so an over-sized cache
+would skew the numbers.
+Every time is the producer's own clock: a chunk ends at its last layer ack, which the runner
+forwards to rank 0's host, so no cross-host clock sync is needed. `first_ack_ms` in the JSONL is
+push -> first layer ack. TTFT under load is the closed-loop TTFT of `USERS` zero-think-time users (the
 push blocks when the runner's H2D FIFO is full), measured over the requests that entered a full
 pipeline.
 
@@ -109,12 +110,10 @@ Results: `OUT` holds one JSON line per idle iteration (`mode: idle`) and per loa
 models/demos/minimax_m3/scripts/prefill_matrix/matrix_table.py <results.jsonl> [--iter0] [--csv out.csv]
 ```
 
-Per-run artefacts in `WORK`: `runner*.log` (all ranks), `producer*.log`, `timing_*/rank<r>.csv`
-(one row per chunk per rank: `rank,c,compute_start,compute_ms`, from `PREFILL_SYNC_PER_CHUNK=1`),
-the rendered `binding_*.yaml` + `manifest_*.json` per launch, `reset_<host>.log`, and the
+Per-run artefacts in `WORK`: `runner*.log` (all ranks), `producer*.log`, the rendered `binding_*.yaml` + `manifest_*.json` per launch, `reset_<host>.log`, and the
 `last_runner_log` / `last_producer_log` pointers.
 
-The measurement arithmetic (steady-state window, TTFT-under-load statistics, timing-CSV reader) is
+The measurement arithmetic (layer-ack chunk ledger, steady-state window, TTFT-under-load statistics) is
 in the ttnn-free `matrix_math.py`, unit-tested by
 `models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py` (host-only, no device; run it with
 `pytest models/demos/minimax_m3/tests/unit/test_prefill_matrix_math.py`).
@@ -126,8 +125,6 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 * The runner path uses the 2D fabric, on which the MoE dispatch's `sparse_mcast` fast path is
   disabled (the log says `sparse_mcast DISABLED`), so stage times are not comparable to the
   single-mesh harness (`tests/galaxy_prefill_kv_pcc.py`).
-* `PREFILL_SYNC_PER_CHUNK=1` (needed for the per-chunk timing rows) costs a few % of
-  throughput versus the production runner.
 * Small requests (< 5120 new tokens) always cost one full chunk, so their tok/s is `new / one
   chunk latency`; under load the pipeline still processes a full chunk per period, so their
   "processed" tok/s is the pipeline ceiling while "new" tok/s shows the padding waste.
@@ -139,7 +136,7 @@ in the ttnn-free `matrix_math.py`, unit-tested by
 | `run_matrix.sh` | top-level: loops the cached rows (and `REPS`), prints the tables |
 | `matrix_row.sh` | one row: shutdown previous runner, (reset,) launch runner, wait ready, run producer |
 | `matrix_runner.sh` | node side: manifest + rendered binding, exec `run_pipeline_prefill.sh` |
-| `matrix_producer.py` | pushes chunks over H2D, measures from the ranks' timing CSVs, writes JSONL |
+| `matrix_producer.py` | pushes chunks over H2D, measures from the runner's layer acks, writes JSONL |
 | `matrix_math.py` | stdlib-only measurement arithmetic used by the producer (unit-tested) |
 | `matrix_shutdown.py` | sends the SHUTDOWN sentinel to a live runner |
 | `matrix_table.py` | tables / CSV from a results JSONL |

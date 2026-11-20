@@ -9,7 +9,7 @@ import ttnn
 from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3.tests.unit.utils import random_torch_tensor, run_test
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker data format conversion. Issue: #41024")

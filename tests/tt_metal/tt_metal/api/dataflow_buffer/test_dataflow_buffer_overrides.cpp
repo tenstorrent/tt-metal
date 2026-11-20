@@ -33,42 +33,42 @@ static void run_dfb_size_override_test(
     const uint32_t entries_per_producer = (workload + num_producers - 1) / num_producers;
     const uint32_t entries_per_consumer = (workload + num_consumers - 1) / num_consumers;
 
-    const experimental::DFBSpecName DFB_NAME{"dfb"};
-    const experimental::KernelSpecName PRODUCER{"producer"};
-    const experimental::KernelSpecName CONSUMER{"consumer"};
-    const experimental::TensorParamName IN_TENSOR{"in_tensor"};
-    const experimental::TensorParamName OUT_TENSOR{"out_tensor"};
+    const DFBSpecName DFB_NAME{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+    const TensorParamName IN_TENSOR{"in_tensor"};
+    const TensorParamName OUT_TENSOR{"out_tensor"};
 
     const auto tensor_spec = make_flat_dram_tensor_spec(data_entry_size, workload);
     MeshTensor in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
     MeshTensor out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
 
-    experimental::DataMovementHardwareConfig dm_producer_cfg;
-    experimental::DataMovementHardwareConfig dm_consumer_cfg;
+    DataMovementHardwareConfig dm_producer_cfg;
+    DataMovementHardwareConfig dm_consumer_cfg;
     if (mesh_device.arch() == ARCH::QUASAR) {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{};
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{};
+        dm_producer_cfg = DataMovementHardwareConfig{};
+        dm_consumer_cfg = DataMovementHardwareConfig{};
     } else {
-        dm_producer_cfg = experimental::DataMovementHardwareConfig{
+        dm_producer_cfg = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_0,
                 },
         };
-        dm_consumer_cfg = experimental::DataMovementHardwareConfig{
+        dm_consumer_cfg = DataMovementHardwareConfig{
             .config_1xx =
-                experimental::DataMovementHardwareConfig::DataMovement1XXConfig{
-                    .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
-                    .noc = tt::tt_metal::NOC::NOC_1,
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = DataMovementProcessor::RISCV_1,
+                    .noc = NOC::NOC_1,
                 },
         };
     }
 
-    experimental::KernelSpec producer_spec{
+    KernelSpec producer_spec{
         .unique_id = PRODUCER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_producer.cpp",
         .num_threads = num_producers,
-        .dfb_bindings = {experimental::ProducerOf(DFB_NAME, "out")},
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
         .tensor_bindings = {{.tensor_parameter_name = IN_TENSOR, .accessor_name = "src_tensor"}},
         .compile_time_args =
             {{"num_entries_per_producer", entries_per_producer},
@@ -77,15 +77,15 @@ static void run_dfb_size_override_test(
         .runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}},
         .hw_config = dm_producer_cfg,
     };
-    experimental::KernelSpec consumer_spec{
+    KernelSpec consumer_spec{
         .unique_id = CONSUMER,
         .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer.cpp",
         .num_threads = num_consumers,
         .dfb_bindings = {{
             .dfb_spec_name = DFB_NAME,
             .accessor_name = "in",
-            .endpoint_type = experimental::DFBEndpointType::CONSUMER,
-            .access_pattern = experimental::DFBAccessPattern::STRIDED,
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED,
         }},
         .tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}},
         .compile_time_args =
@@ -98,14 +98,14 @@ static void run_dfb_size_override_test(
     };
     // Implicit sync is gen2 only
     if (mesh_device.arch() == ARCH::QUASAR && !implicit_sync) {
-        auto& producer_spec_dm = std::get<experimental::DataMovementHardwareConfig>(producer_spec.hw_config);
+        auto& producer_spec_dm = std::get<DataMovementHardwareConfig>(producer_spec.hw_config);
         if (!producer_spec_dm.config_2xx) {
-            producer_spec_dm.config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{};
+            producer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
         }
         auto& producer_hw_config = *producer_spec_dm.config_2xx;
-        auto& consumer_spec_dm = std::get<experimental::DataMovementHardwareConfig>(consumer_spec.hw_config);
+        auto& consumer_spec_dm = std::get<DataMovementHardwareConfig>(consumer_spec.hw_config);
         if (!consumer_spec_dm.config_2xx) {
-            consumer_spec_dm.config_2xx = experimental::DataMovementHardwareConfig::DataMovement2XXConfig{};
+            consumer_spec_dm.config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{};
         }
         auto& consumer_hw_config = *consumer_spec_dm.config_2xx;
         producer_hw_config.disable_dfb_implicit_sync_for_all = true;
@@ -113,16 +113,16 @@ static void run_dfb_size_override_test(
     }
 
     const CoreRangeSet core_range_set(CoreRange(CoreCoord(0, 0), CoreCoord(0, 0)));
-    experimental::WorkUnitSpec wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_range_set};
+    WorkUnitSpec wu{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = core_range_set};
 
-    experimental::DataflowBufferSpec dfb_spec{
+    DataflowBufferSpec dfb_spec{
         .unique_id = DFB_NAME,
         .entry_size = entry_size_spec,
         .num_entries = num_entries_spec,
         .data_format_metadata = tt::DataFormat::Float16_b,
     };
 
-    experimental::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "dfb_size_override",
         .kernels = {producer_spec, consumer_spec},
         .dataflow_buffers = {dfb_spec},
@@ -134,13 +134,13 @@ static void run_dfb_size_override_test(
 
     auto device_range = distributed::MeshCoordinateRange(mesh_device.shape());
     distributed::MeshWorkload mesh_workload;
-    mesh_workload.add_program(device_range, experimental::MakeProgramFromSpec(mesh_device, spec));
+    mesh_workload.add_program(device_range, Program(mesh_device, spec));
     Program& program = mesh_workload.get_programs().at(device_range);
 
     const auto input =
         tt::test_utils::generate_uniform_random_vector<uint32_t>(0, 100, workload * data_entry_size / sizeof(uint32_t));
 
-    const experimental::NodeCoord node{0, 0};
+    const NodeCoord node{0, 0};
     uint32_t eff_entry_size = entry_size_spec;
     uint32_t eff_num_entries = num_entries_spec;
 
@@ -155,23 +155,21 @@ static void run_dfb_size_override_test(
         ASSERT_EQ(eff_entry_size, data_entry_size)
             << "test setup error: effective entry_size must equal the bound tensor page size";
 
-        experimental::ProgramRunArgs run_params;
-        experimental::ProgramRunArgs::KernelRunArgs producer_params{.kernel = PRODUCER};
+        ProgramRunArgs run_params;
+        ProgramRunArgs::KernelRunArgs producer_params{.kernel = PRODUCER};
         producer_params.runtime_arg_values =
-            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
-        experimental::ProgramRunArgs::KernelRunArgs consumer_params{.kernel = CONSUMER};
+            MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
+        ProgramRunArgs::KernelRunArgs consumer_params{.kernel = CONSUMER};
         consumer_params.runtime_arg_values =
-            experimental::MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
+            MakeRuntimeArgsForSingleNode(node, {{"chunk_offset", 0u}, {"entries_per_core", workload}});
         run_params.kernel_run_args = {producer_params, consumer_params};
-        run_params.tensor_args = {
-            {IN_TENSOR, experimental::TensorArgument{in_tensor}},
-            {OUT_TENSOR, experimental::TensorArgument{out_tensor}}};
+        run_params.tensor_args = {{IN_TENSOR, TensorArgument{in_tensor}}, {OUT_TENSOR, TensorArgument{out_tensor}}};
         // At most one dfb_run_overrides entry per DFB; carry whichever of entry_size/num_entries is set.
         if (step.entry_size.has_value() || step.num_entries.has_value()) {
             run_params.dfb_run_overrides.push_back(
                 {.dfb = DFB_NAME, .entry_size = step.entry_size, .num_entries = step.num_entries});
         }
-        experimental::SetProgramRunArgs(program, run_params);
+        program.set_program_run_args(run_params);
 
         // Overrides are reflected in host-side state immediately.
         auto dfb = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(*DFB_NAME));
@@ -277,6 +275,120 @@ TEST_P(DFBImplicitSyncParamFixture, DMTest1xDFB_NumEntriesOverride_ReEntry_4Sx1S
         {DfbSizeOverride{}, DfbSizeOverride{.num_entries = 16}},
         /*num_producers=*/4,
         /*num_consumers=*/1);
+}
+
+// A DFB size override between two enqueues must reach the device, even when fast dispatch replays cached
+// commands. A stale ring still passes data, so probe kernels report the config the device holds.
+TEST_F(UnitMeshAnyDispatchFixture, DataflowBufferSizeOverrideReenqueue) {
+    constexpr uint32_t extent_record_words = 8;
+    constexpr uint32_t extent_record_bytes = extent_record_words * sizeof(uint32_t);
+    constexpr uint32_t initial_entry_size = 1024;
+    constexpr uint32_t initial_num_entries = 16;
+    constexpr uint32_t override_entry_size = 2048;
+    constexpr uint32_t override_num_entries = 8;
+
+    distributed::MeshDevice& mesh_device = this->device();
+    const NodeCoord node{0, 0};
+    const CoreCoord core{0, 0};
+    const DFBSpecName DFB_NAME{"dfb"};
+    const KernelSpecName PRODUCER{"producer"};
+    const KernelSpecName CONSUMER{"consumer"};
+
+    DataMovementHardwareConfig producer_hw;
+    if (mesh_device.arch() == ARCH::QUASAR) {
+        producer_hw.config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for = {DFB_NAME}};
+    } else {
+        producer_hw.config_1xx =
+            DataMovementHardwareConfig::DataMovement1XXConfig{.processor = DataMovementProcessor::RISCV_0};
+    }
+
+    KernelSpec producer_spec{
+        .unique_id = PRODUCER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_extent_probe_dm.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {ProducerOf(DFB_NAME, "out")},
+        .compile_time_args = {{"num_tc_snapshots", 1u}, {"rotate_tc", 0u}, {"credits_to_post", 0u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config = producer_hw,
+    };
+    KernelSpec consumer_spec{
+        .unique_id = CONSUMER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/dfb_extent_probe_compute.cpp",
+        .num_threads = 1,
+        .dfb_bindings = {{
+            .dfb_spec_name = DFB_NAME,
+            .accessor_name = "in",
+            .endpoint_type = DFBEndpointType::CONSUMER,
+            .access_pattern = DFBAccessPattern::STRIDED,
+        }},
+        .compile_time_args =
+            {{"num_tc_snapshots", 1u},
+             {"rotate_tc", 0u},
+             {"drain_producer_rotate_credits", 0u},
+             {"drain_last_tc_credit", 0u},
+             {"num_producers", 1u}},
+        .runtime_arg_schema = {.runtime_arg_names = {"result_l1_addr"}},
+        .hw_config = ComputeHardwareConfig{},
+    };
+
+    ProgramSpec spec{
+        .name = "dfb_size_override_reenqueue",
+        .kernels = {producer_spec, consumer_spec},
+        .dataflow_buffers = {{
+            .unique_id = DFB_NAME,
+            .entry_size = initial_entry_size,
+            .num_entries = initial_num_entries,
+            .data_format_metadata = tt::DataFormat::Float16_b,
+        }},
+        .work_units = {{.name = "main", .kernels = {PRODUCER, CONSUMER}, .target_nodes = node}},
+    };
+
+    const distributed::MeshCoordinateRange device_range(mesh_device.shape());
+    distributed::MeshWorkload mesh_workload;
+    mesh_workload.add_program(device_range, Program(mesh_device, spec));
+    Program& program = mesh_workload.get_programs().at(device_range);
+
+    const uint32_t producer_result_l1 = top_of_l1_scratch_addr(mesh_device, 2 * extent_record_bytes);
+    const uint32_t consumer_result_l1 = producer_result_l1 + extent_record_bytes;
+
+    ProgramRunArgs run_params;
+    run_params.kernel_run_args = {
+        {.kernel = PRODUCER,
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", producer_result_l1}})},
+        {.kernel = CONSUMER,
+         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"result_l1_addr", consumer_result_l1}})},
+    };
+
+    // With one producer and one consumer, every arch reports the whole ring as local, with stride == entry_size:
+    // {entry_size, stride_size, total_num_entries, total_size_bytes, local_num_entries, local_size_bytes,
+    //  ring_span_bytes, ring_span_num_entries}.
+    auto enqueue_and_expect_extent = [&](uint32_t entry_size, uint32_t num_entries) {
+        distributed::EnqueueMeshWorkload(mesh_device.mesh_command_queue(), mesh_workload, /*blocking=*/true);
+        const uint32_t total_size_bytes = entry_size * num_entries;
+        const std::vector<uint32_t> expected = {
+            entry_size,
+            entry_size,
+            num_entries,
+            total_size_bytes,
+            num_entries,
+            total_size_bytes,
+            total_size_bytes,
+            num_entries};
+        for (const uint32_t result_l1 : {producer_result_l1, consumer_result_l1}) {
+            std::vector<uint32_t> record;
+            slow_dispatch::ReadFromL1(mesh_device, core, result_l1, extent_record_bytes, record);
+            EXPECT_EQ(record, expected) << (result_l1 == producer_result_l1 ? "producer" : "consumer");
+        }
+    };
+
+    program.set_program_run_args(run_params);
+    enqueue_and_expect_extent(initial_entry_size, initial_num_entries);
+
+    run_params.dfb_run_overrides.push_back(
+        {.dfb = DFB_NAME, .entry_size = override_entry_size, .num_entries = override_num_entries});
+    program.set_program_run_args(run_params);
+    enqueue_and_expect_extent(override_entry_size, override_num_entries);
 }
 
 }  // namespace tt::tt_metal

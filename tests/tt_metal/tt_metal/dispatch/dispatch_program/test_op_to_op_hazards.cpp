@@ -32,9 +32,10 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/buffer.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/experimental/byte_based_tensor_transfers.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
@@ -45,27 +46,25 @@
 
 #include "command_queue_fixture.hpp"
 #include "device_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 namespace {
 
-namespace exp = tt::tt_metal::experimental;
-
 // Inlined from the api-test-local test_helpers.hpp so this dispatch test is self-contained: push a
 // TensorBinding{param_name, accessor_name} onto the kernel (the kernel then reaches the bound tensor
 // via TensorAccessor(tensor::<accessor_name>)).
-void BindTensorParameterToKernel(
-    exp::KernelSpec& kernel, std::string tensor_parameter_name, std::string accessor_name) {
-    kernel.tensor_bindings.push_back(exp::TensorBinding{
-        .tensor_parameter_name = exp::TensorParamName{std::move(tensor_parameter_name)},
+void BindTensorParameterToKernel(KernelSpec& kernel, std::string tensor_parameter_name, std::string accessor_name) {
+    kernel.tensor_bindings.push_back(TensorBinding{
+        .tensor_parameter_name = TensorParamName{std::move(tensor_parameter_name)},
         .accessor_name = std::move(accessor_name),
     });
 }
 
 // Gen1 data-movement placement for a kernel spec.
-exp::DataMovementHardwareConfig dm_config(DataMovementProcessor processor, NOC noc) {
-    return exp::DataMovementHardwareConfig{
-        .config_1xx = exp::DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}};
+DataMovementHardwareConfig dm_config(DataMovementProcessor processor, NOC noc) {
+    return DataMovementHardwareConfig{
+        .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{.processor = processor, .noc = noc}};
 }
 
 // Default tensor: 1x32 BFLOAT16 ROW_MAJOR interleaved = 64 bytes = one page. The scratchpad matches.
@@ -79,9 +78,9 @@ constexpr uint32_t kStallSmall = 1000000;  // ~1ms @1GHz: producer holds the buf
 
 // Writer and reader run on DIFFERENT nodes so they can execute concurrently (same node => same core =>
 // serial). Trace replay pipelines the two programs; with the op-boundary barrier relaxed the reader races.
-const exp::NodeCoord wNode{0, 0};
-const exp::NodeCoord rNode{1, 0};
-const exp::NodeCoord mNode{2, 0};  // 3rd distinct core for the middle op of 3-program (WAW / transitive) chains
+const NodeCoord wNode{0, 0};
+const NodeCoord rNode{1, 0};
+const NodeCoord mNode{2, 0};  // 3rd distinct core for the middle op of 3-program (WAW / transitive) chains
 
 const char* kWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_writer.cpp";
 const char* kReaderKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_reader.cpp";
@@ -89,6 +88,8 @@ const char* kRawWriterKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/ha
 const char* kMultiKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_multi_rw.cpp";
 const char* kPathsKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_paths.cpp";
 const char* kUnresolvedSlotKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_unresolved_slot.cpp";
+const char* kShardedPagesKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_buf_rw_sharded_pages.cpp";
+const char* kRawFamilyKernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/hazard_raw_family_coverage.cpp";
 
 MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
@@ -98,122 +99,123 @@ MeshTensor alloc(distributed::MeshDevice& md, BufferType bt) {
     return MeshTensor::allocate_on_device(md, spec);
 }
 
-void dope(const MeshTensor& t, uint32_t pattern) {
+void dope(MeshTensor& t, uint32_t pattern) {
     std::vector<uint32_t> v(kWords, pattern);
-    detail::WriteToBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    auto& cq = t.mutable_device().mesh_command_queue();
+    enqueue_write_tensor(cq, reinterpret_cast<const std::byte*>(v.data()), t);
+    distributed::Finish(cq);  // the write is non-blocking and `v` goes out of scope here
 }
 
 std::vector<uint32_t> readback(distributed::MeshCommandQueue& cq, const MeshTensor& t) {
-    std::vector<uint32_t> v;
+    std::vector<uint32_t> v(kWords);
     distributed::Finish(cq);
-    detail::ReadFromBuffer(*t.mesh_buffer().get_reference_buffer(), v);
+    enqueue_read_tensor(cq, t, reinterpret_cast<std::byte*>(v.data()));
     return v;
 }
 
 // Analyzable WRITER: scratchpad staging + tensor::dst binding, on NOC1.
 Program build_writer(
-    distributed::MeshDevice& md, exp::NodeCoord node, const MeshTensor& dst, uint32_t pattern, uint32_t stall) {
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"writer"},
+    distributed::MeshDevice& md, NodeCoord node, const MeshTensor& dst, uint32_t pattern, uint32_t stall) {
+    KernelSpec k{
+        .unique_id = KernelSpecName{"writer"},
         .source = kWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"pattern", "stall"}},
         .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_1),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     BindTensorParameterToKernel(k, "dst", "dst");
 
-    exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "hazard_writer",
         .kernels = {k},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"writer"}}, .target_nodes = node}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"writer"}}, .target_nodes = node}},
     };
-    spec.tensor_parameters = {
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
+    spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
 
-    Program program = exp::MakeProgramFromSpec(md, spec);
-    exp::ProgramRunArgs params;
-    params.kernel_run_args = {exp::ProgramRunArgs::KernelRunArgs{
-        .kernel = exp::KernelSpecName{"writer"},
-        .runtime_arg_values = exp::MakeRuntimeArgsForSingleNode(node, {{"pattern", pattern}, {"stall", stall}})}};
-    params.tensor_args = {{exp::TensorParamName{"dst"}, exp::TensorArgument{dst}}};
-    exp::SetProgramRunArgs(program, params);
+    Program program(md, spec);
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"writer"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"pattern", pattern}, {"stall", stall}})}};
+    params.tensor_args = {{TensorParamName{"dst"}, TensorArgument{dst}}};
+    program.set_program_run_args(params);
     return program;
 }
 
 // Analyzable READER: scratchpad staging + tensor::src (read) / tensor::dst (write) bindings, on NOC0.
 Program build_reader(
-    distributed::MeshDevice& md, exp::NodeCoord node, const MeshTensor& src, const MeshTensor& dst, uint32_t stall) {
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"reader"},
+    distributed::MeshDevice& md, NodeCoord node, const MeshTensor& src, const MeshTensor& dst, uint32_t stall) {
+    KernelSpec k{
+        .unique_id = KernelSpecName{"reader"},
         .source = kReaderKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"stall"}},
         .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     BindTensorParameterToKernel(k, "src", "src");
     BindTensorParameterToKernel(k, "dst", "dst");
 
-    exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "hazard_reader",
         .kernels = {k},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"reader"}}, .target_nodes = node}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"reader"}}, .target_nodes = node}},
     };
     spec.tensor_parameters = {
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"src"}, .spec = src.tensor_spec()},
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"dst"}, .spec = dst.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"src"}, .spec = src.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()},
     };
 
-    Program program = exp::MakeProgramFromSpec(md, spec);
-    exp::ProgramRunArgs params;
-    params.kernel_run_args = {exp::ProgramRunArgs::KernelRunArgs{
-        .kernel = exp::KernelSpecName{"reader"},
-        .runtime_arg_values = exp::MakeRuntimeArgsForSingleNode(node, {{"stall", stall}})}};
+    Program program(md, spec);
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"reader"},
+        .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"stall", stall}})}};
     params.tensor_args = {
-        {exp::TensorParamName{"src"}, exp::TensorArgument{src}},
-        {exp::TensorParamName{"dst"}, exp::TensorArgument{dst}},
+        {TensorParamName{"src"}, TensorArgument{src}},
+        {TensorParamName{"dst"}, TensorArgument{dst}},
     };
-    exp::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
     return program;
 }
 
 // UN-ANALYZABLE WRITER (bail case): NO tensor binding; dst is a raw address via a named RTA + AllocatorBank.
 Program build_raw_writer(
-    distributed::MeshDevice& md, exp::NodeCoord node, const MeshTensor& dst, uint32_t pattern, uint32_t stall) {
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"raw_writer"},
+    distributed::MeshDevice& md, NodeCoord node, const MeshTensor& dst, uint32_t pattern, uint32_t stall) {
+    KernelSpec k{
+        .unique_id = KernelSpecName{"raw_writer"},
         .source = kRawWriterKernel,
         .num_threads = 1,
         .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "pattern", "stall"}},
         .hw_config = dm_config(DataMovementProcessor::RISCV_1, NOC::NOC_1),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     // NOTE: deliberately NO BindTensorParameterToKernel -> the detector cannot see dst.
 
-    exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "hazard_raw_writer",
         .kernels = {k},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"raw_writer"}}, .target_nodes = node}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"raw_writer"}}, .target_nodes = node}},
     };
 
-    Program program = exp::MakeProgramFromSpec(md, spec);
+    Program program(md, spec);
     const uint32_t dst_addr = static_cast<uint32_t>(dst.mesh_buffer().get_reference_buffer()->address());
-    exp::ProgramRunArgs params;
-    params.kernel_run_args = {exp::ProgramRunArgs::KernelRunArgs{
-        .kernel = exp::KernelSpecName{"raw_writer"},
+    ProgramRunArgs params;
+    params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
+        .kernel = KernelSpecName{"raw_writer"},
         .runtime_arg_values =
-            exp::MakeRuntimeArgsForSingleNode(node, {{"dst_addr", dst_addr}, {"pattern", pattern}, {"stall", stall}})}};
-    exp::SetProgramRunArgs(program, params);
+            MakeRuntimeArgsForSingleNode(node, {{"dst_addr", dst_addr}, {"pattern", pattern}, {"stall", stall}})}};
+    program.set_program_run_args(params);
     return program;
 }
 
@@ -221,47 +223,47 @@ Program build_raw_writer(
 // verify resolve_buf_rw tracks the RIGHT bound objects (not just the right counts). No runtime args.
 Program build_multi(
     distributed::MeshDevice& md,
-    exp::NodeCoord node,
+    NodeCoord node,
     const MeshTensor& in0,
     const MeshTensor& in1,
     const MeshTensor& in2,
     const MeshTensor& out) {
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"multi"},
+    KernelSpec k{
+        .unique_id = KernelSpecName{"multi"},
         .source = kMultiKernel,
         .num_threads = 1,
         .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     BindTensorParameterToKernel(k, "in0", "in0");
     BindTensorParameterToKernel(k, "in1", "in1");
     BindTensorParameterToKernel(k, "in2", "in2");
     BindTensorParameterToKernel(k, "out", "out");
 
-    exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "hazard_multi",
         .kernels = {k},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"multi"}}, .target_nodes = node}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"multi"}}, .target_nodes = node}},
     };
     spec.tensor_parameters = {
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"in0"}, .spec = in0.tensor_spec()},
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"in1"}, .spec = in1.tensor_spec()},
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"in2"}, .spec = in2.tensor_spec()},
-        exp::TensorParameter{.unique_id = exp::TensorParamName{"out"}, .spec = out.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"in0"}, .spec = in0.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"in1"}, .spec = in1.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"in2"}, .spec = in2.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"out"}, .spec = out.tensor_spec()},
     };
 
-    Program program = exp::MakeProgramFromSpec(md, spec);
-    exp::ProgramRunArgs params;
+    Program program(md, spec);
+    ProgramRunArgs params;
     params.tensor_args = {
-        {exp::TensorParamName{"in0"}, exp::TensorArgument{in0}},
-        {exp::TensorParamName{"in1"}, exp::TensorArgument{in1}},
-        {exp::TensorParamName{"in2"}, exp::TensorArgument{in2}},
-        {exp::TensorParamName{"out"}, exp::TensorArgument{out}},
+        {TensorParamName{"in0"}, TensorArgument{in0}},
+        {TensorParamName{"in1"}, TensorArgument{in1}},
+        {TensorParamName{"in2"}, TensorArgument{in2}},
+        {TensorParamName{"out"}, TensorArgument{out}},
     };
-    exp::SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
     return program;
 }
 
@@ -298,9 +300,7 @@ void expect_all(const std::vector<uint32_t>& v, uint32_t val) {
 }
 
 // Gen1 (WH/BH) only, mirroring test_scratchpad_hw.cpp's guard.
-bool skip_if_not_gen1(IDevice* device) {
-    return device->arch() != tt::ARCH::WORMHOLE_B0 && device->arch() != tt::ARCH::BLACKHOLE;
-}
+bool skip_if_not_gen1(tt::ARCH arch) { return arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE; }
 
 // Confirm a kernel's ELF buffer-R/W info (op-to-op R/W inference). This reads what the loader harvested
 // from the compiled .tt.BUF_RW section (see Kernel::query_buf_rw), keyed off the KernelSpec name, so it
@@ -317,7 +317,7 @@ void expect_buf_rw(
     const std::string& kernel_name) {
     auto kernel = wl.get_programs()[range].impl().get_kernel_by_spec_name(kernel_name);
     ASSERT_NE(kernel, nullptr) << "no kernel '" << kernel_name << "' in workload";
-    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.get_devices()[0]);
+    const ll_api::BufRwInfo rw = kernel->query_buf_rw(*md.impl().get_devices()[0]);
     if (kernel_name == "writer") {
         EXPECT_FALSE(rw.opaque) << "writer is analyzable";
         EXPECT_TRUE(rw.reads.empty()) << "writer reads nothing";
@@ -343,7 +343,7 @@ void expect_buf_rw(
 // RAW hazard, DRAM: producer writes W to DRAM X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -366,7 +366,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardDram) {
 // RAW hazard, L1: producer writes W to L1 X (stalled); consumer reads X -> Y; barrier => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -390,7 +390,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardL1) {
 // serial/overlap timing probe (long stalls on two different nodes) used later to confirm concurrency.
 TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -417,7 +417,7 @@ TEST_F(UnitMeshCQSingleCardFixture, RawFreeDisjointAndOverlapProbe) {
 // WAR hazard: consumer reads X (stalled) -> Y; producer then writes W to X; barrier => Y == D (original).
 TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -442,7 +442,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarHazard) {
 // WAR-free (disjoint): consumer reads Z (doped W) -> Y; producer writes a DISJOINT X => Y == W.
 TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -467,7 +467,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WarFreeDisjoint) {
 // WAW: two producers write X (W1 then W2); consumer reads X -> Y; barrier => Y == W2 (last write wins).
 TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -489,7 +489,7 @@ TEST_F(UnitMeshCQSingleCardFixture, WawLastWriteWins) {
 // Transitive N/N+1/N+2: N writes X=W (stalled), N+1 touches a disjoint buffer, N+2 reads X -> Z => Z == W.
 TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -518,7 +518,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TransitiveSkipDependency) {
 // buffer usage, so a future detector must conservatively KEEP the barrier. Passes today.
 TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
     auto md = devices_.at(0);
-    if (skip_if_not_gen1(md->get_devices()[0])) {
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -546,8 +546,8 @@ TEST_F(UnitMeshCQSingleCardFixture, RawHazardFreeFunctionKernelBail) {
 // the bound-but-unaccessed tensor absent. This is what a single-tensor test cannot catch.
 TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
-    if (skip_if_not_gen1(dev)) {
+    auto* dev = md->impl().get_devices()[0];
+    if (skip_if_not_gen1(md->arch())) {
         GTEST_SKIP() << "requires Wormhole B0 or Blackhole";
     }
     auto& cq = md->mesh_command_queue();
@@ -598,28 +598,34 @@ TEST_F(UnitMeshCQSingleCardFixture, BufRwMultiTensorTracksCorrectObjects) {
     EXPECT_EQ(name_set(rw.writes), (std::set<std::string_view>{"out"}));
 }
 
-// Coverage of op-to-op R/W inference beyond plain Noc::async_read/async_write on a TensorAccessor
-// (hazard_buf_rw_paths.cpp): each binding is touched through one other transfer path or endpoint kind, and must
-// resolve as that path implies. A path the notes miss shows up as its binding missing from a set -- the unsafe
-// failure (a detector would see no access and relax a real hazard). Compile + one launch; no hazard is timed, so it
-// runs on any architecture and either dispatch mode.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEndpoint) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
-    const exp::NodeCoord node{0, 0};
+    auto* dev = md->impl().get_devices()[0];
+    const NodeCoord node{0, 0};
 
     // DRAM interleaved unless the path needs otherwise: LocalTensorAccessor needs L1, ShardView a sharded tensor.
     const std::vector<std::string> dram_names = {
-        "view", "iter", "state", "zero", "legacy_r", "legacy_w", "wrap", "escape", "unused"};
+        "view",
+        "iter",
+        "bank_r",
+        "bank_state",
+        "bank_w",
+        "state",
+        "zero",
+        "legacy_r",
+        "legacy_w",
+        "wrap",
+        "escape",
+        "unused"};
     std::vector<MeshTensor> tensors;
     std::vector<std::pair<std::string, const MeshTensor*>> bound;
-    tensors.reserve(dram_names.size() + 3);
-    bound.reserve(dram_names.size() + 3);
+    tensors.reserve(dram_names.size() + 5);
+    bound.reserve(dram_names.size() + 5);
     for (size_t i = 0; i < dram_names.size(); ++i) {
         tensors.push_back(alloc(*md, BufferType::DRAM));
     }
     tensors.push_back(alloc(*md, BufferType::L1));
-    for (int i = 0; i < 2; ++i) {  // "shard", "shard_iter"
+    for (int i = 0; i < 4; ++i) {  // "shard", "shard_iter", "shard_once_r", "shard_once_w"
         ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {1, 32}, ShardOrientation::ROW_MAJOR);
         MemoryConfig memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
         TensorLayout layout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), memory_config);
@@ -631,32 +637,34 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
     bound.emplace_back("local", &tensors[dram_names.size()]);
     bound.emplace_back("shard", &tensors[dram_names.size() + 1]);
     bound.emplace_back("shard_iter", &tensors[dram_names.size() + 2]);
+    bound.emplace_back("shard_once_r", &tensors[dram_names.size() + 3]);
+    bound.emplace_back("shard_once_w", &tensors[dram_names.size() + 4]);
 
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"paths"},
+    KernelSpec k{
+        .unique_id = KernelSpecName{"paths"},
         .source = kPathsKernel,
         .num_threads = 1,
         .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
-    exp::ProgramSpec spec{
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    ProgramSpec spec{
         .name = "hazard_buf_rw_paths",
         .kernels = {},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"paths"}}, .target_nodes = node}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"paths"}}, .target_nodes = node}},
     };
-    exp::ProgramRunArgs params;
+    ProgramRunArgs params;
     for (const auto& [name, tensor] : bound) {
         BindTensorParameterToKernel(k, name, name);
         spec.tensor_parameters.push_back(
-            exp::TensorParameter{.unique_id = exp::TensorParamName{name}, .spec = tensor->tensor_spec()});
-        params.tensor_args.emplace(exp::TensorParamName{name}, exp::TensorArgument{*tensor});
+            TensorParameter{.unique_id = TensorParamName{name}, .spec = tensor->tensor_spec()});
+        params.tensor_args.emplace(TensorParamName{name}, TensorArgument{*tensor});
     }
     spec.kernels = {k};
-    Program program = exp::MakeProgramFromSpec(*md, spec);
-    exp::SetProgramRunArgs(program, params);
+    Program program(*md, spec);
+    program.set_program_run_args(params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
@@ -670,12 +678,170 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
         }
         return s;
     };
-    EXPECT_FALSE(rw.opaque);
+    // "escape" drops to a raw NoC call on an address pulled out of its accessor, which is conservatively OPAQUE.
+    EXPECT_TRUE(rw.opaque);
     // Typed endpoints and paths are exact; the binding-erasing / address-escaping ones are both read and written.
     EXPECT_EQ(
         names(rw.reads),
-        (std::set<std::string_view>{"view", "iter", "shard_iter", "shard", "legacy_r", "wrap", "escape", "local"}));
-    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"state", "zero", "legacy_w", "wrap", "escape", "local"}));
+        (std::set<std::string_view>{
+            "view",
+            "iter",
+            "shard_iter",
+            "shard",
+            "shard_once_r",
+            "bank_r",
+            "bank_state",
+            "legacy_r",
+            "wrap",
+            "escape",
+            "local"}));
+    EXPECT_EQ(
+        names(rw.writes),
+        (std::set<std::string_view>{"shard_once_w", "bank_w", "state", "zero", "legacy_w", "wrap", "escape", "local"}));
+}
+
+// Every public raw-address API family, independently: each FAMILY_* build of hazard_raw_family_coverage.cpp
+// makes exactly one such family the kernel's SOLE raw access (see that file's header comment for the full
+// list and why multicast ones target {self, one peer}, never self-only). BufRwCoversEveryTransferPathAndEndpoint
+// above only proves plain noc_async_read/write fire OPAQUE; a family missing its own note_opaque() -- as
+// noc_inline_dw_write briefly was -- would hide behind that test's other assertions. One failing EXPECT per
+// family here instead names exactly which wrapper regressed.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwEveryRawFamilyIndependentlyOpaque) {
+    auto md = devices_.at(0);
+    auto* dev = md->impl().get_devices()[0];
+    const NodeCoord node{0, 0};
+
+    // Non-loopback multicast must not target self alone (see e.g. noc_async_write_multicast's own doc:
+    // "the destination range must not be just self"), so these families need a real second core.
+    const bool has_peer_column = md->logical_grid_size().x >= 2;
+    const CoreCoord self_phys = md->worker_core_from_logical_core(CoreCoord{0, 0});
+    const CoreCoord peer_phys = has_peer_column ? md->worker_core_from_logical_core(CoreCoord{1, 0}) : CoreCoord{0, 0};
+
+    struct Family {
+        std::string name;
+        bool needs_multicast_peer = false;
+    };
+    const std::vector<Family> families = {
+        {"FAMILY_READ_ONE_PACKET"},
+        {"FAMILY_READ_ANY_LEN"},
+        {"FAMILY_READ_ONE_PACKET_SET_STATE"},
+        {"FAMILY_READ_SET_STATE"},
+        {"FAMILY_READ_SET_PCIE_STATE"},
+        {"FAMILY_READ_PCIE"},
+        {"FAMILY_WRITE_ONE_PACKET"},
+        {"FAMILY_WRITE_ANY_LEN"},
+        {"FAMILY_WRITE_ONE_PACKET_SET_STATE"},
+        {"FAMILY_WRITE_SET_STATE"},
+        {"FAMILY_WRITE_SET_PCIE_STATE"},
+        {"FAMILY_WRITE_PCIE"},
+        {"FAMILY_WRITE_ONE_PACKET_WITH_TRID"},
+        {"FAMILY_WRITE_ONE_PACKET_WITH_TRID_SET_STATE"},
+        {"FAMILY_INLINE_DW_WRITE"},
+        {"FAMILY_INLINE_DW_WRITE_SET_STATE"},
+        {"FAMILY_WRITE_MULTICAST_ONE_PACKET", /*needs_multicast_peer=*/true},
+        {"FAMILY_WRITE_MULTICAST", /*needs_multicast_peer=*/true},
+        {"FAMILY_WRITE_MULTICAST_LOOPBACK_SRC", /*needs_multicast_peer=*/true},
+        {"FAMILY_INLINE_MCAST_DW_WRITE", /*needs_multicast_peer=*/true},
+    };
+
+    for (const auto& family : families) {
+        if (family.needs_multicast_peer && !has_peer_column) {
+            continue;  // 1-column grid: nothing else exercises these 4, but don't fail the whole test over it
+        }
+
+        KernelSpec k{
+            .unique_id = KernelSpecName{"raw"},
+            .source = kRawFamilyKernel,
+            .num_threads = 1,
+            .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+        };
+        k.scratchpad_bindings.push_back(
+            KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+        k.compiler_options.defines[family.name] = "1";
+        if (family.needs_multicast_peer) {
+            k.compiler_options.defines["MCAST_X_START"] = std::to_string(self_phys.x);
+            k.compiler_options.defines["MCAST_Y_START"] = std::to_string(self_phys.y);
+            k.compiler_options.defines["MCAST_X_END"] = std::to_string(peer_phys.x);
+            k.compiler_options.defines["MCAST_Y_END"] = std::to_string(peer_phys.y);
+        }
+
+        ProgramSpec spec{
+            .name = "raw_family_" + family.name,
+            .kernels = {k},
+            .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+            .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+                .name = "wu", .kernels = {KernelSpecName{"raw"}}, .target_nodes = node}},
+        };
+        Program program(*md, spec);
+        program.set_program_run_args(ProgramRunArgs{});
+        distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+        const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+        auto kernel = program_impl.get_kernel_by_spec_name("raw");
+        ASSERT_NE(kernel, nullptr) << family.name;
+        const ll_api::BufRwInfo rw = kernel->query_buf_rw(*dev);
+        EXPECT_TRUE(rw.opaque) << family.name << " must independently emit OPAQUE";
+    }
+}
+
+// The sharded pages() iterator's pages, used as NoC endpoints (hazard_buf_rw_sharded_pages.cpp), must resolve
+// exactly: src READ only, dst WRITE only. The pages carry their accessor and the iterator computes addresses without a
+// note, so a regression to the public get_noc_addr adds a WRITE on src, and one to a plain Page drops the READ.
+TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwShardedPagesIteratorIsExact) {
+    auto md = devices_.at(0);
+    auto* dev = md->impl().get_devices()[0];
+    const NodeCoord node{0, 0};
+
+    // Four one-page rows in one L1 shard, so the iterator walks a multi-page contiguous run.
+    const Shape shape{4, 32};
+    ShardSpec shard_spec(CoreRangeSet(CoreRange(CoreCoord{0, 0})), {4, 32}, ShardOrientation::ROW_MAJOR);
+    MemoryConfig sharded_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, shard_spec};
+    MeshTensor src = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), sharded_config)));
+    MemoryConfig interleaved_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
+    MeshTensor dst = MeshTensor::allocate_on_device(
+        *md, TensorSpec(shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::ROW_MAJOR), interleaved_config)));
+
+    KernelSpec k{
+        .unique_id = KernelSpecName{"sharded_pages"},
+        .source = kShardedPagesKernel,
+        .num_threads = 1,
+        .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
+    };
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    BindTensorParameterToKernel(k, "src", "src");
+    BindTensorParameterToKernel(k, "dst", "dst");
+    ProgramSpec spec{
+        .name = "hazard_buf_rw_sharded_pages",
+        .kernels = {k},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"sharded_pages"}}, .target_nodes = node}},
+    };
+    spec.tensor_parameters = {
+        TensorParameter{.unique_id = TensorParamName{"src"}, .spec = src.tensor_spec()},
+        TensorParameter{.unique_id = TensorParamName{"dst"}, .spec = dst.tensor_spec()}};
+    Program program(*md, spec);
+    ProgramRunArgs params;
+    params.tensor_args = {{TensorParamName{"src"}, TensorArgument{src}}, {TensorParamName{"dst"}, TensorArgument{dst}}};
+    program.set_program_run_args(params);
+    distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
+
+    const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();
+    auto kernel = program_impl.get_kernel_by_spec_name("sharded_pages");
+    ASSERT_NE(kernel, nullptr);
+    const ResolvedBufRw rw = kernel->resolve_buf_rw(*dev, program_impl);
+    auto names = [](const auto& accesses) {
+        std::set<std::string_view> s;
+        for (const auto& a : accesses) {
+            s.insert(a.param_name);
+        }
+        return s;
+    };
+    EXPECT_FALSE(rw.opaque);
+    EXPECT_EQ(names(rw.reads), (std::set<std::string_view>{"src"}));
+    EXPECT_EQ(names(rw.writes), (std::set<std::string_view>{"dst"}));
 }
 
 // A record whose slot names none of the kernel's bindings (stale or foreign metadata) can't be attributed:
@@ -683,30 +849,30 @@ TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwCoversEveryTransferPathAndEn
 // real read still resolves.
 TEST_F(AnyDispatchMeshDeviceSingleCardFixture, BufRwUnresolvedSlotIsOpaque) {
     auto md = devices_.at(0);
-    IDevice* dev = md->get_devices()[0];
+    auto* dev = md->impl().get_devices()[0];
     auto in = alloc(*md, BufferType::DRAM);
 
-    exp::KernelSpec k{
-        .unique_id = exp::KernelSpecName{"unresolved"},
+    KernelSpec k{
+        .unique_id = KernelSpecName{"unresolved"},
         .source = kUnresolvedSlotKernel,
         .num_threads = 1,
         .hw_config = dm_config(DataMovementProcessor::RISCV_0, NOC::NOC_0),
     };
-    k.scratchpad_bindings.push_back(exp::KernelSpec::ScratchpadBinding{
-        .scratchpad_spec_name = exp::ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
+    k.scratchpad_bindings.push_back(
+        KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"});
     BindTensorParameterToKernel(k, "in", "in");
-    exp::ProgramSpec spec{
+    ProgramSpec spec{
         .name = "hazard_unresolved_slot",
         .kernels = {k},
-        .scratchpads = {exp::ScratchpadSpec{.unique_id = exp::ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
-        .work_units = std::vector<exp::WorkUnitSpec>{exp::WorkUnitSpec{
-            .name = "wu", .kernels = {exp::KernelSpecName{"unresolved"}}, .target_nodes = exp::NodeCoord{0, 0}}},
+        .scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kBufBytes}},
+        .work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
+            .name = "wu", .kernels = {KernelSpecName{"unresolved"}}, .target_nodes = NodeCoord{0, 0}}},
     };
-    spec.tensor_parameters = {exp::TensorParameter{.unique_id = exp::TensorParamName{"in"}, .spec = in.tensor_spec()}};
-    Program program = exp::MakeProgramFromSpec(*md, spec);
-    exp::ProgramRunArgs params;
-    params.tensor_args = {{exp::TensorParamName{"in"}, exp::TensorArgument{in}}};
-    exp::SetProgramRunArgs(program, params);
+    spec.tensor_parameters = {TensorParameter{.unique_id = TensorParamName{"in"}, .spec = in.tensor_spec()}};
+    Program program(*md, spec);
+    ProgramRunArgs params;
+    params.tensor_args = {{TensorParamName{"in"}, TensorArgument{in}}};
+    program.set_program_run_args(params);
     distributed::MeshWorkload wl = LaunchProgram(*md, std::move(program));
 
     const auto& program_impl = wl.get_programs()[distributed::MeshCoordinateRange(md->shape())].impl();

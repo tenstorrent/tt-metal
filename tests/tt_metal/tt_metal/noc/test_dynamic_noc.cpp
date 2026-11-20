@@ -28,6 +28,7 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 namespace tt::tt_metal {
 
@@ -54,8 +55,8 @@ void build_and_run_program(
 
     log_info(tt::LogTest, "Starting compile of {} programs now.", NUM_PROGRAMS);
 
-    Program program1;
-    Program program2;
+    Program program1 = CreateProgram(*device);
+    Program program2 = CreateProgram(*device);
 
     CircularBufferConfig cb_config =
         CircularBufferConfig(page_size, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, page_size);
@@ -173,18 +174,22 @@ void build_and_run_program(
 
 void build_and_run_program_ethernet(
     const std::shared_ptr<distributed::MeshDevice>& device,
-    bool /*slow_dispatch*/,
+    bool slow_dispatch,
     uint32_t NUM_PROGRAMS,
     uint32_t MAX_LOOP,
     uint32_t page_size,
     bool mix_noc_mode) {
+    if (not slow_dispatch) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+        return;
+    }
     // Make random
     auto random_seed = 0;  // (unsigned int)time(NULL);
     uint32_t seed = tt::parse_env("TT_METAL_SEED", random_seed);
     log_info(tt::LogTest, "Using Test Seed: {}", seed);
     srand(seed);
 
-    auto* device_0 = device->get_devices()[0];
+    auto* device_0 = device->impl().get_devices()[0];
 
     // Query the number of ethernet ERISCs
     const auto erisc_count = tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(
@@ -210,8 +215,8 @@ void build_and_run_program_ethernet(
 
     log_info(tt::LogTest, "Starting compile of {} ethernet programs now.", NUM_PROGRAMS);
 
-    Program program1;
-    Program program2;
+    Program program1 = CreateProgram(*device);
+    Program program2 = CreateProgram(*device);
 
     // Add 2 semaphores initialized to 0 for each program, 1 per erisc
     CoreRangeSet eth_cr_set(CoreRange(eth_core, eth_core));

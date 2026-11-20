@@ -4,12 +4,11 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <optional>
-#include "fabric/fabric_edm_packet_header.hpp"
+#include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "fd_kernel.hpp"
 #include "impl/context/context_descriptor.hpp"
-#include "tt_metal/impl/dispatch/system_memory_manager.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
@@ -88,7 +87,6 @@ public:
             dispatch_core_manager,
             get_control_plane,
             get_dispatch_query_manager,
-            {},
             get_reads_dispatch_cores),
         d2h_{d2h},
         tunnel_id_{tunnel_index} {

@@ -83,6 +83,20 @@ def _load_sharded_rows(layer_dir: Path, key: str, start: int, total_len: int) ->
     return out
 
 
+def _load_rows(single: Path, sharded: Path, key: str, start: int, total_len: int) -> "torch.Tensor":
+    """Rows [start, start + total_len) of one golden stream as float32: one file holding the whole tensor if
+    ``single`` exists, else the row shards under ``sharded``. A read short of ``total_len`` raises."""
+    from safetensors import safe_open
+
+    if not single.exists():
+        return _load_sharded_rows(sharded, key, start, total_len)
+    with safe_open(single, framework="pt") as f:
+        out = f.get_slice(key)[start : start + total_len].to(torch.float32)
+    if out.shape[0] != total_len:
+        raise FileNotFoundError(f"{single} covers only {out.shape[0]} of rows [{start},{start + total_len})")
+    return out
+
+
 def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int = 0) -> "torch.Tensor":
     """[total_len, 576] golden kv_post_transform for one layer, format-agnostic:
     - DeepSeek: a single kv_cache/layer_N.safetensors holding the full tensor.
@@ -90,17 +104,11 @@ def _load_golden_kv_post(trace_dir, layer_idx: int, total_len: int, start: int =
 
     `start` skips that many golden rows first. A head+tail capture stores the two windows back to
     back, so its tail begins at the head length rather than at the prompt position it represents:
-    reaching it needs a row offset, not a longer read.
+    reaching it needs a row offset, not a longer read. A read short of ``total_len`` raises in either layout.
     """
-    import torch
-    from safetensors import safe_open
-
+    root = Path(trace_dir) / "kv_cache"
     key = f"kv_post_transform_layer_{layer_idx}"
-    single = Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}.safetensors"
-    if single.exists():
-        with safe_open(single, framework="pt") as f:
-            return f.get_slice(key)[start : start + total_len].to(torch.float32)
-    return _load_sharded_rows(Path(trace_dir) / "kv_cache" / f"layer_{layer_idx}", key, start, total_len)
+    return _load_rows(root / f"layer_{layer_idx}.safetensors", root / f"layer_{layer_idx}", key, start, total_len)
 
 
 def kvpe_golden_present(trace_dir, layer_idx: int) -> bool:
@@ -122,20 +130,22 @@ def index_golden_present(trace_dir, layer_idx: int | None = None) -> bool:
 
     Some vLLM dumps store only ``dsa/dsa_topk_indices_layer_*``, so a trace can hold a valid KVPE golden
     and no indexer key at all. Callers use this to skip index-cache validation instead of failing on the
-    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the ``dsa/indexer_k_layer_*``
-    layout stays encoded in exactly one place."""
-    from pathlib import Path
+    empty ``torch.cat([])`` the loader would hit. Lives next to the loader so the two indexer-key layouts
+    (GLM's row-sharded ``dsa/indexer_k_layer_N/``, Kimi-K3.1's single ``indexer/indexer_k_layer_N.safetensors``)
+    stay encoded in exactly one place."""
+    layer = "*" if layer_idx is None else layer_idx
+    root = Path(trace_dir)
+    return any(root.glob(f"dsa/indexer_k_layer_{layer}")) or any(
+        root.glob(f"indexer/indexer_k_layer_{layer}.safetensors")
+    )
 
-    dsa_dir = Path(trace_dir) / "dsa"
-    pattern = "indexer_k_layer_*" if layer_idx is None else f"indexer_k_layer_{layer_idx}"
-    return dsa_dir.is_dir() and any(dsa_dir.glob(pattern))
 
-
-def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor":
+def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config, position0: int = 0) -> "torch.Tensor":
     """A half-split-roped indexer-key golden re-based onto the device's interleaved rope pairing.
 
     GLM-5.3 is rope-asymmetric: MLA ropes k_pe half-split while the DSA indexer ropes interleaved, so
     a uniformly-roped trace has to be un-roped, re-paired and re-roped -- not column-permuted.
+    Row r was roped at prompt position ``position0 + r``.
     """
     from models.demos.deepseek_v3_d_p.tt.mla.rope import get_cos_sin_matrix
 
@@ -145,9 +155,9 @@ def _rebase_index_k_rope(golden_ik: "torch.Tensor", hf_config) -> "torch.Tensor"
     pe, nope = golden_ik[:, :rope_dim].float(), golden_ik[:, rope_dim:]
 
     def tables(interleave):
-        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=n)
+        cos, sin = get_cos_sin_matrix(hf_config, interleave=interleave, num_positions=position0 + n)
         assert cos.shape[-1] == rope_dim, f"rope table is {cos.shape[-1]} wide, expected {rope_dim}"
-        return cos[0, 0].float(), sin[0, 0].float()
+        return cos[0, 0, position0:].float(), sin[0, 0, position0:].float()
 
     def rot_half_split(x):  # rotate_half: [a, b] -> [-b, a]
         h = rope_dim // 2
@@ -177,27 +187,25 @@ def _load_golden_index_k(
     *,
     rope_layout: str = "interleaved",
     hf_config=None,
+    position0: int | None = None,
 ) -> "torch.Tensor":
-    """[total_len, index_head_dim] golden indexer key for one layer, from the vLLM trace's row-sharded
-    dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors shards (concatenated by start row). Mirrors
-    _load_golden_kv_post but reads the dsa/ subdir and the indexer_k_layer_N key. ``rope_layout`` is
-    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based."""
+    """[total_len, index_head_dim] golden indexer key for one layer (post-LayerNorm, natural basis), format-
+    agnostic as _load_golden_kv_post: Kimi-K3.1's single indexer/indexer_k_layer_N.safetensors, else GLM's
+    row-sharded dsa/indexer_k_layer_N/rows_<start>_<end>.safetensors (concatenated by start row). ``rope_layout`` is
+    the pairing the TRACE stored; ``interleaved`` is the device's own, ``half_split`` is re-based.
+    ``position0`` is the prompt position of the first returned row, which re-basing rotates by. It
+    defaults to ``start``; a windowed (tail) trace stores position ``capture_start + r`` at row r, so
+    pass the absolute position there."""
+    root = Path(trace_dir)
     key = f"indexer_k_layer_{layer_idx}"
-    golden = _load_sharded_rows(Path(trace_dir) / "dsa" / key, key, start, total_len)
+    golden = _load_rows(root / "indexer" / f"{key}.safetensors", root / "dsa" / key, key, start, total_len)
     if rope_layout == "interleaved":
         return golden
     if rope_layout != "half_split":
         raise ValueError(f"unknown index rope layout {rope_layout!r} (expected 'interleaved' or 'half_split')")
-    if start:
-        raise NotImplementedError(
-            f"{key}: a {rope_layout!r} golden cannot be read at start={start}. Re-basing rotates by "
-            f"absolute position, and the rope table is built from position 0, so a windowed read would "
-            f"be re-based by the wrong angles. Score this layer from row 0, or capture the trace with "
-            f"the device's interleaved pairing."
-        )
     if hf_config is None:
         hf_config = get_adapter(os.environ.get("PREFILL_MODEL", DEFAULT_MODEL)).load_hf_config()
-    return _rebase_index_k_rope(golden, hf_config)
+    return _rebase_index_k_rope(golden, hf_config, start if position0 is None else position0)
 
 
 def kv_cache_pcc_check(
@@ -239,21 +247,23 @@ def kv_cache_pcc_check(
     import torch
 
     from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     cfg = pipeline.config
-    # Assumes TP-REPLICATED twice over: `_to_host` keeps one TP column, and blockcyclic_positions
-    # un-rotates with an SP-only period.
     from models.demos.deepseek_v3_d_p.tt.mla.indexer import resolve_has_indexer
+    from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import get_sp_mesh_composer
+    from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import is_tp_deduped_kv_cache, striped_cache_to_host
 
     assert not resolve_has_indexer(pipeline.hf_config), (
-        "kv_cache_pcc_check has no TP-sharded reconstruction: it keeps one TP column and un-rotates with an "
-        "SP-only block-cyclic period, and every sparse/DSA model TP-dedups. Validate such a cache with the "
-        "mock-migration producer read-back (PREFILL_MOCK_MIGRATION=1) instead of PREFILL_STANDALONE_PCC / "
-        "PREFILL_VALIDATE_MIGRATION."
+        "kv_cache_pcc_check checks the KVPE cache only, so a sparse/DSA model's index-key cache would go "
+        "unchecked. Validate such a cache with the producer's device-less read-back instead of "
+        "PREFILL_STANDALONE_PCC / PREFILL_VALIDATE_MIGRATION."
     )
     mesh_device = pipeline.mesh_device
     sp = cfg.sp_factor
+    tp = cfg.tp_factor
+    # Deduped: every (row, col) chip holds a distinct stripe, so reassemble in linear chip order.
+    kv_dedup = is_tp_deduped_kv_cache(kvpe_cache.storage, cfg.mesh_shape)
     chunk_size = cfg.chunk_size
     num_layers = cfg.num_layers
     seq_len_cache = cfg.max_seq_len
@@ -296,14 +306,16 @@ def kv_cache_pcc_check(
 
     # Gather the persistent representation and reconstruct scaled FP8 only on the host. This keeps
     # validation compatible with both cache formats without allocating a BF16 cache on device.
-    composer = ttnn.ConcatMesh2dToTensor(mesh_device, dims=(2, 1), mesh_shape=mesh_device.shape)
-
     def _to_host(tensor):
-        return ttnn.to_torch(tensor, mesh_composer=composer)[:, :1]
+        if kv_dedup:
+            # [slots, 1, seq_len_cache, row] in linear chip order
+            return striped_cache_to_host(tensor, mesh_device, cfg.sp_axis).unsqueeze(1)
+        # TP-replicated: the SP shards concatenate on the sequence dim and only one TP replica is read back.
+        return ttnn.to_torch(tensor, mesh_composer=get_sp_mesh_composer(mesh_device, cfg.sp_axis, concat_dim=2))
 
     cache_full = kvpe_cache.unpack_host(_to_host(kvpe_cache.storage)).to(torch.float32)
 
-    p = blockcyclic_positions(sp, chunk_size, seq_len_cache)
+    p = blockcyclic_positions(sp * tp if kv_dedup else sp, chunk_size, seq_len_cache)
     logger.info(f"[kv-pcc] device KV cache vs golden kv_post_transform (slot={slot_id}, per layer):")
     min_pcc = 1.0
     failures = []

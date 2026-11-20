@@ -1,0 +1,29 @@
+# Int32 gcd on specific operand pairs: Fibonacci neighbours and fp32-NaN bit patterns.
+# The operand samples only these values, so every pair of them, (a, b) and (b, a) included, lands in
+# about 1024 / 64 = 16 lanes of the A/B tiles. One stage per file: the fuser misroutes outputs of
+# later stages for this layout.
+
+dest_acc: true
+
+operands:
+  - name: "input_A"
+    dims: [32, 64]
+    format: Int32
+    stimuli:
+      include:
+        - -1836311903.0
+        - 1134903170.0
+        - 1836311903.0
+        - 2139095041.0
+        - 2143289344.0
+        - 2147483647.0
+  - name: "sfpu_out"
+    dims: [32, 32]
+    format: Int32
+
+operations:
+  - math:
+      - {type: "Fpu", in0: "input_A", operation: "Datacopy", unpacker: "UnpackerA", math_fidelity: "LoFi", unpack_to_dest: true, block_size: [32, 64]}
+      - {type: "BinarySfpu", operation: SfpuGcd, approximation_mode: false, sign_magnitude: true, iterations: 32, block_size: [32, 32], indexes: {src0: 0, src1: 1, dest: 2}}
+    pack:
+      - {output: "sfpu_out", packer: "Packer", block_size: [32, 32], indexes: {dest: 2, out: 0}}

@@ -7,7 +7,7 @@
 // #include "api/compute/compute_kernel_api.h"
 #include "api/compute/tilize.h"
 #include "api/compute/reduce.h"
-// #include "tools/profiler/kernel_profiler.hpp"
+// #include "api/debug/kernel_profiler.hpp"
 
 #define DEBUG_PRINT 0
 

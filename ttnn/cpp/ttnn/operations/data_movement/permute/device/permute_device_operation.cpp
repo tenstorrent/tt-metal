@@ -8,11 +8,17 @@
 #include <numeric>
 #include <utility>
 
+#include <tt-logger/tt-logger.hpp>
+
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 #include "permute_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/transpose/device/transpose_utils.hpp"
+#include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::operations::data_movement {
@@ -179,6 +185,41 @@ ttnn::operations::data_movement::PermuteDeviceOperation::tensor_return_value_t p
     std::optional<Tensor> optional_output_tensor,
     float pad_value) {
     using OperationType = ttnn::operations::data_movement::PermuteDeviceOperation;
+
+    // BH 8-bit int RM pack_untilize drops the top 24 bits of each 32-bit Dest lane (#61827).
+    // Workaround: stage via UInt32 in DRAM, permute, cast back. Lives in prim (not user API)
+    // because fold/transpose/quasar call prim::permute directly; a user-API-only workaround
+    // would need to be duplicated at every call site. Delete this block once #61827 lands.
+    if ((input_tensor.dtype() == DataType::UINT8 || input_tensor.dtype() == DataType::INT8) &&
+        input_tensor.layout() == Layout::ROW_MAJOR && input_tensor.device() != nullptr &&
+        input_tensor.device()->arch() == tt::ARCH::BLACKHOLE && !dims.empty() &&
+        dims.back() != static_cast<uint32_t>(dims.size() - 1)) {
+        const auto src_dtype = input_tensor.dtype();
+        const auto& input_mc = input_tensor.memory_config();
+        const auto final_memory_config = memory_config.value_or(input_mc);
+        // A sharded preallocated output tensor would be silently dropped by the final cast;
+        // reject it so callers do not get a newly-allocated tensor they did not ask for.
+        TT_FATAL(
+            !(optional_output_tensor.has_value() && final_memory_config.is_sharded()),
+            "prim::permute BH 8-bit RM workaround cannot honor a sharded optional_output_tensor; "
+            "pass interleaved or omit it (see #61827).");
+        const auto interleaved_l1 = tt::tt_metal::MemoryConfig(
+            tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
+        auto staged = input_tensor.is_sharded() ? ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt)
+                                                : input_tensor;
+        auto as_u32 = ttnn::typecast(staged, DataType::UINT32, ttnn::DRAM_MEMORY_CONFIG);
+        auto permuted_u32 = ttnn::device_operation::launch<OperationType>(
+            OperationType::operation_attributes_t{
+                .dims = dims, .output_mem_config = ttnn::DRAM_MEMORY_CONFIG, .pad_value = pad_value},
+            OperationType::tensor_args_t{.input_tensor = as_u32, .optional_output_tensor = std::nullopt});
+        const auto cast_mc = final_memory_config.is_sharded() ? interleaved_l1 : final_memory_config;
+        auto as_8bit = optional_output_tensor.has_value()
+                           ? ttnn::typecast(permuted_u32, src_dtype, cast_mc, optional_output_tensor)
+                           : ttnn::typecast(permuted_u32, src_dtype, cast_mc);
+        return final_memory_config.is_sharded() ? ttnn::to_memory_config(as_8bit, final_memory_config, std::nullopt)
+                                                : as_8bit;
+    }
+
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
             .dims = dims,

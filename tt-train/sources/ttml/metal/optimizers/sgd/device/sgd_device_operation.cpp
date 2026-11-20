@@ -6,6 +6,7 @@
 
 #include <enchantum/enchantum.hpp>
 
+#include "metal/common/tensor_validation.hpp"
 #include "sgd_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -19,39 +20,11 @@ void SGDDeviceOperation::validate_on_program_cache_miss(
                             const std::string& name,
                             const tt::tt_metal::Layout required_layout,
                             const tt::tt_metal::DataType required_dtype) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "SGD optimizer requires '{}' to be on DEVICE. Got storage type: '{}'",
+        check_device_tensor(
+            tensor,
+            "SGD",
             name,
-            enchantum::to_string(tensor.storage_type()));
-
-        TT_FATAL(tensor.buffer() != nullptr, "Tensor '{}' must be allocated on device (buffer is null).", name);
-
-        TT_FATAL(
-            tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Tensor '{}' must be in DRAM. Got buffer type: '{}'",
-            name,
-            enchantum::to_string(tensor.buffer()->buffer_type()));
-
-        TT_FATAL(
-            tensor.layout() == required_layout,
-            "Tensor '{}' must have layout '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_layout),
-            enchantum::to_string(tensor.layout()));
-
-        TT_FATAL(
-            tensor.dtype() == required_dtype,
-            "Tensor '{}' must have data type '{}', but got '{}'",
-            name,
-            enchantum::to_string(required_dtype),
-            enchantum::to_string(tensor.dtype()));
-
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Tensor '{}' must use INTERLEAVED memory layout, but got '{}'",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
+            {.dtypes = {required_dtype}, .layout = required_layout, .buffer_type = tt::tt_metal::BufferType::DRAM});
 
         // Logical shapes must match for element-for-element correspondence with the parameter;
         // padding alone cannot tell apart tensors that round up to the same tile extent.
@@ -107,16 +80,18 @@ std::vector<tt::tt_metal::TensorTopology> SGDDeviceOperation::compute_output_top
     return {tensor_args.param.tensor_topology()};
 }
 
+// lr, momentum, dampening and weight_decay are left out of the key: they change between steps (lr schedules; dampening
+// is 0 on a momentum buffer's first update) and reach the kernels only through runtime args, which
+// SGDProgramFactory::override_runtime_arguments re-applies on every cache hit. Every other attribute and the full spec
+// of every tensor, including whether the momentum buffer is present, are keyed.
 ttsl::hash::hash_t SGDDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    const auto& param_tensor = tensor_args.param;
-    const auto& param_logical_shape = param_tensor.logical_shape();
-    auto nesterov = args.nesterov;
-    auto momentum_initialized = tensor_args.momentum_buffer.has_value();
-    auto hash = tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(
-        nesterov, momentum_initialized, param_tensor.dtype(), param_logical_shape);
-
-    return hash;
+    operation_attributes_t keyed_args = args;
+    keyed_args.lr = 0.0F;
+    keyed_args.momentum = 0.0F;
+    keyed_args.dampening = 0.0F;
+    keyed_args.weight_decay = 0.0F;
+    return tt::tt_metal::operation::hash_operation<SGDDeviceOperation>(keyed_args, tensor_args);
 }
 
 }  // namespace ttml::metal::optimizers::sgd::device

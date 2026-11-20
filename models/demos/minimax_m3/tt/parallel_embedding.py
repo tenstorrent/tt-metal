@@ -49,6 +49,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
+from models.demos.minimax_m3.tt.weight_cache import CACHE_DUMP_MODE
 
 # Cache keys for the SHARDED embed table. Distinct from the old replicated "model.embed_tokens.weight",
 # and — critically — neither key is a prefix of the other: weight_cache_is_complete matches by startswith,
@@ -141,6 +142,7 @@ class TtParallelEmbedding(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mesh_mapper,
             cache_file_name=cache_file_name,
+            cache_dump_mode=CACHE_DUMP_MODE,
         )
         if shard_vocab_on_sp:
             # Sentinel zero-rows: pad each per-device vocab shard on the vocab dim with one zero row at top

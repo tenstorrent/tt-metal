@@ -16,10 +16,6 @@ def is_datacopy_node(compute_node: FpuNode) -> bool:
     return False
 
 
-def is_unary_unpacker(compute_node: FpuNode) -> bool:
-    return False
-
-
 def hw_configure_unpack(
     compute_node: FpuNode,
     dest_acc: str,
@@ -112,6 +108,20 @@ def configure_unpack(
 
 
 def dvalid_init(**kwargs) -> str:
+    return ""
+
+
+def unpack_to_dest_sync_init(config: "GlobalConfig", operation: "L1Operation") -> str:
+    return ""
+
+
+def unpack_to_dest_wait_for_dest_available(config: "GlobalConfig") -> str:
+    return ""
+
+
+def unpack_to_dest_section_done(
+    config: "GlobalConfig", operation: "L1Operation"
+) -> str:
     return ""
 
 

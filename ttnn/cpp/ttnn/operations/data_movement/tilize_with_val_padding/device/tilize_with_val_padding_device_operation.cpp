@@ -8,15 +8,20 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
 
 namespace ttnn::prim {
 
-namespace {
-bool can_use_sharded_optimized_factory(
+bool can_use_tilize_with_val_padding_sharded_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    // Its CBs alias the input and output shards, so both must be in L1.
+    if (!input_tensor.memory_config().is_l1() || !operation_attributes.output_mem_config.is_l1()) {
+        return false;
+    }
     if (input_tensor.memory_config().memory_layout() != TensorMemoryLayout::WIDTH_SHARDED) {
         return false;
     }
@@ -38,12 +43,10 @@ bool can_use_sharded_optimized_factory(
     return !operation_attributes.sub_core_grids.has_value();
 }
 
-}  // namespace
-
 TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDeviceOperation::select_program_factory(
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     if (input_tensor.memory_config().is_sharded()) {
-        if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+        if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
             return TilizeWithValPaddingMultiCoreShardedFactory{};
         }
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
@@ -68,6 +71,23 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
+    // The default factory tilizes a whole row per block, which the Quasar unpacker cannot complete on
+    // RTL past QUASAR_MAX_TILIZE_BLOCK_TILES; the block-interleaved factory bounds the block width
+    // instead, whenever the grid admits such a split.
+    if (device->arch() == tt::ARCH::QUASAR &&
+        num_tiles_per_row > operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES) {
+        const uint32_t num_blocks_block = (input_tensor.padded_shape()[-1] * input_tensor.padded_shape()[-2]) /
+                                          (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
+        if (ttnn::try_compute_ncores_wh_sb(
+                grid_area,
+                num_blocks_block,
+                num_tiles_per_row,
+                num_tiles_per_col,
+                operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+                .has_value()) {
+            return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
+        }
+    }
     constexpr uint32_t threshold_row_block = 32;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {
@@ -86,13 +106,19 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
     const auto& input_shape = input_tensor.logical_shape();
 
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Operands need to be on device!");
-    TT_FATAL(input_tensor.buffer() != nullptr, "Operands need to be allocated in buffers on device!");
+    TT_FATAL(input_tensor.is_allocated(), "Operands need to be allocated in buffers on device!");
     TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "Can only tilize row major data");
     TT_FATAL(
         input_tensor.dtype() == DataType::BFLOAT16 or input_tensor.dtype() == DataType::INT32 or
             input_tensor.dtype() == DataType::UINT32 or input_tensor.dtype() == DataType::FLOAT32 or
             input_tensor.dtype() == DataType::UINT16 or input_tensor.dtype() == DataType::FP8_E4M3,
         "Can only tilize bfloat16/float32 or int32/uint32/uint16 or fp8_e4m3 tensors");
+    // Quasar's packer cannot convert Int32 in DEST to a float format.
+    TT_FATAL(
+        !(input_tensor.device()->arch() == tt::ARCH::QUASAR && input_tensor.dtype() == DataType::INT32 &&
+          operation_attributes.output_dtype != DataType::INT32),
+        "INT32 tilize to {} is not supported on Quasar; the output must be INT32",
+        operation_attributes.output_dtype);
     // fp8 tile INPUT unpacks to fp32 in DEST and packs to any float TILE format. Reject non-float outputs:
     // fp8 itself is ROW_MAJOR-only, and integer outputs are meaningless for a float input.
     if (input_tensor.dtype() == DataType::FP8_E4M3) {
@@ -161,9 +187,9 @@ void TilizeWithValPaddingDeviceOperation::validate_on_program_cache_miss(
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
 
-        const uint32_t page_size_bytes = input_tensor.buffer()->page_size();
+        const uint32_t page_size_bytes = input_tensor.mesh_buffer().page_size();
         TT_FATAL(
-            page_size_bytes == input_tensor.buffer()->aligned_page_size(),
+            page_size_bytes == input_tensor.mesh_buffer().aligned_page_size(),
             "Input row-major shard width {} gives page size {} bytes, which must be aligned to {} bytes L1 SRAM "
             "buffer alignment "
             "requirement",
@@ -179,7 +205,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
     const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
-    if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
+    if (can_use_tilize_with_val_padding_sharded_factory(operation_attributes, input_tensor)) {
         // This case only applies when we expect the optimized sharded path to be taken. This bit forces the output
         // tensor to be width-sharded.
         log_warning(
@@ -196,7 +222,7 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
                           // factory, the output has the same shard spec as the input.
         return tt::tt_metal::TensorSpec(
             input_shape,
-            TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 operation_attributes.output_dtype,
                 PageConfig(Layout::TILE),
                 mem_config,
@@ -206,12 +232,30 @@ tt::tt_metal::TensorSpec TilizeWithValPaddingDeviceOperation::compute_output_spe
 
     return tt::tt_metal::TensorSpec(
         input_shape,
-        TensorLayout::fromPaddedShape(
+        tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             operation_attributes.output_dtype,
             PageConfig(Layout::TILE),
             operation_attributes.output_mem_config,
             input_shape,
             operation_attributes.output_padded_shape));
+}
+
+// The block factory sizes its buffers from the L1 free when the program is built, so what free L1
+// decides about its split is part of the key: a call whose free L1 gives a different split misses
+// and rebuilds instead of replaying buffers that would clash with what is now resident. The other
+// factories never read free L1, so their key is the default one and unrelated L1 allocations do
+// not fork it.
+ttsl::hash::hash_t TilizeWithValPaddingDeviceOperation::compute_program_hash(
+    const TilizeWithValPaddingParams& operation_attributes, const Tensor& input_tensor) {
+    std::optional<ttnn::operations::data_movement::BlockL1Fit> block_fit;
+    if (std::holds_alternative<TilizeWithValPaddingMultiCoreBlockInterleavedFactory>(
+            select_program_factory(operation_attributes, input_tensor))) {
+        block_fit = TilizeWithValPaddingMultiCoreBlockInterleavedFactory::block_l1_fit(
+            operation_attributes,
+            input_tensor,
+            compute_output_specs(operation_attributes, input_tensor).padded_shape());
+    }
+    return ttsl::hash::hash_objects_with_default_seed(operation_attributes, input_tensor, block_fit);
 }
 
 Tensor TilizeWithValPaddingDeviceOperation::create_output_tensors(
@@ -226,7 +270,6 @@ Tensor tilize_with_val_padding(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<DataType>& output_dtype,
     bool use_multicore,
-    bool enough_space_width,
     bool enough_space_height,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     return ttnn::device_operation::launch<TilizeWithValPaddingDeviceOperation>(
@@ -240,7 +283,6 @@ Tensor tilize_with_val_padding(
             .output_dtype = output_dtype.value_or(
                 input_tensor.dtype() == DataType::FP8_E4M3 ? DataType::FLOAT32 : input_tensor.dtype()),
             .use_multicore = use_multicore,
-            .enough_space_width = enough_space_width,
             .enough_space_height = enough_space_height,
             .sub_core_grids = sub_core_grids,
         },

@@ -10,7 +10,7 @@
 #pragma once
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "api/dataflow/noc.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
@@ -128,28 +128,15 @@ inline void compute_single_stage_noc_addrs(
     uint32_t start_core_y,
     uint32_t num_cores_x,
     uint32_t num_cores_y) {
-    uint32_t x = start_core_x;
-    uint32_t y = start_core_y;
+    // Non-rectangular shard grids fill a prefix of their bounding box in shard order.
+    // Rotate over the active workers, not the whole box, to avoid reading idle cores.
+    uint32_t worker = row_major ? start_core_y * num_cores_x + start_core_x : start_core_x * num_cores_y + start_core_y;
     for (uint32_t i = 0; i < num_remote_workers; ++i) {
+        const uint32_t x = row_major ? worker % num_cores_x : worker / num_cores_y;
+        const uint32_t y = row_major ? worker / num_cores_x : worker % num_cores_y;
         remote_coords[i] = {p_remote_noc_x[x], p_remote_noc_y[y]};
-        if constexpr (row_major) {
-            ++x;
-            if (x == num_cores_x) {
-                x = 0;
-                ++y;
-                if (y == num_cores_y) {
-                    y = 0;
-                }
-            }
-        } else {
-            ++y;
-            if (y == num_cores_y) {
-                y = 0;
-                ++x;
-                if (x == num_cores_x) {
-                    x = 0;
-                }
-            }
+        if (++worker == num_remote_workers) {
+            worker = 0;
         }
     }
 }
@@ -162,6 +149,7 @@ inline void compute_single_stage_noc_addrs(
  *
  * @tparam T Type of the TensorAccessor object
  * @tparam Block The block type
+ * @tparam DFB The DataflowBuffer type (deduced from `dfb`)
  * @param noc The Noc object to use for data transfer
  * @param dfb The DataflowBuffer to read into
  * @param addr TensorAccessor object for accessing tensor data
@@ -169,14 +157,9 @@ inline void compute_single_stage_noc_addrs(
  * @param offset Global offset for page ID
  * @param block Block object that defines the number of tiles to read
  */
-template <typename T, typename Block>
+template <typename T, typename Block, typename DFB>
 inline void read_block_to_dfb(
-    Noc& noc,
-    DataflowBuffer& dfb,
-    const T& addr,
-    const uint32_t tile_bytes,
-    const uint32_t offset,
-    const Block& block) {
+    Noc& noc, DFB& dfb, const T& addr, const uint32_t tile_bytes, const uint32_t offset, const Block& block) {
     // Need to reserve/push on intervals that nicely
     // divide the buffer size. The buffer and block size has been
     // configured to ensure this in the program setup
@@ -198,10 +181,10 @@ inline void read_block_to_dfb(
  * contiguously with `rm_row_stride_bytes` stride (= full block width including padding tiles).
  * A full block slot (`block.full_block_size()`) is reserved/pushed for synchronization.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void read_row_major_block_to_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_in_rm,
+    DFB& dfb_in_rm,
     const T& src_a,
     const uint32_t curr_tile_row,
     const uint32_t num_valid_rows,
@@ -229,10 +212,10 @@ inline void read_row_major_block_to_dfb(
 /**
  * @brief Write one column block of row-major output data from a buffer to DRAM.
  */
-template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, typename Block, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void write_row_major_block_from_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_out_rm,
+    DFB& dfb_out_rm,
     const T& dst_a,
     const uint32_t abs_row_base,
     const uint32_t num_valid_rows,
@@ -241,7 +224,7 @@ inline void write_row_major_block_from_dfb(
     const Block& block) {
     // Compute produces block_size tiles (full_block_size) in dfb_out_rm; the last block
     // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
-    dfb_out_rm.wait_front(block.full_block_size());
+    dfb_out_rm.wait_front(static_cast<uint16_t>(block.full_block_size()));
 
     // Column byte offset in the output row where this block starts.
     const uint32_t col_byte_offset = block.start() * tile_width_bytes;
@@ -257,7 +240,7 @@ inline void write_row_major_block_from_dfb(
             {.page_id = abs_row_base + r, .offset_bytes = col_byte_offset});
     }
     noc.async_write_barrier();
-    dfb_out_rm.pop_front(block.full_block_size());
+    dfb_out_rm.pop_front(static_cast<uint16_t>(block.full_block_size()));
 }
 
 /**
@@ -267,10 +250,10 @@ inline void write_row_major_block_from_dfb(
  * into dfb_in_rm. Only `num_valid_rows` rows are read per block; padding rows are zero-filled
  * by the tilize step in the compute kernel. Handles the case where H is not tile-aligned.
  */
-template <typename T, uint32_t TILE_W, uint32_t TILE_H>
+template <typename T, uint32_t TILE_W, uint32_t TILE_H, typename DFB>
 inline void push_row_major_blocks_to_dfb(
     Noc& noc,
-    DataflowBuffer& dfb_in_rm,
+    DFB& dfb_in_rm,
     const T& src_a,
     const uint32_t Wt,
     const uint32_t block_size,

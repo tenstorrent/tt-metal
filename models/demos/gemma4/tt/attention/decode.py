@@ -9,10 +9,27 @@ Uses HF-style ttnn.experimental.rotary_embedding (no transformation matrices).
 
 import os
 
+from loguru import logger
+
 import ttnn
+from models.demos.gemma4.custom_ops.grid import (
+    SDPA_DECODE_TILE_BYTES,
+    plan_packed_sdpa,
+    sdpa_decode_cb_budget_bytes,
+    sdpa_decode_cb_bytes,
+    sdpa_decode_cores_per_head,
+    sdpa_decode_page_table_bytes,
+    sdpa_tile_bytes,
+)
+from models.demos.gemma4.custom_ops.paged_update_rows import PagedUpdateRows
+from models.demos.gemma4.custom_ops.paged_update_rows.op import ENV as PACKED_KV_WRITE_OP_ENV
+from models.demos.gemma4.custom_ops.paged_update_rows.op import enabled as packed_kv_write_op_enabled
+from models.demos.gemma4.custom_ops.qkv_norm_rope import QkvNormRope
 from models.demos.gemma4.tt.compute_config import sdpa_fp32_dest_acc_en, sdpa_math_fidelity
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 from .operations import (
+    _paged_fill_cache,
     apply_allreduce,
     apply_output_projection,
     apply_per_head_norm,
@@ -34,6 +51,186 @@ from .weights import AttentionWeights
 # Populated on the first (un-traced compile) call; inside trace capture the
 # probe is skipped entirely.
 _Q_SHARDED_MEM_CACHE: dict = {}
+
+# GEMMA4_QKV_NORM_ROPE_FUSED=1: the per-head q/k/v norms and the q/k RoPE as one generic op on the height-sharded
+# head tensors (custom_ops/qkv_norm_rope). The TILE [1, 1, 1, head_dim] gamma rows it takes are built with the
+# attention weights (AttentionWeights.q_norm_tile / k_norm_tile, tt/attention/weights.py). The earlier module-level
+# cache keyed by id(weights.q_norm_weight) handed a layer the tiles of a freed, same-id tensor from an earlier
+# attention instance (dead device memory: the attention unit test failed by cache length, i.e. by allocation
+# layout) -- never key device tensors by Python id.
+
+
+def _gamma_tiles(weights: AttentionWeights, head_dim: int):
+    # built with the weights (tt/attention/weights.py); a per-call reshape + tilize here would allocate under trace
+    assert weights.q_norm_tile is not None and weights.k_norm_tile is not None, "AttentionWeights without norm tiles"
+    return weights.q_norm_tile, weights.k_norm_tile
+
+
+def _sdpa_max_cores_per_head_kwargs() -> dict:
+    """GEMMA4_SDPA_MAX_CORES_PER_HEAD=N pins the decode SDPA per-(row, head) core count. The op
+    splits its cores per padded row, so each decode graph (bucket) reduces a row in a different
+    order; pinning N to the widest graph's split (grid / (32 * kv heads per device)) makes every
+    graph reduce identically, at the cost of a lone row's attention speed at long context.
+    Unset (default) keeps the op's own cap (tenstorrent/tt-metal#59300)."""
+    v = os.environ.get("GEMMA4_SDPA_MAX_CORES_PER_HEAD", "")
+    return {"max_cores_per_head_batch": int(v)} if v else {}
+
+
+SPLITFREE_ENV = "GEMMA4_SDPA_DECODE_SPLITFREE"
+_SPLITFREE_WARNED = set()
+
+
+def splitfree_sdpa_enabled(config) -> bool:
+    """GEMMA4_SDPA_DECODE_SPLITFREE (``decode_flag``: the env when set, else the build profile, default off):
+    "1" = the split-independent paged decode SDPA (custom_ops/sdpa_decode_splitfree) on the global layers,
+    "2" = on the sliding layers as well. Its output for a row is bitwise identical across the decode graphs of
+    a build (unit and chunk are build constants), so the graphs can use the cores they have; the pin above
+    stays as it is for the stock op."""
+    mode = decode_flag(SPLITFREE_ENV)
+    if mode == "2":
+        return True
+    return mode == "1" and not config.is_sliding
+
+
+def _splitfree_refused(reason: str):
+    """One warning per reason: the stock op serves the call."""
+    if reason not in _SPLITFREE_WARNED:
+        _SPLITFREE_WARNED.add(reason)
+        logger.warning(f"{SPLITFREE_ENV}: the stock paged decode SDPA serves this call: {reason}")
+
+
+def packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared):
+    """True when ``packed_decode_forward`` writes the KV rows through the per-position
+    ``paged_update_cache`` loop, which needs the probed height-sharded layout.
+
+    The loop-free staging fill runs only with BOTH a staging buffer and an embed
+    index; a caller that keeps the staging buffer attached but writes by position
+    (``kv_write_idxs``, no embed index) still takes the loop, so the probe must not
+    be skipped on the presence of staging alone (serving records hit that case).
+    """
+    return (not is_kv_shared) and (kv_staging is None or embed_idx is None)
+
+
+_ROWS_OP_WARNED = set()
+
+
+def packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, batch, packed_p, nkv_local, head_dim, config):
+    """Why the packed verify's KV write takes the per-position loop instead of ``custom_ops/paged_update_rows``:
+    ``"off"`` unless ``GEMMA4_PACKED_KV_WRITE_OP=1`` (the served default: the loop, until the device A/B passes),
+    else the op's ``unsupported_reason`` (warned once per reason), else ``None`` (the op serves)."""
+    if not packed_kv_write_op_enabled():
+        return "off"
+    k_cache_w, _ = kv_cache
+    reason = PagedUpdateRows.unsupported_reason(
+        k_cache_w,
+        kv_write_idxs,
+        page_table,
+        batch=batch,
+        packed_p=packed_p,
+        num_kv_heads=nkv_local,
+        head_dim=head_dim,
+        block_size=effective_block_size(k_cache_w, head_dim, nkv_local),
+        modulo=config.cache_position_modulo,
+    )
+    if reason is not None and reason not in _ROWS_OP_WARNED:
+        _ROWS_OP_WARNED.add(reason)
+        logger.warning(f"{PACKED_KV_WRITE_OP_ENV}: the per-position paged_update_cache loop serves this call: {reason}")
+    return reason
+
+
+def packed_kv_write_rows(k_cache_w, v_cache_w, tt_k, tt_v, kv_write_idxs, page_table, batch, nkv_local, eff_bs, modulo):
+    """The packed verify's K / V rows written by ``PagedUpdateRows``: one program per tensor (2 per layer) in
+    place of the loop below (6 P per layer), the same bytes. ``tt_k / tt_v [1, nkv, S_pad, head_dim]`` bf16 TILE
+    (the prefill-style split after the norm and RoPE; consumed)."""
+    for cache, src in ((k_cache_w, tt_k), (v_cache_w, tt_v)):
+        PagedUpdateRows.op(
+            cache,
+            src,
+            kv_write_idxs,
+            page_table,
+            batch=batch,
+            num_kv_heads=nkv_local,
+            block_size=eff_bs,
+            cache_position_modulo=modulo,
+        )
+    ttnn.deallocate(tt_k)
+    ttnn.deallocate(tt_v)
+
+
+def packed_kv_write_loop(
+    k_cache_w,
+    v_cache_w,
+    tt_k,
+    tt_v,
+    kv_write_idxs,
+    page_table,
+    B,
+    P,
+    nkv_local,
+    head_dim,
+    eff_bs,
+    q_sharded_mem,
+    modulo,
+):
+    """The per-position ``paged_update_cache`` loop of the packed verify (the served default): per packed position
+    p the K and V rows of every record row are sliced out, resharded one user per core and written by the stock
+    op, which serializes the read-modify-write of a tile row that several positions share (one batched call over
+    the P positions would race on it). ``tt_k / tt_v [1, nkv, S_pad, head_dim]`` bf16 TILE (consumed)."""
+    # Convert the prefill-style [1, nkv, B*P, hd] to decode layout
+    # [1, B*P, nkv, hd] (DRAM — the full tensors stay resident across the
+    # loop; only the per-p reshard occupies L1).
+    tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(tt_k)
+    ttnn.deallocate(tt_v)
+    # The prefill-style split may leave the B*P sequence rows tile-padded to a
+    # multiple of 32 (ttnn-version dependent — same guard as the Q pack at ⑥).
+    # Slice back to the logical B*P rows so the (1,B,P,nkv,hd) reshape is
+    # volume-exact (padding is always at the tail). The slice can alias the
+    # parent's DRAM storage, so keep tt_k_bp/tt_v_bp alive until the end-of-loop
+    # cleanup rather than freeing them here.
+    k_src, v_src = tt_k_bp, tt_v_bp
+    if tt_k_bp.shape[1] != B * P:
+        k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
+        v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
+    tt_k_view = ttnn.reshape(k_src, (1, B, P, nkv_local, head_dim))
+    tt_v_view = ttnn.reshape(v_src, (1, B, P, nkv_local, head_dim))
+    for p in range(P):
+        k_p = ttnn.slice(tt_k_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
+        k_p = ttnn.reshape(k_p, (1, B, nkv_local, head_dim))
+        v_p = ttnn.slice(tt_v_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
+        v_p = ttnn.reshape(v_p, (1, B, nkv_local, head_dim))
+        k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
+        v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
+        if page_table is not None:
+            # Bounded ring: wrap absolute write positions into the ring
+            # (same contract as decode_forward's paged_modulo_kwargs).
+            _mod = {"cache_position_modulo": modulo} if modulo is not None else {}
+            ttnn.experimental.paged_update_cache(
+                k_cache_w,
+                k_p,
+                update_idxs_tensor=kv_write_idxs[p],
+                page_table=page_table,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+                **_mod,
+            )
+            ttnn.experimental.paged_update_cache(
+                v_cache_w,
+                v_p,
+                update_idxs_tensor=kv_write_idxs[p],
+                page_table=page_table,
+                block_size=eff_bs,
+                num_kv_heads=nkv_local,
+                **_mod,
+            )
+        else:
+            ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
+            ttnn.experimental.paged_update_cache(v_cache_w, v_p, update_idxs_tensor=kv_write_idxs[p])
+        ttnn.deallocate(k_p)
+        ttnn.deallocate(v_p)
+    ttnn.deallocate(tt_k_bp)
+    ttnn.deallocate(tt_v_bp)
 
 
 def _q_sharded_mem_key(B, qkv_dim, config, weights, tp):
@@ -68,6 +265,8 @@ def decode_forward(
     position_idx_cache=None,
     sequential_kv_write=False,
     rope_presliced=False,
+    rope_prepared=None,
+    sdpa_scratch=None,
 ):
     """
     Single-token decode attention, fully on device.
@@ -91,23 +290,91 @@ def decode_forward(
         page_table: optional paged attention table
         ccl_manager: optional CCL manager for TP > 1
         is_kv_shared: if True, skip K/V projection and cache update (use source layer's KV cache)
+        sdpa_scratch: the model's persistent fp32 scratch of the split-independent decode SDPA
+            (``GEMMA4_SDPA_DECODE_SPLITFREE``, custom_ops/sdpa_decode_splitfree); None keeps the stock op
     """
     tp = mesh_config.tp if mesh_config else 1
 
-    # 1. Fused QKV projection
-    xqkv = apply_qkv_projection(hidden_states, weights)
-
-    # 2. Split into Q, K, V heads
-    tt_q, tt_k, tt_v = split_qkv_heads_decode(
-        xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+    # 1. Fused QKV projection (GEMMA4_QKV_L1_OUT=1: straight into L1, where the head split reads it anyway --
+    # drops the DRAM -> L1 copy of the Blackhole workaround in split_qkv_heads_decode)
+    xqkv = apply_qkv_projection(
+        hidden_states,
+        weights,
+        memory_config=ttnn.L1_MEMORY_CONFIG if decode_flag("GEMMA4_QKV_L1_OUT") == "1" else None,
     )
 
-    # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
-    q_sharded_mem = tt_q.memory_config()
-    tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
-    tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+    batch_rows = int(xqkv.shape[2])
+    fused_rope_ok = (
+        not is_kv_shared
+        and rope_presliced
+        and len(cos_cache.shape) == 4
+        and int(cos_cache.shape[1]) == 1
+        and not (sequential_kv_write and batch_rows > 1)
+    )
+    # GEMMA4_QKV_HEADS_FUSED=1 (with GEMMA4_QKV_L1_OUT=1): the head split, the per-head norms and the q/k RoPE as
+    # one program straight from the L1 projection output (custom_ops/qkv_heads_norm_rope), in place of
+    # nlp_create_qkv_heads_decode + qkv_norm_rope; the head_dim-256 (sliding) layers, as the fresh-output form.
+    heads_fused = (
+        decode_flag("GEMMA4_QKV_HEADS_FUSED") == "1"
+        and fused_rope_ok
+        and int(config.head_dim) % 64 == 0
+        and not xqkv.is_sharded()
+        and xqkv.memory_config().buffer_type == ttnn.BufferType.L1
+    )
+    if heads_fused:
+        from models.demos.gemma4.custom_ops.qkv_heads_norm_rope import QkvHeadsNormRope
 
-    if is_kv_shared:
+        gq, gk = _gamma_tiles(weights, config.head_dim)
+        tt_q, tt_k, tt_v = QkvHeadsNormRope.op(
+            xqkv,
+            config.num_attention_heads // tp,
+            1 if weights.kv_replicated else config.num_key_value_heads // tp,
+            config.head_dim,
+            gq,
+            gk,
+            cos_cache,
+            sin_cache,
+            config.rms_norm_eps,
+        )
+        xqkv.deallocate(True)
+        q_sharded_mem = tt_q.memory_config()
+        fused_qkv = True
+    else:
+        # 2. Split into Q, K, V heads
+        tt_q, tt_k, tt_v = split_qkv_heads_decode(
+            xqkv, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
+        )
+
+        # 3. Per-head norms (move to DRAM for rms_norm, restore sharded for RoPE)
+        q_sharded_mem = tt_q.memory_config()
+        fused_qkv = (
+            decode_flag("GEMMA4_QKV_NORM_ROPE_FUSED") == "1"
+            and fused_rope_ok
+            # With fresh (not in-place) outputs the op's six live [32, 512] shards per core push the lowest live
+            # L1 buffer under the static circular-buffer region of the following paged_update_cache program on
+            # the head_dim-512 global layers at 32 users ("statically allocated dataflow buffers clash with L1
+            # buffers"), so that form serves the sliding layers only.
+            and (int(config.head_dim) <= 256 or QkvNormRope.in_place())
+        )
+    if heads_fused:
+        pass  # split, norms and RoPE done above
+    elif fused_qkv:
+        # norms + RoPE on the sharded head tensors, outputs in the same sharded layout (custom_ops/qkv_norm_rope)
+        gq, gk = _gamma_tiles(weights, config.head_dim)
+        nq, nk, nv = QkvNormRope.op(tt_q, tt_k, tt_v, gq, gk, cos_cache, sin_cache, config.rms_norm_eps)
+        for t, o in ((tt_q, nq), (tt_k, nk), (tt_v, nv)):
+            if o is not t:  # fresh-output form: the input shards are dead
+                t.deallocate(True)
+        # k / v stay sharded for the paged cache update below (freed right after it); q stays height-sharded into
+        # SDPA (same result as the DRAM form: tests/unit/test_attention_qkv_stages.py).
+        tt_q, tt_k, tt_v = nq, nk, nv
+    else:
+        tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+        tt_q = apply_per_head_norm(tt_q, weights.q_norm_weight, config.rms_norm_eps, with_scale=True)
+
+    if fused_qkv:
+        pass
+    elif is_kv_shared:
         # KV-shared layer: discard own K/V, use source layer's KV cache directly
         tt_k.deallocate(True)
         tt_v.deallocate(True)
@@ -125,7 +392,9 @@ def decode_forward(
     #   - 2D cache: gather the position rows with ttnn.embedding right here (legacy
     #     per-layer path, kept for the it-assistant drafter / direct callers).
     use_embedding_rope = rope_presliced or len(cos_cache.shape) == 2
-    if use_embedding_rope:
+    if fused_qkv:
+        pass  # rotated by the fused op above
+    elif use_embedding_rope:
         if rope_presliced:
             cos_pos, sin_pos = cos_cache, sin_cache  # [1, 1, batch_pad, head_dim], shared
         else:
@@ -139,14 +408,28 @@ def decode_forward(
         # q*cos + rotate_half(q)*sin (numerically equivalent — isolation PCC
         # ~0.99999 vs the fused op and the HF reference — but a few ops costlier).
         batch = tt_q.shape[1]
-        if batch > 1:
-            cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
-            sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+        # The fused op and the elementwise form agree to PCC ~0.99999, not bitwise. With decode
+        # graphs per batch size (GEMMA4_DECODE_WARMUP_BATCHES) a request decoded in the batch-1
+        # graph then sees different Q/K than the same request in a wider graph, which breaks
+        # seeded reproducibility (tt-metal#59300). GEMMA4_ROPE_PERUSER_B1=1 keeps every graph on
+        # the elementwise form; off by default until measured.
+        peruser_at_b1 = os.environ.get("GEMMA4_ROPE_PERUSER_B1", "0") == "1"
+        if batch > 1 or peruser_at_b1:
+            # ``rope_prepared`` (per step, per layer type, from the model) keeps the transposed/sliced cos/sin
+            # and their head-repeated forms across the layers of one type: only the first layer pays the ops.
+            base = rope_prepared.get("base") if rope_prepared is not None else None
+            if base is None:
+                cos_b = ttnn.transpose(cos_pos, 1, 2)[:, :batch, :, :]  # [1, batch, 1, head_dim]
+                sin_b = ttnn.transpose(sin_pos, 1, 2)[:, :batch, :, :]
+                if rope_prepared is not None:
+                    rope_prepared["base"] = (cos_b, sin_b)
+            else:
+                cos_b, sin_b = base
 
         def _rope(t):
-            if batch == 1:
+            if batch == 1 and not peruser_at_b1:
                 return apply_rope(t, cos_pos, sin_pos, token_index=0)
-            return apply_rope_decode_peruser(t, cos_b, sin_b)
+            return apply_rope_decode_peruser(t, cos_b, sin_b, prepared=rope_prepared)
 
         # Rotate Q (and K, unless this is a KV-shared layer) with the shared
         # cos/sin. A concat(Q,K)->rope->split "fusion" was tried to collapse the
@@ -177,9 +460,12 @@ def decode_forward(
     if kv_cache is not None:
         k_cache, v_cache = kv_cache
         if not is_kv_shared:
-            # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update.
-            tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
-            tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
+            if not fused_qkv:
+                # After HF-style RoPE, tensors may be in DRAM. Move to HEIGHT_SHARDED for cache update. (The fused
+                # op's k / v already are; the earlier `and not fused_qkv` on this branch skipped the whole cache
+                # update for the fused path, so no decode token's K / V ever reached the cache: decode gate 12/64.)
+                tt_k = ttnn.to_memory_config(tt_k, q_sharded_mem)
+                tt_v = ttnn.to_memory_config(tt_v, q_sharded_mem)
 
             if page_table is not None:
                 # Per-device kv-head count of the layer's input view. When the cache
@@ -269,6 +555,10 @@ def decode_forward(
             else:
                 ttnn.experimental.paged_update_cache(k_cache, tt_k, update_idxs_tensor=cache_pos)
                 ttnn.experimental.paged_update_cache(v_cache, tt_v, update_idxs_tensor=cache_pos)
+            if fused_qkv:
+                # the fused op's k / v shards are dead once written: free their L1 before SDPA
+                tt_k.deallocate(True)
+                tt_v.deallocate(True)
     else:
         k_cache = tt_k
         v_cache = tt_v
@@ -296,11 +586,53 @@ def decode_forward(
     sdpa_program_config = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=sdpa_grid,
         q_chunk_size=32,
-        k_chunk_size=64,
+        # GEMMA4_SDPA_DECODE_K_CHUNK: K chunk of the decode SDPA (default 64; a multiple of 32, bounded by L1 at
+        # head_dim 512) for the knob sweep; the page block (64) stays the paged read unit either way.
+        k_chunk_size=int(os.environ.get("GEMMA4_SDPA_DECODE_K_CHUNK", "64")),
         exp_approx_mode=False,
+        **_sdpa_max_cores_per_head_kwargs(),
     )
 
-    if page_table is not None:
+    tt_sdpa = None
+    if page_table is not None and sdpa_scratch is not None and splitfree_sdpa_enabled(config):
+        # GEMMA4_SDPA_DECODE_SPLITFREE: the custom op (custom_ops/sdpa_decode_splitfree): fixed KV units per
+        # (row, group) on a static core mapping, fp32 partials in the model's scratch, a fixed-order combine --
+        # the row's bits do not depend on the padded batch or the cores (tt-metal#59300), and a lone row's units
+        # sit on consecutive cores whatever the padded batch (64 cores at 256K). Out of contract (the wrapper
+        # says why), the stock op serves.
+        from models.demos.gemma4.custom_ops.sdpa_decode_splitfree import SdpaDecodeSplitfree
+
+        sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
+        if tt_q.is_sharded():  # the fused head ops leave q height-sharded in L1; the op reads interleaved tiles
+            q_dram = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
+            tt_q.deallocate(True)
+            tt_q = q_dram
+        splitfree_kwargs = dict(
+            num_kv_heads=sdpa_num_local_kv_heads,
+            block_size=effective_block_size(k_cache, config.head_dim, sdpa_num_local_kv_heads),
+            sliding_window=sliding_window,
+        )
+        splitfree_reason = SdpaDecodeSplitfree.unsupported_reason(
+            tt_q, k_cache, v_cache, cache_pos, page_table, sdpa_scratch, **splitfree_kwargs
+        )
+        if splitfree_reason is None:
+            tt_sdpa = SdpaDecodeSplitfree.op(
+                tt_q,
+                k_cache,
+                v_cache,
+                cache_pos,
+                page_table,
+                sdpa_scratch,
+                scale=1.0,
+                cache_position_modulo=config.cache_position_modulo,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                **splitfree_kwargs,
+            )
+        else:
+            _splitfree_refused(splitfree_reason)
+    if tt_sdpa is not None:
+        pass  # the split-independent op served the call
+    elif page_table is not None:
         sdpa_num_local_kv_heads = 1 if weights.kv_replicated else config.num_key_value_heads // tp
         tt_sdpa = ttnn.transformer.paged_scaled_dot_product_attention_decode(
             tt_q,
@@ -337,7 +669,12 @@ def decode_forward(
     # 7. Concat heads + output projection + allreduce
     num_local_heads = config.num_attention_heads // tp
     tt_out = concat_heads(
-        tt_sdpa, is_decode_mode=True, num_heads=num_local_heads, head_dim=config.head_dim, mesh_device=mesh_device
+        tt_sdpa,
+        is_decode_mode=True,
+        num_heads=num_local_heads,
+        head_dim=config.head_dim,
+        mesh_device=mesh_device,
+        o_proj=weights.o_proj,
     )
     tt_out = apply_output_projection(tt_out, weights)
     tt_out = apply_allreduce(tt_out, mesh_config, ccl_manager, config.hidden_size)
@@ -363,7 +700,19 @@ def _packed_sdpa_grid(config, mesh_device):
     return ttnn.CoreCoord(device_grid.x, device_grid.y)
 
 
-def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
+def _verify_head_splits(
+    B,
+    H_local,
+    nkv_local,
+    P,
+    head_dim,
+    grid=None,
+    max_cores_per_head=16,
+    k_chunk=64,
+    kv_tile_bytes=SDPA_DECODE_TILE_BYTES,
+    extra_bytes=0,
+    budget_bytes=None,
+):
     """How many QUERY-HEAD-wise sub-ops to split the packed-verify SDPA into.
 
     The packed verify folds ``H_local*P`` query rows onto ``nkv_local`` KV
@@ -382,7 +731,10 @@ def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
     are left unsplit.
 
     ``GEMMA4_PV_SDPA_HEAD_SPLITS`` overrides the count (clamped to the largest
-    valid split <= the request)."""
+    valid split <= the request). ``max_cores_per_head``, ``k_chunk``,
+    ``kv_tile_bytes`` (the cache format's tile), ``extra_bytes`` (the untiled
+    page-table CB) and ``budget_bytes`` are the packed SDPA plan's
+    (``plan_packed_sdpa``), so the split and the config read the same CB model."""
     if nkv_local != 1:
         return 1
     # Valid splits: whole heads per op AND 32-tile-aligned query-row slices.
@@ -395,33 +747,43 @@ def _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=None):
         return max(d for d in valid if d <= want)
     if (H_local * P) * head_dim <= 8192:  # not heavy (sliding) — one op fits
         return 1
-    # Mirror sdpa_decode_program_factory's core allocation (num_kv_heads == 1)
-    # and CB tile counts; keep grid / max_cores_per_head_batch / k_chunk in sync
-    # with the packed sdpa_program_config. Budget in 2 KB tiles with margin
-    # under the 768-tile (1.5 MB) L1 cap.
+    # sdpa_decode_program_factory's core allocation (num_kv_heads == 1) and CB
+    # bytes (custom_ops.grid), with the packed sdpa_program_config's grid,
+    # max_cores_per_head_batch and k_chunk, against the planner's budget (15/16
+    # of the L1 above the unreserved base the CBs start at).
     if grid is None:
         grid = 32 if head_dim >= 512 else 64
-    max_cores_per_head, k_chunk = 16, 64
-    cores_per_head = max(1, min(grid, max_cores_per_head * B) // max(1, B))
+    if budget_bytes is None:
+        budget_bytes = sdpa_decode_cb_budget_bytes()
+    cores_per_head = sdpa_decode_cores_per_head(grid, B, 1, max_cores_per_head)
     DHt, Sk = head_dim // 32, max(1, k_chunk // 32)
-    BUDGET_TILES = 720
 
-    def per_core_tiles(n):
-        pnht = (H_local * P) // (32 * n)
-        return (
-            2 * pnht * DHt  # Q-in + tilized-Q
-            + 5 * pnht * DHt  # 3 out-im + out-stats + out-final
-            + 2 * pnht * Sk  # attn-mask + QK-im
-            + 11 * pnht  # softmax stats CBs
-            + 4 * Sk * DHt  # K + V (double-buffered)
-            + 3  # scale / identity
-            + (pnht * DHt + 2 * pnht) * (cores_per_head - 1)  # cross-core flash reduction
-        )
+    def per_core_bytes(n):
+        return sdpa_decode_cb_bytes((H_local * P) // (32 * n), DHt, Sk, cores_per_head, kv_tile_bytes, extra_bytes)
 
     for d in valid:  # ascending ⇒ smallest split that fits the budget
-        if per_core_tiles(d) <= BUDGET_TILES:
+        if per_core_bytes(d) <= budget_bytes:
             return d
     return valid[-1]
+
+
+def packed_verify_mask_span(table_cols, block_size, mask_cols):
+    """The keys a paged packed verify attends: ``table_cols * block_size``, which must equal the mask width.
+
+    sdpa_decode checks a mask against K only for unpaged calls; paged, it attends the table width times the block
+    size and reads every mask row tile past the first at THAT pitch (``mask_tile_id = start + row * PSt``), so a
+    table narrower than the mask shifts the mask of packed rows 32 and up by the difference (the 31B at TP4:
+    a 4096-column sliding table under a 263168-key mask moved three of eight local heads 1024 keys ahead).
+    Returns the span; raises on a mismatch."""
+    table_cols, block_size, mask_cols = int(table_cols), int(block_size), int(mask_cols)
+    span = table_cols * block_size
+    if span != mask_cols:
+        raise ValueError(
+            f"packed verify: the page table spans {table_cols} x {block_size} = {span} keys but the mask is "
+            f"{mask_cols} wide; the kernel attends the table span and reads the mask's row tiles at that pitch, so "
+            f"the two must be equal (serving_verify_table_widths sizes the table from the mask)"
+        )
+    return span
 
 
 def _packed_verify_sdpa(
@@ -444,6 +806,8 @@ def _packed_verify_sdpa(
     # increase, and fp32 accumulation is strictly higher precision. On multi-device
     # meshes heads split so PNHt is already power-of-2 — leave the op default (None)
     # there so the packed path stays identical to upstream.
+    if layer_page_table is not None and attn_mask is not None:
+        packed_verify_mask_span(layer_page_table.shape[-1], block_size, attn_mask.shape[-1])
     _dev = k.device()
     _num_dev = getattr(_dev, "get_num_devices", lambda: 1)()
     # Single-device ONLY, as originally shipped. Forcing fp32_dest_acc on a
@@ -574,7 +938,7 @@ def _packed_fill_kv_loopfree_embed(cache, staging, new_seq, embed_idx, hot_pt):
 
     # ② persist updated hot blocks for next step, then ③ one fill launch.
     ttnn.assign(merged, staging)
-    ttnn.experimental.paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
+    _paged_fill_cache(cache, merged, hot_pt, batch_idx=0)
     ttnn.deallocate(merged)
 
 
@@ -653,7 +1017,18 @@ def packed_decode_forward(
     # emits; the spec depends only on shape constants, so probe once and cache.
     cache_key = _q_sharded_mem_key(B, qkv_dim, config, weights, tp)
     q_sharded_mem = _Q_SHARDED_MEM_CACHE.get(cache_key)
-    if q_sharded_mem is None and kv_staging is None and not is_kv_shared:
+    # The loop-free custom op (GEMMA4_PACKED_KV_WRITE_OP=1) needs no sharded layout: the probe runs only when the
+    # loop serves the write.
+    rows_op_reason = (
+        packed_rows_op_reason(kv_cache, kv_write_idxs, page_table, B, P, nkv_local, head_dim, config)
+        if packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
+        else "staging"
+    )
+    if (
+        q_sharded_mem is None
+        and rows_op_reason is not None
+        and packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared)
+    ):
         probe = ttnn.slice(xqkv, [0, 0, 0, 0], [1, 1, B, qkv_dim])
         q_probe, k_probe, v_probe = split_qkv_heads_decode(
             probe, config, weights.is_global, tp=tp, kv_replicated=weights.kv_replicated
@@ -720,70 +1095,41 @@ def packed_decode_forward(
         ttnn.deallocate(tt_k)
         ttnn.deallocate(tt_v)
 
-    # ── ⑤ FALLBACK per-p paged_update_cache loop ────────────────────────────
+    # ── ⑤ FALLBACK: the per-position paged_update_cache loop (packed_kv_write_loop, 6 P programs per layer),
+    # or with GEMMA4_PACKED_KV_WRITE_OP=1 the loop-free custom op writing the same bytes (2 per layer) ─────
     elif not is_kv_shared:
         tt_q = ttnn.to_memory_config(tt_q, ttnn.DRAM_MEMORY_CONFIG)
         k_cache_w, v_cache_w = kv_cache
         eff_bs = effective_block_size(k_cache_w, head_dim, nkv_local)
-        # Convert the prefill-style [1, nkv, B*P, hd] to decode layout
-        # [1, B*P, nkv, hd] (DRAM — the full tensors stay resident across the
-        # loop; only the per-p reshard occupies L1).
-        tt_k_bp = ttnn.permute(tt_k, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        tt_v_bp = ttnn.permute(tt_v, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(tt_k)
-        ttnn.deallocate(tt_v)
-        # The prefill-style split may leave the B*P sequence rows tile-padded to a
-        # multiple of 32 (ttnn-version dependent — same guard as the Q pack at ⑥).
-        # Slice back to the logical B*P rows so the (1,B,P,nkv,hd) reshape is
-        # volume-exact (padding is always at the tail). The slice can alias the
-        # parent's DRAM storage, so keep tt_k_bp/tt_v_bp alive until the end-of-loop
-        # cleanup rather than freeing them here.
-        k_src, v_src = tt_k_bp, tt_v_bp
-        if tt_k_bp.shape[1] != B * P:
-            k_src = ttnn.slice(tt_k_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
-            v_src = ttnn.slice(tt_v_bp, [0, 0, 0, 0], [1, B * P, nkv_local, head_dim])
-        tt_k_view = ttnn.reshape(k_src, (1, B, P, nkv_local, head_dim))
-        tt_v_view = ttnn.reshape(v_src, (1, B, P, nkv_local, head_dim))
-        for p in range(P):
-            k_p = ttnn.slice(tt_k_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
-            k_p = ttnn.reshape(k_p, (1, B, nkv_local, head_dim))
-            v_p = ttnn.slice(tt_v_view, [0, 0, p, 0, 0], [1, B, p + 1, nkv_local, head_dim])
-            v_p = ttnn.reshape(v_p, (1, B, nkv_local, head_dim))
-            k_p = ttnn.to_memory_config(k_p, q_sharded_mem)
-            v_p = ttnn.to_memory_config(v_p, q_sharded_mem)
-            if page_table is not None:
-                # Bounded ring: wrap absolute write positions into the ring
-                # (same contract as decode_forward's paged_modulo_kwargs).
-                _mod = (
-                    {"cache_position_modulo": config.cache_position_modulo}
-                    if config.cache_position_modulo is not None
-                    else {}
-                )
-                ttnn.experimental.paged_update_cache(
-                    k_cache_w,
-                    k_p,
-                    update_idxs_tensor=kv_write_idxs[p],
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=nkv_local,
-                    **_mod,
-                )
-                ttnn.experimental.paged_update_cache(
-                    v_cache_w,
-                    v_p,
-                    update_idxs_tensor=kv_write_idxs[p],
-                    page_table=page_table,
-                    block_size=eff_bs,
-                    num_kv_heads=nkv_local,
-                    **_mod,
-                )
-            else:
-                ttnn.experimental.paged_update_cache(k_cache_w, k_p, update_idxs_tensor=kv_write_idxs[p])
-                ttnn.experimental.paged_update_cache(v_cache_w, v_p, update_idxs_tensor=kv_write_idxs[p])
-            ttnn.deallocate(k_p)
-            ttnn.deallocate(v_p)
-        ttnn.deallocate(tt_k_bp)
-        ttnn.deallocate(tt_v_bp)
+        if rows_op_reason is None:
+            packed_kv_write_rows(
+                k_cache_w,
+                v_cache_w,
+                tt_k,
+                tt_v,
+                kv_write_idxs,
+                page_table,
+                B,
+                nkv_local,
+                eff_bs,
+                config.cache_position_modulo,
+            )
+        else:
+            packed_kv_write_loop(
+                k_cache_w,
+                v_cache_w,
+                tt_k,
+                tt_v,
+                kv_write_idxs,
+                page_table,
+                B,
+                P,
+                nkv_local,
+                head_dim,
+                eff_bs,
+                q_sharded_mem,
+                config.cache_position_modulo,
+            )
 
     k_cache_use, v_cache_use = kv_cache
 
@@ -808,28 +1154,51 @@ def packed_decode_forward(
     q_packed = ttnn.to_layout(tt_q, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
     ttnn.deallocate(tt_q)
 
-    # GEMMA4_PV_K_CHUNK: experiment knob only; keep the default 64. The
-    # rescale-count theory of the packed long-S_k greedy drift was TESTED and
-    # FALSIFIED: k_chunk=128 diverges at exactly the same token as 64 (char 165
-    # at 128k) with the same acceptance, and k_chunk=256 TT_THROWs at program
-    # build. The drift is inherent packed-vs-decode path numerics; it is handled
-    # by the ISL tier gate in spec_decode._fused_packed_enabled, not here.
-    _k_chunk = int(os.environ.get("GEMMA4_PV_K_CHUNK", "64"))
-    # The flash cross-core reduction CBs scale with PNHt * cores_per_head_batch.
-    # At PNHt<=2 (<=64 packed query rows) 16 cores fit L1; at PNHt=4 (the B>1
-    # dFlash fold, 128 rows) 16 cores overflow (~2.06 MB > 1.5 MB) and head
-    # splits can't help when nkv_local > 1 (31B sliding: 16 kv heads / tp8 = 2),
-    # so trade reduction parallelism for L1: 8 cores fits (~1.29 MB).
-    _pnht = (H_local * P + 31) // 32
-    sdpa_program_config = ttnn.SDPAProgramConfig(
-        compute_with_storage_grid_size=_packed_sdpa_grid(config, mesh_device),
-        q_chunk_size=32,
-        k_chunk_size=_k_chunk,
-        exp_approx_mode=False,
-        max_cores_per_head_batch=16 if _pnht <= 2 else 8,
+    # The K chunk and the cores per head come from the CB model of the op (custom_ops.grid.plan_packed_sdpa):
+    # every Q-shaped CB scales with the packed query rows (H_local * P, in tiles) and the cross-core reduction
+    # staging with the cores per head, so a geometry that stacks more local heads (the 31B at TP4: 8 local q
+    # heads on the head_dim-512 global layers) overflowed the per-core L1 at the op defaults. GEMMA4_PACKED_SDPA_
+    # K_CHUNK / _Q_CHUNK pin the chunks (GEMMA4_PV_K_CHUNK is the earlier name of the K knob); unset, derived. A
+    # wider K chunk than 64 is not on the ladder: k_chunk 256 TT_THROWs at program build and 128 buys nothing for
+    # the long-S_k greedy drift (tested; the ISL tier gate in spec_decode._fused_packed_enabled handles that).
+    _grid = _packed_sdpa_grid(config, mesh_device)
+    _plan = plan_packed_sdpa(
+        H_local,
+        nkv_local,
+        P,
+        head_dim,
+        B,
+        _grid.x * _grid.y,
+        arch=getattr(mesh_device, "arch", lambda: None)(),
+        kv_tile_bytes=sdpa_tile_bytes(getattr(k_cache_use, "dtype", None)),
+        extra_bytes=sdpa_decode_page_table_bytes(page_table.shape[-1]) if page_table is not None else 0,
     )
-    _grid = sdpa_program_config.compute_with_storage_grid_size
-    n_sdpa_splits = _verify_head_splits(B, H_local, nkv_local, P, head_dim, grid=_grid.x * _grid.y)
+    if not _plan.fits and not getattr(packed_decode_forward, "_overflow_logged", False):
+        packed_decode_forward._overflow_logged = True
+        logger.warning(
+            f"Gemma4 packed verify: no SDPA config on the ladder fits the per-core L1 on the {_grid.x}x{_grid.y} "
+            f"grid: {_plan.describe()}"
+        )
+    sdpa_program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=_grid,
+        q_chunk_size=_plan.q_chunk,
+        k_chunk_size=_plan.k_chunk,
+        exp_approx_mode=False,
+        max_cores_per_head_batch=_plan.max_cores_per_head_batch,
+    )
+    n_sdpa_splits = _verify_head_splits(
+        B,
+        H_local,
+        nkv_local,
+        P,
+        head_dim,
+        grid=_grid.x * _grid.y,
+        max_cores_per_head=_plan.max_cores_per_head_batch,
+        k_chunk=_plan.k_chunk,
+        kv_tile_bytes=_plan.kv_tile_bytes,
+        extra_bytes=_plan.extra_bytes,
+        budget_bytes=_plan.budget_bytes,
+    )
     eff_bs_sdpa = effective_block_size(k_cache_use, head_dim, nkv_local)
     tt_sdpa = _packed_verify_sdpa(
         q_packed,

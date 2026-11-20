@@ -8,7 +8,7 @@
 #include <optional>
 
 #include <board/board.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::scaleout_tools {
 

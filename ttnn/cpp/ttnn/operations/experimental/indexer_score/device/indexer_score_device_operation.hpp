@@ -120,6 +120,7 @@ ttnn::Tensor indexer_score_dsa(
 // chunk_start_idx / seq_shard_axes / cache_batch_idx / kv_len: same semantics as indexer_score_dsa (the last
 // two are runtime, hash-excluded pass-throughs -- no recompile when the slot or valid length changes). MSA
 // has no TP sub-shard, so seq_shard_axes takes at most one axis ([sp]).
+// block_cyclic_cache_tp_sharded: same KV-dedup key remap as indexer_score_dsa (index_k striped across sp*tp).
 // num_groups is required (no default): per-GQA-group selection is MSA's purpose, so the caller must state
 // the group count explicitly. It is placed before the defaulted optionals so the signature stays well-formed.
 ttnn::Tensor indexer_score_msa(
@@ -135,7 +136,8 @@ ttnn::Tensor indexer_score_msa(
     std::optional<uint32_t> kv_len = std::nullopt,
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
+    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
+    bool block_cyclic_cache_tp_sharded = false);
 
 // FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
 // K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
@@ -179,6 +181,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
+    uint32_t index_cache_layer_idx = 0,
+    // cluster_axis=None only: the mesh axis outermost in the K-ownership / causal rank order. 0 = row-major,
+    // 1 = column-major. Pass the SP axis when Q, K and the cache are SP-major.
+    uint32_t full_mesh_outer_axis = 0);
 
 }  // namespace ttnn::experimental

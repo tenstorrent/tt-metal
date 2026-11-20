@@ -127,6 +127,25 @@ ChunkCompression from_wire(::tt::disaggregation::proto::ChunkCompression c) {
                                                : ::tt::disaggregation::proto::UNROLLED;
 }
 
+KvChunkTensorType from_wire(::tt::disaggregation::proto::KvChunkTensorType t) {
+    switch (t) {
+        case ::tt::disaggregation::proto::KV: return KvChunkTensorType::Kv;
+        case ::tt::disaggregation::proto::SNAPSHOT: return KvChunkTensorType::Snapshot;
+        default:
+            throw std::runtime_error(
+                "KvChunkAddressTable proto declares unknown tensor_type=" + std::to_string(static_cast<int>(t)) +
+                " — written by a newer format; upgrade the reader");
+    }
+}
+
+::tt::disaggregation::proto::KvChunkTensorType to_wire(KvChunkTensorType t) {
+    switch (t) {
+        case KvChunkTensorType::Kv: return ::tt::disaggregation::proto::KV;
+        case KvChunkTensorType::Snapshot: return ::tt::disaggregation::proto::SNAPSHOT;
+    }
+    throw std::runtime_error("unhandled KvChunkTensorType=" + std::to_string(static_cast<int>(t)));
+}
+
 void emit_entry(
     ::tt::disaggregation::proto::KvChunkAddressTable& pb,
     uint32_t c,
@@ -274,6 +293,14 @@ void emit_config_payload(
     const KvChunkAddressTableConfig& cfg,
     uint32_t npc,
     bool dual_write) {
+    // A strided config with no populated row would emit zero runs, which the importer rejects as
+    // malformed ("tagged STRIDED_ROWS but has no runs"). Export it as an empty UNROLLED config instead,
+    // as the UnrolledGrid path does for an all-unset grid (config_compressible() is false there).
+    const bool any_row = std::any_of(map.rows.begin(), map.rows.end(), [](const auto& r) { return r.step != 0; });
+    if (!any_row) {
+        pb_cfg.set_compression(to_wire(ChunkCompression::kUnrolled));
+        return;
+    }
     pb_cfg.set_compression(to_wire(ChunkCompression::kStridedRows));
     for (uint32_t slot = 0; slot < cfg.num_slots; slot++) {
         for (uint32_t layer = 0; layer < cfg.num_layers; layer++) {
@@ -366,6 +393,7 @@ void emit_config_payload(
         pb_cfg->set_num_slots(cfg.num_slots);
         pb_cfg->set_chunk_n_tokens(cfg.chunk_n_tokens);
         pb_cfg->set_chunk_size_bytes(cfg.chunk_size_bytes);
+        pb_cfg->set_tensor_type(to_wire(cfg.tensor_type));
 
         // Static dispatch per map representation (overload set above — one instantiation per
         // alternative; no runtime branch).
@@ -435,6 +463,7 @@ KvChunkAddressTable from_proto_message(const ::tt::disaggregation::proto::KvChun
                         .num_slots = pb_cfg.num_slots(),
                         .chunk_n_tokens = pb_cfg.chunk_n_tokens(),
                         .chunk_size_bytes = pb_cfg.chunk_size_bytes(),
+                        .tensor_type = from_wire(pb_cfg.tensor_type()),  // absent => KV; throws on unknown tag
                     },
                 .compression = from_wire(pb_cfg.compression()),  // throws on unknown tag
             };

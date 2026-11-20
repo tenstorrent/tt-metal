@@ -19,7 +19,6 @@ struct AllGatherConcatDeviceOperation {
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<AllGatherConcatMeshWorkloadFactory>;
-    using shared_variables_t = AllGatherConcatMeshWorkloadFactory::shared_variables_t;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -27,6 +26,8 @@ struct AllGatherConcatDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t&);
+    static std::vector<tt::tt_metal::TensorTopology> compute_output_topologies(
+        const operation_attributes_t&, const tensor_args_t&);
 
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };

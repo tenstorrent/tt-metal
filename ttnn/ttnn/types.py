@@ -18,6 +18,22 @@ bfloat16 = DataType.BFLOAT16
 bfloat8_b = DataType.BFLOAT8_B
 bfloat4_b = DataType.BFLOAT4_B
 fp8_e4m3 = DataType.FP8_E4M3
+# OCP microscaling (MX) formats, Quasar only, TILE layout only.
+mxfp8_e4m3 = DataType.MXFP8_E4M3
+mxfp8_e5m2 = DataType.MXFP8_E5M2
+mxfp6_e2m3 = DataType.MXFP6_E2M3
+mxfp6_e3m2 = DataType.MXFP6_E3M2
+mxfp4 = DataType.MXFP4
+mxint8 = DataType.MXINT8
+mxint4 = DataType.MXINT4
+mxint2 = DataType.MXINT2
+MX_DTYPES = (mxfp8_e4m3, mxfp8_e5m2, mxfp6_e2m3, mxfp6_e3m2, mxfp4, mxint8, mxint4, mxint2)
+
+
+def is_mx_dtype(dtype) -> bool:
+    return dtype in MX_DTYPES
+
+
 DumpTensorMode = ttnn._ttnn.tensor.DumpTensorMode
 
 BufferType = ttnn._ttnn.tensor.BufferType
@@ -120,3 +136,15 @@ FaceGeometry = ttnn._ttnn.program_descriptor.FaceGeometry
 compute_program_descriptor_hash = ttnn._ttnn.operations.generic.compute_program_descriptor_hash
 
 TensorAccessorArgs = ttnn._ttnn.tensor_accessor_args.TensorAccessorArgs
+
+# Host-side multicast helper (counterpart of kernel_lib/mcast/kernel/mcast_pipe).
+attach_absent_mcast = ttnn._ttnn.mcast_host.attach_absent_mcast
+TransferMode = ttnn._ttnn.mcast_host.TransferMode
+Mcast = ttnn._ttnn.mcast_host.Mcast
+McastCoreOrder = ttnn._ttnn.mcast_host.McastCoreOrder
+McastSenderPlacement = ttnn._ttnn.mcast_host.McastSenderPlacement
+McastFixedSenderConfig = ttnn._ttnn.mcast_host.McastFixedSenderConfig
+McastExplicitFixedSenderConfig = ttnn._ttnn.mcast_host.McastExplicitFixedSenderConfig
+McastRotatingSenderConfig = ttnn._ttnn.mcast_host.McastRotatingSenderConfig
+McastConfig = ttnn._ttnn.mcast_host.McastConfig
+McastDataReady = ttnn._ttnn.mcast_host.McastDataReady

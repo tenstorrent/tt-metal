@@ -222,7 +222,7 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, bool do_eltwise_max = false) {
         /**
          * For `dst_tiles` number of rows, compute the max into the even indices of the DST register.
          */
-        reduce_block_max_row_init<cols>(out_cb);
+        reduce_block_max_row_init<cols>(in0_cb, scale_cb, out_cb);
         for (uint32_t i = 0; i < dst_tiles; i++) {
             const uint32_t reduce_dst_idx = i;
             reduce_block_max_row<cols>(in0_cb, scale_cb, (row_start_idx + i) * cols, reduce_dst_idx);
@@ -297,6 +297,57 @@ void reduce_c(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(reduce_dst_idx, out_cb);
+        tile_regs_release();
+    }
+
+    cb_out.push_back(rows);
+}
+
+/**
+ * out_cb = max(in0_cb, dim=-1), and eltwise_max(prev_cb, ...) if do_eltwise_max.
+ *
+ * The FPU max reduce keeps only 8 significant bits, so for an fp32 in0_cb its row max can miss the
+ * row's peak by far more than exp's range once scaled. This folds and reduces on the SFPU instead, so
+ * the max equals the peak as the FPU later reads it from in0_cb and (in0 - max) peaks at exactly 0.
+ * out_cb gets the max in column 0 of each tile, as reduce_c does.
+ */
+template <uint32_t in0_cb, uint32_t rows>
+void reduce_max_row_fp32(uint32_t out_cb, uint32_t prev_cb, uint32_t cols, bool do_eltwise_max = false) {
+    CircularBuffer cb_in0(in0_cb);
+    CircularBuffer cb_out(out_cb);
+    // Precondition: in0_cb has rows*cols produced, in row-major order
+    // Precondition: out_cb has rows free
+    // Precondition: if do_eltwise_max, prev_cb has rows produced
+    // Postcondition: in0_cb has rows*cols produced
+    // Postcondition: out_cb has rows produced
+    cb_in0.wait_front(rows * cols);
+    cb_out.reserve_back(rows);
+    pack_reconfig_data_format(out_cb);
+
+    constexpr uint32_t max_dst_idx = 0;
+    constexpr uint32_t in_dst_idx = 1;
+    for (uint32_t i = 0; i < rows; i++) {
+        tile_regs_acquire();
+        reconfig_data_format_srca(in0_cb);
+        copy_init(in0_cb);
+        binary_max_tile_init();
+        copy_tile(in0_cb, i * cols, max_dst_idx);
+        for (uint32_t j = 1; j < cols; j++) {
+            copy_tile(in0_cb, i * cols + j, in_dst_idx);
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx);
+        }
+        sfpu_reduce_init<PoolType::MAX, DataFormat::Float32>();
+        sfpu_reduce<PoolType::MAX, DataFormat::Float32, ReduceDim::REDUCE_ROW>(max_dst_idx);
+        if (do_eltwise_max) {
+            reconfig_data_format_srca(prev_cb);
+            copy_init(prev_cb);
+            copy_tile(prev_cb, i, in_dst_idx);
+            binary_max_tile_init();
+            binary_max_tile(max_dst_idx, in_dst_idx, max_dst_idx, VectorMode::C);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(max_dst_idx, out_cb);
         tile_regs_release();
     }
 
@@ -951,11 +1002,18 @@ void sigmoid_sub(uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t num
     // whose polynomial implementation loads the constants it consumes into LREGs in the tile body; it
     // does not depend on vConstFloatPrgm* state from exp_tile_init. Conversely, that exp body also
     // does not clobber the reciprocal constants, so one reciprocal init before the tile loop is enough.
+    // That holds for exp_tile_first_column only. The regular exp_tile (the commented-out call in the
+    // loop) takes its constants from the programmable registers exp_tile_init sets (vConstFloatPrgm0..1
+    // on a bf16 DEST, 0..2 on a Blackhole fp32 DEST; see the note on exp_tile), and exp_tile_init
+    // overwrites the reciprocal constant set here. Restoring that call needs exp_tile_init and
+    // sfpu_reciprocal_init re-run inside the loop, each directly before its tile call.
     MATH((ckernel::sfpu::sfpu_reciprocal_init<false>()));
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         tile_regs_acquire();
         sub_tiles(in0_cb, in1_cb, i, i, 0);
+        // Restoring this exp_tile call needs exp_tile_init and sfpu_reciprocal_init re-run per iteration;
+        // see the sfpu_reciprocal_init comment above the loop.
         // exp_tile<false, true /*SCALE_EN*/>(0, (int)VectorMode::C, (uint16_t)0xBF80 /*bf16(-1.0) scale*/);
         MATH((exp_tile_first_column<false /*APPROX_MODE*/, (uint16_t)0xBF80 /*bf16(-1.0) scale*/>(0)));
         // add_unary_tile(0 /*dst_index*/, 0x3F800000); // Call the macro directly to get access to VectorMode argument
@@ -1607,7 +1665,8 @@ template <
     uint32_t chunked_q_local_padded_Nt = 0,
     uint32_t chunked_chunk_size_t = 0,
     bool use_windowed_narrowing = false,
-    uint32_t cb_windowed_k_range = 0>
+    uint32_t cb_windowed_k_range = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -1666,7 +1725,9 @@ void sdpa_inner_loop(
     const bool is_balanced = false,
     const bool use_zigzag_balancing = false,
     const bool is_last_ring_iter = true,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    // RING only: padded multicast slots the reader runs after this core's Q chunks; their K/V are drained.
+    [[maybe_unused]] const uint32_t padded_q_slots = 0) {
     // Parameter-stable CB locals. Aliases (cb_sum_A/B, cb_max_A/B, cb_out_im_A/B) are
     // std::swap-mutated below, so they use inline CircularBuffer(alias).method() at the call
     // sites instead. cb_out is constructed conditionally near its consumer (cur.out target).
@@ -1680,6 +1741,15 @@ void sdpa_inner_loop(
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
     uint32_t KV_chunks_processed_in_iter = 0;
     const uint32_t q_per_core = iter_q_end - iter_q_start;
+    // RING: absolute K-tile index of a local K chunk's start. Chunked: non-monotonic local->abs map.
+    auto ring_kv_global_start_tile = [&](uint32_t k_chunk) -> uint32_t {
+        if constexpr (chunked_enabled) {
+            return kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
+                ring_id, k_chunk * Sk_chunk_t);
+        } else {
+            return local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+        }
+    };
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
         uint32_t q_start_tile = 0;    // First tile of Q chunk (tile units, both STANDARD and RING)
@@ -1755,14 +1825,7 @@ void sdpa_inner_loop(
             uint32_t kv_global_start_tile = 0;  // RING only: abs K-tile index of this k_chunk's start
             if constexpr (sdpa_type == RING) {
                 const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                // Global index into the padded KV tensor. Chunked: non-monotonic local→abs map.
-                if constexpr (chunked_enabled) {
-                    kv_global_start_tile =
-                        kv_global_tile_for_local<true, 0, chunked_chunk_size_t, chunked_q_local_padded_Nt>(
-                            ring_id, k_chunk * Sk_chunk_t);
-                } else {
-                    kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                }
+                kv_global_start_tile = ring_kv_global_start_tile(k_chunk);
                 if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
                     // This is a KV chunk on spatial input beyond the logical N, and not joint KV. Skip it.
                     continue;
@@ -1928,9 +1991,15 @@ void sdpa_inner_loop(
              * reduce_tile + binary_max_tile. The overload with cols as a template arg
              * is bf16-only but cb_qk_im could be fp32.
              */
+#ifdef SDPA_EXACT_FP32_ROW_MAX
+            // cb_qk_im and the max CBs are fp32 with fp32 dest accumulation.
+            reduce_max_row_fp32<cb_qk_im, Sq_chunk_t>(
+                alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#else
             reconfig_data_format(cb_qk_im, cb_identity_scale_in);
             reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t>(
                 alias_cur_max, alias_prev_max, Sk_chunk_t, processed_k_chunks > 0);
+#endif
 
             /**
              * sub_exp fuses a few operations.
@@ -2031,6 +2100,9 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_prev_max, true);
 
             // 2. Compute exp((prev_max - cur_max) * scale) to rescale previous statistics
+            //    The max CBs can be fp32 while exp_max_diff stays at the stats format.
+            reconfig_data_format(alias_prev_max, alias_cur_max);
+            pack_reconfig_data_format(cb_exp_max_diff);
             sub_exp_block<scale_fp32>(alias_prev_max, alias_cur_max, cb_exp_max_diff, Sq_chunk_t);
             CircularBuffer(alias_prev_max).pop_front(Sq_chunk_t);
 
@@ -2144,6 +2216,28 @@ void sdpa_inner_loop(
     }
 
     if constexpr (sdpa_type == RING) {
+        // Padded multicast slots: the reader pushes every K/V entry it receives so this core's CBs advance with
+        // the injector's. Drain them with the same skips as a real Q chunk, before the phase-alignment dummy.
+        // Compiled only when the factory can schedule padded slots, so configs without them keep their text size.
+        if constexpr (padded_q_slots_enabled) {
+            for (uint32_t slot = 0; slot < padded_q_slots; ++slot) {
+                const uint32_t q_flat = padded_slot_flat_q<false>({}, iter_q_start, q_per_core, q_per_core + slot, 1);
+                const uint32_t q_chunk = remap_q_index(q_flat, q_num_chunks, use_zigzag_balancing) % q_num_chunks;
+                if (is_balanced && (q_chunk < q_num_chunks / 2)) {
+                    continue;
+                }
+                for (uint32_t k_chunk = iter_k_chunk_start; k_chunk < iter_k_chunk_end; ++k_chunk) {
+                    if (k_chunk < num_local_k_chunks && ring_kv_global_start_tile(k_chunk) >= logical_nt) {
+                        continue;
+                    }
+                    KV_chunks_processed_in_iter++;
+                    cb_k_in_obj.wait_front(k_chunk_tiles);
+                    cb_v_in_obj.wait_front(v_chunk_tiles);
+                    cb_k_in_obj.pop_front(k_chunk_tiles);
+                    cb_v_in_obj.pop_front(v_chunk_tiles);
+                }
+            }
+        }
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_k_in_obj.wait_front(k_chunk_tiles);
             cb_v_in_obj.wait_front(v_chunk_tiles);
@@ -2431,7 +2525,8 @@ template <
     bool lightweight_mask_enabled = false,
     bool chunked_enabled = false,
     uint32_t chunked_q_local_padded_Nt = 0,
-    uint32_t chunked_chunk_size_t = 0>
+    uint32_t chunked_chunk_size_t = 0,
+    bool padded_q_slots_enabled = true>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2485,7 +2580,8 @@ void sdpa_ring(
     const bool skip_first_half_q,
     const bool is_last_ring_iter,
     const bool use_zigzag_balancing = false,
-    const ChunkedContext& chunked = {}) {
+    const ChunkedContext& chunked = {},
+    const uint32_t padded_q_slots = 0) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2507,7 +2603,10 @@ void sdpa_ring(
         lightweight_mask_enabled,
         chunked_enabled,
         chunked_q_local_padded_Nt,
-        chunked_chunk_size_t>(
+        chunked_chunk_size_t,
+        false,  // use_windowed_narrowing (not used)
+        0,      // cb_windowed_k_range (not used)
+        padded_q_slots_enabled>(
         0,  // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
@@ -2565,5 +2664,6 @@ void sdpa_ring(
         skip_first_half_q,
         use_zigzag_balancing,
         is_last_ring_iter,
-        chunked);
+        chunked,
+        padded_q_slots);
 }

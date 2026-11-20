@@ -37,12 +37,12 @@ Grep for "X" in tt_llk_{target_arch}/ (*.h files)
 Common SFPU includes:
 ```cpp
 #include "sfpi.h"
-#include "ckernel_sfpu_load_config.h"
+#include "sfpu/ckernel_sfpu_load_config.h"
 ```
 
 ```
 # Check what includes similar kernels use
-Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h, then Read the top of each file
+Glob for tt_metal/hw/ckernels/{target_arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_*.h, then Read the top of each file
 ```
 
 ### Wrong v_if Syntax
@@ -182,7 +182,7 @@ Grep for "_init_" in tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h with context
 Grep for "_uninit_" in tt_llk_{target_arch}/llk_lib/llk_{type}_{op}.h with context
 ```
 
-Every register modified in `_init_` must be restored in `_uninit_`. Do NOT reset the device — it masks the bug.
+Every register modified in `_init_` must be restored in `_uninit_`. Transient state is the exception: MOP config, replay buffers and ADDR_MODs are programmed by every init that uses them, so `_uninit_` does not reset them. Do NOT reset the device — it masks the bug.
 
 ---
 
@@ -191,7 +191,7 @@ Every register modified in `_init_` must be restored in `_uninit_`. Do NOT reset
 ### Before Submitting for Testing
 - [ ] Function signatures match test harness (`tests/sources/*{op}*.cpp`)
 - [ ] Uses correct instruction conventions for target arch (check existing kernels)
-- [ ] Init/uninit symmetry maintained
+- [ ] Init/uninit symmetry maintained (transient MOP, replay and ADDR_MOD state is not reset in uninit)
 - [ ] Unused parameters marked `[[maybe_unused]]`
 - [ ] Checked similar existing kernels for patterns
 

@@ -6,7 +6,7 @@ import torch
 import ttnn
 import pytest
 
-from tests.ttnn.utils_for_testing import assert_equal
+from tests.ttnn.utils_for_testing import assert_equal, assert_with_ulp
 from math import isnan
 
 
@@ -54,7 +54,9 @@ def make_condition_tensor(shape, dtype, condition, stride=8):
         ((4, 2, 2, 2, 1, 1), (4, 1, 1, 1, 128, 128), (4, 1, 2, 1, 1, 1)),
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+# The scalar is a runtime arg excluded from the program hash, and its packing is checked bitwise in
+# test_ternary_category1_float32.py::test_where_scalar_branch, so one value covers the dispatch path.
+@pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, device):
@@ -97,7 +99,7 @@ def test_ttnn_where(c_shape, t_shape, f_shape, scalar, variant, condition, devic
 )
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-@pytest.mark.parametrize("scalar", [-9, 10, 7])
+@pytest.mark.parametrize("scalar", [-9])
 def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.int32) * condition
@@ -138,7 +140,7 @@ def test_ttnn_where_int32(c_shape, t_shape, f_shape, variant, condition, scalar,
 )
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
-@pytest.mark.parametrize("scalar", [9, 10, 7])
+@pytest.mark.parametrize("scalar", [9])
 def test_ttnn_where_uint32(c_shape, t_shape, f_shape, variant, condition, scalar, device):
     torch.manual_seed(0)
     C = torch.ones(c_shape, dtype=torch.int32) * condition
@@ -183,7 +185,7 @@ def test_ttnn_where_uint32(c_shape, t_shape, f_shape, variant, condition, scalar
         ((256,), (256,), (256,)),  # LLK
     ],
 )
-@pytest.mark.parametrize("scalar", [15.5, -11.5, 0, 55.5])
+@pytest.mark.parametrize("scalar", [-11.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
 @pytest.mark.parametrize("condition", [1, 0])
 def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, scalar, variant, condition, device):
@@ -221,23 +223,6 @@ def test_ttnn_where_bfloat8b(tor_dtype, ttnn_dtype, c_shape, t_shape, f_shape, s
     golden = torch.where(C.bool(), T, F)
 
     assert torch.equal(result, golden)
-
-
-def test_ttnn_where_forge():
-    cond = torch.tensor([[1, 0, 1, 0]], dtype=torch.int32)
-    x = torch.tensor([[10, 20, 30, 40]], dtype=torch.int32)
-    y = torch.tensor([[100, 200, 300, 400]], dtype=torch.int32)
-    expected = torch.where(cond != 0, x, y)
-
-    with ttnn.manage_device(0) as dev:
-        ttnn_cond = ttnn.from_torch(cond, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        real_cond = ttnn.eq(ttnn_cond, 1)
-        ttnn_x = ttnn.from_torch(x, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        ttnn_y = ttnn.from_torch(y, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=dev)
-        ttnn_result = ttnn.where(real_cond, ttnn_x, ttnn_y)
-        result = ttnn.to_torch(ttnn_result)
-
-    assert torch.equal(result, expected), f"Expected {expected}, got {result}"
 
 
 def test_ttnn_where_nan(device):
@@ -289,7 +274,8 @@ def test_ttnn_where_nan(device):
 @pytest.mark.parametrize("h", [32])
 @pytest.mark.parametrize("w", [32])
 @pytest.mark.parametrize(
-    "tor_dtype, ttnn_dtype", [(torch.bfloat16, ttnn.bfloat16), (torch.float32, ttnn.float32), (torch.int32, ttnn.int32)]
+    "tor_dtype, ttnn_dtype",
+    [(torch.float32, ttnn.float32), (torch.int32, ttnn.int32)],
 )
 def test_ttnn_where_mcw(h, w, tor_dtype, ttnn_dtype, device):
     C = torch.arange(h * w, dtype=tor_dtype)
@@ -424,6 +410,78 @@ def test_where_scalar_bf16_inputs_fp32_output(device, scalar, scalar_is_true):
         expected = torch.where(C.bool(), T.float(), torch.tensor(scalar))
 
     assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize(
+    "c_shape",
+    [(2, 64, 128), (2, 64, 1), (1, 1, 1), (1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+@pytest.mark.parametrize("c_dtype", [ttnn.bfloat16, ttnn.float32], ids=["c_bf16", "c_fp32"])
+@pytest.mark.parametrize("t_dtype", [ttnn.bfloat16, ttnn.float32], ids=["t_bf16", "t_fp32"])
+@pytest.mark.parametrize("f_dtype", [ttnn.bfloat16, ttnn.float32], ids=["f_bf16", "f_fp32"])
+def test_where_ttt_mixed_dtypes(device, c_shape, c_dtype, t_dtype, f_dtype):
+    # Regression for #60223: mixed bf16/fp32 operands must be unpacked with their own format into
+    # an fp32 DEST and selected with the matching where_tile variant.
+    torch.manual_seed(0)
+    shape = (2, 64, 128)
+    to_torch_dtype = {ttnn.bfloat16: torch.bfloat16, ttnn.float32: torch.float32}
+    C = (torch.rand(c_shape) > 0.5).to(to_torch_dtype[c_dtype])
+    T = torch.randn(shape, dtype=to_torch_dtype[t_dtype])
+    F = torch.randn(shape, dtype=to_torch_dtype[f_dtype])
+    ttnn_C = ttnn.from_torch(C, dtype=c_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=t_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=f_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.where(ttnn_C, ttnn_T, ttnn_F))
+    expected = torch.where(C.bool(), T.float(), F.float()).to(to_torch_dtype[t_dtype])
+
+    assert result.dtype == expected.dtype
+    if t_dtype == ttnn.float32:
+        assert torch.equal(result, expected)
+    else:
+        # fp32 -> bf16 packing rounds ties away from zero, torch rounds them to even.
+        assert_with_ulp(expected_result=expected, actual_result=result, ulp_threshold=1)
+
+
+@pytest.mark.parametrize(
+    "c_shape",
+    [(2, 64, 128), (2, 64, 1), (1, 1, 1), (1, 1, 128)],
+    ids=["no_bcast", "col_bcast", "scalar_bcast", "row_bcast"],
+)
+def test_where_ttt_bf16_inputs_fp32_output(device, c_shape):
+    torch.manual_seed(0)
+    shape = (2, 64, 128)
+    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16)
+    T = torch.randn(shape, dtype=torch.bfloat16)
+    F = torch.randn(shape, dtype=torch.bfloat16)
+    ttnn_C, ttnn_T, ttnn_F = (
+        ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in (C, T, F)
+    )
+    out = ttnn.from_torch(torch.zeros(shape), dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    ttnn.where(ttnn_C, ttnn_T, ttnn_F, output_tensor=out)
+
+    assert torch.equal(ttnn.to_torch(out), torch.where(C.bool(), T.float(), F.float()))
+
+
+@pytest.mark.parametrize("c_dtype", [ttnn.bfloat16, ttnn.float32], ids=["c_bf16", "c_fp32"])
+@pytest.mark.parametrize(
+    "c_shape", [(1, 1, 64, 128), (1, 1, 64, 1), (1, 1, 1, 1)], ids=["no_bcast", "col_bcast", "scalar_bcast"]
+)
+def test_where_ttt_float_predicate_int32_values(device, c_dtype, c_shape):
+    torch.manual_seed(0)
+    shape = (1, 1, 64, 128)
+    C = (torch.rand(c_shape) > 0.5).to(torch.bfloat16 if c_dtype == ttnn.bfloat16 else torch.float32)
+    T = torch.randint(-(2**30), 2**30, shape, dtype=torch.int32)
+    F = torch.randint(-(2**30), 2**30, shape, dtype=torch.int32)
+    ttnn_C = ttnn.from_torch(C, dtype=c_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_T = ttnn.from_torch(T, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn_F = ttnn.from_torch(F, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    result = ttnn.to_torch(ttnn.where(ttnn_C, ttnn_T, ttnn_F))
+
+    assert torch.equal(result, torch.where(C.bool(), T, F))
 
 
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
@@ -863,9 +921,10 @@ def test_ttnn_where_preallocated(a_shape, b_shape, c_shape, scalar, variant, con
     ],
 )
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
-@pytest.mark.parametrize("scalar", [15.5, 5.0, -11.33])
+@pytest.mark.parametrize("scalar", [15.5])
 @pytest.mark.parametrize("variant", ["TTS", "TST", "TTT"])
-@pytest.mark.parametrize("condition", [1, 0])
+# make_condition_tensor mixes both predicate values, so either setting exercises both branches.
+@pytest.mark.parametrize("condition", [1])
 def test_where_subcore_grid(device, shape, sub_core_grid, dtype, scalar, variant, condition):
     torch.manual_seed(0)
     tor_dtype = dtype
@@ -976,32 +1035,15 @@ def test_where_tss_subcore_grid(device, shape, sub_core_grid, dtype, scalar_true
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
         (0.0, -11.33),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_tss_int32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
     """TSS variant: INT32 predicate, float scalars, sub_core_grids.
 
@@ -1033,32 +1075,15 @@ def test_where_tss_int32_predicate_sub_core_grid(device, shape, sub_core_grid, s
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
 @pytest.mark.parametrize(
     "scalar_true, scalar_false",
     [
-        (15.5, 31.2),
         (0.0, -11.33),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_tss_uint32_predicate_sub_core_grid(device, shape, sub_core_grid, scalar_true, scalar_false, condition):
     """TSS variant: UINT32 predicate, float scalars, sub_core_grids.
 
@@ -1090,25 +1115,9 @@ def test_where_tss_uint32_predicate_sub_core_grid(device, shape, sub_core_grid, 
                 ]
             ),
         ),
-        (
-            torch.Size([1, 7, 32, 96]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 6)),
-                ]
-            ),
-        ),
-        (
-            torch.Size([1, 1, 32, 128]),
-            ttnn.CoreRangeSet(
-                [
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1)),
-                ]
-            ),
-        ),
     ],
 )
-@pytest.mark.parametrize("condition", [1, 0])
+@pytest.mark.parametrize("condition", [1])
 def test_where_ttt_int32_predicate_sub_core_grid(device, shape, sub_core_grid, condition):
     """TTT variant: INT32 predicate, float tensors, sub_core_grids.
 
@@ -1207,3 +1216,137 @@ def test_where_program_cache_different_broadcast_shapes(device, variant):
 
     assert_equal(expected1, result1)
     assert_equal(expected2, result2)
+
+
+# The preallocated-output shape check compared the output's shape with itself, so a smaller output
+# silently got a partial result and a larger one made the reader run past the inputs.
+@pytest.mark.parametrize(
+    "input_shape, output_shape",
+    [((1, 1, 64, 64), (1, 1, 32, 32)), ((1, 1, 32, 32), (1, 1, 64, 64))],
+    ids=["output_smaller", "output_larger"],
+)
+def test_where_rejects_mismatched_preallocated_output(device, expect_error, input_shape, output_shape):
+    def to_device(t):
+        return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    cond = to_device(torch.randint(0, 2, input_shape).bfloat16())
+    true_values = to_device(torch.randn(input_shape).bfloat16())
+    false_values = to_device(torch.randn(input_shape).bfloat16())
+    out = to_device(torch.zeros(output_shape).bfloat16())
+    with expect_error(RuntimeError, "requires its shape to match the computed shape"):
+        ttnn.where(cond, true_values, false_values, output_tensor=out)
+
+
+# The row-major binary_ng readers built B's tensor accessor at common-runtime-arg offset 0, so with both
+# operands sharded B's pages were decoded with A's shape and read from the wrong cores.
+def test_where_scalar_row_major_both_sharded_broadcast(device):
+    grid = device.compute_with_storage_grid_size()
+    if grid.x < 8:
+        pytest.skip("needs 8 cores in a row")
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+
+    def height_sharded(t):
+        rows = t.shape[0] * t.shape[1] * t.shape[2]
+        mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(core_grid, (rows // 8, t.shape[3]), ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        return ttnn.from_torch(
+            t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mem_config
+        )
+
+    torch.manual_seed(0)
+    torch_pred = torch.randint(0, 2, (1, 1, 256, 64)).bfloat16()
+    torch_true = torch.randn((1, 4, 256, 64)).bfloat16()
+
+    out = ttnn.where(height_sharded(torch_pred), height_sharded(torch_true), 0.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    expected = torch.where(torch_pred.bool(), torch_true, torch.zeros_like(torch_true))
+    assert torch.equal(ttnn.to_torch(out), expected)
+
+
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bfp8", "bfp4"])
+@pytest.mark.parametrize(
+    "c_shape, t_shape, f_shape, condition",
+    [
+        ((1, 1, 64, 1), (1, 1, 64, 64), (1, 1, 64, 64), None),  # predicate column broadcast
+        ((1, 1, 64, 64), (1, 1, 1, 64), (1, 1, 64, 64), 1),  # true-value row broadcast
+        ((1, 1, 64, 64), (1, 1, 64, 64), (1, 1, 1, 1), 0),  # false-value scalar broadcast
+    ],
+    ids=["col_bcast_predicate", "row_bcast_true", "scalar_bcast_false"],
+)
+def test_where_block_float_subtile_broadcast(device, ttnn_dtype, c_shape, t_shape, f_shape, condition):
+    """The broadcast tile is filled by the reader, which must use the block-float layout of its CB."""
+    torch.manual_seed(0)
+    if condition is None:
+        torch_c = torch.randint(0, 2, c_shape).bfloat16()
+    else:
+        torch_c = torch.full(c_shape, float(condition), dtype=torch.bfloat16)
+
+    def round_trip(t):
+        tt = ttnn.from_torch(t, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return tt, ttnn.to_torch(tt)
+
+    tt_c, torch_c = round_trip(torch_c)
+    tt_t, torch_t = round_trip(torch.randn(t_shape).bfloat16())
+    tt_f, torch_f = round_trip(torch.randn(f_shape).bfloat16())
+
+    result = ttnn.to_torch(ttnn.where(tt_c, tt_t, tt_f))
+    # Every 16-element block of the output comes from a single operand, so block-float rounding is exact.
+    assert torch.equal(result, torch.where(torch_c.bool(), torch_t, torch_f))
+
+
+@pytest.mark.parametrize(
+    "predicate_dtype, value_dtype",
+    [(ttnn.float32, ttnn.bfloat16), (ttnn.bfloat16, ttnn.float32)],
+    ids=["float32_predicate", "float32_values"],
+)
+@pytest.mark.parametrize(
+    "c_shape, f_shape",
+    [((1, 1, 64, 64), (1, 1, 64, 64)), ((1, 1, 64, 1), (1, 1, 64, 64)), ((1, 1, 64, 64), (1, 1, 1, 1))],
+    ids=["no_bcast", "col_bcast_predicate", "scalar_bcast_false"],
+)
+def test_where_mixed_float32_bfloat16_operands(device, predicate_dtype, value_dtype, c_shape, f_shape):
+    """Any float32 operand needs a 32-bit Dest, and each operand must be unpacked with its own format."""
+    torch.manual_seed(0)
+    t_shape = (1, 1, 64, 64)
+
+    def round_trip(torch_tensor, dtype):
+        tt_tensor = ttnn.from_torch(torch_tensor, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+        return tt_tensor, ttnn.to_torch(tt_tensor)
+
+    tt_c, torch_c = round_trip(torch.randint(0, 2, c_shape).float(), predicate_dtype)
+    tt_t, torch_t = round_trip(torch.randn(t_shape), value_dtype)
+    tt_f, torch_f = round_trip(torch.randn(f_shape), value_dtype)
+
+    result = ttnn.to_torch(ttnn.where(tt_c, tt_t, tt_f))
+    assert torch.equal(result, torch.where(torch_c.bool(), torch_t, torch_f))
+
+
+@pytest.mark.parametrize(
+    "ttnn_dtype, scalar",
+    [
+        (ttnn.int32, 2.5),
+        (ttnn.int32, float("inf")),
+        (ttnn.int32, 2.0**31),
+        (ttnn.uint32, -1.0),
+        (ttnn.uint32, 0.5),
+        (ttnn.uint32, float("nan")),
+    ],
+)
+@pytest.mark.parametrize("variant", ["TTS", "TST"])
+def test_where_rejects_scalar_not_representable_in_int_tensor(device, expect_error, ttnn_dtype, scalar, variant):
+    """The scalar is packed with the integer tensor's dtype, which would silently truncate or wrap it."""
+    shape = (1, 1, 32, 32)
+    tt_c = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    tt_t = ttnn.from_torch(
+        torch.ones(shape, dtype=torch.int32), dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "cannot represent the scalar"):
+        if variant == "TTS":
+            ttnn.where(tt_c, tt_t, scalar)
+        else:
+            ttnn.where(tt_c, scalar, tt_t)

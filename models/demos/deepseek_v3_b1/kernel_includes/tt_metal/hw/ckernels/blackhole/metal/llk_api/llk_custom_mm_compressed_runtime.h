@@ -23,7 +23,11 @@ namespace compressed {
  * Zero tiles have abs_addr = ZEROS_ADDR_SHIFTED, precomputed by host.
  * No per-tile arithmetic, no branches.
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM, bool FINALIZE = true>
+template <
+    uint32_t KT_DIM,
+    uint32_t CT_DIM,
+    bool FINALIZE = true,
+    ckernel::CustomMmDestLayout DEST_LAYOUT = ckernel::CustomMmDestLayout::DefaultSplitAcc>
 FORCE_INLINE void custom_mm_compressed_block_runtime(
     uint32_t fmt_l1_addr, uint32_t addr_in0, uint32_t addr_in1, uint32_t in0_face_r_dim, uint32_t dst_index) {
     static_assert(CT_DIM > 0, "CT_DIM must be > 0");
@@ -103,7 +107,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime(
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
         TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT, FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 // Sentinel value for zero tiles in relative-offset fmt metadata.
@@ -116,7 +120,11 @@ constexpr uint32_t ZERO_TILE_SENTINEL = 0xFFFFFF;
  * Zero tiles use ZERO_TILE_SENTINEL as the offset.
  * effective_addr = (offset == SENTINEL) ? zero_addr : (slot_base + offset)
  */
-template <uint32_t KT_DIM, uint32_t CT_DIM = 1, bool FINALIZE = true>
+template <
+    uint32_t KT_DIM,
+    uint32_t CT_DIM = 1,
+    bool FINALIZE = true,
+    ckernel::CustomMmDestLayout DEST_LAYOUT = ckernel::CustomMmDestLayout::DefaultSplitAcc>
 FORCE_INLINE void custom_mm_compressed_block_runtime_dram(
     uint32_t fmt_l1_addr,
     uint32_t addr_in0,
@@ -200,7 +208,7 @@ FORCE_INLINE void custom_mm_compressed_block_runtime_dram(
         TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
         TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1010);
     }));
-    MATH((_llk_math_custom_mm_<FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
+    MATH((_llk_math_custom_mm_<DEST_LAYOUT, FINALIZE>(in0_face_r_dim, dst_index, KT_DIM, CT_DIM)));
 }
 
 }  // namespace compressed

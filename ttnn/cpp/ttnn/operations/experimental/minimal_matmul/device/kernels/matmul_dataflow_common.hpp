@@ -30,25 +30,30 @@ namespace detail {
 template <typename... Args, uint32_t... Indexes>
 auto make_tensor_accessor_tuple_impl(
     const std::tuple<Args...>& args_tuple,
-    uint32_t address_rt_arg_index_start,
+    uint32_t address_common_arg_index_start,
     uint32_t page_size,
     std::integer_sequence<uint32_t, Indexes...>) {
     // Third argument page_size from runtime args overrides TensorAccessorArgs::AlignedPageSize, which may be stale on
     // program cache hits.
     return std::make_tuple(TensorAccessor(
-        std::get<Indexes>(args_tuple), get_arg_val<uint32_t>(address_rt_arg_index_start + Indexes), page_size)...);
+        std::get<Indexes>(args_tuple),
+        get_common_arg_val<uint32_t>(address_common_arg_index_start + Indexes),
+        page_size)...);
 }
 }  // namespace detail
 
 /**
  * Create a tuple of TensorAccessors from a tuple of TensorAccessorArgs.
- * Each tensor gets its address from consecutive RT args starting at address_rt_arg_index_start.
+ * Each tensor gets its address from consecutive common runtime args starting at address_common_arg_index_start.
  */
 template <typename... Args>
 auto make_tensor_accessor_tuple_uniform_page_size(
-    const std::tuple<Args...>& args_tuple, uint32_t address_rt_arg_index_start, uint32_t page_size) {
+    const std::tuple<Args...>& args_tuple, uint32_t address_common_arg_index_start, uint32_t page_size) {
     return detail::make_tensor_accessor_tuple_impl(
-        args_tuple, address_rt_arg_index_start, page_size, std::make_integer_sequence<uint32_t, sizeof...(Args)>());
+        args_tuple,
+        address_common_arg_index_start,
+        page_size,
+        std::make_integer_sequence<uint32_t, sizeof...(Args)>());
 }
 inline void fill_zeros_async(const Noc& noc, const CircularBuffer& cb, uint32_t bytes, uint32_t offset_bytes = 0) {
     noc.async_write_zeros(cb, bytes, {.offset_bytes = offset_bytes});
@@ -242,10 +247,11 @@ void write_block_sync(
  * as soon as the first row is ready, rather than waiting for the entire block. This overlapping
  * of data movement and compute improves overall throughput.
  */
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
+// The ternary tensors can have different memory layouts or buffer types.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TernaryAAccessor, typename TernaryBAccessor>
 void read_ternary_blocks_sync(
-    const TensorAccessorType& ternary_a_accessor,
-    const TensorAccessorType& ternary_b_accessor,
+    const TernaryAAccessor& ternary_a_accessor,
+    const TernaryBAccessor& ternary_b_accessor,
     const TensorShape2D& shape,
     uint32_t ternary_a_cb,
     uint32_t ternary_b_cb,

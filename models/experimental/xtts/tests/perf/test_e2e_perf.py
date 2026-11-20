@@ -107,6 +107,10 @@ def test_xtts_e2e_perf(device, reset_seeds):
         f"replay={perf['replay_s']:.3f}s RTF={rtf:.3f} compile={perf['compile_s']:.1f}s"
     )
 
+    from models.demos.utils.common_demo_utils import report_e2e_metrics
+
+    report_e2e_metrics("xtts-v2", {"rtf": rtf}, batch_size=1, model_type="audio")
+
     prep_perf_report(
         model_name="xtts_v2",
         batch_size=1,

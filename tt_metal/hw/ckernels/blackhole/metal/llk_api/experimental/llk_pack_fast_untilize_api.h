@@ -71,15 +71,13 @@ inline void llk_pack_fast_untilize_block_strided(
         output_row_address + chunk_offset, unit_dim, prev_unit_dim, output_row_stride);
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_fast_untilize_uninit_with_src_format(const std::uint32_t pack_src_format) {
     SAN_HOOK(unsupported());
-    ckernel::_llk_pack_fast_untilize_uninit_<block_ct_dim, full_ct_dim>(pack_src_format);
+    ckernel::_llk_pack_fast_untilize_uninit_(pack_src_format);
 }
 
-template <std::uint32_t block_ct_dim, std::uint32_t full_ct_dim>
 inline void llk_pack_fast_untilize_uninit(const std::uint32_t output) {
     SAN_HOOK(unsupported());
     const std::uint32_t output_id = get_output_id(output);
-    ckernel::_llk_pack_fast_untilize_uninit_<block_ct_dim, full_ct_dim>(pack_src_format[output_id]);
+    ckernel::_llk_pack_fast_untilize_uninit_(pack_src_format[output_id]);
 }

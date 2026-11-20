@@ -106,6 +106,11 @@ run_sync_events_test() {
     pytest tests/ttnn/tracy/test_sync_events_profiler.py
 }
 
+run_perf_counter_analysis_test() {
+    # Offline post-processing tests: they build their own counter frames, so no device.
+    pytest $PROFILER_TEST_SCRIPTS_ROOT/test_perf_counter_analysis.py --noconftest
+}
+
 # Umbrella that runs every individual test in sequence. Kept for callers that
 # don't pass a function name (CI invokes individual functions via the matrix).
 run_profiling_test() {
@@ -116,6 +121,7 @@ run_profiling_test() {
     run_accumulate_profiler_test
     run_streaming_profiler_test
     run_sync_events_test
+    run_perf_counter_analysis_test
 }
 
 main() {

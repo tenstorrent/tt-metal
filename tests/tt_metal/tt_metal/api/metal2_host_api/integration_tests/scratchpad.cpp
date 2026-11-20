@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -23,6 +23,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/program_spec_hw_fixture.hpp"
 
+#include "metal2_host_api/test_helpers/scratchpad_override.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -30,6 +32,38 @@ using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1DMKernel;
 using test_helpers::MakeMinimalWorkUnit;
 using test_helpers::ProgramSpecHWTest;
+
+namespace sp_test = tt::tt_metal::test_helpers;
+using ScratchpadOverrideSlowTest = sp_test::ScratchpadPlacementFixture<ProgramSpecHWTest>;
+
+TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideGuardedAccess) {
+    // Kernels write only on selected nodes and leave memory on the excluded node untouched.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    auto spec = sp_test::MakeGuardedScratchpadSpecForTest();
+    distributed::MeshWorkload workload(fixture_device, spec);
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0xC0DE0000u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0xC0DE0000u));
+}
+
+TEST_F(ScratchpadOverrideSlowTest, ScratchpadPlacementOverrideRepeatedEnqueue) {
+    // Repeated enqueue supplies each new pattern to both scratchpad bindings.
+    distributed::MeshDevice& fixture_device = this->fixture_device();
+    distributed::MeshWorkload workload(fixture_device, sp_test::MakeGuardedScratchpadSpecForTest());
+    Program& program = workload.get_programs().begin()->second;
+    sp_test::InitializeScratchpadReportsForTest(fixture_device, program);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x100u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    program.set_program_run_args(sp_test::MakeGuardedScratchpadArgsForTest(0x200u));
+    sp_test::EnqueueScratchpadOverrideForTest(fixture_device, workload, false);
+    EXPECT_EQ(
+        sp_test::ReadScratchpadResultsForTest(fixture_device, program),
+        sp_test::ExpectedScratchpadResultsForTest(sp_test::ScratchpadAddressForTest(program), 0x200u));
+}
 
 // ============================================================================
 // Kernel Scratchpad: write / readback under slow dispatch
@@ -43,9 +77,10 @@ using test_helpers::ProgramSpecHWTest;
 // TT_METAL_SLOW_DISPATCH_MODE=1) exercises exactly that path.
 //
 // One Gen1 DM kernel binds a 64-byte scratchpad, writes a known pattern into it, and reports its
-// Scratchpad::get_base_address() to a host-known L1 address. The host reads the reported base, then
-// reads the scratchpad L1 and confirms the pattern landed — closing the loop on both "the scratchpad is
-// real, writable, node-local L1" and "the framework delivered its base address to the kernel".
+// base address and get_dataformat() to a host-known L1 address. The host reads the
+// reported values, then reads the scratchpad L1 and confirms the pattern landed — closing the loop on
+// the scratchpad being real, writable, node-local L1 and the framework delivering its metadata.
+
 TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 
@@ -79,35 +114,40 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
     ProgramSpec spec;
     spec.name = "scratchpad_write_readback_slow_dispatch";
     spec.kernels = {dm_kernel};
-    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = kScratchpadBytes}};
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = kScratchpadBytes,
+        .data_format_metadata = tt::DataFormat::Float16_b,
+    }};
     spec.work_units = std::vector<WorkUnitSpec>{WorkUnitSpec{
         .name = "work_unit_0",
         .kernels = {KernelSpecName{"scratch_kernel"}},
         .target_nodes = node,
     }};
 
-    Program program = MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
 
     ProgramRunArgs params;
     params.kernel_run_args = {ProgramRunArgs::KernelRunArgs{
         .kernel = KernelSpecName{"scratch_kernel"},
         .runtime_arg_values = MakeRuntimeArgsForSingleNode(node, {{"report_addr", kReportAddr}}),
     }};
-    SetProgramRunArgs(program, params);
+    program.set_program_run_args(params);
 
     // Pre-zero the report location so a kernel that never wrote it would be caught (the readback base
     // address would be 0, which is not a valid scratchpad L1 address → the pattern check fails).
-    std::vector<uint32_t> zero_report(1, 0u);
+    std::vector<uint32_t> zero_report(2, 0u);
     slow_dispatch::WriteToL1(*mesh_device, node, kReportAddr, zero_report);
 
     // Dispatch via the slow-dispatch path (blocking — wait_until_cores_done defaults to true).
     LaunchProgram(*mesh_device, std::move(program));
 
     std::vector<uint32_t> reported;
-    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, sizeof(uint32_t), reported);
-    ASSERT_EQ(reported.size(), 1u);
+    slow_dispatch::ReadFromL1(*mesh_device, node, kReportAddr, 2 * sizeof(uint32_t), reported);
+    ASSERT_EQ(reported.size(), 2u);
     const uint32_t scratch_base = reported[0];
     EXPECT_NE(scratch_base, 0u) << "Kernel reported a 0 scratchpad base address (token not delivered?)";
+    EXPECT_EQ(reported[1], static_cast<uint32_t>(tt::DataFormat::Float16_b));
 
     std::vector<uint32_t> scratch_contents;
     slow_dispatch::ReadFromL1(*mesh_device, node, scratch_base, kScratchpadBytes, scratch_contents);
@@ -127,7 +167,7 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 
 // A scratchpad's framework-allocated L1 base address rides a common-runtime-arg (CRTA) word, patched
 // in by ProgramImpl::allocate_scratchpads. Scratchpads stack on top of the DFB allocators, so when a
-// DFB size override (SetProgramRunArgs's dfb_run_overrides) re-lays-out the L1 region between
+// DFB size override (Program::set_program_run_args's dfb_run_overrides) re-lays-out the L1 region between
 // enqueues, the scratchpad's base address MOVES — and the moved address must be re-patched into the
 // CRTA before the next dispatch, or the kernel reads a stale base that now points into the grown DFB.
 //
@@ -138,13 +178,13 @@ TEST_F(ProgramSpecHWTest, ScratchpadWriteReadback) {
 // or mis-orders the latch reset would silently ship the stale base, and nothing else catches it.
 //
 // Setup: a BRISC producer binds a scratchpad AND a DFB (producer). It writes a known pattern into the
-// scratchpad and stages the scratchpad's get_base_address() into the DFB; an NCRISC consumer drains
+// scratchpad and stages the scratchpad's base address into the DFB; an NCRISC consumer drains
 // that entry to DRAM. Both on node {0,0}, so the DFB lives on the producer's core and the scratchpad
 // stacks above it. The producer has no named args — its only per-enqueue state is the
 // framework-supplied scratchpad CRTA — so it is omitted from kernel_run_args (the binding-only second
-// pass in SetProgramRunArgs installs its CRTA).
+// pass in Program::set_program_run_args installs its CRTA).
 //
-// Sequence (slow dispatch): launch with the small DFB → base_A; SetProgramRunArgs again with a
+// Sequence (slow dispatch): launch with the small DFB → base_A; Program::set_program_run_args again with a
 // dfb_run_overrides that GROWS the DFB → launch → base_B. The grown DFB pushes the stacked scratchpad
 // up, so a correctly re-delivered base satisfies base_B != base_A, and the pattern must still land at
 // base_B (the scratchpad is real, writable L1 at its new home). With the latch reset removed,
@@ -187,7 +227,8 @@ void kernel_main() {
     DataflowBuffer buf(dfb::stage);
     buf.reserve_back(1);
     volatile tt_l1_ptr uint32_t* w = (volatile tt_l1_ptr uint32_t*)buf.get_write_ptr();
-    w[0] = pad.get_base_address();
+    // Raw address: the base is reported to the host for comparison.
+    w[0] = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     buf.push_back(1);
 }
 )"};
@@ -202,6 +243,7 @@ void kernel_main() {
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 void kernel_main() {
     auto dst_addr = get_arg(args::dst_addr);
     auto bank_id = get_arg(args::bank_id);
@@ -228,7 +270,7 @@ void kernel_main() {
 
     distributed::MeshCoordinateRange device_range(mesh_device->shape());
     distributed::MeshWorkload workload;
-    workload.add_program(device_range, MakeProgramFromSpec(*mesh_device, spec));
+    workload.add_program(device_range, Program(*mesh_device, spec));
     Program& program = workload.get_programs().at(device_range);
 
     std::vector<uint32_t> expected_pattern(kNumElems);
@@ -246,7 +288,7 @@ void kernel_main() {
                 MakeRuntimeArgsForSingleNode(node, {{"dst_addr", output_buffer->address()}, {"bank_id", 0u}}),
         }};
         params.dfb_run_overrides.push_back({.dfb = DFBSpecName{"stage"}, .num_entries = dfb_num_entries});
-        SetProgramRunArgs(program, params);
+        program.set_program_run_args(params);
 
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true);
 

@@ -51,6 +51,7 @@ from triage import (
 )
 from ttexalens.context import Context
 from ttexalens.coordinate import OnChipCoordinate
+from ttexalens.hardware.risc_debug import RiscLocation
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 
 
@@ -105,6 +106,12 @@ def _format_core_location(device_label: str | None, location: OnChipCoordinate |
     return f"{device_label}:{location.to_user_str()}"
 
 
+@dataclass
+class RunningKernel:
+    name: str
+    risc_location: RiscLocation  # one RISC running the kernel
+
+
 class RunningOperationAggregation:
     """Mutable accumulator for all cores running operations under the same host assigned ID."""
 
@@ -127,10 +134,13 @@ class RunningOperationAggregation:
         self.previous_operation_parameters = previous_operation_parameters
         self.core_locations: set[str] = set()
         self.device_labels: set[str] = set()
+        self.kernels: dict[int, RunningKernel] = {}
 
-    def add_core(self, device_label: str, location: OnChipCoordinate) -> None:
-        self.core_locations.add(_format_core_location(device_label, location))
+    def add_core(self, device_label: str, risc_location: RiscLocation, core: DispatcherCoreData) -> None:
+        self.core_locations.add(_format_core_location(device_label, risc_location.location))
         self.device_labels.add(device_label)
+        if core.kernel is not None:
+            self.kernels[core.watcher_kernel_id] = RunningKernel(core.kernel.name, risc_location)
 
 
 @dataclass
@@ -162,15 +172,16 @@ def _build_runtime_id_map(inspector_data: InspectorData) -> OperationRuntimeMap:
 
 def _collect_dispatcher_data(
     dispatcher_data: DispatcherData,
-    location: OnChipCoordinate,
-    risc_name: str,
+    risc_location: RiscLocation,
     show_all_cores: bool,
 ) -> DispatcherCoreData | None:
+    location = risc_location.location
+    risc_name = risc_location.risc_name
     if not dispatcher_data.risc_enabled(risc_name):
         return None
 
     try:
-        dispatcher_core_data = dispatcher_data.get_cached_core_data(location, risc_name)
+        dispatcher_core_data = dispatcher_data.get_cached_core_data(risc_location)
     except TimeoutDeviceRegisterError:
         raise
     except Exception as e:
@@ -203,7 +214,7 @@ def run(args, context: Context) -> RunningOpsAggregation:
     runtime_id_to_operation = _build_runtime_id_map(inspector_data)
 
     collected_results = run_checks.run_per_core_check(
-        lambda location, risc_name: _collect_dispatcher_data(dispatcher_data, location, risc_name, show_all_cores),
+        lambda risc_debug: _collect_dispatcher_data(dispatcher_data, risc_debug.risc_location, show_all_cores),
         block_filter=BLOCK_TYPES_TO_CHECK,
     )
 
@@ -256,7 +267,8 @@ def run(args, context: Context) -> RunningOpsAggregation:
 
             aggregation.add_core(
                 device_description_serializer(check_result.device_description),
-                check_result.location,
+                RiscLocation(check_result.location, check_result.neo_id, check_result.risc_name),
+                dispatcher_core_data,
             )
         except Exception as e:
             log_check(False, f"Failed to aggregate one core's running-op data: {e}")

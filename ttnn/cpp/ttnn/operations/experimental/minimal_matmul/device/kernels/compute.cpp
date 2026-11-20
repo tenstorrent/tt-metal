@@ -19,6 +19,8 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#include "minimal_matmul_runtime_args.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
 
 // Renamed from copy_block to avoid an ambiguous overload with ckernel::copy_block (added to
 // api/compute/tile_move_copy.h in #49070), which has the identical (uint32_t, uint32_t, uint32_t,
@@ -224,11 +226,8 @@ void add_bias_and_addcmul_block(
 #ifndef TERNARY_B_IS_FLOAT32
         mul_bcast_rows_init(intermediate_cb, ternary_b_cb);
 #else
-        // Full re-arm (hw_configure + pack_dest/math_pack_sync), matching the pre-cleanup
-        // 2-arg unary_bcast_init(ternary_b_cb, intermediate_cb); this runs after matmul_blocks
-        // regardless of FUSE_BIAS, so a plain reconfig would drop the MATH<->PACK DST re-arm.
-        // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-        compute_kernel_hw_startup(ternary_b_cb, intermediate_cb);
+        // ternary_b_cb is bound UnpackToSrc, so unary_bcast reads it through SrcB, which the
+        // reconfig above sets.
         unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
 #endif  // TERNARY_B_IS_FLOAT32
 
@@ -243,8 +242,6 @@ void add_bias_and_addcmul_block(
                 mul_tiles_bcast<BroadcastType::ROW>(intermediate_cb, ternary_b_cb, tile_id, n, DST_ID);
 #else
                 constexpr uint32_t TERNARY_B_DST_ID = 1;
-                // TODO(#52395): compute_kernel_hw_startup is a call-once API; this mid-kernel re-init (preserving the pre-cleanup full-init behaviour) should become a targeted DST re-arm.
-                compute_kernel_hw_startup(ternary_b_cb, intermediate_cb);
                 unary_bcast_init<BroadcastType::ROW>(ternary_b_cb);
                 unary_bcast<BroadcastType::ROW>(ternary_b_cb, n, TERNARY_B_DST_ID);
 
@@ -409,16 +406,22 @@ void kernel_main() {
     constexpr uint32_t M_block_tiles = get_compile_time_arg_val(1);
     constexpr uint32_t K_block_tiles = get_compile_time_arg_val(2);
     constexpr uint32_t N_block_tiles = get_compile_time_arg_val(3);
-    constexpr uint32_t M_blocks_per_core = get_compile_time_arg_val(4);
+    constexpr uint32_t M_cores = get_compile_time_arg_val(4);
     constexpr uint32_t N_blocks_per_core = get_compile_time_arg_val(5);
     constexpr uint32_t subblock_h = get_compile_time_arg_val(6);
     constexpr uint32_t subblock_w = get_compile_time_arg_val(7);
 
+    // Row count is the one common runtime arg; the DM kernels derive the same range from it.
+    const uint32_t M_tiles =
+        get_common_arg_val<uint32_t>(ttnn::experimental::prim::minimal_matmul_common_args::Compute::M_tiles);
+
     uint32_t argidx = 0;
-    const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
-    const uint32_t M_end_tile = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in0_idx = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_start_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
+
+    [[maybe_unused]] const auto [M_tiles_per_core, M_blocks_per_core, padded_M_tiles, M_start_tile, M_end_tile] =
+        ttnn::runtime_length::uniform_split(M_tiles, M_cores, in0_idx, M_block_tiles);
 
 #ifdef FUSE_TERNARY
     const uint32_t fused_ternary_scalar_uint = get_arg_val<uint32_t>(argidx++);

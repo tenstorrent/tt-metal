@@ -6,18 +6,17 @@
 
 // Buffer descriptor (BFD) types and table access.
 
+#include <cfg_defines.h>
+
 #include <cstdint>
 
-#include "cfg_defines.h"
+#include "ckernel_trisc_id.h"
 #include "llk_assert.h"
 #include "tensix_types.h"
 #include "tensor_shape.h"
 
 namespace ckernel::trisc
 {
-
-// Num of words in buffer descriptor struct
-constexpr static std::uint32_t BD_NUM_WORDS = 3;
 
 // Number of entries in the buffer descriptor table (physically partitioned per TRISC; ids are 0..31).
 constexpr std::uint32_t BD_TABLE_NUM_ENTRIES = 32;
@@ -32,26 +31,21 @@ enum class L1AccessMode : std::uint8_t
     Strided    = 1,
 };
 
-// Real UNPACR/PACR hardware engines that consume buffer descriptors. One "current id" slot each;
-// compile-time ownership ties each engine to a TRISC role (see bfd_engine_owned_by_trisc).
-//
-// Unp2_Slice0/Unp2_Slice1 are one engine, not two: a binary SrcS op needs both input descriptors
-// live at once, so UNPACR2 gets two current[] slots.
-enum class BfdResource : std::uint8_t
-{
-    Unp0 = 0,
-    Unp1,
-    Pack0,
-    Pack1,
-    Unp2_Slice0,
-    Unp2_Slice1,
-    Count
-};
+// One fixed BFD id per TDMA engine, inside the owning thread's partition of the table; LLK-internal.
+// Correctness needs TTSync TRACK_GLOBAL_CFG enabled (on at reset, see set_ttsync_enables): it makes a
+// BD re-program wait for in-flight UNPACR/PACR using that entry.
+//   unpack: UNP0=0, UNP1=1 | pack: PACK0=16 | SFPU thread: PACK1=24, UNP2_SLICE0/1=25/26 (one engine, UNPACR2)
+constexpr std::uint8_t BFD_ID_UNP0        = 0;
+constexpr std::uint8_t BFD_ID_UNP1        = 1;
+constexpr std::uint8_t BFD_ID_PACK0       = 16;
+constexpr std::uint8_t BFD_ID_PACK1       = 24;
+constexpr std::uint8_t BFD_ID_UNP2_SLICE0 = 25;
+constexpr std::uint8_t BFD_ID_UNP2_SLICE1 = 26;
 
 // Points to the config space
-std::uint32_t volatile* const cfg = (std::uint32_t volatile*)TENSIX_CFG_BASE;
+std::uint32_t volatile* const cfg = reinterpret_cast<std::uint32_t volatile*>(TENSIX_CFG_BASE);
 // Points to the buffer table
-buffer_descriptor_u volatile* const bd_table = (buffer_descriptor_u volatile* const)(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
+buffer_descriptor_u volatile* const bd_table = reinterpret_cast<buffer_descriptor_u volatile*>(cfg + BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_ADDR32);
 
 /**
  * @brief helper function used to compute z-dim for buf_desc from TensorShape.
@@ -73,40 +67,25 @@ inline std::uint16_t compute_square_of_min(std::uint8_t input1, std::uint8_t inp
     8x16: x=16, y=8, z=1
     16x16: x=16, y=16, z=1
     32x32: x=16, y=16, z=4
- * @param buf_desc: Contains L1 buffer descriptor information
+ * @param x_dim: Face column dimension
+ * @param y_dim: Face row dimension after applying the L1 access mode
+ * @param z_dim: Faces per HW tile (4 for a 2x2 face grid, else 1); forced to 1 for Strided mode
  * @tparam MODE: L1 access mode the descriptor was built for. Strided ops (PACR/UNPACR_STRIDE
  *        tiny-tiles) must be programmed with y_dim = 1 to index L1 rows as tiles.
  */
 template <L1AccessMode MODE = L1AccessMode::Continuous>
-inline void validate_buffer_desc(const buffer_descriptor_u& buf_desc)
+inline void validate_buffer_desc(const std::uint8_t x_dim, const std::uint8_t y_dim, const std::uint8_t z_dim)
 {
-    LLK_ASSERT(buf_desc.f.x_dim == 16, "x_dim must be 16");
-    LLK_ASSERT(
-        buf_desc.f.y_dim == 16 || buf_desc.f.y_dim == 8 || buf_desc.f.y_dim == 4 || buf_desc.f.y_dim == 2 || buf_desc.f.y_dim == 1,
-        "y_dim must be powers of 2 <= 16");
-    LLK_ASSERT(buf_desc.f.z_dim == 1 || buf_desc.f.z_dim == 4, "z_dim must be 1 or 4");
-    if (buf_desc.f.z_dim == 4)
+    LLK_ASSERT(x_dim == 16, "x_dim must be 16");
+    LLK_ASSERT(y_dim == 16 || y_dim == 8 || y_dim == 4 || y_dim == 2 || y_dim == 1, "y_dim must be powers of 2 <= 16");
+    LLK_ASSERT(z_dim == 1 || z_dim == 4, "z_dim must be 1 or 4");
+    if (z_dim == 4)
     {
-        LLK_ASSERT(buf_desc.f.y_dim == 16, "y_dim must be 16 when z_dim is 4");
+        LLK_ASSERT(y_dim == 16, "y_dim must be 16 when z_dim is 4");
     }
     if constexpr (MODE == L1AccessMode::Strided)
     {
-        LLK_ASSERT(buf_desc.f.y_dim == 1, "Strided L1 access requires buffer descriptor y_dim == 1");
-    }
-}
-
-/**
- * @brief Populates buffer table entry for TDMA engines
- * @param buf_desc_id: Buffer descriptor id into the buffer descriptor table
- * @param buf_desc: Contains L1 buffer descriptor information
- */
-inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const buffer_descriptor_u& buf_desc)
-{
-    // Guards the invalid sentinel (BFD_ID_INVALID) and any OOB id from a wild write into cfg space.
-    LLK_ASSERT(buf_desc_id < BD_TABLE_NUM_ENTRIES, "buf_desc_id out of range");
-    for (std::uint32_t i = 0; i < BD_NUM_WORDS; i++)
-    {
-        bd_table[buf_desc_id].words[i] = buf_desc.words[i];
+        LLK_ASSERT(y_dim == 1, "Strided L1 access requires buffer descriptor y_dim == 1");
     }
 }
 
@@ -124,30 +103,42 @@ inline void _configure_buf_desc_table_(const std::uint32_t buf_desc_id, const bu
 template <L1AccessMode MODE = L1AccessMode::Continuous>
 inline buffer_descriptor_u construct_buf_desc(const TensorShape& tensor_shape, unsigned base_l1_16B, unsigned data_format)
 {
-    buffer_descriptor_u buf_desc = {0};
-    buf_desc.f.x_dim             = tensor_shape.face_c_dim;
-    buf_desc.f.y_dim             = tensor_shape.face_r_dim;
-    if (tensor_shape.num_faces_r_dim == tensor_shape.num_faces_c_dim)
-    {
-        buf_desc.f.z_dim = tensor_shape.total_num_faces();
-    }
-    else
-    {
-        buf_desc.f.z_dim = static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
-    }
-    buf_desc.f.l1_addr_16B = base_l1_16B;
-    buf_desc.f.format      = static_cast<std::uint8_t>(data_format);
+    const std::uint8_t x_dim = tensor_shape.face_c_dim;
+    const std::uint8_t y_dim = MODE == L1AccessMode::Strided ? 1 : tensor_shape.face_r_dim;
+    const std::uint8_t z_dim =
+        MODE == L1AccessMode::Strided ? 1 : static_cast<std::uint8_t>(compute_square_of_min(tensor_shape.num_faces_r_dim, tensor_shape.num_faces_c_dim));
+    validate_buffer_desc<MODE>(x_dim, y_dim, z_dim);
 
-    if constexpr (MODE == L1AccessMode::Strided)
-    {
-        // PACR_STRIDE quirk: program BD as 1x1x16 so L1 addressing indexes rows as tiles.
-        buf_desc.f.y_dim = 1;
-        buf_desc.f.z_dim = 1;
-    }
+    const std::uint32_t word0 = (base_l1_16B & BUFFER_DESCRIPTOR_TABLE_REG0_L1_BASE_ADDR_MASK) |
+                                ((data_format << BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT_SHAMT) & BUFFER_DESCRIPTOR_TABLE_REG0_TILE_FORMAT_MASK);
+    const std::uint32_t word1 = static_cast<std::uint32_t>(x_dim) << BUFFER_DESCRIPTOR_TABLE_REG0_TILE_X_DIM_SHAMT;
+    const std::uint32_t word2 = (static_cast<std::uint32_t>(y_dim) << BUFFER_DESCRIPTOR_TABLE_REG0_TILE_Y_DIM_SHAMT) |
+                                (static_cast<std::uint32_t>(z_dim) << BUFFER_DESCRIPTOR_TABLE_REG0_TILE_Z_DIM_SHAMT);
+    return {{word0, word1, word2, 0}};
+}
 
-    validate_buffer_desc<MODE>(buf_desc);
-
-    return buf_desc;
+/**
+ * @brief Program the fixed table entry BFD_ID of an engine from the L1 buffer info.
+ * @tparam BFD_ID: fixed id of the engine (BFD_ID_*); must belong to the compiling thread's partition
+ * @tparam MODE: L1 access mode (Continuous, or Strided for PACR/UNPACR_STRIDE tiny-tiles)
+ * @param tensor_shape: Tile/face dimensions and shape of the buffer
+ * @param l1_base_addr: base address of the buffer in L1 (16B units)
+ * @param l1_data_format: L1 data encoding format
+ * @note Safe only while TTSync TRACK_GLOBAL_CFG is enabled on this thread: the store waits for in-flight
+ *       UNPACR/PACR using the entry (see BFD_ID_UNP0).
+ */
+template <std::uint8_t BFD_ID, L1AccessMode MODE = L1AccessMode::Continuous>
+inline void program_bfd(const TensorShape& tensor_shape, const std::uint32_t l1_base_addr, const std::uint32_t l1_data_format)
+{
+    // Cross-thread table writes are not ordered by TTSync, so each thread may only write its own partition.
+    static_assert(
+        (ckernel::TRISC_ID == 0 && BFD_ID <= BFD_ID_UNP1) || (ckernel::TRISC_ID == 2 && BFD_ID == BFD_ID_PACK0) ||
+            (ckernel::TRISC_ID == 3 && BFD_ID >= BFD_ID_PACK1 && BFD_ID <= BFD_ID_UNP2_SLICE1),
+        "BFD id not owned by the compiling thread (math owns none)");
+    const auto buf_desc = construct_buf_desc<MODE>(tensor_shape, l1_base_addr, l1_data_format);
+    bd_table[BFD_ID].words[0] = buf_desc.words[0];
+    bd_table[BFD_ID].words[1] = buf_desc.words[1];
+    bd_table[BFD_ID].words[2] = buf_desc.words[2];
 }
 
 } // namespace ckernel::trisc

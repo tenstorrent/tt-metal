@@ -18,23 +18,27 @@ inline void logical_not_unary_init() { math::reset_counters(p_setrwc::SET_ABD_F)
 template <bool APPROXIMATION_MODE, InstrModLoadStore INSTRUCTION_MODE, int ITERATIONS>
 inline void calculate_logical_not() {
     static_assert(
-        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::LO16 ||
+        INSTRUCTION_MODE == InstrModLoadStore::DEFAULT || INSTRUCTION_MODE == InstrModLoadStore::UINT16 ||
             INSTRUCTION_MODE == InstrModLoadStore::INT32,
-        "INSTRUCTION_MODE must be one of: DEFAULT, LO16, INT32.");
+        "INSTRUCTION_MODE must be one of: DEFAULT, UINT16, INT32.");
 
-    // DEFAULT uses the native float layout, LO16 unsigned 16-bit (U16), INT32 two's-complement 32-bit (I32).
+    // DEFAULT uses the native float layout, UINT16 unsigned 16-bit (U16), INT32 two's-complement 32-bit (I32).
     // mode<DataLayout::Default> is equivalent to a plain dst_reg access.
-    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::LO16)    ? sfpi::DataLayout::U16
+    constexpr sfpi::DataLayout layout = (INSTRUCTION_MODE == InstrModLoadStore::UINT16)  ? sfpi::DataLayout::U16
                                         : (INSTRUCTION_MODE == InstrModLoadStore::INT32) ? sfpi::DataLayout::I32
                                                                                          : sfpi::DataLayout::Default;
     using vType = std::conditional_t<
-        INSTRUCTION_MODE == InstrModLoadStore::LO16,
+        INSTRUCTION_MODE == InstrModLoadStore::UINT16,
         sfpi::vUInt,
         std::conditional_t<INSTRUCTION_MODE == InstrModLoadStore::INT32, sfpi::vInt, sfpi::vFloat>>;
 
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vType v = sfpi::dst_reg[0].mode<layout>();
+        if constexpr (std::is_same_v<vType, sfpi::vFloat>) {
+            // v == 0 tests all 32 bits, so -0.0 (0x80000000) needs its sign cleared to count as zero.
+            v = sfpi::setsgn(v, 0 /* sgn */);
+        }
         vType r = 0;
         v_if(v == 0) { r = 1; }
         v_endif;

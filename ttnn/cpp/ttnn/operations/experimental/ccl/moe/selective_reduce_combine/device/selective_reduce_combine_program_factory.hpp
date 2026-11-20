@@ -6,11 +6,14 @@
 
 #include <cstdint>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "selective_reduce_combine_device_operation_types.hpp"
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/experimental/fabric/fabric.hpp>
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
@@ -22,6 +25,32 @@ struct SelectiveReduceCombineWorkerLayout {
     uint32_t num_worker_cores = 0;
 };
 
+struct FusedSourceBufferLayout {
+    uint32_t rows_per_buffer = 0;             // token-segment rows per ring entry
+    uint32_t buffer_block_size_bytes = 0;     // rows_per_buffer * token_segment_size_bytes
+    uint32_t circular_buffer_size_bytes = 0;  // num_buffers * buffer_block_size_bytes == the shard
+};
+
+// Fused source: the producer (moe_compute dm1) and the combine writer alias one
+// height-sharded L1 tensor as a num_buffers-entry ring. Each core's shard is
+// [source_shard_height, source_shard_width] elements, but both sides address it in
+// rows of one token segment (token_segment_width = hidden_size / num_data_parallel_cores
+// elements, token_segment_size_bytes each): dm1's token_expert_row_offset and the
+// writer's block stride count token-segment rows, not shard rows. A ring entry holds
+// source_shard_height / num_buffers shard rows, each source_shard_width /
+// token_segment_width segments wide, so
+//   rows_per_buffer = source_shard_height / num_buffers * (source_shard_width / token_segment_width)
+// (equal to the shard height split when the shard is one segment wide). The shard
+// height must divide by num_buffers, the shard width by the segment width, and the
+// ring (== the shard's bytes) must fit the L1 bank (source_buffer_size_bytes).
+FusedSourceBufferLayout compute_fused_source_buffer_layout(
+    uint32_t source_shard_height,
+    uint32_t source_shard_width,
+    uint32_t token_segment_width,
+    uint32_t source_buffer_size_bytes,
+    uint32_t token_segment_size_bytes,
+    uint32_t num_buffers);
+
 SelectiveReduceCombineWorkerLayout compute_worker_layout(
     const Tensor& input_tensor,
     uint32_t hidden_size,
@@ -29,84 +58,97 @@ SelectiveReduceCombineWorkerLayout compute_worker_layout(
     uint32_t num_data_parallel_cores,
     bool local_combine = false);
 
+struct MuxCorePlacement {
+    CoreCoord logical_core;
+    tt::tt_fabric::FabricNodeId dst_node_id;
+    uint32_t link = 0;
+};
+
 }  // namespace detail
 
-struct SelectiveReduceCombineProgramArtifacts {
-    tt::tt_metal::KernelHandle reader_kernel_id{};
-    tt::tt_metal::KernelHandle writer_kernel_id{};
-    tt::tt_metal::CBHandle data_cb_handle{};
-    std::vector<tt::tt_metal::CoreCoord> cores;
-    // Owned by the artifacts for the standalone UnifiedSelectReduce op. nullopt for the
-    // fused moe_compute FullLocal path (writer compiles out init/final barrier handling),
-    // in which case the kernel runtime args carry a placeholder address of 0.
-    std::optional<GlobalSemaphore> init_semaphore;
-    std::optional<GlobalSemaphore> cross_device_semaphore;
+// Host side of kernels/dataflow/combine_fabric.hpp for one device. worker_runtime_args is in the order of the workers
+// passed to plan_combine_fabric.
+struct CombineFabric {
+    tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args;
+    tt::tt_metal::KernelDescriptor::Defines defines;
+    std::vector<std::vector<uint32_t>> worker_runtime_args;
+    tt::tt_fabric::FabricMuxV2Config mux_config;
+    tt::tt_fabric::FabricNodeId src_node_id;
+    std::vector<detail::MuxCorePlacement> mux_placements;
+
+    // Call after adding the worker kernels so their indices stay fixed.
+    void append_mux_kernels(const MeshDevice& mesh_device, tt::tt_metal::ProgramDescriptor& desc) const;
 };
+
+// Plans num_links mux cores per neighbor along `axis`; adds the workers' packet-header CB and semaphores to desc.
+CombineFabric plan_combine_fabric(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const MeshDevice& mesh_device,
+    const MeshCoordinate& mesh_coordinate,
+    const std::vector<MeshCoordinate>& all_mesh_coordinates,
+    tt::tt_fabric::Topology topology,
+    uint32_t axis,
+    uint32_t num_links,
+    const CoreRangeSet& mux_core_range_set,
+    const std::vector<CoreCoord>& workers,
+    uint32_t packet_header_cb_id,
+    uint32_t max_packet_size_bytes);
+
+// The largest fabric packet a combine sends for tokens of `dtype` (a power of two for bf16 rows).
+uint32_t combine_max_packet_size_bytes(const MeshDevice& mesh_device, tt::tt_metal::DataType dtype);
 
 struct UnifiedSelectReduce {
     using operation_attributes_t = SelectiveReduceCombineParams;
     using tensor_args_t = SelectiveReduceCombineTensors;
     using tensor_return_value_t = ttnn::Tensor;
 
-    using shared_variables_t = SelectiveReduceCombineProgramArtifacts;
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinateRangeSet& tensor_coords,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-    static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const operation_attributes_t& operation_attributes,
-        const tensor_args_t& tensor_args,
-        tensor_return_value_t& tensor_return_value);
-
-private:
-    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-    static cached_program_t create_at(
-        const operation_attributes_t& operation_attributes,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const std::vector<ttnn::MeshCoordinate>& all_mesh_coordinates,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value,
-        const GlobalSemaphore& init_semaphore,
-        const GlobalSemaphore& cross_device_semaphore);
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+    static void override_runtime_arguments(
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& operation_attributes,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
-// Builder function that creates kernels and returns artifacts.
-// `init_semaphore` / `cross_device_semaphore` are passed as optionals: the builder uses their
-// addresses (0 when nullopt) for writer kernel runtime args, and stores them in the returned
-// artifacts for ownership. nullopt is used by the fused moe_compute FullLocal path, whose
-// writer compiles out all init/final barrier handling.
-SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_artifacts(
-    tt::tt_metal::Program& program,
-    const experimental::prim::SelectiveReduceCombineParams& operation_attributes,
+// Appends CBs and kernels onto desc and returns the combine writer's kernel index. nullopt semaphores bake address 0
+// (local_combine / SingleDevice).
+uint32_t append_selective_reduce_combine_to_descriptor(
+    tt::tt_metal::ProgramDescriptor& desc,
+    const SelectiveReduceCombineParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
     const std::vector<MeshCoordinate>& all_mesh_coordinates,
-    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
+    const SelectiveReduceCombineTensors& tensor_args,
     Tensor& tensor_return_value,
     const std::optional<GlobalSemaphore>& init_semaphore,
     const std::optional<GlobalSemaphore>& cross_device_semaphore,
     uint32_t metadata_sync_semaphore_id,
     uint32_t compute_sync_semaphore_id,
-    uint32_t compute_cores_per_combine_cores = 0,
-    const std::optional<std::vector<CoreCoord>>& compute_cores_by_ring_id = std::nullopt);
+    // Fused moe_compute only: for each data-parallel (width) column, the compute cores whose
+    // output feeds that column. Presence switches the writer to a double-buffered source.
+    const std::optional<std::vector<std::vector<CoreCoord>>>& compute_cores_by_combine_column = std::nullopt);
 
-// Runtime argument override function. Semaphore kernel runtime-arg slots are written as
-// raw addresses; pass 0 for the fused moe_compute FullLocal path (unused by the writer).
-void selective_reduce_combine_helper_override_runtime_arguments(
+// Returns the {init, final} barrier semaphores, held in workload.semaphores. The final one is cross_device_semaphore
+// when given.
+std::pair<GlobalSemaphore, GlobalSemaphore> add_selective_reduce_combine_barrier_semaphores(
+    tt::tt_metal::WorkloadDescriptor& workload,
+    ttnn::MeshDevice* mesh_device,
+    const CoreRangeSet& combine_cores,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore);
+
+// The combine writer's runtime arg that holds the final barrier (cross-device) semaphore's address.
+constexpr uint32_t kCombineWriterCrossDeviceSemaphoreArgIdx = 4;
+
+// On a cache hit, writes the caller-owned cross-device semaphore's address into arg arg_idx of kernel_idx.
+void override_cross_device_semaphore_arg(
     tt::tt_metal::Program& program,
-    tt::tt_metal::KernelHandle reader_kernel_id,
-    tt::tt_metal::KernelHandle writer_kernel_id,
-    tt::tt_metal::CBHandle data_cb_handle,
-    const std::vector<tt::tt_metal::CoreCoord>& cores,
-    const experimental::prim::SelectiveReduceCombineTensors& tensor_args,
-    Tensor& tensor_return_value,
-    uint32_t init_semaphore_addr,
-    uint32_t cross_device_semaphore_addr,
-    const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
+    uint32_t kernel_idx,
+    uint32_t arg_idx,
+    const GlobalSemaphore& cross_device_semaphore);
 
 }  // namespace ttnn::experimental::prim

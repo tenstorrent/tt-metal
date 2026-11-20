@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Per-field invariants of ProgramSpec (program_spec.hpp): unique ids within each group, non-empty
-// kernels and work_units, disjoint work_units, no cross-node DFBs yet.
+// kernels and work_units, disjoint work_units.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -11,8 +11,8 @@
 #include <stdexcept>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -40,7 +40,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateKernelNameFails) {
     spec.kernels.push_back(duplicate_kernel);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name 'dm_kernel'")));
 }
 
@@ -58,7 +58,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateKernelNameFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"dm_kernel"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate KernelSpec name")));
 }
 
@@ -70,7 +70,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateDFBNameFails) {
     spec.dataflow_buffers.push_back(duplicate_dfb);
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate DataflowBufferSpec name 'dfb_0'")));
 }
@@ -90,7 +90,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateSemaphoreNameFails) {
     spec.semaphores = {sem1, sem2};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate SemaphoreSpec name 'sem_0'")));
 }
 
@@ -106,7 +106,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_DuplicateScratchpadNameFails) {
         KernelSpec::ScratchpadBinding{.scratchpad_spec_name = ScratchpadSpecName{"scratch_0"}, .accessor_name = "s"}};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Duplicate ScratchpadSpec name")));
 }
 
@@ -122,9 +122,24 @@ TEST_F(ProgramSpecTestGen1, CPU_DuplicateTensorParameterNameFails) {
     BindTensorParameterToKernel(spec.kernels[0], "input_tensor", "input_ta");
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Duplicate TensorParameter name 'input_tensor'")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DuplicateSRAMArenaParameterNameFails) {
+    // Two SRAMArenaParameters declared with the same unique_id are rejected as duplicates.
+    ProgramSpec spec = MakeMinimalValidProgramSpec();
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}},
+        {.unique_id = SRAMArenaParamName{"arena"}, .properties = LockstepSRAMArenaProperties{.per_bank_size = 4096}}};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("Duplicate SRAMArenaParameter name 'arena'")));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_EmptyKernelsFails) {
@@ -133,7 +148,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_EmptyKernelsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty work_units too
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("A ProgramSpec must have at least one KernelSpec")));
 }
@@ -147,7 +162,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_EmptyWorkUnitSpecsFails) {
     spec.work_units = std::vector<WorkUnitSpec>{};  // Empty!
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
             ::testing::HasSubstr("Kernel 'kernel' is not referenced by any WorkUnitSpec")));
 }
@@ -168,7 +183,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_OverlappingWorkUnitSpecsFails) {
         MakeMinimalWorkUnit("work_unit1", node, {"kernel1"}), MakeMinimalWorkUnit("work_unit2", node, {"kernel2"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("overlap in target nodes")));
 }
 
@@ -189,36 +204,7 @@ TEST_F(ProgramSpecTestQuasar, CPU_MultipleWorkUnitsOnDifferentNodesSucceeds) {
     spec.work_units = std::vector<WorkUnitSpec>{
         MakeMinimalWorkUnit("work_unit0", node0, {"kernel"}), MakeMinimalWorkUnit("work_unit1", node1, {"kernel"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
-}
-
-// Cross-node DFBs are part of the API surface but not yet supported by the runtime.
-TEST_F(ProgramSpecTestQuasar, CPU_CrossNodeDFBNotYetSupportedAtRuntime) {
-    NodeCoord producer_node{0, 0};
-    NodeCoord consumer_node{1, 0};
-
-    ProgramSpec spec;
-    spec.name = "test_program";
-
-    auto producer = MakeMinimalGen2DMKernel("producer");
-    auto consumer = MakeMinimalGen2DMKernel("consumer");
-
-    producer.dfb_bindings.push_back(ProducerOf(DFBSpecName{"dfb"}, "out"));
-    consumer.dfb_bindings.push_back(ConsumerOf(DFBSpecName{"dfb"}, "in"));
-
-    spec.kernels = {producer, consumer};
-    spec.cross_node_dataflow_buffers = {CrossNodeDataflowBufferSpec{
-        .dfb_spec = MakeMinimalDFB("dfb"),
-        .producer_consumer_map = {{producer_node, consumer_node}},
-    }};
-    spec.work_units = std::vector<WorkUnitSpec>{
-        MakeMinimalWorkUnit("producer_work_unit", producer_node, {"producer"}),
-        MakeMinimalWorkUnit("consumer_work_unit", consumer_node, {"consumer"}),
-    };
-
-    EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("not yet supported")));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 }  // namespace

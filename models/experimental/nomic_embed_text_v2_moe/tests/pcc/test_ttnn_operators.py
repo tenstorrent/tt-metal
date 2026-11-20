@@ -33,7 +33,7 @@ from models.experimental.nomic_embed_text_v2_moe.tt.common import (
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.matmul_config import SMALL_M_TILES, dense_linear
 from models.experimental.nomic_embed_text_v2_moe.tt.model_config import OpGroup
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 pytestmark = [run_for_blackhole(), pytest.mark.use_module_device]
 
@@ -278,7 +278,8 @@ def test_token_axis_reshape_round_trip_is_exact(device, config, batch, seqlen):
 
 
 def test_typecast(device, config):
-    """aten._to_copy -> ttnn.typecast, the router's fp32-to-bf16 step after the selection."""
+    """aten._to_copy -> ttnn.typecast, fp32 to bf16. The router writes its bf16 gate from the fp32
+    product directly; test_one_hot_reproduces_the_scatter pins that rounding."""
     x = torch.randn(1, 1, 512, config.hidden_size)
 
     out = ttnn.typecast(to_device(x, device, dtype=ttnn.float32), ttnn.bfloat16)

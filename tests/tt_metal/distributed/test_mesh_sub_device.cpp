@@ -204,7 +204,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     auto all_cores = syncer_core.merge(datacopy_core);
     auto global_sem = GlobalSemaphore(*mesh_device_, all_cores, 0);
 
-    Program sync_and_incr_program = CreateProgram();
+    Program sync_and_incr_program = CreateProgram(*this->mesh_device_);
     auto sync_kernel = CreateKernel(
         sync_and_incr_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_increment.cpp",
@@ -213,7 +213,7 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
     std::array<uint32_t, 3> sync_rt_args = {global_sem.address(), datacopy_core_phys.x, datacopy_core_phys.y};
     SetRuntimeArgs(sync_and_incr_program, sync_kernel, syncer_core, sync_rt_args);
 
-    Program datacopy_program = CreateProgram();
+    Program datacopy_program = CreateProgram(*this->mesh_device_);
     auto datacopy_kernel = CreateKernel(
         datacopy_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/sync_and_datacopy.cpp",
@@ -247,9 +247,9 @@ TEST_F(MeshSubDeviceTestSuite, DataCopyOnSubDevices) {
         // buffer data
         EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), input_buf, src_vec, true);
 
-        for (auto* device : mesh_device_->get_devices()) {
+        for (auto device_id : mesh_device_->get_device_ids()) {
             MetalContext::instance().get_cluster().write_core(
-                device->id(), syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
+                device_id, syncer_core_phys, std::vector<uint32_t>{1}, global_sem.address());
         }
         mesh_device_->reset_sub_device_stall_group();
         for (std::size_t logical_x = 0; logical_x < output_buf->device()->num_cols(); logical_x++) {
@@ -338,7 +338,7 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
         {SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, k_local_l1_size);
     mesh_device_->load_sub_device_manager(sub_device_manager_0);
 
-    Program delay_program = CreateProgram();
+    Program delay_program = CreateProgram(*this->mesh_device_);
     auto delay_kernel = CreateKernel(
         delay_program,
         "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
@@ -355,15 +355,15 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
     auto& trace_cq = mesh_device_->mesh_command_queue(1);
     EnqueueMeshWorkload(trace_cq, delay_mesh_workload, true);
 
-    auto trace_id = BeginTraceCapture(mesh_device_.get(), 1);
+    auto trace_id = mesh_device_->begin_mesh_trace(trace_cq);
     for (uint32_t i = 0; i < k_workloads_in_trace; i++) {
         EnqueueMeshWorkload(trace_cq, delay_mesh_workload, false);
     }
-    mesh_device_->end_mesh_trace(1, trace_id);
+    mesh_device_->end_mesh_trace(trace_cq, trace_id);
 
     // Repeat to exercise both newly built and cached manager setup commands while CQ1 is busy.
     for (uint32_t i = 0; i < 3; ++i) {
-        mesh_device_->replay_mesh_trace(1, trace_id, false);
+        mesh_device_->replay_mesh_trace(trace_cq, trace_id, false);
         mesh_device_->load_sub_device_manager(sub_device_manager_1);
         Finish(mesh_device_->mesh_command_queue(0));
         Finish(trace_cq);

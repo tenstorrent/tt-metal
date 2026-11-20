@@ -228,8 +228,8 @@ ALWI void mul_tiles(
  * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
  * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
- * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
- * | Function   | ntiles        | Number of consecutive tile pairs to add          | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to add          | uint32_t   | start_idst + ntiles <= acquired size of DST REG | True |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on
@@ -264,8 +264,8 @@ ALWI void add_block(
  * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
  * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
- * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
- * | Function   | ntiles        | Number of consecutive tile pairs to subtract     | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to subtract     | uint32_t   | start_idst + ntiles <= acquired size of DST REG | True |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on
@@ -300,8 +300,8 @@ ALWI void sub_block(
  * | Function   | a / b         | Input operands (base address + geometry)         | LLKOperand | N/A         | True     |
  * | Function   | start_itile0  | Index of the first source tile within A          | uint32_t   | N/A         | True     |
  * | Function   | start_itile1  | Index of the first source tile within B          | uint32_t   | N/A         | True     |
- * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | 0 to 15     | True     |
- * | Function   | ntiles        | Number of consecutive tile pairs to multiply     | uint32_t   | start_idst + ntiles <= 16 | True |
+ * | Function   | start_idst    | Index of the first destination tile in DST       | uint32_t   | Must be less than the acquired size of DST REG | True     |
+ * | Function   | ntiles        | Number of consecutive tile pairs to multiply     | uint32_t   | start_idst + ntiles <= acquired size of DST REG | True |
  * | Template   | is_fp32_dest_acc_en | fp32 dest-accumulate mode                  | bool       |             | False |
  */
 // clang-format on

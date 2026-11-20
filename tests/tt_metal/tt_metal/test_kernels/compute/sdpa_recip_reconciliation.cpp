@@ -29,7 +29,7 @@ void kernel_main() {
         input.wait_front(1);
         output.reserve_back(1);
         tile_regs_acquire();
-        copy_tile_to_dst_init_short(tt::CBIndex::c_0);
+        copy_init(tt::CBIndex::c_0);
         copy_tile(tt::CBIndex::c_0, 0, 0);
 
         ckernel::test_helpers::seed_sdpa_recip_cached_sums();

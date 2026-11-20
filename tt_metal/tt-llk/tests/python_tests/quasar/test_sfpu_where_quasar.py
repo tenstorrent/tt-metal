@@ -7,7 +7,6 @@ from helpers.format_config import DataFormat
 from helpers.golden_generators import WhereGolden, get_golden_generator
 from helpers.llk_params import (
     DataCopyType,
-    ImpliedMathFormat,
     MathOperation,
     PerfRunType,
     UnpackerEngine,
@@ -28,7 +27,6 @@ from helpers.test_variant_parameters import (
     DATA_COPY_TYPE,
     DEST_INDEX,
     DEST_SYNC,
-    IMPLIED_MATH_FORMAT,
     LOOP_FACTOR,
     MATH_OP,
     NUM_FACES,
@@ -63,7 +61,6 @@ def _processed_face_mask(vector_mode: VectorMode, num_faces: int) -> torch.Tenso
 def get_valid_formats_dest_acc():
     formats = input_output_formats(
         [
-            DataFormat.Float16,
             DataFormat.Float16_b,
             DataFormat.Float32,
         ]
@@ -93,14 +90,12 @@ def _build_condition_for_test_case(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=get_valid_formats_dest_acc(),
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    format_variant=get_valid_formats_dest_acc(),
     test_case=runtime(["mixed", "all_ones", "all_zeros"]),
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
 def test_sfpu_where_quasar(
-    formats_dest_acc,
-    implied_math_format,
+    format_variant,
     test_case,
     vector_mode,
     *,
@@ -123,7 +118,6 @@ def test_sfpu_where_quasar(
     modes; unprocessed faces are excluded from the golden assertion since
     Dest retains the producer-written data there.
     """
-    format_variant = formats_dest_acc
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -179,7 +173,6 @@ def test_sfpu_where_quasar(
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA
@@ -235,11 +228,10 @@ def test_sfpu_where_quasar(
 
 @pytest.mark.quasar
 @parametrize(
-    formats_dest_acc=get_valid_formats_dest_acc()[:3],
-    implied_math_format=[ImpliedMathFormat.No, ImpliedMathFormat.Yes],
+    format_variant=get_valid_formats_dest_acc()[:3],
     vector_mode=[VectorMode.None_, VectorMode.R, VectorMode.C, VectorMode.RC],
 )
-def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mode):
+def test_sfpu_where_mcw_quasar(format_variant, vector_mode):
     """
     Deterministic where test — alternating 0/1 condition pattern with
     known true/false scalars (2 and 11) for easy debugging.
@@ -247,7 +239,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
     Runs through the same C++ harness as `test_sfpu_where_quasar`. The test uses
     Dest index 0 because the unary Unpack-to-Dest API always starts at Dest[0].
     """
-    format_variant = formats_dest_acc
     assert isinstance(format_variant, QuasarSfpuVariant)
     formats = format_variant.formats
     dest_acc = format_variant.dest_acc
@@ -278,7 +269,6 @@ def test_sfpu_where_mcw_quasar(formats_dest_acc, implied_math_format, vector_mod
         "formats": formats,
         "templates": [
             MATH_OP(mathop=MathOperation.SfpuWhere),
-            IMPLIED_MATH_FORMAT(implied_math_format),
             DATA_COPY_TYPE(DataCopyType.A2D),
             UNPACKER_ENGINE_SEL(
                 UnpackerEngine.UnpDest if unpack_to_dest else UnpackerEngine.UnpA

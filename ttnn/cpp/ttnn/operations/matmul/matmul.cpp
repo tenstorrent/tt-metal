@@ -14,8 +14,11 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/operations/creation/creation.hpp"
+#include "ttnn/operations/core/to_memory_config/to_memory_config_op.hpp"
 
+#include "ttnn/config.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/matmul/device/config/model/matmul_model_hook.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/matmul/device/utilities/matmul_utilities.hpp"
 #include "ttnn/operations/matmul/device/sparse/sparse_matmul_device_operation.hpp"
@@ -222,6 +225,31 @@ static bool get_post_process_bias(
     return post_process_bias;
 }
 
+// Of the auto-selected program configs, only 2D multicast reads an ND-sharded B, and only from DRAM.
+// With a sharded A, or a batched B and a user core grid, the config lookup itself reads B's 2D shard spec.
+static bool auto_config_reads_nd_dram_b(
+    const ttnn::Tensor& input_tensor_a,
+    const ttnn::Tensor& input_tensor_b,
+    const std::optional<const ttnn::Tensor>& bias,
+    const ttnn::prim::MatmulParams& parameters,
+    const std::optional<ttnn::Tensor>& optional_output_tensor) {
+    if (input_tensor_b.memory_config().buffer_type() != BufferType::DRAM || input_tensor_a.is_sharded() ||
+        (detail::is_input_batched(input_tensor_b.logical_shape()) && parameters.user_core_coord.has_value())) {
+        return false;
+    }
+    auto matmul_struct =
+        ttnn::prim::create_matmul_attributes(input_tensor_a, input_tensor_b, parameters, {optional_output_tensor});
+    const uint32_t bias_single_tile_size =
+        bias.has_value() ? tt::tile_size(datatype_to_dataformat_converter(bias->dtype())) : 0;
+    return std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(get_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        parameters.transpose_a,
+        parameters.transpose_b,
+        bias_single_tile_size,
+        matmul_struct));
+}
+
 static ttnn::Tensor bound_matmul(
     const ttnn::Tensor& input_tensor_a,
     const ttnn::Tensor& input_tensor_b,
@@ -233,6 +261,25 @@ static ttnn::Tensor bound_matmul(
             "ttnn.matmul: Both arguments to matmul need to be at least 1D, but got shapes {} and {}",
             input_tensor_a.logical_shape(),
             input_tensor_b.logical_shape());
+    }
+
+    // Auto-generated program configs read a sharded operand's 2D shard spec, which an ND shard spec
+    // only has when its shards flatten to a height-, width- or block-sharded layout.
+    if (!parameters.program_config.has_value()) {
+        const auto lacks_2d_shard_spec = [](const Tensor& t) { return t.is_sharded() && !t.shard_spec().has_value(); };
+        if (lacks_2d_shard_spec(input_tensor_a) || lacks_2d_shard_spec(input_tensor_b)) {
+            const auto to_dram = [](const Tensor& t) {
+                return ttnn::to_memory_config(t, ttnn::DRAM_MEMORY_CONFIG, std::nullopt);
+            };
+            const bool move_a = lacks_2d_shard_spec(input_tensor_a);
+            const Tensor a = move_a ? to_dram(input_tensor_a) : input_tensor_a;
+            const bool move_b = lacks_2d_shard_spec(input_tensor_b) &&
+                                !auto_config_reads_nd_dram_b(a, input_tensor_b, bias, parameters, optional_output_tensor);
+            if (move_a || move_b) {
+                return bound_matmul(
+                    a, move_b ? to_dram(input_tensor_b) : input_tensor_b, bias, parameters, optional_output_tensor);
+            }
+        }
     }
 
     if (input_tensor_a.is_sharded() || input_tensor_b.is_sharded()) {
@@ -293,6 +340,9 @@ static ttnn::Tensor bound_matmul(
         input_tensor_b_adjusted = ttnn::transpose(input_tensor_b, -1, -2, input_tensor_b.memory_config());
     }
 
+    // The output shape below is computed from the untransposed inputs, so it needs the caller's flags.
+    const bool transpose_a_requested = parameters.transpose_a;
+    const bool transpose_b_requested = parameters.transpose_b;
     // We need to change the transpose_a and transpose_b flags if we manually transposed
     // the input tensors
     if (needs_manual_transpose_a) {
@@ -329,14 +379,36 @@ static ttnn::Tensor bound_matmul(
         parameters.user_fused_activation = std::nullopt;
     }
 
+    std::optional<Tensor> matmul_output_tensor = optional_output_tensor;
+    if (post_process_bias && optional_output_tensor.has_value() &&
+        optional_output_tensor->logical_shape().volume() !=
+            utilities::compute_matmul_output_shape(
+                input_tensor_a_adjusted, input_tensor_b_adjusted, parameters.transpose_a, parameters.transpose_b)
+                .volume()) {
+        matmul_output_tensor = std::nullopt;
+    }
+
     auto attributes = ttnn::prim::create_matmul_attributes(
-        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {optional_output_tensor});
+        input_tensor_a_adjusted, input_tensor_b_adjusted, parameters, {matmul_output_tensor});
+
+    // Opt-in (ttnn.CONFIG.matmul_model_config): the matmul config model chooses the program config, once per matmul,
+    // for the inputs, bias and attributes the device op gets. The compute kernel config stays the one resolved above
+    // without a program config; nullopt keeps the default selection (prim::matmul's get_program_config). With the
+    // flag off nothing but the flag is read.
+    if (ttnn::CONFIG.get<"matmul_model_config">() && !attributes.program_config.has_value()) {
+        attributes.program_config = model::model_program_config(
+            input_tensor_a_adjusted,
+            input_tensor_b_adjusted,
+            post_process_bias ? std::nullopt : bias,
+            matmul_output_tensor,
+            attributes);
+    }
 
     auto output_tensor = ttnn::prim::matmul(
                              input_tensor_a_adjusted,
                              input_tensor_b_adjusted,
                              post_process_bias ? std::nullopt : bias,
-                             optional_output_tensor,
+                             matmul_output_tensor,
                              attributes)
                              .at(0);
 
@@ -344,7 +416,7 @@ static ttnn::Tensor bound_matmul(
         output_tensor = ttnn::reshape(
             output_tensor,
             utilities::compute_matmul_output_shape(
-                input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b));
+                input_tensor_a, input_tensor_b, transpose_a_requested, transpose_b_requested));
     }
 
     // Apply bias as post-processing if needed
@@ -353,12 +425,13 @@ static ttnn::Tensor bound_matmul(
             output_tensor,
             bias.value(),
             /*output_dtype=*/std::nullopt,
-            output_tensor.memory_config(),
+            optional_output_tensor.has_value() ? optional_output_tensor->memory_config()
+                                               : output_tensor.memory_config(),
             optional_output_tensor);
     }
 
     const auto& matmul_shape = utilities::compute_matmul_output_shape(
-        input_tensor_a, input_tensor_b, attributes.transpose_a, attributes.transpose_b);
+        input_tensor_a, input_tensor_b, transpose_a_requested, transpose_b_requested);
 
     ttnn::Shape result_shape = (bias.has_value()) ? utilities::compute_matmul_with_bias_output_shape(
                                                         matmul_shape, bias.value().logical_shape())
@@ -452,7 +525,14 @@ Tensor linear(
     std::optional<ttnn::Tensor> optional_output_tensor,
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
-    const PrefetcherPipeList& prefetcher_pipes) {
+    const PrefetcherPipeList& prefetcher_pipes,
+    std::optional<uint32_t> in0_column_offset) {
+    // Checked before the program config is chosen: an auto-selected config would see mismatched K.
+    TT_FATAL(
+        !in0_column_offset.has_value() ||
+            (program_config.has_value() &&
+             std::holds_alternative<MatmulMultiCoreReuseMultiCastProgramConfig>(program_config.value())),
+        "in0_column_offset requires a MatmulMultiCoreReuseMultiCastProgramConfig");
     std::optional<CoreCoord> user_core_coord;
     if (core_grid.has_value()) {
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
@@ -474,7 +554,8 @@ Tensor linear(
         output_tile,
         global_cb,
         sub_device_id,
-        prefetcher_pipes};
+        prefetcher_pipes,
+        in0_column_offset};
     return bound_matmul(input_tensor_a, input_tensor_b, bias, matmul_params, optional_output_tensor);
 }
 
@@ -615,6 +696,8 @@ Tensor addmm(
     return out_tensor;
 }
 
+std::string matmul_model_last_pick() { return model::last_pick(); }
+
 Tensor sparse_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -632,7 +715,8 @@ Tensor sparse_matmul(
     const std::optional<const GlobalCircularBuffer>& global_cb,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id,
     const std::optional<Tensor>& indices,
-    const std::optional<Tensor>& bias) {
+    const std::optional<Tensor>& bias,
+    const PrefetcherPipeList& prefetcher_pipes) {
     std::optional<CoreCoord> user_core_coord =
         core_grid.has_value() ? std::make_optional(CoreCoord(core_grid->x, core_grid->y)) : std::nullopt;
 
@@ -653,7 +737,8 @@ Tensor sparse_matmul(
                global_cb,
                sub_device_id,
                indices,
-               bias)
+               bias,
+               prefetcher_pipes)
         .at(0);
 }
 

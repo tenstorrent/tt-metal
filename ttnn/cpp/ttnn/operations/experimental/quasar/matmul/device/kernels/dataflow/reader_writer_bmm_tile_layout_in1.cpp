@@ -20,8 +20,9 @@ void kernel_main() {
     // RUNTIME ARGS
     // READER
     uint32_t in1_tensor_start_tile_id = get_arg(args::in1_tensor_start_tile_id);
-    // batch args
+    // batch args: this core computes `batch` consecutive output blocks, starting at M block start_m_block
     const uint32_t batch = get_arg(args::batch);
+    const uint32_t start_m_block = get_arg(args::start_m_block);
     // WRITER
     uint32_t out_tensor_start_tile_id = get_arg(args::out_tensor_start_tile_id);
 
@@ -53,6 +54,9 @@ void kernel_main() {
     constexpr uint32_t out_num_subblocks_h = get_arg(args::out_num_subblocks_h);
     // batch args
     constexpr uint32_t MtNt = get_arg(args::MtNt);
+    // Consecutive blocks walk the M blocks of a batch (sharing the batch's in1) before moving to the next batch
+    constexpr uint32_t m_blocks_per_batch = get_arg(args::m_blocks_per_batch);
+    constexpr uint32_t out_m_block_stride = get_arg(args::out_m_block_stride);
 
     constexpr uint32_t cb_id_in1 = dfb::in1;
     // WRITER
@@ -68,12 +72,12 @@ void kernel_main() {
     cb_in1.push_back(in1_num_tiles);
 #else
     const uint32_t in1_single_tile_size_bytes = get_tile_size(cb_id_in1);
-    // Tiles whose size is not a multiple of the DRAM alignment are padded to it in DRAM and the in1
-    // CB pages are sized to match (see the program factory), so tiles are laid out in L1 at the
-    // padded stride while the NOC reads the unpadded tile of data into each padded slot. No-op when
-    // the tile size is already aligned.
-    const uint32_t in1_aligned_tile_size_bytes =
-        (in1_single_tile_size_bytes + (DRAM_ALIGNMENT - 1)) & ~(DRAM_ALIGNMENT - 1);
+    // Interleaved tiles are laid out in L1 at their DRAM page stride rounded up to the NOC DRAM read alignment,
+    // the entry size the program factory set (get_interleaved_tile_stride): 576 B for a 544 B bfp8 32x16 tile on
+    // Blackhole, the tile size itself on Wormhole and on Quasar (whose NOC reads at any offset and whose unpacker
+    // walks the ring at the format's own stride, e.g. 1056 B for an 8-bit MX tile).
+    const uint32_t in1_aligned_tile_size_bytes = (in1_single_tile_size_bytes + NOC_DRAM_READ_ALIGNMENT_BYTES - 1) /
+                                                 NOC_DRAM_READ_ALIGNMENT_BYTES * NOC_DRAM_READ_ALIGNMENT_BYTES;
     const auto s1 = TensorAccessor(tensor::in1);
 #endif  // IN1_SHARDED
 
@@ -83,7 +87,9 @@ void kernel_main() {
 #endif  // OUT_SHARDED
 
 #if not defined IN1_SHARDED or not defined OUT_SHARDED
+    uint32_t m_block = start_m_block;
     for (uint32_t b = 0; b < batch; ++b) {
+        const bool last_m_block_of_batch = m_block + 1 == m_blocks_per_batch;
 #ifndef IN1_SHARDED
         uint32_t in1_tensor_current_block_start_tile_id = in1_tensor_start_tile_id;
         for (uint32_t block = 0; block < num_blocks; ++block) {
@@ -112,7 +118,7 @@ void kernel_main() {
 
             cb_in1.push_back(in1_block_num_tiles);
         }
-        if (bcast_B == 0) {
+        if (bcast_B == 0 && last_m_block_of_batch) {
             in1_tensor_start_tile_id += KtNt;
         }
 #endif  // IN1_SHARDED
@@ -154,8 +160,11 @@ void kernel_main() {
             }
             out_tensor_sbh_start_tile_id += out_tensor_next_subblock_stride_h;
         }
-        out_tensor_start_tile_id += MtNt;
+        // The M blocks of a batch are consecutive rows, and the next batch's rows follow the last one
+        out_tensor_start_tile_id +=
+            last_m_block_of_batch ? MtNt - (m_blocks_per_batch - 1) * out_m_block_stride : out_m_block_stride;
 #endif  // OUT_SHARDED
+        m_block = last_m_block_of_batch ? 0 : m_block + 1;
     }
 #endif  // not defined IN1_SHARDED or not defined OUT_SHARDED
 

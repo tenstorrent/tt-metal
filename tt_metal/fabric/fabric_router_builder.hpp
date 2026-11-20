@@ -5,10 +5,14 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>               // RoutingDirection
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // FabricNodeId
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>         // Topology
 #include <hostdevcommon/fabric_common.h>                                // chan_id_t
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"   // MasterRouterCandidate
+#include "tt_metal/fabric/builder/protected_domain_effect.hpp"          // ChipRoutingFacts
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
+#include <tt-umd/types/core_coordinates.hpp>                        // CoreType
 
 namespace tt::tt_metal {
 class IDevice;
@@ -65,7 +69,8 @@ struct KernelCreationContext {
  * - SwitchMeshRouterBuilder: For switch mesh routers (future, routing-only)
  *
  * Usage:
- *   auto router = FabricRouterBuilder::create(fabric_context, device, program, local_node, location);
+ *   auto router =
+ *       FabricRouterBuilder::create(fabric_context, dispatch_core_type, device, program, local_node, location);
  *   router->configure_connection(*other_router, link_idx, num_links, topology, is_galaxy);
  */
 class FabricRouterBuilder {
@@ -77,18 +82,22 @@ public:
      * Determines router type (compute mesh vs switch mesh) internally based on fabric context.
      *
      * @param fabric_context The fabric context; must outlive the returned builder
+     * @param dispatch_core_type Core type the device's dispatch runs on
      * @param device The device to build on
      * @param program The fabric program
      * @param local_node The local fabric node ID
      * @param location Router location (eth_chan, remote_node, direction, is_dispatch)
+     * @param chip_facts The chip's routing facts (edge capabilities, ring predicates), bound at chip scope
      * @return A unique_ptr to the appropriate FabricRouterBuilder implementation
      */
     static std::unique_ptr<FabricRouterBuilder> create(
         const FabricContext& fabric_context,
+        CoreType dispatch_core_type,
         tt::tt_metal::IDevice* device,
         tt::tt_metal::Program& program,
         FabricNodeId local_node,
-        const RouterLocation& location);
+        const RouterLocation& location,
+        const ChipRoutingFacts& chip_facts);
 
     // ============ Connection Methods ============
 
@@ -106,14 +115,6 @@ public:
         FabricRouterBuilder& peer, uint32_t link_idx, uint32_t num_links, Topology topology, bool is_galaxy) = 0;
 
     /**
-     * Configure local connections between routers on the same device (e.g., mesh↔Z)
-     *
-     * @param local_routers Map of direction → router builder for all routers on this device
-     */
-     virtual void configure_local_connections(
-        const std::map<RoutingDirection, FabricRouterBuilder*>& local_routers) = 0;
-
-    /**
      * Configure this router for dispatch link operation.
      * Dispatch links require specific settings (e.g., higher context switching frequency).
      * Each router type decides how (or if) to configure for dispatch.
@@ -128,6 +129,12 @@ public:
     RoutingDirection get_routing_direction() const { return location_.direction; }
     bool is_dispatch_link() const { return location_.is_dispatch_link; }
     const RouterLocation& get_location() const { return location_; }
+
+    /**
+     * What the choice of the chip's local handshake master needs to know about this router.
+     * Call only after connect_routers(): it reads the router's final downstream connections.
+     */
+    virtual MasterRouterCandidate describe_master_router_candidate() const = 0;
 
     // ============ Build Methods ============
 
@@ -147,6 +154,13 @@ public:
      * @param ctx Cluster-wide coordination info (master router, channel mask, etc.)
      */
     virtual void create_kernel(tt::tt_metal::Program& program, const KernelCreationContext& ctx) = 0;
+
+    /**
+     * This router's channel buffers, which its link peer and the routers feeding it need before their kernels are
+     * created. A router type with no fabric channel buffers returns nothing; a router whose link peer is a fabric
+     * router must return its layout, since the peer's compile time args read it.
+     */
+    virtual std::optional<RouterChannelLayout> get_channel_layout() const { return std::nullopt; }
 
 protected:
     // Protected constructor - only derived classes can construct

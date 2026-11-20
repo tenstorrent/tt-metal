@@ -447,7 +447,16 @@ def test_tensor_index_update_cache_decode_program_cache(
 
 
 def run_test_paged_update_cache_decode(
-    cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    cache_idx,
+    block_size,
+    head_dim,
+    max_seq_len,
+    num_users,
+    num_heads,
+    input_dtype,
+    cache_dtype,
+    device,
+    page_table_sharded=False,
 ):
     max_num_blocks_per_seq = max_seq_len // block_size
     assert max_num_blocks_per_seq * block_size == max_seq_len
@@ -507,7 +516,22 @@ def run_test_paged_update_cache_decode(
         cache_idxs[num_users // 2] = -1
     # logger.info(f"cache_idxs: {cache_idxs}")
     cache_idxs_tt = ttnn.Tensor(torch.tensor(cache_idxs), ttnn.int32).to(device)
-    page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
+    if page_table_sharded:
+        # Sharded page tables are UINT16, one full copy per core.
+        page_table_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 1))])
+        page_table_tt = ttnn.as_tensor(
+            page_table.repeat(page_table_grid.num_cores(), 1),
+            device=device,
+            dtype=ttnn.uint16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(page_table_grid, (num_users, max_num_blocks_per_seq), ttnn.ShardOrientation.ROW_MAJOR),
+            ),
+        )
+    else:
+        page_table_tt = ttnn.Tensor(page_table, ttnn.int32).to(device)
 
     cachett = ttnn.experimental.paged_update_cache(
         cachett, xt, update_idxs_tensor=cache_idxs_tt, page_table=page_table_tt
@@ -574,6 +598,14 @@ def test_paged_update_cache_decode(
 ):
     run_test_paged_update_cache_decode(
         cache_idx, block_size, head_dim, max_seq_len, num_users, num_heads, input_dtype, cache_dtype, device
+    )
+
+
+@pytest.mark.parametrize("block_size", [64, 128], ids=["block64", "block128"])
+@pytest.mark.parametrize("cache_idx", [0, 127, 1057])
+def test_paged_update_cache_decode_sharded_uint16_page_table(cache_idx, block_size, device):
+    run_test_paged_update_cache_decode(
+        cache_idx, block_size, 128, 2048, 32, 1, ttnn.bfloat16, ttnn.bfloat16, device, page_table_sharded=True
     )
 
 
@@ -1380,3 +1412,63 @@ def test_paged_fill_cache_batched_rejects_non_row_major_batch_idx_tensor(device,
 
     with expect_error(RuntimeError, r"Batch idx tensor must have input_tensor batch dim"):
         ttnn.experimental.paged_fill_cache(cache_tt, input_tt, page_table_tt, batch_idx_tensor=bad, batch_idx=0)
+
+
+@pytest.mark.parametrize("input_dtype", [ttnn.float32, ttnn.bfloat16])
+def test_paged_update_cache_preserves_fp32_neighbors(input_dtype, device):
+    """Paged decode must leave the other rows in a FLOAT32 cache bit exact."""
+    num_users, num_heads, seq_len, head_dim = 4, 1, 64, 64
+    exponent = torch.arange(num_users * num_heads * seq_len * head_dim) % 23 + 1
+    cache = (1.0 + torch.pow(2.0, -exponent.double())).float().reshape(num_users, num_heads, seq_len, head_dim)
+    update = torch.full((1, num_users, num_heads, head_dim), 3.0)
+    update_padded = torch.nn.functional.pad(update, (0, 0, 0, 32 - num_heads))
+    cache_tt = ttnn.from_torch(cache, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+    update_tt = ttnn.Tensor(update_padded, input_dtype).to(ttnn.TILE_LAYOUT)
+    update_tt = ttnn.reshape(update_tt, ttnn.Shape(update.shape))
+    grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), True)
+    shard_spec = ttnn.ShardSpec(
+        grid,
+        [update_tt.volume() // update_tt.padded_shape[-1] // num_users, update_tt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
+    update_tt = update_tt.to(device, memory_config)
+    expected = cache.clone()
+    entries_before = device.num_program_cache_entries()
+    for indices in ([5, 7, 9, 11], [37, 39, 41, 43]):
+        indices_tt = ttnn.Tensor(torch.tensor(indices), ttnn.int32).to(device)
+        ttnn.experimental.paged_update_cache(cache_tt, update_tt, update_idxs_tensor=indices_tt)
+        for user, index in enumerate(indices):
+            expected[user, 0, index, :] = 3.0
+        assert torch.equal(ttnn.to_torch(cache_tt), expected)
+    assert device.num_program_cache_entries() - entries_before == 1
+
+
+@pytest.mark.parametrize("bad_position", [256, 300])
+def test_update_cache_decode_attr_idxs_rejects_position_past_sequence(device, bad_position, expect_error):
+    """A position in the update_idxs list past the cache's sequence length used to be accepted and
+    written into the next user's rows or past the end of the cache. The first, valid call builds the
+    program, so the rejected one is a program-cache hit: compute_program_hash excludes the positions."""
+    num_users, num_heads, max_seq_len, head_dim = 4, 1, 256, 128
+    input_shape = [1, num_users, num_heads, head_dim]
+    cache = torch.randn([num_users, num_heads, max_seq_len, head_dim]).bfloat16().float()
+    cachett = ttnn.Tensor(cache, ttnn.bfloat16).to(ttnn.TILE_LAYOUT).to(device)
+    x = torch.randn(input_shape).bfloat16().float()
+    x_pad = torch.nn.functional.pad(x, (0, 0, 0, 32 - num_heads), "constant", 0)
+    xt = ttnn.reshape(ttnn.Tensor(x_pad, ttnn.bfloat16).to(ttnn.TILE_LAYOUT), ttnn.Shape(input_shape))
+    shard_grid = ttnn.num_cores_to_corerangeset(num_users, device.compute_with_storage_grid_size(), True)
+    input_shard_spec = ttnn.ShardSpec(
+        shard_grid,
+        [xt.volume() // xt.padded_shape[-1] // num_users, xt.padded_shape[-1]],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+    xt = xt.to(device, input_mem_config)
+
+    # The last valid position is accepted.
+    ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=[max_seq_len - 1] * num_users)
+    expected = cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch()
+
+    with expect_error(RuntimeError, "must be less than cache tensor sequence length"):
+        ttnn.experimental.paged_update_cache(cachett, xt, update_idxs=[0, 1, bad_position, 2])
+    assert torch.equal(cachett.cpu().to(ttnn.ROW_MAJOR_LAYOUT).to_torch(), expected)

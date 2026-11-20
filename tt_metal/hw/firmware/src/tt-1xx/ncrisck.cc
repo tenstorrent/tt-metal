@@ -16,8 +16,8 @@
 #endif
 #include "internal/firmware_common.h"
 #include "api/dataflow/dataflow_api.h"
-#include "tools/profiler/kernel_profiler.hpp"
-#include "tools/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
+#include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/noc_debugging_profiler.hpp"  // RECORD_DFB_REGION_CLEAR
 #include "internal/tensix_functions.h"
 #include "c_tensix_core.h"
 #include "kernel_includes.hpp"

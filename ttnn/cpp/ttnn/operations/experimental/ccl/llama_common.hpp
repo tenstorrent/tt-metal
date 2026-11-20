@@ -9,8 +9,9 @@
 
 namespace llama_specific {
 
-CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise = true);
+tt::tt_metal::CoreRangeSet get_custom_cores(uint32_t num_workers, bool row_wise = true);
 
-std::tuple<CoreRangeSet, std::vector<tt::tt_metal::CoreCoord>> get_custom_worker_core_placement(uint32_t num_links);
+std::tuple<tt::tt_metal::CoreRangeSet, std::vector<tt::tt_metal::CoreCoord>> get_custom_worker_core_placement(
+    uint32_t num_links);
 
 }  // namespace llama_specific

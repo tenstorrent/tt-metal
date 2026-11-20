@@ -4,6 +4,7 @@
 
 #include "k_split_gram_matmul_device_operation.hpp"
 
+#include "metal/common/tensor_validation.hpp"
 namespace ttml::metal::ops::k_split_gram_matmul::device {
 
 KSplitGramMatmulDeviceOperation::program_factory_t KSplitGramMatmulDeviceOperation::select_program_factory(
@@ -15,14 +16,7 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const auto& input = tensor_args.input_tensor;
     TT_FATAL(input.device()->arch() == tt::ARCH::BLACKHOLE, "KSplitGramMatmul is only supported on Blackhole.");
-    TT_FATAL(input.storage_type() == ttnn::StorageType::DEVICE, "Input tensor must be on device");
-    TT_FATAL(input.buffer() != nullptr, "Input tensor must be allocated on device");
-    TT_FATAL(input.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Input tensor must be in DRAM");
-    TT_FATAL(input.layout() == tt::tt_metal::Layout::TILE, "Input tensor must have TILE layout");
-    TT_FATAL(input.dtype() == ttnn::DataType::BFLOAT16, "Input tensor must be BFLOAT16");
-    TT_FATAL(
-        input.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-        "Input tensor must use INTERLEAVED memory layout");
+    check_device_tensor(input, "KSplitGramMatmul", "input", {.buffer_type = tt::tt_metal::BufferType::DRAM});
     const auto rank = input.logical_shape().rank();
     TT_FATAL(rank == 2 || rank == 4, "Input tensor must be 2D [M, K] or 4D [1, 1, M, K]");
     if (rank == 4) {
@@ -51,15 +45,9 @@ void KSplitGramMatmulDeviceOperation::validate_on_program_cache_miss(
     if (tensor_args.preallocated_output.has_value()) {
         const auto& output = tensor_args.preallocated_output.value();
         const uint32_t M = input.logical_shape()[-2];
-        TT_FATAL(output.storage_type() == ttnn::StorageType::DEVICE, "Preallocated output must be on device");
-        TT_FATAL(output.buffer() != nullptr, "Preallocated output must be allocated on device");
-        TT_FATAL(
-            output.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM, "Preallocated output must be in DRAM");
-        TT_FATAL(output.layout() == tt::tt_metal::Layout::TILE, "Preallocated output must have TILE layout");
-        TT_FATAL(output.dtype() == ttnn::DataType::BFLOAT16, "Preallocated output must be BFLOAT16");
-        TT_FATAL(
-            output.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "Preallocated output must use INTERLEAVED memory layout");
+        check_device_tensor(
+            output, "KSplitGramMatmul", "preallocated_output", {.buffer_type = tt::tt_metal::BufferType::DRAM});
+        check_same_device(output, input, "KSplitGramMatmul", "preallocated_output", "input");
         TT_FATAL(
             output.logical_shape()[-2] == M && output.logical_shape()[-1] == M,
             "Preallocated output shape must be [{}, {}], got [{}, {}]",

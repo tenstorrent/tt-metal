@@ -4,10 +4,11 @@
 
 #pragma once
 
-#include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
+#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "erisc_datamover_builder.hpp"
+#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 #include "tt_metal/fabric/fabric_tensix_builder.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include <vector>
@@ -15,6 +16,8 @@
 #include <array>
 #include <limits>
 #include <optional>
+#include <unordered_map>
+#include <utility>
 
 namespace tt::tt_fabric {
 
@@ -29,19 +32,6 @@ class FabricContext;
     EDGE_ONLY,                     // Intermesh VC on edge nodes only (traffic sinks at mesh boundary)
     FULL_MESH,                     // Intermesh VC throughout mesh (traffic can traverse nodes within mesh)
     FULL_MESH_WITH_PASS_THROUGH    // Intermesh VC with inter-mesh pass-through (e.g., A→B→C routing)
-};
-
-/**
- * IntermeshRouterType - Distinguishes types of intermesh routers
- *
- * Different intermesh router types have different channel requirements:
- * - Z_INTERMESH: Vertical device stacking, requires 4 VC1 sender channels (3 mesh + Z)
- * - XY_INTERMESH: Horizontal inter-mesh, requires 3 VC1 sender channels (mesh only)
- */
-enum class IntermeshRouterType : uint8_t {
-    NONE,          // No intermesh connectivity
-    Z_INTERMESH,   // Z routers (vertical device stacking)
-    XY_INTERMESH   // XY intermesh routers (horizontal inter-mesh)
 };
 
 /**
@@ -60,11 +50,13 @@ enum class IntermeshRouterType : uint8_t {
  */
 struct IntermeshVCConfig {
     IntermeshVCMode mode = IntermeshVCMode::DISABLED;
-    IntermeshRouterType router_type = IntermeshRouterType::NONE;  // Type of intermesh router (Z vs XY)
     bool requires_vc1 = false;                      // True if VC1 needed for intermesh
     bool requires_vc1_full_mesh = false;            // True if VC1 needed throughout mesh (not just edges)
     bool requires_vc1_mesh_pass_through = false;    // True if VC1 must support inter-mesh pass-through
     bool requires_vc2 = false;                      // True if VC2 needed (Blackhole + 2D + no UDM/mux)
+    // TT_METAL_FABRIC_DISABLE_INTERMESH_VC=1: inter-mesh traffic lands on VC0 and goes only N or S from the
+    // landing chip. Deadlock-free only for traffic that cannot form a buffer cycle across meshes.
+    bool intermesh_vc_disabled = false;
 
     IntermeshVCConfig() = default;
 
@@ -95,6 +87,20 @@ struct IntermeshVCConfig {
         config.requires_vc1_mesh_pass_through = true;
         return config;
     }
+
+    // Per-router VC1 mode predicates. These are pure functions of this (system-global) config and
+    // the router's own inter/intra-mesh placement — evaluate per router, do not cache.
+    //
+    // VC1 is actively serviced (VC1 sender+receiver steps run) when:
+    //  - intra-mesh router with full-mesh VC1, or
+    //  - inter-mesh router with pass-through VC1
+    bool vc1_serviced_for(bool is_inter_mesh) const {
+        return (!is_inter_mesh && requires_vc1_full_mesh) || (is_inter_mesh && requires_vc1_mesh_pass_through);
+    }
+
+    // Inter-mesh full-mesh routers cross incoming VC0 link traffic over to the VC1 downstream
+    // interface array (their own VC1 steps are compiled out — see vc1_serviced_for).
+    bool vc0_crossover_to_vc1_for(bool is_inter_mesh) const { return is_inter_mesh && requires_vc1_full_mesh; }
 };
 
 /**
@@ -138,8 +144,17 @@ public:
         return max_receiver_channels_per_vc_;
     }
 
+    // ============ Stream-Register Assignment ============
+    // The fabric's (mesh's) shared stream-register assignment, derived once from the fabric's
+    // family maxima and the mesh's credit plan. Every builder reads this one object, so the
+    // flat-channel -> register-id map is identical on every router in the mesh by construction --
+    // the kernel resolves a downstream router's register through its own table, and that lookup is
+    // only correct if the maps agree.
+    const StreamAssignment& get_stream_assignment(MeshId mesh_id) const;
+
     // ============ Tensix Config ============
-    void initialize_tensix_config();
+    // Call after routing tables are configured. No-op unless fabric tensix is enabled.
+    void initialize_tensix_config(const FabricTensixSessionInputs& inputs);
     FabricTensixDatamoverConfig& get_tensix_config() const;
     bool has_tensix_config() const { return tensix_config_ != nullptr; }
 
@@ -155,6 +170,28 @@ public:
     std::pair<uint32_t, uint32_t> get_fabric_router_sync_address_and_status() const;
     std::optional<std::pair<uint32_t, EDMStatus>> get_fabric_router_ready_address_and_signal() const;
     std::pair<uint32_t, uint32_t> get_fabric_router_termination_address_and_signal() const;
+
+    // ============ Router Channel Layouts ============
+    // See RouterChannelLayouts.
+    void clear_router_channel_layouts() { router_channel_layouts_.begin_launch(); }
+    void publish_router_channel_layout(FabricNodeId node, chan_id_t eth_chan, const RouterChannelLayout& layout) {
+        router_channel_layouts_.publish(node, eth_chan, layout);
+    }
+    void exchange_router_channel_layouts(
+        const tt::tt_metal::distributed::multihost::DistributedContext& context,
+        RouterChannelLayouts::LaunchHeader header,
+        const RouterChannelLayouts::HeaderCheck& check) {
+        router_channel_layouts_.exchange(context, header, check);
+    }
+    const RouterChannelLayout& get_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.get(node, eth_chan);
+    }
+    const RouterChannelLayout* find_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.find(node, eth_chan);
+    }
+    PeerLayout get_peer_router_channel_layout(FabricNodeId node, chan_id_t eth_chan) const {
+        return router_channel_layouts_.peer(node, eth_chan);
+    }
 
     // ============ Diagnostic Buffer Map ============
     /** Returns the diagnostic buffer locations for all routers.
@@ -182,6 +219,7 @@ public:
 private:
 
     IntermeshVCConfig compute_intermesh_vc_config() const;
+    StreamAssignment compute_stream_assignment(MeshId mesh_id) const;
 
     friend class FabricContext;
 
@@ -199,6 +237,12 @@ private:
     std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
     std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
 
+    // The stream-register assignment, one per mesh (the credit plan follows express enablement,
+    // which is per mesh). Filled for every local mesh during construction, then only read: the
+    // builders that query it run concurrently, one thread per device, so populating it on demand
+    // would race on this map.
+    std::unordered_map<MeshId, StreamAssignment> stream_assignments_;
+
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;
     // Router config with mux extension for each direction (E, W, N, S)
@@ -213,6 +257,8 @@ private:
     static constexpr uint32_t UNINITIALIZED_ROUTERS = std::numeric_limits<uint32_t>::max();
     std::vector<chan_id_t> master_router_chans_;
     std::vector<uint32_t> num_initialized_routers_;
+
+    RouterChannelLayouts router_channel_layouts_;
 
     // Helper to create EDM config with given options
     std::unique_ptr<FabricEriscDatamoverConfig> create_edm_config(

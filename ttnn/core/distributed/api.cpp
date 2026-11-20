@@ -15,6 +15,7 @@
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/tensor/host_buffer/functions.hpp>
 #include <ttnn/tensor/tensor_utils.hpp>
+#include <ttnn/tensor/topology_check.hpp>
 #include <ttnn/distributed/host_ccl.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
@@ -79,7 +80,9 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
         std::vector<ttnn::Tensor> tensors;
         tensors.reserve(device_storage.get_coords().size());
         for (const auto& coord : device_storage.get_coords()) {
-            tensors.push_back(Tensor(DeviceStorage(device_storage, {coord})));
+            // Each shard is a tensor of its own held at one mesh coordinate and is labelled as such; the label of
+            // the tensor it was taken from describes shards this tensor does not hold.
+            tensors.push_back(Tensor(DeviceStorage::single_shard(device_storage, coord)));
         }
         return tensors;
     }
@@ -133,6 +136,77 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
     }
 
     return Tensor(DeviceStorage::combine_device_storages(device_storages, shard_dim));
+}
+
+Tensor from_local_host_shards(
+    const std::map<MeshCoordinate, Tensor>& shards,
+    const MeshDevice& mesh_device,
+    const tt::tt_metal::TensorTopology& topology) {
+    TT_FATAL(!shards.empty(), "from_local_host_shards needs at least one shard");
+    const auto& [reference_coord, reference_shard] = *shards.begin();
+    const auto& mesh_device_view = mesh_device.get_view();
+    const auto& mesh_shape = mesh_device_view.shape();
+    const distributed::MeshCoordinateRange mesh_range(mesh_shape);
+    for (const auto& [coord, shard] : shards) {
+        TT_FATAL(
+            shard.storage_type() == StorageType::HOST, "from_local_host_shards: the shard at {} is not on host", coord);
+        // A mesh host tensor (the output of cpu(), say) is on host too, but holds several shards; get_host_buffer
+        // below would refuse it with a message that names no coordinate.
+        const size_t shard_count = shard.host_storage().buffer().shard_coords().size();
+        TT_FATAL(
+            shard_count == 1,
+            "from_local_host_shards: the shard at {} is a multi-device host tensor with {} shards; pass one "
+            "single-device host tensor per coordinate",
+            coord,
+            shard_count);
+        TT_FATAL(
+            shard.tensor_spec() == reference_shard.tensor_spec(),
+            "from_local_host_shards: the shard at {} has a different tensor spec from the one at {}",
+            coord,
+            reference_coord);
+        // The dims compare comes first: MeshCoordinateRange::contains throws its own, less specific, message on a
+        // coordinate with the wrong number of dimensions.
+        TT_FATAL(
+            coord.dims() == mesh_shape.dims() && mesh_range.contains(coord),
+            "from_local_host_shards: coordinate {} is not inside the mesh of shape {}",
+            coord,
+            mesh_shape);
+    }
+
+    // The buffer spans the whole mesh. The label decides where the tensor lives, which can be part of the mesh (a
+    // mapper's mesh_shape_override, say): every coordinate it lists on this host needs a shard, and a shard goes only
+    // to a coordinate of this host. A shard at a coordinate the label does not list is refused by
+    // verify_shards_match_topology below.
+    auto distributed_host_buffer = DistributedHostBuffer::create(mesh_device_view);
+    for (const auto& coord : topology.mesh_coords()) {
+        TT_FATAL(
+            coord.dims() == mesh_shape.dims() && mesh_range.contains(coord),
+            "from_local_host_shards: the topology lists coordinate {}, which is not inside the mesh of shape {}",
+            coord,
+            mesh_shape);
+        TT_FATAL(
+            shards.contains(coord) || !distributed_host_buffer.is_local(coord),
+            "from_local_host_shards: no shard was given for local coordinate {}",
+            coord);
+    }
+    for (const auto& [coord, shard] : shards) {
+        TT_FATAL(
+            distributed_host_buffer.is_local(coord),
+            "from_local_host_shards: coordinate {} is not local to this host",
+            coord);
+    }
+    for (const auto& [coord, shard] : shards) {
+        HostBuffer buffer = host_buffer::get_host_buffer(shard);
+        distributed_host_buffer.emplace_shard(coord, [&]() { return std::move(buffer); });
+    }
+    Tensor result(host_tensor_from_buffer_with_topology(
+        std::move(distributed_host_buffer), reference_shard.tensor_spec(), topology));
+    // The label is the caller's: check that it describes the shards just placed, with the check serialization runs,
+    // so a label that omits a populated coordinate or lists one that holds no shard is refused here rather than
+    // when the tensor is composed or dumped. Replica contents are not compared: the shards are what the caller
+    // loaded, and comparing them would read every byte.
+    verify_shards_match_topology(result, /*compare_replica_contents=*/false);
+    return result;
 }
 
 }  // namespace ttnn::distributed

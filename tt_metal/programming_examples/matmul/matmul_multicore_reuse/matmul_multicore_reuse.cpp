@@ -73,10 +73,10 @@ void matmul_multicore_reuse(
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
-    Program program{};
+    Program program = CreateProgram(*mesh_device);
 
     tt::DataFormat cb_data_format = tt::DataFormat::Float16_b;
-    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
     uint32_t single_tile_size = tt::tile_size(cb_data_format);
     // uint32_t single_tile_size = 2 * 1024;
 

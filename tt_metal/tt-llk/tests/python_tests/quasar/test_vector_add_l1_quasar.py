@@ -47,7 +47,7 @@ def test_vector_add_l1_quasar():
             twos_complement=True,
         ),
         dest_acc=DestAccumulation.Yes,
-        disable_format_inference=True,
+        unpack_to_dest=True,
         requires_vector_ext=True,
     )
 

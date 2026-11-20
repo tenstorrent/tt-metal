@@ -64,7 +64,7 @@ CoreCoord get_core_range(
 // took & revise from bmm_op_multi_core_reuse_mcast_2d_optimized.cpp
 tt_metal::Program create_program_mcast_in0_in1(
     tt_metal::distributed::MeshDevice* device,
-    MathFidelity math_fidelity,
+    tt::tt_metal::MathFidelity math_fidelity,
     CoreCoord core_range,
     uint32_t B,
     uint32_t M,
@@ -84,7 +84,7 @@ tt_metal::Program create_program_mcast_in0_in1(
     tt::DataFormat in1_data_format,
     tt::DataFormat bias_data_format,
     tt::DataFormat output_data_format) {
-    tt_metal::Program program{};
+    tt_metal::Program program = tt_metal::CreateProgram(*device);
 
     uint32_t in0_single_tile_size = tt::tile_size(in0_data_format);
     uint32_t in1_single_tile_size = tt::tile_size(in1_data_format);
@@ -1082,7 +1082,7 @@ int main(int argc, char** argv) {
         //                      Application Setup
         ////////////////////////////////////////////////////////////////////////////
         TT_FATAL(core_range.x > 1 && core_range.y > 1, "Error");
-        MathFidelity math_fidelity = MathFidelity::HiFi4;
+        tt::tt_metal::MathFidelity math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
         auto program = create_program_mcast_in0_in1(
             device.get(),

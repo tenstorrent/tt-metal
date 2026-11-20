@@ -182,6 +182,12 @@ void bind_indexer_score(nb::module_& mod) {
                 reads the permuted cache back in natural token order so the per-group
                 scores (and the block-max-pool, which pools token-contiguous blocks)
                 come out correct. Unset = contiguous K.
+            block_cyclic_cache_tp_sharded: optional bool (default False). KV dedup, same
+                semantics as indexer_score_dsa: the index-key cache is striped across ALL
+                sp*tp devices (linear chip = sp_coord*tp + tp_coord), so only the key remap
+                moves to (sp*tp, block_cyclic_chunk_local/tp); the causal geometry is
+                unchanged. Needs block_cyclic_chunk_local divisible by tp with a tile-aligned
+                quotient.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
@@ -200,7 +206,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("kv_len") = std::nullopt,
         nb::arg("seq_shard_axes") = std::nullopt,
         nb::arg("block_cyclic_sp_axis") = std::nullopt,
-        nb::arg("block_cyclic_chunk_local") = std::nullopt);
+        nb::arg("block_cyclic_chunk_local") = std::nullopt,
+        nb::arg("block_cyclic_cache_tp_sharded") = false);
 
     ttnn::bind_function<"ring_indexer_score_dsa", "ttnn.experimental.">(
         mod,
@@ -280,6 +287,9 @@ void bind_indexer_score(nb::module_& mod) {
                 decodes (sp*tp, block_cyclic_chunk_local/tp) while the causal geometry stays on the query
                 pair (sp, block_cyclic_chunk_local). Requires block_cyclic_sp_axis, and a per-stripe chunk
                 that is tile-aligned. k_local must hold whole stripes. See indexer_score_dsa.
+            full_mesh_outer_axis: optional int (default 0). ``cluster_axis=None`` only: the mesh axis that is
+                outermost in the K-ownership and causal rank order, ``0`` row-major, ``1`` column-major. Pass
+                the SP axis when Q, K and the cache are SP-major (e.g. a TP-deduplicated cache, SP on axis 1).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -308,7 +318,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("valid_end_tensor") = nb::none(),
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
-        nb::arg("index_cache_layer_idx") = 0);
+        nb::arg("index_cache_layer_idx") = 0,
+        nb::arg("full_mesh_outer_axis") = 0);
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "llk_math_eltwise_unary_sfpu.h"
 #include "sfpi.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_recip.h"
 
 namespace ckernel::sfpu {

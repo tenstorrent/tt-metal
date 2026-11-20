@@ -8,9 +8,13 @@
 #include <tt-metalium/experimental/range_lockstep_allocation/memory_config.hpp>
 #include <tt-metalium/tensor/spec/memory_config/memory_config.hpp>
 #include <tt-metalium/experimental/tensor_serialization_support.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 
 #include "layout/page_config_impl.hpp"
 #include "layout/tensor_layout_impl.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace tt::tt_metal {
 
@@ -20,7 +24,18 @@ namespace CMAKE_UNIQUE_NAMESPACE {
 std::optional<std::string> get_shape_fits_shard_grid_error(
     const TensorLayout& tensor_layout, const Shape& logical_shape) {
     const auto& memory_config = tensor_layout.get_memory_config();
-    if (!memory_config.is_sharded() or !memory_config.shard_spec().has_value()) {
+    if (!memory_config.is_sharded()) {
+        return std::nullopt;
+    }
+    if (memory_config.created_with_nd_shard_spec() && memory_config.nd_shard_spec().has_value()) {
+        const auto& nd_shard_shape = memory_config.nd_shard_spec()->shard_shape;
+        for (size_t i = 0; i < nd_shard_shape.rank(); i++) {
+            if (nd_shard_shape[i] == 0) {
+                return fmt::format("ND shard shape must be greater than 0 in every dim, got {}", nd_shard_shape);
+            }
+        }
+    }
+    if (!memory_config.shard_spec().has_value()) {
         return std::nullopt;
     }
 
@@ -113,9 +128,9 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             (dtype == DataType::UINT32 || dtype == DataType::INT32 || dtype == DataType::FLOAT32 ||
              dtype == DataType::UINT8 || dtype == DataType::INT8 || dtype == DataType::UINT16 ||
              dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B ||
-             dtype == DataType::FP8_E4M3),
-            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, or FP8_E4M3 dtypes are "
-            "supported on device!");
+             dtype == DataType::FP8_E4M3 || is_mx(dtype)),
+            "Only UINT32, INT32, FLOAT32, UINT16, UINT8, INT8, BFLOAT16, BFLOAT8_B, BFLOAT4_B, FP8_E4M3, or MX dtypes "
+            "are supported on device!");
     };
     auto supported_layout = [&dtype, &layout]() {
         switch (dtype) {
@@ -129,6 +144,17 @@ void validate_dtype_and_layout(DataType dtype, Layout layout) {
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B:
                 TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for BFLOAT8_B dtype!");
+                break;
+            case DataType::MXFP8_E4M3:
+            case DataType::MXFP8_E5M2:
+            case DataType::MXFP6_E2M3:
+            case DataType::MXFP6_E3M2:
+            case DataType::MXFP4:
+            case DataType::MXINT8:
+            case DataType::MXINT4:
+            case DataType::MXINT2:
+                // Arch validation (MX is Quasar only) happens when the tensor is placed on a device.
+                TT_FATAL(layout == Layout::TILE, "Only TILE layout is supported for {} dtype!", dtype);
                 break;
             case DataType::FP8_E4M3:
                 // Arch validation is each producer op's responsibility (e.g., the combine op
@@ -274,14 +300,14 @@ TensorSpec TensorSpec::sharded(
 void TensorSpec::populate_sharding_specs() {
     if (memory_config().created_with_nd_shard_spec()) {
         if (auto upd_mem_config = populate_legacy_shard_spec_from_nd()) {
-            tensor_layout_ = TensorLayout(
+            tensor_layout_ = experimental::tensor_layout_with_custom_alignment(
                 tensor_layout_.get_data_type(),
                 tensor_layout_.get_page_config(),
                 *upd_mem_config,
                 tensor_layout_.get_alignment());
         }
     } else if (memory_config().shard_spec()) {
-        tensor_layout_ = TensorLayout(
+        tensor_layout_ = experimental::tensor_layout_with_custom_alignment(
             tensor_layout_.get_data_type(),
             tensor_layout_.get_page_config(),
             populate_nd_shard_spec_from_legacy(),
@@ -382,7 +408,7 @@ std::optional<MemoryConfig> TensorSpec::populate_legacy_shard_spec_from_nd() con
 
     TensorMemoryLayout shard_kind = TensorMemoryLayout::BLOCK_SHARDED;
     if (nd_shard_spec.shard_distribution_strategy == ShardDistributionStrategy::ROUND_ROBIN_1D) {
-        if (shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
+        if (padded_shape()[-1] > 0 && shard_spec.shape[0] == padded_shape().volume() / padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::WIDTH_SHARDED;
         } else if (shard_spec.shape[1] == padded_shape()[-1]) {
             shard_kind = TensorMemoryLayout::HEIGHT_SHARDED;

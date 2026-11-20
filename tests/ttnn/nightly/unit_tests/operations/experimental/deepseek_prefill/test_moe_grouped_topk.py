@@ -14,7 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from tt_py_test_utils_common.utility_functions import comp_pcc, is_blackhole
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     assert_gate_output,
     build_padding_config,
@@ -22,7 +22,6 @@ from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     grouped_gate_golden_act,
     score_activation,
 )
-from tests.ttnn.nightly.unit_tests.operations.experimental.deepseek_prefill import ci_pruning
 from models.demos.deepseek_v3_d_p.utils.chunk_config import PREFILL_CHUNK_TOKENS_PER_CHIP
 
 
@@ -30,12 +29,18 @@ TEST_PARAMS = [(1, 1, 1), (1, 1, 33), (1, 1, 128), (1, 1, PREFILL_CHUNK_TOKENS_P
 
 TEST_PARAM_IDS = ["minimal", "just_over_one_tile", "four_tiles", "realistic"]
 
-# (n_groups, total_experts, summed_experts_per_group, topk_groups, n_activated_experts, route_scale)
+# Blackhole only: open the device with 16 KiB less worker L1, which grows the kernel config buffer
+# from 70656 B to 87040 B. The grouped (n_groups > 1) program is 79776 B under watcher + LLK
+# asserts and does not fit the default buffer.
+BH_DEFAULT_WORKER_L1_SIZE = 1461120
+GROUPED_DEVICE_PARAMS = {"worker_l1_size": BH_DEFAULT_WORKER_L1_SIZE - 16 * 1024} if is_blackhole() else {}
+
+# (n_groups, total_experts, summed_experts_per_group, topk_groups, n_activated_experts, route_scale, device_params)
 ROUTING_CONFIGS = [
-    (8, 256, 2, 4, 8, 0.5),  # DeepSeek grouped routing
-    (1, 384, 1, 1, 8, 2.827),  # Kimi single expert group -> collapses to a plain top-k
-    (1, 256, 1, 1, 6, 1.5),  # DeepSeek-V4 Flash single-group top-k
-    (1, 384, 1, 1, 6, 2.5),  # DeepSeek-V4 Pro single-group top-k
+    (8, 256, 2, 4, 8, 0.5, GROUPED_DEVICE_PARAMS),  # DeepSeek grouped routing
+    (1, 384, 1, 1, 8, 2.827, {}),  # Kimi single expert group -> collapses to a plain top-k
+    (1, 256, 1, 1, 6, 1.5, {}),  # DeepSeek-V4 Flash single-group top-k
+    (1, 384, 1, 1, 6, 2.5, {}),  # DeepSeek-V4 Pro single-group top-k
 ]
 ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv4pro-1g384e"]
 
@@ -43,9 +48,9 @@ ROUTING_CONFIG_IDS = ["deepseek-8g256e", "kimi-1g384e", "dsv4flash-1g256e", "dsv
 SCORE_FUNCS = ["sigmoid", "sqrtsoftplus"]
 
 
-# Input dtype for logits/bias. The op upcasts internally bf16 input to fp32.
-INPUT_DTYPES = [ttnn.float32, ttnn.bfloat16]
-INPUT_DTYPE_IDS = ["in_fp32", "in_bf16"]
+# Input dtype for logits/bias. Production feeds bf16; the op upcasts it to fp32 internally.
+INPUT_DTYPES = [ttnn.bfloat16]
+INPUT_DTYPE_IDS = ["in_bf16"]
 
 
 # Selected-weight PCC thresholds
@@ -55,13 +60,13 @@ WEIGHTS_PCC_THRESHOLD_BF16 = 0.85
 BIASED_PCC_THRESHOLD = 0.999
 
 
-@pytest.mark.uncollect_if(pred=ci_pruning.bh_fp32_input)
 @pytest.mark.parametrize("input_dtype", INPUT_DTYPES, ids=INPUT_DTYPE_IDS)
 @pytest.mark.parametrize("score_func", SCORE_FUNCS)
 @pytest.mark.parametrize(
-    "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale",
+    "n_groups,total_experts,summed_experts_per_group,topk_groups,n_activated_experts,route_scale,device_params",
     ROUTING_CONFIGS,
     ids=ROUTING_CONFIG_IDS,
+    indirect=["device_params"],
 )
 @pytest.mark.parametrize("num_batches,batch_size,seq_len", TEST_PARAMS, ids=TEST_PARAM_IDS)
 @pytest.mark.parametrize("padded_percent", [0, 50], ids=lambda p: f"pad{p}")
