@@ -648,4 +648,3 @@ def test_moreh_sum_empty_dims(device, input_shape, dim, dtype, use_provide_outpu
     result = ttnn.operations.moreh.sum(tt_input, dim=dim, keepdim=True, output=tt_output)
     assert list(result.shape) == list(torch_output.shape)
     assert torch.equal(ttnn.to_torch(result).to(torch_dtype), torch_output)
-
