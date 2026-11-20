@@ -30,8 +30,7 @@ from models.experimental.bevformer.model_config import (
     tt_fpn_kwargs,
     tt_resnet_kwargs,
 )
-from models.experimental.bevformer.tt.tt_common import is_pointwise
-from models.experimental.bevformer.tt.tt_modulated_deform_conv import GRID_SAMPLE_C_CAP, grid_offset_order
+from models.experimental.bevformer.tt.tt_common import conv_output_size, is_pointwise
 from models.experimental.bevformer.tt.tt_resnet import TTResNet
 
 # --- Shared helpers ---------------------------------------------------------------------------
@@ -111,22 +110,14 @@ def create_spatial_cross_attention_parameters(sca, device, dtype=WEIGHT_DTYPE):
 
 def create_temporal_self_attention_parameters(tsa, device, dtype=WEIGHT_DTYPE):
     """``reference.temporal_self_attention.TemporalSelfAttention`` as TTTemporalSelfAttention
-    takes it. The offset and attention Linears emit channels head-major,
-    (head, queue, level, point[, xy]); they are reordered queue-major, so each stacked map's
-    channels are one contiguous half of the row."""
-    heads, queue = tsa.num_heads, tsa.num_bev_queue
-    per_head = tsa.num_levels * tsa.num_points
-
-    def queue_major(linear, width):
-        order = torch.arange(heads * queue * per_head * width).view(heads, queue, per_head * width)
-        order = order.permute(1, 0, 2).reshape(-1)
-        return linear_params(linear.weight[order], linear.bias[order], device, dtype)
-
+    takes it, which samples the BEV maps as levels of one fused op: the offset and attention
+    Linears' head-major channels, (head, map, level, point[, xy]), are the op's as they are, and
+    ``output_proj_mean`` carries the mean over the maps, which the op sums."""
     return SimpleNamespace(
         value_proj=linear_params(tsa.value_proj.weight, tsa.value_proj.bias, device, dtype),
-        sampling_offsets=queue_major(tsa.sampling_offsets, 2),
-        attention_weights=queue_major(tsa.attention_weights, 1),
-        output_proj=linear_params(tsa.output_proj.weight, tsa.output_proj.bias, device, dtype),
+        sampling_offsets=linear_params(tsa.sampling_offsets.weight, tsa.sampling_offsets.bias, device, dtype),
+        attention_weights=linear_params(tsa.attention_weights.weight, tsa.attention_weights.bias, device, dtype),
+        output_proj_mean=linear_params(tsa.output_proj.weight / tsa.num_bev_queue, tsa.output_proj.bias, device, dtype),
     )
 
 
@@ -208,9 +199,9 @@ def create_perception_transformer_parameters(transformer, device, dtype=WEIGHT_D
 
 # Each BatchNorm is folded into the conv before it. The backbone's conv input shapes are recorded
 # from one reference forward; the FPN's follow from its input levels' shapes. The weights stay on
-# the host: conv2d lays them out for its input on the device. A stride-1 1x1 conv whose activations
-# are in DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their device op's
-# matmul weight chunks and an offset conv that emits the offsets in its (x, y) order and grid units.
+# the host: conv2d lays them out for its input on the device. A 1x1 conv whose activations are in
+# DRAM runs as a matmul instead and gets a Linear's weight; the DCNs get their op's weight,
+# laid out for the order it samples its columns in.
 
 
 def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
@@ -228,49 +219,31 @@ def _conv_parameters(weight, bias, linear_dtype, staging_dtype):
     }
 
 
-def _dcn_parameters(conv, bn, offset_args):
+def _dcn_parameters(conv, bn):
     """A DCNv2 conv and its offset conv as TTModulatedDeformConv2dPack takes them, ``bn`` folded in.
 
-    The weight becomes the device DCN's matmul weight, one ``(K*K*c_chunk, C_out)`` block per
-    chunk of ``GRID_SAMPLE_C_CAP`` input channels, rows kk-major as grid_sample emits its samples.
-    The offset conv's offset rows are reordered to the device DCN's (x, y) order and scaled by
-    ``2 / [W, H]`` to grid_sample's units; both are exact on the weights and drop a reorder and
-    a multiply from every forward.
+    The weight becomes the device DCN's ``(K*K*C_in, C_out)`` matmul weight, rows in the (kk, c_in)
+    order the op samples its columns in. The offset conv stays DCNv2's: it emits the offsets in
+    pixels, (y, x) per kernel position, then the mask logits, which the op reads as they are.
     """
     if conv.groups != 1 or conv.deform_groups != 1:
         raise ValueError(f"the device DCN takes groups 1 and deform_groups 1, got {conv.groups}, {conv.deform_groups}")
     weight, bias = (t.detach() for t in fold_batch_norm2d_into_conv2d(conv, bn))
-    c_out, c_in, kernel_h, kernel_w = weight.shape
-    c_chunk = min(c_in, GRID_SAMPLE_C_CAP)
-    if c_in % c_chunk != 0:
-        raise ValueError(f"C_in {c_in} is not a multiple of the grid_sample chunk {c_chunk}")
-    weight_chunks = [
-        ttnn.from_torch(
-            weight[:, start : start + c_chunk].permute(2, 3, 1, 0).reshape(-1, c_out).contiguous(),
-            dtype=WEIGHT_DTYPE,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        for start in range(0, c_in, c_chunk)
-    ]
-
-    order = grid_offset_order(kernel_h * kernel_w)
-    offset_weight = conv.conv_offset.weight.detach()
-    offset_bias = conv.conv_offset.bias.detach()
-    scale = torch.ones(offset_weight.shape[0])
-    scale[: len(order) : 2] = 2.0 / offset_args.input_width
-    scale[1 : len(order) : 2] = 2.0 / offset_args.input_height
-    offset_weight = torch.cat([offset_weight[order], offset_weight[len(order) :]]) * scale.view(-1, 1, 1, 1)
-    offset_bias = torch.cat([offset_bias[order], offset_bias[len(order) :]]) * scale
+    c_out = weight.shape[0]
     return {
-        "weight_chunks": weight_chunks,
+        "weight": ttnn.from_torch(
+            weight.permute(2, 3, 1, 0).reshape(-1, c_out).contiguous(), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT
+        ),
         "bias": ttnn.from_torch(bias.reshape((1, -1)), dtype=WEIGHT_DTYPE, layout=ttnn.TILE_LAYOUT),
-        "conv_offset": _conv_parameters(offset_weight, offset_bias, None, ttnn.float32),
+        "conv_offset": _conv_parameters(
+            conv.conv_offset.weight.detach(), conv.conv_offset.bias.detach(), None, ttnn.float32
+        ),
     }
 
 
-def _resnet_preprocessor(model, resnet, conv_args, tt_kwargs):
-    """``preprocess_model_parameters``' hook for ``resnet``, given its recorded ``conv_args`` and
-    TTResNet's ``tt_kwargs``; the hook sees every submodule and answers for ``resnet`` only."""
+def _resnet_preprocessor(model, resnet, tt_kwargs):
+    """``preprocess_model_parameters``' hook for ``resnet``, given TTResNet's ``tt_kwargs``; the hook
+    sees every submodule and answers for ``resnet`` only."""
     if model is not resnet:
         return {}
     dram_activation_stages = tt_kwargs["dram_activation_stages"]
@@ -280,7 +253,12 @@ def _resnet_preprocessor(model, resnet, conv_args, tt_kwargs):
         linear_dtype = tt_kwargs["weights_dtype"] if dram_activation and is_pointwise(conv) else None
         return _conv_parameters(weight, bias, linear_dtype, ttnn.float32)
 
-    parameters = {"conv1": conv_parameters(model.conv1, model.bn1, False)}
+    # The stem conv reads convert_to_hwc's pixels, their channels padded to the L1 alignment;
+    # zero weights on the padding keep it the reference conv.
+    weight, bias = fold_batch_norm2d_into_conv2d(model.conv1, model.bn1)
+    padding = TTResNet.stem_hwc_channels(weight.shape[1]) - weight.shape[1]
+    weight = torch.nn.functional.pad(weight, (0, 0, 0, 0, 0, padding))
+    parameters = {"conv1": _conv_parameters(weight, bias, None, ttnn.float32)}
     for layer_idx in range(1, 5):
         prefix = f"layer{layer_idx}"
         parameters[prefix] = {}
@@ -292,8 +270,7 @@ def _resnet_preprocessor(model, resnet, conv_args, tt_kwargs):
                 bn = getattr(block, f"bn{conv_name[-1]}")
                 # A DCNv2 conv carries the conv that predicts its offsets and mask.
                 if hasattr(conv, "conv_offset"):
-                    offset_args = conv_args[prefix][block_idx][conv_name].conv_offset
-                    block_parameters[conv_name] = _dcn_parameters(conv, bn, offset_args)
+                    block_parameters[conv_name] = _dcn_parameters(conv, bn)
                 else:
                     block_parameters[conv_name] = conv_parameters(conv, bn, conv_name in dram_convs)
 
@@ -318,7 +295,7 @@ def create_resnet_parameters(model, input_tensor, tt_kwargs=None):
     conv_args = infer_ttnn_module_args(model=model, run_model=lambda model: model(input_tensor), device=None)
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
-        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, model, conv_args, tt_kwargs),
+        custom_preprocessor=lambda module, name: _resnet_preprocessor(module, model, tt_kwargs),
     )
     parameters.conv_args = conv_args
     parameters.tt_kwargs = tt_kwargs
@@ -342,8 +319,7 @@ def create_fpn_parameters(model, input_tensors, tt_kwargs=None):
     for fpn_conv in model.fpn_convs[len(level_shapes) :]:
         shapes.append((batch, height, width))
         conv = fpn_conv.conv
-        height = (height + 2 * conv.padding[0] - conv.kernel_size[0]) // conv.stride[0] + 1
-        width = (width + 2 * conv.padding[1] - conv.kernel_size[1]) // conv.stride[1] + 1
+        height, width = conv_output_size(height, width, conv.kernel_size, conv.stride, conv.padding)
 
     def conv_args(conv_module, shape):
         conv = conv_module.conv

@@ -22,6 +22,17 @@ from models.experimental.ops.quasar.tests.vad_variant_ops import op_utils as U
 C, Q = U.NUM_CAMS, U.NUM_QUERY
 
 
+def _op(name):
+    """ttnn.<name>, or its Quasar port on Quasar (mainline binary_ng builds legacy kernels)."""
+    return getattr(ttnn.experimental.quasar if U.is_quasar() else ttnn, name)
+
+
+def _quasar_rows(shape):
+    """On Quasar shrink the 10000-query dim: padded to 32-wide tiles, 6 x 10000 rows is 3.85 MB per L1 tensor,
+    more than the emulator's two ~3.9 MB banks hold with an output. 1000 queries keeps the op and layout."""
+    return tuple(1000 if d == Q else d for d in shape) if U.is_quasar() else shape
+
+
 def _assert_exact(ref, out, mesh):
     got = U.from_tt(out, mesh).reshape(-1)[: ref.numel()].reshape(ref.shape)
     assert torch.equal(got, ref.float()), f"{(got != ref.float()).sum().item()}/{ref.numel()} mismatches"
@@ -37,10 +48,12 @@ def _assert_exact(ref, out, mesh):
 )
 def test_compare_scalar(ttnn_mesh_device, reset_seeds, op, shape, mem, scalar):
     mesh = ttnn_mesh_device
+    if mem == "l1":
+        shape = _quasar_rows(shape)
     # Integer-valued input (like a hit count) so the comparison is unambiguous in bf16.
     x_torch = torch.randint(-2, 3, shape).to(torch.bfloat16)
     x = U.to_tt_mem(x_torch, mesh, mem)
-    out = getattr(ttnn, op)(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
+    out = _op(op)(x, scalar, memory_config=U.resolve_memcfg(mem, mesh))
     ref = (x_torch > scalar) if op == "gt" else (x_torch < scalar)
     _assert_exact(ref, out, mesh)
 
@@ -49,9 +62,10 @@ def test_compare_scalar(ttnn_mesh_device, reset_seeds, op, shape, mem, scalar):
 @pytest.mark.parametrize("shape", [pytest.param((C, 1, Q, 4), id="B18-logical_and-381505")])
 def test_logical_and(ttnn_mesh_device, reset_seeds, shape):
     mesh = ttnn_mesh_device
+    shape = _quasar_rows(shape)
     a_torch = torch.randint(0, 2, shape).to(torch.bfloat16)
     b_torch = torch.randint(0, 2, shape).to(torch.bfloat16)
     a = U.to_tt_mem(a_torch, mesh, "l1")
     b = U.to_tt_mem(b_torch, mesh, "l1")
-    out = ttnn.logical_and(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = _op("logical_and")(a, b, memory_config=ttnn.L1_MEMORY_CONFIG)
     _assert_exact(torch.logical_and(a_torch, b_torch), out, mesh)

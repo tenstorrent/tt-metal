@@ -141,6 +141,9 @@ struct RouterVcShape {
  * with zero VC1 channels. The derivation emits all flat bases and enforces the channel ceilings.
  * Reading facing capability and Z role from one capability set prevents inconsistent inputs.
  */
+// Fill the flat-index bases from the counts and enforce the channel ceilings.
+void finalize_vc_shape_bases(RouterVcShape& shape);
+
 RouterVcShape router_vc_shape(
     Topology topology,
     RoutingDirection facing,
@@ -199,6 +202,9 @@ RouterArchetype router_archetype(
     const PerDirectionCapabilities& chip_capabilities,
     ExpressAxis express_axis,
     const IntermeshVCConfig* vc_config);
+
+// Fails on a supplied shape that the router can't hold.
+void check_vc_shape(const RouterVcShape& shape);
 
 /**
  * Datamover owner for sender channels on one VC. In MUX mode TENSIX owns VC0; ERISC owns VC1/VC2.

@@ -11,6 +11,9 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <utility>
+#include <vector>
 
 namespace ttnn::prim {
 uint32_t largest_power_of_two(uint32_t x);
@@ -69,4 +72,13 @@ constexpr bool padded_width_needs_uint32_indices(uint64_t padded_width) {
 // True when the op must use 32-bit indices: the padded reduced dim does not fit in 16 bits, or the
 // input is fp32, which sorts with fp32 dest accumulation and loads indices as INT32.
 bool is_uint32_index_required(const ttnn::Tensor& input_tensor, int8_t dim);
+
+// True when the reader kernels fill the width padding: bf16/fp32, 32x32 tiles, padded only to the next tile.
+bool topk_reader_fills_width_padding(const ttnn::Tensor& input);
+
+// Whole pad tiles the single-core reader appends so a row spans the two tiles the sort needs (0 or 1).
+uint32_t topk_reader_pad_tiles(const ttnn::Tensor& input);
+
+// Reader defines that fill the padding of each row's last tile and append pad tiles, or none when not needed.
+std::vector<std::pair<std::string, std::string>> topk_width_padding_defines(const ttnn::Tensor& input, bool largest);
 }  // namespace ttnn::prim

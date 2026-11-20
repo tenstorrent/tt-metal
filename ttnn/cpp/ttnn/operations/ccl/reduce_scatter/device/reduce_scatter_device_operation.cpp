@@ -156,9 +156,11 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     // --- Architecture and clock ---
     tt::ARCH arch = tt::ARCH::WORMHOLE_B0;
     int clock_rate_mhz = 1000;
+    auto fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
     if (input_tensor.storage_type() == StorageType::DEVICE) {
         arch = input_tensor.device()->arch();
         clock_rate_mhz = input_tensor.device()->get_clock_rate_mhz();
+        fabric_config = tt::tt_fabric::GetFabricConfig(*input_tensor.device());
     }
 
     // --- Data sizes ---
@@ -198,7 +200,7 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     }
     // Fabric bandwidth and its pipeline-fill latency are two independent floors — both compete in the final max().
     const auto [fabric_bw_cycles, fabric_fill_cycles] = ttnn::ccl::estimate_fabric_transfer_cycles(
-        arch, tt::tt_fabric::GetFabricConfig(), clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
+        arch, fabric_config, clock_rate_mhz, bottleneck_bytes, num_links, num_hops);
 
     // =========================================================================
     // 2. LOCAL DATA MOVEMENT — first-principles minimum (algorithm-agnostic)
@@ -214,10 +216,10 @@ ReduceScatterDeviceOperation::create_op_performance_model(
     // take max(read_bw, write_bw) rather than summing them.
     // =========================================================================
     const auto& output_tensor = output_tensors[1];  // [0] is intermediate, [1] is output
-    const bool input_is_dram = input_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const bool output_is_dram = output_tensor.buffer()->buffer_type() == BufferType::DRAM;
-    const uint32_t read_page_size = input_tensor.buffer()->page_size();
-    const uint32_t write_page_size = output_tensor.buffer()->page_size();
+    const bool input_is_dram = input_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const bool output_is_dram = output_tensor.memory_config().buffer_type() == BufferType::DRAM;
+    const uint32_t read_page_size = input_tensor.mesh_buffer().page_size();
+    const uint32_t write_page_size = output_tensor.mesh_buffer().page_size();
     const uint32_t device_rows = input_tensor.device()->compute_with_storage_grid_size().x;
     const uint32_t device_cols = input_tensor.device()->compute_with_storage_grid_size().y;
     const uint32_t num_cores = device_rows * device_cols;
