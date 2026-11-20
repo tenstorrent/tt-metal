@@ -176,7 +176,6 @@ MAPPING: list = [
 # --------------------------------------------------------------------------------------------
 _SAFE_OP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.]{0,31}")
 _SAFE_GLOB = re.compile(r"[A-Za-z0-9_.*?\[\]!-]{1,128}")
-_SAFE_TIMESTAMP = re.compile(r"[0-9T:.+\-Z]{1,40}")
 
 
 def _arg_op_name(value: str) -> str:
@@ -225,8 +224,10 @@ def _arg_out(value: str) -> str:
 
 
 def _arg_timestamp(value: str) -> str:
-    if not _SAFE_TIMESTAMP.fullmatch(value):
-        raise argparse.ArgumentTypeError(f"--now must be an ISO timestamp, got {value!r}")
+    try:
+        datetime.datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"--now must be an ISO timestamp, got {value!r}") from None
     return value
 
 
