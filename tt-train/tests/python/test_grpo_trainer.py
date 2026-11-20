@@ -535,6 +535,7 @@ def test_setup_records_num_generation_batches(monkeypatch):
     trainer.optimizer_dict = {}
     trainer.callbacks = []
     trainer.reward_funcs = [lambda completions, **_: [0.0] * len(completions)]
+    trainer.tools = []
     trainer.rollout_sampler = _EchoSampler()
     trainer._rollout_client = None
 
