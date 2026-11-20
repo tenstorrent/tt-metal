@@ -19,22 +19,22 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         The sequence-parallel prefix as a relay along the SP axis, with the chunk's final carry: rank ``p``
         (chronological position, from ``actual_start``) takes its entry state ``S_p`` from its predecessor, computes
         ``S_{p+1} = A_p S_p + B_p = S_p + (E_p S_p + B_p)`` from its packed complement-form summary ``[E | B]``
-        (``E = A - I``) and forwards it, one head per head's first core and one tile column at a time; the last rank
+        (``E = A - I``) and forwards it, on relay cores of two heads each and one tile column at a time; the last rank
         sends the final state ``P`` on to the first. ``S_p`` and ``B_p`` are added exactly in FP32 DST (``B_p`` as
         ``I B_p`` in the matmul); only ``E_p S_p`` passes through the matmul's source registers at its fidelity.
 
-        Every core of a head then forms its chunks' outputs ``x = F0 + (FI - F0) @ seed`` from the summary's
+        Every correction core of a head then forms its chunks' outputs ``x = F0 + (FI - F0) @ seed`` from the summary's
         ``terms`` (the entry correction), the seed being ``S_p``, or ``P`` for the chunks of a separated tail,
         and writes each row's gated RMSNorm ``x / sqrt(mean(x^2) + norm_epsilon) * norm_weight *
         sigmoid(gate)``, token-major. The gate ``gate_input @ gate_weight`` is formed in the same program at
-        ``gate_math_fidelity`` while the relay's hops are on their way: each head's other cores form their chunks'
-        rows, and a helper core per head those of its first core. The first rank forms the final carry as ``P``
+        ``gate_math_fidelity`` while the relay's hops are on their way: each correction core forms its chunks' rows.
+        The first rank forms the final carry as ``P``
         lands: ``P + (E P + B)`` with its final transition ``final_e`` / ``final_b`` when the interval ends in a
         separated tail, else ``P``. It multicasts it from L1 along the SP axis into every rank's carry output, and
         every other rank waits for its arrival, which separates consecutive calls across the SP line.
 
-        ``cores`` lists the same number of cores per head, head by head (the first of each also runs the relay's
-        hop), then two sender cores per link, then a helper core per head (any other core, a sender included). The
+        ``cores`` lists the same number of correction cores per head, head by head, then two sender cores per link,
+        then the relay cores (each runs the hop of up to two heads of one link: heads ``h`` and ``h + num_links``). The
         ``landing`` buffer and the global ``semaphores`` outlive the call: a peer writes them before this rank's
         call starts.
 
@@ -57,21 +57,19 @@ void bind_relay_chunk_scan(nb::module_& mod) {
             actual_start (ttnn.Tensor): Replicated UINT32 row-major scalar with the absolute position of the
                 chunk's first token. Keep its address stable and update its contents before replay of a
                 captured trace.
-            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[2*B*H*K, K]`` height-sharded in L1 over each head's
-                first core, two ``K x K`` states per core: the entry state the predecessor's sender writes and the
-                final state the last rank writes on the first rank.
-            gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the heads' cores and the helpers (``cores``
-                less the senders that are not helpers), the same bytes on each: the output gate's working buffers, for
-                the call only. The relay takes K blocks as large as it holds.
-            semaphores (list[ttnn.GlobalSemaphore]): Six zeroed counters on every core of the program: the
-                entry-state, final-state and final-carry arrivals, then the output gate's x and W block counts and its
-                landed count.
+            landing (ttnn.Tensor): FLOAT32 TILE-layout ``[4*R*K, K]`` height-sharded in L1 over the ``R`` relay cores,
+                four ``K x K`` states per core: per head slot, the entry state the predecessor's sender writes, then
+                per slot the final state the last rank writes on the first rank.
+            gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the correction cores, the same bytes on each:
+                the output gate's working buffers, for the call only. The relay takes K blocks as large as it holds.
+            semaphores (list[ttnn.GlobalSemaphore]): Five zeroed counters on every core of the program: the
+                entry-state, final-state and final-carry arrivals, then the output gate's x and W block counts.
 
         Keyword Args:
             local_rows (int): Positive, 32-aligned token rows per SP device.
             num_links (int): Fabric links to the successor, two sender cores each.
-            cores (list[ttnn.CoreCoord]): The heads' cores, head by head (as many per head, dividing its chunks),
-                then two senders per link, then a helper per head (distinct from the heads' cores and each other).
+            cores (list[ttnn.CoreCoord]): The heads' correction cores, head by head (as many per head, dividing its
+                chunks), then two senders per link, then the relay cores (all distinct).
             num_heads (int): Heads per batch ``H``; ``B*H`` heads are ``B`` batches.
             actual_end (ttnn.Tensor, optional): Replicated UINT32 exclusive valid end, which decides whether the
                 interval ends in a separated tail. Omitted, the chunk runs to its full capacity.

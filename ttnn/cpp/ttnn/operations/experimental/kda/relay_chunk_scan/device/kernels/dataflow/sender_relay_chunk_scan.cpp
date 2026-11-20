@@ -16,15 +16,17 @@ using namespace tt::tt_fabric;
 using namespace tt::tt_fabric::linear::experimental;
 
 constexpr uint32_t cb_stage = get_compile_time_arg_val(0);
-constexpr uint32_t cb_eout = get_compile_time_arg_val(1);  // at the same address on the head cores
+constexpr uint32_t cb_eout = get_compile_time_arg_val(1);  // at the same address on the relay cores
 constexpr uint32_t sp_size = get_compile_time_arg_val(2);
 constexpr uint32_t local_rows = get_compile_time_arg_val(3);
-constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);        // one tile column of a head's state
-constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);       // one fabric packet
-constexpr uint32_t kt = get_compile_time_arg_val(6);                // tile columns per state
-constexpr uint32_t slots = get_compile_time_arg_val(7);             // unit buffers
-constexpr uint32_t ack_semaphore_id = get_compile_time_arg_val(8);  // on the head cores
-constexpr auto start_args = TensorAccessorArgs<9>();
+constexpr uint32_t unit_bytes = get_compile_time_arg_val(4);   // one tile column of a head's state
+constexpr uint32_t chunk_bytes = get_compile_time_arg_val(5);  // one fabric packet
+constexpr uint32_t kt = get_compile_time_arg_val(6);           // tile columns per state
+constexpr uint32_t slots = get_compile_time_arg_val(7);        // unit buffers
+// On the relay cores, per head slot: the releases of the head.
+constexpr uint32_t first_ack_semaphore_id = get_compile_time_arg_val(8);
+constexpr uint32_t relay_heads = get_compile_time_arg_val(9);  // a relay core's head slots
+constexpr auto start_args = TensorAccessorArgs<10>();
 constexpr uint32_t chunks = (unit_bytes + chunk_bytes - 1) / chunk_bytes;
 constexpr auto carry_args = TensorAccessorArgs<start_args.next_compile_time_args_offset()>();
 // Slab (slab_kernel_args): the carry output is the slab, written at entry `index * slab_scale + slab_offset` on every
@@ -46,17 +48,20 @@ static_assert(
     slots * chunks <= MEM_PACKET_HEADER_POOL_SIZE / MaxDMProcessorsPerCoreType / PACKET_HEADER_MAX_SIZE,
     "the sender's packet headers exceed the packet header pool");
 
-// Sender core: the relay's sender of a link reads each finished tile column out of its head cores and forwards it into
-// the successor's landing buffer (the first rank's final-state landing, from the last rank) over the fabric. On the
-// chronologically first rank, every sender then multicasts the final carry its head cores form, carry_range ranks
+// Sender core: the relay's sender of a link reads each finished tile column out of its heads' relay cores and forwards
+// it into the head's slot of the successor's landing buffer (the first rank's final-state slot, from the last rank)
+// over the fabric. On the chronologically first rank, every sender then multicasts the final carry the relay cores
+// form, carry_range ranks
 // along its one connection (or unicasts it to each of them), into every rank's carry output; together a link's
 // senders reach every other rank once.
 void kernel_main() {
     size_t arg = 0;
     const uint32_t start_address = get_common_arg_val<uint32_t>(0);
-    // The landing buffer's slots (same on every head core): the successor's entry state, the first rank's final state.
+    // The landing buffer (same on every relay core): a slot per head of the successor's entry states, then of the
+    // first rank's final states.
+    constexpr uint32_t state_bytes = kt * unit_bytes;
     const uint32_t ein_landing = get_common_arg_val<uint32_t>(1);
-    const uint32_t final_landing = ein_landing + kt * unit_bytes;
+    const uint32_t final_landing = ein_landing + relay_heads * state_bytes;
     const uint32_t eout_address = get_write_ptr(cb_eout);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
     const uint16_t dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg++));
@@ -65,10 +70,12 @@ void kernel_main() {
     const uint32_t sp_rank = get_arg_val<uint32_t>(arg++);
     // 1D routing: hops to the successor, 1 forward, or sp_size - 1 backward from the last rank of a line.
     const uint32_t successor_hops = get_arg_val<uint32_t>(arg++);
-    const uint32_t num_heads = get_arg_val<uint32_t>(arg++);  // entries: head core NoC x | y << 16
+    const uint32_t num_heads = get_arg_val<uint32_t>(arg++);  // entries: the head's relay core NoC x | y << 16
     const size_t head_args = arg;
     arg += num_heads;
     const size_t notify_args = arg;  // then each head's count semaphore id on this core
+    arg += num_heads;
+    const size_t slot_args = arg;  // then each head's slot on its relay core
     arg += num_heads;
     const uint32_t carry_semaphore = get_arg_val<uint32_t>(arg++);
     const uint32_t drain_x = get_arg_val<uint32_t>(arg++);
@@ -99,7 +106,6 @@ void kernel_main() {
     const bool last = position == sp_size - 1;
     const uint32_t landing = last ? final_landing : ein_landing;
     const uint32_t landed_semaphore = last ? final_semaphore : arrival_semaphore;
-    const uint32_t ack_semaphore = get_semaphore(ack_semaphore_id);
 
     RoutingPlaneConnectionManager fabric;
     open_connections(fabric, connections, arg);
@@ -125,6 +131,13 @@ void kernel_main() {
     }
     const uint32_t units = num_heads * kt;
     const auto head_xy = [&](uint32_t u) { return get_arg_val<uint32_t>(head_args + u / kt); };
+    const auto head_slot = [&](uint32_t u) { return get_arg_val<uint32_t>(slot_args + u / kt); };
+    // Unit u's column in its head's slot (of cb_eout, and of a landing buffer's states).
+    const auto column_offset = [&](uint32_t u) { return head_slot(u) * state_bytes + (u % kt) * unit_bytes; };
+    const auto release = [&](uint32_t u) {
+        const uint32_t xy = head_xy(u);
+        noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, get_semaphore(first_ack_semaphore_id + head_slot(u))), 1);
+    };
     // Head k's writer counts its finished columns into its count semaphore on this core. Blackhole's data-movement
     // RISCs cache L1: invalidate before each poll, as noc_semaphore_wait_min does.
     const auto ready = [&](uint32_t u) {
@@ -138,7 +151,7 @@ void kernel_main() {
     const auto fetch = [&](uint32_t u) {
         const uint32_t xy = head_xy(u);
         noc_async_read(
-            get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + (u % kt) * unit_bytes),
+            get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + column_offset(u)),
             stage + (u % slots) * unit_bytes,
             unit_bytes);
     };
@@ -161,11 +174,11 @@ void kernel_main() {
         const uint32_t hx = xy & 0xFFFF;
         const uint32_t hy = xy >> 16;
         if (u % kt == kt - 1) {
-            // The head's last column has left its head core: release the head.
-            noc_semaphore_inc(get_noc_addr(hx, hy, ack_semaphore), 1);
+            // The head's last column has left its relay core: release the head.
+            release(u);
         }
         const uint32_t buffer = stage + (u % slots) * unit_bytes;
-        const uint32_t column = landing + (u % kt) * unit_bytes;
+        const uint32_t column = landing + column_offset(u);
         for (uint32_t c = 0; c < chunks; ++c) {
             const uint32_t offset = c * chunk_bytes;
             const uint32_t bytes = offset + chunk_bytes <= unit_bytes ? chunk_bytes : unit_bytes - offset;
@@ -242,7 +255,7 @@ void kernel_main() {
             } while (count[0] < counted + u % kt + 1);
             const uint32_t xy = head_xy(u);
             noc_async_read(
-                get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + (u % kt) * unit_bytes),
+                get_noc_addr(xy & 0xFFFF, xy >> 16, eout_address + column_offset(u)),
                 stage + (u % 2) * unit_bytes,
                 unit_bytes);
         };
@@ -254,9 +267,8 @@ void kernel_main() {
             noc_async_read_barrier();
             const uint32_t column = u % kt;
             if (column == kt - 1) {
-                // The head's last carry column has left its head core: this sender is done with the head.
-                const uint32_t xy = head_xy(u);
-                noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, ack_semaphore), 1);
+                // The head's last carry column has left its relay core: this sender is done with the head.
+                release(u);
             }
             const uint32_t head = link + u / kt * links;
             const uint32_t buffer = stage + (u % 2) * unit_bytes;

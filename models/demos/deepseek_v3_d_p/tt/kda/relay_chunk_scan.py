@@ -8,17 +8,17 @@ is one hop; on a line it crosses the SP axis (2D routing, or sp_size - 1 hops ba
 then forms the chunk's final carry from it and multicasts it to every rank.
 
 The same program forms the chunk outputs from the summary's emitted terms (the entry correction): each head's chunks are
-spread over `cores_per_head` cores, the first of which runs the head's hop and copies the landed entry state (and, for a
-separated tail, the final state) to the head's other cores. It also forms the output gate x @ W of the gated norm while
-the relay's hops are on their way, which take its cores little time: each head's other cores their chunks' rows, and a
-helper core per head (a core the relay leaves free, or a sender) the rows of the head's first core. The summary writes
+spread over `cores_per_head` correction cores, and relay cores, each serving two heads of a link, run the heads' hops and
+copy each landed entry state (and, for a separated tail, the final state) to the heads' correction cores. The correction
+cores also form the output gate x @ W of the gated norm, each its chunks' rows, while the relay's hops are on their way;
+only the correction and relay cores run matmuls (the Blackhole di/dt bound). The summary writes
 the terms sharded so each core's chunk rows, F(0) then F(I), are in its own L1 (terms_memory_config); when a core's
 share is over KDA_RELAY_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
 
-The relay's landing buffer is an L1 tensor sharded one head per head's first core, at the same address on every device. A
+The relay's landing buffer is an L1 tensor sharded over the relay cores, at the same address on every device. A
 rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before the SP barrier that
 precedes the recurrence (reserve) and the call frees it once the relay has consumed it: between layers that L1 is free
-for the other attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns).
+for the other attention layers (ring_mla's circular buffers span nearly all of L1).
 
 Load-bearing: the entry barrier of the layer's qkv convolution history exchange runs after the reservation and before
 the relay, so no rank relays until every rank has reserved its landing buffer and finished the programs before it,
@@ -69,13 +69,16 @@ class OutputNorm:
 
 
 # The relay's persistent counters (relay_semaphores in relay_chunk_scan_device_operation_types.hpp): its entry-state,
-# final-state and final-carry arrivals, then the output gate's x and W block counts and a head core's g landed.
-_RELAY_SEMAPHORES = 6
+# final-state and final-carry arrivals, then the output gate's x and W block counts.
+_RELAY_SEMAPHORES = 5
 
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
-_MAX_HEADS_PER_LINK = 12
+_MAX_HEADS_PER_LINK = 14
 
-# The output gate's working L1 per core (the K blocks of x and W in flight, a pair's partial sums): with Kimi-K3's 5
+# Heads per relay core (relay_chunk_scan_heads_per_relay_core): a link's heads h and h + num_links, in its order.
+_HEADS_PER_RELAY_CORE = 2
+
+# The output gate's working L1 per correction core (the K blocks of x and W in flight, a pair's partial sums): with Kimi-K3's 5
 # chunk rows per core (4 cores a head), K blocks of 8 tiles for paired heads. Allocated right before the relay, it takes
 # L1 the layer has freed by then (its q, k, v and projection). With more rows a core and the terms in its L1, the terms
 # and the relay's own buffers leave less: it takes the K blocks its buffers fit (relay_chunk_scan_program_factory.cpp).
@@ -160,65 +163,38 @@ class RelayChunkScan:
         self.axis = sequence_parallel_axis
         self.num_links = num_links
         self.local_rows = local_rows
-        # Each head's cores, then two senders per link (the relay's and the final carry's second), then a helper per
-        # head. The senders take the grid's first cores, nearest the Ethernet cores they hand the relay's packets to;
-        # the heads' cores follow in row-major order. Up to max_cores correct chunks: their products count toward the
-        # Blackhole di/dt bound (the output gate's matmul runs under the dynamic throttle, see
-        # kernels/compute/gate_matmul.hpp).
+        # Each head's correction cores, then two senders per link (the relay's and the final carry's second), then the
+        # relay cores (each runs the hop of two heads of a link). The senders take the grid's first cores, nearest the
+        # Ethernet cores they hand the relay's packets to; the heads' cores follow in row-major order, the relay cores
+        # take the last free cores. Up to max_cores correction cores: with the relay cores, their matmuls count toward
+        # the Blackhole di/dt bound.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
-        budget = min(max_cores, len(cores) - senders)
+        relay_count = sum(
+            -(-len(range(link, batch_heads, num_links)) // _HEADS_PER_RELAY_CORE) for link in range(num_links)
+        )
+        budget = min(max_cores, len(cores) - senders - relay_count)
         if budget < batch_heads:
             raise ValueError(
-                f"relay prefix needs {batch_heads} head cores and {senders} senders; max_cores={max_cores}, "
-                f"grid has {len(cores)}"
+                f"relay prefix needs {batch_heads} correction cores, {senders} senders and {relay_count} relay cores; "
+                f"max_cores={max_cores}, grid has {len(cores)}"
             )
-        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard) and
-        # leave a helper per head (a free core or a sender).
+        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard).
         num_chunks = local_rows // ttnn.TILE_SIZE
         if num_chunks == 0:
             raise ValueError(f"relay prefix needs at least one chunk of {ttnn.TILE_SIZE} rows, has {local_rows} rows")
         self.cores_per_head = cores_per_head = max(
-            (
-                d
-                for d in range(1, min(num_chunks, budget // batch_heads) + 1)
-                if num_chunks % d == 0 and batch_heads * (d + 1) <= len(cores)
-            ),
-            default=0,
+            d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
         )
-        if cores_per_head == 0:
-            raise ValueError(f"relay prefix needs a core and a helper per head ({batch_heads}), grid has {len(cores)}")
         # The heads' cores start on the first grid row after the senders' when they fit there: whole rows are one
         # core range, which the dispatch writes the program to in one multicast.
         first = math.ceil(senders / grid.x) * grid.x
-        if first + batch_heads * cores_per_head > len(cores):
+        if first + batch_heads * cores_per_head + relay_count > len(cores):
             first = senders
         correction = cores[first : first + batch_heads * cores_per_head]
-        # The helpers: cores the relay leaves free, or senders (their second RISC and compute are free). A head's W
-        # reaches its helper on one NoC: north (NoC 1, west then north) from the head's last core to a helper above,
-        # or south (NoC 0, east then south) from its second core to one below. Each head takes the nearest that way,
-        # the nearest pairs first; a helper the wrong way across costs a wrap of the row.
-        free = [core for core in cores[senders:] if core not in correction] + cores[:senders]
-
-        def hops(head, helper):
-            head_core, last = correction[head * cores_per_head], correction[(head + 1) * cores_per_head - 1]
-            if helper.y < head_core.y:
-                dx = last.x - helper.x
-                return (dx if dx >= 0 else dx + 2 * grid.x) + head_core.y - helper.y
-            second = correction[head * cores_per_head + min(1, cores_per_head - 1)]
-            dx = helper.x - second.x
-            return (dx if dx >= 0 else dx + 2 * grid.x) + abs(helper.y - head_core.y)
-
-        pairs = sorted((hops(h, c), h, i) for h in range(batch_heads) for i, c in enumerate(free))
-        helpers = [None] * batch_heads
-        taken = set()
-        for _, h, i in pairs:
-            if helpers[h] is None and i not in taken:
-                helpers[h] = free[i]
-                taken.add(i)
-        self.cores = correction + cores[:senders] + helpers
-        gate_cores = correction + helpers
+        relay = [core for core in cores[senders:] if core not in correction][-relay_count:]
+        self.cores = correction + cores[:senders] + relay
 
         def core_set(selected):
             # One range per row run, in the cores' order: a sharded tensor places shard i on the set's i-th core.
@@ -230,15 +206,14 @@ class RelayChunkScan:
                     runs.append([core, core])
             return ttnn.CoreRangeSet([ttnn.CoreRange(lo, hi) for lo, hi in runs])
 
+        # Per relay core, a K x K entry state per head slot, then a final state per slot, while reserved.
+        landing_rows = 2 * _HEADS_PER_RELAY_CORE * key_dim
         self._landing_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(
-                core_set(correction[::cores_per_head]), (2 * key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR
-            ),
+            ttnn.ShardSpec(core_set(relay), (landing_rows, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        # Two K x K states per head (the entry state, the final state) while reserved.
-        self._landing_shape = ttnn.Shape([2 * batch_heads * key_dim, key_dim])
+        self._landing_shape = ttnn.Shape([relay_count * landing_rows, key_dim])
         self._landing = None
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts; the output gate's
         # handshakes count across the program's cores.
@@ -266,9 +241,9 @@ class RelayChunkScan:
         self._gate_workspace_memory_config = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.L1,
-            ttnn.ShardSpec(core_set(gate_cores), (workspace_rows, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(core_set(correction), (workspace_rows, ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        self._gate_workspace_shape = ttnn.Shape([len(gate_cores) * workspace_rows, ttnn.TILE_SIZE])
+        self._gate_workspace_shape = ttnn.Shape([len(correction) * workspace_rows, ttnn.TILE_SIZE])
 
     def reserve(self):
         """Allocate the landing buffer for the next call, before the SP barrier that precedes the recurrence (a no-op
