@@ -742,6 +742,11 @@ void kernel_main() {
     constexpr bool segmented_split = split_segments && long_rows;
     // Shorter rows run on one thread: the set-up costs more than the overlap saves.
     constexpr uint32_t min_split_chunks = K == 2048 ? 2 : 3;
+#ifdef TOPK_TWO_LEVEL
+    // A split row's halves of stage 3 run as soon as they can, not after the end (see the reader).
+    constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
+    static_assert(!early_halves || segmented_split, "early halves run on the segmented split body");
+#endif
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
@@ -787,7 +792,10 @@ void kernel_main() {
                 bool half_item = !two_level_rows && row == num_whole_rows;
                 if (maxima_item) {
                     const uint32_t next = two_level_next_row(input_cb, total_units, split_on);
-                    if (next == topk_two_level::header_end) {
+                    if (early_halves && next == topk_two_level::header_end) {
+                        break;
+                    }
+                    if (next == topk_two_level::header_end || (early_halves && next == topk_two_level::header_half)) {
                         if constexpr (!segmented_split) {
                             break;
                         }
@@ -865,6 +873,30 @@ void kernel_main() {
                         topk_xl_split_set_stamp_offset(0);
                     }
 #endif
+#ifdef TOPK_TWO_LEVEL
+                    if (half_item && early_halves && two_level_rows) {
+                        // The half's survivor leaves DEST raw: to the partner from the second core, into this core's
+                        // own send CB until the end's join on the first.
+                        topk_xl_split_end();
+                        split_on = false;
+                        arm_untilize_pack<K>(indices_cb);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        send.reserve_back(survivor_tiles);
+                        pack_untilize_uninit(send_cb);
+                        pack_reconfig_data_format(send_cb);
+                        for (uint32_t tile = 0; tile < survivor_tiles; ++tile) {
+                            pack_tile(final_survivor + tile, send_cb);
+                        }
+                        send.push_back(survivor_tiles);
+                        tile_regs_release();
+                        arm_untilize_pack<K>(indices_cb);
+                        shifted_half = false;
+                        // The half took a maxima item's slot: the next item is a header again.
+                        ++row;
+                        continue;
+                    }
+#endif
                     if (half_item) {
                         half_done = true;
                         break;
@@ -912,6 +944,32 @@ void kernel_main() {
                 if (two_level_rows) {
                     settle_next_program(input_cb);
                 }
+            }
+            if (two_level_rows && early_halves) {
+                if (has_split && !second_half) {
+                    // The split row's join: this core's parked half, then the partner's landed one merged into it.
+                    arm_untilize_pack<K>(indices_cb);
+                    tile_regs_acquire();
+                    send.wait_front(survivor_tiles);
+                    reconfig_data_format_srca(input_cb, send_cb);
+                    copy_init(send_cb);
+                    for (uint32_t tile = 0; tile < tiles_per_sequence<K>; ++tile) {
+                        copy_tile(send_cb, tile, final_survivor + tile);
+                    }
+                    send.pop_front(survivor_tiles);
+                    merge_landed_fused_survivor<K>(landing, input_cb);
+                    mark_neginf_indices<K>(final_survivor);
+                    materialize_index_rank_order<K>(final_survivor, indices_cb);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    indices.reserve_back(1);
+                    pack_untilize_dest<tiles_per_sequence<K>, tiles_per_sequence<K>>(
+                        indices_cb, 1, 0, final_survivor + tiles_per_sequence<K>);
+                    indices.push_back(1);
+                    tile_regs_release();
+                    settle_next_program(input_cb);
+                }
+                return;
             }
             if (two_level_rows) {
                 if (!has_split) {

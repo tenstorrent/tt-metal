@@ -56,15 +56,25 @@ constexpr uint32_t flag_words(uint32_t search_len) { return div_up(div_up(search
 // across the rows first within a wave: each input row is one DRAM page in one bank, so the units in flight at once
 // spread over every bank, while each wave's rows finish early enough for their owners to start on them.
 constexpr uint32_t wave_rows = 16;
+// Which row the waves take as their o-th: in row order (the split rows last), or with split_first the split rows (the
+// last split_rows rows) first.
 struct Units {
     uint32_t total;
     uint32_t num_rows;
     uint32_t per_row;
+    uint32_t split_rows;
+    bool split_first;
 
+    constexpr uint32_t ordered_row(uint32_t o) const {
+        if (!split_first) {
+            return o;
+        }
+        return o < split_rows ? num_rows - split_rows + o : o - split_rows;
+    }
     constexpr uint32_t row(uint32_t unit) const {
         const uint32_t wave = unit / (wave_rows * per_row);
         const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
-        return wave * wave_rows + (unit - wave * wave_rows * per_row) % rows;
+        return ordered_row(wave * wave_rows + (unit - wave * wave_rows * per_row) % rows);
     }
     constexpr uint32_t part(uint32_t unit) const {
         const uint32_t wave = unit / (wave_rows * per_row);
@@ -72,11 +82,27 @@ struct Units {
         return (unit - wave * wave_rows * per_row) / rows;
     }
 
-    static constexpr Units of(uint32_t search_len, uint32_t batch_tiles, uint32_t num_rows) {
+    static constexpr Units of(
+        uint32_t search_len,
+        uint32_t batch_tiles,
+        uint32_t num_rows,
+        uint32_t split_rows = 0,
+        bool split_first = false) {
         const uint32_t per_row = div_up(search_len, batch_tiles * tile_keys);
-        return {per_row * num_rows, num_rows, per_row};
+        return {per_row * num_rows, num_rows, per_row, split_rows, split_first};
     }
 };
+
+// The phase-1 schedule of a program whose split rows run their halves early (tl_early_halves), by search length. Below
+// split_first_below the split rows' units come first, so their halves of stage 3 run during phase 1, and at most
+// row_cap_fifths / 5 of the cores sort rows while units remain, so phase 1 keeps going. From split_first_below up,
+// phase 1 is long enough to hide the whole rows, and a split row is the shortest work to leave for after it: its
+// units come last, without a cap. (Measured on 108 cores, 160 rows: split-first gains to 256K, loses from 512K.)
+constexpr uint32_t split_first_below = 393216;
+constexpr uint32_t row_cap_fifths = 3;
+constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
+    return early_halves && search_len < split_first_below;
+}
 
 // Row ownership, like the single-level op's split: the first num_rows - split_rows rows are whole rows, row r on core
 // r % num_cores as its local row r / num_cores (a whole number of rounds when there are split rows; without, the
@@ -105,7 +131,9 @@ constexpr uint32_t table_pages = selected_blocks / table_page_entries;
 
 // What the reader sends the compute (a header page in the stage-1 CB, then 32 tile pages) and the writer (its
 // mailbox) next: a phase-1 unit's number, one of this core's rows, or the end.
-constexpr uint32_t header_split = 0xFFFFFFFDu;  // a split row's stage 2; its halves of stage 3 follow the end
+constexpr uint32_t header_half = 0xFFFFFFFCu;   // this core's half of its split row's stage 3 (tl_early_halves)
+constexpr uint32_t header_split = 0xFFFFFFFDu;  // a split row's stage 2; its halves of stage 3 follow the end, or with
+                                                // tl_early_halves run as header_half items as soon as they can
 constexpr uint32_t header_row = 0xFFFFFFFEu;
 constexpr uint32_t header_end = 0xFFFFFFFFu;
 constexpr uint32_t writer_header_code_word = 0;

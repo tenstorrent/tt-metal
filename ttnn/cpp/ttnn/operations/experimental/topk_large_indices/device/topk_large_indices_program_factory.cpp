@@ -429,6 +429,11 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
                                    static_cast<uint32_t>(cores.size()))
                                    ? 1u
                                    : 0u;
+    // A two-level program with split rows and the segmented split body sorts each split row's halves of stage 3 as
+    // soon as they can run, not after the end (see topk_two_level::split_rows_first).
+    const bool early_halves = two_level_enabled(operation_attributes, input.logical_shape()[-1]) && row_split != 0 &&
+                              llk_k == to_uint32(LlkTargetK::K2048) && long_rows(k, input.logical_shape()[-1]) &&
+                              compute_body_mode(k, input.logical_shape()[-1]) == ComputeBodyMode::FusedSegmented;
     uint32_t credit_semaphore_id = 0;
     uint32_t data_semaphore_id = 0;
     if (row_split) {
@@ -455,6 +460,7 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     constexpr uint32_t cb_block_flags = tt::CBIndex::c_13;
     constexpr uint32_t cb_remote_table = tt::CBIndex::c_14;
     constexpr uint32_t cb_writer_mailbox = tt::CBIndex::c_15;
+    constexpr uint32_t cb_split_table = tt::CBIndex::c_16;
     constexpr uint32_t stage1_batch = 32;
     if (two_level) {
         // Stage 3 reads 64 B blocks straight into candidate slots: the DRAM read rule needs the source and the L1
@@ -488,6 +494,10 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         if (row_split) {
             create_cb(cb_remote_table, 1, table_bytes / 2, tt::DataFormat::UInt32);
         }
+        // With early halves, the first core's copy of its split row's table, kept for the row's output at the end.
+        if (early_halves) {
+            create_cb(cb_split_table, 1, table_bytes, tt::DataFormat::UInt32);
+        }
         // The mode and search length, then a header per item (see topk_two_level::header_row).
         create_cb(cb_writer_mailbox, 4, 64, tt::DataFormat::UInt32);
     }
@@ -498,11 +508,15 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
     const uint32_t ready_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     // half: on the second core of a split pair, the count of its half's table pages that have arrived.
     const uint32_t half_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
+    // rows: on the coordinator, the cores sorting a row while phase-1 units remain (see
+    // topk_two_level::split_rows_first).
+    const uint32_t rows_semaphore_id = two_level ? tt::tt_metal::CreateSemaphore(program, all_cores, 0) : 0;
     const std::vector<std::pair<std::string, uint32_t>> two_level_named_args = {
         {"tl_unit_sem", unit_semaphore_id},
         {"tl_claim_sem", claim_semaphore_id},
         {"tl_ready_sem", ready_semaphore_id},
         {"tl_half_sem", half_semaphore_id},
+        {"tl_rows_sem", rows_semaphore_id},
         {"tl_cb_stage1", cb_stage1},
         {"tl_cb_tiled", cb_tiled},
         {"tl_cb_scaler", cb_scaler},
@@ -512,6 +526,9 @@ TopkLargeIndicesProgramFactory::cached_program_t TopkLargeIndicesProgramFactory:
         {"tl_cb_block_flags", cb_block_flags},
         {"tl_cb_remote_table", cb_remote_table},
         {"tl_cb_writer_mailbox", cb_writer_mailbox},
+        {"tl_cb_split_table", cb_split_table},
+        {"tl_early_halves", early_halves ? 1u : 0u},
+
         {"tl_stage1_batch", stage1_batch},
         {"tl_block_max_input", tensor_args.block_max_tensor.has_value() ? 1u : 0u},
         {"tl_mode_output", tensor_args.mode_output.has_value() ? 1u : 0u},

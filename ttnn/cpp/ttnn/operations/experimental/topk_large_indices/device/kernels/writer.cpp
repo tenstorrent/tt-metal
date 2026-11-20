@@ -266,12 +266,10 @@ FORCE_INLINE void two_level_output(
     CircularBuffer& indices_scratch_cb,
     const IndicesT& indices,
     uint32_t row_bytes,
-    uint32_t row) {
+    uint32_t row,
+    uint32_t table_addr) {
     using namespace topk_two_level;
-    // The row's block table: the table CB cycles a whole table at a time, so it starts at the CB's base, and the next
-    // table is built only after this output.
-    const auto* table = reinterpret_cast<const uint32_t*>(
-        CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).get_write_ptr());
+    const auto* table = reinterpret_cast<const uint32_t*>(table_addr);
     indices_cb.wait_front(1);
     indices_scratch_cb.reserve_back(1);
     copy_row_to_scratch<source_slices_per_row, output_slices_per_row, slice_bytes>(indices_cb, indices_scratch_cb, noc);
@@ -382,6 +380,13 @@ void kernel_main() {
                 noc.async_write_barrier();
             }
         }
+        constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
+        if (two_level_mode && early_halves && receives_survivor) {
+            // The landing slot is this pair's only use of it: free from the start, so the partner may send its half's
+            // survivor whenever it has it.
+            landing_cb.reserve_back(survivor_tiles);
+            credit_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+        }
         if (two_level_mode) {
             // The block flags start clear; each table's scan clears the flags it finds.
             auto* packed = reinterpret_cast<uint32_t*>(
@@ -393,7 +398,9 @@ void kernel_main() {
             const auto units = Units::of(
                 search_len,
                 get_named_compile_time_arg_val("tl_stage1_batch"),
-                get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_input_rows));
+                get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_input_rows),
+                get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows),
+                split_rows_first(early_halves, search_len));
             constexpr auto max_out_args =
                 TensorAccessorArgs<get_named_compile_time_arg_val("tl_max_out_args_offset")>();
             const auto max_out = TensorAccessor(
@@ -407,6 +414,39 @@ void kernel_main() {
                 uint32_t row = header[writer_header_row_word];
                 mailbox_cb.pop_front(1);
                 const bool end = code == header_end;
+                if (early_halves && code == header_half) {
+                    if (sends_survivor) {
+                        credit_sem.wait_min(1);
+                        send_cb.wait_front(survivor_tiles);
+                        noc.async_write(
+                            send_cb,
+                            UnicastEndpoint{},
+                            survivor_bytes,
+                            {.offset_bytes = 0},
+                            {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
+                        noc.async_write_barrier();
+                        send_cb.pop_front(survivor_tiles);
+                        data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+                    }
+                    continue;
+                }
+                if (early_halves && end) {
+                    if (!receives_survivor) {
+                        break;
+                    }
+                    data_sem.wait_min(1);
+                    landing_cb.push_back(survivor_tiles);
+                    // The split row's table, kept from its stage 2 while later rows reused the table CB.
+                    two_level_output<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
+                        noc,
+                        indices_cb,
+                        indices_scratch_cb,
+                        indices,
+                        indices_page_bytes,
+                        split_row,
+                        CircularBuffer(get_named_compile_time_arg_val("tl_cb_split_table")).get_write_ptr());
+                    break;
+                }
                 if (end) {
                     // The split row: the second core sends its half's survivor into the first core's landing CB,
                     // as the single-level split does; the first core merges it and writes the row below.
@@ -434,14 +474,35 @@ void kernel_main() {
                 } else if (code == header_row || code == header_split) {
                     two_level_table(noc, indices_cb, search_len, code == header_split);
                     if (code == header_split) {
+                        if constexpr (early_halves) {
+                            // Kept for the row's output at the end: the table CB holds the next row's table by then.
+                            const uint32_t from =
+                                CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).get_write_ptr();
+                            const uint32_t to =
+                                CircularBuffer(get_named_compile_time_arg_val("tl_cb_split_table")).get_write_ptr();
+                            noc_async_read(
+                                get_noc_addr(from, noc.get_noc_id()),
+                                to,
+                                table_pages * table_page_bytes,
+                                noc.get_noc_id());
+                            noc_async_read_barrier(noc.get_noc_id());
+                        }
                         continue;
                     }
                 } else {
                     two_level_unit(noc, max_out, search_len, units, code);
                     continue;
                 }
+                // The row's block table: the table CB cycles a whole table at a time, so it starts at the CB's base,
+                // and the next table is built only after this output.
                 two_level_output<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(
-                    noc, indices_cb, indices_scratch_cb, indices, indices_page_bytes, row);
+                    noc,
+                    indices_cb,
+                    indices_scratch_cb,
+                    indices,
+                    indices_page_bytes,
+                    row,
+                    CircularBuffer(get_named_compile_time_arg_val("tl_cb_table")).get_write_ptr());
                 if (end) {
                     break;
                 }

@@ -320,11 +320,24 @@ FORCE_INLINE void two_level_run(
     // return to a word of their own: the default one is shared with the writer's atomics.
     const uint32_t claim_word = get_semaphore(get_named_compile_time_arg_val("tl_claim_sem"));
     const auto* claimed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(claim_word);
-    const auto claim = [&](uint32_t increment, uint32_t return_word) {
+    // With tl_early_halves a split row's halves of stage 3 run as soon as they can, rather than after the end: the
+    // first core's right after the row's stage 2, the second core's once the first table page has arrived from its
+    // partner.
+    constexpr bool early_halves = get_named_compile_time_arg_val("tl_early_halves") != 0;
+    // The cores in row mode while units remain, counted on the coordinator: with split_rows_first at most a cap of them
+    // take rows, so the rest keep claiming units and phase 1 does not stall behind the rows.
+    const uint64_t rows_counter = get_noc_addr(
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
+        get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
+        get_semaphore(get_named_compile_time_arg_val("tl_rows_sem")),
+        noc.get_noc_id());
+    const uint32_t row_cap = split_rows_first(early_halves, search_len) ? num_cores * row_cap_fifths / 5 : num_cores;
+    // A non-posted atomic add returns the counter's old value to return_word.
+    const auto atomic_add = [&](uint64_t target, uint32_t increment, uint32_t return_word) {
         noc_fast_atomic_increment<noc_mode, true>(
             noc.get_noc_id(),
             write_at_cmd_buf,
-            counter,
+            target,
             NOC_UNICAST_WRITE_VC,
             increment,
             31 /*wrap*/,
@@ -333,32 +346,97 @@ FORCE_INLINE void two_level_run(
             return_word);
         noc.async_atomic_barrier();
     };
+    const auto claim = [&](uint32_t increment, uint32_t return_word) { atomic_add(counter, increment, return_word); };
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
+    const auto* half_pages =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_half_sem")));
+    const uint32_t remote_table = CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
+    bool half_pending = early_halves && has_split;
     bool units_left = !has_block_max;
-    uint32_t local_row = 0;
+    // This core's local rows run in the order their maxima complete; done_rows has a bit per finished one.
+    uint32_t done_rows = 0;
+    uint32_t rows_done = 0;
     while (true) {
-        // The split row is the last: its units are the last claimed, so it waits for the claims to run out.
-        const bool is_split_row = split_owner && local_row == local_whole_rows;
-        if (local_row < local_rows && !(is_split_row && units_left)) {
+        if (half_pending && !split_owner) {
             invalidate_l1_cache();
-            if (has_block_max || ready_count(*ready, local_row) >= units.per_row) {
-                const uint32_t row = is_split_row ? split_row : core_index + local_row * num_cores;
-                two_level_push_stage1(two_level_announce(is_split_row ? header_split : header_row, row));
-                two_level_stage2(noc, block_max, search_len, row);
-                if (!is_split_row) {
-                    two_level_gather(
-                        noc,
-                        input,
-                        search_len,
-                        row,
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
-                        2 * half_chunks,
-                        false);
-                    table_cb.pop_front(table_pages);
-                }
-                ++local_row;
+            if (*half_pages >= 1) {
+                two_level_push_stage1(two_level_announce(header_half, split_row));
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    split_row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_table),
+                    half_chunks,
+                    true);
+                half_pending = false;
                 continue;
             }
+        }
+        // The first of this core's rows whose maxima are complete. Without tl_early_halves the split row is the last:
+        // its units are the last claimed, so it waits for the claims to run out.
+        uint32_t local_row = local_rows;
+        if (rows_done < local_rows) {
+            invalidate_l1_cache();
+            for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
+                const bool split = split_owner && candidate == local_whole_rows;
+                if ((done_rows >> candidate & 1) || (split && units_left && !early_halves)) {
+                    continue;
+                }
+                if (has_block_max || ready_count(*ready, candidate) >= units.per_row) {
+                    local_row = candidate;
+                    break;
+                }
+            }
+        }
+        // Over the cap, the core claims a unit instead.
+        bool counted = false;
+        if (local_row < local_rows && units_left && row_cap < num_cores) {
+            atomic_add(rows_counter, 1, claim_word);
+            invalidate_l1_cache();
+            counted = true;
+            if (*claimed >= row_cap) {
+                atomic_add(rows_counter, 0xFFFFFFFFu, claim_word);
+                counted = false;
+                local_row = local_rows;
+            }
+        }
+        const bool is_split_row = split_owner && local_row == local_whole_rows;
+        if (local_row < local_rows) {
+            const uint32_t row = is_split_row ? split_row : core_index + local_row * num_cores;
+            two_level_push_stage1(two_level_announce(is_split_row ? header_split : header_row, row));
+            two_level_stage2(noc, block_max, search_len, row);
+            if (is_split_row && early_halves) {
+                two_level_push_stage1(two_level_announce(header_half, row));
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
+                    half_chunks,
+                    false);
+                table_cb.wait_front(table_pages);
+                table_cb.pop_front(table_pages);
+                half_pending = false;
+            }
+            if (!is_split_row) {
+                two_level_gather(
+                    noc,
+                    input,
+                    search_len,
+                    row,
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_cb.get_read_ptr()),
+                    2 * half_chunks,
+                    false);
+                table_cb.pop_front(table_pages);
+            }
+            if (counted) {
+                atomic_add(rows_counter, 0xFFFFFFFFu, claim_word);
+            }
+            done_rows |= 1u << local_row;
+            ++rows_done;
+            continue;
         }
         if (units_left) {
             claim(1, claim_word);
@@ -371,7 +449,7 @@ FORCE_INLINE void two_level_run(
             }
             continue;
         }
-        if (local_row == local_rows) {
+        if (rows_done == local_rows && !half_pending) {
             break;
         }
     }
@@ -380,7 +458,7 @@ FORCE_INLINE void two_level_run(
         claim(0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
     }
     two_level_push_stage1(two_level_announce(header_end, 0));
-    if (has_split) {
+    if (has_split && !early_halves) {
         // This core's half of the split row's candidates: the first core's by its own writer's table, the second
         // core's by the table half the first core's writer sends into its remote-table CB.
         const uint32_t table_addr =
@@ -562,7 +640,9 @@ void kernel_main() {
             topk_two_level::Units::of(
                 search_len,
                 get_named_compile_time_arg_val("tl_stage1_batch"),
-                get_common_arg_val<uint32_t>(topk_common_args::two_level_num_input_rows)),
+                get_common_arg_val<uint32_t>(topk_common_args::two_level_num_input_rows),
+                get_common_arg_val<uint32_t>(topk_common_args::two_level_split_rows),
+                topk_two_level::split_rows_first(get_named_compile_time_arg_val("tl_early_halves") != 0, search_len)),
             get_arg_val<uint32_t>(topk_core_args::reader_two_level_core_index),
             get_common_arg_val<uint32_t>(topk_common_args::two_level_num_cores),
             get_common_arg_val<uint32_t>(topk_common_args::two_level_split_rows),
