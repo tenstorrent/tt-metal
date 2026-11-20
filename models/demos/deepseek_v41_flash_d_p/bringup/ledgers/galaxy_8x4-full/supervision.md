@@ -957,3 +957,28 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   PB.7C (attempt 3) -> PB.9F -> PB.9F5 -> PB.9X -> PB.9X5 -> PB.8R -> PB.8RP -> PB.9C -> PB.T. tasks.yaml 490 KB.
 - 20:05 UTC single-request audit (read-only agent, HEAD): the shipped 5120 path also builds programs in serving: ttnn.slice keyed on start (RoPE, compressed RoPE, DeviceScalars k), on ceil(end/32) of a last chunk (arbitrary: ~a build per request), on slot x layer x start (history slice_rows), replay offsets; compile() warms start 0 only. Host per chunk: engram C++ job (by design) + ids readback / re-upload (a round trip P.87's device engram removes); no other host tables. The 69k 5120 ladder is a WARM best case. Note OV-68 (the list with file:line) to PB.9F* / PB.9X*.
 - 20:22 UTC OWNER: agreed: no ids re-upload (device-side reorder from the engine input; the host keeps the readback for the engram hash; engrams stay on the host). Note OV-69 to PB.9X / PB.9X5.
+
+### HAND-OFF 2026-11-20 ~20:30 UTC (overseer context at 77%; continue in a fresh session: /bringup "report on deepseek_v41_flash_d_p galaxy_8x4")
+- Branch dnijemcevic/model_bringup_batching (NOT pushed; never push without the owner). Orchestrator: tmux orch_pb,
+  `orchestrator resume --spec <spec> --until PB.T --attempts 20` with SKIP=check-models-do-not-import-tests (repo-wide
+  hook fails on two old files, FIX.37). Running: PB.7C attempt 3 (glued: host writes ids + descriptor only, all other
+  per-chunk tables derived on device; gate glued_new_layout_ms* <= 1.5, 0 builds, 1 ring call a layer).
+- Queue after it: PB.9F (honest FRESH walls, tests only: new positions / slots / layouts every timed chunk, builds
+  counted per op; single 8192, fixed 4x2k lanes, lanes + glued on AgentX mixes, glued 5 x 1.6k) -> PB.9F5 (same at
+  5120) -> PB.9X (no program build per position / slot / last-chunk end / replay on the single-request and lane paths,
+  POS_DYNAMIC; no ids re-upload (OV-69); audit list with file:line in note OV-68) -> PB.9X5 (5120 accept units + fresh
+  walls, 0 builds) -> PB.8R / PB.8RP (re-apply the mhc change from local branch dnijemcevic/pb8_mhc_post_v2_saved =
+  0ef6b7107f5; owner: a clear win, never reject a verified device win) -> PB.9C (combined report, every number FRESH
+  with the warm one beside it; send the owner the table) -> PB.T (adversarial tests: fast tier <= 5 min in every accept
+  gate incl. 0 builds, deep sweep path-triggered; tt-d-gen boundary set; every failure -> a FIX task).
+- PENDING OWNER QUESTION: make POS_DYNAMIC the default once PB.9X passes (I proposed yes; owner does not want the
+  rebuild penalty).
+- Owner rules learned today (all in the skill / PACKED_RULES.md): no minimum-gain line; serving never rebuilds; no host
+  tables (host writes ids + descriptor only; engrams stay on the HOST, owner: no device engrams); no infeasible
+  shortcuts, checked by the overseer BEFORE accepting; walls count only fresh (F294 labels warm walls); 1-token segments
+  supported, 32-aligned starts, splits on 64-blocks; check gate --status yourself before accepting (F293).
+- Withdrawn as serving numbers: PB.7 / PB.7B glued walls, PB.7C interim 42.6k; unverified: fixed-lane 73.6-75.0k,
+  the 5120 ladder 69.1k (warm best cases). Correctness (oracles bit-identical) stands for all.
+- Before relaunching after a reject, run `resume --only <task>` first (PB.8 lesson); apply tasks.yaml edits only while
+  the orchestrator is stopped (scratchpad patch scripts are gone with this session: re-derive from this log).
+  tasks.yaml is 490 KB (repo hook 500 KB): trim PASS PB briefs if a commit nears it. RAM unaccounted ~105 GiB.
