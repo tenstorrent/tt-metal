@@ -73,7 +73,8 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
         // FP8_E4M3 ingestion is not supported on the streaming path (mirrors the
         // TensorToMesh / aggregate_tensor restriction); reject it explicitly.
         case DataType::FP8_E4M3: TT_THROW("StreamService: FP8_E4M3 global_spec data type is not supported");
-        case DataType::INVALID: TT_THROW("StreamService: invalid global_spec data type");
+        case DataType::INVALID:
+        default: TT_THROW("StreamService: unsupported global_spec data type {}", spec.data_type());
     }
     TT_THROW("Unreachable");
 }

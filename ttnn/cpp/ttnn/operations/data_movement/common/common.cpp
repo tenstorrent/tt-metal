@@ -764,6 +764,39 @@ uint32_t pack_scalar_into_uint32(DataType dtype, float value) {
         case DataType::MXINT8:
         case DataType::MXINT4:
         case DataType::MXINT2:
+        case DataType::GGUF_Q8_0:
+        case DataType::GGUF_Q4_0:
+        case DataType::GGUF_IQ4_NL:
+        case DataType::GGUF_MXFP4:
+        case DataType::GGUF_NVFP4:
+        case DataType::GGUF_Q6_K:
+        case DataType::GGUF_Q4_K:
+        case DataType::GGUF_Q5_K:
+        case DataType::GGUF_Q3_K:
+        case DataType::GGUF_Q2_K:
+        case DataType::GGUF_IQ4_XS:
+        case DataType::GGUF_TQ2_0:
+        case DataType::GGUF_Q2_0:
+        case DataType::GGUF_Q1_0:
+        case DataType::GGUF_IQ2_XXS:
+        case DataType::GGUF_IQ1_S:
+        case DataType::GGUF_IQ2_S:
+        case DataType::GGUF_IQ3_S:
+        case DataType::GGUF_IQ3_XXS:
+        case DataType::GGUF_IQ2_XS:
+        case DataType::GGUF_IQ1_M:
+        case DataType::GGUF_Q4_1:
+        case DataType::GGUF_Q5_0:
+        case DataType::GGUF_Q5_1:
+        case DataType::GGUF_TQ1_0:
+        case DataType::GGUF_IQ2_XXS_EXPANDED:
+        case DataType::GGUF_IQ1_S_EXPANDED:
+        case DataType::GGUF_IQ2_S_EXPANDED:
+        case DataType::GGUF_IQ3_S_EXPANDED:
+        case DataType::GGUF_IQ3_XXS_EXPANDED:
+        case DataType::GGUF_IQ2_XS_EXPANDED:
+        case DataType::GGUF_IQ1_M_EXPANDED:
+        case DataType::GGUF_TQ1_0_EXPANDED:
         case DataType::INVALID: break;
     }
     TT_THROW("Cannot pack a scalar value for dtype {}", dtype);

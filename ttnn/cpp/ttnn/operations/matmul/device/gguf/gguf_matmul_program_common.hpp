@@ -1,0 +1,215 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// Parts of the GGUF matmul programs that both factories use (gguf_matmul_program_factory.cpp,
+// gguf_matmul_prefill_program_factory.cpp): circular buffers, the weight reader (kernels/gguf/gguf_matmul_reader.cpp)
+// and the reader / writer pairs.
+
+#pragma once
+
+#include <array>
+#include <map>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <tt-metalium/experimental/gguf.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
+
+#include "ttnn/operations/core/program_cache_l1.hpp"
+#include "ttnn/operations/matmul/device/gguf/gguf_matmul_program_factory.hpp"
+
+namespace ttnn::prim::gguf_program {
+
+using namespace tt::tt_metal;
+using tt::tt_metal::experimental::gguf_records_per_page;
+using tt::tt_metal::experimental::gguf_traits;
+using tt::tt_metal::experimental::GgufTraits;
+using tt::tt_metal::experimental::is_gguf_expanded;
+
+inline constexpr auto kKernels = "ttnn/cpp/ttnn/operations/matmul/device/kernels/gguf/";
+inline constexpr uint32_t kGroupsPerRead = 4;  // one-page groups: records per unit of reads
+inline constexpr uint32_t kPageUnits = 4;      // units of pages c_0 holds
+inline constexpr uint32_t kRecordSlots = 3;    // multi-page groups: records staged in L1, two in flight from DRAM
+
+// Bytes of circular buffers a core may hold from the allocator's base: below L1_SMALL and any live L1 buffer.
+inline uint32_t program_l1_bytes(const IDevice* device) {
+    return static_cast<uint32_t>(ttnn::operations::core::available_program_l1_capacity(device));
+}
+
+inline void add_cb(
+    Program& program,
+    const CoreRangeSet& cores,
+    tt::CBIndex index,
+    tt::DataFormat format,
+    uint32_t page_bytes,
+    uint32_t pages,
+    std::optional<tt::tt_metal::Tile> tile = std::nullopt) {
+    CircularBufferConfig config =
+        CircularBufferConfig(page_bytes * pages, {{index, format}}).set_page_size(index, page_bytes);
+    if (tile) {
+        config.set_tile_dims(index, *tile);
+    }
+    CreateCircularBuffer(program, cores, config);
+}
+
+// Records per unit of the weight reader's reads: a multi-page group's pages, else kGroupsPerRead one-page groups.
+inline uint32_t reader_unit(const GgufTraits& f) {
+    const uint32_t pages_per_group = f.group_tiles / f.page_tiles;
+    return pages_per_group > 1 ? pages_per_group : kGroupsPerRead;
+}
+
+// MXFP4: c_0 takes each record whole as two pages of a codes part and the scale row (the decoder's page of its first K
+// tile, then the second K tile's codes, which take their scale row from the first page): no staging ring.
+inline bool paired_pages(const GgufTraits& f) { return f.format_id == gguf_traits(DataType::GGUF_MXFP4).format_id; }
+
+// Bytes of a c_0 page: a record (packed), a codes part and the scale rows (paired) or the decoder's L1 page.
+inline uint32_t c0_page_bytes(const GgufTraits& f, bool packed) {
+    return packed ? f.page_bytes() : paired_pages(f) ? f.code_bytes + 64 * f.scale_rows : f.l1_page_bytes();
+}
+
+// L1 bytes of the weight reader's circular buffers (add_weight_reader_cbs).
+inline uint32_t weight_reader_l1_bytes(const GgufTraits& f) {
+    return kPageUnits * reader_unit(f) * c0_page_bytes(f, false) +
+           (f.group_tiles / f.page_tiles > 1 && !paired_pages(f) ? kRecordSlots * f.page_bytes() : 0);
+}
+
+// Whether c_0 packs one-page-group records back to back (page = record) so that a read of several consecutive records
+// of a DRAM page lands in consecutive pages: decode with several records per DRAM page. The unpacker still reads a
+// decoder's L1 page from each page start; the bytes past the record (the next record, or L1 past c_0) are never used.
+inline bool packed_pages(const Tensor& weight) {
+    const GgufTraits& f = gguf_traits(weight.dtype());
+    return f.group_tiles == f.page_tiles && gguf_records_per_page(weight.dtype(), weight.logical_shape()[0]) > 1;
+}
+
+// The weight reader's circular buffers on `cores`: c_0, the decoder's L1 pages (UInt32 tiles of the page's size;
+// packed: pages of one record; paired: two pages per record), and for the other multi-page groups c_2, the staging
+// ring.
+inline void add_weight_reader_cbs(
+    Program& program, const CoreRangeSet& cores, const GgufTraits& f, bool packed = false) {
+    const uint32_t l1_page = f.l1_page_bytes();
+    const tt::tt_metal::Tile page_tile(
+        l1_page == 1024   ? std::array<uint32_t, 2>{16, 16}
+        : l1_page == 2048 ? std::array<uint32_t, 2>{16, 32}
+                          : std::array<uint32_t, 2>{32, 32});
+    add_cb(
+        program,
+        cores,
+        tt::CBIndex::c_0,
+        tt::DataFormat::UInt32,
+        c0_page_bytes(f, packed),
+        kPageUnits * reader_unit(f),
+        page_tile);
+    if (f.group_tiles / f.page_tiles > 1 && !paired_pages(f)) {
+        add_cb(program, cores, tt::CBIndex::c_2, tt::DataFormat::UInt32, kRecordSlots * f.page_bytes(), 1);
+    }
+}
+
+// The weight reader's compile args: format id, c_0 pages, one-page groups per unit, staging slots, the lookup request,
+// answer and page address semaphores, reads in flight, records per DRAM page, bytes per c_0 page, the weight's
+// TensorAccessorArgs.
+inline std::vector<uint32_t> weight_reader_args(
+    const Tensor& weight, uint32_t request_sem, uint32_t answer_sem, uint32_t address_sem, bool packed = false) {
+    const GgufTraits& f = gguf_traits(weight.dtype());
+    // Two reads in flight for Q4_0, Q4_1, MXFP4 and NVFP4, one for the others, which a second one slows down
+    // (measured, decode).
+    const DataType dtype = weight.dtype();
+    const bool two_in_flight = dtype == DataType::GGUF_Q4_0 || dtype == DataType::GGUF_Q4_1 ||
+                               dtype == DataType::GGUF_MXFP4 || dtype == DataType::GGUF_NVFP4;
+    std::vector<uint32_t> args = {
+        f.format_id,
+        kPageUnits * reader_unit(f),
+        kGroupsPerRead,
+        kRecordSlots,
+        request_sem,
+        answer_sem,
+        address_sem,
+        two_in_flight ? 2u : 1u,
+        gguf_records_per_page(dtype, weight.logical_shape()[0]),
+        c0_page_bytes(f, packed)};
+    TensorAccessorArgs(*weight.buffer()).append_to(args);
+    return args;
+}
+
+// Codebook formats: each page's index words in GGUF_LOOKUP_PARTS equal parts, looked up by the reader, the writer, and
+// the compute kernel's math and unpack threads; the pack thread takes the rest. IQ2_XXS and IQ2_XS, and IQ2_S on cores
+// of at least kIq2sEighthsRecords records (`most_records`: a core's records, the most of any core; 0 if unknown):
+// eighths, three of them on the writer, which then gets each record before the reader's scale work (measured, decode).
+// An expanded codebook layout holds the level codes: no lookups.
+inline std::map<std::string, std::string> lookup_defines(const Tensor& weight, uint32_t most_records = 0) {
+    // IQ2_S cores of fewer records lose to the eighths (measured at 2.3 to 4.7 records per core).
+    constexpr uint32_t kIq2sEighthsRecords = 8;
+    const GgufTraits& f = gguf_traits(weight.dtype());
+    const bool expanded = is_gguf_expanded(weight.dtype()) && f.code_offset > 0;
+    const bool eighths = weight.dtype() == DataType::GGUF_IQ2_XXS || weight.dtype() == DataType::GGUF_IQ2_XS ||
+                         (weight.dtype() == DataType::GGUF_IQ2_S && most_records >= kIq2sEighthsRecords);
+    struct LookupSplit {
+        uint32_t parts, reader, writer, math, unpack;
+    };
+    const LookupSplit split = expanded            ? LookupSplit{4, 0, 0, 0, 0}
+                              : eighths           ? LookupSplit{8, 1, 3, 2, 2}
+                              : f.code_offset > 0 ? LookupSplit{4, 1, 1, 1, 1}
+                                                  : LookupSplit{2, 1, 1, 0, 0};
+    return {
+        {"GGUF_EXPANDED", expanded ? "1" : "0"},
+        {"GGUF_LOOKUP_PARTS", std::to_string(split.parts)},
+        {"GGUF_READER_PARTS", std::to_string(split.reader)},
+        {"GGUF_WRITER_PARTS", std::to_string(split.writer)},
+        {"GGUF_MATH_PARTS", std::to_string(split.math)},
+        {"GGUF_UNPACK_PARTS", std::to_string(split.unpack)}};
+}
+
+// The reader and the writer on the cores of `ranges`, all in columns of one parity: the reader uses one NoC and the
+// writer the other, alternating by column so that both NoCs carry DRAM reads.
+inline void add_movers(
+    Program& program,
+    const CoreRangeSet& ranges,
+    uint32_t parity,
+    const std::string& reader,
+    const std::string& writer,
+    const std::vector<uint32_t>& reader_ct,
+    const std::vector<uint32_t>& writer_ct,
+    const std::map<std::string, std::string>& reader_defines,
+    const std::map<std::string, std::string>& writer_defines,
+    GgufMatmulSharedVariables& shared) {
+    shared.reader[parity] = CreateKernel(
+        program,
+        std::string(kKernels) + reader,
+        ranges,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_1,
+            .noc = parity ? NOC::NOC_1 : NOC::NOC_0,
+            .compile_args = reader_ct,
+            .defines = reader_defines});
+    shared.writer[parity] = CreateKernel(
+        program,
+        std::string(kKernels) + writer,
+        ranges,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = parity ? NOC::NOC_0 : NOC::NOC_1,
+            .compile_args = writer_ct,
+            .defines = writer_defines});
+}
+
+// override_runtime_arguments of both programs: the weight address is the reader's runtime arg 0, the input and output
+// addresses the writer's args writer_input and writer_input + 1 (and its last arg with shared.writer_weight).
+template <typename CachedProgram>
+void override_addresses(
+    CachedProgram& cached_program, const GgufMatmulInputs& inputs, const Tensor& output, uint32_t writer_input) {
+    const GgufMatmulSharedVariables& shared = cached_program.shared_variables;
+    for (const CoreCoord& core : shared.cores) {
+        const uint32_t parity = core.x % 2;
+        GetRuntimeArgs(cached_program.program, shared.reader[parity], core)[0] = inputs.weight.buffer()->address();
+        auto& writer_args = GetRuntimeArgs(cached_program.program, shared.writer[parity], core);
+        writer_args[writer_input] = inputs.input.buffer()->address();
+        writer_args[writer_input + 1] = output.buffer()->address();
+        if (shared.writer_weight) {
+            writer_args[writer_args.size() - 1] = inputs.weight.buffer()->address();
+        }
+    }
+}
+
+}  // namespace ttnn::prim::gguf_program

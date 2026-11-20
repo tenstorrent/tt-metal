@@ -639,7 +639,8 @@ Tensor from_buffer_impl(
         case DataType::MXINT8:
         case DataType::MXINT4:
         case DataType::MXINT2:
-        case DataType::INVALID: {
+        case DataType::INVALID:
+        default: {
             TT_THROW("Unreachable");
         }
     }
