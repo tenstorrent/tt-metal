@@ -64,6 +64,9 @@
 
 #ifdef ENABLE_PREFETCHER_PIPE
 #include "ttnn/operations/matmul/device/kernels/dataflow/prefetcher_pipe_in1_window.hpp"
+#ifdef ARCH_QUASAR
+#error "PrefetcherPipe weight delivery into this matmul has not been brought up on Quasar"
+#endif
 #endif
 #ifdef BATCH_BROADCAST
 #include "ttnn/operations/matmul/device/kernels/dataflow/batch_broadcast_offset.hpp"
