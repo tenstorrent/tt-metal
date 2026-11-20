@@ -153,6 +153,10 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             several row counts M: the program cache ignores M, so a pinned orientation keeps one
             cache entry per layer while the rule would re-orient (and rebuild) once M crosses N.
 
+        use_mcast : bool, default: False
+            Each input block reaches its whole row or column of the matmul grid in one NoC multicast instead of a
+            core-to-core relay. Independent of the fabric config; not supported with FSDP.
+
         num_workers_per_link : Optional[int], default: 1
             The number of worker cores per link to use for the all gather portion of the operation.  More than 1 typically
             alleviates DRAM-bound shapes, as long as there is enough tiles to justify more than 1 worker.  More than 2 workers
@@ -253,7 +257,8 @@ void bind_all_gather_minimal_matmul_async(nb::module_& mod) {
             nb::arg("fsdp_topology") = nb::none(),
             nb::arg("fuse_swiglu") = false,
             nb::arg("chunk_sizes") = std::vector<uint32_t>{},
-            nb::arg("transpose_core_grid") = nb::none()});
+            nb::arg("transpose_core_grid") = nb::none(),
+            nb::arg("use_mcast") = false});
 }
 
 }  // namespace ttnn::operations::experimental::ccl
