@@ -120,7 +120,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
                 return false;
             }
             for (const Tensor* t : std::initializer_list<const Tensor*>{&grad_output, &input, &output}) {
-                if (t->buffer()->page_size() != t->buffer()->aligned_page_size()) {
+                if (t->mesh_buffer().page_size() != t->mesh_buffer().aligned_page_size()) {
                     return false;
                 }
             }
@@ -159,12 +159,12 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
 
         const auto paging_of = [&](const Tensor& t, DataFormat df) {
             const uint32_t element_bytes = datum_size(df);
-            const uint32_t page_elements = static_cast<uint32_t>(t.buffer()->page_size()) / element_bytes;
+            const uint32_t page_elements = static_cast<uint32_t>(t.mesh_buffer().page_size()) / element_bytes;
             return RmPaging{
                 .page_elements = page_elements,
                 .pages_per_row = (row_elements + page_elements - 1) / page_elements,
                 .element_bytes = element_bytes,
-                .alignment = t.buffer()->alignment()};
+                .alignment = t.mesh_buffer().alignment()};
         };
         grad_paging = paging_of(grad_output, grad_output_cb_data_format);
         input_paging = paging_of(input, input_cb_data_format);
@@ -175,7 +175,7 @@ ProgramDescriptor UnaryBackwardProgramFactory::create_descriptor(
         // aligned_page_size on its one input; here every tensor has to satisfy it, for its whole
         // row and for each of its pages, since a piece may start at either boundary.
         const auto packs_rows = [&](const Tensor& t, const RmPaging& paging) {
-            const uint32_t alignment = t.buffer()->alignment();
+            const uint32_t alignment = t.mesh_buffer().alignment();
             return (row_elements * paging.element_bytes) % alignment == 0 &&
                    (paging.page_elements * paging.element_bytes) % alignment == 0;
         };

@@ -17,16 +17,17 @@ using address_t = uint32_t;
 ///////////////////////////////////////////////////
 constexpr uint32_t cb0_id = get_compile_time_arg_val(0);
 constexpr uint32_t input_page_size = get_compile_time_arg_val(1);
-constexpr uint32_t current_device_id = get_compile_time_arg_val(2);
-constexpr uint32_t num_devices = get_compile_time_arg_val(3);
-constexpr uint32_t split_dim_size = get_compile_time_arg_val(4);
-constexpr uint32_t inner_dims_size = get_compile_time_arg_val(5);
-constexpr uint32_t last_dim_size = get_compile_time_arg_val(6);
-constexpr uint32_t has_reader_tail = get_compile_time_arg_val(7);
-constexpr uint32_t has_writer_tail = get_compile_time_arg_val(8);
-constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(9);
-constexpr uint32_t dst_inner_dims_size = get_compile_time_arg_val(10);
-constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(11);
+// This chip's index on the axis: common runtime arg 1 (per device), set at kernel start.
+uint32_t current_device_id = 0;
+constexpr uint32_t num_devices = get_compile_time_arg_val(2);
+constexpr uint32_t split_dim_size = get_compile_time_arg_val(3);
+constexpr uint32_t inner_dims_size = get_compile_time_arg_val(4);
+constexpr uint32_t last_dim_size = get_compile_time_arg_val(5);
+constexpr uint32_t has_reader_tail = get_compile_time_arg_val(6);
+constexpr uint32_t has_writer_tail = get_compile_time_arg_val(7);
+constexpr uint32_t concat_num_tiles = get_compile_time_arg_val(8);
+constexpr uint32_t dst_inner_dims_size = get_compile_time_arg_val(9);
+constexpr uint32_t max_pages_per_packet = get_compile_time_arg_val(10);
 
 template <typename AddrGenType>
 void read_data(
@@ -97,13 +98,14 @@ void kernel_main() {
     ///////////////////////////////////////////////////
     size_t arg_idx = 0;
     address_t input_address = get_common_arg_val<address_t>(0);
+    current_device_id = get_common_arg_val<uint32_t>(1);
     uint32_t local_num_devices = get_arg_val<uint32_t>(arg_idx++);
-    constexpr auto input_tensor_args = TensorAccessorArgs<12>();
+    constexpr auto input_tensor_args = TensorAccessorArgs<11>();
     auto input_addrgen = TensorAccessor(input_tensor_args, input_address);
     constexpr uint32_t split_num_half_tiles = split_dim_size * 2 / num_devices;
     constexpr uint32_t split_num_tiles = (split_num_half_tiles + 1) / 2;
-    constexpr bool has_pre_half_tile = has_writer_tail && current_device_id % 2 == 1;
-    constexpr bool has_post_half_tile = has_writer_tail && current_device_id % 2 == 0;
+    const bool has_pre_half_tile = has_writer_tail && current_device_id % 2 == 1;
+    const bool has_post_half_tile = has_writer_tail && current_device_id % 2 == 0;
 
     Noc noc_obj;
     CircularBuffer cb0(cb0_id);
@@ -137,6 +139,24 @@ void kernel_main() {
         uint32_t block_idx = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_end_id = get_arg_val<uint32_t>(arg_idx++);
         const uint32_t block_stride = get_arg_val<uint32_t>(arg_idx++);
+#ifdef TILIZE_INPUT
+        // Row-major input: fetch each tile row (32 input rows) for the tilize kernel, which fills the packet buffer.
+        // The host keeps every range on whole tile rows with stride 1.
+        constexpr uint32_t tile_height = 32;
+        CircularBuffer cb_rows(ROWS_CB);
+        const auto rows = TensorAccessor(input_tensor_args, input_address, ROW_BYTES);
+        for (; block_idx < block_end_id; block_idx += TILES_PER_ROW) {
+            const auto [split_idx, inner_idx, concat_idx, tile_id, payload_size] = calculate_tile(block_idx);
+            const uint32_t first_row = tile_id / TILES_PER_ROW * tile_height;
+            cb_rows.reserve_back(TILES_PER_ROW);
+            const uint32_t rows_l1 = cb_rows.get_write_ptr();
+            for (uint32_t row = 0; row < tile_height; ++row) {
+                noc_async_read(rows.get_noc_addr(first_row + row), rows_l1 + row * ROW_BYTES, ROW_BYTES);
+            }
+            noc_async_read_barrier();
+            cb_rows.push_back(TILES_PER_ROW);
+        }
+#else
         while (block_idx < block_end_id) {
             if (packets_in_pair == 0) {
                 cb0.reserve_back(kPacketsPerPair);
@@ -173,6 +193,7 @@ void kernel_main() {
                 packets_in_pair = 0;
             }
         }
+#endif
     }
     if (packets_in_pair > 0) {
         noc_obj.async_read_barrier();

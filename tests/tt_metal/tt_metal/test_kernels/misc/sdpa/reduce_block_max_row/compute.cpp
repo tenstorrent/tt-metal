@@ -53,7 +53,7 @@ void kernel_main() {
 
     for (std::uint32_t i = 0; i < rows; i++) {
         tile_regs_acquire();
-        reduce_block_max_row_init<cols, /*respect_trigger=*/false>(tensor_shape, out_max_cb);
+        reduce_block_max_row_init<cols, /*respect_trigger=*/false>(tensor_shape, qk_im_cb, scale_cb, out_max_cb);
         reduce_block_max_row<cols, /*respect_trigger=*/false>(
             tensor_shape, qk_im_cb, scale_cb, i * cols, reduce_dst_idx);
         reduce_block_max_row_uninit(qk_im_cb);
