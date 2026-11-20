@@ -61,7 +61,7 @@ else
 fi
 
 # copy all files to all machines (pass user and hostfile)
-${TT_METAL_HOME}/tt-train/sources/examples/nano_gpt/3tier/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
+${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/all_machines_copy.sh --run --sync --user "$USER" --hostfile "$HOST_FILE"
 
 # install requirements
 mpirun-ulfm --hostfile ${HOST_FILE} --tag-output uv pip install -r ${TT_METAL_HOME}/tt-train/sources/examples/python/multihost/hierarchical_parallel/requirements.txt

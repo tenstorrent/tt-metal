@@ -47,19 +47,15 @@ TrainingSteps compute_training_steps(
     uint32_t sequence_length,
     uint32_t batch_size,
     uint32_t gradient_accumulation_steps,
-    uint32_t num_data_workers,
     uint32_t max_steps,
     uint32_t num_epochs) {
     if (dataset.get_size() == 0) {
         throw std::runtime_error(fmt::format(
             "Dataset is empty: {} holds fewer than sequence_length + 1 = {} tokens", data_path, sequence_length + 1));
     }
-    if (num_data_workers == 0U) {
-        throw std::runtime_error("num_data_workers must be positive");
-    }
     TrainingSteps steps;
     steps.steps_per_epoch = ttml::utils::steps_per_epoch(
-        dataset.get_num_tokens(), num_data_workers * batch_size * gradient_accumulation_steps, sequence_length);
+        dataset.get_num_tokens(), batch_size * gradient_accumulation_steps, sequence_length);
     steps.effective_max_steps = ttml::utils::resolve_effective_max_steps(max_steps, num_epochs, steps.steps_per_epoch);
     return steps;
 }

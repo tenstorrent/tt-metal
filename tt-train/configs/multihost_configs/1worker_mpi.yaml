@@ -1,4 +1,0 @@
-multihost_config:
-  enabled: true
-  num_workers: 1
-  socket_type: mpi

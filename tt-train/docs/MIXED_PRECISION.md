@@ -81,13 +81,14 @@ forward and backward keep running in bf16. This is not PyTorch FSDP2's `MixedPre
 names the compute dtype. It is applied by `core::apply_precision_config()`
 (`sources/ttml/core/parameter_dtype.{hpp,cpp}`) after the model is built and before the optimizer is created, so the
 optimizer state follows: in Python by `ttml.common.utils.create_optimizer()` when it is given the whole config (as in
-`train.py`), and in C++ by the `nano_gpt` runner and the 3-tier optimizer worker. Runners that pass only the optimizer
+`train.py`), and in C++ by the `nano_gpt` runner. Runners that pass only the optimizer
 section, such as the SFT and GRPO trainers, don't apply it. The load order is: build the model, convert, load
 weights, create the optimizer, then load a training checkpoint, which restores the optimizer state too. Every loader
 writes the dtype a tensor is stored in, so values loaded after the conversion keep their fp32 bits; loaded before it,
 they are rounded to bf16 first. `train.py` and the `nano_gpt` runner keep this order; `nano_gpt`'s save-and-exit path
 skips the conversion, so it exports the weights in the dtype the model builds.
-3-tier workers keep bf16 parameters for `RemoteOptimizer`; the optimizer worker holds the fp32 master weights.
+In the Python hierarchical example the workers keep bf16 parameters for `RemoteOptimizer`; the rank that runs the
+optimizer holds the fp32 master weights.
 The fp32 parameter is the master weight: fused `AdamW` updates it in place with fp32 moments, and forward and backward
 read its bf16 view, which is refreshed into its existing buffer the first time it is read after the step. Parameters
 managed by `ttml.fsdp.fully_shard` are the exception: FSDP swaps the gathered weight and the cached fp32 shard in with
@@ -154,9 +155,10 @@ the fused kernels require. Unset keeps the bf16 sum.
     measurements below is an HSDP run.
 - **Not covered yet.** GRPO, and `SFTTrainer` when it builds its own optimizer (from an optimizer dict, or its default
   `AdamW`), don't apply the precision block. They store no value, so their syncs keep the bf16 sum unless an earlier
-  config in the same process stored one. The aggregators of 2- and 3-tier training add the workers' gradients and
-  all-reduce them in bf16: the C++ 3-tier one, and `aggregator()` and `aggregator_optimizer()` in the Python
-  hierarchical example (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`).
+  config in the same process stored one. The aggregators of 2- and 3-tier training, `aggregator()` and
+  `aggregator_optimizer()` in the Python hierarchical example
+  (`sources/examples/python/multihost/hierarchical_parallel/trainer.py`), add the workers' gradients and all-reduce
+  them in bf16.
 
 The mean is cast back to bf16 rather than kept in fp32: a gradient is used once per step, so this costs one rounding,
 while the optimizer state and the master weights, which accumulate, stay in fp32 with `master_dtype: float32` (with
