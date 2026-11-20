@@ -41,7 +41,10 @@ targets:
               text_image_pcc: 1.0
               text_image_pcc_tolerance: 0.03
               edit_image_pcc: 1.0
-              edit_image_pcc_tolerance: 0.03
+              # The edit image amplifies small op rounding changes through the VAE encode and 40 denoising
+              # steps: correct softmax precision changes alone move it between 0.964 and 0.988 while the
+              # text image stays at 0.9902.
+              edit_image_pcc_tolerance: 0.05
             owner_id: U03HY7MK4BT
             team: models
   gemma4-31b-qb2:
@@ -55,6 +58,21 @@ targets:
               # The validator uses symmetric bands: 100 +/- 20% gives that floor.
               gpqa: 100
               gpqa_tolerance: 0.2
+            owner_id: U03HY7MK4BT
+            team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U03HY7MK4BT
+            team: models
+          - batch_size: 32
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
             owner_id: U03HY7MK4BT
             team: models
   gemma4-26b-a4b-qb2:
@@ -113,6 +131,49 @@ targets:
               # First 10/198 GPQA Diamond questions; require at least 9/10.
               gpqa: 100
               gpqa_tolerance: 0.1
+            owner_id: U08BGTAMU1W
+            team: models
+          # Serving perf shapes. Without these, the GPQA entry above applies to them and fails on a missing gpqa.
+          - batch_size: 1
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 1
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 8
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 128
+            status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U08BGTAMU1W
+            team: models
+          - batch_size: 16
+            seq_len: 1024
+            status: active
+            perf: {}
+            accuracy: {}
             owner_id: U08BGTAMU1W
             team: models
   # Consolidation: additive central-accuracy targets for models whose TTTv2 demo has no committed CI e2e
@@ -541,10 +602,9 @@ targets:
               decode_t/s: 45.6307
               prefill_t/s: 969.3269
               prefill_time_to_token: 0.0898
-              # 27.23 s (run 40213776008) -> 15.29 s (run 40227270371) after the FusedNormDecode runtime-arg
-              # change (the per-layer scalar no longer forks a JIT build per layer: 620 -> 542 builds).
-              compile_decode: 15.2906
-              compile_prefill: 21.9563
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 8.60-15.29 s, compile_prefill 12.46-21.96 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
             owner_id: U08TJ70UFRT # Harry Andrews
             team: models
@@ -592,8 +652,9 @@ targets:
               decode_t_s_tolerance: 0.2
               prefill_t/s: 936.1785
               prefill_time_to_token: 0.0929
-              compile_decode: 12.2
-              compile_prefill: 13.8983
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 2.92-12.30 s, compile_prefill 3.02-12.45 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
   gemma-4-e2b:
     aliases: ["gemma-4-e2b", "google/gemma-4-E2B-it", "gemma-4-e2b-it"]
@@ -997,11 +1058,13 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 21.1
-              decode_t/s: 84.4002
-              prefill_t/s: 3885.7
-              prefill_time_to_token: 0.0296
-              compile_prefill: 163.0123
+              # Means of the 11-16/17 runs on f10cs07/08/09 (decode: 25.0-25.8 t/s/u, 100.1-103.3 t/s) and of
+              # eight runs 11-04..11-17 on f10cs06-09 (prefill: 4374-4960 t/s, 23.2-26.3 ms; compile 134-164 s).
+              decode_t/s/u: 25.34
+              decode_t/s: 101.35
+              prefill_t/s: 4702.0
+              prefill_time_to_token: 0.0245
+              compile_prefill: 148.3
             accuracy: {}
           - batch_size: 8
             seq_len: null
@@ -1009,8 +1072,9 @@ targets:
             perf:
               decode_t/s/u: 25.8738
               decode_t/s: 206.9905
-              prefill_t/s: 6642.8391
-              prefill_time_to_token: 0.0173
+              # Means of five runs 11-07..11-17 on f10cs07/08/09: 6959-8209 t/s, 14.0-16.5 ms.
+              prefill_t/s: 7680.0
+              prefill_time_to_token: 0.0150
               # Includes the 1x1 logprob sampling precompile on the DP-8 submeshes.
               # +/-30%: runner-sensitive (90.4 s f10cs09, 101.8 s f10cs08).
               compile_prefill: 96.0
@@ -1057,11 +1121,14 @@ targets:
           # Specific entry so it wins over the catch-all for this config without disturbing
           # the b4/b1 runs above. Reseeded after removing dummy host-logprob copies:
           # run 36987762999, job 110780206653 measured 71.1432 t/s/u and 2276.5818 t/s.
+          # TTFT re-centred 2026-11-05 from 28 to 24.4 ms: six scheduled runs 10-31..11-05 on three
+          # QB2 hosts (qb2-120-p06t02, qb2-120-p02t06, qb2-120-p02t09) measured 23.77-24.70 ms, so the
+          # old 23.8 ms floor sat inside the normal spread (11-05 failed "much better than expected").
           - batch_size: 32
             seq_len: 712
             status: active
             perf:
-              prefill_time_to_first_token: 28
+              prefill_time_to_first_token: 24.4
               decode_t/s/u: 71.1
               decode_t/s: 2275.2
             accuracy: {}
@@ -1403,8 +1470,9 @@ targets:
             seq_len: null
             status: active
             perf:
-              decode_t/s/u: 9.3
-              decode_t/s: 9.3
+              # Mean of the 11-16/17 runs on f10cs05/06/07: 10.17-10.92 t/s.
+              decode_t/s/u: 10.44
+              decode_t/s: 10.44
               prefill_t/s: 12.8039
               prefill_time_to_token: 1.4058
               compile_decode: 35.88
@@ -1604,9 +1672,10 @@ targets:
           - batch_size: 32
             seq_len: 707
             status: active
-            # Seeded from scheduled run 27016350392 (ci eval-32).
+            # Seeded from scheduled run 27016350392 (ci eval-32). Decode re-centred on the 11-16/17 runs:
+            # 28.10-28.62 t/s/u on f10cs06/08/09.
             perf:
-              decode_t/s/u: 22.66
+              decode_t/s/u: 28.39
               prefill_time_to_first_token: 101
             accuracy: {}
       p300x2:
@@ -1663,16 +1732,11 @@ targets:
               # f10cs* host; centre on the mean with a 0.25 tolerance ([187.5, 312.5]).
               prefill_time_to_first_token: 250
               prefill_time_to_first_token_tolerance: 0.25
-              # b1 decode is run-to-run unstable: measured ~10.9-13.2 t/s across
-              # recent scheduled runs + 3 targeted reruns. The old 13.77 center
-              # sat at the top of the range, so its tol-0.15 floor (11.70) tripped
-              # on the low observations (10.87 on 06-30, 10.96 on a rerun).
-              # Recenter on the observed mean ~12 with a wide 0.2 tolerance
-              # ([9.6, 14.4]) to absorb the swing while still catching gross
-              # regressions (the one-off 07-01 collapse to 6.2 would still fail).
-              decode_t/s/u: 12.0
+              # b1 decode is run-to-run unstable, so it keeps a wide 0.2 tolerance. Centred on the mean of the
+              # 11-16/17 runs on f10cs05/07/09 (16.25-16.77 t/s): [13.2, 19.8].
+              decode_t/s/u: 16.49
               decode_t_s_u_tolerance: 0.2
-              decode_t/s: 12.0
+              decode_t/s: 16.49
               decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
@@ -1681,21 +1745,13 @@ targets:
             seq_len: 2048
             status: active
             perf:
-              # b32 decode throughput is strongly host-correlated on the
-              # wh_llmbox_perf T3K pool, not commit-correlated: healthy hosts
-              # (f10cs06/07/08/09) measure 311-406 t/s across the last 10
-              # scheduled runs, while the degraded host f10cs05 runs ~142-185
-              # (tracked as infra, INFRA-3). The default 0.15 tolerance made the
-              # gate flip between "too fast" (f10cs09 ~400 > 399.7 upper bound,
-              # 07-03) and "regression" (f10cs05, 07-01) purely by which box the
-              # scheduler picked. Keep center 347.6 and widen tolerance to 0.20
-              # ([278, 417]) to bracket the healthy-host spread; f10cs05's ~⅔
-              # readings still fail by design (do not lower the gate to mask a
-              # degraded host).
+              # b32 decode throughput is host-correlated on the wh_llmbox_perf T3K pool, so it keeps a 0.20
+              # tolerance. Centred on the mean of the 11-16/17 runs on f10cs05/07/09 (462.1-464.0 t/s,
+              # 14.44-14.50 t/s/u); a degraded host still fails by design.
               prefill_time_to_first_token: 1163
-              decode_t/s/u: 10.86
+              decode_t/s/u: 14.47
               decode_t_s_u_tolerance: 0.2
-              decode_t/s: 347.6
+              decode_t/s: 462.9
               decode_t_s_tolerance: 0.2
             accuracy: {}
             owner_id: U08JFM3CFA4 # Gongyu Wang
@@ -1874,9 +1930,9 @@ targets:
             seq_len: 686
             status: active
             perf:
-              # The T3K perf runners f10cs08 and f10cs09 measure 19.3-22.1 on the same code.
-              # f10cs06 measures about 14 and is meant to fail.
-              decode_t/s/u: 20.7
+              # The T3K perf runners differ on the same code: 21.2-24.5 on f10cs05/08/09 (11-16/17, four runs).
+              # Centred on their mean.
+              decode_t/s/u: 23.1
               decode_t_s_u_tolerance: 0.15
               prefill_time_to_first_token: 141
               prefill_time_to_first_token_tolerance: 0.15
@@ -2470,11 +2526,12 @@ targets:
             seq_len: 2048
             status: active
             perf:
-              decode_t/s/u: 20.4788
-              decode_t/s: 655.321
+              # decode and compile_decode: means of the 11-16/17 runs on f10cs05/06/07.
+              decode_t/s/u: 23.21
+              decode_t/s: 742.5
               prefill_t/s: 3118.0786
               prefill_time_to_token: 0.6568
-              compile_decode: 0.0533
+              compile_decode: 0.0430
             accuracy: {}
             owner_id: U08H31YMN4Q # Sanjay Sanjay
             team: models
@@ -2482,13 +2539,14 @@ targets:
             seq_len: 128
             status: active
             perf:
-              decode_t/s/u: 23.3354
-              decode_t/s: 23.3354
+              # decode and compile_decode: means of the 11-16/17 runs on f10cs05/06/07.
+              decode_t/s/u: 26.63
+              decode_t/s: 26.63
               prefill_t/s: 876.3
               # Batch-1 128-token TTFT is noisy on every T3K perf host, not tied to one runner:
               # 114.5-190.6 ms over 14 scheduled nights (10-15..10-28). Centred at the midpoint with +/-30%.
               prefill_time_to_token: 0.152
-              compile_decode: 0.0452
+              compile_decode: 0.0374
               # Widened to +/-30% (default is +/-15%): prefill_t/s swings across runs
               # (749.6 prior calibration vs 876.3 run 105412280076, ~15-17%). Observed
               # within +/-30% across runs (PR #59424, pt.9).
@@ -2523,8 +2581,9 @@ targets:
               # 128-token prefill on qb2-120-p05t08: 59.5 ms (run 40213776008), 61.6 ms (run 40227270371); the
               # 52 ms entry predates this branch. Re-centred on the latest measurement.
               prefill_time_to_token: 0.0616
-              compile_decode: 14.4349
-              compile_prefill: 14.163
+              # No compile_decode / compile_prefill target on QB2: cold-JIT compile time follows the runner's kernel
+              # cache, not the code. One commit measured compile_decode 8.56-14.60 s, compile_prefill 8.75-14.16 s across All Model Tests runs 43957134464,
+              # 44122157854, 44188503323 and 44244547108 (2026-11-16..18). The validator still prints the measured values.
             accuracy: {}
             owner_id: U088413NP0Q # Ashai Reddy
             team: models
@@ -2640,7 +2699,8 @@ targets:
         entries:
           - status: active
             perf:
-              fps: 0.0933
+              # Re-centred 2026-11-03 from 10 scheduled nights (10-25..11-03) on 7 QB2 hosts: 0.1051-0.1081 fps.
+              fps: 0.1060
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
             team: models
@@ -2663,6 +2723,16 @@ targets:
             perf: {}
             accuracy: {}
             owner_id: U0ATR08RCQ0 # James Lee
+            team: models
+  ideogram-4:
+    aliases: ["ideogram-4"]
+    skus:
+      bh_sc1:
+        entries:
+          - status: active
+            perf: {}
+            accuracy: {}
+            owner_id: U0ANYQF656Y # Rahmy Salman
             team: models
   wan-2.2-t2v:
     aliases: ["wan-2.2-t2v", "wan2.2"]

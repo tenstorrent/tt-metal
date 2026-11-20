@@ -40,10 +40,13 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include <cstdint>
 #include "strided_ring_reduce_scatter_common.hpp"
+#include "ttnn/operations/common/shared_with_host/runtime_length.hpp"
+#include "ttnn/operations/experimental/ccl/strided_reduce_scatter_async/device/kernels/strided_reduce_scatter_runtime_args.hpp"
 #include "api/tensor/noc_traits.h"
 
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
+namespace Crta = ttnn::experimental::ccl::strided_reduce_scatter_common_args;
 
 ///////////////////////////////////////////////////
 // COMPILE TIME ARGS
@@ -56,33 +59,25 @@ constexpr uint32_t cb_reader_output_id = get_compile_time_arg_val(3);
 constexpr uint32_t tile_granularity = get_compile_time_arg_val(4);
 constexpr uint32_t page_size = get_compile_time_arg_val(5);
 constexpr uint32_t num_tiles_to_write_per_packet = get_compile_time_arg_val(6);
-constexpr uint32_t output_batch_num_pages = get_compile_time_arg_val(7);
-[[maybe_unused]] constexpr uint32_t input_channel_num_pages =
-    get_compile_time_arg_val(8);  // C=1 is validated on host; reserved for future C>1 support
-[[maybe_unused]] constexpr uint32_t output_channel_num_pages =
-    get_compile_time_arg_val(9);  // C=1 is validated on host; reserved for future C>1 support
-constexpr uint32_t input_tensor_B = get_compile_time_arg_val(10);
-constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(11);
-constexpr uint32_t slice_C = get_compile_time_arg_val(12);
-constexpr uint32_t slice_Wt = get_compile_time_arg_val(13);
-constexpr uint32_t dim = get_compile_time_arg_val(14);
-constexpr uint32_t mm_M_unit_blocks_per_core = get_compile_time_arg_val(15);
-constexpr uint32_t mm_block_ht = get_compile_time_arg_val(16);
-constexpr uint32_t mm_cores_y = get_compile_time_arg_val(17);
-constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(18);
-constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(19);
-constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(20);
-constexpr uint32_t slice_Ht_per_core = get_compile_time_arg_val(21);
-constexpr uint32_t slice_Ht = get_compile_time_arg_val(22);
-constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(23);
-constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(24);
+constexpr uint32_t input_tensor_B = get_compile_time_arg_val(7);
+constexpr uint32_t input_tensor_Wt = get_compile_time_arg_val(8);
+constexpr uint32_t slice_C = get_compile_time_arg_val(9);
+constexpr uint32_t slice_Wt = get_compile_time_arg_val(10);
+constexpr uint32_t dim = get_compile_time_arg_val(11);
+constexpr uint32_t mm_block_ht = get_compile_time_arg_val(12);
+constexpr uint32_t mm_cores_y = get_compile_time_arg_val(13);
+constexpr uint32_t N_full_block_wt = get_compile_time_arg_val(14);
+constexpr uint32_t chunk_width_in_tiles = get_compile_time_arg_val(15);
+constexpr uint32_t chunks_per_mm_N_full_block = get_compile_time_arg_val(16);
+constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(17);
+constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(18);
 // The mux sits in program-local L1: its addresses here and in the runtime args are offsets from the map
 // address it publishes in semaphore fabric_mux_l1_base_semaphore_id.
-constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(25);
-constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(26);
-constexpr uint32_t num_mux_clients = get_compile_time_arg_val(27);
+constexpr uint32_t fabric_mux_l1_base_semaphore_id = get_compile_time_arg_val(19);
+constexpr size_t fabric_mux_termination_signal_offset = get_compile_time_arg_val(20);
+constexpr uint32_t num_mux_clients = get_compile_time_arg_val(21);
 
-constexpr uint32_t num_ct_args = 28;
+constexpr uint32_t num_ct_args = 22;
 
 constexpr ccl_routing_utils::line_unicast_route_info_t forward_unicast_route_info =
     ccl_routing_utils::get_line_unicast_route_info_from_args<num_ct_args>();
@@ -107,17 +102,24 @@ void kernel_main() {
     CircularBuffer cb_reader_output(cb_reader_output_id);
 
     uint32_t arg_idx = 0;
-    const address_t intermediate_address = get_arg_val<address_t>(arg_idx++);
-    const address_t output_address = get_arg_val<address_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_x = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t out_ready_sem_noc0_y = get_arg_val<uint32_t>(arg_idx++);
-    const size_t out_ready_sem = get_arg_val<uint32_t>(arg_idx++);
-    const size_t batch_ready_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool use_barrier_sem = get_arg_val<uint32_t>(arg_idx++);
-    const size_t barrier_sem = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);  // 1 is forward, 0 is backward
     const uint32_t worker_id = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_workers = get_arg_val<uint32_t>(arg_idx++);
+
+    // The row count, buffer addresses and semaphores are common runtime args (one word per launch).
+    const uint32_t slice_Ht = get_common_arg_val<uint32_t>(Crta::Writer::slice_Ht);
+    const address_t intermediate_address = get_common_arg_val<address_t>(Crta::Writer::intermediate);
+    const address_t output_address = get_common_arg_val<address_t>(Crta::Writer::output);
+    const size_t out_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::semaphore_0 + direction);
+    const size_t batch_ready_sem = get_common_arg_val<uint32_t>(Crta::Writer::batch_ready);
+    const size_t barrier_sem = get_common_arg_val<uint32_t>(Crta::Writer::barrier);
+    // Same split as the reader and the matmul's in0 kernels.
+    const uint32_t slice_Ht_per_core = ttnn::runtime_length::div_up(slice_Ht, mm_cores_y);
+    const uint32_t mm_M_unit_blocks_per_core = ttnn::runtime_length::div_up(slice_Ht_per_core, mm_block_ht);
+    const uint32_t output_batch_num_pages = slice_C * slice_Ht * slice_Wt;
     const bool mux_connection_valid = get_arg_val<uint32_t>(arg_idx++) == 1;
     const bool is_termination_master = get_arg_val<uint32_t>(arg_idx++);
     const uint8_t fabric_mux_x = get_arg_val<uint32_t>(arg_idx++);

@@ -261,6 +261,44 @@ class SessionTests(unittest.TestCase):
         self.assertFalse([url for _, url, _ in self.fixture.upstream.requests if "/cmake-dependency/" in url])
         self.finish()
 
+    def config_entries(self, file):
+        result = subprocess.run(
+            [self.env["CACHEW_REAL_GIT"], "config", "--file", str(file), "--null", "--list"],
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return [tuple(item.split("\n", 1)) for item in result.stdout.split("\0")[:-1]]
+
+    def url_setting(self, url, key):
+        result = subprocess.run(
+            [self.env["CACHEW_REAL_GIT"], "config", "--get-urlmatch", key, url],
+            cwd=self.fixture.workspace,
+            env=self.env,
+            text=True,
+            capture_output=True,
+        )
+        return result.stdout.strip() if result.returncode == 0 else None
+
+    def test_fallback_aborts_only_the_checked_out_repository_when_it_crawls(self):
+        # A fetch stuck on a lossy connection must fail fast so actions/checkout
+        # retries it on a new connection, instead of crawling until the job
+        # times out. Submodule updates are not retried, so they stay unlimited.
+        self.fixture.cache.health = 503
+        self.prepare()
+        repository = f"{self.fixture.upstream.url}/{self.env['CACHEW_REPOSITORY']}"
+        self.assertEqual(self.url_setting(repository, "http.lowSpeedLimit"), "524288")
+        self.assertEqual(self.url_setting(repository, "http.lowSpeedTime"), "60")
+        self.assertIsNone(self.url_setting(f"{self.fixture.upstream.url}/org/submodule", "http.lowSpeedLimit"))
+        self.assertFalse(self.fixture.attempt())
+        self.checkout()
+        self.assertTrue(self.fixture.upstream.requests)
+        self.assertFalse(self.activate())
+        # Later steps use global.config, which never carries the fallback limit.
+        self.assertIsNone(self.url_setting(repository, "http.lowSpeedLimit"))
+        self.finish()
+
     def test_inherited_rewrite_cannot_redirect_unhealthy_fallback(self):
         key = f"url.{self.fixture.cache.url}/git/{self.fixture.upstream.server.server_address[0]}:{self.fixture.upstream.server.server_port}/.insteadOf"
         fixtures.git(self.fixture.workspace, "config", "--global", key, self.fixture.upstream.url + "/", env=self.env)
@@ -600,8 +638,9 @@ class SessionTests(unittest.TestCase):
         upstream_auth = [auth for _, url, auth in self.fixture.upstream.requests if "/org/main/" in url]
         self.assertTrue(upstream_auth and all(auth and auth.lower() == primary.lower() for auth in upstream_auth))
         for name in ("global.config", "checkout.config"):
-            text = (directory / name).read_text()
-            self.assertNotIn(f'[http "{self.fixture.upstream.url}', text)
+            for key, _ in self.config_entries(directory / name):
+                if key.startswith(f"http.{self.fixture.upstream.url}".lower()):
+                    self.assertNotEqual(key.rsplit(".", 1)[1], "extraheader", f"{name}: {key}")
         self.finish()
 
     def run_prepare_expecting_fallback(self, env):
