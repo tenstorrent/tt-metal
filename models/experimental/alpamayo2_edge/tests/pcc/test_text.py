@@ -12,7 +12,7 @@ from loguru import logger
 
 import ttnn
 from models.experimental.alpamayo2_edge.reference import golden_cache
-from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
+from models.experimental.alpamayo2_edge.reference.model import MAX_NEW_TOKENS, ReferenceModel
 from models.experimental.alpamayo2_edge.reference.text import (
     MLP,
     DecoderLayer,
@@ -24,6 +24,7 @@ from models.experimental.alpamayo2_edge.reference.weights import load_weights
 from models.experimental.alpamayo2_edge.tests._util import PCC, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
 from models.experimental.alpamayo2_edge.tt.common import round_up
+from models.experimental.alpamayo2_edge.tt.model_config import LM_FFN_DTYPE, LM_HEAD_DTYPE
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache, ReluSquaredFeedForward, TtLanguageModel
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
@@ -56,7 +57,7 @@ def test_lm_head_dtype(mesh_device, cfg):
     config = TtLanguageModel.config_from(replace(cfg.text, layers=1))
     default = TtLanguageModel(config, device=mesh_device)
     bf16 = TtLanguageModel(config, device=mesh_device, lm_head_dtype=ttnn.bfloat16)
-    assert default.final_linear.weight.dtype == ttnn.bfloat8_b
+    assert default.final_linear.weight.dtype == LM_HEAD_DTYPE
     assert bf16.final_linear.weight.dtype == ttnn.bfloat16
     assert bf16.final_linear.weight.total_shape == default.final_linear.weight.total_shape
 
@@ -69,7 +70,7 @@ def test_relu2_ffn(mesh_device, cfg, lm_weights):
     with torch.no_grad():
         golden = reference(x)
 
-    ffn = ReluSquaredFeedForward(cfg.text.hidden, cfg.text.mlp, mesh_device=mesh_device)
+    ffn = ReluSquaredFeedForward(cfg.text.hidden, cfg.text.mlp, mesh_device=mesh_device, dtype=LM_FFN_DTYPE)
     ffn.load_torch_state_dict(
         {
             "linear_in.weight": lm_weights["layers.0.mlp.fc1.weight"],
@@ -156,7 +157,9 @@ def test_prefill(mesh_device, cfg, lm_weights, head_weights, sample_inputs):
     model = TtLanguageModel(TtLanguageModel.config_from(cfg.text), device=mesh_device)
     model.load_torch_state_dict(TtLanguageModel.convert_state(lm_weights, head_weights))
     cache = AlpamayoCache(
-        device=mesh_device, size=AlpamayoCache.size_for(seq, max_new_tokens=256, action_rows=64), batch_size=1
+        device=mesh_device,
+        size=AlpamayoCache.size_for(seq, max_new_tokens=MAX_NEW_TOKENS, action_rows=64),
+        batch_size=1,
     )
 
     logits = model.prefill(
@@ -210,7 +213,7 @@ def test_cache_from_reference(mesh_device, cfg):
             torch.randn(1, tcfg.kv_heads, rows, tcfg.head_dim),
             torch.randn(1, tcfg.kv_heads, rows, tcfg.head_dim),
         )
-    size = AlpamayoCache.size_for(rows, max_new_tokens=256, action_rows=64)
+    size = AlpamayoCache.size_for(rows, max_new_tokens=MAX_NEW_TOKENS, action_rows=64)
     cache = AlpamayoCache.from_reference(kv, size=size, mesh_device=mesh_device)
     assert cache.size == size and cache.batch_size == 1
     assert int(tensor.to_torch(cache.position)[0]) == rows

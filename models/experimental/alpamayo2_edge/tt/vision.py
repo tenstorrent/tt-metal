@@ -17,6 +17,7 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference.config import ProjectorConfig, VisionConfig
 from models.experimental.alpamayo2_edge.reference.vision import vision_position_embeddings
 from models.experimental.alpamayo2_edge.tt.common import drop_unbuilt_layers, round_up
+from models.experimental.alpamayo2_edge.tt.model_config import PROJECTOR_WEIGHT_DTYPE
 from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionBlock, Qwen3VlVisionPatchMerger
 from models.tt_dit.encoders.vision import VisionPatchEmbed
 from models.tt_dit.layers.linear import Linear
@@ -24,9 +25,6 @@ from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import LayerNorm
 from models.tt_dit.utils.tensor import bf16_tensor
 
-_HIDDEN_ACT = "gelu_pytorch_tanh"
-# Hard-coded in the upstream patch merger rather than read from the config.
-_PROJECTOR_NORM_EPS = 1e-6
 # Checkpoint key of the learned position grid, which `PosEmbedCache` takes on the host.
 POS_EMBED_KEY = "embeddings.position_embedding.weight"
 
@@ -73,13 +71,17 @@ class TtProjector(Qwen3VlVisionPatchMerger):
             hidden_size=vcfg.hidden,
             out_hidden_size=pcfg.out,
             spatial_merge_size=vcfg.merge,
-            norm_eps=_PROJECTOR_NORM_EPS,
+            norm_eps=pcfg.norm_eps,
             use_postshuffle_norm=False,
             mesh_device=mesh_device,
         )
         # Parameters are allocated when loaded, so the replaced linears cost nothing.
-        self.linear_fc1 = Linear(self.merged_size, pcfg.hidden, bias=True, mesh_device=mesh_device)
-        self.linear_fc2 = Linear(pcfg.hidden, pcfg.out, bias=True, mesh_device=mesh_device)
+        self.linear_fc1 = Linear(
+            self.merged_size, pcfg.hidden, bias=True, dtype=PROJECTOR_WEIGHT_DTYPE, mesh_device=mesh_device
+        )
+        self.linear_fc2 = Linear(
+            pcfg.hidden, pcfg.out, bias=True, dtype=PROJECTOR_WEIGHT_DTYPE, mesh_device=mesh_device
+        )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         """`[N, hidden]` -> `[N // merge**2, out]`."""
@@ -109,7 +111,7 @@ class TtVisionTower(Module):
                 hidden_size=vcfg.hidden,
                 num_heads=vcfg.heads,
                 intermediate_size=vcfg.mlp,
-                hidden_act=_HIDDEN_ACT,
+                hidden_act=vcfg.hidden_act,
                 norm_eps=vcfg.eps,
                 mesh_device=mesh_device,
             )

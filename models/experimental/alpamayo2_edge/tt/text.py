@@ -16,6 +16,7 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference.config import TextConfig
 from models.experimental.alpamayo2_edge.reference.text import KVCache
 from models.experimental.alpamayo2_edge.tt.common import drop_unbuilt_layers, round_up
+from models.experimental.alpamayo2_edge.tt.model_config import LM_FFN_DTYPE, LM_HEAD_DTYPE, LM_QKV_DTYPE
 from models.tt_dit.blocks.rope import RopeConfig
 from models.tt_dit.encoders.transformer import (
     LINEAR_DTYPE,
@@ -47,7 +48,7 @@ class ReluSquaredFeedForward(Module):
     """`linear_out(relu(linear_in(x)) ** 2)`, unsharded, without biases."""
 
     def __init__(
-        self, embed_size: int, hidden_size: int, *, mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType = LINEAR_DTYPE
+        self, embed_size: int, hidden_size: int, *, mesh_device: ttnn.MeshDevice, dtype: ttnn.DataType
     ) -> None:
         super().__init__()
         self.linear_in = ColParallelLinear(
@@ -143,16 +144,17 @@ class TtLanguageModel(TransformerEncoder):
         config: TransformerEncoderConfig,
         *,
         device: ttnn.MeshDevice,
-        lm_head_dtype: ttnn.DataType = LINEAR_DTYPE,
+        lm_head_dtype: ttnn.DataType = LM_HEAD_DTYPE,
     ) -> None:
         """
         Args:
-            lm_head_dtype: Weight dtype of the vocabulary projection; tt_dit's linear default is bf8.
+            lm_head_dtype: Weight dtype of the vocabulary projection.
         """
         super().__init__(config, device=device)
         # Parameters are allocated when loaded, so the replaced modules cost nothing.
         for layer in self.layers:
-            layer.ff = ReluSquaredFeedForward(config.embed_size, config.ff_size, mesh_device=device)
+            layer.ff = ReluSquaredFeedForward(config.embed_size, config.ff_size, mesh_device=device, dtype=LM_FFN_DTYPE)
+        # The encoder builds its head at LINEAR_DTYPE; another dtype needs a head of its own.
         if self.final_linear is not None and lm_head_dtype != LINEAR_DTYPE:
             self.final_linear = ColParallelLinear(
                 config.embed_size,
@@ -176,6 +178,7 @@ class TtLanguageModel(TransformerEncoder):
             attn_qkv_bias=False,
             attn_out_bias=False,
             attn_qk_norm=False,
+            attn_qkv_dtype=LM_QKV_DTYPE,
             vocab_size=tcfg.vocab,
             rope_config=RopeConfig(
                 theta=tcfg.rope_theta, mrope_section=list(tcfg.mrope_section), mrope_interleaved=True

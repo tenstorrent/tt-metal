@@ -13,7 +13,7 @@ from models.experimental.alpamayo2_edge.reference.action import expert_mask
 from models.experimental.alpamayo2_edge.reference.config import load_config, resolve_model_dir
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
 from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
-from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
+from models.experimental.alpamayo2_edge.reference.model import MAX_NEW_TOKENS, ReferenceModel
 from models.experimental.alpamayo2_edge.reference.weights import load_weights, make_random_checkpoint
 from models.experimental.alpamayo2_edge.tests._util import reference_cache
 from models.experimental.alpamayo2_edge.tt.common import round_up
@@ -110,7 +110,7 @@ def expert_setup(mesh_device, cfg, sample_inputs, prefix) -> tuple[AlpamayoCache
     prefix_len = int(offsets.max())
     p_pad = round_up(prefix_len, ttnn.TILE_SIZE)
     assert p_pad > prefix_len, "the sample must leave rows between the prefix and p_pad to poison"
-    size = AlpamayoCache.size_for(inputs.input_ids.shape[1], max_new_tokens=256, action_rows=n)
+    size = AlpamayoCache.size_for(inputs.input_ids.shape[1], max_new_tokens=MAX_NEW_TOKENS, action_rows=n)
     assert size >= p_pad + n
 
     kv = reference_cache(prefix)

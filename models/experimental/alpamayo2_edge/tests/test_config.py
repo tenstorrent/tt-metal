@@ -2,11 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import replace
+from pathlib import Path
 
+import huggingface_hub
 import pytest
 
-from models.experimental.alpamayo2_edge.reference.config import load_config, validate_supported
+from models.experimental.alpamayo2_edge.reference.config import (
+    MODEL_REVISION,
+    load_config,
+    resolve_model_dir,
+    validate_supported,
+)
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
 from models.experimental.alpamayo2_edge.tests._util import full_depth_only
 
@@ -17,6 +25,28 @@ def test_config_matches_checkpoint(cfg):
     assert (cfg.expert.hidden, cfg.expert.layers, cfg.expert.mlp) == (512, 28, 3840)
     assert cfg.vision.layers == 27 and cfg.projector.hidden == 11520
     assert cfg.tokens.future_start == 135084
+    # Upstream constants the checkpoint does not carry (`reference/config.py`), and the vision activation it does.
+    assert (cfg.projector.norm_eps, cfg.action.in_proj_norm_eps) == (1e-6, 1e-5)
+    assert cfg.vision.hidden_act == "gelu_pytorch_tanh"
+
+
+@pytest.mark.skipif(bool(os.environ.get("ALPAMAYO_REVISION")), reason="ALPAMAYO_REVISION selects another snapshot")
+def test_model_dir_is_the_pinned_revision(model_dir):
+    assert model_dir.name == MODEL_REVISION
+    # The README's download command must fetch the same snapshot.
+    assert MODEL_REVISION in (Path(__file__).parents[1] / "README.md").read_text()
+
+
+@pytest.mark.parametrize("override, expected", [(None, MODEL_REVISION), ("main", "main")])
+def test_resolve_model_dir_revision(override, expected, monkeypatch):
+    calls = []
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", lambda repo, revision: calls.append(revision) or "/x")
+    if override is None:
+        monkeypatch.delenv("ALPAMAYO_REVISION", raising=False)
+    else:
+        monkeypatch.setenv("ALPAMAYO_REVISION", override)
+    resolve_model_dir()
+    assert calls == [expected]
 
 
 def test_weights_prefixes(model_dir):
@@ -70,6 +100,7 @@ def test_action_config_matches_checkpoint(cfg, model_dir):
         ("expert", {"layers": 27}, r"KV-cache geometry \(layers\)"),
         ("expert", {"kv_heads": 4}, r"KV-cache geometry \(kv_heads\)"),
         ("expert", {"head_dim": 64}, r"KV-cache geometry \(head_dim\)"),
+        ("vision", {"hidden_act": "gelu"}, "tanh-approximated GELU"),
     ],
 )
 def test_unsupported_config_rejected(cfg, part, change, message, expect_error):

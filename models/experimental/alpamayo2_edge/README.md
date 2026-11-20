@@ -16,7 +16,8 @@ lists each host step with its call site and the reason it stays on the host.
 
 ```
 reference/   pure-torch reference (the golden for every test), input preparation, host-op inventory
-tt/          vision.py, text.py (LM + cache), generate.py (CoT loop), expert.py, action.py, model.py
+tt/          vision.py, text.py (LM + cache), generate.py (CoT loop), expert.py, action.py, model.py,
+             model_config.py (weight dtypes and compute fidelity per block)
 tests/       host tests, pcc/ per block, e2e/ end to end
 demo/        demo.py
 ```
@@ -28,12 +29,13 @@ demo/        demo.py
 
    ```bash
    export HF_HOME=/path/to/hf_data
-   python -c 'from huggingface_hub import snapshot_download; snapshot_download("nvidia/Alpamayo2-Edge")'
+   python -c 'from huggingface_hub import snapshot_download; snapshot_download("nvidia/Alpamayo2-Edge", revision="b92b6aa326bd3e2235db28f248ad5a30b5890e64")'
    ```
 
-   Every entry point resolves the checkpoint with `snapshot_download("nvidia/Alpamayo2-Edge")`.
-   After the download, set `HF_HUB_OFFLINE=1` to skip the network check. The tested snapshot is
-   `b92b6aa326bd3e2235db28f248ad5a30b5890e64`.
+   Every entry point resolves the checkpoint at that revision (`reference/config.py` `MODEL_REVISION`),
+   the snapshot every number in this README was measured on. `ALPAMAYO_REVISION=<commit or branch>`
+   selects another one; with `HF_HUB_OFFLINE=1` it must already be in the cache. After the download, set
+   `HF_HUB_OFFLINE=1` to skip the network check.
 
 ## Demo
 
@@ -219,6 +221,7 @@ logits readback and host sampling.
   is not measured. Which permissively licensed driving dataset to use for it is still open.
 - **Weights:** the vision tower and projector linears are bf16 (the tt_dit `Linear` default). The LM
   linears are bf8 (the tt_dit encoder default). The expert and the action projections are bf16.
+  `tt/model_config.py` holds the choices the port can change.
 
 ## tt_dit internals this package relies on
 

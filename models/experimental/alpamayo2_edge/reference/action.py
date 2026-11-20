@@ -41,7 +41,7 @@ class _RMSNorm(nn.Module):
     """Upstream `ActionInProj`'s RMSNorm: `text.RMSNorm` takes its weight at construction, this one is filled by
     `load_state_dict` from the checkpoint's `encoder.trunk.*` keys."""
 
-    def __init__(self, dim: int, eps: float = 1e-5):
+    def __init__(self, dim: int, eps: float):
         super().__init__()
         self.eps = eps
         self.weight = nn.Parameter(torch.ones(dim), requires_grad=False)
@@ -84,7 +84,7 @@ class ActionInProj(nn.Module):
         layers: list[nn.Module] = [nn.Linear(in_features, hidden), nn.SiLU()]
         for i in range(acfg.in_proj_layers):
             last = i == acfg.in_proj_layers - 1
-            layers += [_RMSNorm(hidden), nn.Linear(hidden, out_dim if last else hidden)]
+            layers += [_RMSNorm(hidden, acfg.in_proj_norm_eps), nn.Linear(hidden, out_dim if last else hidden)]
             if not last:
                 layers.append(nn.SiLU())
         self.encoder = nn.Module()

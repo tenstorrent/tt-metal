@@ -21,16 +21,6 @@ def single_device_ctx(mesh_device: ttnn.MeshDevice) -> TransformerContext:
     return TransformerContext(device=mesh_device, tp_axis=None, ccl_manager=None, sp_axis=None, fsdp_axis=None)
 
 
-def accurate_compute_config(mesh_device: ttnn.MeshDevice) -> ttnn.DeviceComputeKernelConfig:
-    """HiFi4 with fp32 accumulation, for the small expert and action ops whose error feeds the 10-step flow."""
-    return ttnn.init_device_compute_kernel_config(
-        mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.HiFi4,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-    )
-
-
 def drop_unbuilt_layers(state: dict[str, torch.Tensor], prefix: str, built: int) -> None:
     """Removes the entries of `prefix`-indexed layers at index `built` and deeper, in place.
 

@@ -19,13 +19,13 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference.action import expert_mask, expert_position_ids
 from models.experimental.alpamayo2_edge.reference.config import TextConfig
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
-from models.experimental.alpamayo2_edge.tt.common import (
-    accurate_compute_config,
-    drop_unbuilt_layers,
-    round_up,
-    single_device_ctx,
-)
+from models.experimental.alpamayo2_edge.tt.common import drop_unbuilt_layers, round_up, single_device_ctx
 from models.experimental.alpamayo2_edge.tt.generate import CotResult
+from models.experimental.alpamayo2_edge.tt.model_config import (
+    EXPERT_ROPE_DTYPE,
+    EXPERT_WEIGHT_DTYPE,
+    accurate_compute_config,
+)
 from models.experimental.alpamayo2_edge.tt.text import STATE_CONVERSION, AlpamayoCache, ReluSquaredFeedForward
 from models.tt_dit.blocks.rope import RopeConfig, RotaryEmbedding
 from models.tt_dit.encoders.transformer import MAX_CHUNK_SIZE, TransformerRmsNorm
@@ -83,7 +83,7 @@ def make_expert_frame(
     positions = expert_position_ids(cot.offsets, rope_deltas, n_waypoints)[0]
     rope = RotaryEmbedding(head_size=ecfg.head_dim, config=RopeConfig(theta=ecfg.rope_theta))
     cos, sin = rope.forward(
-        tensor.from_torch(positions.float(), device=mesh_device, dtype=ttnn.float32), dtype=ttnn.bfloat16
+        tensor.from_torch(positions.float(), device=mesh_device, dtype=ttnn.float32), dtype=EXPERT_ROPE_DTYPE
     )
 
     # Columns from a sample's offset to p_pad are text after its anchor, or rows no sample wrote: both masked.
@@ -114,11 +114,11 @@ class TtExpertAttention(Module):
             ecfg.hidden,
             (ecfg.heads + 2 * ecfg.kv_heads) * ecfg.head_dim,
             bias=False,
-            dtype=ttnn.bfloat16,
+            dtype=EXPERT_WEIGHT_DTYPE,
             mesh_device=mesh_device,
         )
         self.o_proj = Linear(
-            ecfg.heads * ecfg.head_dim, ecfg.hidden, bias=False, dtype=ttnn.bfloat16, mesh_device=mesh_device
+            ecfg.heads * ecfg.head_dim, ecfg.hidden, bias=False, dtype=EXPERT_WEIGHT_DTYPE, mesh_device=mesh_device
         )
         self._device = mesh_device
         self._compute_kernel_config = accurate_compute_config(mesh_device)
@@ -188,7 +188,7 @@ class TtExpertLayer(Module):
         self.attn_norm = TransformerRmsNorm(ecfg.hidden, eps=ecfg.eps, ctx=ctx)
         self.attn = TtExpertAttention(ecfg, mesh_device=mesh_device)
         self.ff_norm = TransformerRmsNorm(ecfg.hidden, eps=ecfg.eps, ctx=ctx)
-        self.ff = ReluSquaredFeedForward(ecfg.hidden, ecfg.mlp, mesh_device=mesh_device, dtype=ttnn.bfloat16)
+        self.ff = ReluSquaredFeedForward(ecfg.hidden, ecfg.mlp, mesh_device=mesh_device, dtype=EXPERT_WEIGHT_DTYPE)
 
     def forward(self, x: ttnn.Tensor, *, layer_kv: tuple[ttnn.Tensor, ttnn.Tensor], frame: ExpertFrame) -> ttnn.Tensor:
         x = x + self.attn.forward(self.attn_norm.forward(x), layer_kv=layer_kv, frame=frame)

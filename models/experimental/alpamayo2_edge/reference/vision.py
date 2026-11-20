@@ -27,6 +27,9 @@ import torch.nn.functional as F
 
 from models.experimental.alpamayo2_edge.reference.config import ProjectorConfig, VisionConfig
 
+# The vision MLP activations by config name; `validate_supported` admits only the ones both paths implement.
+_ACTIVATIONS = {"gelu_pytorch_tanh": lambda x: F.gelu(x, approximate="tanh")}
+
 
 def vision_cu_seqlens(grid_thw: torch.Tensor) -> list[int]:
     """Cumulative patch counts delimiting each image or video frame in the packed sequence."""
@@ -83,6 +86,7 @@ class VisionBlock(nn.Module):
         self.out_proj = _linear(weights, f"{prefix}self_attn.out_proj", dtype)
         self.fc1 = _linear(weights, f"{prefix}mlp.fc1", dtype)
         self.fc2 = _linear(weights, f"{prefix}mlp.fc2", dtype)
+        self.act = _ACTIVATIONS[vcfg.hidden_act]
 
     def attention(self, x: torch.Tensor, cu_seqlens: list[int]) -> torch.Tensor:
         n = x.shape[0]
@@ -98,7 +102,7 @@ class VisionBlock(nn.Module):
 
     def forward(self, x: torch.Tensor, cu_seqlens: list[int]) -> torch.Tensor:
         x = x + self.attention(self.layer_norm1(x), cu_seqlens)
-        h = self.fc2(F.gelu(self.fc1(self.layer_norm2(x)), approximate="tanh"))
+        h = self.fc2(self.act(self.fc1(self.layer_norm2(x))))
         return x + h
 
 
@@ -126,7 +130,7 @@ class VisionTower(nn.Module):
             VisionBlock(vcfg, weights_visual, f"encoder.layers.{i}.", dtype) for i in range(vcfg.layers)
         )
         self.post_layernorm = _layer_norm(weights_visual, "post_layernorm", vcfg.eps, dtype)
-        self.proj_norm = _layer_norm(weights_projector, "norm", 1e-6, dtype)
+        self.proj_norm = _layer_norm(weights_projector, "norm", pcfg.norm_eps, dtype)
         self.linear_fc1 = _linear(weights_projector, "linear_fc1", dtype)
         self.linear_fc2 = _linear(weights_projector, "linear_fc2", dtype)
 

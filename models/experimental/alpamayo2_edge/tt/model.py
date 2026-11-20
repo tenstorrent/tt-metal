@@ -24,15 +24,15 @@ from models.experimental.alpamayo2_edge.reference.config import (
     validate_supported,
 )
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
-from models.experimental.alpamayo2_edge.reference.model import Prediction
+from models.experimental.alpamayo2_edge.reference.model import MAX_NEW_TOKENS, Prediction
 from models.experimental.alpamayo2_edge.reference.vision import vision_cu_seqlens
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
 from models.experimental.alpamayo2_edge.tt.action import TtActionInProj, TtActionOutProj, sample_actions_tt
 from models.experimental.alpamayo2_edge.tt.expert import TtExpert, make_expert_frame
 from models.experimental.alpamayo2_edge.tt.generate import CotResult, check_generation_args, generate_cot
+from models.experimental.alpamayo2_edge.tt.model_config import LM_HEAD_DTYPE
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache, TtLanguageModel
 from models.experimental.alpamayo2_edge.tt.vision import POS_EMBED_KEY, PosEmbedCache, TtVisionTower
-from models.tt_dit.encoders.transformer import LINEAR_DTYPE
 from models.tt_dit.utils import tensor
 
 
@@ -78,13 +78,13 @@ class Alpamayo2EdgeTT:
         mesh_device: ttnn.MeshDevice,
         cfg: Alpamayo2EdgeConfig | None = None,
         *,
-        lm_head_dtype: ttnn.DataType = LINEAR_DTYPE,
+        lm_head_dtype: ttnn.DataType = LM_HEAD_DTYPE,
     ) -> Alpamayo2EdgeTT:
         """Builds every block at the config's depths and loads the checkpoint into it.
 
         Args:
             cfg: Defaults to the `nvidia/Alpamayo2-Edge` snapshot, with the `ALPAMAYO_NUM_LAYERS` override.
-            lm_head_dtype: Weight dtype of the LM's vocabulary projection; tt_dit's linear default is bf8.
+            lm_head_dtype: Weight dtype of the LM's vocabulary projection.
         """
         if cfg is None:
             cfg = load_config(resolve_model_dir())
@@ -135,7 +135,7 @@ class Alpamayo2EdgeTT:
         forced_cot: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
         seed: int = 0,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = MAX_NEW_TOKENS,
         keep_intermediates: bool = False,
     ) -> TtRun:
         """`infer`, plus the CoT result and stage timings.
@@ -218,7 +218,7 @@ class Alpamayo2EdgeTT:
         forced_cot: torch.Tensor | None = None,
         noise: torch.Tensor | None = None,
         seed: int = 0,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = MAX_NEW_TOKENS,
     ) -> Prediction:
         """`num_samples` trajectories of one prompt, each with its own sampled CoT.
 

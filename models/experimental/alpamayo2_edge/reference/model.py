@@ -46,6 +46,7 @@ from models.experimental.alpamayo2_edge.reference.weights import load_weights
 # Upstream `sample_trajectories_from_data` defaults.
 TEMPERATURE = 0.6
 TOP_P = 0.98
+MAX_NEW_TOKENS = 256
 
 
 @dataclass
@@ -205,7 +206,7 @@ class ReferenceModel:
         *,
         forced: torch.Tensor | None = None,
         seed: int = 0,
-        max_new_tokens: int = 256,
+        max_new_tokens: int = MAX_NEW_TOKENS,
     ) -> CotOut:
         """Sample (or teacher-force) the CoT on the prefill cache, leaving it cropped to the longest CoT.
 

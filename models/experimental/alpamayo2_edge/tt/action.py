@@ -17,17 +17,15 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference.action import FourierEncoder, euler_sample
 from models.experimental.alpamayo2_edge.reference.config import ActionConfig
-from models.experimental.alpamayo2_edge.tt.common import accurate_compute_config, single_device_ctx
+from models.experimental.alpamayo2_edge.tt.common import single_device_ctx
 from models.experimental.alpamayo2_edge.tt.expert import ExpertFrame, TtExpert
+from models.experimental.alpamayo2_edge.tt.model_config import ACTION_WEIGHT_DTYPE, accurate_compute_config
 from models.experimental.alpamayo2_edge.tt.text import AlpamayoCache
 from models.tt_dit.encoders.transformer import TransformerRmsNorm
 from models.tt_dit.layers.linear import Linear
 from models.tt_dit.layers.module import Module, ModuleList
 from models.tt_dit.layers.normalization import LayerNorm
 from models.tt_dit.utils import tensor
-
-# The trunk's RMSNorm epsilon, as in the reference and upstream `ActionInProj`.
-_RMS_EPS = 1e-5
 
 
 def action_features(x: torch.Tensor, t: torch.Tensor, acfg: ActionConfig) -> torch.Tensor:
@@ -63,14 +61,20 @@ class TtActionInProj(Module):
         self.mesh_device = mesh_device
         self.in_features = acfg.fourier_feats * (acfg.action_dim + 1)
         self.trunk_in = Linear(
-            self.in_features, hidden, activation_fn="silu", mesh_device=mesh_device, compute_kernel_config=compute
+            self.in_features,
+            hidden,
+            activation_fn="silu",
+            dtype=ACTION_WEIGHT_DTYPE,
+            mesh_device=mesh_device,
+            compute_kernel_config=compute,
         )
-        self.norms = ModuleList(TransformerRmsNorm(hidden, eps=_RMS_EPS, ctx=ctx) for _ in range(layers))
+        self.norms = ModuleList(TransformerRmsNorm(hidden, eps=acfg.in_proj_norm_eps, ctx=ctx) for _ in range(layers))
         self.linears = ModuleList(
             Linear(
                 hidden,
                 out_dim if i == layers - 1 else hidden,
                 activation_fn=None if i == layers - 1 else "silu",
+                dtype=ACTION_WEIGHT_DTYPE,
                 mesh_device=mesh_device,
                 compute_kernel_config=compute,
             )
@@ -107,7 +111,11 @@ class TtActionOutProj(Linear):
 
     def __init__(self, hidden: int, action_dim: int, *, mesh_device: ttnn.MeshDevice) -> None:
         super().__init__(
-            hidden, action_dim, mesh_device=mesh_device, compute_kernel_config=accurate_compute_config(mesh_device)
+            hidden,
+            action_dim,
+            dtype=ACTION_WEIGHT_DTYPE,
+            mesh_device=mesh_device,
+            compute_kernel_config=accurate_compute_config(mesh_device),
         )
 
 

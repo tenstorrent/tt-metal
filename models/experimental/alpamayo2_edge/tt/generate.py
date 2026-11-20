@@ -19,6 +19,7 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference.config import TokenIds
 from models.experimental.alpamayo2_edge.reference.inputs import ModelInputs
 from models.experimental.alpamayo2_edge.reference.model import (
+    MAX_NEW_TOKENS,
     TEMPERATURE,
     TOP_P,
     find_anchor_offsets,
@@ -85,7 +86,7 @@ def generate_cot(
     num_samples: int = 1,
     forced: torch.Tensor | None = None,
     seed: int = 0,
-    max_new_tokens: int = 256,
+    max_new_tokens: int = MAX_NEW_TOKENS,
     return_logits: bool = False,
 ) -> CotResult:
     """Prefills the prompt into `cache`, then samples (or teacher-forces) `num_samples` CoTs to their anchors.

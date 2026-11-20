@@ -19,7 +19,7 @@ import ttnn
 from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.action import action_to_traj
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
-from models.experimental.alpamayo2_edge.reference.model import TEMPERATURE, ReferenceModel
+from models.experimental.alpamayo2_edge.reference.model import MAX_NEW_TOKENS, TEMPERATURE, ReferenceModel
 from models.experimental.alpamayo2_edge.tests._util import PCC, full_depth_only, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
 from models.experimental.alpamayo2_edge.tt.model import Alpamayo2EdgeTT
@@ -253,9 +253,11 @@ def test_e2e_free_running_smoke(mesh_device, cfg, sample_inputs):
     model = Alpamayo2EdgeTT.from_pretrained(mesh_device, cfg)
 
     try:
-        pred = model.infer(inputs, seed=SEED, max_new_tokens=256)
+        pred = model.infer(inputs, seed=SEED)
     except ValueError as error:
-        pytest.fail(f"expected a trajectory with the CoT {FREE_RUNNING_COT}, got no anchor in 256 tokens: {error}")
+        pytest.fail(
+            f"expected a trajectory with the CoT {FREE_RUNNING_COT}, got no anchor in {MAX_NEW_TOKENS} tokens: {error}"
+        )
 
     tokenizer = Tokenizer.from_file(str(cfg.model_dir / "tokenizer.json"))
     text = tokenizer.decode(pred.cot_tokens[0].tolist(), skip_special_tokens=False)

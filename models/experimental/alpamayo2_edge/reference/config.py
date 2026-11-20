@@ -20,12 +20,15 @@ class VisionConfig:
     merge: int = 2
     pos_grid: int = 16
     eps: float = 1e-6
+    hidden_act: str = "gelu_pytorch_tanh"
 
 
 @dataclass(frozen=True)
 class ProjectorConfig:
     hidden: int = 11520
     out: int = 2048
+    # Hard-coded in the upstream patch merger rather than read from the config.
+    norm_eps: float = 1e-6
 
 
 @dataclass(frozen=True)
@@ -72,6 +75,8 @@ class ActionConfig:
     expert_non_causal_attention: bool
     action_dim: int = 2
     steps: int = 10
+    # Upstream `ActionInProj`'s RMSNorm default; the checkpoint does not carry it.
+    in_proj_norm_eps: float = 1e-5
 
 
 @dataclass(frozen=True)
@@ -116,10 +121,17 @@ def num_layers_override():
     return layers
 
 
+# The snapshot every measured number in README.md was taken at, so a new upload on the hub cannot silently move them.
+# A commit hash: a branch or tag would follow the hub.
+MODEL_REVISION = "b92b6aa326bd3e2235db28f248ad5a30b5890e64"
+
+
 def resolve_model_dir() -> Path:
+    """The `nvidia/Alpamayo2-Edge` snapshot at `MODEL_REVISION`, or at `ALPAMAYO_REVISION` when that is set."""
     from huggingface_hub import snapshot_download
 
-    return Path(snapshot_download("nvidia/Alpamayo2-Edge"))
+    revision = os.environ.get("ALPAMAYO_REVISION") or MODEL_REVISION
+    return Path(snapshot_download("nvidia/Alpamayo2-Edge", revision=revision))
 
 
 def _text_config(raw: dict, layers: int) -> TextConfig:
@@ -164,14 +176,18 @@ def validate_supported(cfg: Alpamayo2EdgeConfig) -> None:
     """Rejects checkpoint settings that neither the reference nor the TT path implements.
 
     Raises:
-        ValueError: The flow is guided or not Euler, the expert attends causally, or the expert cannot read the LM's
-            KV cache layer for layer.
+        ValueError: The flow is guided or not Euler, the expert attends causally, the vision MLP is not tanh GELU,
+            or the expert cannot read the LM's KV cache layer for layer.
     """
     acfg = cfg.action
     if acfg.use_classifier_free_guidance or acfg.int_method != "euler":
         raise ValueError("Alpamayo2Edge inference is unguided Euler flow matching")
     if not acfg.expert_non_causal_attention:
         raise ValueError("only the non-causal action expert is implemented")
+    if cfg.vision.hidden_act != "gelu_pytorch_tanh":
+        raise ValueError(
+            f"only the tanh-approximated GELU is implemented in the vision MLP, got {cfg.vision.hidden_act}"
+        )
     for name in ("layers", "kv_heads", "head_dim"):
         if getattr(cfg.text, name) != getattr(cfg.expert, name):
             raise ValueError(f"LM and expert must share KV-cache geometry ({name})")
@@ -209,6 +225,7 @@ def load_config(model_dir: Path) -> Alpamayo2EdgeConfig:
             merge=vis["spatial_merge_size"],
             pos_grid=int(vis["num_patches"] ** 0.5),
             eps=vis["layer_norm_eps"],
+            hidden_act=vis["hidden_act"],
         ),
         projector=ProjectorConfig(hidden=vlm["projector_hidden_size"], out=llm["hidden_size"]),
         text=_text_config(llm, text_layers),

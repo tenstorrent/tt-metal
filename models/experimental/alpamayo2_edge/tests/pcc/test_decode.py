@@ -10,7 +10,7 @@ from loguru import logger
 
 from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
-from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
+from models.experimental.alpamayo2_edge.reference.model import MAX_NEW_TOKENS, ReferenceModel
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
 from models.experimental.alpamayo2_edge.tests._util import PCC, pcc
 from models.experimental.alpamayo2_edge.tests.conftest import P100_MESH
@@ -64,7 +64,7 @@ def test_decode_teacher_forced(mesh_device, cfg, sample_inputs):
             load_weights(cfg.model_dir, "vlm.model.language_model."), load_weights(cfg.model_dir, "vlm.lm_head.")
         )
     )
-    size = AlpamayoCache.size_for(seq, max_new_tokens=256, action_rows=cfg.action.n_waypoints)
+    size = AlpamayoCache.size_for(seq, max_new_tokens=MAX_NEW_TOKENS, action_rows=cfg.action.n_waypoints)
     cache = AlpamayoCache(device=mesh_device, size=size, batch_size=1)
 
     cot = generate_cot(
