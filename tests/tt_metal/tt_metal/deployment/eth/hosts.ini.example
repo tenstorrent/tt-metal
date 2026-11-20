@@ -1,0 +1,15 @@
+[general]
+hosts=[bhglx,blackhole]
+syseng=/home/glx/syseng
+
+[bhglx]
+user=glx
+private_key=~/.ssh/bhglx
+workdir=/home/glx/tt-metal-wt/ctr-nradojevicTT/ethernet_tests_log_dump
+syseng=/home/glx/syseng
+
+[blackhole]
+user=blackhole
+private_key=~/.ssh/blackhole
+workdir=/home/blackhole/Documents/tenstorrent/tt-metal-razno/ctr-nradojevicTT/ethernet_tests_log_dump
+syseng=/home/blackhole/Documents/tenstorrent/syseng
