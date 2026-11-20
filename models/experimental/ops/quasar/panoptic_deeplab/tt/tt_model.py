@@ -25,6 +25,7 @@ from models.experimental.ops.quasar.panoptic_deeplab.tt.tt_insemb import TtPanop
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_postprocessing import get_panoptic_segmentation
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_semseg import ShapeSpec
 from models.experimental.ops.quasar.panoptic_deeplab.reference.pytorch_model import PANOPTIC_DEEPLAB, DEEPLAB_V3_PLUS
+from models.experimental.ops.quasar.panoptic_deeplab.tt.arch import block_float_dtype
 
 
 class TtPanopticDeepLab:
@@ -93,7 +94,7 @@ class TtPanopticDeepLab:
         self.backbone = TtResNet(
             parameters=backbone_params,
             device=device,
-            dtype=ttnn.bfloat8_b,
+            dtype=block_float_dtype(device),
             model_configs=model_configs,
         )
 
