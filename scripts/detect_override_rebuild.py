@@ -33,21 +33,9 @@ import os
 import re
 import sys
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from precommit_common import REPO_ROOT, blank_noncode, safe_repo_path as _safe_path
+
 BASELINE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "detect_override_rebuild_baseline.txt")
-
-
-def _safe_path(path):
-    """Resolve a caller-supplied path under the repo root and reject anything that escapes it.
-
-    pre-commit passes repo-relative paths from a trusted, git-tracked file list, but the path is still
-    dynamic input, so normalize it and bound the result to the tree before opening. Returns the resolved
-    absolute path, or ``None`` if it points outside the repo (which the caller then skips)."""
-    joined = path if os.path.isabs(path) else os.path.join(REPO_ROOT, path)
-    resolved = os.path.realpath(joined)
-    if resolved != REPO_ROOT and not resolved.startswith(REPO_ROOT + os.sep):
-        return None
-    return resolved
 
 
 def _baseline():
@@ -82,46 +70,6 @@ HOOK = re.compile(r"\boverride_runtime_arguments\s*\(")
 # handed a freshly built descriptor, so it is the same defect wearing a different hat).
 REBUILD = re.compile(r"\b(?:[A-Za-z_]\w*::)?create_(?:\w+_)?descriptor\s*\(|\bapply_descriptor_runtime_args\s*\(")
 SUPPRESS = re.compile(r"//\s*override-rebuild-ok\b")
-
-
-def _mask_comments(text):
-    """Blank out comment, string-literal and char-literal contents, preserving length and newlines, so
-    a rebuild merely *described* in a comment — or a brace/quote inside a literal such as ``'}'`` or
-    ``'"'`` — cannot corrupt brace/parse tracking or be flagged."""
-    out = list(text)
-    i, n = 0, len(text)
-    while i < n:
-        two = text[i : i + 2]
-        if two == "//":
-            j = text.find("\n", i)
-            j = n if j < 0 else j
-            for k in range(i, j):
-                out[k] = " "
-            i = j
-        elif two == "/*":
-            j = text.find("*/", i + 2)
-            j = n if j < 0 else j + 2
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j
-        elif text[i] == '"' or (
-            # A char literal opener, e.g. ' } ' or '\''. Guard against the C++14 digit separator
-            # (1'000, 0xFF'FF): a separator quote directly follows an alphanumeric, a literal never does.
-            text[i] == "'"
-            and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_"))
-        ):
-            quote = text[i]
-            j = i + 1
-            while j < n and text[j] != quote:
-                j += 2 if text[j] == "\\" else 1
-            for k in range(i, min(j + 1, n)):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j + 1
-        else:
-            i += 1
-    return "".join(out)
 
 
 def _body_span(text, open_paren_idx):
@@ -168,7 +116,7 @@ def check(path):
     if "override_runtime_arguments" not in text:
         return []
     # Match against a comment-free view; report against the original.
-    scan = _mask_comments(text)
+    scan = blank_noncode(text, blank_directives=False)
 
     line_starts = [0]
     for m in re.finditer(r"\n", text):
@@ -213,13 +161,17 @@ def _selftest():
             print(f"SELFTEST FAIL: {msg}")
 
     # --- masker: char literals must not corrupt brace tracking, digit separators must survive ---
-    masked = _mask_comments("void override_runtime_arguments() { char c = '}'; create_descriptor(x); }")
+    text = "void override_runtime_arguments() { char c = '}'; create_descriptor(x); }"
+    masked = blank_noncode(text, blank_directives=False)
     expect("create_descriptor" in masked, "char literal '}' truncated the body before create_descriptor")
-    expect("1'000'000" in _mask_comments("int n = 1'000'000; create_descriptor(y);"), "digit separator mis-masked")
-    expect(
-        "create_descriptor" in _mask_comments('const char* s = "}"; create_descriptor(z);'),
-        "string literal masking regressed",
-    )
+
+    text = "int n = 1'000'000; create_descriptor(y);"
+    masked = blank_noncode(text, blank_directives=False)
+    expect("1'000'000" in masked, "digit separator mis-masked")
+
+    text = 'const char* s = "}"; create_descriptor(z);'
+    masked = blank_noncode(text, blank_directives=False)
+    expect("create_descriptor" in masked, "string literal masking regressed")
 
     # --- path guard: traversal is rejected, an in-repo path resolves ---
     expect(_safe_path("../../../../etc/passwd") is None, "path traversal not rejected")

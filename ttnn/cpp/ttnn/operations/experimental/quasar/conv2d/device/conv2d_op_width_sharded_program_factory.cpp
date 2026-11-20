@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "ttnn/core.hpp"
 #include <filesystem>
 #include <memory>
 #include <string>
@@ -19,13 +20,13 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/tensor_parameter.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/kernel_spec.hpp>
+#include <tt-metalium/workload/specification/dataflow_buffer_spec.hpp>
+#include <tt-metalium/workload/specification/semaphore_spec.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/vocabulary/node_coord.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/math.hpp>
@@ -35,7 +36,7 @@
 namespace ttnn::prim::qsr {
 
 using namespace tt::tt_metal;
-namespace m2 = tt::tt_metal::experimental;
+namespace m2 = tt::tt_metal;
 namespace unary = ttnn::operations::unary;
 using ttnn::operations::conv::conv_skip_mcast;
 using ttnn::operations::conv::SkipMcast;
@@ -421,7 +422,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
             TensorMemoryLayout::HEIGHT_SHARDED, tt::tt_metal::BufferType::L1_SMALL, shard_spec};
     }();
 
-    auto& cq = a.device()->mesh_command_queue();
+    auto& cq = ttnn::core::current_mesh_command_queue(*a.device());
     tt::tt_metal::MeshTensor reader_indices_mesh_tensor =
         cq.enqueue_write_tensor(host_config_tensor.host_tensor(), reader_indices_mem_config);
     tt::tt_metal::Buffer* conv_reader_indices_buffer = reader_indices_mesh_tensor.mesh_buffer().get_reference_buffer();
@@ -854,7 +855,7 @@ ttnn::device_operation::ProgramArtifacts Conv2dWidthShardedProgramFactory::creat
                 {"num_cores_x", full_core_grid.x},
             });
         // X/Y mcast lookup tables as per-node varargs.
-        m2::AdvancedKernelRunArgs::Varargs varargs;
+        m2::experimental::AdvancedKernelRunArgs::Varargs varargs;
         varargs.reserve(act_mcast_noc_x.size() + act_mcast_noc_y.size());
         varargs.insert(varargs.end(), act_mcast_noc_x.begin(), act_mcast_noc_x.end());
         varargs.insert(varargs.end(), act_mcast_noc_y.begin(), act_mcast_noc_y.end());

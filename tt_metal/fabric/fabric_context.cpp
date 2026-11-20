@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <mutex>
 #include <unordered_map>
 #include <vector>
 #include <map>
@@ -14,7 +15,6 @@
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/reflection.hpp>
 #include "erisc_datamover_builder.hpp"
-#include <tt-umd/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/axis_route_topology.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -22,6 +22,7 @@
 #include "tt_metal/fabric/fabric_host_utils.hpp"
 #include "tt_metal/fabric/packet_header_types.hpp"
 #include "fabric/hw/inc/fabric_routing_mode.h"
+#include "llrt/hal.hpp"
 
 namespace tt::tt_fabric {
 
@@ -247,16 +248,18 @@ bool FabricContext::is_switch_mesh(MeshId mesh_id) const {
 // ============ Builder Context Access ============
 
 FabricBuilderContext& FabricContext::get_builder_context() {
-    if (!builder_context_) {
-        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
-    }
+    // Builder context is lazily initialized on first access. Wrap in std::call_once to prevent race conditions when
+    // this function is called by multiple threads.
+    std::call_once(
+        builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;
 }
 
 const FabricBuilderContext& FabricContext::get_builder_context() const {
-    if (!builder_context_) {
-        builder_context_ = std::make_unique<FabricBuilderContext>(*this);
-    }
+    // Builder context is lazily initialized on first access. Wrap in std::call_once to prevent race conditions when
+    // this function is called by multiple threads.
+    std::call_once(
+        builder_context_init_flag_, [this]() { builder_context_ = std::make_unique<FabricBuilderContext>(*this); });
     return *builder_context_;
 }
 
