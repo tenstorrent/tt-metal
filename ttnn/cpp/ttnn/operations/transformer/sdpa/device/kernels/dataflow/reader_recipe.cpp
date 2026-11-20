@@ -373,17 +373,19 @@ struct RecipeNoKvShare {
 // A BFP tile's first value as FP32 bits: face 0 row 0's shared exponent (byte 0) and the value's sign-magnitude
 // bits (data byte 0 after the 64 B exponent section; BFP4: its low nibble). The magnitude holds the leading one
 // explicitly: value = magnitude * 2^(exponent - 127 - (bits - 2)).
+template <uint32_t bits>
 FORCE_INLINE uint32_t bfp_first_value_to_fp32(uint32_t address) {
+    static_assert(bits == 8 || bits == 4);
     const auto* bytes = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(address);
     const uint32_t exponent = bytes[0];
-    const uint32_t value = sink_bfp_bits == 8 ? bytes[64] : bytes[64] & 0xf;
-    const uint32_t sign = (value >> (sink_bfp_bits - 1)) & 1;
-    const uint32_t magnitude = value & ((1u << (sink_bfp_bits - 1)) - 1);
+    const uint32_t value = bits == 8 ? bytes[64] : bytes[64] & 0xf;
+    const uint32_t sign = (value >> (bits - 1)) & 1;
+    const uint32_t magnitude = value & ((1u << (bits - 1)) - 1);
     if (magnitude == 0) {
         return sign << 31;
     }
     const int32_t lead = 31 - __builtin_clz(magnitude);
-    const int32_t biased = static_cast<int32_t>(exponent) - static_cast<int32_t>(sink_bfp_bits - 2) + lead;
+    const int32_t biased = static_cast<int32_t>(exponent) - static_cast<int32_t>(bits - 2) + lead;
     if (biased <= 0) {
         return sign << 31;  // below FP32's normal range: no sink weight
     }
@@ -399,7 +401,7 @@ FORCE_INLINE void read_sink_page(const Noc& noc, const Accessor& sink, CircularB
     noc.async_read(sink, CoreLocalMem<uint32_t>(page), sink_bfp_bits ? 128 : 64, {.page_id = head % sink_heads}, {});
     noc.async_read_barrier();
     if constexpr (sink_bfp_bits != 0) {
-        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page) = bfp_first_value_to_fp32(page);
+        *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(page) = bfp_first_value_to_fp32<sink_bfp_bits>(page);
     }
     cb.push_back(1);
 }

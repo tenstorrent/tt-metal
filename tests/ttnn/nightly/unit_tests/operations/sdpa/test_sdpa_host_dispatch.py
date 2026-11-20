@@ -20,6 +20,9 @@ import ttnn
 from loguru import logger
 
 ITERS = 50
+# Back-to-back bursts: BURST calls enqueued without waiting (the queue never fills at this size), timed together. The
+# per-call mean of a burst is less sensitive to the host's wake-up jitter after a device synchronize than one call.
+BURST, BURSTS = 16, 20
 
 
 def _tt(x, device, dtype=ttnn.bfloat16):
@@ -39,7 +42,17 @@ def _time_calls(device, fn):
         times.append((t1 - t0) * 1e6)
         ttnn.synchronize_device(device)
         _deallocate(out)
-    return statistics.median(times), min(times)
+    bursts = []
+    for _ in range(BURSTS):
+        ttnn.synchronize_device(device)
+        t0 = time.perf_counter()
+        outs = [fn() for _ in range(BURST)]
+        t1 = time.perf_counter()
+        bursts.append((t1 - t0) * 1e6 / BURST)
+        ttnn.synchronize_device(device)
+        for out in outs:
+            _deallocate(out)
+    return statistics.median(times), min(times), statistics.median(bursts)
 
 
 def _deallocate(out):
@@ -47,12 +60,14 @@ def _deallocate(out):
         t.deallocate(True)
 
 
-def _record(name, median_us, min_us):
-    logger.info(f"SDPA host dispatch {name}: median {median_us:.1f} us, min {min_us:.1f} us")
+def _record(name, median_us, min_us, burst_us):
+    logger.info(
+        f"SDPA host dispatch {name}: median {median_us:.1f} us, min {min_us:.1f} us, burst {burst_us:.1f} us per call"
+    )
     path = os.environ.get("SDPA_HOST_BENCH_OUT")
     if path:
         with open(path, "a") as f:
-            f.write(f"{name},{median_us:.1f},{min_us:.1f}\n")
+            f.write(f"{name},{median_us:.1f},{min_us:.1f},{burst_us:.1f}\n")
 
 
 def _config(device, q_chunk, k_chunk):
