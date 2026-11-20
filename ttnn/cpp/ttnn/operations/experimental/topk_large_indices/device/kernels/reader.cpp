@@ -444,7 +444,8 @@ FORCE_INLINE void two_level_run(
     const uint32_t remote_table = CircularBuffer(get_named_compile_time_arg_val("tl_cb_remote_table")).get_write_ptr();
     bool half_pending = early_halves && has_split;
     bool units_left = !has_block_max;
-    // This core's local rows run in the order their maxima complete; done_rows has a bit per finished one.
+    // This core's local rows run in the order their maxima complete; done_rows has a bit per finished one (with the
+    // caller's maxima the rows run in order and only rows_done counts them).
     uint32_t done_rows = 0;
     uint32_t rows_done = 0;
     while (true) {
@@ -482,7 +483,10 @@ FORCE_INLINE void two_level_run(
         // its table stays in the table CB until its half gathers after the end, so it waits for the claims to run out
         // and for the whole rows.
         uint32_t local_row = local_rows;
-        if (rows_done < local_rows) {
+        if constexpr (has_block_max) {
+            // Every row is ready: they run in order, any number of them.
+            local_row = rows_done;
+        } else if (rows_done < local_rows) {
             invalidate_l1_cache();
             for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
                 const bool split = split_owner && candidate == local_whole_rows;
@@ -490,7 +494,7 @@ FORCE_INLINE void two_level_run(
                     (split && !early_halves && (units_left || rows_done < local_whole_rows))) {
                     continue;
                 }
-                if (has_block_max || row_ready(candidate)) {
+                if (row_ready(candidate)) {
                     local_row = candidate;
                     break;
                 }
@@ -539,7 +543,9 @@ FORCE_INLINE void two_level_run(
             if (counted) {
                 rows_add(0xFFFFFFFFu);
             }
-            done_rows |= 1u << local_row;
+            if constexpr (!has_block_max) {
+                done_rows |= 1u << local_row;
+            }
             ++rows_done;
             idle = false;
             continue;
@@ -574,8 +580,9 @@ FORCE_INLINE void two_level_run(
         if (rows_done == local_rows && !half_pending) {
             break;
         }
-        // Nothing to do: every unit is claimed, and this core waits for its rows' units. If it has waited repair_after,
-        // one went missing (see the claims above), and the core does its rows' missing units itself.
+        // Nothing to do: every unit is claimed, and this core waits for its rows' units or its partner's table. After
+        // repair_after the core does any of its rows' units still missing (see the claims above) itself; usually
+        // there are none.
         if constexpr (!has_block_max) {
             const uint32_t now = get_timestamp_32b();
             if (!idle) {
