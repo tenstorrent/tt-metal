@@ -14,6 +14,7 @@ from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.llk_params import BroadcastType as LlkBroadcastType
 from helpers.llk_params import DestAccumulation, MathOperation, Transpose, format_dict
 from helpers.param_config import parametrize
+from helpers.perf.core import create_test_or_perf_config
 from helpers.test_config import BuildMode, TestConfig
 from helpers.test_variant_parameters import TemplateParameter
 
@@ -28,17 +29,17 @@ LAYOUTS = {
 
 @dataclass
 class BCAST_LAYOUT(TemplateParameter):
-    data: int = 0
-    bcast: int = 1
-    out: int = 2
-    pre_data: int = -1
-    runtime: int = 0
+    bcast_l_data: int = 0
+    bcast_l_bcast: int = 1
+    bcast_l_out: int = 2
+    bcast_l_pre_data: int = -1
+    bcast_l_runtime: int = 0
 
     def convert_to_cpp(self) -> str:
         return (
-            f"#define BCAST_L_DATA {self.data}\n#define BCAST_L_BCAST {self.bcast}\n"
-            f"#define BCAST_L_OUT {self.out}\n#define BCAST_L_PRE_DATA ({self.pre_data})\n"
-            f"#define BCAST_L_RUNTIME {self.runtime}"
+            f"#define BCAST_L_DATA {self.bcast_l_data}\n#define BCAST_L_BCAST {self.bcast_l_bcast}\n"
+            f"#define BCAST_L_OUT {self.bcast_l_out}\n#define BCAST_L_PRE_DATA ({self.bcast_l_pre_data})\n"
+            f"#define BCAST_L_RUNTIME {self.bcast_l_runtime}"
         )
 
 
@@ -72,12 +73,25 @@ LAYOUT_CASES = [
     for f, a in (_FMT_ACC[0], _FMT_ACC[2])
     for op in _OPS
 ]
+# BCAST_L_RUNTIME=1: tile indices opaque to the compiler (TT_ encodings built at run time).
+RUNTIME_LAYOUT_CASES = [
+    (f, a, LlkBroadcastType.Row, op, l)
+    for l in ("L210", "L132p0")
+    for f, a in (_FMT_ACC[0], _FMT_ACC[2])
+    for op in _OPS
+]
 
 
-@parametrize(case=LAYOUT_CASES)
-def test_sfpu_binary_bcast_layout(case):
+def run_bcast_layout(
+    case,
+    bcast_l_runtime=0,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     _skip_quasar()
-    fmt, dest_acc, bcast_dim, mathop, layout = case[0]
+    fmt, dest_acc, bcast_dim, mathop, layout = case
     formats = InputOutputFormat(fmt, fmt)
     input_dimensions = [32, 32]
     src_A, tile_cnt_A, src_B, tile_cnt_B = F.generate_stimuli(
@@ -86,8 +100,10 @@ def test_sfpu_binary_bcast_layout(case):
         stimuli_format_B=fmt,
         input_dimensions_B=input_dimensions,
     )
+    # Bfp8_b unpacks to Float16_b in dest.
+    golden_fmt = DataFormat.Float16_b if fmt == DataFormat.Bfp8_b else fmt
     golden_tensor = F._golden_sfpu_binary_bcast(
-        src_A, src_B, bcast_dim, F._BCAST_BINARY_OPS[mathop], fmt
+        src_A, src_B, bcast_dim, F._BCAST_BINARY_OPS[mathop], golden_fmt
     )
     num_blocks, num_tiles_in_block = F.get_num_blocks_and_num_tiles_in_block(
         F.DestSync.Half, dest_acc, formats, input_dimensions, F.TILE_DIMENSIONS
@@ -105,13 +121,13 @@ def test_sfpu_binary_bcast_layout(case):
             F.SFPU_BCAST_DIM(bcast_dim),
             F.SFPU_DST_ROUNDING_MODE(),
             F.SIGN_MAGNITUDE_FORMAT(False),
-            BCAST_LAYOUT(d, b, o, p),
+            BCAST_LAYOUT(d, b, o, p, bcast_l_runtime),
         ],
         "runtimes": [
             F.TILE_COUNT(tile_cnt_A + tile_cnt_B),
             F.NUM_BLOCKS(num_blocks),
             F.NUM_TILES_IN_BLOCK(num_tiles_in_block),
-            F.LOOP_FACTOR(1),
+            F.LOOP_FACTOR(loop_factor),
             F.NUM_FACES(),
             F.ZERO_POINT(0),
             F.OUT_ZERO_POINT(0),
@@ -130,17 +146,30 @@ def test_sfpu_binary_bcast_layout(case):
         "unpack_to_dest": F.unpacks_to_dest(fmt, dest_acc),
         "compile_time_formats": True,
     }
-    cfg = F.create_test_or_perf_config(
-        is_perf=False,
-        run_types=F._resolve_perf_args(False, None, None),
+    cfg = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=F._resolve_perf_args(is_perf, perf_report, run_types),
         test_config_kwargs=kwargs,
     )
+    if is_perf:
+        cfg.run(perf_report)
+        return
     res_from_L1 = cfg.run().result
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         return
     res = torch.tensor(res_from_L1, dtype=format_dict[fmt]).flatten()
     assert len(res) == len(golden_tensor)
     F.assert_against_contract(mathop, formats, dest_acc, golden_tensor, res)
+
+
+@parametrize(case=LAYOUT_CASES)
+def test_sfpu_binary_bcast_layout(case):
+    run_bcast_layout(case[0])
+
+
+@parametrize(case=RUNTIME_LAYOUT_CASES)
+def test_sfpu_binary_bcast_layout_runtime_idx(case):
+    run_bcast_layout(case[0], bcast_l_runtime=1)
 
 
 REPRO_CASES = [
