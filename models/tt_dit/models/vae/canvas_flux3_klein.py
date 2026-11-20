@@ -50,18 +50,17 @@ def canvas_for(width: int, height: int) -> tuple[int, int]:
 @dataclass
 class CanvasLevelMask:
     rows: ttnn.Tensor  # [1, H, 1, 1] fp32, 1 inside the image
-    cols: ttnn.Tensor  # [1, 1, W, 1] fp32
     rows16: ttnn.Tensor
-    cols16: ttnn.Tensor
+    cols16: ttnn.Tensor  # [1, 1, W, 1]
     inv_n: ttnn.Tensor  # [1, 1, 1, 1] fp32: 1 / image pixels at this level
 
-    def apply(self, x: ttnn.Tensor, dtype: ttnn.DataType | None = None) -> ttnn.Tensor:
-        fp32 = x.dtype == ttnn.float32
-        x = ttnn.multiply(x, self.cols if fp32 else self.cols16)
-        return ttnn.multiply(x, self.rows if fp32 else self.rows16, **({"dtype": dtype} if dtype is not None else {}))
+    def apply(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        """Zeroes bf16 `x` outside the image, in place."""
+        ttnn.multiply_(x, self.cols16)
+        return ttnn.multiply_(x, self.rows16)
 
     def deallocate(self) -> None:
-        for t in (self.rows, self.cols, self.rows16, self.cols16, self.inv_n):
+        for t in (self.rows, self.rows16, self.cols16, self.inv_n):
             ttnn.deallocate(t)
 
 
@@ -80,7 +79,6 @@ class CanvasMasks:
                 tensor.from_torch(t, device=device, dtype=dtype, mesh_axes=[None] * 4)
                 for t, dtype in (
                     (rows, ttnn.float32),
-                    (cols, ttnn.float32),
                     (rows, ttnn.bfloat16),
                     (cols, ttnn.bfloat16),
                 )
@@ -105,8 +103,8 @@ class CanvasMasks:
 
 
 class MaskedGroupNorm(Module):
-    """GroupNorm (+ SiLU) over the image area of a canvas: two-pass fp32 statistics of the masked activation, the
-    output zeroed outside the image. Channels split over the TP axis (whole groups)."""
+    """GroupNorm (+ SiLU) over the image area of a canvas: two-pass statistics of the masked bf16 activation, summed in
+    fp32, the output zeroed outside the image. Channels split over the TP axis (whole groups)."""
 
     def __init__(self, num_channels: int, *, ctx, silu: bool) -> None:
         super().__init__()
@@ -130,22 +128,27 @@ class MaskedGroupNorm(Module):
         group = torch.arange(self._local) // (self.num_channels // GROUPS)
         state["groups"] = (group[:, None] == group[None, :]).float()[None, None] / (self.num_channels // GROUPS)
 
-    def _group_mean(self, x: ttnn.Tensor, inv_n: ttnn.Tensor) -> ttnn.Tensor:
-        _, h, w, c = (int(d) for d in x.shape)
-        sums = ttnn.sum(ttnn.reshape(x, (1, 1, h * w, c)), dim=2, keepdim=True)
-        return ttnn.multiply(ttnn.matmul(sums, self.groups.data, compute_kernel_config=self._fp32_config), inv_n)
+    def _group_mean(self, x: ttnn.Tensor, mask: CanvasLevelMask) -> ttnn.Tensor:
+        """Group means over the image of `x` (zero right of the image; freed here): row sums rounded to bf16, then the
+        image rows summed in fp32."""
+        rows = ttnn.sum(x, dim=2, keepdim=True, compute_kernel_config=self._fp32_config)
+        ttnn.deallocate(x)
+        rows = ttnn.multiply(ttnn.typecast(rows, ttnn.float32), mask.rows)
+        sums = ttnn.sum(rows, dim=1, keepdim=True, compute_kernel_config=self._fp32_config)
+        return ttnn.multiply(ttnn.matmul(sums, self.groups.data, compute_kernel_config=self._fp32_config), mask.inv_n)
 
     def forward(self, x: ttnn.Tensor, mask: CanvasLevelMask) -> ttnn.Tensor:
         if x.layout != ttnn.TILE_LAYOUT:
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.typecast(x, ttnn.float32)
-        mean = self._group_mean(mask.apply(x), mask.inv_n)
-        centred = mask.apply(ttnn.subtract(x, mean))
-        var = self._group_mean(ttnn.multiply(centred, centred), mask.inv_n)
+        mean = self._group_mean(ttnn.multiply(x, mask.cols16), mask)
+        square = [ttnn.UnaryWithParam(ttnn.UnaryOpType.SQUARE)]
+        centred = ttnn.subtract(x, ttnn.typecast(mean, ttnn.bfloat16), activations=square)
+        var = self._group_mean(ttnn.multiply_(centred, mask.cols16), mask)
         scale = ttnn.multiply(ttnn.rsqrt(ttnn.add(var, GROUP_NORM_EPS)), self.weight.data)
         shift = ttnn.subtract(self.bias.data, ttnn.multiply(mean, scale))
         act = {"activations": [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU)]} if self._silu else {}
-        return mask.apply(ttnn.add(ttnn.multiply(x, scale), shift, **act), dtype=ttnn.bfloat16)
+        out = ttnn.multiply(x, ttnn.typecast(scale, ttnn.bfloat16))
+        return mask.apply(ttnn.add_(out, ttnn.typecast(shift, ttnn.bfloat16), **act))
 
 
 class CanvasVaeEncoder(Flux2VaeEncoder):

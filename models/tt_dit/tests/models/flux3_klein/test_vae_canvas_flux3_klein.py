@@ -62,27 +62,36 @@ def test_4mp_wide_and_tall_references_take_the_tight_canvases(size, canvas):
 @pytest.fixture
 def torch_ttnn(monkeypatch):
     """canvas_flux3_klein's ttnn and uploads as torch: tensors stay torch tensors (fp32 for both dtypes)."""
-    silu = object()
+    silu, square = object(), object()
+    unary = {silu: F.silu, square: torch.square}
 
     def binary(op):
-        def run(a, b, *, dtype=None, activations=None):
+        def run(a, b, *, activations=()):
             out = op(a, b)
-            return F.silu(out) if activations else out
+            for f in activations:
+                out = unary[f](out)
+            return out
 
         return run
+
+    def inplace(op):
+        return lambda a, b, **kwargs: a.copy_(binary(op)(a, b, **kwargs))
 
     stub = types.SimpleNamespace(
         float32=torch.float32,
         bfloat16=torch.float32,
         TILE_LAYOUT=torch.strided,
         UnaryWithParam=lambda op: op,
-        UnaryOpType=types.SimpleNamespace(SILU=silu),
+        UnaryOpType=types.SimpleNamespace(SILU=silu, SQUARE=square),
         typecast=lambda x, dtype: x.to(dtype),
         multiply=binary(torch.mul),
         subtract=binary(torch.sub),
         add=binary(torch.add),
+        multiply_=inplace(torch.mul),
+        add_=inplace(torch.add),
+        deallocate=lambda t: None,
         rsqrt=torch.rsqrt,
-        sum=lambda x, dim, keepdim: x.sum(dim=dim, keepdim=keepdim),
+        sum=lambda x, dim, keepdim, compute_kernel_config=None: x.sum(dim=dim, keepdim=keepdim),
         reshape=lambda x, shape: x.reshape(shape),
         matmul=lambda a, b, compute_kernel_config=None: a @ b,
         concat=lambda ts, dim: torch.cat(ts, dim=dim),
@@ -131,7 +140,7 @@ def test_masks_free_every_tensor_once(torch_ttnn):
     cv.ttnn.deallocate = freed.append
     masks = cv.CanvasMasks(None, canvas=CANVAS, image=IMAGE)
     masks.deallocate()
-    assert len(freed) == len({id(t) for t in freed}) == cv.LEVELS * 5 + 1
+    assert len(freed) == len({id(t) for t in freed}) == cv.LEVELS * 4 + 1
 
 
 def test_masked_attention_is_attention_on_the_image(torch_ttnn):
