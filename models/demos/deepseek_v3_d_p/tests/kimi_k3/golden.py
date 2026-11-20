@@ -67,6 +67,10 @@ TRACE_K31 = Path(KimiK31Adapter.prefill_trace_default)
 # (`converted_from.layers` 24 in its metadata): K3's long-context check scores those layers. Test-only; no runner
 # gate reads it.
 TRACE_K31_128K = TRACE_K31.parent / "kimi_k31_pro_128k_v2_conv2_l24"
+# The 1M vLLM trace (kimi_k31_pro_1m), layers 0-23. Its tracer recorded the residual stream only at layers 0 and
+# 12 (both block seals), so this golden has decoder_output for those two layers; top-k, indexer keys and KV for
+# every DSA layer.
+TRACE_K31_1M = TRACE_K31.parent / "kimi_k31_pro_1m_conv2_l24"
 
 # `kv_cache/layer_N.safetensors` is the one stream whose file stem is not its tensor key; every
 # other group names the file after the key it holds.
