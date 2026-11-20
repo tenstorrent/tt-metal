@@ -43,9 +43,8 @@ inline void check_input_and_gamma_shapes(const ttnn::Tensor& input, const ttnn::
 // Upper bound on num_slices. Every core of a row-group shares its partial row sum with all the others, so each core
 // receives num_slices tiles per row and keeps two rows of them in L1: exchange time and L1 both grow with num_slices.
 constexpr uint32_t kMaxRowSlices = 16U;
-// A sliced row costs S + kRowSliceExchangeCostTiles extra tiles of work: S to sum the gathered partials, plus the NOC
-// writes and semaphore wait of the exchange. 4 is an unmeasured estimate: that round trip takes a few us, against ~1 us
-// per tile of compute. To retune, rerun rmsnorm_benchmark on its H=1, T=1024/4096 rows.
+// A sliced row costs S tiles to sum the gathered partials, plus this many for the exchange (NOC writes, semaphore).
+// Profiled on 11x10: at T=1024 it picks the faster split for C=7168 (S=6, not 10) and C=8192 (S=10, not 6).
 constexpr uint32_t kRowSliceExchangeCostTiles = 4U;
 
 // How rmsnorm_fw and rmsnorm_bw split tile-rows over the cores: each row is cut into num_slices column slices of
