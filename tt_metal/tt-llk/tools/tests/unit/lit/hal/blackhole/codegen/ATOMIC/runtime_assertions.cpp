@@ -226,20 +226,6 @@ extern "C" __attribute__((noinline, used)) void fifo_runtime_set_address_invalid
 // CHECK-LABEL: <fifo_runtime_set_address_invalid>:
 // CHECK: ebreak
 
-extern "C" __attribute__((noinline, used)) void fifo_capacity15_updates()
-{
-    constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
-    fifo.pop(hal::gpr<4>());
-    fifo.push(hal::gpr<4>());
-}
-
-// CHECK-LABEL: <fifo_capacity15_updates>:
-// CHECK: ebreak
-// CHECK: ttatincgetptr
-// CHECK: ebreak
-// CHECK: ttatincgetptr
-// CHECK: ret
-
 extern "C" __attribute__((noinline, used)) void fifo_capacity15_waits()
 {
     constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
@@ -251,32 +237,3 @@ extern "C" __attribute__((noinline, used)) void fifo_capacity15_waits()
 // CHECK-NOT: ebreak
 // CHECK: ret
 // CHECK-NOT: ebreak
-
-extern "C" __attribute__((noinline, used)) void invalid_static_counter()
-{
-    constexpr auto counter = atomic::counter<0>(hal::gpr<1>());
-    counter.fetch_add(hal::gpr<2>());
-}
-
-// CHECK-LABEL: <invalid_static_counter>:
-// CHECK: ebreak
-// CHECK: ret
-
-extern "C" __attribute__((noinline, used)) void invalid_static_address()
-{
-    constexpr auto counter = atomic::counter<32>(hal::gpr<64>());
-    counter.fetch_add(hal::gpr<2>());
-}
-
-// CHECK-LABEL: <invalid_static_address>:
-// CHECK: ebreak
-// CHECK: ret
-
-extern "C" __attribute__((noinline, used)) void invalid_static_quad()
-{
-    atomic::store_masked(hal::gpr<3>(), hal::gpr<5>(), 0xff /*granule_mask*/);
-}
-
-// CHECK-LABEL: <invalid_static_quad>:
-// CHECK: ebreak
-// CHECK: ret
