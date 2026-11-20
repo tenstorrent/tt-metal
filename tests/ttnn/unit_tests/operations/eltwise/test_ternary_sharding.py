@@ -2,14 +2,42 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
 import ttnn
 import pytest
 from functools import partial
 
-from tt_py_test_utils_common.utility_functions import torch_random
+from tt_py_test_utils_common.utility_functions import is_slow_dispatch, torch_random
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 from tests.ttnn.utils_for_testing import assert_with_pcc
+
+
+# The readers and writer branch on each operand's sharding separately (plus an "any operand interleaved" check), and the
+# output config is inherited from whichever input is sharded. Each operand sharded alone, all sharded, and all inputs
+# sharded with an interleaved output cover every pair of operands in every sharded/interleaved state.
+WHERE_SHARDED = [
+    (True, True, True, True),
+    (True, True, True, False),
+    (True, False, False, False),
+    (False, True, False, False),
+    (False, False, True, False),
+    (False, False, False, True),
+]
+WHERE_INPUTS_SHARDED = [
+    (True, True, True),
+    (True, False, False),
+    (False, True, False),
+    (False, False, True),
+]
+LERP_SHARDED = [
+    (True, True, True),
+    (True, True, False),
+    (True, False, False),
+    (False, True, False),
+    (False, False, True),
+]
 
 
 def torch_equal_nan(a, b):
@@ -45,10 +73,7 @@ def torch_equal_nan(a, b):
         ),
     ],
 )
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_no_bcast_with_sharding(
     device,
@@ -116,10 +141,7 @@ def test_where_ttt_no_bcast_with_sharding(
     assert output_tensor.shape == shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_height_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -191,10 +213,7 @@ def test_where_ttt_width_bcast_with_height_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_width_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -266,10 +285,7 @@ def test_where_ttt_width_bcast_with_width_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_height_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -341,10 +357,7 @@ def test_where_ttt_height_bcast_with_height_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_width_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -416,10 +429,7 @@ def test_where_ttt_height_bcast_with_width_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_width_bcast_with_block_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -495,10 +505,7 @@ def test_where_ttt_width_bcast_with_block_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_height_bcast_with_block_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -574,10 +581,7 @@ def test_where_ttt_height_bcast_with_block_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_height_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -649,10 +653,7 @@ def test_where_ttt_scalar_bcast_with_height_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_width_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -724,10 +725,7 @@ def test_where_ttt_scalar_bcast_with_width_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_scalar_bcast_with_block_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -803,10 +801,7 @@ def test_where_ttt_scalar_bcast_with_block_sharding(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_width_bcast_with_height_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -873,10 +868,7 @@ def test_where_ttt_width_bcast_with_height_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_width_bcast_with_width_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -943,10 +935,7 @@ def test_where_ttt_width_bcast_with_width_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_width_bcast_with_block_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1013,10 +1002,7 @@ def test_where_ttt_width_bcast_with_block_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_height_bcast_with_height_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1083,10 +1069,7 @@ def test_where_ttt_height_bcast_with_height_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_height_bcast_with_width_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1156,10 +1139,7 @@ def test_where_ttt_height_bcast_with_width_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_height_bcast_with_block_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1230,10 +1210,7 @@ def test_where_ttt_height_bcast_with_block_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_scalar_bcast_with_height_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1300,10 +1277,7 @@ def test_where_ttt_scalar_bcast_with_height_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_scalar_bcast_with_width_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1370,10 +1344,7 @@ def test_where_ttt_scalar_bcast_with_width_sharding_uneven(
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 def test_where_ttt_scalar_bcast_with_block_sharding_uneven(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded
 ):
@@ -1528,9 +1499,7 @@ def test_where_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, devic
     "out_strategy",
     ["dram", "height", "width", "block"],
 )
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded", WHERE_INPUTS_SHARDED)
 def test_where_ttt_identical_mixed_strategy(
     device, dtype_pt, dtype_tt, config_permutation, out_strategy, predicate_sharded, true_sharded, false_sharded
 ):
@@ -2029,10 +1998,7 @@ def test_ternary_resolve_mem_config_with_grid_size_two(device):
     assert_with_pcc(torch_output, output)
 
 
-@pytest.mark.parametrize("predicate_sharded", [True, False])
-@pytest.mark.parametrize("true_sharded", [True, False])
-@pytest.mark.parametrize("false_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("predicate_sharded, true_sharded, false_sharded, out_sharded", WHERE_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_where_ttt_outer_bcast_with_height_sharding(
     device, predicate_sharded, true_sharded, false_sharded, out_sharded, shard_orientation
@@ -2136,9 +2102,7 @@ def test_where_ttt_outer_bcast_with_height_sharding(
         ),
     ],
 )
-@pytest.mark.parametrize("input_sharded", [True, False])
-@pytest.mark.parametrize("end_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("input_sharded, end_sharded, out_sharded", LERP_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_lerp_tts_no_bcast_with_sharding(
     device,
@@ -2250,9 +2214,7 @@ def test_lerp_tts_scalar_bcast_with_height_sharding(device, input_sharded, out_s
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("input_sharded", [True, False])
-@pytest.mark.parametrize("end_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("input_sharded, end_sharded, out_sharded", LERP_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_lerp_tts_outer_bcast_with_height_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
@@ -2315,9 +2277,7 @@ def test_lerp_tts_outer_bcast_with_height_sharding(device, input_sharded, end_sh
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("input_sharded", [True, False])
-@pytest.mark.parametrize("end_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("input_sharded, end_sharded, out_sharded", LERP_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_lerp_tts_outer_bcast_with_width_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
@@ -2494,9 +2454,7 @@ def test_lerp_tts_row_bcast_with_height_sharding(device, end_sharded, out_sharde
     assert output_tensor.shape == output_shape
 
 
-@pytest.mark.parametrize("input_sharded", [True, False])
-@pytest.mark.parametrize("end_sharded", [True, False])
-@pytest.mark.parametrize("out_sharded", [True, False])
+@pytest.mark.parametrize("input_sharded, end_sharded, out_sharded", LERP_SHARDED)
 @pytest.mark.parametrize("shard_orientation", [ttnn.ShardOrientation.ROW_MAJOR, ttnn.ShardOrientation.COL_MAJOR])
 def test_lerp_tts_col_bcast_with_height_sharding(device, input_sharded, end_sharded, out_sharded, shard_orientation):
     torch.manual_seed(0)
@@ -2732,6 +2690,7 @@ def test_where_nd_sharded_output_l1_interleaved_inputs(device, explicit_out):
     assert torch.equal(ttnn.to_torch(out), torch.where(cond.bool(), t, f))
 
 
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
 @pytest.mark.parametrize(
     "inputs_nd_sharded, explicit_out",
     [(True, False), (True, True), (False, True)],
@@ -2768,6 +2727,101 @@ def test_where_nd_sharded_on_second_sub_device(device, inputs_nd_sharded, explic
         assert out.memory_config().shard_spec is None
         assert out.memory_config().nd_shard_spec.grid == grid
         assert torch.equal(ttnn.to_torch(out), torch.where(cond.bool(), t, f))
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+def _sub_device_delay_program(cores, iterations):
+    runtime_args = ttnn.RuntimeArgs()
+    for core_range in cores.ranges():
+        for x in range(core_range.start.x, core_range.end.x + 1):
+            for y in range(core_range.start.y, core_range.end.y + 1):
+                runtime_args[x][y] = [iterations]
+    kernel = ttnn.KernelDescriptor(
+        kernel_source="tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+        source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+        core_ranges=cores,
+        compile_time_args=[],
+        runtime_args=runtime_args,
+        config=ttnn.ReaderConfigDescriptor(),
+    )
+    return ttnn.ProgramDescriptor(kernels=[kernel], semaphores=[], cbs=[])
+
+
+@pytest.mark.skipif(is_slow_dispatch(), reason="sub-device managers are unsupported with slow dispatch")
+@pytest.mark.parametrize("a_sharding", ["height", "nd"])
+def test_where_inherited_sharded_output_runs_on_its_sub_device(device, a_sharding):
+    """With a sharded `a`, DRAM `b`/`c` and no memory_config, the inferred output lives on the second sub-device,
+    so `where` must run there: a read that waits only for that sub-device must see its output (#64037)."""
+    sd0_cores = ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 3))})
+    sd1_cores = ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (5, 3))})
+    manager = device.create_sub_device_manager([ttnn.SubDevice([sd0_cores]), ttnn.SubDevice([sd1_cores])], 3200)
+    device.load_sub_device_manager(manager)
+    try:
+        shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (4, 3))})
+        if a_sharding == "height":
+            a_config = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(shard_grid, [32, 128], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+        else:
+            a_config = ttnn.MemoryConfig(
+                ttnn.BufferType.L1,
+                ttnn.NdShardSpec(
+                    ttnn.Shape([1, 1, 32, 32]),
+                    ttnn.CoreRangeSet({ttnn.CoreRange((4, 0), (4, 2))}),
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                    ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+                ),
+            )
+        shape = (1, 1, 128, 128)
+        cond = (torch.arange(128 * 128).reshape(shape) % 2).bfloat16()
+        t, f = torch.full(shape, 2.0).bfloat16(), torch.full(shape, 0.5).bfloat16()
+        expected = torch.where(cond.bool(), t, f)
+        tt_cond = ttnn.from_torch(
+            cond, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=a_config
+        )
+        tt_t, tt_f = (ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device) for x in (t, f))
+        if a_sharding == "nd":
+            assert tt_cond.memory_config().shard_spec is None
+
+        # Compile and cache the op first, so the timed call below only dispatches.
+        warm = ttnn.where(tt_cond, tt_t, tt_f)
+        assert torch.equal(ttnn.to_torch(warm), expected)
+        output_config = warm.memory_config()
+        ttnn.deallocate(warm)
+        # Leave a known value where the output will be allocated, so an unwritten output is detectable.
+        placeholder = ttnn.from_torch(
+            torch.full(shape, -7.0).bfloat16(),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=output_config,
+        )
+        ttnn.deallocate(placeholder)
+
+        dummy = ttnn.from_torch(torch.zeros(32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        # Compile the delay kernel first, so the calibration below times only its run.
+        ttnn.generic_op([dummy, dummy], _sub_device_delay_program(sd0_cores, 1))
+        ttnn.synchronize_device(device)
+        # Calibrate the delay kernel to roughly one second on this device.
+        start = time.monotonic()
+        ttnn.generic_op([dummy, dummy], _sub_device_delay_program(sd0_cores, 5_000_000))
+        ttnn.synchronize_device(device)
+        iterations = int(5_000_000 / max(time.monotonic() - start, 1e-3))
+
+        ttnn.generic_op([dummy, dummy], _sub_device_delay_program(sd0_cores, iterations))
+        device.set_sub_device_stall_group([ttnn.SubDeviceId(1)])
+        try:
+            out = ttnn.where(tt_cond, tt_t, tt_f)
+            early = ttnn.to_torch(out)
+        finally:
+            device.reset_sub_device_stall_group()
+            ttnn.synchronize_device(device)
+        assert out.memory_config() == output_config
+        assert torch.equal(early, expected), f"{int((early == -7).sum())} elements were read before `where` wrote them"
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(manager)

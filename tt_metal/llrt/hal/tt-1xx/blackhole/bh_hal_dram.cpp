@@ -16,7 +16,7 @@ using namespace tt::tt_metal::blackhole::dram;
 
 #include "blackhole/bh_hal.hpp"
 #include "dev_mem_map.h"
-#include "hal_types.hpp"
+#include "llrt/hal_types.hpp"
 #include "llrt/hal.hpp"
 #include <tt-umd/types/core_coordinates.hpp>
 

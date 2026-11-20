@@ -18,6 +18,32 @@ struct TileDescriptor;
 
 namespace ttnn::operations::data_movement {
 
+// 32-bit Dest covers true 32-bit datums and the 8-bit integer formats BH reconstructs via int-FPU.
+inline bool requires_32bit_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 ||
+           fmt == tt::DataFormat::UInt32 || fmt == tt::DataFormat::UInt8 || fmt == tt::DataFormat::Int8;
+}
+inline bool requires_32bit_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32 || dtype == tt::tt_metal::DataType::UINT8 ||
+           dtype == tt::tt_metal::DataType::INT8;
+}
+
+// UnpackMode::UnpackToDest lowers to UnpackToDestFp32 which bypasses SrcA; only 32-bit formats
+// are safe. 8-bit integer formats must stay on the SrcA/int-FPU path.
+inline bool requires_unpack_to_dest(tt::DataFormat fmt) {
+    return fmt == tt::DataFormat::Float32 || fmt == tt::DataFormat::Int32 || fmt == tt::DataFormat::UInt32;
+}
+inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
+    return dtype == tt::tt_metal::DataType::FLOAT32 || dtype == tt::tt_metal::DataType::INT32 ||
+           dtype == tt::tt_metal::DataType::UINT32;
+}
+
+// Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
+inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
+    return fp32_dest_acc_en && requires_unpack_to_dest(dtype);
+}
+
 ttnn::Shape squeeze_shape_to_ND(const ttnn::Shape& output_shape, uint32_t);
 ttnn::Shape squeeze_shape_to_4D(const ttnn::Shape& output_shape);
 ttnn::Shape squeeze_shape_to_3D(const ttnn::Shape& output_shape);
@@ -208,6 +234,30 @@ BlockPlan make_block_plan(
 // sweep, #56622), so Quasar keeps every tilize block at or under this width.
 constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
 
+// The part of make_block_plan's split that free L1 (and `max_block_tiles`) decides. When the
+// unconstrained block is over that limit, the split falls back to the smaller `sizes` (nullopt if
+// none fits); everything else in the plan follows from the shapes and the grid. Two calls with
+// equal attributes and tensor specs build the same plan exactly when this is equal, so a
+// compute_program_hash can key on it per dispatch without building the plan. Pass the same
+// `max_block_tiles` as to make_block_plan. The output is given by its padded shape, since a hash has
+// no output tensor.
+struct BlockL1Fit {
+    bool limited = false;
+    std::optional<ttnn::NcoresWHsb> sizes;
+};
+
+BlockL1Fit block_l1_fit(
+    BlockDirection direction,
+    BlockCoreOrder core_order,
+    const Tensor& input_tensor,
+    const ttnn::Shape& output_padded_shape,
+    uint32_t input_single_tile_size,
+    uint32_t output_single_tile_size,
+    uint32_t tile_height,
+    uint32_t tile_width,
+    const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
+    std::optional<uint32_t> max_block_tiles = std::nullopt);
+
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
 // a downstream size check only catches that when the widths happen to differ numerically.
@@ -281,6 +331,10 @@ uint32_t wrap_index(int index, int size);
 uint16_t float_to_uint16(float f);
 
 uint32_t pack_two_uint16_into_uint32(std::pair<uint16_t, uint16_t> two_uint16s);
+
+// Packs `value` as `dtype` into a 32-bit word; 16-bit types fill both halves, UINT8 fills all four bytes,
+// UINT8 and 32-bit integers truncate, integer types saturate.
+uint32_t pack_scalar_into_uint32(DataType dtype, float value);
 
 template <typename OpOutputType, typename... OpInputTypes>
 struct MassagedOperationParams {
