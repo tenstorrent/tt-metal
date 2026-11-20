@@ -1174,9 +1174,9 @@ def passed_test(
     # A result that is all zero on those lanes against a nonzero constant is a
     # stuck-at-zero output and fails here, even within tolerance: calculate_pcc cannot
     # be relied on for it, since NaN/Inf lanes on both sides defeat its all-zero check.
-    # Pair the lanes as the tolerance check did: the Bfp compares flatten both sides
-    # (equal numel suffices), torch.isclose broadcasts them.
-    if golden_tensor.numel() == res_tensor.numel():
+    # Pair the lanes as the tolerance check did: the Bfp4_b/Bfp2_b compares flatten
+    # both sides (equal numel suffices), the torch.isclose-based ones broadcast them.
+    if output_data_format in (DataFormat.Bfp4_b, DataFormat.Bfp2_b):
         golden_lanes, res_lanes = golden_tensor.flatten(), res_tensor.flatten()
     else:
         golden_lanes, res_lanes = torch.broadcast_tensors(golden_tensor, res_tensor)

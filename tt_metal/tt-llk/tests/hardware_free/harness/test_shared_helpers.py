@@ -209,6 +209,18 @@ def test_passed_test_a_constant_golden_bfp_accepts_a_reshaped_result(data_format
     assert passed_test(golden, torch.ones(32 * 32, dtype=torch.bfloat16), data_format)
 
 
+def test_passed_test_a_zero_result_fails_a_constant_golden_through_broadcast():
+    """Equal element counts, but torch.isclose broadcasts a (2, 2, 1) golden against a
+    (1, 2, 2) result, pairing every finite golden lane with a zero. Flattening would pair
+    one with Inf instead and let the stuck-at-zero output through."""
+    golden = torch.tensor([[[0.03], [float("inf")]]] * 2, dtype=torch.bfloat16)
+    result = torch.tensor(
+        [[[0.0, 0.0], [float("inf"), float("inf")]]], dtype=torch.bfloat16
+    )
+    assert golden.numel() == result.numel()
+    assert not passed_test(golden, result, DataFormat.Float16_b, print_errors=False)
+
+
 def test_passed_test_a_constant_golden_with_non_finite_lanes_is_judged_by_tolerance():
     """Like log over {0, 1}: the finite golden lanes are all 0 next to -Inf/NaN lanes.
     Those lanes are zeroed for PCC, so the golden is constant there and the tolerance
