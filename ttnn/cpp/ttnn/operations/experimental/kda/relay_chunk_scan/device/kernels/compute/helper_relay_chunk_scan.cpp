@@ -4,7 +4,6 @@
 #include <cstdint>
 
 #include "api/compute/compute_kernel_hw_startup.h"
-#include "api/debug/kernel_profiler.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/compute/gate_matmul.hpp"
 
 constexpr uint32_t cb_gin0 = get_compile_time_arg_val(0);
@@ -24,7 +23,6 @@ constexpr uint32_t ways = get_compile_time_arg_val(10);
 void kernel_main() {
     const bool own_first = ways == 1 || get_arg_val<uint32_t>(0);
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_gin0, cb_gin1, cb_gate);
-    DeviceZoneScopedN("HELPER-MM");
     kda_gate::matmul<gate_fidelity>(
         cb_gin0, cb_gin1, cb_gate, cb_gate_pair, own_first, ways, rows, columns, gate_kb, blocks);
     if constexpr (ways == 2) {

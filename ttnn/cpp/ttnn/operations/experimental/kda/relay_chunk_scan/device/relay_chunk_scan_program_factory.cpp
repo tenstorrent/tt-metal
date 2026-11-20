@@ -282,6 +282,8 @@ tt::tt_metal::ProgramDescriptor build_program(
     // NoC 1 west and north), so it starts from the end of its run that way. A head's W moves north on NoC 1 (the
     // writer's) from its last core when its helper is above it, else south on NoC 0 (the reader's) from its second
     // core; its cores' x moves on the other kernel. The helpers move x on NoC 1.
+    // Buffers that are never in use on one core at the same time, at one address: each holds `bytes` in whole `units`
+    // (what it reserves at once), so the size is a common multiple of the units.
     struct SharedPart {
         uint32_t index;
         tt::DataFormat format;
@@ -443,8 +445,6 @@ tt::tt_metal::ProgramDescriptor build_program(
         const auto format = tt::tt_metal::datatype_to_dataformat_converter(dtype);
         return kda_factory_detail::cb_descriptor(index, tiles, tt::tile_size(format), format, correction_set);
     };
-    // Buffers that are never in use on one core at the same time, at one address: each holds `bytes` in whole `units`
-    // (what it reserves at once), so the size is a common multiple of the units.
     const auto gate_set = correction_set.merge(helper_set);
     auto gate_cbs = gate_buffers(gate_kb, gate_ways);
     for (auto& cb : gate_cbs) {

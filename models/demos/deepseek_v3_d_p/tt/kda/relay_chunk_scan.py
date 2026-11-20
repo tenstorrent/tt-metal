@@ -11,9 +11,9 @@ The same program forms the chunk outputs from the summary's emitted terms (the e
 spread over `cores_per_head` cores, the first of which runs the head's hop and copies the landed entry state (and, for a
 separated tail, the final state) to the head's other cores. It also forms the output gate x @ W of the gated norm while
 the relay's hops are on their way, which take its cores little time: each head's other cores their chunks' rows, and a
-helper core per head (a core the relay leaves free, or a sender) the rows of the head's first core. The summary writes the terms sharded so each core's chunk
-rows, F(0) then F(I), are in its own L1 (terms_memory_config); when a core's share is over
-KDA_RELAY_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
+helper core per head (a core the relay leaves free, or a sender) the rows of the head's first core. The summary writes
+the terms sharded so each core's chunk rows, F(0) then F(I), are in its own L1 (terms_memory_config); when a core's
+share is over KDA_RELAY_TERMS_L1_BYTES_PER_CORE they stay in DRAM and each core streams its chunk rows.
 
 The relay's landing buffer is an L1 tensor sharded one head per head's first core, at the same address on every device. A
 rank's predecessor writes into it before the rank's own call starts, so a layer reserves it before the SP barrier that
@@ -191,13 +191,13 @@ class RelayChunkScan:
             raise ValueError(f"relay prefix needs {batch_heads} helper cores, the grid leaves {len(free)}")
 
         def hops(head, helper):
-            first, last = correction[head * cores_per_head], correction[(head + 1) * cores_per_head - 1]
-            if helper.y < first.y:
+            head_core, last = correction[head * cores_per_head], correction[(head + 1) * cores_per_head - 1]
+            if helper.y < head_core.y:
                 dx = last.x - helper.x
-                return (dx if dx >= 0 else dx + 2 * grid.x) + first.y - helper.y
+                return (dx if dx >= 0 else dx + 2 * grid.x) + head_core.y - helper.y
             second = correction[head * cores_per_head + min(1, cores_per_head - 1)]
             dx = helper.x - second.x
-            return (dx if dx >= 0 else dx + 2 * grid.x) + abs(helper.y - first.y)
+            return (dx if dx >= 0 else dx + 2 * grid.x) + abs(helper.y - head_core.y)
 
         pairs = sorted((hops(h, c), h, i) for h in range(batch_heads) for i, c in enumerate(free))
         helpers = [None] * batch_heads

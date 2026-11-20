@@ -253,16 +253,17 @@ FORCE_INLINE void swap_partials(
     noc_async_write_barrier();
 }
 
-// The output gate's operands as a kernel moves them. Where the buffers fit (`ways` 2), the heads of a batch pair up,
-// h with h + heads / 2, and each core forms both heads' columns of its rows over its head's half of K (the first half
-// for a pair's first head), then swaps partial sums with the pair's core (swap_partials); else (`ways` 1) each core
-// forms its head's over all of K. Compile-time args from `ct`: x's, W's and the progress CBs,
-// the rows and a head's columns (tiles) a core forms, the K block and K (tiles), the K tiles of the local input (0:
-// none), W's tile columns, the heads per batch, the x groups (two per place: the pairs' first heads' cores, then their
-// second's; W's follow, one per head), where the group table and the gate's common args start, the CBs of the partial
-// sums of the pair's head and of the pair's of this core's head and their swap's semaphores, then the input's, the
-// local input's and W's accessor args. Common args: the input, the local input, W, the TP rank, and x's and W's block
-// counts. Last of the compile-time args before the accessors: `ways`.
+// The output gate's operands as a kernel moves them. Where their buffers fit (`ways` 2) the heads of a batch pair up,
+// h with h + heads / 2: each core forms both heads' columns of its rows over its head's half of K (the first half for
+// a pair's first head), then swaps partial sums with the pair's core (swap_partials). Else (`ways` 1) each core forms
+// its head's columns over all of K.
+//
+// Compile-time args from `ct`: x's, W's and the progress CBs; the rows and a head's columns (tiles) a core forms; the
+// K block and K (tiles); the K tiles of the local input (0: none); W's tile columns; the heads per batch; the x groups
+// (`ways` per place: the pairs' first heads' cores, then their second's; W's groups follow, one per head); where the
+// group table and the gate's common args start; the CBs of the partial sums of a pair's other head and of the pair's
+// of this core's head, and the swap's two semaphores; `ways`; then the input's, the local input's and W's accessor
+// args. Common args: the input, the local input, W, the TP rank, and x's and W's block counts.
 template <uint32_t ct>
 struct Operands {
     static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
@@ -293,7 +294,7 @@ struct Operands {
     // A pair's first head.
     static uint32_t first(uint32_t head) { return head - half(head) * (heads / 2); }
 
-    // x of a correction core's chunks, or its head's W: whichever the other kernel leaves it.
+    // x of a correction core's chunks (in the x group of the head batch's cores at its place), or its head's W.
     static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
         x_share(ways * group + half(head)).all(blocks, x_read(first_row, half(head)));
     }
