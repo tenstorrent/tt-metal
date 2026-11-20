@@ -465,7 +465,6 @@ def test_transpose_hw_rm_with_program_cache(device, n, c, h, w):
     assert device.num_program_cache_entries() == 1
 
 
-@skip_for_blackhole("Mismatching on BH, see #12349")
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [224])
 @pytest.mark.parametrize("h", [16])

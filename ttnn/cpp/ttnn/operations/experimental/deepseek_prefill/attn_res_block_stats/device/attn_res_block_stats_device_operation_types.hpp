@@ -24,8 +24,8 @@ struct AttnResBlockStatsParams {
     ttnn::ccl::Topology topology = ttnn::ccl::Topology::Linear;
     uint32_t num_links = 1;
     // The peers' arrivals, with the axis: the caller's, made before any trace capture, over
-    // the gather cores. It hashes by its cores, not its address, so a cache hit can carry
-    // another semaphore, and the factory rewrites the address on every hit.
+    // the gather cores. Its address is part of the program hash (compute_program_hash): the
+    // program bakes it in, and a range's chips run as one program.
     std::optional<tt::tt_metal::GlobalSemaphore> semaphore;
 };
 

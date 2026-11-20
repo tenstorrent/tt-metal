@@ -72,6 +72,7 @@ void bind_batch_norm_operation(nb::module_& mod) {
 
         Limitations:
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
+            - When any input or parameter tensor is ``FLOAT32``, ``compute_kernel_config`` must keep ``fp32_dest_acc_en=True`` (the default).
         )doc";
 
     ttnn::bind_function<"batch_norm">(

@@ -251,20 +251,4 @@ private:
         const tt::tt_metal::distributed::MeshCoordinate&);
 };
 
-class [[deprecated("Use distributed::MeshBuffer instead. This API will be removed after 2026-10-22.")]] AnyBuffer {
-public:
-    AnyBuffer() = default;
-
-    Buffer* get_buffer() const;
-    bool is_mesh_buffer() const;
-    std::shared_ptr<MeshBuffer> get_mesh_buffer() const;
-
-private:
-    AnyBuffer(std::shared_ptr<Buffer> buffer);
-    AnyBuffer(std::shared_ptr<MeshBuffer> buffer);
-
-    Buffer* buffer_ = nullptr;
-    std::variant<std::shared_ptr<Buffer>, std::shared_ptr<distributed::MeshBuffer>> holder_;
-};
-
 }  // namespace tt::tt_metal::distributed

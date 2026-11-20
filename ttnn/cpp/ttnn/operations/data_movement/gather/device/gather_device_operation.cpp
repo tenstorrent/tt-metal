@@ -16,6 +16,21 @@ namespace ttnn::prim {
 
 constexpr uint32_t GATHER_WT_THRESHOLD = 60;
 
+void validate_gather_tile_shape(const Tensor& tensor, std::string_view name) {
+    if (tensor.layout() != Layout::TILE) {
+        return;
+    }
+    const auto tile_shape = tensor.tensor_spec().tile().get_tile_shape();
+    TT_FATAL(
+        tile_shape[0] == tt::constants::TILE_HEIGHT && tile_shape[1] == tt::constants::TILE_WIDTH,
+        "Gather supports only {}x{} tiles, but {} has a {}x{} tile",
+        tt::constants::TILE_HEIGHT,
+        tt::constants::TILE_WIDTH,
+        name,
+        tile_shape[0],
+        tile_shape[1]);
+}
+
 GatherDeviceOperation::program_factory_t GatherDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {
     const auto input_tensor_shape = tensor_args.input_tensor.padded_shape();
@@ -106,6 +121,12 @@ void GatherDeviceOperation::validate_on_program_cache_miss(
         tensor_args.input_tensor.layout() == Layout::TILE || tensor_args.input_tensor.layout() == Layout::ROW_MAJOR,
         "Gather only supports TILE or ROW_MAJOR layout. Current layout: {}",
         tensor_args.input_tensor.layout());
+
+    validate_gather_tile_shape(tensor_args.input_tensor, "the input tensor");
+    validate_gather_tile_shape(tensor_args.input_index_tensor, "the index tensor");
+    if (tensor_args.output_tensor.has_value()) {
+        validate_gather_tile_shape(*tensor_args.output_tensor, "the output tensor");
+    }
 
     // TILE-only: any user-provided output shard_spec must be tile-aligned. RM operates at
     // stick granularity, so sub-tile shards are valid there.
