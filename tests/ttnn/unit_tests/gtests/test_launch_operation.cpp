@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ttnn/command_list_params.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/mesh_device_operation_adapter.hpp"
@@ -181,6 +182,27 @@ struct MeshWorkloadSpecFactoryWithOverride {
     }
 };
 
+// The override factories again, plus the TTNN command-list parameters a recording binds.
+struct CustomProgramSpecFactoryWithCmdListParams : CustomProgramSpecFactory {
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        const tt::tt_metal::ProgramSpec& /*spec*/,
+        const tt::tt_metal::ProgramRunArgs& /*run_params*/) {
+        return {};
+    }
+};
+
+struct MeshWorkloadSpecFactoryWithOverrideAndCmdListParams : MeshWorkloadSpecFactoryWithOverride {
+    static ttnn::command_list::CmdListBindings map_cmd_list_parameters(
+        const OperationAttributes& /*attrs*/,
+        const Tensor& /*tensor_args*/,
+        const tt::tt_metal::ProgramSpec& /*spec*/,
+        const tt::tt_metal::ProgramRunArgs& /*run_params*/) {
+        return {};
+    }
+};
+
 // Minimal device operation supplying just the typedefs the adapter inherits.
 struct ProgramSpecMinimalOp {
     using operation_attributes_t = OperationAttributes;
@@ -210,11 +232,23 @@ static_assert(ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloa
 static_assert(!ttnn::device_operation::ProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
 static_assert(!ttnn::device_operation::CustomProgramSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverride>);
 
+// Command-list parameters leave the classification as it was.
+static_assert(ttnn::device_operation::CustomProgramSpecFactoryConcept<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(
+    ttnn::device_operation::MeshWorkloadSpecFactoryConcept<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
+static_assert(
+    ttnn::device_operation::detail::HasSpecRuntimeArgsOverride<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
+static_assert(ttnn::device_operation::detail::MapsCmdListParameters<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(!ttnn::device_operation::detail::MapsCmdListParameters<CustomProgramSpecFactory>);
+
 // Every flavor is exactly one alternative as far as a program_factory_t variant is concerned.
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<ProgramSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<CustomProgramSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactory>>);
 static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactoryWithOverride>>);
+static_assert(ttnn::device_operation::AllFactoriesValid<std::variant<CustomProgramSpecFactoryWithCmdListParams>>);
+static_assert(
+    ttnn::device_operation::AllFactoriesValid<std::variant<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>>);
 
 template <typename Factory>
 using WorkloadSpecAdapter =
@@ -234,12 +268,15 @@ template <typename... Factories>
 constexpr bool keys_on_tensor_aliasing_v =
     device_operation::MeshDeviceOperationAdapter<OpWithFactories<Factories...>>::keys_on_tensor_aliasing;
 
-// Only factories whose cache hit replays the bindings recorded on the miss key the cache on tensor
-// aliasing; the others re-derive their tensors on every hit, so their keys stay as they were.
+// Only factories whose cache hit reads the bindings recorded on the miss (tensor refresh or
+// command-list recording) key the cache on tensor aliasing; the others re-derive their tensors on
+// every hit, so their keys stay as they were.
 static_assert(keys_on_tensor_aliasing_v<ProgramSpecFactory>);
 static_assert(keys_on_tensor_aliasing_v<MeshWorkloadSpecFactory>);
 static_assert(!keys_on_tensor_aliasing_v<CustomProgramSpecFactory>);
 static_assert(!keys_on_tensor_aliasing_v<MeshWorkloadSpecFactoryWithOverride>);
+static_assert(keys_on_tensor_aliasing_v<CustomProgramSpecFactoryWithCmdListParams>);
+static_assert(keys_on_tensor_aliasing_v<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>);
 static_assert(!keys_on_tensor_aliasing_v<NewInfraProgramFactory>);
 static_assert(!device_operation::MeshDeviceOperationAdapter<ProgramSpecMinimalOp>::keys_on_tensor_aliasing);
 // One replaying factory is enough: any call of the op may select it.
@@ -264,6 +301,13 @@ TEST(LaunchOperationTest, ProgramSpecAdapterCompiles) {
     [[maybe_unused]] auto wapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactory>::apply_descriptor;
     [[maybe_unused]] auto wocreate = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::create_mesh_workload;
     [[maybe_unused]] auto woapply = &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverride>::apply_descriptor;
+
+    // The miss stores command-list bindings for override factories too.
+    using CustomCmdListAdapter = device_operation::MeshDeviceOperationAdapter<
+        ProgramSpecMinimalOp>::CustomProgramSpecMeshWorkloadFactoryAdapter<CustomProgramSpecFactoryWithCmdListParams>;
+    [[maybe_unused]] auto cclcreate = &CustomCmdListAdapter::create_mesh_workload;
+    [[maybe_unused]] auto wclcreate =
+        &WorkloadSpecAdapter<MeshWorkloadSpecFactoryWithOverrideAndCmdListParams>::create_mesh_workload;
     SUCCEED();
 }
 
@@ -678,7 +722,10 @@ TEST_F(LaunchOperation2x4Test, OutputTensorTopologyMultipleShardDims) {
         (ttsl::SmallVector<distributed::MeshMapperConfig::Placement>{distributed::MeshMapperConfig::Shard{0}}));
 }
 
-TEST_F(LaunchOperation2x4Test, TensorAliasSignature) {
+// Cache keys do not depend on the mesh size, so these tests run on any machine.
+using LaunchOperationMeshTest = tt::tt_metal::GenericMeshDeviceFixture;
+
+TEST_F(LaunchOperationMeshTest, TensorAliasSignature) {
     using TensorRefs = std::vector<std::reference_wrapper<const Tensor>>;
     using device_operation::detail::compute_tensor_alias_signature;
 
@@ -729,7 +776,7 @@ using SamplingOp = ttnn::prim::SamplingDeviceOperation;
 using SamplingAdapter = device_operation::MeshDeviceOperationAdapter<SamplingOp>;
 static_assert(SamplingAdapter::keys_on_tensor_aliasing);
 
-TEST_F(LaunchOperation2x4Test, ProgramCacheKeySeparatesTensorAliasingPatterns) {
+TEST_F(LaunchOperationMeshTest, ProgramCacheKeySeparatesTensorAliasingPatterns) {
     auto* mesh_device = mesh_device_.get();
     const auto make_tensor = [&](const ttnn::Shape& shape, DataType dtype, Layout layout) {
         return ttnn::create_device_tensor(
@@ -804,7 +851,7 @@ struct CustomHashSpecOp {
 using CustomHashSpecAdapter = device_operation::MeshDeviceOperationAdapter<CustomHashSpecOp>;
 static_assert(CustomHashSpecAdapter::keys_on_tensor_aliasing);
 
-TEST_F(LaunchOperation2x4Test, CanonicalKeySeparatesTensorAliasingPatternsWithCustomHash) {
+TEST_F(LaunchOperationMeshTest, CanonicalKeySeparatesTensorAliasingPatternsWithCustomHash) {
     auto* mesh_device = mesh_device_.get();
     const tt::tt_metal::TensorSpec spec(
         ttnn::Shape{1, 1, 32, 32}, tt::tt_metal::TensorLayout(DataType::FLOAT32, Layout::ROW_MAJOR, MemoryConfig{}));

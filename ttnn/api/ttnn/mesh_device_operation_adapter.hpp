@@ -1076,7 +1076,7 @@ public:
             const tensor_args_t& tensor_args,
             const tt::tt_metal::ProgramSpec& spec,
             const tt::tt_metal::ProgramRunArgs& run_params) {
-            if constexpr (requires { &Factory::map_cmd_list_parameters; }) {
+            if constexpr (detail::MapsCmdListParameters<Factory>) {
                 auto bindings = Factory::map_cmd_list_parameters(attrs, tensor_args, spec, run_params);
                 bindings.factory_name = ttsl::long_type_name<Factory>;
                 return std::make_shared<const ttnn::command_list::CmdListBindings>(std::move(bindings));
@@ -1180,7 +1180,8 @@ public:
         //
         // When several slots hold the same MeshTensor, pointer identity cannot tell which of them a
         // TensorArgument came from (ProgramRunArgs::tensor_args is a Table with no promised order).
-        // Any of them is correct: compute_mesh_workload_cache_key keys spec ops by which tensor_args
+        // Any of them is correct for both readers of these bindings on a hit, the tensor refresh and
+        // command-list recording: compute_mesh_workload_cache_key keys such ops by which tensor_args
         // slots alias (compute_tensor_alias_signature), so every hit of this entry repeats the miss's
         // aliasing.
         //
@@ -1748,10 +1749,11 @@ public:
         }
     };
 
-    // A spec factory's cache hit replays the io slot each TensorArgument was matched to on the miss,
-    // unless it re-derives its run args with override_runtime_arguments. When the miss passed one
-    // MeshTensor in several slots, that match could have picked any of them (#57248), so such ops
-    // key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
+    // A spec factory's cache hit replays the io slot each TensorArgument was matched to on the miss in
+    // its tensor refresh, unless it re-derives its run args with override_runtime_arguments, and in a
+    // command-list recording, if it defines map_cmd_list_parameters. When the miss passed one MeshTensor
+    // in several slots, that match could have picked any of them (#57248), so ops with a factory that
+    // replays it key the cache on which tensor_args slots alias: an entry is then only reused by calls whose
     // aliased slots again hold one tensor, where every pick is right. Outputs need no entry in the
     // signature: the cache is keyed on tensor_args only, a new output aliases nothing, and an output
     // that aliases an input (e.g. a preallocated one) is passed in a tensor_args slot. Whether an op
@@ -1760,8 +1762,9 @@ public:
     static constexpr bool keys_on_tensor_aliasing =
         []<typename... Factories>(std::type_identity<std::variant<Factories...>>) {
             return (
-                (ProgramSpecFactoryConcept<Factories> ||
-                 (MeshWorkloadSpecFactoryConcept<Factories> && !detail::HasSpecRuntimeArgsOverride<Factories>)) ||
+                ((ProgramSpecFactoryConcept<Factories> || CustomProgramSpecFactoryConcept<Factories> ||
+                  MeshWorkloadSpecFactoryConcept<Factories>) &&
+                 (!detail::HasSpecRuntimeArgsOverride<Factories> || detail::MapsCmdListParameters<Factories>)) ||
                 ...);
         }(std::type_identity<program_factory_t>{});
 
