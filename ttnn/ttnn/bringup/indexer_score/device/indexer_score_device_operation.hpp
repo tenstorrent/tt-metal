@@ -205,6 +205,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::vector<uint32_t>& lane_kv_lens = {},
     const std::vector<uint32_t>& lane_buffer = {},
     const std::vector<ttnn::Tensor>& k_extra = {},
-    const std::vector<ttnn::Tensor>& k_local_extra = {});
+    const std::vector<ttnn::Tensor>& k_local_extra = {},
+    // Bring-up fork (PB.3M): each lane buffer gathered to its own lanes' extent (operation_attributes_t).
+    bool lane_own_extent = false);
 
 }  // namespace ttnn::experimental::bringup

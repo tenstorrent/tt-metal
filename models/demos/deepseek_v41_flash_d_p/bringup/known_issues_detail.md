@@ -1685,3 +1685,23 @@ clean wall 79.5 ms vs device busy 65.3 ms. With HOST_HIDE the engram worker's ha
 and upload (1.0-2.5 ms) a layer mostly hide behind layer 0 / layers 2-13; running the jobs before the clock gave
 78.4 vs 80.0 ms (alternating, median of 7), so ~1.6 ms is exposed. Tool: `tests/perf/test_host_idle_map.py`
 (`_clean_replay`, DS41-309). P.87 measured the on-device table: steady wall -1.2 ms on the harness path.
+
+## A mixed packed chunk's indexer is bound by its longest lane's score
+
+(DS41-333, PB.3M: why the longest lane's indexer work cannot be split over the early lanes' chips)
+
+Probe `tests/packed/test_lane_balance_probe.py` (walls' mixed case, slots at the one capacity, lanes [139k, 308k, 547k,
+61k] on mesh rows 0-1 / 2-3 / 4-5 / 6-7; one call's ms, max over a row's chips; PACKED_LANE_BALANCE off -> on):
+ring_indexer_score_dsa 4.26 / 4.13 / 3.66 / 3.11 / 4.47 / 4.40 / 3.99 / 4.13 -> 2.37 / 2.20 / 2.52 / 2.56 / 4.13 /
+4.13 / 2.23 / 2.34; topk_large_indices 0.48 / 0.97 / 1.71 / 0.24 (by lane, unchanged); the next collective
+(moe_head 0.41-0.46 on the 547k rows vs 0.82-0.91 elsewhere with on) absorbs the skew, so the slowest chip's device
+time moves ~0-1 ms. Served-cache digests on vs off: 0 of 200 differ.
+- The floor of the ring on a short lane (~2.3 ms) is the all-gather of every lane buffer (each chip forwards all
+  four); the 547k lane's 4.13 ms is its own score: 256 query rows x 273,408 keys (ratio 2) x 32 heads x 128 = 573
+  GFLOP a chip, ~139 TFLOPS on 110 cores.
+- Splitting the 547k lane's KEYS over the 61k lane's chips needs its logits (256 rows x keys x bf16 = 140 MB a chip
+  for all keys; ~62 MB for the balancing share 0.44) on the owner chips for the top-k: the SP links already carry the
+  ring's ~72 MB, so the link floor rises to ~4 ms (no gain); the TP links join chips of the same lane only.
+- A partial top-k on the helper + a merge, or moving query rows between lanes, changes which tied ids win:
+  topk_large_indices orders ties by its own row split (topk_large_indices/README.md "Ties", DS41-286); the oracle's
+  lane equivalence / alone vs today (== 0) would fail on tied bf16 scores, frequent at the 512th place.

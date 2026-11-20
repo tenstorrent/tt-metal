@@ -257,3 +257,18 @@ Mechanical fork changes (fork_op.py): namespace `ttnn::operations::bringup`, CMa
   device/indexer_score_device_operation.cpp, device/indexer_score_device_operation.hpp,
   device/ring_indexer_score_dsa_program_factory.cpp, device/ring_indexer_score_dsa_program_factory.hpp,
   indexer_score_nanobind.cpp, README.md
+
+### PB.3M (deepseek_v41_flash_d_p, 2026-11-20): lane_own_extent, each lane buffer gathered to its own lanes' extent
+- What: opt-in `ring_indexer_score_dsa(lane_own_extent=False)` (with `lane_rows`): the lanes ring's all-gather moves
+  each lane buffer only to the largest kv_len of the lanes that read it (`lane_buffer_valid_height_tiles`, the per-input
+  valid-pages field of the ring_attention all-gather, re-patched every cache-hit call), not every buffer to the call's
+  kv_len (the largest lane's). The consumer is unchanged: a lane reads its own buffer up to its own kv_len only, which
+  its buffer's extent still covers. The first call of a program (cache miss) gathers the call's extent (correct, as
+  before); every later call its own lanes'. Hashed (one program a value).
+- Why: deepseek_v41_flash_d_p PB.3M (PACKED_LANE_BALANCE): a mixed packed chunk (61k / 139k / 308k / 547k) moved 4 x
+  the 547k lane's index keys around the SP ring; the lanes' own extents are ~1.9 x it.
+- Default: off (false): the program, its hash and the gather unchanged.
+- Run: the model's packed oracle / walls on the 8x4 (no fork unit test on the 8x4: brief).
+- Files: device/indexer_score_device_operation_types.hpp, device/indexer_score_device_operation.cpp,
+  device/indexer_score_device_operation.hpp, device/ring_indexer_score_dsa_program_factory.cpp,
+  indexer_score_nanobind.cpp, README.md

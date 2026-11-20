@@ -83,6 +83,24 @@ std::optional<uint32_t> gather_valid_height_tiles(const operation_attributes_t& 
     return std::min<uint32_t>(valid_local_rows, k_local.logical_shape()[2]) / tt::constants::TILE_HEIGHT;
 }
 
+// PB.3M (lane_own_extent): the gather extent of lane buffer `input` = the largest of its own lanes' extents (the
+// lanes whose lane_buffer is `input`); a buffer no lane reads keeps the call's extent.
+std::optional<uint32_t> lane_buffer_valid_height_tiles(
+    const operation_attributes_t& args, const Tensor& k_local, uint32_t input) {
+    std::optional<uint32_t> out;
+    for (uint32_t l = 0; l < args.lane_buffer.size(); ++l) {
+        if (args.lane_buffer[l] != input) {
+            continue;
+        }
+        const auto v = gather_valid_height_tiles(lane_attributes(args, l), k_local);
+        if (!v.has_value()) {
+            return gather_valid_height_tiles(args, k_local);
+        }
+        out = std::max(out.value_or(0u), *v);
+    }
+    return out.has_value() ? out : gather_valid_height_tiles(args, k_local);
+}
+
 // One device's fused program: indexer compute (banded schedule, DSA path) + co-scheduled ring_attention AG.
 // lanes_args / lanes_tensors (PB.3A, lane_rows > 0): the call's own attributes and tensors, the ones the AG gathers
 // (every lane buffer, the largest lane's extent); args / tensors are then this device's lane's.
@@ -950,7 +968,9 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
     const auto changed = [&](auto member) {
         return !previous_controls || (*previous_controls).*member != scalar_controls.*member;
     };
-    const bool update_extent = changed(&ScalarControls::kv_len) || changed(&ScalarControls::cache_batch);
+    // (PB.3M lane_own_extent: every input's extent is its own lanes', which change with the lanes: every call)
+    const bool update_extent =
+        changed(&ScalarControls::kv_len) || changed(&ScalarControls::cache_batch) || (lanes && args.lane_own_extent);
     const bool update_metadata = changed(&ScalarControls::num_layers) || changed(&ScalarControls::layer_index);
     const bool update_consumer = update_extent || update_metadata || changed(&ScalarControls::chunk_start) ||
                                  changed(&ScalarControls::lane_lo) || changed(&ScalarControls::lane_hi) || lanes;
@@ -1002,7 +1022,9 @@ void RingIndexerScoreDsaMeshWorkloadFactory::override_runtime_arguments(
         for (uint32_t in = 0; in < n_inputs; ++in) {
             const auto& in_shape = in == 0 ? shape : tensors.k_local_extra[in - 1].padded_shape();
             const uint32_t in_Ht = in_shape[2] / tt::constants::TILE_HEIGHT;
-            const uint32_t valid_pages = std::min(valid_Ht.value_or(in_Ht), in_Ht) * Wt;
+            const auto in_valid_Ht =
+                args.lane_own_extent ? lane_buffer_valid_height_tiles(args, k_local, in) : valid_Ht;  // PB.3M
+            const uint32_t valid_pages = std::min(in_valid_Ht.value_or(in_Ht), in_Ht) * Wt;
             const uint32_t block = in * ag_rt::kTensorDescriptorFieldCount;
             for (size_t i : {0u, 1u}) {
                 ag_updates[i].emplace_back(

@@ -347,6 +347,10 @@ void bind_indexer_score(nb::module_& mod) {
                 of lane l scores at chunk start lane_starts[l] with kv_len lane_kv_lens[l] against the keys of buffer
                 lane_buffer[l] (0: k / k_local, i: k_extra[i - 1] / k_local_extra[i - 1]); the ring gathers every
                 buffer's k_local (up to 4); kv_len must be the largest lane's. The lane values are runtime values.
+            lane_own_extent: optional bool (default False = every lane buffer gathered to kv_len, the largest
+                lane's; bring-up fork, deepseek_v41_flash_d_p PB.3M): each lane buffer gathered only to the largest
+                kv_len of the lanes that read it (a mixed packed chunk's short lanes do not carry the longest lane's
+                extent around the ring). Runtime extents; the scores are unchanged (no lane reads past its kv_len).
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -389,7 +393,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("lane_kv_lens") = std::vector<uint32_t>{},
         nb::arg("lane_buffer") = std::vector<uint32_t>{},
         nb::arg("k_extra") = std::vector<ttnn::Tensor>{},
-        nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{});
+        nb::arg("k_local_extra") = std::vector<ttnn::Tensor>{},
+        nb::arg("lane_own_extent") = false);
 }
 
 }  // namespace ttnn::operations::bringup::indexer_score::detail

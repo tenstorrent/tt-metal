@@ -790,6 +790,12 @@ ONE_RING = [_has_one_ring()]  # (a list: tests may switch it off for the per-seg
 _KBUFS: dict = {}  # (id(mesh), capacity, j) -> (mesh, lane j's gathered-key buffer, the indexer's kbuf's spec)
 
 
+def _own_extent() -> dict:
+    """PACKED_LANE_BALANCE=on (PB.3M, call-time): the lanes ring gathers each lane buffer to its own lane's extent
+    (ring_indexer_score_dsa lane_own_extent), not every buffer to the longest lane's; off: the fork's default."""
+    return {"lane_own_extent": True} if settings.get("PACKED_LANE_BALANCE") == "on" else {}
+
+
 def _kbuf(mesh, base: ttnn.Tensor, j: int) -> ttnn.Tensor:
     """Lane buffer j >= 1's ring output of the one-call indexer (the indexer's own ``_kbuf`` is j 0)."""
     key = (id(mesh), tuple(base.shape), base.dtype, j)
@@ -1192,6 +1198,7 @@ class OneCall:
             k_extra=[_kbuf(self.model.mesh, ix._kbuf[caps[j]], j) for j in range(1, len(segs))],
             k_local_extra=list(k_locals[1:]),
             **ep,
+            **_own_extent(),
         )
         if bias is not None:
             dealloc(bias)

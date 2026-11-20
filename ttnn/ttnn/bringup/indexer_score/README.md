@@ -90,6 +90,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   default 0 / empty; PB.3A): ONE fused ring over the lanes of a packed chunk: each device its lane's start, kv_len and
   key buffer; the all-gather moves every lane buffer's k_local (up to 4 inputs, no partial readiness); kv_len is the
   largest lane's. Starts / kv_lens are runtime values; lane_buffer is hashed (one program a lane -> buffer map).
+- `lane_own_extent` (ring op, fork, opt-in, default False; PB.3M): with `lane_rows`, each lane buffer is gathered only
+  to its own lanes' largest kv_len instead of the call's kv_len (a mixed packed chunk: 61k / 139k / 308k / 547k moved
+  4 x the 547k lane's keys). Same scores. Hashed; the extents are runtime values.
 
 ## Limits
 - fp32 DEST: DSA only (not MSA, not block pooling); `dst_full_sync_en` must stay False.
@@ -129,7 +132,7 @@ Tests: `tests/test_indexer_score.py` (model cases, `tests/cases.py`), `tests/uni
   keys with `natural_query_rows`.
   P.40: INDEX_K_FORMAT=bfp8 scores bfloat8_b keys (k_local and the ring buffer) against the bfloat4_b query.
   PB.3A (PACKED_ATTN_ONECALL=on, `tt/packed_onecall.py`): `natural_query_lane` (a segment's ring call) and the lanes
-  ring (one call over a packed chunk).
+  ring (one call over a packed chunk); PB.3M (PACKED_LANE_BALANCE=on): `lane_own_extent`.
 
 ## History
 CHANGELOG.md

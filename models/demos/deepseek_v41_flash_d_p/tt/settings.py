@@ -1394,6 +1394,16 @@ TABLE = {
         "query; off = PB.3A (the prefetches serial at the first engram wait, the tails serial at the source layer). Same "
         "bytes at the same rows (a data move). Default off (the task's: on = the change; the gate sets it)",
     ),
+    "PACKED_LANE_BALANCE": Setting(
+        "off",
+        ("off", "on"),
+        "PB.3M (OWNER 2026-11-19, overseer 2026-11-20 06:35), read per chunk (CALL-TIME, listed in bringup/hooks.py "
+        "batch_call_settings). A mixed packed chunk (lanes at different history positions) is bounded by its longest "
+        "lane: on = the one-ring indexer's all-gather moves each lane's key buffer only to that lane's own extent "
+        "(ring_indexer_score_dsa lane_own_extent), not every buffer to the longest lane's (4 x the 547k lane's keys "
+        "around the ring for 61k / 139k / 308k / 547k); off = PB.3K. The same scores (no lane reads past its "
+        "kv_len). Default off (the task's: on = the change; the gate sets it)",
+    ),
     "PACKED_HOST_FAST": Setting(
         "off",
         ("off", "on"),

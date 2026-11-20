@@ -180,6 +180,11 @@ struct operation_attributes_t {
     std::vector<uint32_t> lane_starts{};
     std::vector<uint32_t> lane_kv_lens{};
     std::vector<uint32_t> lane_buffer{};
+    // Bring-up fork option (DeepSeek-V4.1 PB.3M, PACKED_LANE_BALANCE; default false = the PB.3A gather): with
+    // lane_rows > 0, each gathered buffer moves only the extent its own lanes read (the largest kv_len of the lanes
+    // whose lane_buffer is that buffer), not the largest lane's: a mixed packed chunk's short lanes stop carrying the
+    // longest lane's key extent around the ring. Runtime extents (re-patched every call); HASHED (one program a value).
+    bool lane_own_extent{false};
     // Bring-up fork block epilogue (opt-in, fused ring only; default 0 / false = no epilogue, the program unchanged):
     // block_keys > 0 when tensor_args.block_bias or block_max_out is given -- blocks of block_keys adjacent logical
     // keys (block b = keys [b block_keys, (b + 1) block_keys)), applied by the writer to the untilized scores.

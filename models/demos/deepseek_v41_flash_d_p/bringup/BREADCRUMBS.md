@@ -1798,3 +1798,56 @@
   DS41-316; the walls' raised max_seq; the gate's fresh determinism process).
 - Final check `orchestrator measure --task PB.3K` (quick, single-request path, switch on): rc 0, chunk_wall_ms 224.9
   (PB.3H 229.9), min layer PCC 0.732 (L39, as PB.3H), host_transfers_per_layer 0.
+
+## PPB.3M (PB.3M perf, attempt 1): the mixed chunk's longest lane off the indexer's critical path (PACKED_LANE_BALANCE off | on)
+
+- Load (1) reason: tests/packed/test_lane_balance_probe.py on the walls' performance load (layers 0-20, 8192, slots at
+  the one capacity): "needs the walls' one performance load; the question is the per-chip time of the one ring /
+  top-k at the mixed case's real 547k history, which only real slots at that position have".
+- Expected (perf_guide s2, written before the first measurement): PB.3K mixed device 121.0 ms, indexer 22.4 ms a chunk
+  (3 index layers in 0-20; per layer the one ring ~5.5 ms + top-k ~1.7 ms on the 547k lane's chips; the 547k lane's
+  ring alone, per-segment, was 4.1 ms in PB.3A). The one ring's all-gather moves every lane buffer to the call's kv_len
+  (the 547k lane's: ring_indexer_score_dsa_program_factory.cpp, `gather_valid_height_tiles(*lanes_args, ...)`), i.e.
+  4 x 137k index keys a ring where the lanes need 61k + 139k + 308k + 547k = 1.93 x 547k. Change 1 (fork option
+  lane_own_extent): each buffer to its own lane's extent. Expected: -0.5..-1.5 ms a ring layer (the gap between the
+  one ring and the 547k lane alone), -1.5..-4 ms device a chunk on mixed, 0 on 4 x 2k (equal extents), host 0.
+  Change 2 (the overseer's item 1, the score work of the longest lane split over the early lanes' chips) only if the
+  probe shows the ring compute-bound on the 547k chips with the others idle.
+- Built: fork option `ring_indexer_score_dsa(lane_own_extent=)` (indexer_score CHANGELOG PB.3M: each lane buffer's
+  all-gather extent = its own lanes' largest kv_len, re-patched every cache-hit call; hashed; default off = PB.3A's
+  gather), Setting PACKED_LANE_BALANCE (call-time, batch_call_settings), tt/packed_onecall._own_extent (the lanes
+  ring call). No kernel change: the ring_attention all-gather kernels already take a per-input valid-pages field.
+  Cores: unchanged (score 110, the all-gather on the free column).
+- Probe (tests/packed/test_lane_balance_probe.py, held 21-layer walls load, slots at the one capacity, lanes [139k,
+  308k, 547k, 61k] on mesh rows 0-1 / 2-3 / 4-5 / 6-7; one call's ms, max over a row's chips), off -> on:
+  ring 4.26 / 4.13 / 3.66 / 3.11 / 4.47 / 4.40 / 3.99 / 4.13 -> 2.37 / 2.20 / 2.52 / 2.56 / 4.13 / 4.13 / 2.23 / 2.34;
+  top-k 0.48 / 0.97 / 1.71 / 0.24 by lane (unchanged); slowest chip's device 118.09 -> 116.90 and 117.90 -> 117.81
+  (two runs: the critical path is the 547k lane's chips, whose ring only lost the gather excess 4.40 -> 4.13; the
+  skew moves to the next collective, moe_head 0.41-0.46 on the 547k rows vs 0.82-0.91 elsewhere). Served-cache
+  digests on vs off: 0 of 200 differ (both runs). Every other op is even over the rows (sparse_sdpa, gathers, MoE).
+- DECIDED (OV-58), item 1 (split the longest lane's score over the early lanes' chips) NOT built: bit-identity to
+  PB.3K rules out a partial top-k + merge or moving query rows (topk_large_indices orders ties by its own row split,
+  DS41-286 / its README "Ties"; the oracle's == 0 checks would fail on tied bf16 scores); a key split with the logits
+  sent back to the owner moves ~62 MB a chip over the SP links that already carry the ring's ~72 MB (link floor ~2.3
+  -> ~4 ms): no gain. The 547k score is 573 GFLOP a chip in 4.13 ms (~139 TFLOPS on 110 cores at ATTN_FIDELITY); a
+  faster score kernel or LoFi scoring would help every case and is its own pick (precision A/B), not this task's.
+  Detail: known_issues_detail.md (DS41-333).
+- Gate (`gate PB.3M --check`, after the last code edit, pre-commit clean): PASS PB.3M. Oracle (40 layers): lane
+  equivalence 0, alone vs today 0, slot digests 0 mismatches, packed determinism 0; reference: every segment's every
+  layer within its limit, final hidden 0.131, top-5 1.0 x 4; determinism 0.0. Walls (gate, switch on, one 21-layer
+  load, resident table), vs PB.3K's walls run (same table):
+  | case | PB.3K | PB.3M on | device PB.3K -> PB.3M | new tok/s |
+  | 4 x 2k @ 139264 | 110.2 ms | 109.4 ms | 99.6 -> 99.7 | 74.9k (no regression) |
+  | mixed 61k / 139k / 308k / 547k | 127.5 ms (gate 129.4) | 126.4 ms (spread 2.3) | 121.0 -> 116.65 (indexer 22.41 -> 19.76) | 64.8k (>= 64k) |
+  | 1 x 2k + 3 empty | 88.5 ms | 88.4 ms | 78.6 -> 78.7 | 23.2k |
+  The device drop on mixed (-4.35 ms) is larger than the probe's (0..-1.2 ms; the experts phase moves 44.2 -> 39.1
+  with the lanes' routing between runs): the A/B's own off / on table decides.
+- Final check `orchestrator measure --task PB.3M` (quick, single-request path, switch on): rc 0, chunk_wall_ms 225.6
+  (PB.3K 224.9), min layer PCC 0.732 (L39, as PB.3K), host_transfers_per_layer 0.
+- Re-run: gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.3M --spec $BRINGUP_SPEC --check`; probe
+  `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd "BRINGUP_CHUNK=8192
+  DS41_ENGRAM_TABLE=resident DS41_PACKED=on DS41_PACKED_MOE=on DS41_PACKED_GATHER_HIDE=on DS41_PACKED_ATTN_ONECALL=on
+  DS41_PACKED_HOST_FAST=on BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode [PB3M_PROBE_SECTIONS=a,c,e,...]
+  scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/packed/test_lane_balance_probe.py"`.
+- Device opens this task: 2 runner restarts (a python reload whose memory did not come back, DS41-316; the C++ build)
+  plus the gate's own processes.
