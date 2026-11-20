@@ -762,8 +762,7 @@ struct MuxCachedInfo {
  * *****************************************************************************/
 template <typename EdmSenderT = WorkerToFabricEdmSender>
 struct FabricConnectionArray {
-    // TODO: get the num buffers more systematically
-    static constexpr uint8_t NUM_BUFFERS = 8;
+    static constexpr uint8_t NUM_BUFFERS = MUX_BUFFERS_PER_CHANNEL;
 
     using MuxConnectionType = tt::tt_fabric::WorkerToFabricMuxSender<NUM_BUFFERS>;
     static constexpr size_t MAX_CONNECTION_SIZE = std::max(sizeof(EdmSenderT), sizeof(MuxConnectionType));

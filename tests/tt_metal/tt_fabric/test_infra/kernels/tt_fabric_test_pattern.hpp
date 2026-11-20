@@ -28,6 +28,10 @@ namespace tt::tt_fabric::fabric_tests {
 inline constexpr uint32_t HOT_STATE_MAX_CONFIGS_WORMHOLE = 20;
 inline constexpr uint32_t HOT_STATE_MAX_CONFIGS_BLACKHOLE = 39;
 
+// Buffers in every channel of a test mux: the host builds each mux with this many per channel, and each client sizes
+// its mux connection (FabricConnectionArray in tt_fabric_test_kernels_utils.hpp) to match.
+inline constexpr uint8_t MUX_BUFFERS_PER_CHANNEL = 8;
+
 // Per-packet seed step. Payload word i of a packet is seed + i.
 inline uint32_t prng_next(uint32_t n) {
     uint32_t x = n;

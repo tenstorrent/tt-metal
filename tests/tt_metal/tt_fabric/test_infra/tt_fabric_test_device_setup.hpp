@@ -210,10 +210,6 @@ private:
     std::set<tt::tt_metal::CoreCoord> all_mux_client_cores_;  // All cores that use mux connections
     tt::tt_metal::CoreCoord global_termination_master_;       // First mux client (in deterministic order)
 
-    // Must match the clients' FabricConnectionArray::NUM_BUFFERS (kernels/tt_fabric_test_kernels_utils.hpp), which sets
-    // the buffer count of their mux connections.
-    static constexpr uint32_t BUFFERS_PER_CHANNEL = 8;
-
     // Times a mux services its full-size (sender data) channels per pass over its header-only (receiver credit)
     // channels; the mux default is 1. A mux in these tests mostly serves receivers returning credits, so at 1 a sender
     // gets one packet through per pass over every credit channel.

@@ -304,7 +304,7 @@ void TestContext::split_senders_to_fit_core_limits(TestConfig& config) const {
         use_dynamic_policies_ ? std::nullopt
                               : std::optional<uint32_t>(allocation_policies_.receiver_config.max_configs_per_core);
     tt::tt_fabric::fabric_tests::DynamicPolicyManager::split_senders_to_fit_core_limits(
-        config, *fixture_, fixed_receiver_configs_per_core);
+        config, *fixture_, *fixture_, fixed_receiver_configs_per_core);
 }
 
 void TestContext::prepare_for_test(const TestConfig& config) {
