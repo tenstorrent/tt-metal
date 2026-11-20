@@ -223,6 +223,32 @@ class TtPrefillRuntime:
 
         self._build_model(state_dict)
 
+    @classmethod
+    def weight_cache_complete(cls, config) -> bool:
+        """Whether config.weight_cache_path holds every weight file this rank's model loads, so it can be built
+        with an empty state_dict."""
+        if not config.weight_cache_path:
+            return False
+        model_cfg = config.model_cfg
+        num_devices = config.mesh_shape[0] * config.mesh_shape[1]
+        return cls.MODEL_CLS.check_cache_complete(
+            config.weight_cache_path,
+            config.num_layers,
+            model_cfg.NUM_ROUTED_EXPERTS // num_devices,
+            first_k_dense=model_cfg.NUM_DENSE_LAYERS,
+            first_layer_idx=config.first_layer_idx,
+            is_first_rank=config.is_first_rank,
+            is_last_rank=config.is_last_rank,
+            kv_only_last_layer=config.kv_only_last_layer,
+            # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
+            # to look for the latent-projection cache files and would call an incomplete cache complete.
+            model_cfg=model_cfg,
+            # Must be the dtype the experts will be BUILT at, or a cache at another dtype
+            # reports complete and the placeholder is loaded as the weights.
+            routed_expert_weights_dtype=config.routed_expert_weights_dtype,
+            mtp_levels=config.mtp_levels,
+        )
+
     def _build_model(self, state_dict: dict) -> None:
         logger.info(
             f"Building TtPrefillRuntime model: "
@@ -233,26 +259,7 @@ class TtPrefillRuntime:
         )
         model_cfg = self.config.model_cfg
         if self.config.weight_cache_path:
-            num_devices = self.config.mesh_shape[0] * self.config.mesh_shape[1]
-            experts_per_chip = model_cfg.NUM_ROUTED_EXPERTS // num_devices
-            if self.MODEL_CLS.check_cache_complete(
-                self.config.weight_cache_path,
-                self.config.num_layers,
-                experts_per_chip,
-                first_k_dense=model_cfg.NUM_DENSE_LAYERS,
-                first_layer_idx=self.config.first_layer_idx,
-                is_first_rank=self.config.is_first_rank,
-                is_last_rank=self.config.is_last_rank,
-                kv_only_last_layer=self.config.kv_only_last_layer,
-                # Required for a LatentMoE model (Kimi-K3): without it the per-block check cannot know
-                # to look for the latent-projection cache files and would call an incomplete cache
-                # complete. model_cfg is already in hand two lines up.
-                model_cfg=model_cfg,
-                # Must be the dtype the experts will be BUILT at, or a cache at another dtype
-                # reports complete and the placeholder is loaded as the weights.
-                routed_expert_weights_dtype=self.config.routed_expert_weights_dtype,
-                mtp_levels=self.config.mtp_levels,
-            ):
+            if self.weight_cache_complete(self.config):
                 logger.info(f"TTNN weight cache complete at {self.config.weight_cache_path}; loading from disk")
             elif not state_dict:
                 # Incomplete cache AND no source weights is the silent-corruption case this change

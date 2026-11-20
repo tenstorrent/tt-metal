@@ -11,8 +11,13 @@ fixed (quad_screen_runtime.py); every stage checks what it received and what it 
 from __future__ import annotations
 
 import dataclasses
+import os
 from pathlib import Path
 
+from loguru import logger
+
+import ttnn
+from models.common.utility_functions import is_blackhole
 from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 
@@ -34,28 +39,48 @@ class QuadBlockRandomAdapter(_QuadScreenAdapter):
 
     name = "quad_block_random"
 
+    def weight_cache_path(self, mesh_shape: tuple):
+        """Opt-in TTNN cache of the random weights: with PREFILL_TTNN_CACHE set, the first bring-up on a host
+        writes them and later ones load them instead of building them again (~3.5 min). The directory names the
+        seed, so a new seed never loads old weights. Unset, every bring-up builds them."""
+        from models.demos.deepseek_v3_d_p.tt.runners.quad_screen_runtime import WEIGHT_SEED
+
+        root = os.environ.get("PREFILL_TTNN_CACHE")
+        if not root:
+            return None
+        arch = "bh" if is_blackhole() else "wh"
+        sp, tp = mesh_shape
+        path = Path(root) / f"{self.name}_seed{WEIGHT_SEED}_{arch}_{ttnn.get_num_devices()}dev" / f"{sp}x{tp}"
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):
         from models.demos.deepseek_v3_d_p.tt.runners.quad_screen_runtime import (
             QuadBlockRandomRuntime,
             random_block_state_dict,
         )
+        from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
         assert params.num_layers == 2, f"each quad screen stage runs 2 layers, got {params.num_layers}"
         # Built as a middle stage so it takes a hidden state and returns one on every rank. Global layer
         # first_layer_idx is made the dense one and the next the MoE one, so every stage runs block-random's
         # L0 + L1 while its layer acks keep their own global indices.
-        inner = dataclasses.replace(
-            params, is_first_rank=False, is_last_rank=False, kv_only_last_layer=False, weight_cache_path=None
-        )
+        inner = dataclasses.replace(params, is_first_rank=False, is_last_rank=False, kv_only_last_layer=False)
         stage_cfg = type(
             "QuadStageKimiK27Config", (self.model_config,), {"NUM_DENSE_LAYERS": params.first_layer_idx + 1}
         )
         config = dataclasses.replace(self.runtime_config(inner), model_cfg=stage_cfg)
+        # A complete cache already holds these exact weights; building them again is most of bring-up.
+        if TtPrefillRuntime.weight_cache_complete(config):
+            logger.info(f"quad screen: random weights cached at {config.weight_cache_path}; not building them")
+            state_dict = {}
+        else:
+            state_dict = random_block_state_dict(self, hf_config)
         return QuadBlockRandomRuntime(
             mesh_device,
             hf_config,
             config,
-            random_block_state_dict(self, hf_config),
+            state_dict,
             is_first_rank=params.is_first_rank,
             is_last_rank=params.is_last_rank,
         )
