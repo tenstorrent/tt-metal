@@ -23,7 +23,9 @@ rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
 | no `tt-run-signal` | forces through the launcher and says to reset the devices | 130 | `test_ttrun_stop[ctrl_c_no_helper]` |
 | a rank killed, aborting or exiting non-zero | its wrapper stops the job; tt-run names the rank and returns its code | 128 + signal / the code | `test_ttrun_dead_rank`, `test_ttrun_abort_ends`, `test_ttrun_dead_peer_survivors_abort` |
 | the job reaches its `--timeout N` | SIGTERM to every rank at N s, as for Ctrl-C; PRRTE's own `--timeout` stays only as a backstop at N + the grace + 30 s | 241 | `test_ttrun_hang_timeout` |
-| ranks that do not exit | forced after the stop grace, or on a second Ctrl-C, with a warning to run `tt-smi -r` | 128 + the signal | `test_ttrun.py` (`TestJobOwnership`) |
+| Ctrl-C (or SIGTERM) a second time | forces at once: SIGTERM to the launcher, which kills every rank still running (SIGTERM, then SIGKILL 250 ms later), with a warning to run `tt-smi -r` | 128 + the first signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[second_signal]` |
+| ranks still running when the stop grace runs out | forced the same way, with the same warning | 128 + the signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[grace_expired]` |
+| an uncaught C++ exception in a rank | the rank calls `MPI_Abort` (main's terminate handler): PRRTE kills every rank (SIGTERM, then SIGKILL ~200 ms later) before tt-run can act; tt-run names the rank from prterun's banner and ends a launcher that lingers after it (openpmix/prrte#2815) | the abort code | `test_ttrun_abort_ends`, `test_ttrun.py::test_wait_ends_a_launcher_that_lingers_after_an_mpi_abort` |
 | a process still exiting after the launcher returned | waited for up to the grace after a clean finish (10 s after a stop), then SIGTERM, then SIGKILL; a zombie counts as ended | 0 if it exits in time | `test_ttrun.py` (`TestJobOwnership`) |
 | clean | normal finalize | 0 | `test_ttrun_clean` |
 
