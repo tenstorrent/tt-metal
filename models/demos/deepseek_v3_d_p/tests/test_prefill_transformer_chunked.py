@@ -53,11 +53,8 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
     torus_xy_device_params,
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
-from models.demos.deepseek_v3_d_p.tests.measure.determinism import (
-    marker_chips,
-    merge_device_mismatch_markers,
-    mismatch_report,
-)
+from models.demos.deepseek_v3_d_p.tests.measure.determinism import marker_chips
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import det_probe
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.mla.indexer import (
     full_indexer_rank,
@@ -2261,15 +2258,25 @@ def run_chunked_transformer_updated(
         signpost("PROFILE_MEASURE_START")
 
     det_copies = []
+    det_bad = {}  # iteration -> the chips whose KV cache differed from iteration 0's
     if determinism_check:
+        # DET_ITERS: replays are ~1 s against ~12 min of setup - run many (each compared on device as it ends, so
+        # the count costs no memory)
+        num_iters = int(os.environ.get("DET_ITERS", num_iters))
         if num_iters < 2:
             pytest.skip("determinism_check requires num_iters >= 2 (iteration 0 is the baseline)")
         det_storage = tt_kvpe_cache.storage if isinstance(tt_kvpe_cache, MlaKvCache) else tt_kvpe_cache
         # ne compares values: a packed scaled-FP8 cache holds bf16 fields in FP8 bytes, which it would misread.
         assert det_storage.dtype != ttnn.DataType.FP8_E4M3, "on-device determinism needs a bf16/bfp8 KV cache"
-        # One copy of the KV cache per iteration, allocated before any capture: a buffer allocated while a trace is
-        # live can land on its scratch and be overwritten by the next replay. Compared after the last iteration.
-        det_copies = [ttnn.allocate_tensor_on_device(det_storage.spec, mesh_device) for _ in range(num_iters)]
+        # Three copies of the KV cache, allocated before any capture (a buffer allocated while a trace is live can land
+        # on its scratch and be overwritten by the next replay): iteration 0's, the latest iteration's and the first
+        # one that differed (for the failure report). Each
+        # iteration is compared with iteration 0 as it ends and its marker read back at once (the compare's
+        # temporaries never outlive a replay).
+        det_copies = [ttnn.allocate_tensor_on_device(det_storage.spec, mesh_device) for _ in range(3)]
+    # The per-layer probe (K3 only; DET_PROBE=0 turns it off): every layer's input, attention output and FFN output,
+    # reduced to per-token sums and compared after each chunk, so a failure names the first layer and op that changed.
+    probe = det_probe.install(mesh_device) if determinism_check and os.environ.get("DET_PROBE", "1") == "1" else None
 
     # use_trace: capture the chunk forward ONCE, then replay it per chunk. The per-chunk scalars
     # (slot_id / actual_start / actual_end) cannot be host arguments on a captured program, so they move
@@ -2338,6 +2345,13 @@ def run_chunked_transformer_updated(
         _fwd_meta()  # warm/compile the metadata-variant programs before recording
         ttnn.synchronize_device(mesh_device)
 
+        if probe is not None:
+            # armed after the warm-up (the MoE blocks' arenas exist), one more eager forward allocates the slots and
+            # builds the probe's programs; none may appear under capture
+            probe.arm()
+            _fwd_meta()
+            ttnn.synchronize_device(mesh_device)
+            probe.freeze()
         trace_controller.begin_capture()
         _fwd_meta()
         trace_controller.end_capture()
@@ -2353,6 +2367,8 @@ def run_chunked_transformer_updated(
     profiler.start("tt_forward")
     for it in range(num_iters):
         iter_start = time.time()
+        if probe is not None and not use_trace and it == 1:
+            probe.arm()  # untraced: iteration 0 built the MoE blocks' arenas; iteration 1 is the probe's reference
         chunk_times: list[float] = []
         for c in range(n_chunks):
             kv_actual = preload_isl + c * chunk_size
@@ -2374,6 +2390,8 @@ def run_chunked_transformer_updated(
                 ttnn.synchronize_device(mesh_device)
                 chunk_seconds = time.time() - chunk_start
                 chunk_times.append(chunk_seconds)
+                if probe is not None and probe.order:
+                    probe.compare(it, c)
                 # Per-(iter, chunk) sample. print_duration_table only reports the median over
                 # iterations[1:], so at num_iters=2 iteration 0's per-chunk times would otherwise be
                 # unrecoverable (only its total is logged) -- and the traced path reaches no other
@@ -2407,6 +2425,8 @@ def run_chunked_transformer_updated(
                 index_kv_cache=tt_index_kv_cache,
             )
             ttnn.synchronize_device(mesh_device)
+            if probe is not None and probe.order:
+                probe.compare(it, c)
             if check_layer_pcc:
                 # min over every chunk (and iteration, though accuracy callers pass num_iters=1 since
                 # each iteration replays the same chunks into the same cache region).
@@ -2449,28 +2469,51 @@ def run_chunked_transformer_updated(
             # what every later chunk attends to, so a write landing out of order inside the replay shows up here
             # even when the final hidden state looks fine. On device (tests/measure/determinism.py): each iteration's
             # cache is copied into its own buffer, and every copy is compared with iteration 0's after the last one.
-            ttnn.copy(det_storage, det_copies[it])
+            ttnn.copy(det_storage, det_copies[min(it, 1)])
+            if it > 0:
+                # The mismatch in DRAM interleaved: max cannot reduce the cache's ND sharding.
+                mismatch = ttnn.ne(
+                    det_copies[0], det_copies[1], dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG
+                )
+                marker = ttnn.max(mismatch)
+                ttnn.deallocate(mismatch)
+                bad = marker_chips(marker)
+                ttnn.deallocate(marker)
+                if bad:
+                    if not det_bad:
+                        ttnn.copy(det_copies[1], det_copies[2])
+                    det_bad[it] = bad
+                    logger.warning(f"[determinism] iteration {it}: KV cache differs from iteration 0 on chips {bad}")
+                    if os.environ.get("DET_STOP_AT_FIRST", "0") == "1":
+                        num_iters = it + 1
+                        break
         # Drop iter 0's per-layer MLA/FFN samples (the compile iteration), same as the chunk-time table.
         if it == 0:
             reset_block_timings()
     profiler.end("tt_forward")
 
+    probe_report = ""
+    if probe is not None:
+        probe_report = probe.report() if probe.order else ""
+        det_probe.uninstall()
+        if probe_report:
+            logger.info(probe_report)
     if determinism_check:
-        det_marker = None
         try:
-            for det_copy in det_copies[1:]:
-                # The mismatch in DRAM interleaved: max cannot reduce the cache's ND sharding.
-                mismatch = ttnn.ne(det_copies[0], det_copy, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-                det_marker = merge_device_mismatch_markers(det_marker, ttnn.max(mismatch))
-                ttnn.deallocate(mismatch)
-            chips = marker_chips(det_marker)
-            detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
+            chips = sorted({c for bad in det_bad.values() for c in bad})
+            detail = ""
             if chips:
-                detail += "\n" + _kv_divergence_by_iteration(det_copies, chips)
+                detail = (
+                    f"{len(det_bad)} of {num_iters - 1} iterations differ: "
+                    + ", ".join(f"{it}: chips {bad}" for it, bad in sorted(det_bad.items())[:40])
+                    + "\n"
+                    + _kv_divergence_by_iteration([det_copies[0], det_copies[2]], chips)
+                    + f" (iteration 1 above = iteration {min(det_bad)}, the first that differed)"
+                    + ("\n" + probe_report if probe_report else "")
+                )
         finally:
-            for t in [det_marker, *det_copies]:
-                if t is not None:
-                    ttnn.deallocate(t)
+            for t in det_copies:
+                ttnn.deallocate(t)
         assert (
             not chips
         ), f"captured-trace replay is not deterministic: KV cache differs from iteration 0 on chips {chips}\n{detail}"

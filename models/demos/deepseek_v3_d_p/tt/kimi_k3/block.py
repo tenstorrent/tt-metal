@@ -23,6 +23,7 @@ from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import det_probe
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -223,12 +224,14 @@ class TtKimiK3Block(LightweightModule):
         is done as early as it was before.
         """
         hidden = residual.open(self.local_idx)
+        det_probe.tap(self.layer_idx, "in", hidden)
         if attn_input_tap is not None:
             attn_input_tap(self.local_idx, hidden)
         normed = self.attn_norm(hidden)
         seq_len_local = normed.shape[2]
 
         attn_out = self.attention.forward(normed, ctx)
+        det_probe.tap(self.layer_idx, "attn", attn_out)
         ttnn.deallocate(normed)
 
         if self.attention.writes_kv:
@@ -280,6 +283,7 @@ class TtKimiK3Block(LightweightModule):
         pre_ffn = residual.read()
         ffn_norm_out = self.ffn_norm(pre_ffn)
         ffn_out = self._ffn_path(ffn_norm_out, actual_isl=actual_isl, padding_side=padding_side, ctx=ctx)
+        det_probe.tap(self.layer_idx, "ffn", ffn_out)
         ttnn.deallocate(ffn_norm_out)
         residual.write(ffn_out)
         residual.release(pre_ffn)

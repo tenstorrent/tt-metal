@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdlib>
 #include <map>
 #include <string>
 
@@ -367,6 +368,11 @@ FlatProgramHandles add_flat_routed_expert_program(
         // The kernels read the args table's names; standalone they stay runtime args (off, 0). The combine's
         // runtime_args_to_dram overwrites these when it converts the kernel.
         fill_args_table_named_args(kernel_descriptor);
+        // (diagnostic, temporary: TT_MOE_FLAT_NO_TRID_DRAIN=1 compiles out the write-cmd-buf drains before the
+        // transaction-id polls, to A/B the drain on CI hosts)
+        if (std::getenv("TT_MOE_FLAT_NO_TRID_DRAIN") != nullptr) {
+            kernel_descriptor.defines.emplace_back("FLAT_NO_TRID_DRAIN", "1");
+        }
         kernel_descriptor.opt_level = KernelBuildOptLevel::O2;  // (DataMovementConfig's default)
         kernel_descriptor.config =
             DataMovementConfigDescriptor{.processor = proc, .noc = noc, .noc_mode = NOC_MODE::DM_DEDICATED_NOC};

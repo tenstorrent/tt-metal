@@ -618,6 +618,14 @@ class TtMoEBlockFfn:
                 f"{getattr(block, '_logged_arena', None)}); x {x.memory_config().buffer_type} {tuple(x.shape)}"
             )
             block._logged_arena = block.arena_address
+        if os.environ.get("MOE_RANGE_LOG") == "1":  # (diagnostic, eager only: the combine snap's range - saturates at
+            # (2^31 - 1) q, ~131072 at q 2^-14 - against the block's real outputs, layer by layer)
+            m = ttnn.max(ttnn.abs(y))
+            peak = max(float(ttnn.to_torch(t).abs().max()) for t in ttnn.get_device_tensors(ttnn.from_device(m)))
+            ttnn.deallocate(m)
+            logger.info(
+                f"MOE RANGE layer {self.layer_idx}: max|y| {peak:.4f} (headroom x{131072 / max(peak, 1e-9):.0f})"
+            )
         if tmp is not None:
             ttnn.deallocate(tmp)
         return y
