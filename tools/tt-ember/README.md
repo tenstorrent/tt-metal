@@ -155,9 +155,9 @@ the Blackhole clock after every reset (see `aiclk/`), and records it in `run_com
 Whether the pin survives tt-metal opening the device is not checked; confirm it once with
 `python3 aiclk/set_aiclk.py --watch 30` while a run is going. When the sweep ends, or stops
 early, it releases the pin (`set_aiclk.py 0`). The pin goes to `--device-id` as a tt_umd PCI
-index, which is not always tt-metal's device number (`set_aiclk.py` with no MHz lists the
-indices it sees); on a multi-chip host, check that the two match. Stops immediately if any
-reset or run fails.
+index, which is not always tt-metal's device number (`set_aiclk.py --device-id` with an index
+that is not present lists the ones it sees); on a multi-chip host, check that the two match.
+Stops immediately if any reset or run fails.
 
 - A run is skipped once it is complete: `auto.py` writes `run_complete.json` into the run
   directory only after the parser succeeded, recording the app arguments, the workload
@@ -176,7 +176,8 @@ reset or run fails.
 - Every command, the resets and the environment go to `<output-root>/sweep.log`. The first run
   that actually executes writes the config, the tt-metal commit and the board list to
   `<output-root>/PROVENANCE.md`. A resume adds a dated section instead of replacing it, and
-  `--analyses-only` leaves it alone.
+  `--analyses-only` leaves it alone. A resume with another config makes that config
+  `sweep.yaml` and keeps the old one as `sweep.<date-time>.yaml`.
 
 A config is a YAML mapping:
 

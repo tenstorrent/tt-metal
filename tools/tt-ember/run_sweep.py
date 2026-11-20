@@ -152,6 +152,12 @@ def _positive(path: Path, key: str, value: float) -> float:
     return value
 
 
+def _positive_int(path: Path, key: str, value) -> int:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value != int(value) or value < 1:
+        raise SystemExit(f"{path}: {key} must be a positive integer, got {value!r}")
+    return int(value)
+
+
 def _non_negative(path: Path, key: str, value: float) -> float:
     if not value >= 0:
         raise SystemExit(f"{path}: {key} must not be negative, got {value}")
@@ -175,7 +181,7 @@ def load_sweep(path: Path) -> Sweep:
     # out of run_complete.json, so updated runs match runs made with the variable unset.
     mode_env = "legacy" if mode == "legacy" else ""
 
-    aiclk_mhz = int(_positive(path, "aiclk_mhz", raw["aiclk_mhz"])) if raw.get("aiclk_mhz") else None
+    aiclk_mhz = _positive_int(path, "aiclk_mhz", raw["aiclk_mhz"]) if raw.get("aiclk_mhz") else None
     # Recorded in run_complete.json (common.WORKLOAD_ENV_VARS), so runs at another clock do not count
     # as done; empty when not pinned.
     base_env = {"LONG_MATMUL_MODE": mode_env, "TT_EMBER_AICLK_MHZ": str(aiclk_mhz or "")}
@@ -207,6 +213,9 @@ def load_sweep(path: Path) -> Sweep:
                 raise SystemExit(f"{path}: block must be [M, N] with 1 <= M*N <= {DEST_BLOCK_TILES}, got {b}")
             if (m // TILE) % b[0] or (n // TILE) % b[1]:
                 raise SystemExit(f"{path}: block {b} must divide the output tiles ({m // TILE} x {n // TILE})")
+        for key, values in (("power_cases", power_cases), ("ops", ops), ("blocks", blocks)):
+            if len(set(values)) != len(values):
+                raise SystemExit(f"{path}: runs.{key} lists the same entry twice: {values}")
         cases = [pc.POWER_CASE_SPECS[c] for c in power_cases]
         for op in ops:
             for c in power_cases:
@@ -239,6 +248,8 @@ def load_sweep(path: Path) -> Sweep:
         if name not in ANALYSES:
             raise SystemExit(f"{path}: unknown analysis {name!r}, expected one of {sorted(ANALYSES)}")
         _reject_unknown(path, f"the {name} options", opts, ANALYSIS_OPTIONS[name])
+        if (name == "op_breakdown") != (workload == "ttnn_ops"):
+            raise SystemExit(f"{path}: analysis {name!r} does not apply to the {workload} workload")
     if workload == "long_matmul" and (1, 1) not in blocks:
         per_case = sorted({name for name, _ in analyses} & PER_CASE_ANALYSES)
         if per_case:
@@ -249,11 +260,11 @@ def load_sweep(path: Path) -> Sweep:
         workload=workload,
         mode=mode,
         app_args=app_args,
-        telemetry_freq_hz=int(
-            _positive(path, "telemetry_freq_hz", raw.get("telemetry_freq_hz", DEFAULT_TELEMETRY_FREQ_HZ))
+        telemetry_freq_hz=_positive_int(
+            path, "telemetry_freq_hz", raw.get("telemetry_freq_hz", DEFAULT_TELEMETRY_FREQ_HZ)
         ),
         trim_ms=float(_non_negative(path, "trim_ms", raw.get("trim_ms", POWER_CASES_TRIM_MS))),
-        slot_ms=int(_positive(path, "slot_ms", raw.get("slot_ms", DEFAULT_SLOT_MS))),
+        slot_ms=_positive_int(path, "slot_ms", raw.get("slot_ms", DEFAULT_SLOT_MS)),
         aiclk_mhz=aiclk_mhz,
         runs=runs,
         ops=ops,
@@ -435,7 +446,8 @@ def _run_pending(
         log(head)
         # PROVENANCE.md describes the measurement, so only a sweep that measures writes it.
         if not args.dry_run and not provenance_written:
-            write_provenance(args, sweep, output_root, resumed)
+            pending = [s.subdir for s, st in zip(sweep.runs, statuses) if st != "done" or args.force]
+            write_provenance(args, sweep, output_root, resumed, pending)
             provenance_written = True
         log(f"[RESET] {args.tt_smi} -r")
         rc = reset_hardware(args.tt_smi, args.dry_run)
@@ -801,25 +813,43 @@ def _git(root: Path, *argv: str) -> str:
         return "unknown"
 
 
-def write_provenance(args: argparse.Namespace, sweep: Sweep, output_root: Path, resumed: bool = False) -> None:
+def write_provenance(
+    args: argparse.Namespace,
+    sweep: Sweep,
+    output_root: Path,
+    resumed: bool = False,
+    pending: Optional[List[str]] = None,
+) -> None:
     """Record what measured the runs. A resume (some runs already done) keeps the existing record
     and adds a dated section, since the earlier runs were measured as recorded there."""
     output_root.mkdir(parents=True, exist_ok=True)
     provenance = output_root / "PROVENANCE.md"
+    config_copy = output_root / "sweep.yaml"
     if resumed and provenance.exists():
+        now = dt.datetime.now()
         lines = [
             "",
-            f"## Resumed {dt.datetime.now().isoformat(timespec='seconds')}",
+            f"## Resumed {now.isoformat(timespec='seconds')}",
             "",
             f"- host: {platform.node()}",
             f"- command: {shell_join(sys.argv)}",
             f"- tt-metal: {_git(args.tt_metal_root, 'rev-parse', 'HEAD')} ({_git(args.tt_metal_root, 'describe', '--always', '--dirty')})",
-            "",
         ]
+        # Another config resuming into this root: sweep.yaml becomes the new one, so
+        # --analyses-only --config sweep.yaml renders what this sweep asks for.
+        if config_copy.exists() and args.config.read_bytes() != config_copy.read_bytes():
+            previous = output_root / f"sweep.{now.strftime('%Y%m%d-%H%M%S')}.yaml"
+            config_copy.rename(previous)
+            shutil.copy2(args.config, config_copy)
+            lines.append(
+                f"- config: {sweep.name}, sweep.yaml (copied from {args.config}; the previous one is now {previous.name})"
+            )
+        if pending:
+            lines.append(f"- runs measured now: {', '.join(pending)}")
+        lines.append("")
         with provenance.open("a", encoding="utf-8") as f:
             f.write("\n".join(lines))
         return
-    config_copy = output_root / "sweep.yaml"
     # Re-running from the recorded config passes that very file as --config.
     if args.config.resolve() != config_copy.resolve():
         shutil.copy2(args.config, config_copy)
