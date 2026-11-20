@@ -39,6 +39,7 @@ from typing import Sequence
 
 from .common import emit_result, emit_running, log, run_with_timeout, write_command_log
 from .galaxy import EXPECTED_CHIP_COUNT, QSFP_PORT_IDS, UBB_ETH_PORT_OF, UBB_ETH_PORTS, format_bdf, parse_bdf_physical
+from .naming import link_end, port_name as _port_name
 from .model import FAIL, PASS, SKIP, WARN, Check, Phase
 
 TRIAGE_SCRIPT = "tools/triage/triage.py"
@@ -387,10 +388,6 @@ def _ubbs(trays: Sequence[int]) -> str:
     return ", ".join(f"UBB{t}" for t in sorted(trays))
 
 
-def _port_name(ptype: str, pid: int) -> str:
-    return f"{'QSFP' if ptype == 'QSFP_DD' else ptype} P{pid}"
-
-
 def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
     """'UBB2/U6 ch4 (TRACE P9, dev 13)', or 'dev 13 ch4' when the chip's place is not known."""
     ch = "" if channel is None else f" ch{channel}"
@@ -403,28 +400,30 @@ def _where(dev: int, channel: int | None, chip_bdfs: dict[int, str]) -> str:
 
 
 def _link_state_checks(
-    now: dict[tuple[int, str], EthLink], before: dict[tuple[int, str], EthLink] | None, where
+    now: dict[tuple[int, str], EthLink], before: dict[tuple[int, str], EthLink] | None, where, ends
 ) -> list[Check]:
+    """*where* names a link in words, *ends* gives the ``link_ends`` entries of a list of links."""
     live = [l for l in now.values() if not l.idle]
-    down: list[str] = []
+    down: list[tuple[EthLink, str]] = []
     if before is not None:
-        down += [f"{where(before[k])}: gone between the reads" for k in sorted(before.keys() - now.keys())]
+        down += [(before[k], f"{where(before[k])}: gone between the reads") for k in sorted(before.keys() - now.keys())]
     for k in sorted(now):
         l = now[k]
         if "unreadable" in (l.port.lower(), (l.link or "").lower()):
-            down.append(f"{where(l)}: eth core unreadable")
+            down.append((l, f"{where(l)}: eth core unreadable"))
         elif l.idle:
             continue
         elif l.link is not None:
             if l.link.lower() != "up":
-                down.append(f"{where(l)}: link down")
+                down.append((l, f"{where(l)}: link down"))
         else:
             reasons = (["port down"] if l.port.lower() == "down" else []) + (
                 ["RX link down"] if (l.rx or "up").lower() != "up" else []
             )
             if reasons:
-                down.append(f"{where(l)}: {', '.join(reasons)}")
+                down.append((l, f"{where(l)}: {', '.join(reasons)}"))
     chips = len({l.dev for l in live})
+    down_ends, down = ends([l for l, _ in down]), [t for _, t in down]
     links_down = Check(
         name="eth_status_links_down",
         status=FAIL if down else PASS,
@@ -434,11 +433,18 @@ def _link_state_checks(
             else f"{len(live)}/{len(live)} links up on {chips} chips"
             + (", none lost between the reads" if before is not None else "")
         ),
-        data={"links": len(live), "chips": chips, "down": down, "findings": _findings(FAIL, down)},
+        data={
+            "links": len(live),
+            "chips": chips,
+            "down": down,
+            "findings": _findings(FAIL, down),
+            "link_ends": down_ends,
+        },
         ip="eth",
     )
 
-    stopped = [where(l) for l in now.values() if (l.heartbeat or "").lower() == "down"]
+    dead = [l for l in now.values() if (l.heartbeat or "").lower() == "down"]
+    stopped = [where(l) for l in dead]
     beating = sum(1 for l in now.values() if l.heartbeat is not None)
     heartbeat = Check(
         name="eth_status_heartbeat",
@@ -453,11 +459,13 @@ def _link_state_checks(
         data={
             "stopped": stopped,
             "findings": _findings(FAIL, [f"{w}: heartbeat not moving, the eth core has stopped" for w in stopped]),
+            "link_ends": ends(dead),
         },
         ip="eth",
     )
 
-    odd = [f"{where(l)}: port {l.port}" for l in now.values() if l.port in ODD_PORT_STATES]
+    oddly = [l for l in now.values() if l.port in ODD_PORT_STATES]
+    odd = [f"{where(l)}: port {l.port}" for l in oddly]
     port_state = Check(
         name="eth_status_port_state",
         status=WARN if odd else PASS,
@@ -466,7 +474,7 @@ def _link_state_checks(
             if odd
             else f"no port {', '.join(sorted(ODD_PORT_STATES))}"
         ),
-        data={"odd": odd, "findings": _findings(WARN, odd)},
+        data={"odd": odd, "findings": _findings(WARN, odd), "link_ends": ends(oddly)},
         ip="eth",
     )
     return [links_down, heartbeat, port_state]
@@ -845,8 +853,13 @@ def judge_eth_status(
     def where(l: EthLink) -> str:
         return _where(l.dev, l.channel, chip_bdfs)
 
+    def ends(links: list[EthLink]) -> list[dict]:
+        return [
+            {"a": link_end(chip_bdfs[l.dev], l.channel)} for l in links if l.dev in chip_bdfs and l.channel is not None
+        ]
+
     return (
-        _link_state_checks(now, before, where)
+        _link_state_checks(now, before, where, ends)
         + _counter_checks(now, before, interval_s, where)
         + _topology_checks(now, chip_bdfs, chips_on_pcie)
     )

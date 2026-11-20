@@ -16,6 +16,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 from unittest import mock
 
@@ -27,6 +28,7 @@ import tiers  # noqa: E402
 from diag import busbar, links  # noqa: E402
 from diag.aer import aer_check, aer_new  # noqa: E402
 from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
+from diag.naming import link_end  # noqa: E402
 
 
 def _steps(mode, **kw):
@@ -324,23 +326,31 @@ class TestLinks(unittest.TestCase):
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
 
     def _sweep_reset(self, reset_fails=False, skip_reset=False, no_reset=False):
-        """run_diag's reset callback for the sweep, after a failed pair test, with the real run_post_test_reset
-        over a glx_reset that fails or not."""
+        return self._run_load(reset_fails, skip_reset, no_reset)["why"]
+
+    def _run_load(self, reset_fails=False, skip_reset=False, no_reset=False, steps=None):
+        """run_diag's galaxy load with the bus-bar and links phases stubbed: ``busbar`` is how often the bus-bar
+        phase ran, ``links`` whether the links phase ran and ``why`` what its reset callback said after a failed
+        pair test (the real run_post_test_reset over a glx_reset that fails or not)."""
         import diag_runner
         from diag import resets
 
-        got = {}
+        got = {"busbar": 0, "links": False}
+
+        def fake_busbar(*args, **kw):
+            got["busbar"] += 1
+            return True
 
         def fake_loop(tt_smi, plan, phase, dry_run):
             phase.add(Check(name="reset_glx", status=FAIL if reset_fails else PASS, details=""))
 
         def fake_links(phase, out, fault, reset, dry_run):
             phase.add(Check(name="galaxy_pair", status=FAIL, details="pair 00-01 failed", ip="eth"))
-            got["why"] = reset()
+            got["links"], got["why"] = True, reset()
 
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
             diag_runner, "run_links", fake_links
-        ), mock.patch.object(diag_runner, "run_busbar", return_value=True), mock.patch.object(
+        ), mock.patch.object(diag_runner, "run_busbar", fake_busbar), mock.patch.object(
             resets, "resolve_tt_smi", return_value="tt-smi"
         ), mock.patch.object(
             resets, "reset_loop", fake_loop
@@ -361,8 +371,9 @@ class TestLinks(unittest.TestCase):
                 snapshot_out=d / "snapshot.json",
                 skip_reset=skip_reset,
                 no_reset=no_reset,
+                steps=steps,
             )
-        return got["why"]
+        return got
 
     def test_no_reset_sweeps_without_resetting(self):
         import diag_runner
@@ -389,6 +400,59 @@ class TestLinks(unittest.TestCase):
             ],
         )
 
+    def test_steps_pick_the_phases(self):
+        for steps, busbar_runs, links_ran in (
+            (None, 1, True),
+            ("heavy", 1, False),
+            ("qb,links", 1, True),
+            ("links", 0, True),
+        ):
+            with self.subTest(steps=steps):
+                got = self._run_load(steps=steps)
+                self.assertEqual((got["busbar"], got["links"]), (busbar_runs, links_ran))
+
+    def test_links_only_call_sweeps_without_resetting(self):
+        got = self._run_load(reset_fails=True, no_reset=True, steps="links")
+        self.assertEqual((got["busbar"], got["why"]), (0, ""))
+
+    def test_steps_accept_links_but_the_plan_stays_bus_bar(self):
+        self.assertEqual(busbar.parse_steps("links, qb"), ("qb", "links"))
+        self.assertEqual(busbar.plan("plain", "links"), [])
+        with self.assertRaisesRegex(ValueError, "--steps: unknown 'link'"):
+            busbar.parse_steps("link")
+
+    def test_eth_status_links_name_their_ends(self):
+        from diag.eth_status import EthLink, judge_eth_status
+        from diag.galaxy import UBB_ETH_PORT_OF, expected_bdf
+
+        asic, ch = next(iter(UBB_ETH_PORT_OF))
+        bdf = expected_bdf(2, asic)
+        row = dict(dev=0, noc="1-1", channel=ch, port="Up", link="Down", heartbeat="Down", rx="Up")
+        row.update(retrain=0, crc=0, uncorr=0, err_stat=0)
+        checks = {c.name: c for c in judge_eth_status({(0, "1-1"): EthLink(**row)}, None, None, {0: bdf}, 31)}
+        report = {
+            "phases": {
+                "eth": {"checks": [asdict(checks[n]) for n in ("eth_status_links_down", "eth_status_heartbeat")]}
+            }
+        }
+        links.name_chips(report)
+        want = [{"a": link_end(bdf, ch)}]
+        self.assertEqual(want[0]["a"]["tray"], 2)
+        self.assertRegex(want[0]["a"]["port"], r"^(QSFP|[A-Z_]+) P\d+$")
+        for c in report["phases"]["eth"]["checks"]:
+            self.assertEqual((c["bdf"], c["tray"], c["asic"], c["link_ends"]), ([bdf], [2], [asic], want), c["name"])
+
+    def test_count_fail_names_only_the_missing_chip(self):
+        from diag.galaxy import expected_bdf
+        from diag.snapshot_checks import pcie_enum_check
+
+        bdfs = [expected_bdf(t, a) for t in range(1, 5) for a in range(1, 9)]
+        c = pcie_enum_check([{"board_info": {"bus_id": b}} for b in bdfs[1:]])
+        report = {"phases": {"snapshot": {"checks": [asdict(c)]}}}
+        links.name_chips(report)
+        got = report["phases"]["snapshot"]["checks"][0]
+        self.assertEqual((got["status"], got["bdf"], got["tray"], got["asic"]), (FAIL, [bdfs[0]], [1], [1]))
+
     def test_report_checks_name_their_chips_and_link_ends(self):
         ends = links.link_ends(self._disc(), 0, 1, [0])
         report = {
@@ -401,7 +465,8 @@ class TestLinks(unittest.TestCase):
                             "details": "01:00.0-02:00.0 (channels 0): hung",
                             "data": {"failed": [{"pair": "01:00.0-02:00.0", "ends": ends}], "link_ends": ends},
                         },
-                        {"name": "x", "status": "PASS", "details": "at 12:00.0 on 0000:c1:00.0", "data": {}},
+                        {"name": "x", "status": "PASS", "details": "at 04:00.0 on 0000:c1:00.0", "data": {}},
+                        {"name": "dram", "status": "FAIL", "details": "", "data": {"failed_chips": ["0000:c1:00.0"]}},
                         {"name": "none", "status": "PASS", "details": "", "data": {}},
                     ]
                 }
@@ -409,10 +474,11 @@ class TestLinks(unittest.TestCase):
         }
         before = json.loads(json.dumps(report))
         links.name_chips(report)
-        a, x, none = report["phases"]["links"]["checks"]
+        a, x, dram, none = report["phases"]["links"]["checks"]
         self.assertEqual((a["bdf"], a["tray"], a["asic"]), (["0000:01:00.0", "0000:02:00.0"], [1, 1], [1, 2]))
         self.assertEqual(a["link_ends"], ends)
-        self.assertEqual((x["bdf"], x["tray"], x["asic"]), (["0000:c1:00.0"], [3], [1]))
+        self.assertEqual((x["bdf"], x["link_ends"]), ([], []))  # a BDF or time in the text names nothing
+        self.assertEqual((dram["bdf"], dram["tray"], dram["asic"]), (["0000:c1:00.0"], [3], [1]))
         self.assertEqual((none["bdf"], none["tray"], none["asic"], none["link_ends"]), ([], [], [], []))
         for old, new in zip(before["phases"]["links"]["checks"], report["phases"]["links"]["checks"]):
             self.assertEqual(old, {k: new[k] for k in old})  # only keys were added

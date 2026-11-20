@@ -40,7 +40,7 @@ if _SUITE_DIR not in sys.path:
 from diag.common import default_tt_metal_path, log, print_phase_line, print_phase_summary  # noqa: E402
 from diag.aer import AerWindow  # noqa: E402
 from diag.device_tests import run_tests  # noqa: E402
-from diag.busbar import MODES, OVERRIDES, STEPS, plan as busbar_plan, run_busbar  # noqa: E402
+from diag.busbar import MODES, OVERRIDES, SELECTABLE, STEPS, parse_steps, plan as busbar_plan, run_busbar  # noqa: E402
 from diag.eth_status import run_eth_status  # noqa: E402
 from diag.links import name_chips, run_links  # noqa: E402
 from diag.eth_summary import SUMMARY_FILE, render_eth_summary  # noqa: E402
@@ -165,15 +165,15 @@ def build_diag_arg_parser() -> argparse.ArgumentParser:
     ap.add_argument(
         "--steps",
         default=None,
-        help=f"With --mode: run only these bus-bar steps, comma-separated, in plan order (any of {', '.join(STEPS)}). "
-        "Not given: all of them.",
+        help=f"With --mode: run only these parts, comma-separated (any of {', '.join(SELECTABLE)}): the bus-bar steps "
+        "and the links phase. Not given: all of them.",
     )
     for key, (flag, typ, what) in OVERRIDES.items():
         ap.add_argument(flag, dest=key, type=typ, default=None, help=f"With --mode: {what}. Not given: the plan's own.")
     ap.add_argument(
         "--no-reset",
         action="store_true",
-        help="With --mode: the links sweep does not reset first (the caller just did); it still runs after a fault.",
+        help="With --mode: the links sweep does not reset first (for a call of --steps links right after the caller's own reset); it still runs after a fault.",
     )
     ap.add_argument("--output", type=Path, default=Path("diag_report.json"))
     ap.add_argument("--snapshot-out", type=Path, default=Path("/tmp/diag_snapshot.json"))
@@ -432,17 +432,20 @@ def run_diag(
 
     # Phase 3b: the galaxy load (--mode): the bus-bar parts, then the pair link
     # test, its sweep on a fault and the fabric open/close. Inside the AER window.
+    # --steps picks the parts: the bus-bar phase runs for its steps, the links phase for "links".
     if plan.busbar and mode:
         load_dir = output.parent / "galaxy"
         busbar_phase, fault = Phase(name="busbar"), []
         t0 = time.time()
-        _guarded(
-            busbar_phase,
-            "busbar",
-            FAIL,
-            lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {}))),
-        )
-        _finish(report, busbar_phase, t0, summary=True)
+        want = parse_steps(steps) if steps is not None else SELECTABLE
+        if any(w in STEPS for w in want):
+            _guarded(
+                busbar_phase,
+                "busbar",
+                FAIL,
+                lambda: fault.append(run_busbar(busbar_phase, load_dir, mode, dry_run, steps, **(overrides or {}))),
+            )
+            _finish(report, busbar_phase, t0, summary=True)
         links_phase = Phase(name="links")
         t0 = time.time()
 
@@ -455,13 +458,14 @@ def run_diag(
             aer_mark()
             return "" if run_post_test_reset(tt_smi_path, ("-glx_reset",), links_phase, dry_run) else "reset failed"
 
-        _guarded(
-            links_phase,
-            "links",
-            FAIL,
-            lambda: run_links(links_phase, load_dir, any(fault) or busbar_phase.error != "", sweep_reset, dry_run),
-        )
-        _finish(report, links_phase, t0, summary=True)
+        if "links" in want:
+            _guarded(
+                links_phase,
+                "links",
+                FAIL,
+                lambda: run_links(links_phase, load_dir, any(fault) or busbar_phase.error != "", sweep_reset, dry_run),
+            )
+            _finish(report, links_phase, t0, summary=True)
 
     aer_mark()
 

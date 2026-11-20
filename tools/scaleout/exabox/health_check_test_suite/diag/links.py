@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import signal
 import subprocess
 import sys
@@ -21,9 +20,8 @@ from pathlib import Path
 
 from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
 from .common import log
-from .galaxy import UBB_ETH_PORT_OF
 from .model import FAIL, PASS, SKIP, Check, Phase
-from .naming import chip
+from .naming import chip, link_end
 
 PAIR_S, SWEEP_S, OP_TIMEOUT_S = 10, 300, 30
 DISCOVER = """import json, tt_umd as u
@@ -82,34 +80,27 @@ def _short(bdf: str) -> str:
     return bdf.replace("0000:", "")
 
 
-def _end(disc: dict, dev: int, channel: int) -> dict:
-    """One end of a link: the chip's BDF, tray and ASIC, the Ethernet channel and its port (type and number)."""
-    port = UBB_ETH_PORT_OF.get((chip(disc["bdfs"][dev])["asic"], channel))
-    return {**chip(disc["bdfs"][dev]), "channel": channel, "port": f"{port[0]} P{port[1]}" if port else None}
-
-
 def link_ends(disc: dict, a: int, b: int, channels: list[int]) -> list[dict]:
     """The links of pair (a, b) by their *channels* on chip a, each end named by tray, port, ASIC and BDF."""
-    return [{"a": _end(disc, a, ch), "b": _end(disc, b, disc["links"][a][ch][1])} for ch in channels]
-
-
-BDF = re.compile(r"\b(?:0000:)?[0-9a-f]{2}:00\.0\b")
+    return [
+        {"a": link_end(disc["bdfs"][a], ch), "b": link_end(disc["bdfs"][b], disc["links"][a][ch][1])} for ch in channels
+    ]
 
 
 def name_chips(report: dict) -> None:
     """Add to every check of the *report*: ``bdf``, ``tray`` and ``asic`` (parallel lists, one entry per Galaxy chip the check
-    names in its name, details or data; empty when it names none) and ``link_ends`` (the ends of the links its data names).
+    names, empty when it names none) and ``link_ends`` (the links it names). A check names chips in its data: ``missing``
+    (chips, as naming.chip), ``failed_chips`` (BDFs) and the ends of ``link_ends``; nothing is read from its text.
     """
     for phase in report["phases"].values():
         for c in phase["checks"]:
-            text = " ".join((c["name"], c["details"], json.dumps(c["data"], default=str)))
-            chips = {}
-            for m in BDF.findall(text):
-                bdf = m if m.startswith("0000:") else f"0000:{m}"
-                if (n := chip(bdf))["tray"] is not None:
-                    chips.setdefault(bdf, n)
+            d = c["data"]
+            ends = d.get("link_ends", [])
+            bdfs = [m["bdf"] for m in d.get("missing", []) if isinstance(m, dict) and "bdf" in m]
+            bdfs += d.get("failed_chips", []) + [e["bdf"] for l in ends for e in l.values()]
+            chips = {b: n for b in bdfs if (n := chip(b))["tray"] is not None}
             c["bdf"], c["tray"], c["asic"] = ([n[k] for n in chips.values()] for k in ("bdf", "tray", "asic"))
-            c["link_ends"] = c["data"].get("link_ends", [])
+            c["link_ends"] = ends
 
 
 def pair_test(

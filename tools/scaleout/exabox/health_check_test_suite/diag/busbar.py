@@ -34,6 +34,7 @@ from .model import FAIL, PASS, SKIP, Check, Phase
 GALAXY_DIR = Path(__file__).resolve().parent.parent / "galaxy"
 MODES = ("plain", "full", "smoke")
 STEPS = ("qb", "mix", "step", "heavy", "code")
+SELECTABLE = (*STEPS, "links")  # what --steps names: the bus-bar steps, and the links phase run by diag_runner
 # plan() keyword -> (diag_runner flag, type, what it sets). Unset by default: the plan is then unchanged.
 OVERRIDES = {
     "heavy_s": ("--heavy-s", int, "heavy: seconds of DIDT ops"),
@@ -111,11 +112,13 @@ def _overrides(over: dict) -> dict:
 
 
 def parse_steps(steps: str) -> tuple[str, ...]:
-    """The parts named in the comma-separated *steps*, in plan order."""
+    """The parts named in the comma-separated *steps*, in plan order, the links phase last."""
     names = steps.replace(" ", "").split(",")
-    if bad := [n for n in names if n not in STEPS]:
-        raise ValueError(f"--steps: unknown {', '.join(map(repr, bad))}; expected one or more of: {', '.join(STEPS)}")
-    return tuple(n for n in STEPS if n in names)
+    if bad := [n for n in names if n not in SELECTABLE]:
+        raise ValueError(
+            f"--steps: unknown {', '.join(map(repr, bad))}; expected one or more of: {', '.join(SELECTABLE)}"
+        )
+    return tuple(n for n in SELECTABLE if n in names)
 
 
 @dataclass(frozen=True)
