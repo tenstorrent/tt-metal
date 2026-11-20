@@ -67,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         {
             if constexpr (!unpack_to_dest)
             {
-                _perf_unpack_loop_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
+                _perf_unpack_stream_set_valid<true /* set_a */, is_fp32_dest_acc_en /* set_b */, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR /* iterations */);
             }
         }
         else
@@ -131,6 +131,10 @@ void run_kernel(RUNTIME_PARAMETERS)
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
         {
+        }
+        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        {
+            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
@@ -231,6 +235,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT((block_tile < MAX_TILES_DEST), "block_tile exceeds max dest tiles");
                         _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en>(block_tile, L1_ADDRESS(buffer_Res[block_start + block_tile]));
+                    }
+                    // Wormhole: release the dest section as production's tile_regs_release does, so every section starts with drained packers
+                    if constexpr (PERF_PACK_SECTION_RELEASE)
+                    {
+                        _llk_pack_dest_section_done_<DST_SYNC_MODE, is_fp32_dest_acc_en>();
                     }
                 }
             }

@@ -47,11 +47,13 @@ from models.demos.common.prefill.runners.migration import (
 from models.demos.common.prefill.runners.runner_utils import (
     MTP_PAD_TOKEN_ID,
     h2d_row_len,
+    install_crash_diagnostics,
     load_trace_token_ids,
     num_mtp_tokens,
     resolve_trace_dir,
 )
 from models.demos.deepseek_v3_d_p.tt.mla.utils import mtp_lookahead_positions
+from models.demos.deepseek_v3_d_p.utils.chunk_config import prefill_chunk_tokens
 
 
 def _apply_manifest_env(manifest_path: str) -> dict:
@@ -109,12 +111,12 @@ def _apply_manifest_env(manifest_path: str) -> dict:
 
 
 def _load_env_config(check_budget: bool = True) -> None:
-    global SP_AXIS, TP_AXIS, GLOBAL_MESH_SHAPE, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
+    global SP_FACTOR, CHUNK_SIZE, MAX_SEQ_LEN, NUM_LAYERS, ADAPTER, NUM_ACK_LAYERS, MTP_LEVELS
     global MTP_DECODE_LEVELS, FORWARD_CHUNKS, CHUNK_METADATA_SIZE_BYTES
-    SP_AXIS = int(os.environ.get("PREFILL_SP", 8))
-    TP_AXIS = int(os.environ.get("PREFILL_TP", 4))
-    GLOBAL_MESH_SHAPE = (SP_AXIS, TP_AXIS)
-    CHUNK_SIZE = int(os.environ.get("PREFILL_CHUNK_SIZE", 5 * 1024))
+    # The host payload is one row per SP chip, in SP order, whichever mesh axis SP runs on; the
+    # runner's H2D mapper (PREFILL_SP_AXIS) places the rows, so the producer needs only the factor.
+    SP_FACTOR = int(os.environ.get("PREFILL_SP", 8))
+    CHUNK_SIZE = prefill_chunk_tokens()
     # Tokens per forward, a multiple of the chunk size; must match the runner's.
     forward_tokens_budget = int(os.environ.get("PREFILL_FORWARD_TOKENS_BUDGET", CHUNK_SIZE))
     assert not check_budget or (
@@ -168,7 +170,7 @@ def _h2d_rows(tokens, actual_start: int = 0):
     # Same host-side reshuffle as the engine's H2D prefill connector: a chunk starting mid-slab (multi-turn
     # resume) is rotated so each SP chip receives the tokens the KV writer places on it (identity when the
     # start is chunk-aligned).
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     assert len(tokens) == CHUNK_SIZE, f"expected {CHUNK_SIZE} tokens, got {len(tokens)}"
     tokens = rotate_chunk_tokens(list(tokens), actual_start, sp)
@@ -178,7 +180,7 @@ def _h2d_rows(tokens, actual_start: int = 0):
 def _h2d_forward_rows(chunks, starts):
     """``[sp, 1, FORWARD_CHUNKS * CHUNK_SIZE / sp]`` rows of one packed forward: chip c gets slice c of every
     chunk's rotated tokens, in chunk order (pack_forward_tokens). One chunk gives _h2d_rows."""
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     assert all(len(t) == CHUNK_SIZE for t in chunks), f"every chunk is {CHUNK_SIZE} tokens"
     tokens = pack_forward_tokens(chunks, starts, sp)
     return _to_host_array(torch.tensor(tokens, dtype=torch.int64).view(sp, 1, len(tokens) // sp))
@@ -203,17 +205,48 @@ def _forward_payload(pushes: list, pool_of) -> tuple:
             _mtp_rows(pool, p.actual_start, p.actual_isl, actual_end=p.actual_end),
             _pack_metadata(p.slot_id, p.actual_start, p.actual_end),
         )
+    pushes = _partial_runs_last(pushes)
     chunks = pad_chunks([PrefillChunk(p.slot_id, p.actual_start, p.actual_end) for p in pushes], FORWARD_CHUNKS)
     tokens = [_chunk_slice(pool_of(p.slot_id), p.actual_start, p.actual_isl) for p in pushes]
     tokens += [[1] * CHUNK_SIZE] * (FORWARD_CHUNKS - len(pushes))
     rows = _h2d_forward_rows(tokens, [c.actual_start for c in chunks])
-    return rows, None, pack_forward_metadata(chunks, FORWARD_CHUNKS)
+    return rows, _forward_mtp_rows(pushes, pool_of), pack_forward_metadata(chunks, FORWARD_CHUNKS)
+
+
+def _partial_runs_last(pushes: list) -> list:
+    """``pushes`` with the slot runs that end in a partial chunk after the others. The MoE masks every pad row wherever
+    it sits (PackedPadding), but its dispatch loop stops at each chip's last real row, so trailing pad rows cost
+    nothing and pad rows ahead of a non-empty chunk still cost a loop pass (packed_routed_pad_rows). Whole runs
+    move, so each slot's chunks stay one run in order (validate_chunks); only a run's last chunk can be partial."""
+    runs = []
+    for p in pushes:
+        if runs and runs[-1][-1].slot_id == p.slot_id:
+            runs[-1].append(p)
+        else:
+            runs.append([p])
+    runs.sort(key=lambda run: run[-1].actual_end - run[-1].actual_start < CHUNK_SIZE)
+    return [p for run in runs for p in run]
+
+
+def _forward_mtp_rows(pushes: list, pool_of):
+    """``[sp, 1, FORWARD_CHUNKS * num_mtp_tokens]`` lookahead ids of a packed forward, sent after every chunk's ids:
+    chunk k's block (_mtp_rows) at ``k * num_mtp_tokens``, an empty chunk's all MTP_PAD_TOKEN_ID. None without MTP."""
+    n_mtp = num_mtp_tokens(MTP_LEVELS)
+    if not n_mtp:
+        return None
+    sp = SP_FACTOR
+    blocks = [_mtp_rows(pool_of(p.slot_id), p.actual_start, p.actual_isl, actual_end=p.actual_end) for p in pushes]
+    blocks += [np.full((sp, 1, n_mtp), MTP_PAD_TOKEN_ID, dtype=np.uint32)] * (FORWARD_CHUNKS - len(pushes))
+    return np.concatenate(blocks, axis=-1)
 
 
 def _shutdown_payload() -> tuple:
     """(token rows, MTP rows, metadata) of the SHUTDOWN sentinel: every metadata word is SHUTDOWN_WORD."""
     rows = _h2d_forward_rows([[1] * CHUNK_SIZE] * FORWARD_CHUNKS, [0] * FORWARD_CHUNKS)
-    return rows, _mtp_rows([], 0), sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
+    mtp = _mtp_rows([], 0)
+    if mtp is not None:
+        mtp = np.concatenate([mtp] * FORWARD_CHUNKS, axis=-1)  # one block per chunk position
+    return rows, mtp, sentinel_metadata(SHUTDOWN_WORD, FORWARD_CHUNKS)
 
 
 def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
@@ -223,7 +256,7 @@ def _mtp_rows(pool, actual_start: int, actual_isl=None, actual_end=None):
     n_mtp = num_mtp_tokens(MTP_LEVELS)
     if not n_mtp:
         return None
-    sp = GLOBAL_MESH_SHAPE[0]
+    sp = SP_FACTOR
     stride = h2d_row_len(CHUNK_SIZE, sp)
     actual_end = actual_start + CHUNK_SIZE if actual_end is None else actual_end
     slots = mtp_lookahead_positions(actual_start, sp, stride, actual_end, MTP_LEVELS)
@@ -856,7 +889,7 @@ def _golden_pe_as_device(golden_pe, layout: str):
 
 
 def _kvpe_pcc_vs_golden(golden, device_kv, kv_lora: int, golden_pe_layout: str = "half_split"):
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     _, pcc_nope = comp_pcc(golden[:, :kv_lora], device_kv[:, :kv_lora])
     _, pcc_pe = comp_pcc(_golden_pe_as_device(golden[:, kv_lora:], golden_pe_layout), device_kv[:, kv_lora:])
@@ -960,7 +993,7 @@ def _check_mtp_kv_slots(
         return None
     logger.info(f"[producer] slot {slot_id} MTP: golden KV from {golden_dir} (pe columns: {pe_layout})")
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     rejected = "half_split" if pe_layout == "interleaved" else "interleaved"
     min_pcc = 1.0
@@ -990,7 +1023,7 @@ def _read_slot_kv_and_check_pcc_gpt_oss(
 
     from models.demos.gpt_oss_d_p.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.gpt_oss_d_p.tt.runners.acceptance import validate_kv_for_pcc
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1077,7 +1110,7 @@ def _read_slot_kv_and_check_pcc_llama(table, device_map: dict, slot_id: int, rea
 
     from safetensors import safe_open
 
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM
@@ -1159,7 +1192,7 @@ def _read_slot_kv_and_check_pcc_m3(table, device_map: dict, slot_id: int, real_l
 
     from models.demos.minimax_m3.tt.attention.kv_cache import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.minimax_m3.tt.runners.prefill_kv_validation import _hf_to_meta_rotary_perm
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     mc = ADAPTER.model_config
     n_kv, head_dim, rotary_dim = mc.NUM_KEY_VALUE_HEADS, mc.HEAD_DIM, mc.ROTARY_DIM
@@ -1283,7 +1316,7 @@ def _resolve_pcc_window(trace_dir, real_len: int, tokens_per_block: int) -> tupl
 
 
 def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_len: int, trace_dir):
-    from models.demos.deepseek_v3_d_p.tt.mla.indexer import normalized_hadamard_matrix
+    from models.demos.deepseek_v3_d_p.tt.mla.indexer import rotate_index_keys
     from models.demos.deepseek_v3_d_p.tt.runners.prefill_kv_validation import (
         _load_golden_index_k,
         _load_golden_kv_post,
@@ -1292,7 +1325,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
     )
     from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs
-    from tests.ttnn.utils_for_testing import comp_pcc
+    from tt_py_test_utils_common.utils_for_testing import comp_pcc
 
     # The pe half needs re-basing only if the model rotates it. The adapter's own declaration wins:
     # `cache_half_pccs` names a second case (a natively interleaved indexer RoPE) where the answer
@@ -1410,17 +1443,18 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
         mins["mtp"] = mtp_min
     if _has_index_config(table):
         index_head_dim = ADAPTER.model_config.INDEX_HEAD_DIM
-        index_hadamard = normalized_hadamard_matrix(index_head_dim).float()
+        hf_config = ADAPTER.load_hf_config()
         n_index_layers = table.config(1).num_layers
         full_layers = _full_indexer_layer_indices(NUM_LAYERS)
         index_rows = []
         if index_golden_present(trace_dir):
-            index_rows = [
-                (layer, trace_dir) for layer in (range(n_index_layers) if full_layers is None else full_layers)
-            ]
-            assert full_layers is None or max(full_layers) < n_index_layers, (
+            # Without an `indexer_types` map every layer that owns a KV slab runs its own indexer: all of a
+            # dense DSA stack, only the DSA layers of a hybrid one (Kimi-K3.1's other rows hold KDA state).
+            index_layers = sorted(expected_slabs) if full_layers is None else full_layers
+            index_rows = [(layer, trace_dir) for layer in index_layers]
+            assert max(index_layers) < n_index_layers, (
                 f"config 1 has {n_index_layers} rows but layers [0,{NUM_LAYERS}) put a full indexer at layer "
-                f"{max(full_layers)}. On the layer axis the extent must cover the deepest full-indexer "
+                f"{max(index_layers)}. On the layer axis the extent must cover the deepest full-indexer "
                 f"layer; a compacted (rank-axis) table reaching here would read another layer's keys."
             )
         else:
@@ -1474,7 +1508,7 @@ def _read_slot_kv_and_check_pcc_mla(table, device_map: dict, slot_id: int, real_
                 rope_layout=mtp_index_layout if is_mtp_row else "interleaved",
                 position0=first_pos + skip_rows,
             )
-            dev_ik = (dev_ik.float() @ index_hadamard).to(torch.bfloat16)
+            dev_ik = rotate_index_keys(hf_config, dev_ik.float()).to(torch.bfloat16)  # the golden's natural basis
             _, pcc_index = comp_pcc(golden_ik, dev_ik)
             if is_mtp_row:
                 mtp_index_pcc = pcc_index
@@ -1799,6 +1833,8 @@ def _run_validator(rank: int, world_size: int) -> None:
 
 
 def main() -> None:
+    # Stacks on SIGUSR1 and an uncaught-exception marker for run_multirank_pcc.sh's watchdogs.
+    install_crash_diagnostics()
     parser = argparse.ArgumentParser(
         prog="prefill_producer",
         description="H2D producer for the prefill runner. Config comes from a YAML manifest "

@@ -20,7 +20,7 @@ using namespace ckernel::trisc;
  * handshake takes its place (per-section sequence at @ref _llk_unpack_unary_operand_to_dest_init_).
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
- *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ *        the fixed per-engine BFD id (ckernel_buf_desc.h)
  */
 inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t buf_desc_id)
 {
@@ -45,7 +45,7 @@ inline void _llk_unpack_unary_operand_to_dest_mop_config_(const std::uint32_t bu
  * safe to call inside a tile loop; the once-per-program bank reset lives in @ref _llk_unpack_dest_init_.
  *
  * @param buf_desc_id: The buffer descriptor ID where the buffer information is stored in the buffer descriptor table;
- *        allocated from the unpack TRISC partition [0,16) at op-init time (see llk_bfd_alloc.h)
+ *        the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @note Transpose is forced off for both unpacker engines: UNP_DEST does not support it. Tiny tiles are not supported.
  * @note Math thread (T1) contract: math runs no datacopy MOP here (skip @ref _llk_math_eltwise_unary_datacopy_init_); it
  *       only forwards UNPACK_MATH into MATH_PACK. Once per program, @ref _llk_math_pack_sync_init_ (seeds MATH_PACK, the

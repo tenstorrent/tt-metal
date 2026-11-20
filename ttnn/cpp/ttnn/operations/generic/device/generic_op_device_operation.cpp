@@ -62,6 +62,9 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             kernel.compile_time_args,
             kernel.named_compile_time_args,
             kernel.defines,
+            kernel.opt_level.has_value(),
+            kernel.opt_level.value_or(KernelBuildOptLevel{}),
+            kernel.compiler_include_paths,
             kernel.common_runtime_args.size(),
             // Blaze-only experimental named args (issue #50953): hash the FULL named-RT-arg schema
             // (names/lengths/dispatch across all 4 variants), NOT values. Replaces the previous
@@ -77,7 +80,8 @@ ttsl::hash::hash_t compute_program_descriptor_hash(const tt::tt_metal::ProgramDe
             format_descriptor.buffer_index,
             format_descriptor.data_format,
             format_descriptor.page_size,
-            format_descriptor.tile);
+            format_descriptor.tile,
+            format_descriptor.face_geometry);
     };
 
     auto hash_circular_buffer = [&](const CBDescriptor& cb) -> size_t {

@@ -8,18 +8,13 @@
 // untilizer that produces them and the readers that consume them build this from the same replicated control
 // tensors, so a batch index names the same tile-row on every core with nothing exchanged between them.
 //
-// A group is one ring direction, feeding the num_links senders travelling that way. Those senders take their
-// destinations furthest-first — descending dispatch-group index clockwise, ascending counter-clockwise — and
-// walk the pages inside a run the same way. Runs sit in dispatch-group order inside an expert's region, so
-// each destination's run continues where the previous one stopped, and the same-chip run the local phase
-// copies continues where the last of them stops. The walk is therefore ONE contiguous page interval, or two
-// where the dispatch-group index wraps the region boundary — at most once, since the destinations plus the
-// same-chip run are m + 1 consecutive indices out of the ring's 2m.
+// A group is one ring direction. Its senders take destinations furthest-first — descending dispatch-group
+// index clockwise, ascending counter-clockwise — and runs sit in dispatch-group order inside an expert's
+// region, so the walk is ONE contiguous page interval, or two where the index wraps the region boundary.
 //
-// The group produces every one of those runs WHOLE. A sender takes only its own share, so it skips what the
-// other sender of its group takes and must release those batches on the way past; and the two runs both
-// directions need — the diametrically opposite chip's, and the same-chip one — are simply produced by both
-// groups, which is what keeps this free of any notion of a seam.
+// The group produces every run WHOLE, so a sender skips the batches its partner takes and must release them
+// on the way past. The two runs both directions need are produced by both groups, which is what keeps this
+// free of any notion of a seam.
 
 #include <cstdint>
 

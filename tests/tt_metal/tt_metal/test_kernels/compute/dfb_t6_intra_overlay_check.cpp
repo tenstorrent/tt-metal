@@ -36,6 +36,7 @@
 #include "ckernel_trisc_common.h"
 #include "dev_mem_map.h"
 #include "experimental/kernel_args.h"
+#include "risc_common.h"
 
 namespace {
 // Host may pass fewer steps; a zero tile count ends the series.
@@ -165,12 +166,14 @@ void kernel_main() {
 #ifdef UCK_CHLKC_UNPACK
     WAYPOINT("URW");
     while (*scratch_ptr(scratch_l1_address, ready_idx) != handshake_ready) {
+        invalidate_l1_cache();
     }
     WAYPOINT("URD");
 
     // Wait for the full push series so the pop arithmetic is a deterministic function of tiles popped.
     WAYPOINT("UPW");
     while (*scratch_ptr(scratch_l1_address, pushes_done_idx) != handshake_pushes_done) {
+        invalidate_l1_cache();
     }
     WAYPOINT("UPR");
 

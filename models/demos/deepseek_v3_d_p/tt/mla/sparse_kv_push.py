@@ -8,6 +8,7 @@ owner chip pushes only the rows a requester's indices reference into that reques
 reads the buffer through indices rewritten to compact slots. The plan is built on device, so it is trace-safe.
 """
 
+from collections import Counter
 from dataclasses import dataclass
 
 import torch
@@ -28,6 +29,39 @@ class SparseKvPushPlan:
     compact_indices: ttnn.Tensor
     stripe_chunk: int
     max_rows: int
+
+
+@dataclass(frozen=True)
+class PushStep:
+    """The attention step a pre-send fills the buffer for, in a packed forward (several chunks per forward): the
+    step that runs next. Within a layer that is the next chunk (layer_offset 0); after a layer's last chunk it is the
+    next layer's first chunk (layer_offset 1). Its prefix (rows below its chunk start) is complete by then: a slot's
+    earlier chunks in the same forward run their attention steps, and so write that layer's KV, before it.
+
+    indices: that step's top-k, or None for the pre-sending step's own (the next layer reusing this chunk's).
+    cache_user_id, kv_actual_isl: its chunk's slot and start (eager); metadata: its chunk's metadata (traced)."""
+
+    layer_offset: int
+    indices: ttnn.Tensor | None = None
+    cache_user_id: int = 0
+    kv_actual_isl: int = 0
+    metadata: list | None = None
+
+
+# One chunk per forward: the step after this one is the next layer's, on the same chunk.
+SAME_CHUNK_NEXT_LAYER = "same_chunk_next_layer"
+
+
+def packed_push_targets(nonempty: list[bool]) -> dict[int, tuple[int, int]]:
+    """For each chunk position that runs its attention step, the step after it: (layer_offset, chunk position).
+
+    Empty positions (False) run no attention step in an eager forward and are skipped; a traced forward runs every
+    position, so passes all True. The last running position points at the next layer's first running position."""
+    running = [k for k, real in enumerate(nonempty) if real]
+    targets = {k: (0, nxt) for k, nxt in zip(running, running[1:])}
+    if running:
+        targets[running[-1]] = (1, running[0])
+    return targets
 
 
 def sparse_kv_push_supported(mesh_device, stripe_chunk: int, max_rows: int) -> bool:
@@ -71,8 +105,13 @@ class SparseKvPushPlanner:
         self._tables = None
         self._buffers = {}
         self._managers = {}  # query rows -> sub-device manager of grids(query rows)
-        # layer index -> plan whose prefix rows the previous layer already pushed into its buffer, beside its attention
+        # layer index -> (plan, buffer parity): the plan whose prefix rows the previous attention step already pushed,
+        # beside its attention, into that buffer (None: the dense gather buffer)
         self.prefetched = {}
+        # Pre-sends on/off, for comparing against pushing every row in line (tests).
+        self.presend = True
+        # Pushes enqueued by part name (ALL / PREFIX / REST), counted on the host as they are enqueued.
+        self.pushes = Counter()
 
     def grids(self, query_rows: int):
         """(attention, push) core grids for sparse_sdpa beside the next layer's prefix push.

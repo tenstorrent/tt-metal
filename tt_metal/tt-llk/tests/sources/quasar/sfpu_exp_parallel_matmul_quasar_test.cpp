@@ -22,7 +22,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_matmul.h"
 #include "params.h"
 
@@ -53,10 +53,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const ckernel::TensorShape tensor_shape_B = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces_B);
         // Matmul flips the unpacker roles: _llk_unpack_matmul_init_ arg0 drives UNPACR1/SrcB, arg1 drives
         // UNPACR0/SrcA -- so operand A is recorded under Unp1 and operand B under Unp0 (matches product).
-        const auto bfd_a =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
-        const auto bfd_b =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP1>(tensor_shape_A, L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
+        constexpr std::uint8_t bfd_a = ckernel::trisc::BFD_ID_UNP1;
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(tensor_shape_B, L1_ADDRESS(buffer_B[0]), formats.unpack_B_src);
+        constexpr std::uint8_t bfd_b = ckernel::trisc::BFD_ID_UNP0;
         _llk_unpack_configure_binary_<p_unpacr::UNP_B, p_unpacr::UNP_A>(
             static_cast<DataFormat>(formats.unpack_A_dst), static_cast<DataFormat>(formats.unpack_B_dst));
         _llk_unpack_matmul_init_<UNPACK_TRANSPOSE_FACES>(bfd_a, bfd_b, CT_DIM, rt_block, KT_DIM);
@@ -69,7 +69,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
-            _perf_unpack_matmul_mock(LOOP_FACTOR * num_blocks, rt_block, KT_DIM, CT_DIM);
+            _perf_unpack_matmul_mock<PERF_RUN_TYPE>(LOOP_FACTOR * num_blocks, rt_block, KT_DIM, CT_DIM);
         }
         else
         {
@@ -132,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_matmul_mock(num_sections, rt_block, KT_DIM, CT_DIM);
+            _perf_math_matmul_mock<PERF_RUN_TYPE>(num_sections, rt_block, KT_DIM, CT_DIM);
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
         {
@@ -241,7 +241,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #ifdef LLK_TRISC_PACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_matmul.h"
 #include "params.h"
@@ -276,8 +276,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
 
         const ckernel::TensorShape tensor_shape = ckernel::tensor_shape_from_num_faces(FACE_R_DIM, num_faces);
-        const auto bfd_pack =
-            ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(tensor_shape, L1_ADDRESS(buffer_C[0]), formats.pack_dst);
+        ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(tensor_shape, L1_ADDRESS(buffer_C[0]), formats.pack_dst);
+        constexpr std::uint8_t bfd_pack = ckernel::trisc::BFD_ID_PACK0;
         _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
         _llk_pack_matmul_init_(bfd_pack, rt_block, CT_DIM, 1 /*num_subblocks_c_dim*/);
         PROFILER_SYNC();
