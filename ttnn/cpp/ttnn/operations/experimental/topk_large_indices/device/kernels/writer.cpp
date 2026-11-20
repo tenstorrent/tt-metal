@@ -279,9 +279,9 @@ FORCE_INLINE void two_level_table(const Noc& noc, CircularBuffer& indices_cb, ui
 }
 
 // Stage 3's output for one of this core's rows: candidate positions in rank order, mapped through the table to key
-// indices.
+// indices. Out of line: it has a call site per split-row schedule.
 template <uint32_t source_slices_per_row, uint32_t output_slices_per_row, uint32_t slice_bytes, typename IndicesT>
-FORCE_INLINE void two_level_output(
+__attribute__((noinline)) void two_level_output(
     const Noc& noc,
     CircularBuffer& indices_cb,
     CircularBuffer& indices_scratch_cb,
@@ -375,6 +375,21 @@ void kernel_main() {
     // The landing CB is one survivor slot cycled whole, so its base is the same address on every core -- every CB
     // here is created over the whole grid, so the allocator gives each core the same layout.
     const uint32_t landing_base = row_split ? landing_cb.get_write_ptr() : 0;
+    // The second core of a split pair sends its half's survivor into the first core's landing CB once the first core
+    // has credited the slot, then counts it on the first core's data_sem. Out of line: it has a call site per schedule.
+    const auto send_survivor = [&]() __attribute__((noinline)) {
+        credit_sem.wait_min(1);
+        send_cb.wait_front(survivor_tiles);
+        noc.async_write(
+            send_cb,
+            UnicastEndpoint{},
+            survivor_bytes,
+            {.offset_bytes = 0},
+            {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
+        noc.async_write_barrier();
+        send_cb.pop_front(survivor_tiles);
+        data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+    };
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
 #ifdef TOPK_TWO_LEVEL
@@ -439,17 +454,7 @@ void kernel_main() {
                 const bool end = code == header_end;
                 if (early_halves && code == header_half) {
                     if (sends_survivor) {
-                        credit_sem.wait_min(1);
-                        send_cb.wait_front(survivor_tiles);
-                        noc.async_write(
-                            send_cb,
-                            UnicastEndpoint{},
-                            survivor_bytes,
-                            {.offset_bytes = 0},
-                            {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
-                        noc.async_write_barrier();
-                        send_cb.pop_front(survivor_tiles);
-                        data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+                        send_survivor();
                     }
                     continue;
                 }
@@ -474,17 +479,7 @@ void kernel_main() {
                     // The split row: the second core sends its half's survivor into the first core's landing CB,
                     // as the single-level split does; the first core merges it and writes the row below.
                     if (sends_survivor) {
-                        credit_sem.wait_min(1);
-                        send_cb.wait_front(survivor_tiles);
-                        noc.async_write(
-                            send_cb,
-                            UnicastEndpoint{},
-                            survivor_bytes,
-                            {.offset_bytes = 0},
-                            {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
-                        noc.async_write_barrier();
-                        send_cb.pop_front(survivor_tiles);
-                        data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+                        send_survivor();
                     }
                     if (!receives_survivor) {
                         break;
@@ -550,17 +545,7 @@ void kernel_main() {
         }
 
         if (is_split && sends_survivor) {
-            credit_sem.wait_min(1);
-            send_cb.wait_front(survivor_tiles);
-            noc.async_write(
-                send_cb,
-                UnicastEndpoint{},
-                survivor_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = partner_noc_x, .noc_y = partner_noc_y, .addr = landing_base});
-            noc.async_write_barrier();
-            send_cb.pop_front(survivor_tiles);
-            data_sem.up(noc, partner_noc_x, partner_noc_y, 1);
+            send_survivor();
             noc.async_atomic_barrier();
         } else {
             write_row_indices<source_slices_per_row, output_slices_per_row, indices_slice_bytes>(

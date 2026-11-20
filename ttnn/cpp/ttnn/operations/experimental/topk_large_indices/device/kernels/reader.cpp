@@ -111,6 +111,23 @@ __attribute__((noinline)) void gather_read(uint32_t src, uint32_t dst, uint32_t 
     noc_async_read_with_state(src, dst, bytes, noc_id);
 }
 
+// A non-posted atomic add to `target` on command buffer `cmd_buf`, returning the old value to `return_word` (see
+// two_level_run on what that value is worth), and the wait for its acknowledgement. Out of line, like gather_read.
+__attribute__((noinline)) void atomic_add(
+    uint8_t noc_id, uint32_t cmd_buf, uint64_t target, uint32_t increment, uint32_t return_word) {
+    noc_fast_atomic_increment<noc_mode, true>(
+        noc_id,
+        cmd_buf,
+        target,
+        NOC_UNICAST_WRITE_VC,
+        increment,
+        31 /*wrap*/,
+        false /*linked*/,
+        false /*posted*/,
+        return_word);
+    noc_async_atomic_barrier(noc_id);
+}
+
 // Stage 3's gather: the selected blocks table[0 .. 64 * num_chunks) of `row` into num_chunks 2048-key candidate
 // chunks. A row is one page in one bank, so its NoC address is resolved once and each block read is an offset from
 // it. Sentinel slots and keys past the search length are -inf.
@@ -362,17 +379,7 @@ FORCE_INLINE void two_level_run(
     constexpr uint32_t repair_after = 4000000;  // wall-clock ticks idle (about 3 ms) once every unit is claimed
     uint32_t last_claimed = 0xFFFFFFFFu;
     const auto claim = [&](uint32_t increment, uint32_t return_word) {
-        noc_fast_atomic_increment<noc_mode, true>(
-            noc.get_noc_id(),
-            write_at_cmd_buf,
-            counter,
-            NOC_UNICAST_WRITE_VC,
-            increment,
-            31 /*wrap*/,
-            false /*linked*/,
-            false /*posted*/,
-            return_word);
-        noc.async_atomic_barrier();
+        atomic_add(noc.get_noc_id(), write_at_cmd_buf, counter, increment, return_word);
         if (return_word != claim_word) {
             return true;
         }
@@ -392,17 +399,7 @@ FORCE_INLINE void two_level_run(
         static_cast<uint32_t>(NOC_XY_ADDR(my_x[noc.get_noc_id()], my_y[noc.get_noc_id()], 0) >> NOC_ADDR_COORD_SHIFT) &
         NOC_COORDINATE_MASK;
     const auto aux_add = [&](uint64_t target, uint32_t increment) {
-        noc_fast_atomic_increment<noc_mode, true>(
-            noc.get_noc_id(),
-            write_reg_cmd_buf,
-            target,
-            NOC_UNICAST_WRITE_VC,
-            increment,
-            31 /*wrap*/,
-            false /*linked*/,
-            false /*posted*/,
-            rows_word);
-        noc.async_atomic_barrier();
+        atomic_add(noc.get_noc_id(), write_reg_cmd_buf, target, increment, rows_word);
         invalidate_l1_cache();
         return *rows_returned;
     };
