@@ -717,8 +717,8 @@ tests/ttnn/unit_tests/base_functionality/*stream_service* @razorback3 @dongjin-n
 tests/ttnn/unit_tests/base_functionality/test_d2d_pipeline_descriptor.py @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_layer_* @razorback3 @dongjin-na @bbradelTT
 # Bindings and tests for the prefetcher and global circular buffers.
-ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT
-ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/global_circular_buffer.* @nsextonTT @jbaumanTT @abhullar-tt
+ttnn/cpp/ttnn-nanobind/prefetcher_pipe.* @nsextonTT @jbaumanTT @abhullar-tt
 tests/ttnn/unit_tests/base_functionality/*prefetcher* @razorback3 @dongjin-na @bbradelTT
 tests/ttnn/unit_tests/base_functionality/test_global_circular_buffer.py @razorback3 @dongjin-na @bbradelTT
 # The prefetcher and global circular buffer code itself: owned by the people who build it.
@@ -739,7 +739,7 @@ tests/ttnn/unit_tests/base_functionality/test_graph_report_device_tensors_unit.p
 ttnn/cpp/ttnn-nanobind/pipeline_module_nanobind.* @nsextonTT
 ttnn/cpp/ttnn-nanobind/mcast_host.* @nsextonTT
 tests/ttnn/unit_tests/base_functionality/test_mcast_host_bindings.py @razorback3 @dongjin-na @bbradelTT
-ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT
+ttnn/cpp/ttnn-nanobind/profiler.* @nsextonTT @mo-tenstorrent @akerteszTT @yusufbashiTT
 # The TTNN profiler code itself, and its multi-host smoke test with that test's configs: owned by the profiler's owners.
 ttnn/cpp/tools/profiler/ @mo-tenstorrent @akerteszTT @yusufbashiTT
 ttnn/ttnn/profiler.py @mo-tenstorrent @akerteszTT @yusufbashiTT
