@@ -33,7 +33,8 @@ static bool run_test(
     uint32_t transfer_size = 1024;
     uint32_t transfer_count = 1;
 
-    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t));
+    TEST_PARAM(uint32_t, rand_seed, 0, "ETH_TEST_RAND_SEED");
+    auto inputs = generate_uniform_random_vector<uint32_t>(0, 100, transfer_size / sizeof(uint32_t), rand_seed);
 
     struct l1_allocator send_allocator = new_erisc_allocator();
     struct l1_allocator recv_allocator = new_erisc_allocator();
