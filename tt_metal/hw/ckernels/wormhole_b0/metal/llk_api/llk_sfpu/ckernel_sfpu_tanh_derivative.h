@@ -7,63 +7,20 @@
 #include <cstdint>
 #include "ckernel.h"
 #include "ckernel_defs.h"
-#include "sfpu/ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_polyval.h"
 #include "ckernel_sfpu_exp.h"
 #include "cmath_common.h"
+#include "sfpi.h"
 
 namespace ckernel {
 namespace sfpu {
 
-// Legacy tanh derivative: 1 - lut(x)^2, with tanh taken from the SFPLUT rather than computed.
-// For finite |x| >= 3 the result is exactly 0, so every point in the tail is 100% relative
-// error against a sech^2 that is merely small -- and, measured in ulp of that bfloat16
-// reference, a flat ~256 rather than anything unbounded. Absolute error is the only metric
-// that stays meaningful there, and it stays below sech^2(3) = 0.0099; max absolute error is
-// 0.0143 overall (Wormhole, fp32 end to end, every finite bfloat16 input). The infinities are
-// the exception to "exactly 0": the tail pair is (A=0, B=1) and the hardware evaluates
-// A*|x| + B, so 0 * inf + 1 is NaN and 1 - NaN^2 is NaN. Kept for backward
-// compatibility -- calculate_tanh_derivative_sech2 is accurate to 1 bfloat16 ULP instead.
-// Nothing in this repository calls it: tanh_derivative_tile dispatches
-// calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx, and the
-// LLK harness runs tt-llk's _calculate_tanh_derivative_ rather than this copy. The table
-// in tanh_derivative_init below is live even though this function is not -- see there.
-template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH = 0, int ITERATIONS = 8>
-inline void calculate_tanh_derivative() {
-    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
-    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
-    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
-    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
-    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
-    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
-
-    // tanh'(x) = 1 - (tanh(x))^2
-    for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat val = sfpi::dst_reg[0];
-
-        if constexpr (!WITH_PRECOMPUTED_TANH) {
-            val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
-        }
-
-        val = val * (-val) + 1.0f;
-        sfpi::dst_reg[0] = val;
-
-        sfpi::dst_reg++;
-    }
-
-    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
-    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
-    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
-    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
-    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
-    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
-}
-
 template <bool APPROXIMATION_MODE>
 inline void tanh_derivative_init() {
     // A 6-entry SFPLUTFP32 FP16 table, TABLE1 breakpoints |x| = 0.5, 1, 1.5, 2, 3, evaluated
-    // as 1 - lut(x)^2. Its consumer is not calculate_tanh_derivative above but tt-llk's
-    // _calculate_tanh_derivative_, paired with this init under SfpuType::tanh_derivative_lut;
-    // the table crosses repositories in LReg0/1/2 (slopes) and LReg4/5/6 (intercepts) and is
+    // as 1 - lut(x)^2. Its consumer is
+    // _calculate_tanh_derivative_ (below), paired with this init under SfpuType::tanh_derivative_lut;
+    // the table is passed through LReg0/1/2 (slopes) and LReg4/5/6 (intercepts) and is
     // the whole of that kernel's approximation. Fitted for sech^2, not tanh: tanh_init's own
     // table measures 0.0179 here and is not monotone once squared, against 0.0143 for this.
     //
@@ -255,5 +212,52 @@ inline void tanh_derivative_sech2_init() {
     // Polynomial uses only Horner evaluation, inline exp uses only arithmetic.
 }
 
+// Legacy tanh derivative: 1 - lut(x)^2, with tanh taken from the SFPLUT rather than computed.
+// For finite |x| >= 3 the result is exactly 0, so every point in the tail is 100% relative
+// error against a sech^2 that is merely small -- and, measured in ulp of that bfloat16
+// reference, a flat ~256 rather than anything unbounded. Absolute error is the only metric
+// that stays meaningful there, and it stays below sech^2(3) = 0.0099; max absolute error is
+// 0.0143 overall (Wormhole, fp32 end to end, every finite bfloat16 input). The infinities are
+// the exception to "exactly 0": the tail pair is (A=0, B=1) and the hardware evaluates
+// A*|x| + B, so 0 * inf + 1 is NaN and 1 - NaN^2 is NaN. Kept for backward
+// compatibility -- calculate_tanh_derivative_sech2 is accurate to 1 bfloat16 ULP instead.
+// Only the LLK harness calls it: tanh_derivative_tile dispatches
+// calculate_tanh_derivative_sech2 unconditionally and ignores fast_and_approx.
+// It consumes the table loaded by tanh_derivative_init: slopes in LReg0/1/2 packed hi/lo,
+// intercepts in LReg4/5/6, a 6-entry SFPLUTFP32 FP16 table fitted for sech^2 through
+// 1 - lut^2. The two must move together; only this register convention couples them.
+template <bool APPROXIMATION_MODE, int WITH_PRECOMPUTED_TANH, int ITERATIONS>
+inline void _calculate_tanh_derivative_(const int iterations)
+{
+    sfpi::vLut16ss s01 = sfpi::l_reg[sfpi::LRegs::LReg0];
+    sfpi::vLut16ss s23 = sfpi::l_reg[sfpi::LRegs::LReg1];
+    sfpi::vLut16ss s45 = sfpi::l_reg[sfpi::LRegs::LReg2];
+    sfpi::vLut16ii i01 = sfpi::l_reg[sfpi::LRegs::LReg4];
+    sfpi::vLut16ii i23 = sfpi::l_reg[sfpi::LRegs::LReg5];
+    sfpi::vLut16ii i45 = sfpi::l_reg[sfpi::LRegs::LReg6];
+
+    // tanh'(x) = 1 - (tanh(x))^2. SGN_RETAIN makes lut odd, and the square drops the sign.
+    for (int d = 0; d < iterations; d++)
+    {
+        sfpi::vFloat val = sfpi::dst_reg[0];
+
+        if constexpr (!WITH_PRECOMPUTED_TANH)
+        {
+            val = sfpi::lut(val, s01, i01, s23, i23, s45, i45, sfpi::LutSign::Retain);
+        }
+
+        val              = val * (-val) + 1.0f;
+        sfpi::dst_reg[0] = val;
+
+        sfpi::dst_reg++;
+    }
+
+    sfpi::l_reg[sfpi::LRegs::LReg0] = s01;
+    sfpi::l_reg[sfpi::LRegs::LReg1] = s23;
+    sfpi::l_reg[sfpi::LRegs::LReg2] = s45;
+    sfpi::l_reg[sfpi::LRegs::LReg4] = i01;
+    sfpi::l_reg[sfpi::LRegs::LReg5] = i23;
+    sfpi::l_reg[sfpi::LRegs::LReg6] = i45;
+}
 }  // namespace sfpu
 }  // namespace ckernel

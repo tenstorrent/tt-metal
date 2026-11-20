@@ -867,3 +867,36 @@ def test_indexed_fill_specless_sharded_output_grid_shrinks(device, shape, out_la
 
     golden = golden_indexed_fill(torch_a, torch_b, batch_id, dim=0)
     assert_with_pcc(golden, ttnn.to_torch(output), 0.9999)
+
+
+def test_indexed_fill_rm_dram_width_sharded_subaligned_rows(device):
+    # indexed_fill along W ends with a permute into input_a's memory config, whose DRAM shard rows are 16-byte
+    # multiples but not multiples of the DRAM alignment. The permute stages that output through interleaved memory.
+    e = 8 if device.arch() == ttnn.device.Arch.WORMHOLE_B0 else 16
+    x = ((torch.arange(64 * 33) % 97 - 48) / 8).reshape(1, 1, 64, 33).to(torch.bfloat16)
+    b_host = -(torch.arange(64) + 1).reshape(1, 1, 64, 1).to(torch.bfloat16)
+    num_shards = -(-33 // e)
+    a_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_shards - 1, 0))}),
+            [64, e],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    a = ttnn.from_torch(x, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=a_config)
+    b = ttnn.from_torch(b_host, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    index = ttnn.from_torch(
+        torch.tensor([3], dtype=torch.int32),
+        dtype=ttnn.int32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    output = ttnn.indexed_fill(index, a, b, dim=3)
+
+    want = x.clone()
+    want[..., 3:4] = b_host
+    assert_equal(want, ttnn.to_torch(output))

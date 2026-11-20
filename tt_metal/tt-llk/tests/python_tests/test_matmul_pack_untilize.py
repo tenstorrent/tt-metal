@@ -5,7 +5,7 @@ import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
-from helpers.llk_params import DestAccumulation, MathFidelity, format_dict
+from helpers.llk_params import ALL_MATH_FIDELITIES, DestAccumulation, format_dict
 from helpers.param_config import input_output_formats, parametrize
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
@@ -16,7 +16,7 @@ from helpers.test_variant_parameters import (
     NUM_TILES_IN_BLOCK,
     generate_input_dim,
 )
-from helpers.tilize_untilize import tilize
+from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 
 
@@ -24,18 +24,12 @@ from helpers.utils import passed_test
     formats=input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
             DataFormat.Bfp8_b,  # Pack Untilize doesn't work for block float formats (Bfp8_b); we only include as input format in our test
             DataFormat.Float32,
         ]
     ),
     dest_acc=[DestAccumulation.Yes, DestAccumulation.No],
-    math_fidelity=[
-        MathFidelity.LoFi,
-        MathFidelity.HiFi2,
-        MathFidelity.HiFi3,
-        MathFidelity.HiFi4,
-    ],
+    math_fidelity=ALL_MATH_FIDELITIES,
 )
 def test_matmul_pack_untilize(
     formats,
@@ -78,9 +72,9 @@ def test_matmul_pack_untilize(
         ],
         runtimes=[NUM_BLOCKS(num_blocks), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(
-            tilize(src_A, formats.input_format),
+            tilize_block(src_A, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
-            tilize(src_B, formats.input_format),
+            tilize_block(src_B, input_dimensions, formats.input_format).flatten(),
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

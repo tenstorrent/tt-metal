@@ -17,6 +17,7 @@
 namespace ttnn::operations::experimental::deepseek_prefill::combine_fabric2d {
 
 using cmbf2d::make_stream_id;
+using cmbf2d::reverse_stream;
 using cmbf2d::stream_count;
 using cmbf2d::stream_is_cw;
 using cmbf2d::StreamId;

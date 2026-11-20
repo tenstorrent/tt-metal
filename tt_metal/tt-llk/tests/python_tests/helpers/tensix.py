@@ -9,14 +9,13 @@ from enum import IntEnum
 from typing import Any
 
 from helpers import device as device_module
-from helpers.device import commit_brisc_command, get_register_store
-from helpers.device_io import read_words_from_device
-from helpers.llk_params import BriscCmd
+from helpers.device import get_register_store
 from helpers.logger import logger
 from helpers.test_config import TestConfig
 from ttexalens.register_store import TensixGeneralPurposeRegisterDescription
 from ttexalens.tt_exalens_lib import (
     get_tensix_state,
+    read_words_from_device,
 )
 
 
@@ -103,7 +102,7 @@ class TensixState:
 
     @classmethod
     def _dump_gprs(cls, location: str) -> dict[tuple[int, int], int]:
-        # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 instead.
+        # ttexalens reads GPRs by halting BRISC, which hangs it; BRISC copies them to L1 once the TRISCs are done.
         dump_address = device_module.Mailboxes.Unpacker.value - GPR_DUMP_BYTES
         device_print_end = (
             TestConfig.DEVICE_PRINT_BUFFER_BASE + TestConfig.DEVICE_PRINT_BUFFER_SIZE
@@ -113,7 +112,6 @@ class TensixState:
                 f"BRISC GPR dump at {dump_address:#x} overlaps the device print buffer "
                 f"(ends at {device_print_end:#x})"
             )
-        commit_brisc_command(location, BriscCmd.DUMP_GPRS)
         words = read_words_from_device(
             location, dump_address, word_count=GPR_DUMP_WORDS
         )

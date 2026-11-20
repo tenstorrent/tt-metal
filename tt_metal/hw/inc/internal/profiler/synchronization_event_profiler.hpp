@@ -25,6 +25,12 @@
     DeviceZoneScopedN(name); \
     DeviceTimestampedData(name "-KEY", (key))
 
+// The two halves of SYNC_WAIT, for a wait whose key is known only when it ends: a poll over several
+// semaphores, released by whichever is set first. Open the zone with SYNC_WAIT_ZONE and record the key
+// with SYNC_WAIT_KEY as the wait returns; the reader pairs a wait zone with the first key inside it.
+#define SYNC_WAIT_ZONE(name) DeviceZoneScopedN(name)
+#define SYNC_WAIT_KEY(name, key) DeviceTimestampedData(name "-KEY", (key))
+
 // Records a timestamp for a signal event.
 #define SYNC_SIGNAL(name, key) DeviceTimestampedData(name, (key))
 
@@ -36,6 +42,8 @@
 
 // When profiling is off, these do nothing but still compile-check the arguments.
 #define SYNC_WAIT(name, key) (void(sizeof(key)))
+#define SYNC_WAIT_ZONE(name)
+#define SYNC_WAIT_KEY(name, key) (void(sizeof(key)))
 #define SYNC_SIGNAL(name, key) (void(sizeof(key)))
 #define SYNC_SIGNAL_NOC_ADDR(name, addr, noc) (void(sizeof(addr) + sizeof(noc)))
 

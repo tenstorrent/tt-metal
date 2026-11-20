@@ -2,6 +2,8 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
+import struct
+
 from helpers.golden_generators import UnarySFPUGolden, get_golden_generator
 
 
@@ -10,6 +12,15 @@ def unary_golden(call, state, node, operation, config):
     tile_dims = state.dest.tile_dims
     data_format = config.sentinel.golden_math_format
     tensor = state.dest.tilized(data_format)
+    # Only Quasar's UnarySfpu carries dropout operands; other ops and arches use the defaults.
+    dropout_kwargs = {}
+    if hasattr(node.sfpu, "dropout_probability_operand"):
+        dropout_kwargs = {
+            "dropout_probability": node.sfpu.dropout_probability_operand,
+            "dropout_scale": struct.unpack(
+                "<f", struct.pack("<I", node.sfpu.dropout_scale_bits)
+            )[0],
+        }
     result = get_golden_generator(UnarySFPUGolden)(
         node.sfpu.operation,
         tensor,
@@ -22,6 +33,7 @@ def unary_golden(call, state, node, operation, config):
         node.sfpu.fill_const_value,
         skip_tilize=True,
         tile_dimensions=tile_dims,
+        **dropout_kwargs,
     )
     tile_elements = tile_dims[0] * tile_dims[1]
     span = (node.sfpu.iterations * 32 + tile_elements - 1) // tile_elements

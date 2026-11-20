@@ -79,6 +79,8 @@ The original sweep uses 256 experts. The partial-face regression covers counts
 from 16 through 240, with deliberately large inactive keys to exercise padding.
 Biased-payload cases use spread-out winning keys so normalized weights remain
 sensitive to payload swaps; 512/1024-expert cases place winners on every face.
+The negative-key sweep mirrors the partial-face keys below zero, so only a true
+-inf padding keeps the inactive experts out of the top-k.
 
 Configurations left uncovered
 -----------------------------
@@ -102,7 +104,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import MOE_GATE_NORMALIZE_PARAMS, MOE_GATE_TOPK
 from helpers.tilize_untilize import tilize_block, untilize_block
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 FACE_DIM = 16
 NUM_TOTAL_EXPERTS = 256  # one face of a 32x32 tile
@@ -220,7 +222,33 @@ def test_sfpu_generic_moe_gate_topk(
 def test_sfpu_generic_moe_gate_partial_face(
     num_total_experts, num_selected_experts, normalize
 ):
-    _check_moe_gate(num_selected_experts, True, normalize, True, num_total_experts)
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+    )
+
+
+@blackhole_only
+@parametrize(
+    num_total_experts=[32, 64, 80],
+    num_selected_experts=[4, 12],
+    normalize=[False, True],
+)
+def test_sfpu_generic_moe_gate_partial_face_negative_keys(
+    num_total_experts, num_selected_experts, normalize
+):
+    """Every active key is negative, so the inactive-expert padding must be -inf."""
+    _check_moe_gate(
+        num_selected_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
+        negative_keys=True,
+    )
 
 
 @blackhole_only
@@ -248,10 +276,10 @@ def test_sfpu_generic_moe_gate_biased_scores(
     """
     _check_moe_gate(
         num_selected_experts,
-        full_sort,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=full_sort,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=scores_include_bias,
         generate_indices=generate_indices,
         spread_biased_scores=True,
@@ -270,10 +298,10 @@ def test_sfpu_generic_moe_gate_biased_scores_multiple_faces(
     """Copy biased payloads across all active faces before the global merge."""
     _check_moe_gate(
         num_selected_experts,
-        True,
-        normalize,
-        True,
-        num_total_experts,
+        full_sort=True,
+        normalize=normalize,
+        zero_tail=True,
+        num_total_experts=num_total_experts,
         scores_include_bias=True,
         spread_biased_scores=True,
     )
@@ -288,6 +316,7 @@ def _check_moe_gate(
     scores_include_bias=False,
     generate_indices=True,
     spread_biased_scores=False,
+    negative_keys=False,
 ):
     torch.manual_seed(0)
 
@@ -328,6 +357,10 @@ def _check_moe_gate(
             biased[:num_total_experts][lower_positions] = lower_keys
             biased[winner_positions] = winning_keys
         biased = biased.to(torch_format).to(torch.float32)
+    if negative_keys:
+        # Same distinct keys, mirrored below zero: -1.0 .. -3.984375. The raw
+        # scores (the payload) stay positive so normalization is unaffected.
+        biased[:num_total_experts] = -biased[:num_total_experts]
     # Without the SFPU's -inf padding these inactive experts would win.
     biased[num_total_experts:] = 1000.0
     scores = (
@@ -383,7 +416,7 @@ def _check_moe_gate(
     )
 
     res_from_L1 = configuration.run().result
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format)
 
     score_words = res_tensor[:ELEMENTS_PER_TILE]
     index_words = res_tensor[ELEMENTS_PER_TILE : 2 * ELEMENTS_PER_TILE]

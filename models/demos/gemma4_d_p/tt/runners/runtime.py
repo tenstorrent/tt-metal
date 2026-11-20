@@ -6,8 +6,10 @@
 import torch
 
 import ttnn
+from models.demos.common.prefill.chunk_layout import rotated_chunk_positions
 from models.demos.gemma4_d_p.config import MeshConfig
 from models.demos.gemma4_d_p.tt.common import create_tt_model
+from models.demos.gemma4_d_p.tt.dflash_config import DEFAULT_DFLASH_MODEL
 
 
 class Gemma4PrefillRuntime:
@@ -22,6 +24,12 @@ class Gemma4PrefillRuntime:
         self.layer_completion_sink = None
         self.slot_ends = [0] * config.num_users
 
+    @property
+    def resume_granularity(self):
+        """Token multiple a chunk may start at: a per-rank slab (chunk / CP). A start inside a slab would give one
+        rank rows from two slabs, each needing its own predecessor halo, and the sliding gather buffer holds one."""
+        return self.config.chunk_size // self.config.mesh_shape[0]
+
     def _host_tokens(self, values):
         return ttnn.from_torch(
             torch.tensor(values, dtype=torch.int64).reshape(1, self.config.chunk_size),
@@ -35,8 +43,13 @@ class Gemma4PrefillRuntime:
 
     def _stage_positions(self, slot_id, actual_start):
         self.model.prefill_metadata.update(slot_idx=slot_id, kv_actual_global=actual_start)
-        positions = range(actual_start, actual_start + self.config.chunk_size)
-        ttnn.copy_host_to_device_tensor(self._host_tokens(positions), self.positions)
+        ttnn.copy_host_to_device_tensor(self._host_tokens(self._chunk_positions(actual_start)), self.positions)
+
+    def _chunk_positions(self, start):
+        """Each rank's rows' positions for a chunk at start: a chunk that starts mid-slab arrives rotated to its
+        block-cyclic rows (chunk_layout), so its positions are too."""
+        cp = self.mesh_config.cp_degree
+        return [p for rows in rotated_chunk_positions(start, cp, self.config.chunk_size // cp) for p in rows]
 
     def _forward(self):
         embeddings = self.model.transform_and_embed_prefill_inputs_device(self.input_tokens)
@@ -55,6 +68,9 @@ class Gemma4PrefillRuntime:
             max_batch_size=1,
             ring_kv_caches=kv_cache,
             tt_cache_path=self.tt_cache_path,
+            dflash_enabled=self.config.dflash_enabled,
+            dflash_checkpoint_path=self.config.dflash_checkpoint_path or DEFAULT_DFLASH_MODEL,
+            dflash_kv_cache=kv_cache.dflash,
         )
         self.input_tokens = self.make_chunk_input([0] * self.config.chunk_size)
         self.positions = self.make_chunk_input(range(self.config.chunk_size))
@@ -78,8 +94,16 @@ class Gemma4PrefillRuntime:
     def set_layer_completion_sink(self, sink):
         self.layer_completion_sink = sink
 
+    @property
+    def num_ack_layers(self):
+        return self.config.num_layers + (self.model.dflash.config.num_hidden_layers if self.model.dflash else 0)
+
+    def layer_ack_layers(self, global_count, local_count):
+        draft_layers = self.num_ack_layers - self.config.num_layers
+        return global_count + draft_layers, local_count + draft_layers
+
     def warmup_ack_count(self):
-        return self.config.num_layers if self.d2h_service is not None else 0
+        return self.num_ack_layers if self.d2h_service is not None else 0
 
     def capture_trace(self, kv_cache):
         self._check_cache(kv_cache)
@@ -97,16 +121,29 @@ class Gemma4PrefillRuntime:
             layer.self_attn.ring_kv_cache is not cache for layer, cache in zip(self.model.layers, kv_cache.layers)
         ):
             raise ValueError("The traced runtime requires the caches supplied to compile")
+        expected_draft = self.model.dflash.kv_cache if self.model.dflash is not None else None
+        if kv_cache.dflash is not expected_draft:
+            raise ValueError("The traced runtime requires the DFlash caches supplied to compile")
 
     def validate_chunk(self, slot_id, actual_start, actual_end):
         if not 0 <= slot_id < self.config.num_users:
             raise ValueError(f"KV slot {slot_id} is outside [0, {self.config.num_users})")
-        if actual_start < 0 or actual_start % self.config.chunk_size:
-            raise ValueError("Chunk start must be a nonnegative multiple of 8192")
-        if not actual_start < actual_end <= min(actual_start + self.config.chunk_size, self.config.max_seq_len):
-            raise ValueError("Chunk must contain 1 to 8192 real tokens within the 256K context")
-        if actual_start != 0 and actual_start != self.slot_ends[slot_id]:
-            raise ValueError(f"Slot {slot_id} expects position {self.slot_ends[slot_id]}, got {actual_start}")
+        chunk = self.config.chunk_size
+        if actual_start < 0 or actual_start % self.resume_granularity:
+            raise ValueError(
+                f"Chunk start must be a nonnegative multiple of {self.resume_granularity} at chunk size {chunk}"
+            )
+        # The KV writer writes the whole padded chunk.
+        if actual_start + chunk > self.config.max_seq_len:
+            raise ValueError(
+                f"Chunk [{actual_start}, {actual_start + chunk}) runs past the {self.config.max_seq_len}-token slot; "
+                f"resume at {self.config.max_seq_len - chunk} or earlier"
+            )
+        if not actual_start < actual_end <= actual_start + chunk:
+            raise ValueError(f"Chunk must contain 1 to {chunk} real tokens")
+        # A resume may rewind into the cached prefix (a cache hit rounded down to the granularity), not skip past it.
+        if actual_start > self.slot_ends[slot_id]:
+            raise ValueError(f"Slot {slot_id} holds {self.slot_ends[slot_id]} tokens, got a chunk at {actual_start}")
 
     def prefill_chunk(
         self,
@@ -135,9 +172,12 @@ class Gemma4PrefillRuntime:
         self._stage_positions(slot_id, actual_start)
         ttnn.execute_trace(self.mesh_device, self.trace_id, cq_id=0, blocking=False)
         ttnn.synchronize_device(self.mesh_device)
+        # Replay can write different tokens or padding, invalidating the previous suffix.
+        # Track this request's valid KV frontier, even when it shrinks; later chunks must
+        # recompute that suffix before they can continue from the old frontier.
         self.slot_ends[slot_id] = actual_end
         if self.layer_completion_sink is not None:
-            self.layer_completion_sink.layers_completed(0, self.config.num_layers, slot_id, actual_start, actual_end)
+            self.layer_completion_sink.layers_completed(0, self.num_ack_layers, slot_id, actual_start, actual_end)
         ttnn.deallocate(input_tensor)
         if metadata_msg is not None:
             ttnn.deallocate(metadata_msg)
@@ -152,6 +192,12 @@ class Gemma4PrefillRuntime:
         for layer_idx, cache in enumerate(kv_cache.layers):
             tensors = (cache.kv,) if hasattr(cache, "kv") else (cache.k, cache.v)
             stages.extend(KvCacheStage(int(tensor.buffer_address()), layer_idx, 1) for tensor in tensors)
+        if kv_cache.dflash is not None:
+            draft = kv_cache.dflash
+            stages.extend(
+                KvCacheStage(int(tensor.buffer_address()), self.config.num_layers, draft.config.num_hidden_layers)
+                for tensor in (draft.k, draft.v)
+            )
         return stages
 
     def build_kv_chunk_table(self, kv_cache, path, *, first_layer_idx=0, num_my_layers=None, stage_layouts=None):

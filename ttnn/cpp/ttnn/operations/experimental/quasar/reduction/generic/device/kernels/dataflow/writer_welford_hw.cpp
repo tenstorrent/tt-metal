@@ -27,7 +27,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/numeric/bfloat16.h"
 #include "api/tensor/noc_traits.h"
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 #include "ttnn/operations/normalization/groupnorm/device/kernels/dataflow/welford_combine.h"
 
 void kernel_main() {

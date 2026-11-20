@@ -61,3 +61,56 @@ def test_row_major_zero_shard_width(device, expect_error, layout):
             device=device,
             memory_config=_one_core_shard(layout, (64, 0)),
         )
+
+
+def _one_core_nd_shard(shard_shape):
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    return ttnn.MemoryConfig(ttnn.BufferType.L1, ttnn.NdShardSpec(list(shard_shape), grid))
+
+
+# An ND shard shape with a 0 dim reached `% 0` / `div_up(x, 0)` while TensorSpec derived the legacy shard spec.
+@pytest.mark.parametrize("shard_shape", [(32, 0), (0, 32)], ids=["zero_width", "zero_height"])
+def test_nd_zero_shard_dim(device, expect_error, shard_shape):
+    with expect_error(RuntimeError, "ND shard shape must be greater than 0 in every dim"):
+        ttnn.from_torch(
+            torch.randn(1, 1, 64, 64).bfloat16(),
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=_one_core_nd_shard(shard_shape),
+        )
+
+
+# A zero last dim with a valid ND shard spec reached 0 / 0 while classifying the legacy shard layout.
+def test_nd_sharded_zero_width_tensor_spec():
+    spec = ttnn.TensorSpec((32, 0), ttnn.bfloat16, ttnn.TILE_LAYOUT, memory_config=_one_core_nd_shard((32, 32)))
+    assert list(spec.shape) == [32, 0]
+
+
+# A legacy shard spec with a 0 in its unsharded dim is valid, and so is reusing the spec built from it,
+# even though that spec carries a derived ND shard shape with a 0.
+@pytest.mark.parametrize(
+    "layout, tensor_shape, shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, 32), (0, 32)),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 0), (32, 0)),
+    ],
+    ids=["width_sharded", "height_sharded"],
+)
+def test_legacy_zero_shard_spec_can_be_reused(layout, tensor_shape, shard_shape):
+    spec = ttnn.TensorSpec(
+        tensor_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, memory_config=_one_core_shard(layout, shard_shape)
+    )
+    reused = ttnn.TensorSpec(spec.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, memory_config=spec.memory_config)
+    assert list(reused.shape) == list(tensor_shape)
+
+
+# Reshaping a row-major sharded tensor to a zero last dim divided the shard volume by it.
+def test_reshape_sharded_to_zero_last_dim(device, expect_error):
+    x = ttnn.from_torch(
+        torch.zeros(0, 32).bfloat16(),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=_one_core_shard(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 32)),
+    )
+    with expect_error(RuntimeError, "Cannot reshape a sharded tensor to a zero last dimension"):
+        ttnn.reshape(x, [32, 0])

@@ -50,12 +50,16 @@ void kernel_main() {
         // every async_read_with_state below passes its own address, which is why l1_read_addr can
         // advance per page without re-setting state. Re-issuing it per block would cost a
         // leading-index multiple of the NOC state programming for no behavioural difference.
-        noc.set_async_read_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-            UnicastEndpoint{},
-            page_size,
-            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-             .addr = input_base_read_addr});
+        // Over the limit, set-state is unusable: it holds the length in the command buffer and
+        // the splitting variant rewrites it per packet, so overlapping reads see each other's length.
+        if constexpr (page_size <= NOC_MAX_BURST_SIZE) {
+            noc.set_async_read_state<NocOptions::DEFAULT, page_size>(
+                UnicastEndpoint{},
+                page_size,
+                {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                 .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                 .addr = input_base_read_addr});
+        }
 
         for (uint32_t block_idx = block_start; block_idx < block_end; block_idx++) {
             uint32_t l1_write_addr = output_base_write_addr + block_idx * output_block_stride;
@@ -64,14 +68,25 @@ void kernel_main() {
             for (uint32_t stick_idx = 0; stick_idx < input_num_sticks; stick_idx++) {
                 for (uint32_t page_idx = 0; page_idx < input_num_pages_per_stick; page_idx++) {
                     CoreLocalMem<uint32_t> dst(l1_write_addr + page_size * page_idx);
-                    noc.async_read_with_state<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
-                        UnicastEndpoint{},
-                        dst,
-                        page_size,
-                        {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
-                         .noc_y = (uint32_t)my_y[noc.get_noc_id()],
-                         .addr = l1_read_addr},
-                        {.offset_bytes = 0});
+                    if constexpr (page_size <= NOC_MAX_BURST_SIZE) {
+                        noc.async_read_with_state<NocOptions::DEFAULT, page_size>(
+                            UnicastEndpoint{},
+                            dst,
+                            page_size,
+                            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                             .addr = l1_read_addr},
+                            {.offset_bytes = 0});
+                    } else {
+                        noc.async_read(
+                            UnicastEndpoint{},
+                            dst,
+                            page_size,
+                            {.noc_x = (uint32_t)my_x[noc.get_noc_id()],
+                             .noc_y = (uint32_t)my_y[noc.get_noc_id()],
+                             .addr = l1_read_addr},
+                            {.offset_bytes = 0});
+                    }
                     l1_read_addr += page_size;
                 }
                 l1_write_addr += output_stride;

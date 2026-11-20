@@ -4,7 +4,7 @@
 
 #pragma once
 #include <cstdint>
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_unpack_common_api.h"
 #include "experimental/llk_unpack_AB_reduce_runtime_custom.h"
 
@@ -65,8 +65,10 @@ inline void llk_unpack_AB_reduce_block_max_row(
     const std::uint32_t operandA_id = get_operand_id(operandA);
     const std::uint32_t operandB_id = get_operand_id(operandB);
 
-    const std::uint8_t buf_desc_id_a = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp0>(operandA_id);
-    const std::uint8_t buf_desc_id_b = llk_unpack_program_bfd<ckernel::trisc::BfdResource::Unp1>(operandB_id);
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP0>(operandA_id);
+    constexpr std::uint8_t buf_desc_id_a = ckernel::trisc::BFD_ID_UNP0;
+    llk_unpack_program_bfd<ckernel::trisc::BFD_ID_UNP1>(operandB_id);
+    constexpr std::uint8_t buf_desc_id_b = ckernel::trisc::BFD_ID_UNP1;
 
     _llk_unpack_AB_reduce_block_max_row_mop_config_runtime_(
         block_ct_dim, buf_desc_id_a, buf_desc_id_b, tensor_shape, respect_trigger);
@@ -74,8 +76,8 @@ inline void llk_unpack_AB_reduce_block_max_row(
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
     const std::uint32_t l1_tile_index_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].rd_entry_idx + row_start_index;
-    const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].rd_entry_idx;
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + row_start_index;
+    const std::uint32_t l1_tile_index_b = local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx;
 
     WAYPOINT("URBW");
     _llk_unpack_AB_reduce_block_max_row_runtime_(

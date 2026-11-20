@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariant of WorkUnitSpec::kernels on Gen1 data-movement placement (program_spec.hpp): its DM
-// kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs.
+// kernels use distinct processors, share noc_mode, and DM_DEDICATED_NOC kernels use distinct NOCs unless
+// both opt in to sharing one (DataMovement1XXConfig::dedicated_noc_sharing).
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -11,8 +12,8 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
@@ -45,7 +46,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMOnlyProgramSucceeds) {
     spec.dataflow_buffers = {dfb};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"producer", "consumer"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDifferentProcessorsSucceeds) {
@@ -62,7 +63,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDifferentProcessorsSucceeds) {
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_ProcessorConflictFails) {
@@ -79,7 +80,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ProcessorConflictFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 
@@ -103,7 +104,51 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("pinned to NOC_0")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedBothSharingSucceeds) {
+    // Two dedicated-NOC DM kernels may name the same NOC when both declare their traffic disjoint.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    for (auto* k : {&k0, &k1}) {
+        auto& cfg = (*std::get<DataMovementHardwareConfig>(k->hw_config).config_1xx);
+        cfg.noc = NOC::NOC_0;
+        cfg.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+    }
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDedicatedOneSharingFails) {
+    // Sharing a dedicated NOC takes both kernels' opt-in: the second kernel's traffic is what the first
+    // kernel's declaration cannot vouch for.
+    NodeCoord node{0, 0};
+
+    ProgramSpec spec;
+    spec.name = "test_program";
+
+    auto k0 = MakeMinimalGen1DMKernel("k0", DataMovementProcessor::RISCV_0);
+    auto k1 = MakeMinimalGen1DMKernel("k1", DataMovementProcessor::RISCV_1);
+    auto& cfg0 = (*std::get<DataMovementHardwareConfig>(k0.hw_config).config_1xx);
+    cfg0.noc = NOC::NOC_0;
+    cfg0.dedicated_noc_sharing = DedicatedNocSharing::SHARED_DISJOINT_TRAFFIC;
+    (*std::get<DataMovementHardwareConfig>(k1.hw_config).config_1xx).noc = NOC::NOC_0;
+
+    spec.kernels = {k0, k1};
+    spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
+
+    EXPECT_THAT(
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("pinned to NOC_0")));
 }
 
@@ -122,7 +167,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsDistinctNocDedicatedSucceeds) {
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDynamicSucceeds) {
@@ -146,7 +191,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsSameNocDynamicSucceeds) {
     spec.kernels = {k0, k1};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsMixedNocModeFails) {
@@ -168,7 +213,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoDMKernelsMixedNocModeFails) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"k0", "k1"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different NOC modes")));
 }
 
@@ -192,7 +237,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelsSameProcessorAndNocOnDistinctNodesSucce
         MakeMinimalWorkUnit("wu_b", node_b, {"k_b"}),
     };
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_DMKernelsDifferentNocModesOnDistinctNodesSucceeds) {
@@ -216,7 +261,7 @@ TEST_F(ProgramSpecTestGen1, CPU_DMKernelsDifferentNocModesOnDistinctNodesSucceed
         MakeMinimalWorkUnit("wu_b", node_b, {"k_b"}),
     };
 
-    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    EXPECT_NO_THROW(Program(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_ReaderAndWriterRolesOnSameNodeSucceed) {
@@ -233,7 +278,7 @@ TEST_F(ProgramSpecTestGen1, CPU_ReaderAndWriterRolesOnSameNodeSucceed) {
     spec.kernels = {reader, writer};
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"reader", "writer"})};
 
-    EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
+    EXPECT_NO_THROW({ Program(*mesh_device_, spec); });
 }
 
 TEST_F(ProgramSpecTestGen1, CPU_TwoReaderRolesOnSameNodeConflict) {
@@ -252,7 +297,7 @@ TEST_F(ProgramSpecTestGen1, CPU_TwoReaderRolesOnSameNodeConflict) {
     spec.work_units = std::vector<WorkUnitSpec>{MakeMinimalWorkUnit("work_unit", node, {"r0", "r1"})};
 
     EXPECT_THAT(
-        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        [&] { Program(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("both claim the same DM processor")));
 }
 

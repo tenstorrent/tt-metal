@@ -34,6 +34,16 @@ using tt::tt_metal::WriterConfigDescriptor;
 
 constexpr uint32_t kPartialSemaphoreId = 0;
 constexpr uint32_t kCollectorSemaphoreId = 1;
+// Senders are every 3rd ring position (0, 3, 6, 9); the last ring position is the collector.
+constexpr uint32_t kSenderRingStride = 3;
+
+bool is_sender_ring_pos(uint32_t ring_pos) { return ring_pos % kSenderRingStride == 0; }
+
+bool is_collector_ring_pos(uint32_t ring_pos, uint32_t num_cores) { return ring_pos + 1 == num_cores; }
+
+bool is_group_mask_receiver(uint32_t ring_pos, uint32_t num_cores) {
+    return !is_sender_ring_pos(ring_pos) && !is_collector_ring_pos(ring_pos, num_cores);
+}
 
 CBDescriptor make_cb(
     tt::CBIndex index,
@@ -144,7 +154,7 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
 
     // For every third core, figure out the physical coords of the two cores after it.
     std::unordered_map<uint32_t, std::array<uint32_t, 5>> dram_bank2neighbors;
-    for (uint32_t ring_pos = 0; ring_pos < num_cores; ring_pos += 3) {
+    for (uint32_t ring_pos = 0; ring_pos < num_cores; ring_pos += kSenderRingStride) {
         auto bank_id = ring_pos2bank_id[ring_pos];
         auto bank_id_next1 = ring_pos2bank_id[ring_pos + 1];
         auto bank_id_next2 = ring_pos2bank_id[ring_pos + 2];
@@ -159,13 +169,27 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
     std::unordered_map<uint32_t, uint32_t> bank2tile_id;
     uint32_t tile_id = 0;
     for (uint32_t core_id = 0; core_id < num_cores; core_id++) {
-        if ((core_id % 3) == 0) {
+        if (is_sender_ring_pos(core_id)) {
             continue;
         }
         bank2tile_id[ring_pos2bank_id[core_id]] = tile_id++;
     }
 
-    const auto& collector_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[11]]);
+    uint32_t num_mask_receivers = 0;
+    for (uint32_t ring_pos = 0; ring_pos < num_cores; ++ring_pos) {
+        if (is_group_mask_receiver(ring_pos, num_cores)) {
+            ++num_mask_receivers;
+        }
+    }
+    const uint32_t expected_mask_receivers = num_cores - (num_cores / kSenderRingStride) - 1;
+    TT_FATAL(
+        num_mask_receivers == expected_mask_receivers,
+        "moe_gate_mm group-mask receiver count {} does not match the sender/collector ring rule {}",
+        num_mask_receivers,
+        expected_mask_receivers);
+
+    const auto collector_logical = dram_bank2core_coords[ring_pos2bank_id[num_cores - 1]];
+    const auto& collector_core = device->worker_core_from_logical_core(collector_logical);
     const auto& first_core = device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[0]]);
 
     const KernelDescriptor::NamedCompileTimeArgs named_compile_time_args = {
@@ -202,6 +226,7 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         .named_compile_time_args = named_compile_time_args,
         .config = WriterConfigDescriptor{},
     };
+    dm1_kernel.named_compile_time_args.emplace_back("num_mask_receivers", num_mask_receivers);
 
     KernelDescriptor compute_kernel{
         .kernel_source = compute_kernel_source,
@@ -276,6 +301,25 @@ tt::tt_metal::ProgramDescriptor MoEGateMMDeviceOperation::create_descriptor(
         runtime_args.push_back(is_sender ? neighbors[4] : 0u);
         runtime_args.push_back(core_id);
         runtime_args.push_back(kCollectorSemaphoreId);
+        // Unicast targets: a dispatch core inside the ring rectangle would consume one multicast slot.
+        if (core == collector_logical) {
+            uint32_t pushed_receivers = 0;
+            for (uint32_t ring_pos = 0; ring_pos < num_cores; ++ring_pos) {
+                if (!is_group_mask_receiver(ring_pos, num_cores)) {
+                    continue;
+                }
+                const auto& receiver =
+                    device->worker_core_from_logical_core(dram_bank2core_coords[ring_pos2bank_id[ring_pos]]);
+                runtime_args.push_back(receiver.x);
+                runtime_args.push_back(receiver.y);
+                ++pushed_receivers;
+            }
+            TT_FATAL(
+                pushed_receivers == num_mask_receivers,
+                "moe_gate_mm pushed {} group-mask receivers, expected {}",
+                pushed_receivers,
+                num_mask_receivers);
+        }
 
         dm0_kernel.emplace_runtime_args(core, runtime_args);
         dm1_kernel.emplace_runtime_args(core, runtime_args);

@@ -7,6 +7,7 @@
 #include "ttnn/graph/graph_consts.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/core.hpp"
+#include "ttnn/common/guard.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/cluster.hpp"
 #include "ttnn/reports.hpp"
@@ -15,9 +16,14 @@
 #include <cstdlib>
 
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <fstream>
 #include <optional>
+#include <ranges>
 #include <sstream>
+#include <system_error>
+#include <unistd.h>
 #include <enchantum/enchantum.hpp>
 #include <memory>
 #include <string>
@@ -26,6 +32,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/experimental/op_profiler_support.hpp>
+#include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-metalium/mesh_command_queue.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
@@ -223,7 +231,6 @@ void GraphProcessor::track_device(const tt::tt_metal::IDevice* device) {
     size_t num_x_compute_cores = compute_grid.x;
     size_t num_y_compute_cores = compute_grid.y;
     size_t num_compute_cores = num_x_compute_cores * num_y_compute_cores;
-    size_t num_storage_cores = device->storage_only_cores().size();
     size_t worker_l1_size = allocator->get_worker_l1_size();
     size_t l1_num_banks = allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     size_t l1_bank_size = allocator->get_bank_size(tt::tt_metal::BufferType::L1);
@@ -241,13 +248,10 @@ void GraphProcessor::track_device(const tt::tt_metal::IDevice* device) {
     info[kDeviceAddressAtFirstL1CbBuffer] = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     info[kDeviceNumBanksPerStorageCore] = l1_bank_size > 0 ? worker_l1_size / l1_bank_size : 0;
     info[kDeviceNumComputeCores] = num_compute_cores;
-    info[kDeviceNumStorageCores] = num_storage_cores;
-    info[kDeviceTotalL1Memory] = (num_storage_cores + num_compute_cores) * worker_l1_size;
+    info[kDeviceNumStorageCores] = 0;
+    info[kDeviceTotalL1Memory] = num_compute_cores * worker_l1_size;
     info[kDeviceTotalL1ForTensors] = 0;  // Not computed in original implementation
-    info[kDeviceTotalL1ForInterleavedBuffers] =
-        (num_storage_cores + num_compute_cores +
-         (l1_bank_size > 0 ? (worker_l1_size / l1_bank_size) * num_storage_cores : 0)) *
-        l1_bank_size;
+    info[kDeviceTotalL1ForInterleavedBuffers] = num_compute_cores * l1_bank_size;
     info[kDeviceTotalL1ForShardedBuffers] = num_compute_cores * l1_bank_size;
     info[kDeviceCbLimit] = worker_l1_size - allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 
@@ -578,8 +582,8 @@ struct ProgramPlacement {
 // KernelMeta is the only public view of a program's core types, and it carries no core ranges, so
 // non-Tensix work can be detected but not intersected against a sub-device. Called only on the
 // failure path, where it turns "we found nothing" into a reason worth printing.
-bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
-    for (const auto& kernel : tt::tt_metal::detail::collect_kernel_meta(program, /*device=*/nullptr)) {
+bool has_non_tensix_kernels(const tt::tt_metal::Program& program, tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    for (const auto& kernel : tt::tt_metal::experimental::collect_kernel_meta(program, mesh_device)) {
         if (kernel.programmable_core_type != tt::tt_metal::HalProgrammableCoreType::TENSIX) {
             return true;
         }
@@ -608,7 +612,9 @@ bool has_non_tensix_kernels(const tt::tt_metal::Program& program) {
 //
 // The caller records the execution either way; only the placement is dropped.
 ProgramPlacement resolve_program_placement(
-    const tt::tt_metal::Program& program, const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device) {
+    const tt::tt_metal::Program& program,
+    const std::vector<tt::tt_metal::CoreRangeSet>& tensix_cores_by_sub_device,
+    tt::tt_metal::distributed::MeshDevice& mesh_device) {
     // circular_buffers() returns by value, so it is built once rather than per sub-device.
     const auto circular_buffers = program.circular_buffers();
     std::optional<tt::tt_metal::SubDeviceId> match;
@@ -630,8 +636,8 @@ ProgramPlacement resolve_program_placement(
     }
     return {
         std::nullopt,
-        has_non_tensix_kernels(program) ? "it runs only on non-Tensix cores"
-                                        : "it allocates no circular buffers to match against"};
+        has_non_tensix_kernels(program, mesh_device) ? "it runs only on non-Tensix cores"
+                                                     : "it allocates no circular buffers to match against"};
 }
 }  // namespace
 
@@ -657,7 +663,9 @@ void track_mesh_workload_execution(
     }
 
     const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
-    const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
+    // The thread's selected queue id is recorded directly; no queue lookup is needed (and a NO_DISPATCH capture must
+    // work even if the selected id does not exist on this device).
+    const auto command_queue_id = ttnn::core::get_current_command_queue_id_for_thread().get();
     const auto mesh_device_id = static_cast<uint32_t>(mesh_device->id());
     const bool default_manager =
         mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id();
@@ -698,8 +706,9 @@ void track_mesh_workload_execution(
         // program inspection at all. This is both the common case and the one ProgramImpl itself
         // short-circuits, which keeps the proxy in resolve_program_placement off the path that
         // almost every capture takes.
-        ProgramPlacement placement = default_manager ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
-                                                     : resolve_program_placement(program, tensix_cores_by_sub_device);
+        ProgramPlacement placement = default_manager
+                                         ? ProgramPlacement{tt::tt_metal::SubDeviceId{0}, {}}
+                                         : resolve_program_placement(program, tensix_cores_by_sub_device, *mesh_device);
 
         if (!placement.sub_device_id.has_value()) {
             // Once per capture: on a whole-model capture an unplaceable op recurs every iteration,
@@ -957,15 +966,23 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 }
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
-    tt::tt_metal::Buffer* buffer = nullptr;
+    // Set only if the tensor's MeshBuffer owns its allocation.
+    const tt::tt_metal::distributed::MeshBuffer* buffer = nullptr;
+    // A lockstep allocation has one address on the whole MeshDevice. A per-node one is placed by each device.
+    bool lockstep = false;
+    // A device Buffer of the tensor local to this host. Its allocation is the one recorded for a per-node tensor.
+    const tt::tt_metal::Buffer* local_device_buffer = nullptr;
     nlohmann::json device_tensors_json = nlohmann::json::array();
     if (is_device_tensor(t) && t.is_allocated()) {
         const auto& mesh_buffer = t.mesh_buffer();
-        // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-        // It has an ID different from the "backing" buffer that was used to perform the allocation.
-        // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-        // buffer.
-        buffer = mesh_buffer.get_backing_buffer();
+        // `t.buffer()` returns a reference buffer allocated on first device in a mesh.
+        // It has an ID different from the allocation's, which was captured when the allocation was made.
+        // To deduplicate an entry for this buffer, use the allocation's ID.
+        if (mesh_buffer.unique_id().has_value()) {
+            buffer = &mesh_buffer;
+            lockstep = !tt::tt_metal::experimental::per_core_allocation::is_per_core_allocation(
+                mesh_buffer.device_local_config().sharding_args);
+        }
 
         // For multi-device tensors, capture per-device addresses and mesh device IDs.
         // In multi-host (SPMD) runs the tensor's coords span the full global mesh, but this
@@ -980,9 +997,12 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
             }
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
+                if (local_device_buffer == nullptr) {
+                    local_device_buffer = device_buffer;
+                }
                 device_tensors_json.push_back(
                     {{"device_id", device_buffer->device()->id()},
-                     {kMeshDeviceId, buffer != nullptr ? buffer->device()->id() : device_buffer->device()->id()},
+                     {kMeshDeviceId, lockstep ? buffer->device()->id() : device_buffer->device()->id()},
                      {"address", device_buffer->address()}});
             }
         }
@@ -1008,12 +1028,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     // declares where it lives. Record that, so a missing buffer type only ever means a host tensor.
     if (t.storage_type() == StorageType::DEVICE) {
         params[kMemoryConfig] = fmt::format("{}", t.memory_config());
-        const auto buffer_type = buffer != nullptr ? buffer->buffer_type() : t.memory_config().buffer_type();
+        const auto buffer_type =
+            buffer != nullptr ? buffer->device_local_config().buffer_type : t.memory_config().buffer_type();
         params[kBufferType] = std::to_string(static_cast<int>(buffer_type));
     }
 
     // Add buffer-related info (primary device for single-device tensors)
-    if (buffer != nullptr) {
+    if (lockstep) {
         params[kDeviceId] = std::to_string(buffer->device()->id());
         params[kAddress] = std::to_string(buffer->address());
     }
@@ -1037,8 +1058,13 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
                 break;
             case StorageType::HOST: log_debug(tt::LogAlways, "Tensor does not have buffer (on host)"); break;
         }
-    } else {
-        node_id buffer_node_id = add_buffer(buffer);
+    } else if (lockstep) {
+        node_id buffer_node_id = add_buffer(*buffer);
+        graph[buffer_node_id].connections.push_back(tensor_counter);
+    } else if (local_device_buffer != nullptr) {
+        // Each device Buffer of a per-node allocation shares the MeshBuffer's ID, and the allocation events carry the
+        // device's own ID. A host without a device Buffer of the tensor recorded no allocation for it.
+        node_id buffer_node_id = add_buffer(local_device_buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
     }
 
@@ -1046,8 +1072,26 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
 }
 
 node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
-    const auto buffer_unique_id = buffer->unique_id();
+    return add_buffer(
+        buffer->unique_id(), buffer->size(), buffer->buffer_type(), buffer->buffer_layout(), buffer->device()->id());
+}
 
+node_id GraphProcessor::add_buffer(const tt::tt_metal::distributed::MeshBuffer& mesh_buffer) {
+    const auto& config = mesh_buffer.device_local_config();
+    return add_buffer(
+        mesh_buffer.unique_id().value(),
+        mesh_buffer.device_local_size(),
+        config.buffer_type,
+        config.sharding_args.buffer_layout(),
+        mesh_buffer.device()->id());
+}
+
+node_id GraphProcessor::add_buffer(
+    std::size_t buffer_unique_id,
+    uint64_t size,
+    tt::tt_metal::BufferType buffer_type,
+    tt::tt_metal::TensorMemoryLayout layout,
+    int device_id) {
     if (const auto it = buffer_id_to_counter.find(buffer_unique_id); it != buffer_id_to_counter.end()) {
         return it->second;
     }
@@ -1055,11 +1099,13 @@ node_id GraphProcessor::add_buffer(const tt::tt_metal::Buffer* buffer) {
     const node_id counter = graph.size();
     int stacking_level = static_cast<int>(current_op_id.size()) - 1;
     std::unordered_map<std::string, std::string> params = {
-        {kSize, std::to_string(buffer->size())},
-        {kType, buffer->is_dram() ? "DRAM" : "L1"},
-        {kBufferType, std::to_string(static_cast<int>(buffer->buffer_type()))},
-        {kLayout, tensorMemoryLayoutToString(buffer->buffer_layout())},
-        {kDeviceId, std::to_string(buffer->device()->id())}};
+        {kSize, std::to_string(size)},
+        {kType,
+         buffer_type == tt::tt_metal::BufferType::DRAM || buffer_type == tt::tt_metal::BufferType::TRACE ? "DRAM"
+                                                                                                         : "L1"},
+        {kBufferType, std::to_string(static_cast<int>(buffer_type))},
+        {kLayout, tensorMemoryLayoutToString(layout)},
+        {kDeviceId, std::to_string(device_id)}};
 
     graph.push_back(Vertex{
         .counter = counter,
@@ -1302,39 +1348,98 @@ void GraphProcessor::begin_graph_capture(RunMode mode = RunMode::NORMAL) {
     tt::tt_metal::GraphTracker::instance().push_processor(std::make_shared<GraphProcessor>(mode));
 }
 
+namespace {
+
+// The capture that end_graph_capture and end_graph_capture_to_file end: the innermost GraphProcessor on this thread's
+// tracker stack. It need not be on top. The first device opened in a process pushes the device's memory tracker
+// (ShmTrackingProcessor), which stays for good, so a device opened after begin_graph_capture (as when a capture begins
+// before tt-train or a test opens its device) sits above the capture. Throws, changing nothing, when no capture is
+// active: popping the top unchecked would then remove that memory tracker.
+std::shared_ptr<GraphProcessor> innermost_graph_capture() {
+    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
+    for (const auto& processor : std::views::reverse(processors)) {
+        if (auto capture = std::dynamic_pointer_cast<GraphProcessor>(processor)) {
+            return capture;
+        }
+    }
+    TT_THROW("Cannot end graph capture: no graph capture is active; call begin_graph_capture first");
+}
+
+// Takes `capture` off the tracker stack, leaving the processors above it in place and in order.
+void remove_graph_capture(const std::shared_ptr<GraphProcessor>& capture) {
+    auto& tracker = tt::tt_metal::GraphTracker::instance();
+    std::vector<std::shared_ptr<tt::tt_metal::IGraphProcessor>> above;
+    while (tracker.get_processors().back() != capture) {
+        above.push_back(tracker.get_processors().back());
+        tracker.pop_processor();
+    }
+    tracker.pop_processor();
+    for (const auto& processor : std::views::reverse(above)) {
+        tracker.push_processor(processor);
+    }
+}
+
+}  // namespace
+
 nlohmann::json GraphProcessor::end_graph_capture() {
-    auto res = tt::tt_metal::GraphTracker::instance().get_processors().back()->end_capture();
-    tt::tt_metal::GraphTracker::instance().pop_processor();
-    return res;
+    auto capture = innermost_graph_capture();
+    // End the capture even if finalizing it throws; see end_graph_capture_to_file.
+    auto remove_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
+    return capture->end_capture();
 }
 
 nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::path& report_path) {
-    const auto& processors = tt::tt_metal::GraphTracker::instance().get_processors();
-    TT_ASSERT(!processors.empty(), "No active graph capture to end");
+    auto capture = innermost_graph_capture();
+    auto& processor = *capture;
 
-    auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
-    TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
+    // End the capture even if writing the report throws (unwritable path, full disk): a capture left active keeps
+    // recording the caller's later operations and nests the next begin_graph_capture inside itself. (The graph report
+    // fixture's other ranks still wait for a rank whose write fails; see tenstorrent/ttnn-visualizer#2205.)
+    auto remove_capture = ttnn::make_guard([capture]() { remove_graph_capture(capture); });
 
     // Finalize the graph, then build the report via the shared get_report() path
-    auto graph_json = processor->end_capture();
-    nlohmann::json report = processor->get_report();
+    auto graph_json = processor.end_capture();
+    nlohmann::json report = processor.get_report();
 
-    // Write to file
+    // Written beside the report under a name of this process's own and moved into place once complete, so a failed
+    // write never leaves a truncated report where an import's graph_capture*.json glob would pick it up. Overwriting a
+    // report therefore needs room for both until the rename.
     if (report_path.has_parent_path()) {
         std::filesystem::create_directories(report_path.parent_path());
     }
-    std::ofstream file(report_path);
-    if (!file.is_open()) {
-        TT_THROW("Failed to open graph report file for writing: {}", report_path.string());
+    auto partial_path = report_path;
+    partial_path += ".partial." + std::to_string(::getpid());
+    // Declared before the file, so the file is closed first; released once the report is in place.
+    auto remove_partial = ttnn::make_guard([&partial_path]() {
+        std::error_code ignored;
+        std::filesystem::remove(partial_path, ignored);
+    });
+    {
+        std::ofstream file(partial_path);
+        if (!file.is_open()) {
+            TT_THROW(
+                "Failed to open graph report file for writing: {} (via {}): {}",
+                report_path.string(),
+                partial_path.string(),
+                std::strerror(errno));
+        }
+        file << report.dump(2);
+        file.close();
+        if (!file) {
+            TT_THROW(
+                "Failed to write graph report to file: {} (via {}): {}",
+                report_path.string(),
+                partial_path.string(),
+                std::strerror(errno));
+        }
     }
-    file << report.dump(2);
-    if (!file) {
-        TT_THROW("Failed to write graph report to file: {}", report_path.string());
+    std::error_code rename_error;
+    std::filesystem::rename(partial_path, report_path, rename_error);
+    if (rename_error) {
+        TT_THROW("Failed to move graph report into place at {}: {}", report_path.string(), rename_error.message());
     }
-    file.close();
+    remove_partial.release();
     log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
-
-    tt::tt_metal::GraphTracker::instance().pop_processor();
     return graph_json;
 }
 

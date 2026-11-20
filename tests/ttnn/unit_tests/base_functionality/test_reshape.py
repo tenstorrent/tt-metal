@@ -10,6 +10,13 @@ import ttnn
 from ttnn.tools import trace_allocation_tracker
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_equal
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 
 def test_view_preserves_root_buffer_unique_id(device):
@@ -374,6 +381,36 @@ def test_reshape_hw_rm_with_program_cache(device, n, c, h, w):
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
     assert device.cache_entries_counter.total == 1
+
+
+def test_reshape_on_device_tile_same_padded_shape_different_alignment(device):
+    """Two tiled inputs that share a padded shape but differ in logical shape and Alignment share one cached program:
+    the factories work only from the padded shape, so the key frees Alignment via relax_tensor_layout_alignment
+    (#59915). The cache-hit output must match a freshly built program's output."""
+    torch.manual_seed(0)
+    # Padded to [1, 1, 64, 64] by the default 32x32 tile alignment.
+    tt_default = ttnn.from_torch(
+        torch.rand((1, 1, 48, 40), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device
+    )
+    # Padded to the same [1, 1, 64, 64] explicitly, which gives it a different Alignment.
+    tt_explicit = ttnn.tilize_with_val_padding(
+        ttnn.from_torch(torch.rand((1, 1, 30, 64), dtype=torch.bfloat16), layout=ttnn.ROW_MAJOR_LAYOUT, device=device),
+        [1, 1, 64, 64],
+        0.0,
+    )
+    assert list(tt_default.padded_shape) == list(tt_explicit.padded_shape) == [1, 1, 64, 64]
+
+    # References from freshly built programs. The tile path reshapes the padded data, so a logical torch
+    # reshape is not a valid reference.
+    device.disable_and_clear_program_cache()
+    expected = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    device.enable_program_cache()
+
+    with device.cache_entries_counter.measure():
+        outputs = [ttnn.to_torch(ttnn.reshape_on_device(t, 1, 1, 15, 128)) for t in (tt_default, tt_explicit)]
+    assert device.cache_entries_counter.total == 1
+    for output, reference in zip(outputs, expected):
+        assert torch.equal(output, reference)
 
 
 @pytest.mark.parametrize("h", [32])
@@ -1062,6 +1099,76 @@ def test_reshape_rm_nonclean_large_odd_dest_page_l1_cb(device, input_shape, outp
     assert_equal(torch_input.reshape(output_shape), ttnn.to_torch(tt_out))
 
 
+@pytest.mark.parametrize("padded_widths", [(32, 64), (64, 32)], ids=["narrow_first", "wide_first"])
+def test_reshape_rm_padded_shape_is_new_program(device, padded_widths):
+    """The padded shape sets the RM output page size, so it must key the program cache (#55237)."""
+    torch.manual_seed(5)
+    torch_input = torch.randn((1, 1, 16, 60), dtype=torch.bfloat16)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    logical_shape = ttnn.Shape([1, 1, 32, 30])
+    expected = torch_input.reshape(1, 1, 32, 30)
+    entries = device.num_program_cache_entries()
+    for i, padded_width in enumerate(padded_widths):
+        tt_out = ttnn.reshape(tt_input, logical_shape, ttnn.Shape([1, 1, 32, padded_width]))
+        assert list(tt_out.padded_shape) == [1, 1, 32, padded_width]
+        assert device.num_program_cache_entries() == entries + i + 1
+        assert_equal(expected, ttnn.to_torch(tt_out))
+
+
+def test_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    """The non-clean staging ring is budgeted against live L1, so a cache hit must not replay a ring
+    sized for an emptier L1 (#55237)."""
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(6)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    reshape_native = ttnn._ttnn.operations.data_movement.reshape_force_native
+
+    def run():
+        tt_out = reshape_native(tt_input, list(output_shape), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
 def test_quasar_reshape_rm_unit_last_dim(device):
     """Quasar RM factory/kernel: misaligned [N, 1] reshape must stay bit-exact (#50191)."""
     rows, cols = 32, 17
@@ -1078,3 +1185,82 @@ def test_quasar_reshape_rm_unit_last_dim(device):
     tt_out = ttnn.experimental.quasar.reshape(tt_input, (n, 1))
     ttnn.synchronize_device(device)
     assert_equal(torch_input.reshape(n, 1), ttnn.to_torch(tt_out))
+
+
+def test_quasar_reshape_rm_nonclean_dest_slots_track_l1_pressure(device):
+    if not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)):
+        pytest.skip("This regression covers the WH/BH legacy RM staging ring, not the Quasar Metal-2 factory")
+    # dest page 10004 B (not 16 B aligned): 8 staging slots plus source scratch take ~89 KiB per core.
+    input_shape, output_shape = (64, 2501), (32, 5002)
+    torch.manual_seed(7)
+    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+    expected = torch_input.reshape(output_shape)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    def run():
+        tt_out = ttnn.experimental.quasar.reshape(tt_input, output_shape, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        assert_equal(expected, ttnn.to_torch(tt_out))
+        ttnn.deallocate(tt_out)
+
+    run()
+    entries = device.num_program_cache_entries()
+
+    view = ttnn.get_memory_view(device, ttnn.BufferType.L1)
+    tiles_per_bank = (view.largest_contiguous_bytes_free_per_bank - 40 * 1024) // (32 * 32 * 2)
+    if tiles_per_bank <= 0:
+        pytest.skip("L1 already has less free space than the test needs")
+    hog = ttnn.allocate_tensor_on_device(
+        ttnn.Shape((1, 1, 32, tiles_per_bank * view.num_banks * 32)),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        # Only ~3 slots fit now: a different program, not a hit on the 8-slot one.
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    # With L1 free again the 8-slot program is a hit.
+    run()
+    assert device.num_program_cache_entries() == entries + 1
+
+
+def test_reshape_rejects_overflowing_volume(device, expect_error):
+    x = ttnn.from_torch(
+        torch.randn(1, 1, 32, 32).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+    )
+    with expect_error(RuntimeError, "Invalid arguments to reshape: the volume of the new shape overflows"):
+        ttnn.reshape(x, [-1, 65536, 65536, 65536, 65536])
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.reshape))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.reshape))
+def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.reshape docstring lists."""
+    check_readable(dtype, layout, buffer_type)
+    # The TILE reshape below moves data, which the docstring supports for UINT16 on Wormhole B0 and Blackhole.
+    if (
+        dtype == ttnn.uint16
+        and layout == ttnn.TILE_LAYOUT
+        and not (ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device))
+    ):
+        pytest.skip(f"UINT16 reshapes that move data need Wormhole B0 or Blackhole, not {device.arch()}")
+    memory_config = interleaved_memory_config(buffer_type)
+    input_tensor = ttnn.from_torch(
+        full_range_input((1, 2, 50, 64), dtype), dtype=dtype, layout=layout, device=device, memory_config=memory_config
+    )
+    # The last dim stays the same, so block-float values come back unchanged; for TILE the data still moves.
+    output = ttnn.reshape(input_tensor, (1, 1, 100, 64), memory_config=memory_config)
+
+    assert output.dtype == dtype
+    assert output.layout == layout
+    assert output.memory_config().buffer_type == buffer_type
+    assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))

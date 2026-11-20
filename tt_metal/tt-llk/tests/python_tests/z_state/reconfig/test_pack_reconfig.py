@@ -1,13 +1,11 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.format_config import DataFormat, InputOutputFormat
-from helpers.param_config import parametrize
-from helpers.reconfig_formats import (
-    NEXT_TILE_SIZE,
-    RECONFIG_FORMATS,
-    reconfig_dest_acc,
-)
+from helpers.llk_params import DestAccumulation
+from helpers.param_config import flat_axes, parametrize
+from helpers.reconfig_formats import NEXT_TILE_SIZE, RECONFIG_FORMATS
 from helpers.tensix import TensixState, TensixThread
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import CONFIGURE_TEST_RUN_IDX
@@ -41,10 +39,43 @@ def _drop_key(state, key):
     return state
 
 
+def _pack_dest_acc(
+    prev_src: DataFormat, next_dst: DataFormat
+) -> list[DestAccumulation]:
+    # The 16/32-bit integer formats need the 32-bit Dest. Int8/UInt8 also pack from a 16-bit Dest,
+    # where the Dest-read control selects the raw 8-bit integer read (PCK_DEST_RD_CTRL_Read_int8);
+    # cover both Dest modes for a reconfig onto or away from them so the dumped control compares
+    # the reconfig against the full configure in both directions.
+    if any(f.is_integer() and f not in _INT8_FORMATS for f in (prev_src, next_dst)):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No, DestAccumulation.Yes]
+
+
+# Float16 is out of the sweep below, but PCK_DEST_RD_CTRL_Round_10b_mant is set only when an fp32
+# dest packs from Float16, and no functional test can see a 10-bit-mantissa rounding difference.
+# These (prev_src, next_dst) rows keep the reconfig RMW of that bit covered, so they only run with
+# dest_acc=Yes.
+ROUND_10B_MANT_FORMATS = [(DataFormat.Float16, DataFormat.Float16_b)]  # clears the bit
+# Sets the bit. Blackhole only: Wormhole infers pack_src Float32 for a Float16 output, so the bit
+# would stay clear there.
+if get_chip_architecture() != ChipArchitecture.WORMHOLE:
+    ROUND_10B_MANT_FORMATS.append((DataFormat.Float16_b, DataFormat.Float16))
+
+
 @parametrize(
-    prev_src=RECONFIG_FORMATS,
-    next_dst=RECONFIG_FORMATS,
-    dest_acc=lambda prev_src, next_dst: reconfig_dest_acc(prev_src, next_dst),
+    **flat_axes(
+        ("prev_src", "next_dst", "dest_acc"),
+        [
+            (prev_src, next_dst, dest_acc)
+            for prev_src in RECONFIG_FORMATS
+            for next_dst in RECONFIG_FORMATS
+            for dest_acc in _pack_dest_acc(prev_src, next_dst)
+        ]
+        + [
+            (prev_src, next_dst, DestAccumulation.Yes)
+            for prev_src, next_dst in ROUND_10B_MANT_FORMATS
+        ],
+    )
 )
 def test_pack_reconfig(
     prev_src,
@@ -60,6 +91,15 @@ def test_pack_reconfig(
         ],
         dest_acc=dest_acc,
     )
+    if dest_acc == DestAccumulation.No and (
+        prev_src in _INT8_FORMATS or next_dst in _INT8_FORMATS
+    ):
+        # With a 16-bit Dest the format inference keeps pack_src at the previous (unpack) format,
+        # which would give both runs the same Dest-read control (and an unsupported Int8 -> float
+        # pack in run 0). Pack the next format's own register representation so the control
+        # changes between the previous and the next format.
+        for fmt_config in configuration.formats_config:
+            fmt_config.pack_src = next_dst
 
     configuration.run()
     expected = TensixState.fetch(TestConfig.TENSIX_LOCATION)

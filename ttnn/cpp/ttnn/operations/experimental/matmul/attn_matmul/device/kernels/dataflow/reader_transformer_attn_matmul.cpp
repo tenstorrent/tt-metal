@@ -5,48 +5,39 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/noc.h"
-#include "api/dataflow/circular_buffer.h"
+#include "api/dataflow/dataflow_buffer.h"
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "experimental/kernel_args.h"
 
 void kernel_main() {
-    // same arg indices as in reader_binary_diff_lengths for compat
-    uint32_t src0_addr = get_arg_val<uint32_t>(0);
-    uint32_t src1_addr = get_arg_val<uint32_t>(1);
-    uint32_t Mt = get_arg_val<uint32_t>(2);
-    uint32_t Kt = get_arg_val<uint32_t>(3);
-    uint32_t Nt = get_arg_val<uint32_t>(4);
-    uint32_t MtKt = get_arg_val<uint32_t>(5);           // if 0
-    uint32_t in1_KtNt_skip = get_arg_val<uint32_t>(6);  // 0 if in0 and in1 Kt are the same
-    uint32_t in1_KtNt_mul_32 = get_arg_val<uint32_t>(7);
-    uint32_t blocks = get_arg_val<uint32_t>(8);
-    uint32_t itileA_start = get_arg_val<uint32_t>(9);
-    uint32_t itileB_start = get_arg_val<uint32_t>(10);
+    // same arg set (and order) as in reader_binary_diff_lengths for compat
+    uint32_t Mt = get_arg(args::Mt);
+    uint32_t Kt = get_arg(args::Kt);
+    uint32_t Nt = get_arg(args::Nt);
+    uint32_t MtKt = get_arg(args::MtKt);                    // if 0
+    uint32_t in1_KtNt_skip = get_arg(args::in1_KtNt_skip);  // 0 if in0 and in1 Kt are the same
+    uint32_t in1_KtNt_mul_32 = get_arg(args::in1_KtNt_mul_32);
+    uint32_t blocks = get_arg(args::blocks);
+    uint32_t itileA_start = get_arg(args::itileA_start);
+    uint32_t itileB_start = get_arg(args::itileB_start);
 
-    constexpr bool transpose_hw_bool = get_compile_time_arg_val(0) == 1;
-    constexpr bool fp32_acc_en = get_compile_time_arg_val(1) == 1;
-
-    constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
-    constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
-    constexpr uint32_t cb_id_intermed0 = tt::CBIndex::c_2;
-    constexpr uint32_t cb_id_intermed1 = tt::CBIndex::c_3;
-    constexpr uint32_t cb_id_intermed2 = tt::CBIndex::c_4;
+    constexpr bool transpose_hw_bool = get_arg(args::transpose_hw) == 1;
+    constexpr bool fp32_acc_en = get_arg(args::fp32_acc_en) == 1;
 
     Noc noc;
-    CircularBuffer cb_in0_obj(cb_id_in0);
-    CircularBuffer cb_in1_obj(cb_id_in1);
-    CircularBuffer cb_intermed1_obj(cb_id_intermed1);
-    CircularBuffer cb_intermed2_obj(cb_id_intermed2);
+    DataflowBuffer dfb_in0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_intermed1(dfb::intermed1);
+    DataflowBuffer dfb_intermed2(dfb::intermed2);
 
     constexpr uint32_t onetile = 1;
-    const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
-    const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
+    const uint32_t in0_tile_bytes = dfb_in0.get_tile_size();
+    const uint32_t in1_tile_bytes = dfb_in1.get_tile_size();
 
-    constexpr auto in0_args = TensorAccessorArgs<2>();
-    constexpr auto in1_args = TensorAccessorArgs<in0_args.next_compile_time_args_offset()>();
-    const auto s0 = TensorAccessor(in0_args, src0_addr);
-    const auto s1 = TensorAccessor(in1_args, src1_addr);
+    const auto s0 = TensorAccessor(tensor::src0);
+    const auto s1 = TensorAccessor(tensor::src1);
 
     uint32_t itileA_batch = itileA_start;
     uint32_t itileB_batch;
@@ -55,10 +46,10 @@ void kernel_main() {
     uint32_t itileA;
     uint32_t itileB;
 
-    uint32_t cb_intermed1_addr_initial = cb_intermed1_obj.get_read_ptr();
-    uint32_t cb_intermed2_addr_initial = cb_intermed2_obj.get_write_ptr();
-    uint32_t cb_intermed1_addr;
-    uint32_t cb_intermed2_addr;
+    uint32_t dfb_intermed1_addr_initial = dfb_intermed1.get_read_ptr();
+    uint32_t dfb_intermed2_addr_initial = dfb_intermed2.get_write_ptr();
+    uint32_t dfb_intermed1_addr;
+    uint32_t dfb_intermed2_addr;
     constexpr uint32_t bfloat16_row_bytes = fp32_acc_en ? 128 : 64;
     constexpr uint32_t num_rows_in_one_tile = 32;
 
@@ -74,29 +65,29 @@ void kernel_main() {
             itileB_Nt = itileB_batch;
 
             for (uint32_t n = 0; n < Nt; n++) {
-                cb_intermed1_addr = cb_intermed1_addr_initial;
-                cb_intermed2_addr = cb_intermed2_addr_initial;
+                dfb_intermed1_addr = dfb_intermed1_addr_initial;
+                dfb_intermed2_addr = dfb_intermed2_addr_initial;
                 itileA = itileA_Mt;
                 itileB = itileB_Nt;
 
-                cb_in0_obj.reserve_back(Kt);
+                dfb_in0.reserve_back(Kt);
                 for (uint32_t kt = 0; kt < Kt; kt++) {
                     // Read A's tile at (mt, kt)
-                    noc.async_read(s0, cb_in0_obj, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
+                    noc.async_read(s0, dfb_in0, in0_tile_bytes, {.page_id = itileA}, {.offset_bytes = 0});
                     noc.async_read_barrier();
-                    cb_in0_obj.push_back(onetile);
+                    dfb_in0.push_back(onetile);
 
                     itileA++;  // A is MK
                 }
 
-                cb_intermed2_obj.reserve_back(1);
+                dfb_intermed2.reserve_back(1);
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
                     for (uint32_t kt = 0; kt < Kt; kt++) {
                         // Read B's tile at (kt, nt)
-                        cb_in1_obj.reserve_back(onetile);
-                        noc.async_read(s1, cb_in1_obj, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
+                        dfb_in1.reserve_back(onetile);
+                        noc.async_read(s1, dfb_in1, in1_tile_bytes, {.page_id = itileB}, {.offset_bytes = 0});
                         noc.async_read_barrier();
-                        cb_in1_obj.push_back(onetile);
+                        dfb_in1.push_back(onetile);
 
                         if constexpr (transpose_hw_bool) {
                             itileB++;  // Kt is in B[3], so it is contiguous in memory
@@ -106,22 +97,22 @@ void kernel_main() {
                     }  // Kt loop
 
                     // Read 32 untilized tiles and select correct rows to reconstruct single correct tile
-                    cb_intermed1_obj.wait_front(1);
-                    CoreLocalMem<uint32_t> local_dst(cb_intermed2_addr);
+                    dfb_intermed1.wait_front(1);
+                    CoreLocalMem<uint32_t> local_dst(dfb_intermed2_addr);
                     noc.async_read(
                         local_src,
                         local_dst,
                         bfloat16_row_bytes,
-                        {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = cb_intermed1_addr},
+                        {.noc_x = local_noc_x, .noc_y = local_noc_y, .addr = dfb_intermed1_addr},
                         {});
                     noc.async_read_barrier();
-                    cb_intermed1_obj.pop_front(1);
-                    cb_intermed1_addr += bfloat16_row_bytes;
-                    cb_intermed2_addr += bfloat16_row_bytes;
+                    dfb_intermed1.pop_front(1);
+                    dfb_intermed1_addr += bfloat16_row_bytes;
+                    dfb_intermed2_addr += bfloat16_row_bytes;
 
                     itileB += in1_KtNt_skip;  // different depending on transpose_hw
                 }  // 32 tiles loop
-                cb_intermed2_obj.push_back(1);
+                dfb_intermed2.push_back(1);
 
                 // Next tile in Nt
                 if constexpr (transpose_hw_bool) {

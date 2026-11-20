@@ -246,6 +246,24 @@ class Penalties1D(LightweightModule):
         original_shape = logits.shape
         logits = ttnn.reshape(logits, (-1, original_shape[-1]))
 
+        # Repetition: sign-dependent scaling (before presence and frequency, as in vLLM's apply_penalties)
+        combined_mask_int32 = ttnn.add(params.prompt_mask, accum.output_mask, **op)
+        combined_mask = ttnn.typecast(combined_mask_int32, ttnn.bfloat16, **op)
+        combined_mask_int32.deallocate()
+        penalties = ttnn.where(combined_mask, params.repetition_penalties, 1.0, **op)
+        inverse_penalties = ttnn.where(combined_mask, params.inverse_repetition_penalties, 1.0, **op)
+        combined_mask.deallocate()
+
+        logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op)
+        logits_gt1 = ttnn.gt(logits_bf16, 0, **op)
+        logits_bf16.deallocate()
+        scaling = ttnn.where(logits_gt1, inverse_penalties, penalties, **op)
+        logits_gt1.deallocate()
+        penalties.deallocate()
+        inverse_penalties.deallocate()
+        logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op)
+        scaling.deallocate()
+
         # Presence: logits -= typecast(output_mask, bf16) * presence
         presence_term = ttnn.multiply(
             ttnn.typecast(accum.output_mask, ttnn.bfloat16, **op), params.presence_penalties, **op
@@ -263,24 +281,6 @@ class Penalties1D(LightweightModule):
         freq_term.deallocate()
         logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op)
         freq_term_bf16.deallocate()
-
-        # Repetition: sign-dependent scaling
-        combined_mask_int32 = ttnn.add(params.prompt_mask, accum.output_mask, **op)
-        combined_mask = ttnn.typecast(combined_mask_int32, ttnn.bfloat16, **op)
-        combined_mask_int32.deallocate()
-        penalties = ttnn.where(combined_mask, params.repetition_penalties, 1.0, **op)
-        inverse_penalties = ttnn.where(combined_mask, params.inverse_repetition_penalties, 1.0, **op)
-        combined_mask.deallocate()
-
-        logits_bf16 = ttnn.typecast(logits, ttnn.bfloat16, **op)
-        logits_gt1 = ttnn.gt(logits_bf16, 0, **op)
-        logits_bf16.deallocate()
-        scaling = ttnn.where(logits_gt1, inverse_penalties, penalties, **op)
-        logits_gt1.deallocate()
-        penalties.deallocate()
-        inverse_penalties.deallocate()
-        logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op)
-        scaling.deallocate()
 
         return ttnn.reshape(logits, original_shape)
 

@@ -10,7 +10,6 @@ from helpers.llk_params import DestAccumulation
 NEXT_TILE_SIZE = 16 * 16 * 4
 
 RECONFIG_FORMATS = [
-    DataFormat.Float16,
     DataFormat.Float16_b,
     DataFormat.Bfp8,
     DataFormat.Bfp8_b,

@@ -19,6 +19,9 @@
 
 void kernel_main() {
     const uint32_t block_height = get_arg(args::block_height);
+    // Rows the reader pushed (the full shard). The last height shard can be partial (block_height < this),
+    // so wait for and pop the full shard while writing only block_height rows.
+    const uint32_t block_num_units = get_arg(args::block_num_units);
     const uint32_t block_width_bytes = get_arg(args::block_width_bytes);
     const uint32_t padded_block_width_bytes = get_arg(args::padded_block_width_bytes);
     const uint32_t input_width_offset_bytes = get_arg(args::input_width_offset_bytes);
@@ -35,7 +38,7 @@ void kernel_main() {
     DataflowBuffer dfb_out(dfb::out);
 
     uint32_t stick_id = start_id;
-    dfb_out.wait_front(block_height);
+    dfb_out.wait_front(block_num_units);
     uint32_t dfb_read_offset = 0;
     for (uint32_t h = 0; h < block_height; ++h) {
         noc.async_write(
@@ -48,5 +51,5 @@ void kernel_main() {
         dfb_read_offset += padded_block_width_bytes;
     }
     noc.async_write_barrier();
-    dfb_out.pop_front(block_height);
+    dfb_out.pop_front(block_num_units);
 }

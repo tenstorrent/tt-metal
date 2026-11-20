@@ -31,7 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     reverse_reorder_tensor_chunks,
     rotated_row_of_position,
 )
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, PackedPadding, packed_padding
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE
 from models.demos.deepseek_v3_d_p.tt.mtp_prefill.device_windows import (
     MTPDeviceEmbedSource,
@@ -190,18 +190,23 @@ class TtPrefillTransformer(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only_last_layer: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        tp_shard_kv: Optional[bool] = None,
         first_layer_idx: int = 0,
         is_first_rank: bool = True,
         is_last_rank: bool = True,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
+        moe_impl: Optional[str] = None,
         lm_head_is_column_parallel: bool = True,
         mtp_predictor=None,
         use_fused_rmsnorm: Optional[bool] = None,
+        forward_chunks: int = 1,
     ):
         super().__init__()
         self.mesh_device = mesh_device
         self.seq_len = seq_len
+        # Chunks per packed forward (forward(..., chunks=...)); seq_len stays the per-chunk size.
+        self.forward_chunks = forward_chunks
         self.padding_side = padding_side
         self.is_chunked = is_chunked
         self.num_layers = num_layers
@@ -223,9 +228,11 @@ class TtPrefillTransformer(LightweightModule):
         # local layer slice onto the global map.
         self.first_layer_idx = first_layer_idx
         self.indexer_types = getattr(config, "indexer_types", None)
+        self.last_indexer_indices = None
 
-        tp_topology = topology[1] if isinstance(topology, tuple) else topology
-        sp_topology = topology[0] if isinstance(topology, tuple) else topology
+        # A tuple is per mesh axis (tt_ccl.per_axis_topology), so index it by the TP / SP axis.
+        tp_topology = topology[tp_axis] if isinstance(topology, tuple) else topology
+        sp_topology = topology[sp_axis] if isinstance(topology, tuple) else topology
 
         if not state_dict and not (weight_cache_path and weight_cache_path.exists()):
             raise ValueError(
@@ -294,12 +301,16 @@ class TtPrefillTransformer(LightweightModule):
                 layer_num=self.num_kvpe_cache_layers,
                 max_seq_len=max_seq_len,
                 kv_only=kv_only_last_layer and is_last,
+                next_kv_only=kv_only_last_layer and local_idx == num_layers - 2,
                 routing_use_l1_small_for_semaphores=routing_use_l1_small_for_semaphores,
+                tp_shard_kv=tp_shard_kv,
                 sparse_kv_cache_format=sparse_kv_cache_format,
                 overlap_shared_expert_with_dispatch=overlap_shared_expert_with_dispatch,
+                moe_impl=moe_impl,
                 first_layer_idx=first_layer_idx,
                 llama4_scale_cache=self._llama4_scale_cache,
                 use_fused_rmsnorm=use_fused_rmsnorm,
+                forward_chunks=forward_chunks,
             )
             self.layers.append(layer)
 
@@ -327,6 +338,8 @@ class TtPrefillTransformer(LightweightModule):
         self.lm_head = (
             TtLMHead(
                 mesh_device=mesh_device,
+                sp_axis=sp_axis,
+                tp_axis=tp_axis,
                 emb_dim=config.hidden_size,
                 vocab_size=config.vocab_size,
                 torch_weight=state_dict.get("lm_head_weight"),
@@ -431,6 +444,11 @@ class TtPrefillTransformer(LightweightModule):
         for layer in self._trace_blocks():
             layer.set_trace_controller(controller)
 
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        """Switch every layer's KV layout; the cache passed to forward() must be allocated to match."""
+        for layer in self.layers:
+            layer.mla.set_tp_shard_kv(tp_shard_kv)
+
     def release_sub_device_managers(self):
         """Remove every MoE-created overlap sub-device manager and free the MTP SP-rank tensor before closing the
         mesh device. Ensures none is loaded first (clear is idempotent). Leaving managers registered at mesh close
@@ -451,13 +469,57 @@ class TtPrefillTransformer(LightweightModule):
 
     def _to_host(self, tt_tensor):
         """Bring SP+TP sharded tensor to host as [1, seq, emb] bfloat16."""
+        # Sequence concatenates over the SP axis and the embedding over the TP axis.
+        dims = (-2, -1) if self.sp_axis == 0 else (-1, -2)
         host = ttnn.to_torch(
             tt_tensor,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=dims, mesh_shape=self.mesh_device.shape),
         ).to(torch.bfloat16)
         if len(tt_tensor.shape) == 4:
             host = host.squeeze(0)
         return host
+
+    @property
+    def receives_indexer_indices(self) -> bool:
+        return self.indexer_types is not None and self.indexer_types[self.first_layer_idx] == "shared"
+
+    @property
+    def forwards_indexer_indices(self) -> bool:
+        next_idx = self.first_layer_idx + self.num_layers
+        return (
+            not self.is_last_rank
+            and self.indexer_types is not None
+            and next_idx < len(self.indexer_types)
+            and self.indexer_types[next_idx] == "shared"
+        )
+
+    def indexer_indices_shape(self) -> tuple:
+        """Per-chip shape of the top-k indices one pipeline boundary carries: one chunk's, or for a packed
+        forward its ``forward_chunks`` chunks' stacked chunk-major along rows (chunk k at rows
+        [k * r, (k + 1) * r), r the one-chunk row count), in pack order."""
+        _, _, rows, k = self.layers[0].mla.indexer_indices_shape()
+        return (1, 1, rows * self.forward_chunks, k)
+
+    def _pack_chunk_indices(self, per_chunk: list) -> ttnn.Tensor:
+        """Stack per-chunk top-k indices chunk-major along rows (indexer_indices_shape()). An empty chunk of an
+        eager packed forward has none; its rows are zeros, which the next rank never reads (it skips that
+        chunk's attention, or runs it in the scratch slot when traced)."""
+        real = next(t for t in per_chunk if t is not None)
+        parts = [t if t is not None else ttnn.zeros_like(real) for t in per_chunk]
+        packed = parts[0] if len(parts) == 1 else ttnn.concat(parts, dim=2)
+        for t, part in zip(per_chunk, parts):
+            if t is None:
+                ttnn.deallocate(part)
+        return packed
+
+    @staticmethod
+    def _split_chunk_indices(packed: ttnn.Tensor, n: int) -> list:
+        """Inverse of _pack_chunk_indices: chunk k's rows of a packed indices tensor."""
+        rows = packed.shape[2] // n
+        assert rows * n == packed.shape[2], f"{packed.shape[2]} index rows do not split into {n} chunks"
+        if n == 1:
+            return [packed]
+        return [ttnn.slice(packed, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, packed.shape[-1])) for k in range(n)]
 
     def forward(
         self,
@@ -480,6 +542,9 @@ class TtPrefillTransformer(LightweightModule):
         input_is_embedded: bool = False,
         provided_levels: int = 0,
         mtp_geometry=None,
+        seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        chunks: Optional[list] = None,
+        mtp_unions: Optional[list] = None,
     ):
         """
         Forward pass: [embed] -> [block x N]. The populated KV cache is the output.
@@ -525,6 +590,20 @@ class TtPrefillTransformer(LightweightModule):
             mtp_geometry: an `MTPTraceGeometry` the caller refreshed for this chunk. The MTP levels then
                         take every per-chunk decision from device tensors, so the forward can be captured;
                         `provided_levels` is ignored (the geometry carries it).
+            seed_indexer_indices: GLM-5.3 indexer reuse across a pipeline boundary. When this rank's first
+                        layer is ``shared``, the upstream rank's last ``full`` layer top-k indices (shape
+                        indexer_indices_shape()), reused by every leading ``shared`` layer. When
+                        forwards_indexer_indices is set, this rank's last ``full`` layer indices are left in
+                        last_indexer_indices for the caller to send downstream.
+            chunks: a packed forward's PrefillChunk list (forward_chunks of them, see forward_packed).
+                        token_ids then holds every chunk's rows back to back on each SP chip, and the chunk
+                        list replaces actual_isl / actual_start / actual_end / cache_user_id, and
+                        on_layer_complete is called as (layer_idx, chunk), once per non-empty chunk. A
+                        pipeline rank takes and leaves its indexer indices packed (indexer_indices_shape()).
+                        d2h_service then sends nothing: it only has each chunk's KV pad window zeroed, the
+                        caller sending the forward's acks once it is done.
+            mtp_unions: a packed forward's MTP input, one `MTPUnionEmbedding` per chunk position (see
+                        forward_packed); `provided_levels` is then one count per chunk.
 
         Returns:
             On a non-last rank: the hidden-state activation tensor to hand to the next rank.
@@ -542,6 +621,28 @@ class TtPrefillTransformer(LightweightModule):
             "d2h_service and on_layer_complete are mutually exclusive ack transports; the block takes "
             "d2h_service and would silently drop on_layer_complete"
         )
+        if chunks is not None:
+            assert (
+                metadata is None and mtp_union is None
+            ), "a packed forward reads no single-chunk metadata, and takes its MTP input per chunk (mtp_unions)"
+            return self.forward_packed(
+                token_ids,
+                kvpe_cache,
+                chunks,
+                seed_indexer_indices=seed_indexer_indices,
+                # A packed forward's D2H acks go out once it is done (TtPrefillRuntime.prefill_forward); here
+                # the service only asks for each chunk's KV pad window to be zeroed as it is written.
+                zero_pad=d2h_service is not None,
+                index_kv_cache=index_kv_cache,
+                return_intermediates=return_intermediates,
+                read_profiler=read_profiler,
+                on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
+                input_is_embedded=input_is_embedded,
+                mtp_unions=mtp_unions,
+                provided_levels=provided_levels if mtp_unions is not None else None,
+            )
+        assert mtp_unions is None, "mtp_unions is a packed forward's (chunks=...) MTP input"
 
         if mtp_union is not None:
             assert self.mtp_predictor is not None, "MTP input passed but this transformer has no mtp_predictor"
@@ -580,13 +681,13 @@ class TtPrefillTransformer(LightweightModule):
         # following "shared" layers. reuse=False (no indexer_types) leaves the call + 2-tuple return
         # exactly as before.
         reuse = self.indexer_types is not None
-        # reuse seeds from the first "full" layer within this forward; a stack starting on a "shared"
-        # layer has no prior indices (pipeline-parallel would need them threaded in from the prior rank).
         if reuse:
-            assert (
-                self.indexer_types[self.first_layer_idx] == "full"
-            ), f"first layer {self.first_layer_idx} must be 'full' to seed indexer reuse, got '{self.indexer_types[self.first_layer_idx]}'"
-        indexer_indices = None
+            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+                f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
+                "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
+            )
+        indexer_indices = seed_indexer_indices if reuse else None
+        self.last_indexer_indices = None
         for i, layer in enumerate(self.layers):
             signpost(f"forward_layer_{i}_start")
             mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
@@ -631,6 +732,8 @@ class TtPrefillTransformer(LightweightModule):
                 intermediates[f"layer_{i}"] = self._to_host(h)
             if read_profiler:
                 ttnn.ReadDeviceProfiler(self.mesh_device)
+        if self.forwards_indexer_indices:
+            self.last_indexer_indices = indexer_indices
         # Drop the held reference. Python reference counting releases owned top-k allocations after
         # their last consumer; any TP gather scratch remains owned by TT_CCL.
         indexer_indices = None
@@ -701,6 +804,164 @@ class TtPrefillTransformer(LightweightModule):
             if on_mtp_complete is not None:
                 on_mtp_complete(mtp_out, mtp_generated)
 
+        return intermediates
+
+    def forward_packed(
+        self,
+        token_ids: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        chunks: list,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
+        return_intermediates: bool = False,
+        read_profiler: bool = False,
+        on_layer_complete: Optional[Callable[[int, object], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        input_is_embedded: bool = False,
+        metadata: Optional[list] = None,
+        padding_config: Optional[PackedPadding] = None,
+        seed_indexer_indices: Optional[ttnn.Tensor] = None,
+        zero_pad: bool = False,
+        mtp_unions: Optional[list] = None,
+        provided_levels: Optional[list] = None,
+        mtp_geometries: Optional[list] = None,
+    ):
+        """One packed forward of ``chunks`` (PrefillChunk, forward_chunks of them): every layer runs its
+        attention half once per non-empty chunk against that chunk's slot and offset, then its FFN half once
+        over all rows (TtPrefillBlock.forward_packed). Same inputs and returns as forward() otherwise.
+
+        on_layer_complete fires as (global layer index, chunk) once per non-empty chunk per layer.
+        GLM-5.3 indexer reuse is tracked per chunk: each "full" layer's top-k indices go to the following
+        "shared" layers of the same chunk. Across a pipeline boundary they travel packed
+        (indexer_indices_shape(), chunk-major): ``seed_indexer_indices`` seeds a rank that starts on a
+        "shared" layer, and a rank whose successor starts on one leaves its last "full" layer's indices in
+        last_indexer_indices.
+
+        ``zero_pad``: zero each chunk's KV pad window after its write without acking it, for a caller that
+        sends the D2H acks itself once the forward is done (TtPrefillRuntime.prefill_forward).
+
+        Traced form: ``metadata`` (one ChunkMetadata per chunk position, read on device) and
+        ``padding_config`` (the runtime's persistent PackedPadding) replace ``chunks``, which is then None.
+
+        MTP (last rank): ``mtp_unions`` holds one MTPUnionEmbedding per chunk position. Eager, ``provided_levels`` is
+        one count per chunk (run_mtp_packed); traced, ``mtp_geometries`` one MTPTraceGeometry per chunk position
+        (run_mtp_packed_traced).
+        """
+        assert self.is_chunked, "a packed forward is chunked prefill; build with is_chunked=True"
+        n = len(metadata) if metadata is not None else len(chunks)
+        assert n == self.forward_chunks, f"{n} chunks for a model built for {self.forward_chunks}"
+        assert (mtp_unions is not None) == (
+            self.mtp_predictor is not None and self.is_last_rank
+        ), "a last rank running MTP takes mtp_unions, one per chunk position; any other rank takes none"
+        assert mtp_unions is None or len(mtp_unions) == n, "packed MTP takes one union per chunk position"
+        assert mtp_unions is None or (mtp_geometries is not None) == (
+            metadata is not None
+        ), "traced packed MTP (metadata) takes mtp_geometries, one per chunk position; eager takes none"
+        rope_tensors = self.indexed_rope
+        intermediates = {} if return_intermediates else None
+
+        if self.is_first_rank and not input_is_embedded:
+            h = ttnn.unsqueeze_to_4D(self.embed(token_ids))  # [1, 1, forward_chunks * chunk_local, emb_dim/tp]
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["embed"] = self._to_host(h)
+        else:
+            h = token_ids
+
+        # Eager: one MoE padding (PackedPadding) for every layer of the forward, not one per layer's gate.
+        owned_padding_config = None
+        if metadata is None and padding_config is None:
+            sp = self.mesh_device.shape[self.sp_axis]
+            owned_padding_config = packed_padding(self.mesh_device, chunks, sp, h.shape[2] // n, sp_axis=self.sp_axis)
+            padding_config = owned_padding_config
+
+        reuse = self.indexer_types is not None
+        if reuse:
+            assert self.indexer_types[self.first_layer_idx] == "full" or seed_indexer_indices is not None, (
+                f"first layer {self.first_layer_idx} is '{self.indexer_types[self.first_layer_idx]}': "
+                "a stack starting on a shared layer needs seed_indexer_indices from the upstream rank"
+            )
+        # Per chunk, from the most recent "full" layer (or the upstream rank's, unpacked).
+        indexer_indices = (
+            self._split_chunk_indices(seed_indexer_indices, n) if (reuse and seed_indexer_indices is not None) else None
+        )
+        self.last_indexer_indices = None
+        for i, layer in enumerate(self.layers):
+            signpost(f"forward_layer_{i}_start")
+            mode = self.indexer_types[self.first_layer_idx + i] if reuse else "full"
+            ret = layer.forward_packed(
+                h,
+                rope_tensors,
+                kvpe_cache,
+                chunks,
+                cache_layer_idx=i,
+                return_intermediates=return_intermediates,
+                on_layer_complete=on_layer_complete,
+                on_layer_hidden=on_layer_hidden,
+                indexer_indices=indexer_indices if (reuse and mode == "shared") else None,
+                return_indexer_indices=reuse,
+                index_kv_cache=index_kv_cache,
+                metadata=metadata,
+                padding_config=padding_config,
+                zero_pad=zero_pad,
+            )
+            if reuse:
+                h, _, new_indices = ret
+                if mode == "full":
+                    indexer_indices = new_indices
+            else:
+                h, _ = ret
+            signpost(f"forward_layer_{i}_end")
+            if self.kv_only_last_layer and i == len(self.layers) - 1:
+                if owned_padding_config is not None:
+                    owned_padding_config.deallocate()
+                return intermediates
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates[f"layer_{i}"] = self._to_host(h)
+            if read_profiler:
+                ttnn.ReadDeviceProfiler(self.mesh_device)
+        if self.forwards_indexer_indices:
+            self.last_indexer_indices = self._pack_chunk_indices(indexer_indices)
+        indexer_indices = None
+
+        if mtp_unions is not None:
+            # h^0 = model.norm(trunk output), as in forward(); the MTP layer's MoE uses the forward's padding config.
+            h_normed = self.norm(h)
+            ttnn.deallocate(h)
+            if return_intermediates:
+                ttnn.synchronize_device(self.mesh_device)
+                intermediates["norm"] = self._to_host(h_normed)
+            if mtp_geometries is not None:
+                self.run_mtp_packed_traced(
+                    h_normed,
+                    kvpe_cache,
+                    rope_tensors,
+                    unions=mtp_unions,
+                    geometries=mtp_geometries,
+                    metadata=metadata,
+                    padding_config=padding_config,
+                    zero_pad=zero_pad,
+                    index_kv_cache=index_kv_cache,
+                )
+            else:
+                self.run_mtp_packed(
+                    h_normed,
+                    kvpe_cache,
+                    rope_tensors,
+                    chunks,
+                    unions=mtp_unions,
+                    provided_levels=provided_levels,
+                    padding_config=padding_config,
+                    zero_pad=zero_pad,
+                    index_kv_cache=index_kv_cache,
+                    on_layer_complete=on_layer_complete,
+                )
+            ttnn.deallocate(h_normed)
+        if owned_padding_config is not None:
+            owned_padding_config.deallocate()
+
+        if not self.is_last_rank:
+            return h
         return intermediates
 
     def mtp_embed_ids(self, tt_ids: ttnn.Tensor) -> ttnn.Tensor:
@@ -881,6 +1142,169 @@ class TtPrefillTransformer(LightweightModule):
                 union.set_split_chip_lookahead(None)
                 split_lookahead.deallocate()
         return out, source.generated_tokens
+
+    def run_mtp_packed(
+        self,
+        h_normed: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        rope_tensors: dict,
+        chunks: list,
+        *,
+        unions: list,
+        provided_levels: Optional[list] = None,
+        **fwd_kwargs,
+    ) -> None:
+        """:meth:`run_mtp` over a packed forward's chunks, ``h_normed`` holding every chunk's rows back to back.
+
+        Each level's input is built per chunk from that chunk's own union (and, from its ``provided_levels`` up, the
+        token generated from its rows), so no window reads another user's rows. The level then runs once over every
+        chunk's rows, attention per chunk (TtPrefillBlock.forward_packed). The level outputs are freed here.
+        """
+        assert self.mtp_predictor is not None, "run_mtp_packed called on a transformer built without an mtp_predictor"
+        n = len(chunks)
+        assert len(unions) == n, f"{len(unions)} unions for {n} chunks"
+        num_levels = self.num_mtp_levels
+        levels = [0] * n if provided_levels is None else list(provided_levels)
+        assert len(levels) == n and all(
+            0 <= p <= num_levels for p in levels
+        ), f"provided_levels {levels} for {n} chunks outside [0, {num_levels}]"
+        rows = h_normed.shape[2] // n
+        assert rows * n == h_normed.shape[2], f"{h_normed.shape[2]} rows do not split into {n} chunks"
+
+        sources, generations, lookaheads = [], [], []
+        try:
+            for chunk, union, provided in zip(chunks, unions, levels):
+                if chunk.is_empty:
+                    sources.append(MTPDeviceEmbedSource(union, provided_levels=num_levels))
+                    continue
+                split = MTPSplitChipLookahead.for_chunk_start(
+                    chunk.actual_start,
+                    self.seq_len // self.sp_factor,
+                    self.sp_factor,
+                    self._mtp_sp_rank,
+                    self._mtp_all_gather_sp,
+                    chunk_end=chunk.actual_end,
+                    num_levels=num_levels,
+                )
+                union.set_split_chip_lookahead(split)
+                lookaheads.append((union, split))
+                generation = None
+                if provided < num_levels:
+                    generation = self._mtp_build_generation(
+                        union,
+                        chunk.actual_end - chunk.actual_start,
+                        chunk.actual_start,
+                        chunk.actual_end,
+                        provided_levels=provided,
+                    )
+                    generations.append(generation)
+                sources.append(MTPDeviceEmbedSource(union, generation=generation, provided_levels=provided))
+
+            def get_embed(level, h):
+                s = list(h.shape)
+                parts = []
+                for k, source in enumerate(sources):
+                    generates = source.generation is not None and level >= source.provided_levels
+                    # Generation reads the chunk's own rows: the LM head picks its last real row out of them.
+                    h_k = ttnn.slice(h, [0, 0, k * rows, 0], [s[0], s[1], (k + 1) * rows, s[3]]) if generates else None
+                    parts.append(source(level, h_k))
+                    if h_k is not None:
+                        ttnn.deallocate(h_k)
+                embed = ttnn.concat(parts, dim=2)
+                for part in parts:
+                    ttnn.deallocate(part)
+                return embed
+
+            out = self.mtp_predictor.forward(
+                get_embed,
+                h_normed,
+                rope_tensors,
+                kvpe_cache,
+                chunks=chunks,
+                layer_ack_base=self.first_layer_idx + self.mtp_predictor.first_cache_slot,
+                **fwd_kwargs,
+            )
+            for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+        finally:
+            for generation in generations:
+                generation.deallocate()
+            for union, split in lookaheads:
+                union.set_split_chip_lookahead(None)
+                if split is not None:
+                    split.deallocate()
+
+    def run_mtp_packed_traced(
+        self,
+        h_normed: ttnn.Tensor,
+        kvpe_cache: MlaKvCache,
+        rope_tensors: dict,
+        *,
+        unions: list,
+        geometries: list,
+        **fwd_kwargs,
+    ) -> None:
+        """:meth:`run_mtp_packed` with no per-chunk host branch, as :meth:`run_mtp_traced` is to :meth:`run_mtp`.
+
+        Chunk k's level input comes from its own union and ``geometries[k]``. Captured twice: "generate" (every
+        chunk runs the generation chain; MTPTraceGeometry.write(full=True) zeroes what a provided level would not
+        patch) and "provided" (no chunk generates). The level outputs are freed here."""
+        assert self.mtp_predictor is not None, "run_mtp_packed_traced on a transformer built without an mtp_predictor"
+        assert not self.is_balanced, "MTP device generation is block-cyclic only"
+        n = len(unions)
+        assert len(geometries) == n, f"{len(geometries)} geometries for {n} chunk positions"
+        rows = h_normed.shape[2] // n
+        assert rows * n == h_normed.shape[2], f"{h_normed.shape[2]} rows do not split into {n} chunks"
+        all_gather_sp = self._mtp_all_gather_sp if self.sp_factor > 1 else None
+
+        def run(generate: bool):
+            sources = [
+                MTPTraceEmbedSource(
+                    union,
+                    geometry,
+                    embed_fn=(lambda h, g=geometry: self.mtp_generate_embedding_selected(h, g.lm_rows))
+                    if generate
+                    else None,
+                    all_gather_sp=all_gather_sp,
+                )
+                for union, geometry in zip(unions, geometries)
+            ]
+
+            def get_embed(level, h):
+                s = list(h.shape)
+                parts = []
+                for k, source in enumerate(sources):
+                    h_k = ttnn.slice(h, [0, 0, k * rows, 0], [s[0], s[1], (k + 1) * rows, s[3]]) if generate else None
+                    parts.append(source(level, h_k))
+                    if h_k is not None:
+                        ttnn.deallocate(h_k)
+                embed = ttnn.concat(parts, dim=2)
+                for part in parts:
+                    ttnn.deallocate(part)
+                return embed
+
+            out = self.mtp_predictor.forward(
+                get_embed,
+                h_normed,
+                rope_tensors,
+                kvpe_cache,
+                chunks=None,
+                layer_ack_base=self.first_layer_idx + self.mtp_predictor.first_cache_slot,
+                **fwd_kwargs,
+            )
+            for t in {id(t): t for t in (*out.x, *out.out, *out.out_head_normed) if t is not None}.values():
+                if t.is_allocated():
+                    ttnn.deallocate(t)
+            # The next variant must start from the row blocks, not this one's temporaries.
+            for union in unions:
+                union.drop_derived()
+
+        if self._trace_controller is None:
+            run(generate=True)
+            return
+        assert not any(u.has_derived for u in unions), "the variants share the unions' row blocks only"
+        self._trace_controller.capture_variants({"generate": lambda: run(True), "provided": lambda: run(False)})
 
     def run_mtp_traced(
         self,

@@ -7,6 +7,7 @@
 #include "allocator/allocator.hpp"
 #include "context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "device/device_manager.hpp"
 #include "dispatch/device_command.hpp"
 #include "dispatch/device_command_calculator.hpp"
@@ -92,8 +93,7 @@ void issue_core_write_command_sequence(const CoreWriteDispatchParams& dispatch_p
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index],
-            dispatch_params.cq_id);
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
 
     command_sequence.add_dispatch_write_linear<true, true>(
@@ -199,16 +199,14 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
             CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM,
             0,
             metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-            dispatch_params.expected_num_workers_completed[offset_index],
-            dispatch_params.cq_id);
+            dispatch_params.expected_num_workers_completed[offset_index]);
     }
     const uint8_t offset_index = *dispatch_params.sub_device_ids[last_index];
     command_sequence.add_dispatch_wait_with_prefetch_stall(
         CQ_DISPATCH_CMD_WAIT_FLAG_WAIT_STREAM | CQ_DISPATCH_CMD_WAIT_FLAG_BARRIER,
         0,
         metal_ctx.dispatch_mem_map().get_dispatch_stream_index(offset_index),
-        dispatch_params.expected_num_workers_completed[offset_index],
-        dispatch_params.cq_id);
+        dispatch_params.expected_num_workers_completed[offset_index]);
 
     command_sequence.add_dispatch_write_host(false, dispatch_params.size_bytes, false, 0);
 
@@ -229,14 +227,15 @@ void read_completion_queue(
     uint16_t channel,
     uint32_t addr,
     const SystemMemoryManager& sysmem_manager) {
-    MetalContext& metal_ctx = MetalContext::instance(sysmem_manager.get_context_id());
+    MetalContext& metal_ctx = sysmem_manager.metal_context();
+    auto& cluster = sysmem_manager.env_impl().get_cluster();
     if (sysmem_manager.is_dram_backed()) {
         const uint32_t dram_channel =
             metal_ctx.device_manager()->get_active_device(device_id)->allocator_impl()->get_dram_channel_from_bank_id(
                 sysmem_manager.get_dram_region_bank_id());
-        metal_ctx.get_cluster().read_dram_vec(dst, size_bytes, device_id, dram_channel, addr);
+        cluster.read_dram_vec(dst, size_bytes, device_id, dram_channel, addr);
     } else {
-        metal_ctx.get_cluster().read_sysmem(dst, size_bytes, addr, device_id, channel);
+        cluster.read_sysmem(dst, size_bytes, addr, device_id, channel);
     }
 }
 

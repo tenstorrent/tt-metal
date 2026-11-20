@@ -55,11 +55,16 @@ void kernel_main() {
     uint32_t X_stride = src_strides[x_dim];
 
     const auto s0 = TensorAccessor(tensor::input);
+    constexpr bool fast_path = get_arg(args::fast_path) != 0 && decltype(s0)::DSpec::is_interleaved;
     Noc noc;
 
     uint32_t idxs[N];
     idxs[N - 1] = 0;
     uint32_t non_x_rows = num_rows / X;
+
+    // One DataflowBuffer for the whole kernel: on Quasar a DataflowBuffer drains when it goes out of scope (#60848),
+    // so a per-block one would wait after every push for the compute to pop that block (no double buffering).
+    DataflowBuffer dfb(dfb::cb_in);
 
     for (uint32_t block = start_block; block < end_block; ++block) {
         // Decompose block into w_block, x_block, and xw_block indices
@@ -105,7 +110,6 @@ void kernel_main() {
         }
 
         // Reserve space in the circular buffer for the X-block length
-        DataflowBuffer dfb(dfb::cb_in);
         dfb.reserve_back(x_block_size);
         uint32_t src_buffer_l1_addr = dfb.get_write_ptr();
 
@@ -114,8 +118,17 @@ void kernel_main() {
         // Read along the X dimension
         for (uint32_t x = x_start; x < x_end; ++x) {
             uint64_t addr_offset = base_addr_offset + x * X_stride;
-            tt::data_movement::common::noc_async_read_sharded(
-                noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
+            if constexpr (fast_path) {
+                noc.async_read<NocOptions::DEFAULT, NOC_MAX_BURST_SIZE>(
+                    s0,
+                    CoreLocalMem<uint32_t>(src_buffer_l1_addr + page_offset),
+                    w_read_size_bytes,
+                    {.page_id = static_cast<uint32_t>(addr_offset), .offset_bytes = w_offset},
+                    {});
+            } else {
+                tt::data_movement::common::noc_async_read_sharded(
+                    noc, src_buffer_l1_addr + page_offset, s0, addr_offset, w_offset, w_read_size_bytes);
+            }
 
             // Advance output pointer by one page size for next row
             page_offset += input_cb_page_size;

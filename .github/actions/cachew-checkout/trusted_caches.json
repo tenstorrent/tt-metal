@@ -1,0 +1,8 @@
+{
+  "comment": "Cachew origins that may receive checkout tokens, in auto-selection order. Each name resolves only on the CI VLAN (restricted DNS rewrites it to the local cluster Service) and only the local cluster's certificate matches, so the first healthy origin is the runner's own cluster. Source: tt-flux apps/cachew/README.md.",
+  "origins": [
+    "https://cachew.ci.tenstorrent.net",
+    "https://cachew.yyz2.ci.tenstorrent.net",
+    "https://cachew.dev.tenstorrent.net"
+  ]
+}

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include <tt-metalium/buffer_types.hpp>
+#include "api/buffer_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "cpp/ttnn/operations/ccl/kernel_common/worker_routing_utils.hpp"
@@ -63,7 +63,7 @@ constexpr bool H_CORNER_FIRST = get_compile_time_arg_val(ct_after_dst + 8);
 
 // W-send bank-major coalesce factor (0 = per-stick)
 constexpr uint32_t W_COALESCE = get_compile_time_arg_val(ct_after_dst + 9);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 
 void kernel_main() {
     // ///////////////////////////////////////////////// ARGS /////////////////////////////////////////////////

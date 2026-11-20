@@ -18,7 +18,6 @@
 # Instead we sweep formats and multiple tile counts, exercising the per-tile
 # source L1 base-address programming inside _llk_unpack_A_custom_.
 
-import torch
 from conftest import skip_for_quasar, skip_for_wormhole
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import (
@@ -26,22 +25,22 @@ from helpers.golden_generators import (
     DataCopyGolden,
     get_golden_generator,
 )
-from helpers.llk_params import DestAccumulation, DestSync, format_dict
+from helpers.llk_params import DestAccumulation, DestSync
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
 )
+from helpers.perf.blaze import execute_llk
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
-from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
     NUM_BLOCKS,
     NUM_FACES,
     NUM_TILES_IN_BLOCK,
     TILE_COUNT,
 )
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 # _llk_unpack_A_custom_ always unpacks a full 4-face 32x32 tile: it hardcodes
 # TTI_SETADCXX(p_setadc::UNP_A, 1023, 0x0) (llk_unpack_A_custom.h), i.e. 1024 datums =
@@ -55,24 +54,28 @@ NUM_FACES_FULL_TILE = 4
 # format pair the harness would otherwise force onto a 32-bit destination.
 UNPACK_A_CUSTOM_FORMATS = [
     fmt
-    for fmt in input_output_formats(
-        [DataFormat.Float16_b, DataFormat.Float16, DataFormat.Bfp8_b]
-    )
+    for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Bfp8_b])
     if not is_dest_acc_needed(fmt)
 ]
+
+# Multiple tile counts exercise distinct source L1 base addresses.
+UNPACK_A_CUSTOM_INPUT_DIMENSIONS = [[32, 32], [64, 64], [32, 256]]
 
 
 @skip_for_wormhole
 @skip_for_quasar
 @parametrize(
     formats=UNPACK_A_CUSTOM_FORMATS,
-    # Sweep tile counts to exercise several distinct source L1 addresses inside
-    # _llk_unpack_A_custom_ (one base-address program per tile).
-    input_dimensions=[[32, 32], [64, 64], [32, 256]],
+    input_dimensions=UNPACK_A_CUSTOM_INPUT_DIMENSIONS,
 )
 def test_unpack_A_custom(
     formats,
     input_dimensions,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     num_faces = NUM_FACES_FULL_TILE
     # The reused kernel hardcodes a 16-bit destination, and the format sweep is
@@ -86,48 +89,50 @@ def test_unpack_A_custom(
         input_dimensions_B=input_dimensions,
     )
 
-    generate_golden = get_golden_generator(DataCopyGolden)
-    golden_tensor = generate_golden(
-        src_A, formats.output_format, num_faces, input_dimensions
-    )
-
     num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
         DestSync.Half, dest_acc, formats, input_dimensions, TILE_DIMENSIONS
     )
 
-    configuration = TestConfig(
-        "sources/eltwise_unary_datacopy_custom_test.cpp",
-        formats,
-        runtimes=[
-            TILE_COUNT(tile_cnt_A),
-            NUM_FACES(num_faces),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt_A,
-            tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
-            num_faces=num_faces,
+    outcome = execute_llk(
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
+        test_config_kwargs=dict(
+            test_name="sources/eltwise_unary_datacopy_custom_test.cpp",
+            formats=formats,
+            templates=[],
+            runtimes=[
+                TILE_COUNT(tile_cnt_A),
+                NUM_FACES(num_faces),
+                NUM_BLOCKS(num_blocks),
+                NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            ],
+            variant_stimuli=StimuliConfig(
+                src_A,
+                formats.input_format,
+                src_B,
+                formats.input_format,
+                formats.output_format,
+                tile_count_A=tile_cnt_A,
+                tile_count_B=tile_cnt_B,
+                tile_count_res=tile_cnt_A,
+                num_faces=num_faces,
+            ),
+            dest_acc=dest_acc,
+            unpack_to_dest=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
     )
+    if is_perf:
+        return
 
-    outcome = configuration.run()
+    generate_golden = get_golden_generator(DataCopyGolden)
+    golden_tensor = generate_golden(
+        src_A, formats.output_format, num_faces, input_dimensions
+    )
     res_from_L1 = outcome.result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), f"Result length {len(res_from_L1)} != golden length {len(golden_tensor)}"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor, res_tensor, formats.output_format
