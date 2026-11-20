@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 #include "rotary_embedding_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -108,7 +109,7 @@ tt::tt_metal::TensorSpec RotaryEmbeddingDeviceOperation::compute_output_specs(
     auto output_spec = [&](const tt::tt_metal::MemoryConfig& mem_config) {
         return tt::tt_metal::TensorSpec(
             logical_shape,
-            tt::tt_metal::TensorLayout::fromPaddedShape(
+            tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                 input_tensor.dtype(),
                 tt::tt_metal::PageConfig(input_tensor.layout()),
                 mem_config,
