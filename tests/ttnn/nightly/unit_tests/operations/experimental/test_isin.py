@@ -31,6 +31,7 @@ def select_torch_dtype(ttnn_dtype):
     raise TypeError(f"Unsupported ttnn dtype: {ttnn_dtype}")
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "elements, test_elements, dtype, layout, invert",
     [
@@ -73,6 +74,7 @@ def test_isin_typical_predefined_data(elements, test_elements, dtype, layout, in
     assert torch.equal(torch_isin_result != 0, torch_result_from_ttnn != 0)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "elements_shape, test_elements_shape, invert",
     [
@@ -134,6 +136,7 @@ def cache_hit_isin_inputs(elements_shape, test_elements_shape):
     return elements_0, test_elements_0, elements_1, test_elements_1
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize(
     "elements_shape, test_elements_shape, invert, expected_num_program_cache_entries",
     [

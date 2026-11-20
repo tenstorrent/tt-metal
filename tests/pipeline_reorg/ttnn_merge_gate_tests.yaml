@@ -227,3 +227,17 @@
   team: ttnn
   budget_type: merge_gate
   owner_id: U084B1CES7M # Borys Bradel
+
+# ttnn.experimental.isin: its unit and nightly tests, selected with @pytest.mark.merge_gate in the test files.
+# The unit file runs in no other CI job.
+- name: "ttnn isin"
+  cmd: >-
+    pytest --timeout 60 -xv -m merge_gate
+    tests/ttnn/unit_tests/operations/experimental/test_isin.py
+    tests/ttnn/nightly/unit_tests/operations/experimental/test_isin.py
+  skus:
+    wh_n150_civ2:
+      timeout: 5
+  team: ttnn
+  budget_type: merge_gate
+  owner_id: U084B1CES7M # Borys Bradel

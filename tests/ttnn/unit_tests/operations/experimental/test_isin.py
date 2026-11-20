@@ -20,12 +20,14 @@ def _isin_matches(dtype, invert, device):
     assert torch.equal(ttnn_result != 0, torch_result)
 
 
+@pytest.mark.merge_gate
 @pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint8, ttnn.bfloat16])
 @pytest.mark.parametrize("invert", [False, True])
 def test_isin_narrow_dtype_writes_uint32_mask(dtype, invert, device):
     _isin_matches(dtype, invert, device)
 
 
+@pytest.mark.merge_gate
 # Sizes just past each dtype's single-subchunk limit on WH, so a later subchunk is written at a non-zero offset.
 @pytest.mark.parametrize("dtype, size", [(ttnn.uint16, 160000), (ttnn.bfloat16, 160000), (ttnn.uint8, 210000)])
 def test_isin_spans_two_subchunks(dtype, size, device):
