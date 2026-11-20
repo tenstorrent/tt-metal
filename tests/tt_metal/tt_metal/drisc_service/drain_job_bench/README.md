@@ -2,7 +2,7 @@
 
 The streaming profiler's drainers run as drain jobs inside the DRISC service (`impl/drisc_service/kernel/drain_job.hpp`),
 16 per chip, one on each seat of each bank. A drain job takes a turn in the service's round-robin after every
-`N` copy turns (`TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS`, default 1; a copy turn is up to 24 KB) and holds the
+`N` copy turns (`TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS`, default 16; a copy turn is up to 24 KB) and holds the
 seat for `M` sweeps (`TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_SWEEPS`, default 1). These scripts measure what that costs
 each side. All run from the tt-metal root after `./build_metal.sh --build-tests`.
 
@@ -73,3 +73,7 @@ The knee is the first delay at which all 3 reps show 0 stalls (`knee_search.sh`,
 100, 50 and 25 come and go) passes at N = 1 and N = 16 with no mismatches. Before the drain job bumped the service
 heartbeat during its holds, 1-2 stress clients per run refused to attach: a client reads the heartbeat twice 20 ms
 apart and takes a still one for a hung kernel, and a hold that waits on the host can outlast that.
+
+N defaults to 16 since these results: it keeps local copies at 194-220 GB/s with the same knee as N = 1. With d2h
+copies it trades the drainer's knee (none up to 1200) for the copies' PCIe share; set
+`TT_METAL_STREAMING_PROFILER_DRAIN_HOLD_TURNS=1` where the profiler must win.

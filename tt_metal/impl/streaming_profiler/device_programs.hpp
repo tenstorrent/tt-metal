@@ -211,7 +211,7 @@ private:
     uint64_t control_vector_l1_ = 0;
     MetalContext* mc_ = nullptr;
     DriscL1 drisc_l1_;
-    uint32_t drain_hold_turns_ = 1;
+    uint32_t drain_hold_turns_ = 16;
     uint32_t drain_hold_sweeps_ = 1;
     EthL1 eth_l1_;
     std::vector<DeviceCtx> devices_;
