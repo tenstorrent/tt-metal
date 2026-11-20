@@ -39,7 +39,8 @@ namespace atomic = hal::atomic;
 constexpr auto descriptor = atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>(), 0, 0};
 constexpr auto bad        = descriptor.operation();
 
-// ZERO_COUNTER_WIDTH: not a constant expression
+// ZERO_COUNTER_WIDTH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGET counter width must be in [1, 32]"
+// ZERO_COUNTER_WIDTH: error: '__builtin_trap()' is not a constant expression
 
 //--- invalid-counter-result.cpp
 #include "hal/atomic.h"
@@ -48,7 +49,8 @@ namespace atomic = hal::atomic;
 constexpr auto counter = atomic::counter<32>(hal::gpr<1>());
 constexpr auto bad     = counter.operation().fetch_add(hal::gpr<64>());
 
-// INVALID_COUNTER_RESULT: not a constant expression
+// INVALID_COUNTER_RESULT: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGET data GPR index must be in [0, 63]"
+// INVALID_COUNTER_RESULT: error: '__builtin_trap()' is not a constant expression
 
 //--- invalid-counter-width.cpp
 #include "hal/atomic.h"
@@ -57,16 +59,18 @@ namespace atomic = hal::atomic;
 constexpr auto counter = atomic::counter<33>(hal::gpr<1>());
 constexpr auto bad     = counter.operation().fetch_add(hal::gpr<2>());
 
-// INVALID_COUNTER_WIDTH: not a constant expression
+// INVALID_COUNTER_WIDTH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGET counter width must be in [1, 32]"
+// INVALID_COUNTER_WIDTH: error: '__builtin_trap()' is not a constant expression
 
 //--- invalid-counter-word.cpp
 #include "hal/atomic.h"
 namespace atomic = hal::atomic;
 
-constexpr auto counter = atomic::counter<32>(hal::gpr<1>(), 4);
+constexpr auto counter = atomic::counter<32>(hal::gpr<1>(), 4 /*word*/);
 constexpr auto bad     = counter.operation().fetch_add(hal::gpr<2>());
 
-// INVALID_COUNTER_WORD: not a constant expression
+// INVALID_COUNTER_WORD: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGET word selection must be in [0, 3]"
+// INVALID_COUNTER_WORD: error: '__builtin_trap()' is not a constant expression
 
 //--- invalid-fifo.cpp
 #include "hal/atomic.h"
@@ -75,7 +79,8 @@ namespace atomic = hal::atomic;
 constexpr auto fifo = atomic::fifo<16>(hal::gpr<3>());
 constexpr auto bad  = fifo.operation().pop(hal::gpr<4>());
 
-// INVALID_FIFO: not a constant expression
+// INVALID_FIFO: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGETPTR FIFO capacity logarithm must be in [0, 14]
+// INVALID_FIFO: error: '__builtin_trap()' is not a constant expression
 
 //--- fifo-increment-too-wide.cpp
 #include "hal/atomic.h"
@@ -108,16 +113,18 @@ namespace atomic = hal::atomic;
 constexpr auto fifo = atomic::fifo<2>(hal::gpr<3>());
 constexpr auto bad  = fifo.operation().pop(hal::gpr<4>(), 3);
 
-// FIFO_RUNTIME_INCREMENT_CONSTANT: not a constant expression
+// FIFO_RUNTIME_INCREMENT_CONSTANT: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGETPTR increment logarithm must not exceed
+// FIFO_RUNTIME_INCREMENT_CONSTANT: error: '__builtin_trap()' is not a constant expression
 
 //--- invalid-lock.cpp
 #include "hal/atomic.h"
 namespace atomic = hal::atomic;
 
-constexpr auto lock = atomic::Lock {hal::gpr<7>(), 4};
+constexpr auto lock = atomic::Lock {hal::gpr<7>(), 4 /*word*/};
 constexpr auto bad  = lock.operation().acquire();
 
-// INVALID_LOCK: not a constant expression
+// INVALID_LOCK: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATCAS word selection must be in [0, 3]"
+// INVALID_LOCK: error: '__builtin_trap()' is not a constant expression
 
 //--- lock-compare-too-wide.cpp
 #include "hal/atomic.h"
@@ -191,7 +198,8 @@ namespace atomic = hal::atomic;
 constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
 constexpr auto bad  = fifo.operation().pop(hal::gpr<4>());
 
-// CAPACITY15_POP: not a constant expression
+// CAPACITY15_POP: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGETPTR FIFO capacity logarithm must be in [0, 14]
+// CAPACITY15_POP: error: '__builtin_trap()' is not a constant expression
 
 //--- capacity15-push.cpp
 #include "hal/atomic.h"
@@ -200,4 +208,5 @@ namespace atomic = hal::atomic;
 constexpr auto fifo = atomic::fifo<15>(hal::gpr<3>());
 constexpr auto bad  = fifo.operation().push(hal::gpr<4>());
 
-// CAPACITY15_PUSH: not a constant expression
+// CAPACITY15_PUSH: in 'constexpr' expansion of 'hal::detail::require({{.*}}"ATINCGETPTR FIFO capacity logarithm must be in [0, 14]
+// CAPACITY15_PUSH: error: '__builtin_trap()' is not a constant expression

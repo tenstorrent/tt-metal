@@ -10,11 +10,11 @@
 
 namespace atomic = hal::atomic;
 
-constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3};
+constexpr atomic::Counter<32, 1> counter_word3 {hal::gpr<1>(), 3 /*word*/};
 constexpr atomic::Counter<1, 63> counter_bit {hal::gpr<63>()};
 constexpr auto fifo16k    = atomic::fifo<14>(hal::gpr<3>());
 constexpr auto fifo32k    = atomic::fifo<15>(hal::gpr<3>());
-constexpr auto lock_word3 = atomic::Lock {hal::gpr<63>(), 3};
+constexpr auto lock_word3 = atomic::Lock {hal::gpr<63>(), 3 /*word*/};
 
 static_assert(atomic::is_valid(counter_word3));
 static_assert(atomic::is_valid(counter_bit));
@@ -29,6 +29,9 @@ static_assert(lock_word3.operation().compare_set<15, 15>() == TT_OP_ATCAS(0, 15,
 // Invalid raw descriptors remain constructible for explicit validation.
 constexpr auto read_capacity15 = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Read, 15};
 static_assert(!atomic::is_valid(read_capacity15));
+
+constexpr auto probe_capacity15 = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Read, 15, 0, true};
+static_assert(atomic::is_valid(probe_capacity15));
 
 constexpr auto write_capacity15 = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Write, 15, 15};
 static_assert(!atomic::is_valid(write_capacity15));
@@ -57,7 +60,7 @@ static_assert(!atomic::is_valid(fifo_invalid_capacity));
 constexpr auto fifo_invalid_address = atomic::fifo<1>(hal::gpr<64>());
 static_assert(!atomic::is_valid(fifo_invalid_address));
 
-constexpr auto lock_invalid_word = atomic::Lock {hal::gpr<0>(), 4};
+constexpr auto lock_invalid_word = atomic::Lock {hal::gpr<0>(), 4 /*word*/};
 static_assert(!atomic::is_valid(lock_invalid_word));
 
 constexpr auto lock_invalid_address = atomic::Lock {hal::gpr<64>()};
@@ -81,11 +84,14 @@ static_assert(!atomic::is_valid(acquire_invalid_pointer));
 constexpr auto acquire_invalid_capacity = atomic::FifoAcquire {hal::gpr<0>(), hal::gpr<0>(), atomic::FifoPointer::Read, 16, 0, false};
 static_assert(!atomic::is_valid(acquire_invalid_capacity));
 
+constexpr auto probe_invalid_capacity = atomic::FifoAcquire {hal::gpr<0>(), hal::gpr<0>(), atomic::FifoPointer::Read, 16, 0, true};
+static_assert(!atomic::is_valid(probe_invalid_capacity));
+
 constexpr auto acquire_invalid_increment = atomic::FifoAcquire {hal::gpr<0>(), hal::gpr<0>(), atomic::FifoPointer::Read, 0, 16, false};
 static_assert(!atomic::is_valid(acquire_invalid_increment));
 
-// A readiness probe must not also advance the pointer.
-constexpr auto probe_with_increment = atomic::FifoAcquire {hal::gpr<0>(), hal::gpr<0>(), atomic::FifoPointer::Read, 0, 1, true};
+// A readiness probe must not also advance the pointer. Capacity 3 admits the increment, so only the probe rule fails.
+constexpr auto probe_with_increment = atomic::FifoAcquire {hal::gpr<0>(), hal::gpr<0>(), atomic::FifoPointer::Read, 3, 1, true};
 static_assert(!atomic::is_valid(probe_with_increment));
 
 constexpr auto compare_set_invalid_word = atomic::CompareSet {hal::gpr<0>(), 0, 0, 4};
@@ -106,12 +112,15 @@ static_assert(!atomic::is_valid(write_invalid_address));
 // Descriptor defaults work with C++17 deduction; compare/set remain required.
 constexpr auto default_fetch = atomic::FetchIncrement {hal::gpr<1>(), hal::gpr<2>()};
 static_assert(default_fetch.word_select == 0 && default_fetch.counter_width == 32);
+static_assert(atomic::is_valid(default_fetch));
 constexpr auto default_fifo = atomic::FifoAcquire {hal::gpr<3>(), hal::gpr<4>(), atomic::FifoPointer::Read, 3};
 static_assert(default_fifo.increment_log2 == 0 && !default_fifo.probe_only);
+static_assert(atomic::is_valid(default_fifo));
 constexpr auto default_cas = atomic::CompareSet {hal::gpr<7>(), 1, 0};
 static_assert(default_cas.word_select == 0 && default_cas.compare == 1 && default_cas.set == 0);
+static_assert(atomic::is_valid(default_cas));
 constexpr atomic::CompareSet<7> explicit_cas {hal::gpr<7>(), 1, 0};
 static_assert(explicit_cas.operation() == TT_OP_ATCAS(0, 0, 1, 0, 0, 7));
-constexpr auto runtime_counter = atomic::counter<16>(hal::gpr(5), 2);
+constexpr auto runtime_counter = atomic::counter<16>(hal::gpr(5), 2 /*word*/);
 static_assert(atomic::is_valid(runtime_counter));
 static_assert(runtime_counter.operation().fetch_add(hal::gpr(6)) == TT_OP_ATINCGET(0, 15, 2, 6, 5));

@@ -6,6 +6,7 @@
 // RUN: %split-file %s %t
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/reserved-immediate.cpp 2>&1 | FileCheck %s --check-prefix=RESERVED_IMMEDIATE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/immediate-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=IMMEDIATE_TOO_WIDE
+// RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/shift-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=SHIFT_TOO_WIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/runtime-gpr-immediate-too-wide.cpp 2>&1 | FileCheck %s --check-prefix=RUNTIME_GPR_IMMEDIATE_TOO_WIDE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/destination-out-of-range.cpp 2>&1 | FileCheck %s --check-prefix=DESTINATION_OUT_OF_RANGE
 // RUN: not %{blackhole_tensix_diagnose} %{blackhole_math_thread} %t/lhs-out-of-range.cpp 2>&1 | FileCheck %s --check-prefix=LHS_OUT_OF_RANGE
@@ -35,6 +36,18 @@ void immediate_too_wide()
 }
 
 // IMMEDIATE_TOO_WIDE: error: static assertion failed: Scalar-unit immediate must fit in six bits
+
+//--- shift-too-wide.cpp
+#include "hal/scalar.h"
+
+namespace scalar = hal::scalar;
+
+void shift_too_wide()
+{
+    scalar::shift_left(hal::gpr<1>(), hal::gpr<2>(), scalar::immediate<32>());
+}
+
+// SHIFT_TOO_WIDE: error: static assertion failed: Scalar-unit shift amount must fit in five bits
 
 //--- runtime-gpr-immediate-too-wide.cpp
 #include <cstdint>

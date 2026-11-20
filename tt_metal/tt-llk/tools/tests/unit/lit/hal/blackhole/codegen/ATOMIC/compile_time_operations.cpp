@@ -36,7 +36,7 @@ extern "C" __attribute__((noinline, used)) void descriptor_operations()
 
 extern "C" __attribute__((noinline, used)) void counter_fetch_add()
 {
-    constexpr auto counter_word3 = atomic::counter<32>(hal::gpr<1>(), 3);
+    constexpr auto counter_word3 = atomic::counter<32>(hal::gpr<1>(), 3 /*word*/);
     constexpr atomic::Counter<1, 63> counter_bit {hal::gpr<63>()};
     counter_word3.fetch_add(hal::gpr<2>());
     counter_bit.fetch_add(hal::gpr<63>());
@@ -117,7 +117,7 @@ extern "C" __attribute__((noinline, used)) void fifo_wait_while()
 
 extern "C" __attribute__((noinline, used)) void lock_operations()
 {
-    constexpr auto lock_word2 = atomic::Lock {hal::gpr<7>(), 2};
+    constexpr auto lock_word2 = atomic::Lock {hal::gpr<7>(), 2 /*word*/};
     constexpr auto lock_word0 = atomic::Lock {hal::gpr<63>()};
     lock_word2.acquire();
     lock_word2.release();
@@ -144,9 +144,9 @@ extern "C" __attribute__((noinline, used)) void masked_store()
 // CHECK-NEXT: ret
 
 // MOP builders remain constant expressions and never issue instructions.
-constexpr auto counter_word3  = atomic::counter<32>(hal::gpr<1>(), 3);
+constexpr auto counter_word3  = atomic::counter<32>(hal::gpr<1>(), 3 /*word*/);
 constexpr auto fifo8          = atomic::fifo<3>(hal::gpr<3>());
-constexpr auto lock_word2     = atomic::Lock {hal::gpr<7>(), 2};
+constexpr auto lock_word2     = atomic::Lock {hal::gpr<7>(), 2 /*word*/};
 constexpr std::uint32_t mop[] = {
     counter_word3.operation().fetch_add(hal::gpr<2>()),
     fifo8.operation().pop<2>(hal::gpr<4>()),
@@ -176,8 +176,8 @@ extern "C" __attribute__((noinline, used)) void fifo_address_setup()
 
 extern "C" __attribute__((noinline, used)) void counter_and_lock_address_setup()
 {
-    constexpr auto counter = atomic::counter<32>(hal::gpr<1>(), 3);
-    constexpr auto lock    = atomic::Lock {hal::gpr<7>(), 2};
+    constexpr auto counter = atomic::counter<32>(hal::gpr<1>(), 3 /*word*/);
+    constexpr auto lock    = atomic::Lock {hal::gpr<7>(), 2 /*word*/};
     counter.set_address(0x1000);
     lock.set_address(0x2000);
 }

@@ -95,7 +95,7 @@ extern "C" __attribute__((noinline, used)) void reference_fifo_runtime_wait_full
 
 extern "C" __attribute__((noinline, used)) void lock_runtime_acquire_release(const std::uint32_t address)
 {
-    const auto lock = atomic::Lock {hal::gpr(address), 1};
+    const auto lock = atomic::Lock {hal::gpr(address), 1 /*word*/};
     lock.acquire();
     lock.release();
 }
@@ -143,5 +143,20 @@ extern "C" __attribute__((noinline, used)) std::uint32_t fifo_runtime_capacity(c
 
 extern "C" __attribute__((noinline, used)) std::uint32_t reference_fifo_runtime_capacity(const std::uint8_t capacity_log2)
 {
-    return TT_OP_ATINCGETPTR(0 /*MemHierSel*/, 0 /*NoIncr*/, 0 /*IncrVal*/, (capacity_log2 + 1u) & 0xfu, 0 /*Sel32b*/, 4 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+    return TT_OP_ATINCGETPTR(
+        0 /*MemHierSel*/, 0 /*NoIncr*/, 0 /*IncrVal*/, (capacity_log2 + 1u) & 0xfu /*WrapVal*/, 0 /*Sel32b*/, 4 /*DataRegIndex*/, 3 /*AddrRegIndex*/);
+}
+
+extern "C" __attribute__((noinline, used)) void fifo_runtime_set_address(const std::uint32_t l1_byte_address)
+{
+    constexpr auto fifo = atomic::fifo<3>(hal::gpr<3>());
+    fifo.set_address(l1_byte_address);
+}
+
+// Atomics take the 16-byte line address (byte address / 16), without the L1_ADDRESS bias of one.
+extern "C" __attribute__((noinline, used)) void reference_fifo_runtime_set_address(const std::uint32_t l1_byte_address)
+{
+    const std::uint32_t line = l1_byte_address >> 4;
+    TT_SETDMAREG(0 /*Payload_SigSelSize*/, line & 0xffffu, 0 /*SetSignalsMode*/, 6 /*RegIndex16b*/);
+    TT_SETDMAREG(0 /*Payload_SigSelSize*/, line >> 16, 0 /*SetSignalsMode*/, 7 /*RegIndex16b*/);
 }
