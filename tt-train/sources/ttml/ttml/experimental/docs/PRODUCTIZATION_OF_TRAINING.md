@@ -14,26 +14,27 @@ that joins them stays put.
 | Component | Built on its own as |
 |---|---|
 | Training loop | A trainer (`SFTTrainer` so far) in `ttml/experimental/trainer/`. It owns the loop and the job lifecycle a host calls: `setup`, `train`, `cleanup`. |
-| Model | A model provider in `ttml/models/provider/`. It builds the model for an HF hub id, checks that the config can train it, and loads and exports its weights. |
-| Dataset | A dataset provider in `ttml/datasets/provider/`. It serves one dataset as the batches the loop consumes. |
+| Model | A model provider in `ttml/experimental/models/provider/`. It builds the model for an HF hub id, checks that the config can train it, and loads and exports its weights. |
+| Dataset | A dataset provider in `ttml/experimental/datasets/provider/`. It serves one dataset as the batches the loop consumes. |
 | Optimizer | An entry in `OPTIMIZERS` (`ttml/experimental/trainer/configs/optimizer.py`), selected by the `optimizer` section. It names which weights train, and with which optimizer and settings. |
 | Checkpoints | The `checkpoint` section, written and read by the model provider. It names when to save, which checkpoints to keep, and which weights a run starts from. |
 
 A new model, dataset, optimizer, or trainer is registered next to the ones that exist. The rest of this document
 is the join as it stands today: what a run trains, the config that selects the components, and how to add one.
 
-The experimental trainer lives under `ttml.experimental` until it moves into the main `ttml` package. The existing
-`ttml.trainers` package is unchanged and works as before.
+The experimental trainer, its model and dataset providers, the utils they share, and its recipes live under
+`ttml.experimental` until they move into the main `ttml` package. The existing `ttml.trainers` package is unchanged
+and works as before.
 
 ---
 
 ## Quick start
 
-From the command line, with a recipe from `tt-train/configs/experimental/training_configs/`:
+From the command line, with a recipe from `tt-train/sources/ttml/ttml/experimental/training_configs/`:
 
 ```bash
 python -m ttml.experimental.trainer \
-  --config tt-train/configs/experimental/training_configs/llama_3_2_1b_instruct_sst2_lora.yaml \
+  --config tt-train/sources/ttml/ttml/experimental/training_configs/llama_3_2_1b_instruct_sst2_lora.yaml \
   --set stopping_criteria.limit=100 --set model.lora.r=8
 ```
 
@@ -62,7 +63,7 @@ finally:
 What a run trains today is the components registered so far. A config joins the model, the optimizer, and the
 dataset described below.
 
-**Models.** The models `providers()` in `ttml/models/provider/__init__.py` lists, by HF hub id: Llama 3.2 1B and Llama
+**Models.** The models `providers()` in `ttml/experimental/models/provider/__init__.py` lists, by HF hub id: Llama 3.2 1B and Llama
 3.1 8B, base and Instruct, in bf16. `model.name` is the hub id, or a local copy of the model in a directory
 named as the model, for example `/models/Llama-3.2-1B-Instruct`. Checkpoints the ttml Llama can't represent are
 rejected before the device opens: quantized weights, attention or MLP biases, an activation other than SiLU, and RoPE
@@ -357,8 +358,8 @@ finally:
 
 The model is one component of the join. Adding one leaves the loop, the dataset, the optimizer, and checkpoints
 as they are. A model provider builds the ttml model for HF models, and loads and exports its weights. It subclasses
-`ModelProvider` in `ttml/models/provider/base.py`, which takes the config, as `self.config`, and implements its four
-methods:
+`ModelProvider` in `ttml/experimental/models/provider/base.py`, which takes the config, as `self.config`, and implements
+its four methods:
 
 - `check()`: raise `UnsupportedTrainingConfig` for anything the model can't be built or trained with, including a
   `device.mesh` it can't be built on. It must not download weights or open the device.
@@ -368,24 +369,24 @@ methods:
 
 What a checkpoint holds and how it is laid out is the provider's: `LlamaProvider` writes the layouts in the table under
 [Checkpoints](#checkpoints). Anything else a provider needs it reads itself: `LlamaProvider` reads the model's HF
-`config.json` from `model.name`. `ttml/models/utils/` has shared helpers for HF hub models and PEFT adapters.
+`config.json` from `model.name`. `ttml/experimental/models/utils/` has shared helpers for HF hub models and PEFT adapters.
 
-Write it in `ttml/models/provider/<family>.py` and add each model it supports to `providers()` in
-`ttml/models/provider/__init__.py`, keyed by its HF hub id; a model of a family that already has a provider only needs
-the entry. `LlamaProvider` in `ttml/models/provider/llama.py` is the reference.
+Write it in `ttml/experimental/models/provider/<family>.py` and add each model it supports to `providers()` in
+`ttml/experimental/models/provider/__init__.py`, keyed by its HF hub id; a model of a family that already has a provider only needs
+the entry. `LlamaProvider` in `ttml/experimental/models/provider/llama.py` is the reference.
 
 ---
 
 ## Adding a dataset
 
 The dataset is one component of the join. Adding one leaves the loop, the model, the optimizer, and checkpoints
-as they are. Dataset providers are grouped by training strategy: `ttml/datasets/provider/<strategy>/`, with what they share in
-`ttml/datasets/utils/<strategy>/`. SFT, the only strategy so far, is in `sft/`.
+as they are. Dataset providers are grouped by training strategy: `ttml/experimental/datasets/provider/<strategy>/`, with what they share in
+`ttml/experimental/datasets/utils/<strategy>/`. SFT, the only strategy so far, is in `sft/`.
 
 An SFT dataset provider serves one split of a dataset as batches: the trainer builds one for training and one for
 validation, and asks each for its next batch. It subclasses `DatasetProvider` in
-`ttml/datasets/provider/sft/base.py`, which tokenizes the examples, masks the prompt, drops the examples longer than `max_length`, and batches them. The
-subclass adds what is the dataset's own:
+`ttml/experimental/datasets/provider/sft/base.py`, which tokenizes the examples, masks the prompt, drops the examples
+longer than `max_length`, and batches them. The subclass adds what is the dataset's own:
 
 - `_load_raw_dataset()`: the HF dataset of `self.split`.
 - `_prompt_and_response(example)`: the prompt and the response of one example.
@@ -393,9 +394,9 @@ subclass adds what is the dataset's own:
   for validation.
 - `has_split(config, split)`, for a source that may lack a split: the trainer then runs without it.
 
-Write it in `ttml/datasets/provider/sft/<dataset>.py`, with its prompt templates in
-`ttml/datasets/utils/sft/templates/<dataset>.py`, and add it to `providers()` in
-`ttml/datasets/provider/sft/__init__.py`, keyed by its `dataset.id`. `SST2Provider` in `ttml/datasets/provider/sft/sst2.py` is the reference.
+Write it in `ttml/experimental/datasets/provider/sft/<dataset>.py`, with its prompt templates in
+`ttml/experimental/datasets/utils/sft/templates/<dataset>.py`, and add it to `providers()` in
+`ttml/experimental/datasets/provider/sft/__init__.py`, keyed by its `dataset.id`. `SST2Provider` in `ttml/experimental/datasets/provider/sft/sst2.py` is the reference.
 
 What a trainer uses of a provider: `next_batch()`, the next batch of the epoch as host arrays, or `None` once the
 epoch is over; iterating it, which takes the batches left in the epoch; `len()`, the batches of an epoch;

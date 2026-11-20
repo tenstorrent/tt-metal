@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Sequence
 
-from ttml.models.provider import UnsupportedTrainingConfig
+from ttml.experimental.models.provider import UnsupportedTrainingConfig
 
 from ..configs import OptimizerConfig
 

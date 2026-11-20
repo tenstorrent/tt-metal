@@ -2,7 +2,7 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-from ttml.models.provider import UnsupportedTrainingConfig
+from ttml.experimental.models.provider import UnsupportedTrainingConfig
 
 from .callbacks import Callback, CallbackHandler, CheckpointCallback, MetricsCallback
 from .configs import (

@@ -6,8 +6,8 @@
 
 A provider serves one split of a dataset as host batches, which the trainer asks it for one at a time; the trainer
 never sees examples, prompts or tokenization. Adding a dataset means subclassing ``DatasetProvider`` (``base.py``) in
-``ttml/datasets/provider/sft/<dataset>.py``, with its prompts in ``ttml/datasets/utils/sft/templates/<dataset>.py``,
-and adding it to ``providers``.
+``ttml/experimental/datasets/provider/sft/<dataset>.py``, with its prompts in
+``ttml/experimental/datasets/utils/sft/templates/<dataset>.py``, and adding it to ``providers``.
 """
 
 from __future__ import annotations

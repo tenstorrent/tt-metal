@@ -11,11 +11,11 @@ import ttnn
 
 import ttml
 from ttml.common.utils import no_grad, validate_clip_grad_norm
-from ttml.datasets.provider.sft import DatasetProvider, load_tokenizer
-from ttml.datasets.provider.sft import get_provider as get_dataset_provider
-from ttml.datasets.provider.sft import providers as dataset_providers
-from ttml.models.provider import UnsupportedTrainingConfig
-from ttml.models.provider import get_provider as get_model_provider
+from ttml.experimental.datasets.provider.sft import DatasetProvider, load_tokenizer
+from ttml.experimental.datasets.provider.sft import get_provider as get_dataset_provider
+from ttml.experimental.datasets.provider.sft import providers as dataset_providers
+from ttml.experimental.models.provider import UnsupportedTrainingConfig
+from ttml.experimental.models.provider import get_provider as get_model_provider
 from ..configs import SFTTrainerConfig
 from ..managers.device import DeviceManager
 from ..utils import CombinedOptimizer, assign_parameters, staged_directory, write_trainer_state
@@ -33,10 +33,10 @@ class SFTTrainer(Trainer):
     """Supervised fine-tuning of a causal LM on ttml, on a single chip. With ``model.lora`` it trains those adapters;
     without it, every weight. AdamW is the optimizer.
 
-    The model comes from a model provider (``ttml.models.provider``), which also decides whether the config can be
-    trained at all, and loads and exports its weights; the batches come from SFT dataset providers
-    (``ttml.datasets.provider.sft``), one per split. Checkpoints are saved in the format ``checkpoint.format`` picks
-    (see ``save_checkpoint``).
+    The model comes from a model provider (``ttml.experimental.models.provider``), which also decides whether the
+    config can be trained at all, and loads and exports its weights; the batches come from SFT dataset providers
+    (``ttml.experimental.datasets.provider.sft``), one per split. Checkpoints are saved in the format
+    ``checkpoint.format`` picks (see ``save_checkpoint``).
 
     Losses are read back to host floats once per micro-batch, as ttml's other trainers do.
     """

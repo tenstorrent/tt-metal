@@ -2,8 +2,6 @@
 
 This directory contains YAML configuration files for training transformer models with TT-Metal. This README explains all valid parameters for each configuration type based on the actual implementation.
 
-The recipes in `experimental/training_configs/` are not in this format: they are configs for `python -m ttml.experimental.trainer`, described in [PRODUCTIZATION_OF_TRAINING.md](../docs/PRODUCTIZATION_OF_TRAINING.md#configuration).
-
 ## Configuration Types
 
 There are four main configuration types:

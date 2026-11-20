@@ -1,7 +1,7 @@
 # LoRA fine-tuning of Llama 3.1 8B Instruct on your own instruction data, on a single chip.
 #
 #   python -m ttml.experimental.trainer \
-#     --config tt-train/configs/experimental/training_configs/llama_3_1_8b_instruct_custom_lora.yaml \
+#     --config tt-train/sources/ttml/ttml/experimental/training_configs/llama_3_1_8b_instruct_custom_lora.yaml \
 #       --set dataset.custom_options.train_dataset_path=/data/train.jsonl \
 #       --set dataset.custom_options.val_dataset_path=/data/val.jsonl
 #

@@ -4,8 +4,9 @@
 
 """Model providers: build HF models in ttml, and load and export their weights.
 
-Bringing up a model means subclassing ``ModelProvider`` (``base.py``) in ``ttml/models/provider/<family>.py``, or
-reusing its family's, and adding the model to ``providers``, keyed by its HF hub id.
+Bringing up a model means subclassing ``ModelProvider`` (``base.py``) in
+``ttml/experimental/models/provider/<family>.py``, or reusing its family's, and adding the model to ``providers``,
+keyed by its HF hub id.
 """
 
 from __future__ import annotations

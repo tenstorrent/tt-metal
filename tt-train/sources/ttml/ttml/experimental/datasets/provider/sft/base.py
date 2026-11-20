@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Iterator, Optional
 
 import numpy as np
 
-from ...hf_dataloader import InMemoryDataloader
+from ttml.datasets.hf_dataloader import InMemoryDataloader
 from ...utils.sft.collate import IGNORED_INDEX, collate_causal_lm
 
 if TYPE_CHECKING:
