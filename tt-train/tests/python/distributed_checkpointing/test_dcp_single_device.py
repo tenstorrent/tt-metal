@@ -11,7 +11,10 @@ budget that bounds the host buffers in flight, a missing data file and a restore
 live one.
 """
 
+import errno
 import os
+import threading
+import weakref
 
 import numpy as np
 import pytest
@@ -156,6 +159,116 @@ def test_one_byte_budget(tmp_path, monkeypatch):
     dcp.load(path, model=fresh, optimizer=fresh_opt)
     assert_same_shards(model_shards(fresh.parameters()), model_shards(model.parameters()))
     assert_same_shards(optimizer_shards(fresh_opt)[0], optimizer_shards(opt)[0])
+
+
+class _Interrupt(BaseException):
+    """Stands in for a KeyboardInterrupt, which is a BaseException and not an Exception, without being one pytest
+    would act on."""
+
+
+def _trained_pair():
+    model = _Pair(DIM)
+    opt = make_adamw(model.parameters())
+    train_step(model, opt, DIM)
+    return model, opt
+
+
+def _join_writers() -> None:
+    for thread in threading.enumerate():
+        if thread.name.startswith("dcp-writer-"):
+            thread.join()
+
+
+def test_an_interrupted_save_writes_only_into_its_own_files(tmp_path, monkeypatch, expect_error):
+    """An interrupt while save waits for its writers (a ^C in a join) leaves no writer writing through a descriptor
+    that was closed under it, and so reused by the next file opened: each writer closes its own files after its last
+    write."""
+    model, opt = _trained_pair()
+    gate = threading.Event()
+    real_pwrite_all, real_join = _save.pwrite_all, threading.Thread.join
+    interrupted, lost = [], []
+
+    def held_pwrite_all(fd, view, offset):  # each writer's first write is still going when the interrupt lands
+        inode = os.fstat(fd).st_ino
+        gate.wait()
+        try:
+            if os.fstat(fd).st_ino != inode:
+                lost.append(fd)  # closed, and reused by another file
+        except OSError:
+            lost.append(fd)  # closed
+        real_pwrite_all(fd, view, offset)
+
+    def interrupted_join(thread, timeout=None):
+        if thread.name.startswith("dcp-writer-") and not interrupted:
+            interrupted.append(thread.name)
+            threading.Timer(0.5, gate.set).start()  # the writes that were going on go on after the interrupt
+            raise _Interrupt()
+        return real_join(thread, timeout)
+
+    monkeypatch.setattr(_save, "pwrite_all", held_pwrite_all)
+    monkeypatch.setattr(threading.Thread, "join", interrupted_join)
+    open_fds = len(os.listdir("/proc/self/fd"))
+    with expect_error(_Interrupt, ""):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt)
+    monkeypatch.undo()
+    # The next file opened takes the lowest free descriptor: the save's own, had it been closed under its writer.
+    bystander = tmp_path / "bystander"
+    with open(bystander, "wb"):
+        gate.wait()
+        _join_writers()
+    assert interrupted, "the save never waited for a writer"
+    assert not lost, f"descriptors {lost} were closed while their writer was still writing through them"
+    assert os.path.getsize(bystander) == 0, "an interrupted save's writer wrote into a file it did not open"
+    assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
+    assert os.listdir(tmp_path) == ["bystander"], "no checkpoint and no staging directory left"
+
+
+def test_a_shard_is_freed_before_its_budget_is_released(tmp_path, monkeypatch):
+    """The writer lets go of a shard's host buffers before it releases the shard's budget: otherwise the producer is
+    told the bytes are free while they are still held, and the host buffers in flight outgrow max_inflight_bytes."""
+    model, opt = _trained_pair()
+    views, alive_at_release = [], []
+    real_logical_bytes = _save._logical_bytes
+
+    def recorded_logical_bytes(view, sizes, itemsize):
+        out = real_logical_bytes(view, sizes, itemsize)
+        views.append(weakref.ref(out))
+        return out
+
+    class _Checked(_save._ByteBudget):
+        def release(self, nbytes: int) -> None:
+            alive_at_release.append(sum(ref() is not None for ref in views))
+            super().release(nbytes)
+
+    monkeypatch.setattr(_save, "_logical_bytes", recorded_logical_bytes)
+    monkeypatch.setattr(_save, "_ByteBudget", _Checked)
+    dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, threads=1)  # one writer, one shard at a time
+    assert views and len(alive_at_release) == len(views), "every shard written released its budget"
+    assert not any(alive_at_release), f"shards still held when their budget was released: {alive_at_release}"
+
+
+@pytest.mark.timeout(120)  # a writer that kept the failed write's budget would leave save waiting for it forever
+def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
+    """The second write fails. Save raises that error, not a later one; writes nothing after it; does not wait for the
+    budget the failed write held; and leaves no descriptor open and no directory behind. With a one-byte budget one
+    key is in flight at a time, so the producer is waiting for the failed write's budget when it fails."""
+    model, opt = _trained_pair()
+    calls = []
+    real_pwrite_all = _save.pwrite_all
+
+    def failing_second_write(fd, view, offset):
+        calls.append(offset)
+        if len(calls) == 2:
+            raise OSError(errno.ENOSPC, "injected: no space left on device")
+        real_pwrite_all(fd, view, offset)
+
+    monkeypatch.setattr(_save, "pwrite_all", failing_second_write)
+    open_fds = len(os.listdir("/proc/self/fd"))
+    with expect_error(OSError, "injected: no space left on device"):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, max_inflight_bytes=1)
+    assert len(calls) == 2, f"{len(calls)} writes: nothing may be written after the failed one"
+    assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
+    assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):

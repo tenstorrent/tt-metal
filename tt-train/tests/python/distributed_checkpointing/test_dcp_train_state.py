@@ -18,7 +18,7 @@ import pytest
 import torch
 import ttnn
 
-from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws
+from dcp_oracle import MISREAD_RNG, WRONG_LENGTH_RNG, Loader, advance_generators, host_draws, set_ttml_token
 
 import ttml
 from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler, StepScheduler
@@ -74,6 +74,18 @@ def test_every_generator_comes_back_exactly():
     assert ctx.get_generator_state() == own["ttml"]
     # The same draws again, and the ttml generator reaches the same state through them (nothing drew from it).
     assert (host_draws(), ctx.get_generator_state()) == expected
+
+
+def test_numpy_state_right_after_seeding_comes_back():
+    """Right after ``np.random.seed`` numpy's position is 624, one past its last word, so the next draw regenerates the
+    words. The position check takes 624."""
+    np.random.seed(17)
+    block = capture_rng(world_rank=0)
+    assert block["ranks"]["0"]["numpy"]["pos"] == 624
+    expected = float(np.random.random())
+    np.random.seed(18)
+    assert "rng.numpy" in restore_rng(block, world_rank=0)
+    assert float(np.random.random()) == expected
 
 
 def test_generator_without_stored_state_warns(monkeypatch):
@@ -312,12 +324,20 @@ def test_the_ttml_text_must_have_the_form_this_build_writes(monkeypatch, expect_
     other_form = 624 if this_form == 625 else 625
     other = json.loads(json.dumps(block))
     other["ranks"]["0"]["ttml"] = " ".join(tokens[:624] + ["0"] * (other_form - 624))
-    with expect_error(CheckpointError, f"is not the {this_form} tokens this build writes .*it has {other_form}"):
+    with expect_error(CheckpointError, f"has {other_form} tokens, not the {this_form} this build writes .*other C"):
         check_train_state({"rng": other}, rng=True, world_rank=0)
+    # The right count, one bad token: the refusal names it, and says nothing of the other library.
+    bad = json.loads(json.dumps(block))
+    set_ttml_token(bad["ranks"]["0"], 5, "x")
+    with expect_error(
+        CheckpointError, r"token 5 of the ttml generator state, 'x', is not an ASCII decimal number"
+    ) as e:
+        check_train_state({"rng": bad}, rng=True, world_rank=0)
+    assert "standard library" not in str(e.value)
 
     monkeypatch.setattr(_train_state, "_mt19937_text_tokens", lambda: other_form)  # a build with the other library
     check_train_state({"rng": other}, rng=True, world_rank=0)  # its own form decodes
-    with expect_error(CheckpointError, f"is not the {other_form} tokens this build writes .*it has {this_form}"):
+    with expect_error(CheckpointError, f"has {this_form} tokens, not the {other_form} this build writes .*other C"):
         check_train_state({"rng": block}, rng=True, world_rank=0)
 
 
