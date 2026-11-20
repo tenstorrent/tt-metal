@@ -4,6 +4,9 @@
 
 """DeepSeek with ``use_tp`` on a [1, 2] mesh.
 
+The hidden state must be identical on both TP ranks: the dense FFN runs the fused SwiGLU on sharded
+weights, so its partial outputs need the all-reduce the parallel layers would do.
+
 The vocab-parallel loss must give the same loss and gradients as a plain loss.
 ``examples/train/train.py`` and ``SFTTrainer`` train every TP model with
 ``vocab_parallel_cross_entropy_loss``, which expects each TP rank to hold its own vocab shard of
@@ -64,6 +67,23 @@ def _loss_and_grads(model, optimizer, loss_fn, tokens):
     norm_grad = _device_slices(model.parameters()["DeepSeek/norm/gamma"].get_grad())[0]
     ttml.autograd.AutoContext.get_instance().reset_graph()
     return loss_value, head_grad, norm_grad
+
+
+def test_tp_hidden_state_is_replicated(tp_mesh):
+    """The dense FFN's partial outputs are all-reduced, so every TP rank carries the same hidden state."""
+    ttml.manual_seed(1234)
+    model = _model(128)
+    tokens = ttml.autograd.Tensor.from_numpy(
+        np.random.default_rng(0).integers(0, 128, size=(BATCH, 1, 1, SEQ)).astype(np.uint32),
+        ttnn.Layout.ROW_MAJOR,
+        ttnn.DataType.UINT32,
+    )
+    x = model.tok_emb(tokens)
+    block = model.blocks[0]
+    x = ttml.ops.binary.add(x, block.attn(block.attn_norm(x)))
+    ffn = _device_slices(block.ffn(block.ffn_norm(x)).get_value())
+    np.testing.assert_allclose(ffn[1], ffn[0], rtol=0, atol=1e-6)
+    ttml.autograd.AutoContext.get_instance().reset_graph()
 
 
 @pytest.mark.parametrize("vocab", [128, 96])
