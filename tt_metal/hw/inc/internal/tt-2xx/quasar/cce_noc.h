@@ -41,7 +41,7 @@ constexpr uint32_t kRespVc = overlay::CMDBUF_WR_RESP_VC;
 
 FORCE_INLINE volatile CceNocRoutes& routes() {
     return *reinterpret_cast<volatile CceNocRoutes*>(
-        static_cast<uintptr_t>(MEM_IERISC_NOC_ROUTES_BASE + MEM_IERISC_UNCACHED_BASE));
+        static_cast<uintptr_t>(MEM_IERISC_NOC_ROUTES_BASE + MEM_L1_UNCACHED_BASE));
 }
 
 // Stops this hart: records @p fault and @p detail in the routes, where the host reads them, then asserts and spins.
@@ -89,9 +89,12 @@ FORCE_INLINE Target lookup(uint64_t noc_addr) {
     halt(Fault::Unmapped, noc_addr);
 }
 
-// The SRAM offset of @p flat, a flat address of this CCE in either view. Halts with Fault::OutsideSram above both.
+// The SRAM offset of @p flat, a flat address of this CCE in either view: cached from ETH_CCE_LOCAL_BASE, uncached
+// MEM_L1_UNCACHED_OFFSET above that. Halts with Fault::OutsideSram outside both.
 FORCE_INLINE uint64_t sram_offset(uint64_t flat) {
-    const uint64_t offset = flat >= MEM_IERISC_UNCACHED_BASE ? flat - MEM_IERISC_UNCACHED_BASE : flat;
+    const uint64_t cached = flat >= MEM_IERISC_UNCACHED_BASE ? flat - MEM_L1_UNCACHED_OFFSET : flat;
+    // Below the CCE's base the difference wraps, so one comparison refuses both sides.
+    const uint64_t offset = cached - ETH_CCE_LOCAL_BASE;
     if (offset >= MEM_IERISC_L1_SIZE) {
         halt(Fault::OutsideSram, flat);
     }
