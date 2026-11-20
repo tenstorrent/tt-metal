@@ -270,3 +270,30 @@ the emu tool's output pump, so EMU_STATE_DIR and run logs now live under /locald
 
 Atomics: posted noc_semaphore_inc from a CCE issues one increment and never completes (the destination is unchanged and
 the command buffer stays busy); KeraunosNocAtomic times out. See the atomics section for follow-up.
+
+## Remote atomics probes (2026-11-20, mmk)
+
+cce-dv's `l1_atomic_accum.cpp` / `cce_dv.hpp` give the IDMA L1 accumulate encodings: operation 9 with format
+3 INT32 (sign-magnitude, saturating), 4 INT32_NORMAL (two's complement), 5 UINT32 (saturating), 6 INT8, 7 UINT8.
+The API default (format 0) is not a valid format, which is why the first probe copied.
+
+IDMA accumulate (`KeraunosAtomicsProbe.*`, `KeraunosAccumulateForms.*`):
+
+| Issuer | Destination address form | Result |
+|---|---|---|
+| HSIO0 CCE0 | own SRAM, SoC form 0x22800000 + offset | adds (formats 3-7) |
+| HSIO0 CCE0 | own SRAM, package form 0x12_0680_0000 + offset | plain copy |
+| HSIO0 CCE0 | peer CCE1, SoC form 0x22C00000 + offset | adds |
+| HSIO0 CCE1 | own SRAM, SoC form 0x22C00000 + offset | adds |
+| HSIO0 CCE1 | CCE0, SoC form 0x22800000 + offset | destination unchanged |
+| HSIO0 CCE0 | HSIO1, SoC form 0x26800000 + offset (guess) | destination unchanged |
+| HSIO0 CCE0 | HSIO1, package form | plain copy |
+
+100 + 0xffffffff: format 4 gives 99 (with or without saturation); format 3 gives 0xffffffff saturated or 0xffffff9b;
+format 5 saturates to 0xffffffff. Format 4 is the int32 add for counters.
+
+NOC (non-IDMA) path from a CCE (`KeraunosNocAtomic.*`, `KeraunosNocProbe.*`): nothing completes. A posted
+`noc_semaphore_inc` issues once and the command buffer never frees; an overlay `noc_write_cmdbuf` to the CCE's own
+SRAM is issued but never acked and the data does not arrive; overlay `noc_atomic_increment_cmdbuf` to own and peer
+SRAM times out. Either a CCE has no NOC endpoint behind the overlay NOC command buffer (all its SRAM traffic is AXI
+through IDMA), or the virtual coordinates used are wrong for it; not yet determined.

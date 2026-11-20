@@ -458,5 +458,161 @@ protected:
 TEST_F(KeraunosFromMimirCce1, M1CceWritesHsio2Cce1Sram) { expect_mimir_to_hsio(1, 2, /*read=*/false, 0x1A1); }
 TEST_F(KeraunosFromMimirCce1, M1CceReadsHsio2Cce1Sram) { expect_mimir_to_hsio(1, 2, /*read=*/true, 0x1A2); }
 
+// IDMA L1 accumulate (format 4, INT32_NORMAL, operation 9) across chiplets and on Mimir CCEs. The accumulate adds when
+// the destination is reached through the issuing tile's SoC-local window; these cases find out what the D2D and
+// package routes do with it.
+class KeraunosMimirAccumulate : public KeraunosPaths {
+protected:
+    static constexpr uint32_t kWords = 16;
+    static constexpr uint32_t kRepeats = 3;
+    static constexpr uint32_t kStart = 100;
+
+    std::vector<uint32_t> start_words() const {
+        std::vector<uint32_t> s(kWords);
+        for (uint32_t i = 0; i < kWords; i++) {
+            s[i] = kStart + i;
+        }
+        return s;
+    }
+    std::vector<uint32_t> added_words() const {
+        auto s = start_words();
+        for (auto& v : s) {
+            v += kRepeats;
+        }
+        return s;
+    }
+
+    std::vector<uint32_t> accum_args(uint64_t src, uint64_t dst, uint32_t status_offset) const {
+        std::vector<uint32_t> args = split(src);
+        const auto d = split(dst);
+        args.insert(args.end(), d.begin(), d.end());
+        args.insert(args.end(), {kWords * 4, kRepeats, /*fmt=*/4, /*op=*/9, /*flags=*/0, status_offset});
+        return args;
+    }
+
+    void launch_mesh(Program& program) {
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(mesh_->mesh_command_queue(), workload, /*blocking=*/true);
+    }
+
+    // The Mimir CCE runs the accumulate; src and dst are addresses as that CCE issues them. Source and destination
+    // blocks live in the CCE's own SRAM at the unreserved base + 0x1000 / + 0x2000; the status block at the base.
+    std::vector<uint32_t> run_on_mimir(uint32_t mimir_cce, uint64_t src, uint64_t dst, bool dst_is_own) {
+        const CoreCoord core = logical_mimir_cce_core(soc_desc_of(device_), mimir_cce);
+        const uint64_t noc = mimir_cce_noc_addr();
+        const std::vector<uint32_t> ones(kWords, 1);
+        const auto start = start_words();
+        std::vector<uint32_t> zero(8, 0);
+        write_mimir_cce_sram(device_, core, noc, zero.data(), zero.size() * 4);
+        write_mimir_cce_sram(device_, core, noc + 0x1000, ones.data(), kWords * 4);
+        if (dst_is_own) {
+            write_mimir_cce_sram(device_, core, noc + 0x2000, start.data(), kWords * 4);
+        }
+        Program program = CreateProgram();
+        const KernelHandle k = CreateKernel(
+            program, std::string(kKernelDir) + "keraunos_cce_idma_accum_cfg.cpp", core, DramConfig{.noc = NOC::NOC_0});
+        SetRuntimeArgs(program, k, core, accum_args(src, dst, mimir_cce_offset()));
+        launch_mesh(program);
+        std::vector<uint32_t> status(8, 0);
+        read_mimir_cce_sram(device_, core, noc, status.data(), status.size() * 4);
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        std::vector<uint32_t> got(kWords, 0);
+        if (dst_is_own) {
+            read_mimir_cce_sram(device_, core, noc + 0x2000, got.data(), kWords * 4);
+        }
+        return got;
+    }
+
+    void report(const char* what, uint64_t dst, const std::vector<uint32_t>& got) {
+        std::cout << fmt::format("{} dst {:#x}: {}", what, dst, fmt::join(got, " ")) << std::endl;
+        EXPECT_EQ(got, added_words()) << (got[0] == 1 ? "acts as a copy" : "neither a copy nor an add");
+    }
+};
+
+// HSIO 2 CCE 0 (on D2D2) accumulates into a Mimir CCE's SRAM through its package address.
+TEST_F(KeraunosMimirAccumulate, KeraunosToMimirCceSram) {
+    const auto k = hsio_core(2, 0);
+    const auto mimir_cce = first_cce_on_mimir(1);
+    ASSERT_TRUE(k.has_value() && mimir_cce.has_value());
+    const CoreCoord core = logical_mimir_cce_core(soc_desc_of(device_), *mimir_cce);
+    write_words(*k, kSrcOffset, std::vector<uint32_t>(kWords, 1));
+    write_words(*k, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+    const auto start = start_words();
+    write_mimir_cce_sram(device_, core, mimir_cce_noc_addr() + 0x2000, start.data(), kWords * 4);
+    const uint64_t dst = mimir_cce_sram_spa(*mimir_cce, mimir_cce_offset() + 0x2000);
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        std::string(kKernelDir) + "keraunos_cce_idma_accum_cfg.cpp",
+        k->logical,
+        EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+    SetRuntimeArgs(program, kernel, k->logical, accum_args(global_addr(*k, kSrcOffset), dst, unreserved_ + kStatusOffset));
+    launch(program, *k);
+    std::vector<uint32_t> got(kWords, 0);
+    read_mimir_cce_sram(device_, core, mimir_cce_noc_addr() + 0x2000, got.data(), kWords * 4);
+    report("K->Mimir", dst, got);
+}
+
+// A Mimir CCE accumulates into its own SRAM through the route table's address (the package form).
+TEST_F(KeraunosMimirAccumulate, MimirOwnSramRouteForm) {
+    const auto c = first_cce_on_mimir(1);
+    ASSERT_TRUE(c.has_value());
+    const uint64_t base = mimir_cce_sram_spa(*c, mimir_cce_offset());
+    report("Mimir own (route)", base + 0x2000, run_on_mimir(*c, base + 0x1000, base + 0x2000, true));
+}
+
+// A Mimir CCE accumulates into its own SRAM through cce-dv's Mimir-local window (SRAM_LBASE 0x1280000000).
+TEST_F(KeraunosMimirAccumulate, MimirOwnSramLocalForm) {
+    const auto c = first_cce_on_mimir(1);
+    ASSERT_TRUE(c.has_value());
+    const uint64_t base = 0x1280000000ULL + mimir_cce_offset();
+    report("Mimir own (local)", base + 0x2000, run_on_mimir(*c, base + 0x1000, base + 0x2000, true));
+}
+
+// A Mimir CCE accumulates into HSIO 2 CCE 0's SRAM through the Keraunos package address.
+TEST_F(KeraunosMimirAccumulate, MimirToKeraunosSram) {
+    const auto k = hsio_core(2, 0);
+    const auto c = first_cce_on_mimir(1);
+    ASSERT_TRUE(k.has_value() && c.has_value());
+    write_words(*k, kDstOffset, start_words());
+    const uint64_t base = mimir_cce_sram_spa(*c, mimir_cce_offset());
+    const uint64_t dst = global_addr(*k, kDstOffset);
+    run_on_mimir(*c, base + 0x1000, dst, false);
+    report("Mimir->K", dst, read_words(*k, kDstOffset, kWords));
+}
+
+// CCE1 accumulating to CCE0's SoC address left CCE0 unchanged; see whether it landed in CCE1's own SRAM instead.
+TEST_F(KeraunosMimirAccumulate, Cce1ToCce0SocWhereItLands) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    const uint64_t soc0 = 0x22800000ULL;
+    const uint64_t soc1 = 0x22C00000ULL;
+    write_words(*b, kSrcOffset, std::vector<uint32_t>(kWords, 1));
+    write_words(*a, kDstOffset, start_words());
+    write_words(*b, kDstOffset, start_words());
+    write_words(*b, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+    Program program = CreateProgram();
+    const KernelHandle kernel = CreateKernel(
+        program,
+        std::string(kKernelDir) + "keraunos_cce_idma_accum_cfg.cpp",
+        b->logical,
+        EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+    SetRuntimeArgs(
+        program,
+        kernel,
+        b->logical,
+        accum_args(soc1 + unreserved_ + kSrcOffset, soc0 + unreserved_ + kDstOffset, unreserved_ + kStatusOffset));
+    launch(program, *b);
+    const auto on0 = read_words(*a, kDstOffset, kWords);
+    const auto on1 = read_words(*b, kDstOffset, kWords);
+    std::cout << fmt::format("CCE1 -> {:#x}: CCE0 dst {} | CCE1 dst {}", soc0, fmt::join(on0, " "), fmt::join(on1, " "))
+              << std::endl;
+    const auto status = read_words(*b, kStatusOffset, kStatusWords);
+    std::cout << fmt::format("status: {:#010x}", fmt::join(status, " ")) << std::endl;
+    EXPECT_EQ(on0, added_words());
+}
+
 }  // namespace
 }  // namespace tt::tt_metal

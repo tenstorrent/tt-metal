@@ -220,5 +220,220 @@ TEST_F(KeraunosNocAtomic, IncrementOtherTileSram) {
     expect_increment(*a, *b);
 }
 
+// IDMA accumulate through cce-dv's SoC-map SRAM addresses (KERAUNOS_TEST: HSIO tiles 0x4000000 apart from 0x20000000,
+// SRAM 0x2800000 into a tile, CCE1 0x400000 above CCE0). On HSIO 0 CCE 0's own SRAM this form adds where the package
+// address only copies; these cases find out which other destinations it reaches.
+class KeraunosAccumulateForms : public KeraunosCceTest {
+protected:
+    static uint64_t soc_sram(uint32_t hsio, uint32_t cce) {
+        return 0x20000000ULL + hsio * 0x4000000ULL + 0x2800000ULL + cce * 0x400000ULL;
+    }
+
+    // Writes `src_words` at kSrcOffset of `src_core` and `start` at kDstOffset of `dst_core`, has `runner` accumulate
+    // `repeats` times from `src` to `dst`, and returns the destination words.
+    std::vector<uint32_t> accumulate(
+        const Hsio& runner,
+        const Hsio& src_core,
+        uint64_t src,
+        const Hsio& dst_core,
+        uint64_t dst,
+        const std::vector<uint32_t>& src_words,
+        const std::vector<uint32_t>& start,
+        uint32_t fmt,
+        uint32_t repeats,
+        bool no_sat) {
+        write_words(src_core, kSrcOffset, src_words);
+        write_words(dst_core, kDstOffset, start);
+        write_words(runner, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+        Program program = CreateProgram();
+        const KernelHandle k = CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_idma_accum_cfg.cpp",
+            runner.logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+        std::vector<uint32_t> args = split(src);
+        const auto d = split(dst);
+        args.insert(args.end(), d.begin(), d.end());
+        args.insert(
+            args.end(),
+            {static_cast<uint32_t>(src_words.size() * 4),
+             repeats,
+             fmt,
+             /*op=*/9,
+             no_sat ? 2u : 0u,
+             unreserved_ + kStatusOffset});
+        SetRuntimeArgs(program, k, runner.logical, args);
+        launch(program, runner);
+        const auto status = read_words(runner, kStatusOffset, kStatusWords);
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        return read_words(dst_core, kDstOffset, static_cast<uint32_t>(start.size()));
+    }
+
+    // Accumulates ones into kStart + i three times with format 4 (INT32_NORMAL) and checks for kStart + i + 3.
+    void expect_adds(const Hsio& runner, const Hsio& src_core, uint64_t src, const Hsio& dst_core, uint64_t dst) {
+        std::vector<uint32_t> start(kWords);
+        std::vector<uint32_t> expected(kWords);
+        for (uint32_t i = 0; i < kWords; i++) {
+            start[i] = kStart + i;
+            expected[i] = kStart + i + kRepeats;
+        }
+        const auto got = accumulate(
+            runner, src_core, src, dst_core, dst, std::vector<uint32_t>(kWords, 1), start, 4, kRepeats, false);
+        std::cout << fmt::format("dst {:#x}: {}", dst, fmt::join(got, " ")) << std::endl;
+        EXPECT_EQ(got, expected) << (got[0] == 1 ? "acts as a copy" : "neither a copy nor an add");
+    }
+};
+
+TEST_F(KeraunosAccumulateForms, Cce0OwnSram) {
+    const auto a = hsio_core(0, 0);
+    ASSERT_TRUE(a.has_value());
+    expect_adds(*a, *a, soc_sram(0, 0) + unreserved_ + kSrcOffset, *a, soc_sram(0, 0) + unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce0ToPeerCce1) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_adds(*a, *a, soc_sram(0, 0) + unreserved_ + kSrcOffset, *b, soc_sram(0, 1) + unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce1OwnSram) {
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(b.has_value());
+    expect_adds(*b, *b, soc_sram(0, 1) + unreserved_ + kSrcOffset, *b, soc_sram(0, 1) + unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce1ToCce0) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_adds(*b, *b, soc_sram(0, 1) + unreserved_ + kSrcOffset, *a, soc_sram(0, 0) + unreserved_ + kDstOffset);
+}
+
+TEST_F(KeraunosAccumulateForms, Cce0ToOtherTileSocForm) {
+    const auto a = hsio_core(0, 0);
+    const auto c = hsio_core(1, 0);
+    ASSERT_TRUE(a.has_value() && c.has_value());
+    expect_adds(*a, *a, soc_sram(0, 0) + unreserved_ + kSrcOffset, *c, soc_sram(1, 0) + unreserved_ + kDstOffset);
+}
+
+// Source in the SoC form, destination another tile through the package address (how cce-dv reaches other tiles).
+TEST_F(KeraunosAccumulateForms, Cce0ToOtherTilePackageDestination) {
+    const auto a = hsio_core(0, 0);
+    const auto c = hsio_core(1, 0);
+    ASSERT_TRUE(a.has_value() && c.has_value());
+    expect_adds(*a, *a, soc_sram(0, 0) + unreserved_ + kSrcOffset, *c, global_addr(*c, kDstOffset));
+}
+
+// Tells the int32 formats apart: 100 plus -1 (0xFFFFFFFF) once. Logs every result; checks only that format 4
+// (INT32_NORMAL, two's complement) gives 99.
+TEST_F(KeraunosAccumulateForms, Int32FormatsWithNegativeValue) {
+    const auto a = hsio_core(0, 0);
+    ASSERT_TRUE(a.has_value());
+    const uint64_t src = soc_sram(0, 0) + unreserved_ + kSrcOffset;
+    const uint64_t dst = soc_sram(0, 0) + unreserved_ + kDstOffset;
+    for (const uint32_t fmt : {3u, 4u, 5u}) {
+        for (const bool no_sat : {false, true}) {
+            const auto got = accumulate(
+                *a, *a, src, *a, dst, std::vector<uint32_t>(kWords, 0xFFFFFFFFu), std::vector<uint32_t>(kWords, 100u),
+                fmt, 1, no_sat);
+            std::cout << fmt::format("fmt {} no_sat {}: 100 + 0xffffffff -> {:#010x}", fmt, no_sat, got[0]) << std::endl;
+            if (fmt == 4) {
+                EXPECT_EQ(got[0], 99u) << "fmt 4 no_sat " << no_sat;
+            }
+        }
+    }
+}
+
+// Plain NOC traffic (overlay command buffer, not IDMA) from a CCE. Run these last: a NOC path that does not work hangs
+// the core until the launch times out.
+class KeraunosNocProbe : public KeraunosCceTest {
+protected:
+    // Returns the status block; `dst_word` receives the destination word after the run.
+    std::vector<uint32_t> run(const Hsio& src, const Hsio& dst, uint32_t mode, uint32_t n, uint32_t incr) {
+        write_words(src, kStatusOffset, std::vector<uint32_t>(kStatusWords, 0));
+        const CoreCoord my = device_->virtual_core_from_logical_core(src.logical, CoreType::ETH);
+        const CoreCoord to = device_->virtual_core_from_logical_core(dst.logical, CoreType::ETH);
+        Program program = CreateProgram();
+        const KernelHandle k = CreateKernel(
+            program,
+            std::string(kKernelDir) + "keraunos_cce_noc_probe.cpp",
+            src.logical,
+            EthernetConfig{.eth_mode = Eth::IDLE, .noc = NOC::NOC_0});
+        SetRuntimeArgs(
+            program,
+            k,
+            src.logical,
+            {static_cast<uint32_t>(my.x),
+             static_cast<uint32_t>(my.y),
+             static_cast<uint32_t>(to.x),
+             static_cast<uint32_t>(to.y),
+             unreserved_ + kDstOffset,
+             unreserved_ + kSrcOffset,
+             mode,
+             n,
+             incr,
+             unreserved_ + kStatusOffset});
+        launch(program, src);
+        return read_words(src, kStatusOffset, kStatusWords);
+    }
+
+    void expect_write(const Hsio& src, const Hsio& dst) {
+        std::vector<uint32_t> data(16);
+        for (uint32_t i = 0; i < data.size(); i++) {
+            data[i] = 0x50C00000u | i;
+        }
+        write_words(src, kSrcOffset, data);
+        write_words(dst, kDstOffset, std::vector<uint32_t>(data.size(), 0));
+        const auto status = run(src, dst, 0, data.size() * 4, 0);
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        EXPECT_EQ(read_words(dst, kDstOffset, data.size()), data);
+    }
+
+    void expect_increment(const Hsio& src, const Hsio& dst) {
+        constexpr uint32_t kBase = 40;
+        constexpr uint32_t kCount = 5;
+        constexpr uint32_t kIncr = 3;
+        write_words(dst, kDstOffset, {kBase});
+        const auto status = run(src, dst, 1, kCount, kIncr);
+        uint32_t value = 0;
+        for (int i = 0; i < 100; i++) {
+            value = read_words(dst, kDstOffset, 1)[0];
+            if (value == kBase + kCount * kIncr) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        EXPECT_EQ(status[4], kAcked) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+        EXPECT_EQ(value, kBase + kCount * kIncr) << fmt::format("status: {:#010x}", fmt::join(status, " "));
+    }
+};
+
+TEST_F(KeraunosNocProbe, WriteOwnSram) {
+    const auto a = hsio_core(0, 0);
+    ASSERT_TRUE(a.has_value());
+    expect_write(*a, *a);
+}
+
+TEST_F(KeraunosNocProbe, WritePeerCce) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_write(*a, *b);
+}
+
+TEST_F(KeraunosNocProbe, AtomicIncrementOwnSram) {
+    const auto a = hsio_core(0, 0);
+    ASSERT_TRUE(a.has_value());
+    expect_increment(*a, *a);
+}
+
+TEST_F(KeraunosNocProbe, AtomicIncrementPeerCce) {
+    const auto a = hsio_core(0, 0);
+    const auto b = hsio_core(0, 1);
+    ASSERT_TRUE(a.has_value() && b.has_value());
+    expect_increment(*a, *b);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal
