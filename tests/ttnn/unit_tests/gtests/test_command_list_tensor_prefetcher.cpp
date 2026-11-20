@@ -155,12 +155,10 @@ TEST_F(CommandListTensorPrefetcherFixture, EveryReplayResendsTheRecordedRequest)
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
         builder.add(device_->mesh_command_queue(), validator);
         auto command_list = builder.build(device_->mesh_command_queue());
-        builder.deallocate();
 
         for (uint32_t i = 0; i < kReplayCount; ++i) {
             EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
         }
-        command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);
 }
@@ -185,12 +183,9 @@ TEST_F(CommandListTensorPrefetcherFixture, RecordedRequestsDoNotOutliveThePrefet
     builder.clear();
     metal_exp::AddTensorPrefetcherRequest(builder, prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
     builder.add(device_->mesh_command_queue(), validator);
-    command_list.deallocate();
     command_list = builder.build(device_->mesh_command_queue());
-    builder.deallocate();
 
     EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
-    command_list.deallocate();
     metal_exp::StopTensorPrefetcher(*device_);
 }
 
@@ -202,13 +197,20 @@ TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSen
     const auto other_manager = device_->create_sub_device_manager({full_grid_sub_device}, 3200);
     metal_exp::StartTensorPrefetcher(*device_, {});
     {
-        CommandListBuilder builder(*device_);
-        metal_exp::AddTensorPrefetcherRequest(builder, prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
-        auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
-            device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
-        builder.add(device_->mesh_command_queue(), validator);
-        auto command_list = builder.build(device_->mesh_command_queue());
-        builder.deallocate();
+        // The builder must be destroyed before loading another sub-device manager.
+        auto command_list = [&] {
+            CommandListBuilder builder(*device_);
+            metal_exp::AddTensorPrefetcherRequest(builder, prefetch.pipe_refs(), std::nullopt, prefetch.inputs());
+            auto validator = ttnn::operations::experimental::test::make_tensor_prefetcher_pipe_validator_workload(
+                device_,
+                prefetch.weight,
+                /*num_layers=*/1,
+                /*print_stride=*/0,
+                prefetch.pipes,
+                prefetch.bank_to_receivers);
+            builder.add(device_->mesh_command_queue(), validator);
+            return builder.build(device_->mesh_command_queue());
+        }();
 
         device_->load_sub_device_manager(other_manager);
         EXPECT_ANY_THROW(EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true));
@@ -217,7 +219,6 @@ TEST_F(CommandListTensorPrefetcherFixture, ReplayUnderAnotherSubDeviceManagerSen
         // Had the rejected replay sent its request, this replay's consumer would read the stale copy, and the copy
         // it leaves behind would still be in the pipes at stop.
         EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
-        command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);
     device_->remove_sub_device_manager(other_manager);

@@ -16,6 +16,7 @@
 #include <nanobind/stl/string.h>
 
 #include <tt-metalium/mesh_device.hpp>
+#include <tt_stl/assert.hpp>
 
 #include "ttnn/command_list.hpp"
 #include "ttnn/common/queue_id.hpp"
@@ -135,7 +136,10 @@ void py_module_types(nb::module_& mod) {
             "Drops everything recorded so far and keeps the device reservation. Not allowed while recording.")
         .def(
             "deallocate",
-            &CommandListBuilder::deallocate,
+            [](CommandListBuilder& self) {
+                TT_FATAL(!self.is_recording(), "Cannot deallocate a recording CommandListBuilder");
+                [[maybe_unused]] const CommandListBuilder released = std::move(self);
+            },
             nb::call_guard<nb::gil_scoped_release>(),
             "Releases the device reservation and invalidates the builder. Not allowed while recording.")
         .def_prop_ro("is_recording", &CommandListBuilder::is_recording);
@@ -196,7 +200,7 @@ void py_module_types(nb::module_& mod) {
             )doc")
         .def(
             "deallocate",
-            &CommandList::deallocate,
+            [](CommandList& self) { [[maybe_unused]] const CommandList released = std::move(self); },
             nb::call_guard<nb::gil_scoped_release>(),
             "Releases device resources and invalidates the list. Repeated calls have no effect.")
         .def_prop_ro("cq_id", &CommandList::cq_id);

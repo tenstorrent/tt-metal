@@ -358,11 +358,9 @@ TEST_F(DispatchEngineTensorPrefetcherFixture, SendsRecordedRequestOnEveryCommand
             device_, prefetch.weight, /*num_layers=*/1, /*print_stride=*/0, prefetch.pipes, prefetch.bank_to_receivers);
         builder.add(device_->mesh_command_queue(), validator);
         auto command_list = builder.build(device_->mesh_command_queue());
-        builder.deallocate();
         for (uint32_t i = 0; i < kReplayCount; ++i) {
             tt::tt_metal::EnqueueCommandList(device_->mesh_command_queue(), command_list, /*blocking=*/true);
         }
-        command_list.deallocate();
     }
     metal_exp::StopTensorPrefetcher(*device_);
 }

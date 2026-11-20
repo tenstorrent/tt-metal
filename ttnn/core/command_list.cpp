@@ -462,6 +462,23 @@ void CmdListBinder::claim_arg(bool common, const tt::tt_metal::KernelSpecName& k
 CommandListBuilder::CommandListBuilder(tt::tt_metal::distributed::MeshDevice& mesh_device) :
     metal_builder_(mesh_device) {}
 
+namespace {
+
+CommandListBuilder& not_recording(CommandListBuilder& builder) {
+    TT_FATAL(!builder.is_recording(), "Cannot move a recording CommandListBuilder");
+    return builder;
+}
+
+}  // namespace
+
+// Bind scopes only exist while recording, so there are none to move.
+CommandListBuilder::CommandListBuilder(CommandListBuilder&& other) noexcept :
+    metal_builder_(std::move(not_recording(other).metal_builder_)),
+    failed_(other.failed_),
+    layout_(std::move(other.layout_)),
+    op_owned_tensors_(std::move(other.op_owned_tensors_)),
+    recorded_programs_(other.recorded_programs_) {}
+
 CommandListBuilder::~CommandListBuilder() {
     if (t_recording == this) {
         t_recording = nullptr;
@@ -520,13 +537,6 @@ void CommandListBuilder::clear() {
     layout_.clear();
     op_owned_tensors_.clear();
     failed_ = false;
-}
-
-void CommandListBuilder::deallocate() {
-    TT_FATAL(!recording_, "Cannot deallocate a recording CommandListBuilder");
-    metal_builder_.deallocate();
-    layout_.clear();
-    op_owned_tensors_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandListBuilder::device() const { return metal_builder_.device(); }
@@ -670,11 +680,6 @@ void CommandList::update_args(const std::unordered_map<std::string, CmdListValue
         }
     }
     metal_list_.update_args(patch, blocking);
-}
-
-void CommandList::deallocate() {
-    metal_list_.deallocate();
-    op_owned_tensors_.clear();
 }
 
 tt::tt_metal::distributed::MeshDevice& CommandList::device() const { return metal_list_.device(); }

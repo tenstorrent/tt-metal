@@ -1693,26 +1693,26 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     builder.add(cq, workload);
     auto command_list = builder.build(cq);
 
-    // Moving transfers the recording and reservation; explicit deallocation invalidates
-    // the destination and releases the reservation for a replacement builder.
-    CommandListBuilder moved_builder(std::move(builder));
-    EXPECT_THAT(
-        [&] { builder.add(cq, workload); },  // NOLINT(bugprone-use-after-move)
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
-    EXPECT_EQ(&moved_builder.device(), mesh_device_.get());
-    moved_builder.deallocate();
-    EXPECT_THAT(
-        [&] { (void)moved_builder.device(); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
-    EXPECT_THAT(
-        [&] { moved_builder.clear(); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
-    EXPECT_THAT(
-        [&] { moved_builder.add(cq, workload); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
-    EXPECT_THAT(
-        [&] { (void)moved_builder.build(cq); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been deallocated")));
+    // Moving transfers the recording and reservation and invalidates the source; destroying
+    // the destination releases the reservation for a replacement builder.
+    {
+        CommandListBuilder moved_builder(std::move(builder));
+        EXPECT_EQ(&moved_builder.device(), mesh_device_.get());
+        // NOLINTBEGIN(bugprone-use-after-move)
+        EXPECT_THAT(
+            [&] { (void)builder.device(); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
+        EXPECT_THAT(
+            [&] { builder.clear(); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
+        EXPECT_THAT(
+            [&] { builder.add(cq, workload); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
+        EXPECT_THAT(
+            [&] { (void)builder.build(cq); },
+            ThrowsMessage<std::runtime_error>(HasSubstr("CommandListBuilder has been moved from")));
+        // NOLINTEND(bugprone-use-after-move)
+    }
 
     EXPECT_NO_THROW({ CommandListBuilder replacement(*mesh_device_); });
 
@@ -1723,7 +1723,7 @@ TEST_F(CommandListTest, BuilderLifecyclePreservesBuiltLists) {
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
 }
 
-TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
+TEST_F(CommandListTest, CommandListMoveInvalidatesTheSource) {
     // Move the built list and verify only the destination remains usable.
     auto workload = make_l1_write_workload(*mesh_device_, kAddressA, kValueA, "list_lifecycle");
     auto& cq = mesh_device_->mesh_command_queue(0);
@@ -1732,32 +1732,24 @@ TEST_F(CommandListTest, CommandListMoveAndDeallocateInvalidateTheHandle) {
     auto command_list = builder.build(cq);
 
     CommandList moved_list(std::move(command_list));
+    // NOLINTBEGIN(bugprone-use-after-move)
     EXPECT_THAT(
-        [&] { EnqueueCommandList(cq, command_list, /*blocking=*/true); },  // NOLINT(bugprone-use-after-move)
+        [&] { EnqueueCommandList(cq, command_list, /*blocking=*/true); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
     EXPECT_THAT(
-        [&] { command_list.update_args({}); },  // NOLINT(bugprone-use-after-move)
+        [&] { (void)command_list.device(); },
         ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
+    EXPECT_THAT(
+        [&] { (void)command_list.cq_id(); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
+    EXPECT_THAT(
+        [&] { command_list.update_args({}); },
+        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been moved from")));
+    // NOLINTEND(bugprone-use-after-move)
 
     write_l1(mesh_device_, kAddressA, 0);
     EnqueueCommandList(cq, moved_list, /*blocking=*/true);
     EXPECT_EQ(read_l1(mesh_device_, kAddressA), kValueA);
-
-    // Explicit deallocation is idempotent and invalidates every remaining operation.
-    moved_list.deallocate();
-    moved_list.deallocate();
-    EXPECT_THAT(
-        [&] { EnqueueCommandList(cq, moved_list, /*blocking=*/true); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been deallocated")));
-    EXPECT_THAT(
-        [&] { (void)moved_list.device(); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been deallocated")));
-    EXPECT_THAT(
-        [&] { (void)moved_list.cq_id(); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been deallocated")));
-    EXPECT_THAT(
-        [&] { moved_list.update_args({}); },
-        ThrowsMessage<std::runtime_error>(HasSubstr("CommandList has been deallocated")));
 }
 
 TEST_F(CommandListTest, RejectsEmptyAndLegacyWorkloadsWithoutChangingTheRecording) {
@@ -1995,17 +1987,17 @@ TEST_F(CommandListTest, TracesAndCommandListsCanRunInSequenceButNotCoexist) {
     auto& cq = mesh_device_->mesh_command_queue(0);
 
     // A live builder, and then live lists on their own, block trace capture until the last list is
-    // released. The remaining list is released by its destructor rather than by deallocate().
+    // released. The builder and first list are destroyed when the lambda returns the second list.
     {
-        CommandListBuilder builder(*mesh_device_);
-        EXPECT_THAT(
-            [&] { (void)mesh_device_->begin_mesh_trace(cq); },
-            ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
-        builder.add(cq, list_workload);
-        auto first_list = builder.build(cq);
-        auto second_list = builder.build(cq);
-        builder.deallocate();
-        first_list.deallocate();
+        auto second_list = [&] {
+            CommandListBuilder builder(*mesh_device_);
+            EXPECT_THAT(
+                [&] { (void)mesh_device_->begin_mesh_trace(cq); },
+                ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));
+            builder.add(cq, list_workload);
+            auto first_list = builder.build(cq);
+            return builder.build(cq);
+        }();
         EXPECT_THAT(
             [&] { (void)mesh_device_->begin_mesh_trace(cq); },
             ThrowsMessage<std::runtime_error>(HasSubstr("while a CommandListBuilder or CommandList exists")));

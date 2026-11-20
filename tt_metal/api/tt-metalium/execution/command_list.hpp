@@ -86,7 +86,7 @@ struct CmdListArgPatch {
 
 /**
  * @brief Records MeshWorkloads for later replay.
- * Only one active builder may exist per MeshDevice.
+ * Only one active builder may exist per MeshDevice. Destruction releases the reservation.
  */
 class CommandListBuilder {
 public:
@@ -140,12 +140,6 @@ public:
     void clear();
 
     /**
-     * @brief Releases the active-builder reservation and invalidates the builder.
-     * Repeated calls have no effect.
-     */
-    void deallocate();
-
-    /**
      * @brief Implementation object, for Metal's experimental extensions of the builder. Not part of the stable API.
      */
     detail::CommandListBuilderImpl& impl();
@@ -186,12 +180,6 @@ public:
      * @param blocking  If true, waits until the patch has been written.
      */
     void update_args(const CmdListArgPatch& patch, bool blocking = false);
-
-    /**
-     * @brief Releases device resources and invalidates the handle.
-     * Repeated calls have no effect.
-     */
-    void deallocate();
 
 private:
     friend class detail::CommandListBuilderImpl;

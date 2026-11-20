@@ -54,16 +54,16 @@ using CmdListOpOwnedTensors = std::vector<std::shared_ptr<const std::vector<tt::
 // Only Metal 2.0 (ProgramSpec) programs can be recorded. Nothing needs to run before recording: recording compiles
 // each workload and uploads its kernel binaries.
 // Any error while recording invalidates the recording: call clear() and record again.
-// Not movable: the recording thread holds a pointer to it.
 class CommandListBuilder {
 public:
-    // Acquires Metal's builder reservation: one builder per MeshDevice.
+    // Acquires Metal's builder reservation: one builder per MeshDevice. Destruction releases it.
     explicit CommandListBuilder(tt::tt_metal::distributed::MeshDevice& mesh_device);
     ~CommandListBuilder();
 
     CommandListBuilder(const CommandListBuilder&) = delete;
     CommandListBuilder& operator=(const CommandListBuilder&) = delete;
-    CommandListBuilder(CommandListBuilder&&) = delete;
+    // `other` must not be recording: the recording thread holds a pointer to it.
+    CommandListBuilder(CommandListBuilder&& other) noexcept;
     CommandListBuilder& operator=(CommandListBuilder&&) = delete;
 
     // Device operations launched on the calling thread are recorded instead of enqueued until end_recording().
@@ -86,9 +86,6 @@ public:
 
     // Drops everything recorded so far, and the mark_failed() mark. Not allowed while recording.
     void clear();
-
-    // Releases the Metal reservation and invalidates the builder. Not allowed while recording.
-    void deallocate();
 
     tt::tt_metal::distributed::MeshDevice& device() const;
 
@@ -133,11 +130,11 @@ private:
 };
 
 // A replayable command list in device DRAM, bound to the command queue it was built for.
-// Lists record raw device addresses, not tensors. Until it is deallocated or destroyed, the list keeps alive only the
-// tensors an op's program factory allocated and cached with its program. Replay reads and writes the addresses of
-// every other tensor the recorded ops used whether or not it is still allocated; what lives there is the caller's
-// responsibility. That includes intermediates an op frees while recording, such as the tensor between the two pads
-// ttnn::pad records for a height-sharded input padded in both width and height.
+// Lists record raw device addresses, not tensors. Until it is destroyed, the list keeps alive only the tensors an op's
+// program factory allocated and cached with its program. Replay reads and writes the addresses of every other tensor
+// the recorded ops used whether or not it is still allocated; what lives there is the caller's responsibility. That
+// includes intermediates an op frees while recording, such as the tensor between the two pads ttnn::pad records for a
+// height-sharded input padded in both width and height.
 class CommandList {
 public:
     CommandList(CommandList&&) noexcept = default;
@@ -150,9 +147,6 @@ public:
     // Sets the values later replays use for the named TTNN command-list parameters. Unknown names, kind mismatches, and
     // values an encoding rejects throw before anything is written. blocking waits for the write to finish.
     void update_args(const std::unordered_map<std::string, CmdListValue>& values, bool blocking = false);
-
-    // Releases device resources and invalidates the list. Repeated calls have no effect.
-    void deallocate();
 
     tt::tt_metal::distributed::MeshDevice& device() const;
     QueueId cq_id() const;

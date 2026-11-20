@@ -371,7 +371,6 @@ public:
     CommandList build(MeshCommandQueue& cq) const;
     MeshDevice& device() const;
     void clear();
-    void deallocate();
 
 private:
     struct OfflineDispatchState;
@@ -411,8 +410,6 @@ private:
     std::vector<BoundTensorFootprint> tensor_regions;
     std::unordered_map<CmdListTensorArgName, std::vector<size_t>> tensor_region_slots;
     distributed::TensorPrefetcherManager::CapturedRequests tensor_prefetcher_requests;
-    bool valid = true;
-    bool lock_held = false;
 };
 
 }  // namespace detail
@@ -483,10 +480,7 @@ CommandList::Impl::~Impl() {
     }
 }
 
-void CommandList::Impl::validate() const {
-    TT_FATAL(valid, "CommandList has been deallocated");
-    TT_FATAL(mesh_device != nullptr, "CommandList has no MeshDevice");
-}
+void CommandList::Impl::validate() const { TT_FATAL(mesh_device != nullptr, "CommandList has no MeshDevice"); }
 
 void CommandList::Impl::release_resources() noexcept {
     if (!valid) {
@@ -666,15 +660,9 @@ uint8_t CommandList::Impl::get_cq_id() const {
 namespace detail {
 
 CommandListBuilderImpl::CommandListBuilderImpl(MeshDevice& mesh_device) :
-    mesh_device(mesh_device),
-    sub_device_manager_id(mesh_device.impl().acquire_command_list_builder()),
-    lock_held(true) {}
+    mesh_device(mesh_device), sub_device_manager_id(mesh_device.impl().acquire_command_list_builder()) {}
 
-CommandListBuilderImpl::~CommandListBuilderImpl() {
-    if (lock_held) {
-        mesh_device.impl().release_command_list_builder();
-    }
-}
+CommandListBuilderImpl::~CommandListBuilderImpl() { mesh_device.impl().release_command_list_builder(); }
 
 struct CommandListBuilderImpl::OfflineDispatchState {
     // Prefetcher cache settings must match FDMeshCommandQueue's: the cache offsets baked into the commands are replayed
@@ -1119,7 +1107,6 @@ void CommandListBuilderImpl::resolve_parameters(
 
 void CommandListBuilderImpl::add(
     MeshCommandQueue& binary_upload_cq, MeshWorkload& workload, const CmdListParameters& parameters) {
-    TT_FATAL(valid, "CommandListBuilder has been deallocated");
     TT_FATAL(binary_upload_cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
     TT_FATAL(
         mesh_device.get_active_sub_device_manager_id() == sub_device_manager_id,
@@ -1197,14 +1184,12 @@ void CommandListBuilderImpl::add_tensor_prefetcher_request(
     const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
     ttsl::optional_reference<const distributed::MeshCoordinateRangeSet> device_subset,
     const std::vector<experimental::TensorPrefetcherInput>& input_tensors) {
-    TT_FATAL(valid, "CommandListBuilder has been deallocated");
     mesh_device.impl()
         .tensor_prefetcher(&mesh_device)
         .capture(tensor_prefetcher_requests, prefetcher_pipes, device_subset, input_tensors);
 }
 
 CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
-    TT_FATAL(valid, "CommandListBuilder has been deallocated");
     TT_FATAL(cq.device() == &mesh_device, "Command queue belongs to a different MeshDevice");
     TT_FATAL(!staged_nodes.empty(), "Cannot build an empty CommandList");
     TT_FATAL(
@@ -1227,33 +1212,15 @@ CommandList CommandListBuilderImpl::build(MeshCommandQueue& cq) const {
         sub_device_manager_id));
 }
 
-MeshDevice& CommandListBuilderImpl::device() const {
-    TT_FATAL(valid, "CommandListBuilder has been deallocated");
-    return mesh_device;
-}
+MeshDevice& CommandListBuilderImpl::device() const { return mesh_device; }
 
 void CommandListBuilderImpl::clear() {
-    TT_FATAL(valid, "CommandListBuilder has been deallocated");
     staged_nodes.clear();
     worker_descriptors = {};
     retained_binary_buffers.clear();
     tensor_regions.clear();
     tensor_region_slots.clear();
     tensor_prefetcher_requests = {};
-}
-
-void CommandListBuilderImpl::deallocate() {
-    staged_nodes.clear();
-    worker_descriptors = {};
-    retained_binary_buffers.clear();
-    tensor_regions.clear();
-    tensor_region_slots.clear();
-    tensor_prefetcher_requests = {};
-    valid = false;
-    if (lock_held) {
-        mesh_device.impl().release_command_list_builder();
-        lock_held = false;
-    }
 }
 
 }  // namespace detail
@@ -1285,12 +1252,6 @@ void CommandListBuilder::clear() {
     impl_->clear();
 }
 
-void CommandListBuilder::deallocate() {
-    if (impl_) {
-        impl_->deallocate();
-    }
-}
-
 detail::CommandListBuilderImpl& CommandListBuilder::impl() {
     TT_FATAL(impl_ != nullptr, "CommandListBuilder has been moved from");
     return *impl_;
@@ -1319,12 +1280,6 @@ MeshDevice& CommandList::device() const {
 uint8_t CommandList::cq_id() const {
     TT_FATAL(impl_ != nullptr, "CommandList has been moved from");
     return impl_->get_cq_id();
-}
-
-void CommandList::deallocate() {
-    if (impl_) {
-        impl_->deallocate();
-    }
 }
 
 void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap) {
