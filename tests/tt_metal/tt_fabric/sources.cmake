@@ -58,6 +58,17 @@ set(UNIT_TESTS_FABRIC_SRC
     graph/test_graph_fabric_mock_compile.cpp
 )
 
+if(TT_UMD_BUILD_GRENDEL_JTAG)
+    list(
+        APPEND
+        UNIT_TESTS_FABRIC_SRC
+        keraunos/vcluster/manifest.cpp
+        keraunos/vcluster/descriptors.cpp
+        keraunos/vcluster/test_vcluster_manifest.cpp
+        keraunos/vcluster/test_vcluster_descriptors.cpp
+    )
+endif()
+
 set(UNIT_TESTS_PHYSICAL_DISCOVERY_SRC physical_discovery/test_physical_system_descriptor.cpp)
 
 set(TEST_SYSTEM_HEALTH_SMOKE_SOURCES system_health/test_system_health.cpp)
