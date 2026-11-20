@@ -781,3 +781,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   74.9k new tok/s, mixed 126.4 ms = 64.8k: BOTH TARGETS MET. Oracle 40 layers bit-identical, final hidden 0.131, top-5
   1.0. Not built (agent DECIDED, accepted): splitting the longest lane's score over idle chips (tie order of top-k
   breaks bit-identity; the logits' return traffic ~ the ring's). DECIDED: accept. Next PB.5 (scripted accept gate).
+- 07:16 UTC PB.3M gate PASS -> 98aa03d3acd. DEVICE OPEN (PB.5, reason: the accept gate's one fresh 40-layer process at 8192 for the packed oracle / reference / 8192 reference, then the walls' 21-layer load). RAM before: available 459.1 GB leaked 50.3 GB .
