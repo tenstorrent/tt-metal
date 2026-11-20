@@ -11,13 +11,12 @@
 #include "api/core_local_mem.h"
 #include "ttnn/operations/transformer/sdpa/device/kernels/sparse_ring_balance_plan.hpp"
 
-// Load balancing of sparse_ring_sdpa, one core per device, every call:
+// sparse_ring_sdpa load balancing, one core per device, every call:
 //   1. wait for every SDPA core's unit costs in this device's table page (DRAM);
-//   2. cross-device: share the pages through the gather writers and compute the row-block swaps (sparse_balance::
-//      place_swaps, identically on every device), then have the writers send the swapped row blocks;
-//   3. plan every core's unit table (sparse_balance::plan_unit_tables) and release it to the SDPA cores;
-//   4. cross-device: signal the SDPA cores once the imports arrive, have the writers send their outputs home, and wait
-//      for this device's own outputs to come back.
+//   2. share the pages through the gather writers, place the row-block swaps (identically on every device), and have
+//      the writers send the swapped row blocks;
+//   3. plan every core's unit table and release it to the SDPA cores;
+//   4. signal the SDPA cores once the imports arrive, have the writers send outputs home, and wait for this device's.
 // Fabric counters are consumed by an atomic decrement, never reset, so an early increment of the next call is kept.
 void kernel_main() {
     constexpr uint32_t units = get_named_compile_time_arg_val("balance_units");
@@ -41,7 +40,7 @@ void kernel_main() {
     static_assert(units % q_blocks == 0 && q_blocks <= sparse_balance::kMaxUnitsPerHead, "whole heads, <= 1024 units");
     static_assert(cap <= sparse_balance::kMaxCoreUnits, "a core's units fit its table");
     constexpr uint32_t active = units < cores ? units : cores;
-    constexpr uint32_t row_offset = cores * cost_words;  // a table page's row-block costs
+    constexpr uint32_t row_offset = cores * cost_words;
     constexpr uint32_t page_words = sparse_balance::table_page_words(cores, cost_words, q_blocks);
     constexpr uint32_t q_blocks_pad = (q_blocks + 15) / 16 * 16;
     constexpr sparse_balance::StaticSplit split{units, cores, q_blocks};
@@ -81,7 +80,7 @@ void kernel_main() {
     ASSERT((layout.words + 16) * sizeof(uint32_t) <= get_local_cb_interface(cb_scratch).fifo_size);
     uint32_t* const tables = base + layout.tables;
 
-    // The gather writers' flag: 1 = the cost page is ready, 2 = the partner page is, 3 = the imports' outputs are.
+    // Writer flag: 1 = cost page ready, 2 = partner page ready, 3 = the imports' outputs ready.
     const auto signal_writers = [&]() {
         for (uint32_t w = 0; w < n_writers; ++w) {
             Semaphore<>(writer_flag_sem)
@@ -99,10 +98,8 @@ void kernel_main() {
         noc_async_atomic_barrier();
     };
 
-    // 1. Every working SDPA core has written its costs.
     Semaphore<>(sem_costs).wait_min(active);
 
-    // 2. This device's unit costs (in flat unit order) and row-block costs.
     const uint32_t mine = remote ? me : 0u;
     const auto read_page = [&](uint32_t r) {
         noc.async_read(
@@ -138,7 +135,6 @@ void kernel_main() {
         }
     }
 
-    // Cross-device: publish the row-block costs, read every device's page, place the swaps.
     uint32_t* const partners = base + layout.partners;
     uint32_t swaps_here = 0;
     if constexpr (remote) {
@@ -228,7 +224,6 @@ void kernel_main() {
         }
     }
 
-    // 3. Unit tables on the costs of the units the slots now hold.
     uint32_t* const unit_tables = base + layout.unit_tables;
     sparse_balance::plan_unit_tables(
         split,
@@ -240,7 +235,7 @@ void kernel_main() {
         base + layout.core_loads,
         base + layout.ranked,
         local.head());
-    // Each core's table into its cb_balance page (the CB has the same address on every core), then its release.
+    // cb_balance has the same address on every core.
     const uint32_t unit_table_addr = CircularBuffer(cb_table).get_write_ptr();
     for (uint32_t i = 0; i < cores; ++i) {
         volatile uint32_t* const unit_table = unit_tables + i * sparse_balance::kTableWords;
@@ -260,7 +255,6 @@ void kernel_main() {
     }
     noc.async_write_barrier();
 
-    // 4. Imports in, outputs out, this device's outputs back.
     if constexpr (remote) {
         if (swaps_here > 0) {
             take_global(imports_arrived, swaps_here);

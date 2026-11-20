@@ -4,21 +4,13 @@
 
 #pragma once
 
-// sparse_ring_sdpa's cross-device load balancing on a gather writer (the decisions are the balance kernel's:
-// sparse_ring_balance.cpp, sparse_ring_balance_plan.hpp). A program semaphore on this core (the flag) is raised by the
-// balance core:
-//   1  this device's cost page is in DRAM: link 0 multicasts it to the same page on every device in this writer's
-//      direction, then an increment of their tables_arrived;
-//   2  the partner page is (so every cost page has been read): an increment of tables_read on the devices the cost
-//      page went to, then this writer's share of the swapped-out row blocks (every head's Q pages and mask row) goes
-//      to the partner slot's import buffers, each block followed by an increment of the partner's imports_arrived;
-//   3  the swapped-in blocks' outputs are in the export buffer: this writer's share goes to the home device's output,
-//      each block followed by an increment of the home's returns_arrived.
-// A writer's share: the row blocks whose partner is reached through its direction (the shorter way round, ties to the
-// minus side; on a line, the partner's side) on its link (block % links). States 1 and 2 run as soon as the flag
-// allows, between K/V packets (poll); finish() completes them after the gather and then does 3. Remote writes go
-// through the local accessors, as the gather's own: the buffers are mesh buffers at one address on every device, and
-// the factory enables this only when every device maps DRAM banks to the same NoC coordinates.
+// sparse_ring_sdpa's cross-device load balancing on a gather writer. The balance core raises a flag semaphore here:
+//   1  cost page in DRAM: link 0 multicasts it to every device in this direction, then increments their tables_arrived;
+//   2  partner page ready (all cost pages read): increment tables_read on those devices, then send this writer's
+//      swapped-out row blocks (Q pages, mask rows) to the partner's import buffers, then increment its imports_arrived;
+//   3  swapped-in outputs in the export buffer: send them to the home device, incrementing returns_arrived per block.
+// A writer sends the blocks whose partner is in its direction (shorter way round, ties to minus) on link block % links.
+// Remote writes use local accessors: the factory requires mesh buffers and identical DRAM bank maps on every device.
 
 #include <cstdint>
 
@@ -73,7 +65,6 @@ enum Arg : uint32_t {
 };
 static_assert(kNumArgs == ttnn::ring_attention_all_gather::kBalanceWriterArgCount);
 
-// The writer's balance accessors (cost table, partner page, Q, mask, output), from compile-time arg kOffset.
 template <uint32_t kOffset>
 struct Accessors {
     static constexpr auto table() { return TensorAccessorArgs<kOffset>(); }
@@ -102,7 +93,7 @@ public:
         }
     }
 
-    // After the gather: the rest of states 1 and 2, then the returns.
+    // After the gather: the rest of states 1 and 2, then 3.
     template <typename Sender>
     void finish(Sender* conn) {
         if constexpr (enabled) {
@@ -147,7 +138,6 @@ private:
         ++state_;
     }
 
-    // Data and increments go k hops along this writer's direction.
     void route(uint32_t hops) {
         ccl_routing_utils::fabric_set_line_unicast_route(
             data_hdr_, {.dst_mesh_id = 0, .dst_chip_id = static_cast<uint16_t>(hops)});
@@ -164,7 +154,6 @@ private:
             reinterpret_cast<uint32_t>(inc_hdr_), sizeof(PACKET_HEADER_TYPE));
     }
 
-    // This device's cost page to the same page of the `range` devices in this direction, in payload-sized pieces.
     template <typename Sender>
     void send_table(Sender* conn, uint32_t range) {
         const auto table = TensorAccessor(Acc::table(), arg(kTable));
@@ -183,8 +172,7 @@ private:
         increment(conn, arg(kTablesArrived));
     }
 
-    // fn(local block b, partner block, hops) for this writer's share of the swapped row blocks (the partner page in the
-    // scratch's list region, the data region free for fn).
+    // fn(local block, partner block, hops) for this writer's share of the swapped row blocks.
     template <typename Fn>
     void for_each_block(Fn fn) {
         const uint32_t q_blocks = arg(kQBlocks);
@@ -204,7 +192,7 @@ private:
                 continue;
             }
             const uint32_t r = p >> 16;
-            const uint32_t minus = (me + ring_size - r) % ring_size;  // hops toward rank - 1 on a ring
+            const uint32_t minus = (me + ring_size - r) % ring_size;
             const uint32_t plus = (r + ring_size - me) % ring_size;
             const bool go_minus = arg(kIsRing) != 0 ? minus <= plus : r < me;
             if (go_minus == minus_side) {
@@ -213,8 +201,6 @@ private:
         }
     }
 
-    // Every head's tile rows of local block b (block_tiles rows x cols tiles of src) to block pb's of dst (the same
-    // layout), up to two pages per packet.
     template <typename Sender, typename Args>
     void send_blocks(
         Sender* conn,
@@ -251,7 +237,6 @@ private:
         }
     }
 
-    // Every head's mask row of local block b to block pb's row of the partner's import mask, in payload pieces.
     template <typename Sender>
     void send_mask_rows(Sender* conn, uint32_t b, uint32_t pb) {
         const auto src = TensorAccessor(Acc::mask(), arg(kMask));

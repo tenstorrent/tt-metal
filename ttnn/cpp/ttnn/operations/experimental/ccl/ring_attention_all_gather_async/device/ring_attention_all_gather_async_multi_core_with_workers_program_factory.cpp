@@ -1003,8 +1003,7 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
     TT_FATAL(
         !has_balance || (fuse_op && !rank_mapping.full_mesh),
         "Ring attention load balancing needs a fused consumer and an axis ring");
-    // Load balancing: the writers' flag (raised by sparse_ring_sdpa's balance core) and scratch (one row block's Q or
-    // output pages of a head, or a payload; then the partner page).
+    // Balance scratch: one head's Q or output pages of a row block, or a payload; then the partner page.
     const uint32_t balance_cb_index = tt::CB::c_in4;
     uint32_t balance_list_offset = 0;
     if (has_balance) {

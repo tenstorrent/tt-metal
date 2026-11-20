@@ -89,7 +89,6 @@ constexpr uint32_t mesh_cols = get_compile_time_arg_val(kMeshCols);
 constexpr bool partial_readiness_enabled = get_compile_time_arg_val(kPartialReadinessEnabled);
 constexpr bool output_bank_owned_schedule = get_compile_time_arg_val(kOutputBankOwnedSchedule);
 constexpr uint32_t num_dram_banks = get_compile_time_arg_val(kNumDramBanks);
-// sparse_ring_sdpa's cross-device load balancing (ring_attention_balance.hpp).
 #ifdef RING_ATTENTION_BALANCE
 constexpr bool has_balance = true;
 #else
@@ -161,7 +160,7 @@ void kernel_main() {
                                              ? std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset()
                                              : (kNumFixedCompileTimeArgs + num_inputs);
     constexpr auto meta_args = TensorAccessorArgs<kMetaArgsOffset>();
-    // Load balancing: its accessors follow the gather's (ring_attention_balance::Accessors).
+    // The balance accessors follow the gather's (ring_attention_balance::Accessors).
     [[maybe_unused]] constexpr uint32_t kBalanceArgsOffset =
         has_metadata ? meta_args.next_compile_time_args_offset()
                      : std::get<num_inputs - 1>(outputs_args).next_compile_time_args_offset();
@@ -251,7 +250,7 @@ void kernel_main() {
             input_tile_id_end);
     }
 
-    // Load-balancing block (ring_attention_balance::Arg), then its scratch CB's id.
+    // The balance runtime args (ring_attention_balance::Arg), then its scratch CB's id.
     [[maybe_unused]] const uint32_t balance_args = arg_idx;
     if constexpr (has_balance) {
         arg_idx += ring_attention_balance::kNumArgs + 1;
@@ -309,7 +308,6 @@ void kernel_main() {
         }
     };
 
-    // Load balancing: its own two packet headers and scratch CB; poll() between K/V packets, finish() at the end.
     [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_data_hdr = nullptr;
     [[maybe_unused]] volatile PACKET_HEADER_TYPE* balance_inc_hdr = nullptr;
     [[maybe_unused]] uint32_t balance_scratch = 0;
@@ -660,7 +658,6 @@ void kernel_main() {
         slice_writes++;
     }
 
-    // The load-balancing exchange's remaining sends, then the swapped-in blocks' outputs home.
     balance.finish(fabric_direction_connection);
 
     // Drain in-flight writes BEFORE closing the EDM connections.

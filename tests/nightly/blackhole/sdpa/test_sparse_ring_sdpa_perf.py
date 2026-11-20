@@ -359,8 +359,7 @@ def test_frame_mask_perf(bench, results_file, rows, lofi):
 @pytest.mark.parametrize("position", ["start", "end"])
 @pytest.mark.parametrize("rows", list(TAIL_POINTS), ids=list(TAIL_POINTS.values()))
 def test_dense_tail_perf(bench, results_file, rows, position, tail_tokens, pooled):
-    """The sparse op at the production k_chunk on density-0.2 video blocks with a dense text / audio tail on one
-    device (balance_mask prefix / suffix: the first or last tail_tokens): the load balancing spreads its rows."""
+    """Density-0.2 video blocks with a dense text / audio tail (first or last tail_tokens) on one device."""
     kind = "prefix" if position == "start" else "suffix"
 
     def make(case):
@@ -372,8 +371,7 @@ def test_dense_tail_perf(bench, results_file, rows, position, tail_tokens, poole
     time_mask(bench, results_file, rows, make, FAMILY_K_CHUNK, pooled, structure=structure)
 
 
-# Load balancing: rows of very different cost. heavy_rows: 2 % of the (head, Q block) rows keep 90 % of the blocks
-# (within a device); causal: block-triangular (across devices).
+# heavy_rows: 2 % of rows keep 90 % of the blocks (unbalances within a device); causal: unbalances across devices.
 BALANCE_STRUCTURES = ["heavy_rows", "causal"]
 
 

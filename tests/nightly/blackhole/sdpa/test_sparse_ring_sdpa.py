@@ -29,7 +29,7 @@ BLOCK = 64  # tokens per (square) mask block, passed as block_size; also the q c
 HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
-TRACE_REGION_SIZE = 50_000_000  # test_balance_trace_masks: one traced call of the op
+TRACE_REGION_SIZE = 50_000_000  # for test_balance_trace_masks
 SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
 # On CI (a shared job with a tight time budget) only these cases run, about 2 minutes on a Galaxy: one per feature
 # (dense equivalence, one local head, a short last shard, ragged shards, partial blocks, LoFi block float, block
@@ -906,18 +906,12 @@ BALANCE_MASKS = ["heavy_rows", "prefix", "causal"]
 
 
 def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0.9, heads=None, dense_blocks=4):
-    """A mask whose rows cost very differently, for the op's load balancing: within a device a head's units over its
-    cores, across devices row blocks swap.
+    """A mask with very uneven row costs, for load balancing.
 
-      heavy_rows  make_mask at `density`, then `heavy_rows` random (shard, head, Q block) rows keep `heavy` of the
-                  blocks (heads drawn from `heads`, default all)
-      prefix      make_mask at `density`, then the first `dense_blocks` Q blocks of shard 0 keep every block and every
-                  row keeps those blocks: a dense text prefix on one device
+      heavy_rows  make_mask, then `heavy_rows` random rows (heads from `heads`) keep `heavy` of the blocks
+      prefix      make_mask, then the first `dense_blocks` Q blocks of shard 0 are dense and every row keeps them
       suffix      the same with the last `dense_blocks` Q blocks of shard S - 1
-      causal      Q block i keeps the K blocks j <= i in sequence order: the last shard's rows cost ~2x the mean, the
-                  first's almost nothing
-
-    Only full blocks are kept, and padding Q rows keep nothing.
+      causal      Q block i keeps the K blocks j <= i in sequence order
     """
     g = torch.Generator().manual_seed(seed)
     nb, nb_pad = geo.nb(), geo.nb_pad()
@@ -960,9 +954,7 @@ def balance_mask(geo, S, H, *, kind, density=0.1, seed=0, heavy_rows=16, heavy=0
     ],
 )
 def test_balance(runtime, geom, kind, pooled):
-    """Load balancing: rows ~90 % dense scattered over the heads the reference checks, a dense prefix on shard 0 and a
-    causal mask, against the reference; r1184 (a partial last block, which never moves between devices) on the
-    prefix only."""
+    """Load balancing on uneven masks; r1184 adds a partial last block, which never moves between devices."""
     case = Case(runtime, GEOMETRIES[geom])
     checked = sorted({0, 1, case.H // 2, case.H - 1})
     mask = balance_mask(case.geo, case.S, case.H, kind=kind, seed=40, heads=checked)
@@ -974,8 +966,7 @@ def test_balance(runtime, geom, kind, pooled):
 @pytest.mark.parametrize("pooled", [False, True], ids=["kept_only", "pooled"])
 @pytest.mark.parametrize("kind", ["prefix", "causal"])
 def test_balance_passes(runtime, kind, pooled):
-    """Load balancing with two Q passes: a core keeps at least one unit per pass, swapped-in units can sit in either
-    pass, and each pass's outputs go home as it ends."""
+    """Load balancing with two Q passes: swapped-in units can sit in either pass."""
     geo = ALIGNED["r1024k256"]
     case = Case(runtime, geo)
     q_blocks_per_pass = case.q_blocks_per_pass_for(2)
@@ -985,9 +976,7 @@ def test_balance_passes(runtime, kind, pooled):
 
 
 def test_balance_masks_per_call(runtime):
-    """The cached program with another mask every call (costs, unit tables and swaps are decided per call, and the
-    fabric counters must come back to zero): prefix, random, causal, heavy rows, prefix again, each against its
-    reference."""
+    """Cached program, new mask every call: the plan is per call and the fabric counters must return to zero."""
     case = Case(runtime, ALIGNED["r1024k256"])
     checked = sorted({0, 1, case.H // 2, case.H - 1})
     for call, kind in enumerate(["prefix", "random", "causal", "heavy_rows", "prefix"]):
@@ -1001,8 +990,7 @@ def test_balance_masks_per_call(runtime):
 
 
 def test_balance_trace_masks(runtime):
-    """Trace replay: one captured trace of the op, replayed after new mask contents are written into the same device
-    tensor (prefix, causal, random): costs, unit tables and swaps are recomputed on device every replay."""
+    """Trace replay with new mask contents each replay: the plan is recomputed on device."""
     geo = ALIGNED["r1024k256"]
     case = Case(runtime, geo)
     mesh = runtime.mesh_device

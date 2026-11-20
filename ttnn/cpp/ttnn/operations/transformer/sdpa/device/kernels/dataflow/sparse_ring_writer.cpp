@@ -92,7 +92,7 @@ void kernel_main() {
     using OutputTileShape = std::conditional_t<output_has_no_padding, StaticOutputTileShape, TensorTileShape>;
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
-    // Swapped-in units' outputs go to the export buffer (laid out as the output), from where they go home.
+    // Swapped-in units' outputs go to the export buffer, laid out as the output, from where they go home.
     const auto export_generator = PaddedAddrGenerator(
         TensorAccessor(out_args, balance_remote ? get_arg_val<uint32_t>(balance_base) : 0u), output_tile_logical);
 
@@ -125,7 +125,7 @@ void kernel_main() {
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
 
-    // Load balancing: the core's unit table in cb_balance (the reader pushes it to compute).
+    // The core's unit table in cb_balance; the reader, not this kernel, pushes it to compute.
     [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
     if constexpr (balance) {
         Semaphore<>(get_named_compile_time_arg_val("balance_sem_table")).wait_min(1);

@@ -86,8 +86,7 @@ SPARSE_RING_HOT void piece_bits(const uint32_t (&words)[kWords], uint32_t nb, ui
     hi = h;
 }
 
-// A unit's load-balancing cost (before the per-unit constant): its kept blocks holding a real token, over its whole
-// block-form mask row at row_addr.
+// A unit's load-balancing cost before kUnitCost: its kept blocks holding a real token, over its whole mask row.
 template <bool has_counts>
 SPARSE_RING_HOT uint32_t row_cost(
     uint32_t row_addr,
@@ -179,7 +178,6 @@ void kernel_main() {
     constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
     constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
     constexpr auto block_counts_args = TensorAccessorArgs<pooled_v_args.next_compile_time_args_offset()>();
-    // Load balancing: this device's cost table.
     constexpr auto balance_table_args = TensorAccessorArgs<block_counts_args.next_compile_time_args_offset()>();
     constexpr uint32_t chains_base_offset = balance_table_args.next_compile_time_args_offset();
 
@@ -236,8 +234,7 @@ void kernel_main() {
     // +3: block counts address (none: geometric counts). Then (load balancing) the balance words, the packed bf16
     // bias-per-token-count table (pooled_bias_gen::kTableWords words) and the head group's delivery arguments.
     [[maybe_unused]] const uint32_t block_counts_addr = get_arg_val<uint32_t>(sparse_args_base + 3);
-    // Load balancing: +0 this core's index, +1 the cost table, +2 / +3 the balance core's NoC x / y, +4 / +5 the
-    // import Q and mask buffers (cross-device).
+    // Balance args: +0 core index, +1 cost table, +2 / +3 balance core NoC x / y, +4 / +5 import Q / mask (remote).
     constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
     constexpr bool balance_remote = get_named_compile_time_arg_val("balance_remote") == 1;
     const uint32_t balance_base = sparse_args_base + 4;
@@ -345,7 +342,7 @@ void kernel_main() {
     // Sparse sources: mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row); pooled K/V
     // [1, NH, n_blocks_pad, DH] tiles (pooled route only, their readers are built where they are used).
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
-    // Load balancing (cross-device): Q and mask rows swapped in from another device (laid out as Q and the mask).
+    // Q and mask rows swapped in from another device, laid out as Q and the mask.
     const auto import_q_generator = PaddedAddrGenerator(
         TensorAccessor(q_args, balance_remote ? get_arg_val<uint32_t>(balance_base + 4) : 0u), input_q_tile_logical);
     const auto import_mask_reader =
@@ -400,14 +397,12 @@ void kernel_main() {
         ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
             fused_op_receiver.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
 
-    // Load balancing (sparse_ring_balance.cpp): this core's static unit costs into this device's cost page, then the
-    // unit table the balance kernel writes into cb_balance; the core's units become positions [0, count) of it.
+    // Load balancing: publish this core's static unit costs, then wait for its unit table (units become positions).
     [[maybe_unused]] volatile tt_l1_ptr uint32_t* unit_table = nullptr;
     [[maybe_unused]] bool imports_ready = false;
     if constexpr (balance) {
         constexpr uint32_t cost_words = get_named_compile_time_arg_val("balance_cost_words");
-        // The plan pages are free before the first iteration: a mask row in the scratch, then the costs (64-byte
-        // aligned).
+        // The plan pages are free before the first iteration: a mask row, then the costs (64-byte aligned).
         CircularBuffer cb_plan(cb_sparse_plan);
         cb_plan.reserve_back(2);
         const uint32_t row_addr = cb_plan.get_write_ptr() + 64;
@@ -450,7 +445,6 @@ void kernel_main() {
         cb_table.push_back(1);
     }
     const uint32_t q_per_core = global_q_end - global_q_start;
-    // The flat unit at position k of the core's units, and whether it is swapped in from another device.
     const auto unit_at = [&](uint32_t k) -> uint32_t {
         if constexpr (balance) {
             return sparse_balance::unit_of(unit_table[1 + k]);
@@ -505,7 +499,7 @@ void kernel_main() {
             uint32_t res_nb[kResMax];
             uint32_t res_nq[kResMax];
             uint32_t res_qc[kResMax];
-            // Resident chunks swapped in from another device (bit i).
+            // Bit i: resident chunk i is swapped in from another device.
             uint32_t res_imported = 0;
             for (uint32_t i = 0; i < n_res; ++i) {
                 const auto d =
@@ -566,7 +560,7 @@ void kernel_main() {
                     {});
                 noc.async_read_barrier();
             };
-            // This shard's slice of chunk i's row (nb_pad words from block ring_id * nb_pad) into the scratch.
+            // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch.
             const auto read_shard_slice = [&](uint32_t i) {
                 noc.async_read(
                     imported(i) ? import_mask_reader : mask_reader,

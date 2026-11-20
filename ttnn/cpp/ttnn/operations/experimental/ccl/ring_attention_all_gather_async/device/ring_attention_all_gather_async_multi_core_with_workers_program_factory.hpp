@@ -140,13 +140,11 @@ inline uint32_t rank_mapping_compile_time_arg(const RingAttentionRankMapping& ma
                                       : ring_attention_all_gather::kRowMajorRankMapping;
 }
 
-// sparse_ring_sdpa's cross-device load balancing, carried by the gather writers (kernels/ring_attention_balance.hpp):
-// the cost-table multicast, the swapped row blocks' Q pages and mask rows, and their outputs' return. The helper fills
-// the writer side (writer_flag_semaphore, writer_cores_noc) for the balance kernel, which raises the flag.
+// sparse_ring_sdpa's cross-device load balancing, carried by the gather writers (kernels/ring_attention_balance.hpp).
 struct RingAttentionBalance {
-    tt::tt_metal::Buffer* table = nullptr;    // R cost pages per device
-    tt::tt_metal::Buffer* partner = nullptr;  // this device's partner page
-    tt::tt_metal::Buffer* q = nullptr;        // sent from q and mask, received into the import buffers (same layouts)
+    tt::tt_metal::Buffer* table = nullptr;  // R cost pages per device
+    tt::tt_metal::Buffer* partner = nullptr;
+    tt::tt_metal::Buffer* q = nullptr;  // sent from q and mask, received into the import buffers (same layouts)
     tt::tt_metal::Buffer* import_q = nullptr;
     tt::tt_metal::Buffer* mask = nullptr;
     tt::tt_metal::Buffer* import_mask = nullptr;

@@ -126,7 +126,6 @@ void kernel_main() {
 
     constexpr bool balance = get_named_compile_time_arg_val("balance") == 1;
     [[maybe_unused]] constexpr uint32_t cb_balance = get_named_compile_time_arg_val("cb_balance");
-    // Load balancing: the core's unit table, from the reader.
     [[maybe_unused]] const volatile uint32_t* unit_table = nullptr;
     if constexpr (balance) {
         CircularBuffer(cb_balance).wait_front(1);

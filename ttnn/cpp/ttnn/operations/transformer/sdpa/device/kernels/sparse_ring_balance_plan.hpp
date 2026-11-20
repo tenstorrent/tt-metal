@@ -2,8 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Load balancing of sparse_ring_sdpa (see sparse_ring_balance.cpp), shared by the balance kernel, the SDPA kernels, the
-// gather writers and the program factory. Integer-only, so every device computes the same result from the same costs.
+// Integer-only, so every device computes the same plan from the same costs.
 
 #pragma once
 
@@ -11,8 +10,7 @@
 
 namespace sparse_balance {
 
-// A core's unit table (its cb_balance page): [count, entries in ascending order]. An entry is a flat unit (< 2^15),
-// flagged kImported when its row block is swapped in from another device.
+// A core's unit table (its cb_balance page): [count, entries ascending]; entry = flat unit | kImported if swapped in.
 constexpr uint32_t kTableWords = 64;
 constexpr uint32_t kMaxCoreUnits = kTableWords - 1;
 constexpr uint32_t kImported = 1u << 15;
@@ -21,26 +19,24 @@ constexpr uint32_t kUnitMask = kImported - 1;
 constexpr uint32_t unit_of(uint32_t entry) { return entry & kUnitMask; }
 constexpr bool is_imported(uint32_t entry) { return (entry & kImported) != 0; }
 
-// Reads back p[i], the last word the RISC stored, so the stores land before the NoC reads them.
+// Reads back the last stored word so the stores land before the NoC reads them.
 template <typename Ptr>
 inline void flush_stores(Ptr p, uint32_t i) {
     (void)p[i];
 }
 
-// A unit's cost: its kept blocks holding a real token plus a fixed per-unit cost (kUnitCost), capped.
+// A unit's cost: its kept blocks holding a real token plus kUnitCost, capped at kMaxUnitCost.
 constexpr uint32_t kUnitCost = 24;
 constexpr uint32_t kMaxUnitCost = 4095;
 constexpr uint32_t kMaxUnitsPerHead = 1024;
 
-// Cost words per core in a table page (64-byte multiple).
 inline uint32_t cost_words_per_core(uint32_t max_units_per_core) { return (max_units_per_core + 15) / 16 * 16; }
 
-// A device's table page: every core's cost slice, then the device's row-block costs (padded to 64 bytes).
+// A device's table page: every core's cost slice, then the device's row-block costs.
 constexpr uint32_t table_page_words(uint32_t cores, uint32_t cost_words, uint32_t q_blocks) {
     return cores * cost_words + (q_blocks + 15) / 16 * 16;
 }
 
-// The balance kernel's L1 scratch: word offsets of its regions, each 64-byte aligned.
 struct Scratch {
     uint32_t tables, row_costs, loads, partners, order, heads, tails, moved, partner_page, unit_costs, unit_tables,
         core_loads, ranked, words;
@@ -69,8 +65,7 @@ struct Scratch {
     }
 };
 
-// The factory's static split: `units` flat units (head-major, `q_blocks` per head) over `cores` cores in order, the
-// first units % cores cores holding one more.
+// The factory's static split: flat units (head-major) over cores in order, the first units % cores getting one more.
 struct StaticSplit {
     uint32_t units = 0;
     uint32_t cores = 0;
@@ -80,14 +75,13 @@ struct StaticSplit {
     constexpr uint32_t extra() const { return units % cores; }
     constexpr uint32_t count(uint32_t i) const { return base() + (i < extra() ? 1u : 0u); }
     constexpr uint32_t start(uint32_t i) const { return i * base() + (i < extra() ? i : extra()); }
-    // The core holding flat unit f (< units).
     constexpr uint32_t core_of(uint32_t f) const {
         const uint32_t long_units = extra() * (base() + 1);
         return f < long_units ? f / (base() + 1) : extra() + (f - long_units) / base();
     }
     constexpr uint32_t first_head(uint32_t i) const { return start(i) / q_blocks; }
     constexpr uint32_t last_head(uint32_t i) const { return (start(i) + count(i) - 1) / q_blocks; }
-    // The most cores holding one head (a head's bins in plan_unit_tables).
+    // The most cores any one head spans.
     constexpr uint32_t max_bins() const {
         uint32_t most = 0;
         for (uint32_t f0 = 0; f0 < units; f0 += q_blocks) {
@@ -98,7 +92,7 @@ struct StaticSplit {
     }
 };
 
-// order[0..n) = indices by keys (each <= top), heaviest first, ties by index (LSD radix sort). tmp: n halfwords.
+// order[0..n) = indices by key (each <= top), heaviest first, stable (LSD radix sort). tmp: n halfwords.
 template <typename Key>
 inline void sort_heaviest_first(const Key* keys, uint32_t n, uint32_t top, uint16_t* order, uint16_t* tmp) {
     uint16_t* src = order;
@@ -107,7 +101,7 @@ inline void sort_heaviest_first(const Key* keys, uint32_t n, uint32_t top, uint1
         src[i] = static_cast<uint16_t>(i);
     }
     for (uint32_t shift = 0; shift < 32 && (shift == 0 || (top >> shift) != 0); shift += 6) {
-        uint16_t at[65];  // at[d + 1]: entries of digit d, then where digit d's next entry goes
+        uint16_t at[65];
         for (uint32_t d = 0; d <= 64; ++d) {
             at[d] = 0;
         }
@@ -129,11 +123,8 @@ inline void sort_heaviest_first(const Key* keys, uint32_t n, uint32_t top, uint1
     }
 }
 
-// Row-block swaps between devices: while the most loaded device is more than 1/32 above the mean, its heaviest
-// unswapped block (of the first `swappable`) trades with the least loaded device's lightest one, if that lowers the
-// pair's maximum by at least a quarter of an average block. A slot trades at most once.
+// Swaps row blocks between the most and least loaded devices while the max is > 1/32 above mean; a slot trades once.
 // partners[r * q_blocks + b] = kHome, or (r' << 16) | b': device r's slot b computes block b' of device r' (and back).
-// order: each device's swappable blocks heaviest first. Scratch: heads, tails, moved.
 constexpr uint32_t kHome = 0xFFFFFFFFu;
 constexpr uint32_t kScan = 16;  // how far the heavy side may skip ahead to a block that gains
 
@@ -181,7 +172,6 @@ inline void place_swaps(
         }
         const uint32_t b_lo = order_lo[tails[lo] - 1];
         const uint32_t c_lo = row_costs[lo * q_blocks + b_lo];
-        // The heaviest unswapped block of hi whose trade still lowers the pair's maximum.
         uint32_t b_hi = q_blocks;
         for (uint32_t j = heads[hi], seen = 0; j < swappable && seen < kScan; ++j) {
             const uint32_t b = order_hi[j];
@@ -191,7 +181,7 @@ inline void place_swaps(
             ++seen;
             const uint32_t c = row_costs[hi * q_blocks + b];
             if (c <= c_lo) {
-                break;  // sorted: no lighter block of hi gains anything
+                break;  // sorted: no lighter block gains
             }
             if (loads[lo] + (c - c_lo) < loads[hi]) {
                 b_hi = b;
@@ -214,8 +204,8 @@ inline void place_swaps(
     }
 }
 
-// One head's planner state (bins = the cores holding the head). By rank (heaviest first): cost, unit, bin and next
-// (the next rank in the same bin, or kEnd). By bin: first rank, load, key, unit count and its bounds lo / hi.
+// One head's planner state (bins = its cores). Indexed by rank (heaviest first): cost, unit, bin, next (the next rank
+// in the same bin); by bin: the rest, lo / hi bounding the bin's unit count.
 constexpr uint16_t kEnd = 0xFFFF;
 struct HeadWork {
     uint16_t* cost;
@@ -231,7 +221,7 @@ struct HeadWork {
 };
 
 // Greedy: each rank, heaviest first, to the least loaded open bin (only bins below lo once the rest are needed there).
-constexpr uint32_t kClosed = 0xFFFFFFFFu;  // the key of a bin that takes no more units
+constexpr uint32_t kClosed = 0xFFFFFFFFu;
 
 inline void deal(const HeadWork& w, uint32_t n, uint32_t n_bins) {
     uint32_t short_of = 0;  // units the bins below lo still need
@@ -243,7 +233,7 @@ inline void deal(const HeadWork& w, uint32_t n, uint32_t n_bins) {
     bool must_fill = false;
     for (uint32_t k = 0; k < n; ++k) {
         if (!must_fill && n - k <= short_of) {
-            must_fill = true;  // from here on every unit goes to a bin below lo
+            must_fill = true;
             for (uint32_t b = 0; b < n_bins; ++b) {
                 w.key[b] = w.count[b] < w.lo[b] ? w.load[b] : kClosed;
             }
@@ -265,8 +255,7 @@ inline void deal(const HeadWork& w, uint32_t n, uint32_t n_bins) {
     }
 }
 
-// Up to kImproveRounds times, the busiest bin trades (or moves) a unit with the least loaded bin that admits a gain,
-// picking the pair whose cost difference is closest to half the bins' gap. Bins keep between lo and hi units.
+// The busiest bin trades (or moves) the unit pair whose cost difference is closest to half its gap to a lighter bin.
 constexpr uint32_t kImproveRounds = 8;
 
 inline void improve(const HeadWork& w, uint32_t n, uint32_t n_bins) {
@@ -315,7 +304,7 @@ inline void improve(const HeadWork& w, uint32_t n, uint32_t n_bins) {
                     }
                 }
             };
-            // For each u of big, small's units just above and at or below cost(u) - gap / 2.
+            // Two pointers: small's units just above and at or below cost(u) - gap / 2.
             const bool can_move = w.count[big] > w.lo[big] && w.count[small] < w.hi[small];
             uint32_t j = first[small];
             uint32_t above = kEnd;
@@ -348,10 +337,9 @@ inline void improve(const HeadWork& w, uint32_t n, uint32_t n_bins) {
             --w.count[big];
             ++w.count[small];
         }
-        // The two bins' ranks, merged in rank order, re-split by their bins now.
         uint32_t a = first[big];
         uint32_t c = first[small];
-        uint32_t tails[2] = {kEnd, kEnd};  // big's, small's
+        uint32_t tails[2] = {kEnd, kEnd};
         first[big] = kEnd;
         first[small] = kEnd;
         while (a != kEnd || c != kEnd) {
@@ -383,16 +371,13 @@ inline void improve(const HeadWork& w, uint32_t n, uint32_t n_bins) {
 // The static split is kept when its busiest core is within 1 / kStaticSlack of max(mean core load, largest unit).
 constexpr uint32_t kStaticSlack = 5;
 
-// A rank word (a head's ranks between plan_unit_tables' two sweeps): cost << 18 | bin << 10 | unit.
-constexpr uint32_t kRankUnitBits = 10;  // units per head <= kMaxUnitsPerHead
+// A rank word, kept between plan_unit_tables' two sweeps: cost << 18 | bin << 10 | unit.
+constexpr uint32_t kRankUnitBits = 10;
 constexpr uint32_t kRankBinBits = 8;
 constexpr uint32_t kMaxBins = 1u << kRankBinBits;
 
-// Every core's unit table (cores x kTableWords) for this device's unit costs, entries flagged kImported where
-// imported[f % q_blocks] (or nullptr). Each head's units stay on the cores holding it in the static split. A core
-// holding one head takes between `passes` and `cap` units; a core spanning heads its static units of each when dealt,
-// at most `cap` in all when improved. Falls back to the static split when that is no worse.
-// Scratch: core_load (2 x cores words), ranked (units words).
+// Fills every core's unit table. A head's units stay on its static-split cores; a one-head core takes `passes` to `cap`
+// units. Falls back to the static split when that is no worse.
 inline void plan_unit_tables(
     const StaticSplit& split,
     uint32_t passes,
@@ -453,7 +438,6 @@ inline void plan_unit_tables(
                 w.count[b] = 0;
             }
             if (sweep == 0) {
-                // The head's ranks, then its costs by rank.
                 for (uint32_t u = 0; u < q_blocks; ++u) {
                     w.cost[u] = static_cast<uint16_t>(costs[f0 + u]);
                 }
@@ -499,7 +483,7 @@ inline void plan_unit_tables(
                 }
                 continue;
             }
-            // The head's units into its cores' tables, ascending (next: each unit's bin, first: entries so far).
+            // Reuses next as unit -> bin and first as each bin's entry count.
             for (uint32_t k = 0; k < q_blocks; ++k) {
                 w.next[w.unit[k]] = w.bin[k];
             }
@@ -556,7 +540,7 @@ struct LocalScratch {
     }
 };
 
-// An upper bound of sizeof(LocalScratch<q_blocks, bins>), and the most of the 8 KB local memory it may take.
+// An upper bound of sizeof(LocalScratch), and how much of the 8 KB local memory it may take.
 constexpr uint32_t local_scratch_bytes(uint32_t q_blocks, uint32_t bins) {
     const uint32_t swap = 8 * q_blocks + 8;
     const uint32_t plan = 8 * bins + 2 * (3 * q_blocks + bins) + q_blocks + 3 * bins + 16;

@@ -245,18 +245,17 @@ namespace ttnn::prim {
 
 namespace {
 
-// Load balancing (kernels/dataflow/sparse_ring_balance.cpp, kernels/sparse_ring_balance_plan.hpp).
 struct BalanceConfig {
     bool on = false;
     bool remote = false;
-    CoreCoord core;           // the balance core (logical), next to the gather workers
-    uint32_t units = 0;       // NH x q_blocks, head-major
-    uint32_t cores = 0;       // SDPA cores
+    CoreCoord core;      // logical
+    uint32_t units = 0;  // NH x q_blocks, head-major
+    uint32_t cores = 0;
     uint32_t q_blocks = 0;    // Q blocks per head
     uint32_t cost_words = 0;  // cost words per core in a table page
     uint32_t unit_cost = 0;   // fixed cost per unit (sparse_balance::kUnitCost, plus the pooled entries' work)
     uint32_t swappable = 0;   // full Q blocks (a partial last block never moves)
-    uint32_t devices = 1;     // cost pages (devices) the balance kernel reads
+    uint32_t devices = 1;
     uint32_t scratch_bytes = 0;
 };
 
@@ -302,8 +301,7 @@ bool same_dram_banks_on_every_device(tt::tt_metal::distributed::MeshDevice* mesh
 
 BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     BalanceConfig c;
-    // Pooled route: every unit also processes the pooled entries (one per block of the mask row), about 1.5 x their
-    // count / 64 in kept-block units (calibrated on the pooled-minus-kept time at 5-15 s).
+    // Pooled route: a unit also processes one pooled entry per mask block, ~1.5 x blocks / 64 kept blocks (calibrated).
     const uint32_t mask_blocks = tensor_args.block_mask.logical_shape()[3];
     c.unit_cost = sparse_balance::kUnitCost + (tensor_args.pooled_route() ? tt::div_up(mask_blocks * 3, 128) : 0u);
     // Logical, as the work split.
@@ -317,8 +315,8 @@ BalanceConfig make_balance_config(const SparseRingSDPAParams& args, const Sparse
     c.cost_words = sparse_balance::cost_words_per_core(max_q);
     c.swappable = q_tiles / args.block_tiles();
     const auto core = choose_balance_core(args, tensor_args);
-    // Unit tables hold 15-bit unit indices and kMaxCoreUnits units; the reader stages a core's costs, 64-byte aligned,
-    // in its second plan page; the balance kernel's local scratch fits its budget, a head's bins a byte.
+    // Limits: 15-bit unit indices, kMaxCoreUnits per table, a core's costs (64-byte aligned) in one reader plan page,
+    // the balance kernel's local scratch budget, a head's bins in a byte.
     const uint32_t plan_page_bytes = 64 + mask_row_bytes;
     const sparse_balance::StaticSplit split{c.units, c.cores, c.q_blocks};
     if (!core.has_value() || c.units >= (1u << 15) || c.q_blocks > sparse_balance::kMaxUnitsPerHead ||
@@ -577,7 +575,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         balancing.on,
         balancing.remote,
         balancing.core);
-    // The balance kernel's scratch (sparse_balance::Scratch), on the balance core.
     constexpr uint32_t kBalanceScratchCb = 0;
     if (balance) {
         desc.cbs.push_back(CBDescriptor{
@@ -851,8 +848,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (k_uses_batch_chain) {
         batch_sems = ChainSemaphores::create(desc, core_grid_set);  // shared-K chain
     }
-    // Load balancing: on the SDPA cores, unit table ready and imports arrived; on the balance core, the counts of cores
-    // that wrote their costs and of swapped-in outputs written.
+    // SDPA cores: unit table ready, imports arrived. Balance core: cores that wrote costs, swapped-in outputs written.
     struct BalanceSemaphores {
         uint32_t table = 0, import = 0, costs = 0, outputs = 0;
     } balance_sems;
@@ -1102,7 +1098,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // only with block_counts or a logical_n off a tile boundary.
         l.key_bias = key_bias_tiles > 0 ? tile_cb(key_bias_tiles, mask_tile_size, mask_df)
                                         : std::numeric_limits<uint32_t>::max();  // inactive
-        // Load balancing: the core's unit table, written by the balance kernel (sparse_balance::kTableWords words).
         l.balance = balance ? alloc(sparse_balance::kTableWords * sizeof(uint32_t), 1, tt::DataFormat::UInt32)
                             : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
@@ -1679,7 +1674,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         reader_args.push_back(pooled_v_buf);
         reader_args.push_back(block_counts_buf);
         if (balance) {
-            // [core index, cost table, balance core NoC x, y, import Q, import mask].
             reader_args.push_back(i);
             reader_args.push_back(balance_table_buf);
             reader_args.push_back(static_cast<uint32_t>(balance_core_noc.x));
@@ -1713,7 +1707,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_signaler_args);
         writer_args.append(writer_signaler_args);
         if (balancing.remote) {
-            // [export buffer, balance core NoC x, y].
             writer_args.push_back(balance_res->export_out->buffer());
             writer_args.push_back(static_cast<uint32_t>(balance_core_noc.x));
             writer_args.push_back(static_cast<uint32_t>(balance_core_noc.y));
@@ -1759,7 +1752,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     std::vector<Tensor> all_gather_input_tensors = {input_tensor_k, input_tensor_v};
     std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k, gathered_input_tensor_v};
-    // Cross-device load balancing rides the gather writers; the helper adds their flag semaphore.
     RingAttentionBalance ring_balance;
     if (balancing.remote) {
         ring_balance.table = balance_res->table->buffer();
@@ -1852,8 +1844,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             {"balance_writer_flag", ring_balance.writer_flag_semaphore},
             {"balance_cb", kBalanceScratchCb},
         };
-        // [cost table, partner page, this device's tensor rank, tables / imports / returns arrived, writers], the SDPA
-        // grid's column NoC x and row NoC y, the writers' NoC (x, y).
         const uint32_t tensor_rank =
             rank_mapping.full_mesh
                 ? ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<
