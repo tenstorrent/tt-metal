@@ -131,6 +131,9 @@ struct ParsedTrafficPatternConfig {
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2. Forwarded to generated senders.
     std::optional<uint32_t> packet_period_cycles;  // benchmark senders: issue one packet every N cycles (0 = unpaced)
+    // ftype: neighbour -- a unicast to the chip one hop away, sent with the neighbour_send route (#65575). ftype
+    // stays CHIP_UNICAST for every host-side routing / hop computation; only the kernel's route call differs.
+    std::optional<bool> neighbour;
 };
 
 struct ParsedSenderConfig {
@@ -169,6 +172,7 @@ struct TrafficPatternConfig {
     std::optional<uint32_t> mcast_start_hops;
     std::optional<uint8_t> vc_id;  // VC selection: 0=VC0 (default), 2=VC2
     std::optional<uint32_t> packet_period_cycles;
+    std::optional<bool> neighbour;  // ftype: neighbour (see ParsedTrafficPatternConfig)
 
     // Credit info
     std::optional<SenderCreditInfo> sender_credit_info;  // For sender

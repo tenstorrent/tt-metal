@@ -678,6 +678,7 @@ void TestContext::add_sender_traffic(const TestConfig& config, size_t first_send
                 .mcast_start_hops = pattern.mcast_start_hops,
                 .enable_flow_control = config.enable_flow_control,
                 .packet_period_cycles = pattern.packet_period_cycles.value_or(0),
+                .neighbour = pattern.neighbour.value_or(false),
                 .seed = config.seed,
                 .is_2D_routing_enabled = fixture_->is_2D_routing_enabled(),
                 .mesh_shape = this->fixture_->get_mesh_shape(),

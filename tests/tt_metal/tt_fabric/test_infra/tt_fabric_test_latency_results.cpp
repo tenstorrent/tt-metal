@@ -63,7 +63,8 @@ void LatencyResultsManager::create_latency_kernels_for_device(
             responder_virtual_core,
             sender_config.link_id,
             sender_config.noc_id.value_or(tt::tt_metal::NOC::RISCV_0_default),
-            probe_start_delay_cycles_);
+            probe_start_delay_cycles_,
+            sender_config.parameters.neighbour);
         probe_cores.push_back(probe_sender_core_);
     }
 
@@ -104,7 +105,8 @@ void LatencyResultsManager::create_latency_kernels_for_device(
             sender_receive_buffer_address,
             sender_virtual_core,
             responder_noc_id,
-            sender_config.link_id);
+            sender_config.link_id,
+            sender_config.parameters.neighbour);
         probe_cores.push_back(probe_responder_core_);
     }
 

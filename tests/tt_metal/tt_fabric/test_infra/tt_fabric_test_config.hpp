@@ -263,6 +263,7 @@ inline TrafficPatternType merge_patterns(const TrafficPatternType& base, const T
     merged.vc_id = specific.vc_id.has_value() ? specific.vc_id : base.vc_id;
     merged.packet_period_cycles =
         specific.packet_period_cycles.has_value() ? specific.packet_period_cycles : base.packet_period_cycles;
+    merged.neighbour = specific.neighbour.has_value() ? specific.neighbour : base.neighbour;
 
     // Special handling for nested destination
     if (specific.destination.has_value()) {

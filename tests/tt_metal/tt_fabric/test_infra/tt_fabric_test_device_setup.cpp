@@ -1488,7 +1488,8 @@ void TestDevice::create_latency_sender_kernel(
     tt::tt_metal::CoreCoord responder_virtual_core,
     uint32_t link_idx,
     tt::tt_metal::NOC noc_id,
-    uint32_t start_delay_cycles) {
+    uint32_t start_delay_cycles,
+    bool neighbour) {
     log_debug(tt::LogTest, "Creating latency sender kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1565,12 +1566,16 @@ void TestDevice::create_latency_sender_kernel(
         rt_args.push_back(num_hops);
     } else {
         // 2D: add device and mesh IDs (for Hybrid Mesh routing)
-        uint32_t hops_2d = 0;
-        for (const auto& [dir, hop_count] : route_manager_->get_hops_to_chip(fabric_node_id_, dest_node)) {
-            hops_2d += hop_count;
-        }
         rt_args.push_back(dest_node.chip_id);
-        rt_args.push_back(neighbour_send_mesh_arg(dest_node.mesh_id.get(), hops_2d));
+        rt_args.push_back(dest_node.mesh_id.get());
+        if (neighbour) {
+            uint32_t hops_2d = 0;
+            for (const auto& [dir, hop_count] : route_manager_->get_hops_to_chip(fabric_node_id_, dest_node)) {
+                hops_2d += hop_count;
+            }
+            TT_FATAL(hops_2d == 1, "ftype: neighbour latency test needs a one-hop pair, got {} hops", hops_2d);
+        }
+        rt_args.push_back(neighbour ? 1u : 0u);  // ftype: neighbour (#65575)
     }
 
     // Add fabric connection args
@@ -1605,7 +1610,8 @@ void TestDevice::create_latency_responder_kernel(
     uint32_t sender_receive_buffer_address,
     tt::tt_metal::CoreCoord sender_virtual_core,
     tt::tt_metal::NOC noc_id,
-    uint32_t sender_link_idx) {
+    uint32_t sender_link_idx,
+    bool neighbour) {
     log_debug(tt::LogTest, "Creating latency responder kernel on node: {}", fabric_node_id_);
 
     // Use static memory map address for semaphore (same as bandwidth tests)
@@ -1700,12 +1706,16 @@ void TestDevice::create_latency_responder_kernel(
         rt_args.push_back(num_hops_back);
     } else {
         // 2D: add device and mesh IDs for sender (for Hybrid Mesh routing)
-        uint32_t hops_2d = 0;
-        for (const auto& [dir, hop_count] : route_manager_->get_hops_to_chip(fabric_node_id_, sender_node)) {
-            hops_2d += hop_count;
-        }
         rt_args.push_back(sender_node.chip_id);
-        rt_args.push_back(neighbour_send_mesh_arg(sender_node.mesh_id.get(), hops_2d));
+        rt_args.push_back(sender_node.mesh_id.get());
+        if (neighbour) {
+            uint32_t hops_2d = 0;
+            for (const auto& [dir, hop_count] : route_manager_->get_hops_to_chip(fabric_node_id_, sender_node)) {
+                hops_2d += hop_count;
+            }
+            TT_FATAL(hops_2d == 1, "ftype: neighbour latency test needs a one-hop pair, got {} hops", hops_2d);
+        }
+        rt_args.push_back(neighbour ? 1u : 0u);  // ftype: neighbour (#65575)
     }
 
     // Add fabric connection args (back to sender)

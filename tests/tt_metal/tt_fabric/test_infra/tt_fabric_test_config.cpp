@@ -124,8 +124,14 @@ ParsedTrafficPatternConfig YamlConfigParser::parse_traffic_pattern_config(const 
 
     ParsedTrafficPatternConfig config;
     if (pattern_yaml["ftype"]) {
-        config.ftype =
-            detail::chip_send_type_mapper.from_string(parse_scalar<std::string>(pattern_yaml["ftype"]), "ftype");
+        const auto ftype = parse_scalar<std::string>(pattern_yaml["ftype"]);
+        if (ftype == "neighbour") {
+            // A unicast to the next chip over, routed with fabric_set_neighbour_route (#65575).
+            config.ftype = ChipSendType::CHIP_UNICAST;
+            config.neighbour = true;
+        } else {
+            config.ftype = detail::chip_send_type_mapper.from_string(ftype, "ftype");
+        }
     }
     if (pattern_yaml["ntype"]) {
         config.ntype = parse_noc_send_type_spec(pattern_yaml["ntype"]);
@@ -1498,6 +1504,7 @@ TrafficPatternConfig TestConfigBuilder::resolve_traffic_pattern(const ParsedTraf
     resolved_pattern.atomic_inc_val = parsed_pattern.atomic_inc_val;
     resolved_pattern.mcast_start_hops = parsed_pattern.mcast_start_hops;
     resolved_pattern.packet_period_cycles = parsed_pattern.packet_period_cycles;
+    resolved_pattern.neighbour = parsed_pattern.neighbour;
     resolved_pattern.sender_credit_info = std::nullopt;
     resolved_pattern.credit_return_batch_size = std::nullopt;
 

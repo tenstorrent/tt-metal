@@ -7,15 +7,6 @@
 #include "tt_metal/fabric/hw/inc/noc_addr.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-// Neighbour-send prototype (#65575): bit 31 of a 2D mesh-id arg asks for the explicit neighbour_send route.
-inline void test_set_2d_unicast_route(
-    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_device_id, uint32_t dst_mesh_arg) {
-    if (dst_mesh_arg & (1u << 31)) {
-        tt::tt_fabric::fabric_set_neighbour_route(packet_header, dst_device_id, static_cast<uint16_t>(dst_mesh_arg));
-    } else {
-        tt::tt_fabric::fabric_set_unicast_route(packet_header, dst_device_id, static_cast<uint16_t>(dst_mesh_arg));
-    }
-}
 #include "api/dataflow/dataflow_api.h"
 
 #include <cstdint>
@@ -56,12 +47,14 @@ void kernel_main() {
     uint32_t num_hops_to_responder = 0;
     uint32_t dst_device_id = 0;
     uint32_t dst_mesh_id = 0;
+    bool neighbour = false;
 
     if constexpr (!is_2d_fabric) {
         num_hops_to_responder = get_arg_val<uint32_t>(arg_idx++);
     } else {
         dst_device_id = get_arg_val<uint32_t>(arg_idx++);
         dst_mesh_id = get_arg_val<uint32_t>(arg_idx++);
+        neighbour = get_arg_val<uint32_t>(arg_idx++) != 0;  // ftype: neighbour (#65575)
     }
 
     // Build fabric connection
@@ -80,8 +73,16 @@ void kernel_main() {
         fabric_set_unicast_route<false>((LowLatencyPacketHeader*)sem_inc_packet_header, num_hops_to_responder);
     } else {
         // 2D routing: use Hybrid Mesh header with device/mesh IDs (static routing)
-        test_set_2d_unicast_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
-        test_set_2d_unicast_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
+        if (neighbour) {
+            fabric_set_neighbour_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
+        } else {
+            fabric_set_unicast_route((HybridMeshPacketHeader*)payload_packet_header, dst_device_id, dst_mesh_id);
+        }
+        if (neighbour) {
+            fabric_set_neighbour_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
+        } else {
+            fabric_set_unicast_route((HybridMeshPacketHeader*)sem_inc_packet_header, dst_device_id, dst_mesh_id);
+        }
     }
 
     // Setup NOC addresses for destination (responder device)

@@ -322,7 +322,8 @@ public:
         tt::tt_metal::CoreCoord responder_virtual_core,
         uint32_t link_idx = 0,
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default,
-        uint32_t start_delay_cycles = 0);
+        uint32_t start_delay_cycles = 0,
+        bool neighbour = false);
 
     void create_latency_responder_kernel(
         tt::tt_metal::CoreCoord core,
@@ -334,7 +335,8 @@ public:
         uint32_t sender_receive_buffer_address,
         tt::tt_metal::CoreCoord sender_virtual_core,
         tt::tt_metal::NOC noc_id = tt::tt_metal::NOC::RISCV_0_default,
-        uint32_t sender_link_idx = 0);
+        uint32_t sender_link_idx = 0,
+        bool neighbour = false);
 
     void set_benchmark_mode(bool benchmark_mode) { benchmark_mode_ = benchmark_mode; }
     void set_global_sync(bool global_sync) { global_sync_ = global_sync; }
