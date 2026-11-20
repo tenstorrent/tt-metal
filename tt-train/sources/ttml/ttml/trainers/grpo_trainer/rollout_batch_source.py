@@ -7,12 +7,13 @@ from __future__ import annotations
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
+from typing import Any, Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
 from ttml.common.utils import repeat_interleave
 
 from .grpo_trainer import RolloutBatch, RolloutSampler, _derive_reward_names, dispatch_reward
+from .tool_calling import Tool
 
 
 @dataclass
@@ -86,9 +87,20 @@ def encode_rollout(rollout: RolloutBatch) -> Dict[str, Any]:
     }
 
 
-def tokenize_prompts(dataset: Any, tokenizer: Any, num_prompts: int) -> Tuple[List[List[int]], Dict[str, list]]:
+def tokenize_prompts(
+    dataset: Any, tokenizer: Any, num_prompts: int, tools: Sequence[Tool] = ()
+) -> Tuple[List[List[int]], Dict[str, list]]:
+    """A "prompt" that is a list of chat messages gets the chat template, with the tool schemas in the system prompt."""
     dataset = dataset.select(range(num_prompts))
-    prompts = [tokenizer.encode(row["prompt"], add_special_tokens=False) for row in dataset]
+    schemas = [tool.schema() for tool in tools] or None
+    prompts = [
+        tokenizer.apply_chat_template(
+            row["prompt"], tools=schemas, add_generation_prompt=True, tokenize=True, return_dict=False
+        )
+        if isinstance(row["prompt"], list)
+        else tokenizer.encode(row["prompt"], add_special_tokens=False)
+        for row in dataset
+    ]
     extra_columns = {k: list(dataset[k]) for k in dataset.column_names if k != "prompt"}
     return prompts, extra_columns
 

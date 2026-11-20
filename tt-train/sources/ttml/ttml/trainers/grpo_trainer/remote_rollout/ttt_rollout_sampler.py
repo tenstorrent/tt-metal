@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import os
 import time
-from typing import Any, Callable, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 import torch
 import ttnn
 from huggingface_hub import snapshot_download
+from transformers import AutoTokenizer
 from models.common.sampling import SamplingParams
 from models.tt_transformers.tt.common import PagedAttentionConfig
 from models.tt_transformers.tt.generator import Generator, create_submeshes
@@ -26,8 +27,9 @@ from models.tt_transformers.tt.model import Transformer
 from models.tt_transformers.tt.model_config import ModelArgs
 from ttml.common.utils import repeat_interleave
 
-from ..grpo_trainer import RolloutBatch, RolloutSampler
+from ..grpo_trainer import MultiTurnConfig, RolloutBatch, RolloutSampler
 from ..rollout_batch_source import pad_logprobs, validate_rollout_batch
+from ..tool_calling import TOOL_CALL_PARSERS, Tool, generate_tool_turns
 
 OptimizationsFn = Callable[[int, str], Any]
 
@@ -67,7 +69,11 @@ class TTTRolloutSampler(RolloutSampler):
         paged_block_size: int = 32,
         min_num_blocks: int = 1024,
         dummy_weights: bool = False,
+        multi_turn: Optional[MultiTurnConfig] = None,
+        tools: Sequence[Tool] = (),
     ) -> None:
+        if (multi_turn is None) != (not tools):
+            raise ValueError("TTTRolloutSampler: 'tools' and 'multi_turn' go together; set both or neither.")
         self.parent_mesh: Any = mesh_device
         self._dtype: Any = ttnn.bfloat16
         self._stop_token_ids: frozenset[int] = frozenset(int(t) for t in stop_token_ids)
@@ -75,6 +81,13 @@ class TTTRolloutSampler(RolloutSampler):
         self._completions_per_prompt: int = int(completions_per_prompt)
         self._max_completion_length: int = int(max_completion_length)
         self._weight_version: int = -1 if dummy_weights else 0
+        self._multi_turn = multi_turn
+        self._tools: Dict[str, Tool] = {tool.name: tool for tool in tools}
+        self._tool_call_parser = (
+            TOOL_CALL_PARSERS[multi_turn.tool_call_format](AutoTokenizer.from_pretrained(model_source))
+            if multi_turn is not None
+            else None
+        )
 
         # one [1,1] submesh per device of the parent mesh
         self._data_parallel: int = mesh_device.get_num_devices()
@@ -191,7 +204,10 @@ class TTTRolloutSampler(RolloutSampler):
         return self._weight_version
 
     def generate(self, prompts: List[List[int]]) -> RolloutBatch:
-        """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call."""
+        """Generate completions_per_prompt completions per prompt, in calls of at most slots_per_call.
+
+        With multi_turn, a completion holds all turns and the tool responses; tool-response tokens have log-prob 0.
+        """
         if self._weight_version < 0:
             raise RuntimeError("TTTRolloutSampler has dummy weights; call update_weights before generate")
         version = self._weight_version
@@ -201,7 +217,18 @@ class TTTRolloutSampler(RolloutSampler):
         token_logprobs: List[List[float]] = []
         for start in range(0, len(prompts_x), self._slots_per_call):
             chunk = prompts_x[start : start + self._slots_per_call]
-            c, lp = self.generate_and_get_log_probs(chunk, [W] * len(chunk))
+            if self._multi_turn is None:
+                c, lp = self.generate_and_get_log_probs(chunk, [W] * len(chunk))
+            else:
+                c, lp = generate_tool_turns(
+                    self,
+                    chunk,
+                    tools=self._tools,
+                    parser=self._tool_call_parser,
+                    max_turns=self._multi_turn.max_turns,
+                    max_tool_response_chars=self._multi_turn.max_tool_response_chars,
+                    max_completion_length=W,
+                )
             completions.extend(c)
             token_logprobs.extend(lp)
 
