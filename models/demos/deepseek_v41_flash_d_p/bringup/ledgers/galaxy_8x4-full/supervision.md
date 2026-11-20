@@ -774,3 +774,10 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   lanes' chips; switch PACKED_LANE_BALANCE) before PB.5, since mixed misses by ~1 % on device alone. PB.5's metric names
   fixed (the walls record _tagentic_cc suffixes; DRAM gated as packed_dram_gib_4x2k... < 32 GiB a chip, slots at 1M
   capacity; there is no separate 4x2k_p1m case).
+- 06:40 UTC PB.3K gate PASS -> bb6caaebe84. PB.3M attempt 1 started.
+- 07:12 UTC PB.3M done (attempt 1), WAITING. Fork option ring_indexer_score_dsa(lane_own_extent=): each lane buffer's
+  ring all-gather extent = its own lane's kv_len (not the longest lane's); no kernel change; behind PACKED_LANE_BALANCE.
+  Mixed device 121.0 -> 116.65 ms (indexer 22.41 -> 19.76). Gate walls (serving-equivalent): 4x2k@139264 109.4 ms =
+  74.9k new tok/s, mixed 126.4 ms = 64.8k: BOTH TARGETS MET. Oracle 40 layers bit-identical, final hidden 0.131, top-5
+  1.0. Not built (agent DECIDED, accepted): splitting the longest lane's score over idle chips (tie order of top-k
+  breaks bit-identity; the logits' return traffic ~ the ring's). DECIDED: accept. Next PB.5 (scripted accept gate).
