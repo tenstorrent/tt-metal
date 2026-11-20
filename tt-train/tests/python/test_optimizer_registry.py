@@ -445,8 +445,9 @@ def test_every_registered_optimizer_steps_on_fp32_gradients():
 def test_module_parameters_are_marked_as_parameters():
     """Registering a tensor in a module marks it as a parameter, the tensors whose gradients add up in fp32 under
     reduce_dtype float32; a tensor no module registered isn't one. Empty tensors, so this needs no device."""
-    model = _make_block_model()
-    assert all(tensor.is_parameter() for tensor in model.parameters().values())
+    model = AbstractModuleBase()
+    model.weight = Parameter(ttml.autograd.Tensor())
+    assert [tensor.is_parameter() for tensor in model.parameters().values()] == [True]
     assert not ttml.autograd.Tensor().is_parameter()
 
 
