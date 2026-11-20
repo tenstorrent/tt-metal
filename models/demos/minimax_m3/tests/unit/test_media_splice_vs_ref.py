@@ -162,7 +162,7 @@ def check(got, want, images, first_chunk_start, seq_len):
     assert torch.equal(got[is_image], want[is_image]), "an image row is not its embedding"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("sharded_residual", ["1", "0"], ids=["tp_sharded", "replicated"])
 @pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["vocab_sharded_2d", "by_position_1d"])
 @pytest.mark.parametrize(
@@ -192,7 +192,7 @@ def test_post_splice_embeddings(
     check(got, want[first_chunk_start:], images, first_chunk_start, seq_len)
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["vocab_sharded_2d", "by_position_1d"])
 def test_packed_forward(mesh_device, device_params, shard_vocab_on_sp):
     """Two slots' chunks in one forward: each position gets its image row or its token embedding, in the
@@ -235,7 +235,7 @@ def test_packed_forward(mesh_device, device_params, shard_vocab_on_sp):
     assert torch.equal(got, want)
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["vocab_sharded_2d", "by_position_1d"])
 def test_same_bucket_compiles_once(mesh_device, device_params, shard_vocab_on_sp):
     """Image counts that snap to the same table height reuse the program — what table_height is for.
@@ -257,7 +257,7 @@ def test_same_bucket_compiles_once(mesh_device, device_params, shard_vocab_on_sp
     assert mesh_device.num_program_cache_entries() == entries, "a same-bucket image count recompiled"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize("shard_vocab_on_sp", [True, False], ids=["vocab_sharded_2d", "by_position_1d"])
 def test_warm_media_leaves_nothing_to_compile(mesh_device, device_params, shard_vocab_on_sp):
     """After compile()'s media warm-up, serving images from one token up to a whole chunk compiles no program."""
@@ -291,7 +291,7 @@ def test_warm_media_leaves_nothing_to_compile(mesh_device, device_params, shard_
     assert mesh_device.num_program_cache_entries() == entries, "a served image size compiled a program"
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 def test_full_size_tables_refill_in_place(mesh_device, device_params):
     """Two forwards at one table height reuse its host table. At full hidden size the table is over the 32 MB above
     which copy_host_to_device_tensor takes its pinned, blocking path where the device can pin; each forward's device
@@ -435,7 +435,7 @@ def hf_prompt(layout, model):
     return torch.tensor(ids), images, features
 
 
-@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)])
+@parametrize_mesh_with_fabric(mesh_shapes=[(1, 1), (2, 4), (8, 4)], linear_fabric=True)
 @pytest.mark.parametrize(
     "layout,first_chunk_start",
     [
