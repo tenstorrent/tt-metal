@@ -352,3 +352,92 @@ def test_padded_slice_tile_pad_value(device, pad_value):
     actual_torch = actual.cpu().to_torch_with_padded_shape()
     passed, message = assert_equal(expected, actual_torch)
     assert passed, message
+
+
+def _rm_pad_value_setup(device, ttnn_dtype, torch_dtype):
+    """Height-sharded output of a row-major slice, 40 of 48 columns sliced, so 8 columns are padding."""
+    core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 0))})
+    begins, ends, shard_shape = [0, 0, 0, 0], [1, 1, 64, 40], (8, 48)
+    torch.manual_seed(0)
+    torch_input = torch.randint(1, 100, [1, 1, 64, 64]).to(torch_dtype)
+    tt_input = ttnn.from_torch(
+        torch_input,
+        dtype=ttnn_dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(core_grid, shard_shape, ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    return torch_input, tt_input, begins, ends, shard_shape, output_mem_config
+
+
+# pad_value is part of the program hash and baked into the kernels, so a new value on the same shapes must
+# compile its own program and still fill the padding with that value.
+@pytest.mark.requires_grid_size((8, 1))
+@pytest.mark.parametrize("pad_values", ((5.0, -3.25), (None, 5.0)), ids=["5_then_-3.25", "none_then_5"])
+def test_padded_slice_rm_pad_value_program_cache(device, pad_values):
+    torch_input, tt_input, begins, ends, shard_shape, output_mem_config = _rm_pad_value_setup(
+        device, ttnn.bfloat16, torch.bfloat16
+    )
+    entries = device.num_program_cache_entries()
+    for pad_value in pad_values:
+        expected = _pad_value_expected(torch_input[..., :40], shard_shape[1], pad_value)
+        actual = ttnn.experimental.padded_slice(
+            tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+        )
+        passed, message = assert_equal(expected, ttnn.to_torch(actual))
+        assert passed, f"pad_value={pad_value}: {message}"
+    assert device.num_program_cache_entries() == entries + 2
+
+
+# Integer output dtypes take the pad value as an exact integer of the output type.
+@pytest.mark.requires_grid_size((8, 1))
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, pad_value",
+    (
+        (ttnn.uint8, torch.uint8, 5.0),
+        (ttnn.uint16, torch.int32, 7.0),
+        (ttnn.int32, torch.int32, -9.0),
+        (ttnn.uint32, torch.int32, 123456.0),
+    ),
+    ids=["uint8", "uint16", "int32", "uint32"],
+)
+def test_padded_slice_rm_integer_pad_value(device, ttnn_dtype, torch_dtype, pad_value):
+    torch_input, tt_input, begins, ends, shard_shape, output_mem_config = _rm_pad_value_setup(
+        device, ttnn_dtype, torch_dtype
+    )
+    expected = _pad_value_expected(torch_input[..., :40].to(torch.int64), shard_shape[1], int(pad_value))
+    actual = ttnn.experimental.padded_slice(
+        tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+    )
+    passed, message = assert_equal(expected, ttnn.to_torch(actual).to(torch.int64))
+    assert passed, message
+
+
+# A float cast to an integer type is undefined for a fractional, non-finite or out-of-range value, so
+# validation rejects them for every integer output dtype.
+@pytest.mark.requires_grid_size((8, 1))
+@pytest.mark.parametrize(
+    "ttnn_dtype, torch_dtype, pad_value",
+    (
+        (ttnn.uint8, torch.uint8, -3.0),
+        (ttnn.uint8, torch.uint8, 256.0),
+        (ttnn.uint16, torch.int32, 65536.0),
+        (ttnn.int32, torch.int32, 5.5),
+        (ttnn.int32, torch.int32, float("nan")),
+        (ttnn.int32, torch.int32, float("inf")),
+        (ttnn.int32, torch.int32, 1e10),
+        (ttnn.uint32, torch.int32, -1.0),
+    ),
+    ids=["uint8_neg", "uint8_256", "uint16_65536", "int32_frac", "int32_nan", "int32_inf", "int32_1e10", "uint32_neg"],
+)
+def test_padded_slice_rm_integer_pad_value_rejected(device, ttnn_dtype, torch_dtype, pad_value, expect_error):
+    _, tt_input, begins, ends, _, output_mem_config = _rm_pad_value_setup(device, ttnn_dtype, torch_dtype)
+    with expect_error(RuntimeError, "must be a finite integer"):
+        ttnn.experimental.padded_slice(
+            tt_input, begins, ends, [1, 1, 1, 1], memory_config=output_mem_config, pad_value=pad_value
+        )

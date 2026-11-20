@@ -4,6 +4,8 @@
 
 #include "padded_slice_device_operation.hpp"
 
+#include <cmath>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -11,6 +13,27 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
+
+namespace {
+
+// pad_value is a float, but an integer output takes it through a float to integer cast, which is undefined for a
+// fractional, non-finite or out-of-range value. The bounds are powers of two, which a float holds exactly.
+bool pad_value_fits_output_dtype(float value, DataType dtype) {
+    switch (dtype) {
+        case DataType::INT32:
+            return std::isfinite(value) && std::trunc(value) == value && value >= -2147483648.0f &&
+                   value < 2147483648.0f;
+        case DataType::UINT32:
+            return std::isfinite(value) && std::trunc(value) == value && value >= 0.0f && value < 4294967296.0f;
+        case DataType::UINT16:
+            return std::isfinite(value) && std::trunc(value) == value && value >= 0.0f && value < 65536.0f;
+        case DataType::UINT8:
+            return std::isfinite(value) && std::trunc(value) == value && value >= 0.0f && value < 256.0f;
+        default: return true;
+    }
+}
+
+}  // namespace
 
 PaddedSliceDeviceOperation::program_factory_t PaddedSliceDeviceOperation::select_program_factory(
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
@@ -56,6 +79,16 @@ void PaddedSliceDeviceOperation::validate_on_program_cache_miss(
             "Slice start {} must be less than or equal to the end {}",
             args.padded_slice_start[i],
             args.padded_slice_end[i]);
+    }
+    if (args.pad_value.has_value()) {
+        const auto output_dtype = tensor_args.preallocated_output.has_value()
+                                      ? tensor_args.preallocated_output->dtype()
+                                      : compute_output_specs(args, tensor_args).data_type();
+        TT_FATAL(
+            pad_value_fits_output_dtype(*args.pad_value, output_dtype),
+            "pad_value {} must be a finite integer that fits the {} output dtype",
+            *args.pad_value,
+            output_dtype);
     }
     if (tensor_args.preallocated_output.has_value()) {
         const auto output_shape_required = compute_output_specs(args, tensor_args).padded_shape();
