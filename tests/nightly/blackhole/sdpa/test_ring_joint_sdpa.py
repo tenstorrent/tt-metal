@@ -1971,7 +1971,8 @@ def run_ring_joint_sdpa_chunked(
             for q_chunk, k_chunk in qk_configs
         }
 
-        # Dropping any opt-in below must change some chunk's output; a match means it was accepted but not applied.
+        # The precision recipes own the numerics and ignore these knobs (k_splits, segmented_accumulation,
+        # matmul_math_fidelity): dropping one must leave every chunk bit-identical.
         def feature_baseline(**overrides):
             base = dict(
                 k_splits=k_splits,
@@ -2526,7 +2527,7 @@ def run_ring_joint_sdpa_chunked(
             ), "Chunked prefill produced output that differs from iteration 0"
 
         for (config_id, feature), differs in feature_differs.items():
-            assert differs, f"{config_id}: output equals the run without {feature} on every chunk, so it never applied"
+            assert not differs, f"{config_id}: {feature} changed the output, but the precision recipes ignore it"
 
         for config_id, per_chunk_results in per_chunk_results_by_config.items():
             failures = [
@@ -4920,9 +4921,10 @@ def test_ring_mla_metadata_trace_replay_matches_scalar(num_chunks):
 
 @pytest.mark.timeout(900)
 def test_ring_mla_segmented_accumulation_matches_unsegmented():
-    """Segmented accumulation on the KV-pad-rotated ring_mla path must match the unsegmented result, at Gemma4's
+    """segmented_accumulation=True on the KV-pad-rotated ring_mla path must match the unsegmented result, at Gemma4's
     global shape (1024 tokens per device, packed 640-wide K/V, q96/k256). At chunk 0 a device's later shards lie
-    wholly after its queries, so their segments are fully masked."""
+    wholly after its queries. The precision recipes ignore the knob (FP32 denominator, no segments), so the outputs
+    must be bit-identical."""
     num_chunks = 2
     mesh_config = MESH_CONFIG
     sp_size = mesh_config.sp_size
@@ -5077,7 +5079,6 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             )
             return tt_out
 
-        segmentation_changed_output = False
         for i, chunk in enumerate(chunks):
             load_chunk(i)
             outputs = []
@@ -5093,9 +5094,7 @@ def test_ring_mla_segmented_accumulation_matches_unsegmented():
             assert torch.isfinite(segmented).all(), f"chunk {i}: segmented output is not finite"
             pcc_passed, pcc = comp_pcc(unsegmented, segmented, 0.9999)
             assert pcc_passed, f"chunk {i} (kv_actual_isl={chunk['kv_actual_isl']}): segmented vs unsegmented PCC {pcc}"
-            segmentation_changed_output |= not torch.equal(unsegmented, segmented)
-        # Segments merge in a different order, so identical output on every chunk means segmentation never applied.
-        assert segmentation_changed_output, "segmented output equals unsegmented on every chunk"
+            assert torch.equal(unsegmented, segmented), f"chunk {i}: segmented_accumulation changed the output"
     finally:
         close_ring_joint_sdpa_runtime(runtime)
 
@@ -5487,9 +5486,11 @@ CAUSAL_PARTIAL_TILE_ROW_ERROR_BOUND = 0.1
 
 @pytest.mark.timeout(600)
 def test_ring_joint_attention_causal_logical_n_inside_tile():
-    """Causal attention with logical_n ending inside a tile: every real row ahead of the masked keys must equal the
-    run of the same data with no pad rows, and every real row must stay within the per-row error bound of the CPU
-    reference without those keys. PCC does not see a few rows."""
+    """Causal attention with logical_n ending inside a tile: every real row ahead of the masked keys' row group must
+    equal the run of the same data with no pad rows, and every real row must stay within the per-row error bound of
+    the CPU reference without those keys. PCC does not see a few rows. STANDARD decides a fused chunk's redo per row
+    group (up to two tile rows), and the pad Q rows share the last group with real rows, so that group may take the
+    other path in one of the two runs."""
     mesh_config = _h3_dynamic_mesh_config()
     runtime = open_ring_joint_sdpa_runtime(mesh_config)
     try:
@@ -5547,7 +5548,9 @@ def test_ring_joint_attention_causal_logical_n_inside_tile():
                 outputs.append(reverse_reorder_tensor_chunks(_h3_dynamic_to_torch(runtime, tt_out), order)[0].float())
             unpadded, padded = outputs
             first_masked = int(masked.nonzero()[0])
-            changed = torch.nonzero((padded[:, :first_masked] != unpadded[:, :first_masked]).any(-1).any(0)).flatten()
+            # Rows before the (up to two-tile) row group holding the first pad row.
+            exact_rows = max(0, (first_masked // 32 - 1) * 32)
+            changed = torch.nonzero((padded[:, :exact_rows] != unpadded[:, :exact_rows]).any(-1).any(0)).flatten()
             real_q, real_v = (t[:, :, ~masked].float() for t in (q, v))
             ref = torch_sdpa_reference(real_q, real_q, real_v, is_causal=True)[0]
             row_error = (((padded[:, ~masked] - ref) ** 2).sum(-1) / (ref**2).sum(-1)).amax(0)
@@ -9140,61 +9143,6 @@ def test_ring_joint_attention_hifi_matmul_on_lofi_compute_config():
     )
 
 
-def test_ring_joint_attention_segmented_accumulation_rejects_several_q_chunks_per_core(expect_error):
-    """A core holding two Q chunks would run them unsegmented, silently losing the accuracy the caller asked for (Gemma4
-    at chunk 12288 with q 96: 128 Q chunks on 110 cores). The op must refuse instead and name the fix."""
-    q_chunk_size = 64
-    # Enough Q chunks that some core gets two, on any mesh.
-    tokens_per_device = q_chunk_size * (MESH_CONFIG.sdpa_cores // GEMMA4_GLOBAL_CHUNKED_MODEL.nhq + 2)
-    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
-    # run_ring_joint_sdpa_chunked reports a raising op call through pytest.fail, keeping the op's message.
-    with expect_error(pytest.fail.Exception, "segmented_accumulation needs one Q chunk per core"):
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            replace(GEMMA4_GLOBAL_CHUNKED_MODEL, d_k=640),
-            chunk_size=chunk_size,
-            # Chunk 0 is not chunked prefill (options ignored); chunk 1 raises.
-            total_seq=2 * chunk_size,
-            qk_configs=[(q_chunk_size, 256)],
-            use_ring_mla=True,
-            matmul_math_fidelity=ttnn.MathFidelity.LoFi,
-            segmented_accumulation=True,
-            do_check=False,
-        )
-
-
-@pytest.mark.parametrize(
-    "nhk, k_splits, segmented, message",
-    [
-        # The kernel holds at most four bands, whatever the grid.
-        (1, 5, False, "k_splits=5, but at most"),
-        (2, 2, False, "k_splits=2 cannot be applied: dense attention needs one grouped K/V head, but there are 2"),
-        # Two bands fit Galaxy and QuietBox grids alike, so the segmented check is what raises.
-        (1, 2, True, "segmented_accumulation is not supported with K split"),
-    ],
-    ids=["ksplit-over-kernel-cap", "ksplit-two-kv-heads", "segmented-with-ksplit"],
-)
-def test_ring_joint_attention_rejects_inapplicable_ksplit_and_segmented(
-    expect_error, nhk, k_splits, segmented, message
-):
-    """The op must refuse a k_splits or segmented_accumulation it cannot apply and name the cause. Gemma4's
-    chunk-2048 global shape (32 units) is otherwise eligible for both."""
-    tokens_per_device = 256
-    chunk_size = tokens_per_device * MESH_CONFIG.sp_size
-    with expect_error(pytest.fail.Exception, message):
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            replace(GEMMA4_GLOBAL_CHUNKED_MODEL, nhk=nhk, nhv=nhk),
-            chunk_size=chunk_size,
-            # Chunk 0 is not chunked prefill (options ignored); chunk 1 raises.
-            total_seq=2 * chunk_size,
-            qk_configs=[(64, 256)],
-            k_splits=k_splits,
-            segmented_accumulation=segmented,
-            do_check=False,
-        )
-
-
 @pytest.mark.timeout(1800)
 @pytest.mark.parametrize(
     "chunk_size, config",
@@ -9216,34 +9164,6 @@ def test_ring_joint_attention_gemma4_tuned_configs_apply(chunk_size, config):
             qk_configs=[(q_chunk_size, k_chunk_size)],
             use_ring_mla=True,
             matmul_math_fidelity=ttnn.MathFidelity.LoFi,
-            k_splits=k_splits,
-            segmented_accumulation=segmented,
-            do_check=False,
-        )
-
-
-@pytest.mark.parametrize(
-    "k_splits, segmented, message",
-    [
-        (2, False, "k_splits=2, but at most 1 can be applied: .* sliding window 128 allows 1"),
-        (1, True, "segmented_accumulation is not supported with a sliding window"),
-    ],
-    ids=["ksplit-over-window-cap", "segmented-with-sliding-window"],
-)
-def test_ring_joint_attention_rejects_inapplicable_sliding_ksplit_and_segmented(
-    expect_error, k_splits, segmented, message
-):
-    """GPT-OSS's 128-token window holds one halo K chunk, too few for a second K-split band."""
-    chunk_size = 1024
-    # Sliding attention refuses a call that is not chunked prefill, which chunk 0 is; run only the last chunk.
-    with mock.patch.dict(os.environ, {CHUNKED_PREFILL_CHUNK_ID_ENV: "2"}), expect_error(pytest.fail.Exception, message):
-        run_ring_joint_sdpa_chunked(
-            MESH_CONFIG,
-            replace(GPT_OSS_CHUNKED_MODEL, q_chunk_sizes=[64], seq_len=chunk_size),
-            chunk_size=chunk_size,
-            total_seq=3 * chunk_size,
-            qk_configs=[(64, 128)],
-            sliding_window_size=GPT_OSS_RING_SINK_CONFIG.sliding_window_size,
             k_splits=k_splits,
             segmented_accumulation=segmented,
             do_check=False,

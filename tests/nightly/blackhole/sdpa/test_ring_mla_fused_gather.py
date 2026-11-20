@@ -541,7 +541,6 @@ def test_ring_mla_split_kv_comparison_mode():
             ("region_hole", "whole KV regions"),
             ("balanced", "Split KV supports only"),
             ("transposed", "Q sequence sharded only on mesh axis 0"),
-            ("fp32", "Split KV requires streaming"),
         )
     ],
 )
@@ -549,9 +548,7 @@ def test_ring_mla_split_kv_rejects_unsupported_geometry(invalid_case, error, exp
     if MESH_CONFIG.num_devices not in (8, 32):
         pytest.skip("Split-KV coverage requires an eight-device LB or 32-device Galaxy")
     tp, sp = 4, MESH_CONFIG.num_devices // 4
-    runtime = open_ring_joint_sdpa_runtime(
-        replace(MESH_CONFIG, tp_size=sp, sp_size=tp), full_mesh=True, fp32_dest_acc_en=invalid_case == "fp32"
-    )
+    runtime = open_ring_joint_sdpa_runtime(replace(MESH_CONFIG, tp_size=sp, sp_size=tp), full_mesh=True)
     try:
         mesh = runtime.mesh_device
         source_rows = 96 if invalid_case == "region_hole" else 64
