@@ -26,18 +26,24 @@
     "glm53": {
       "sc4": {
         "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.03,
+            "ttft_s": 0.03
+          }
+        },
         "8kw": {
-          "throughput_tok_s": 31012,
-          "ttft_s": 26.17,
-          "chunk_time_ms": 577
+          "throughput_tok_s": 31210,
+          "ttft_s": 26.29,
+          "chunk_time_ms": 569
         }
       },
       "sc1": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 9850,
-          "ttft_s": 88.89,
-          "chunk_time_ms": 510
+          "throughput_tok_s": 9906,
+          "ttft_s": 88.2,
+          "chunk_time_ms": 507
         }
       },
       "sc4_4x4": {
@@ -51,9 +57,9 @@
       "sc1_4x4": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 5539,
-          "ttft_s": 132.17,
-          "chunk_time_ms": 883
+          "throughput_tok_s": 5932,
+          "ttft_s": 125.4,
+          "chunk_time_ms": 833
         }
       }
     },
@@ -114,12 +120,12 @@
           "@512k": {
             "throughput_tok_s": 4457,
             "ttft_s": 77.56,
-            "chunk_time_ms": 5171
+            "chunk_time_ms": 4898
           },
           "@1M": {
             "throughput_tok_s": 2684,
             "ttft_s": 234.17,
-            "chunk_time_ms": 8946
+            "chunk_time_ms": 8118
           }
         }
       },

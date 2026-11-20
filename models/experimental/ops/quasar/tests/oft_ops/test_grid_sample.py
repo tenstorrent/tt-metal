@@ -87,7 +87,7 @@ def _run(mesh, in_shape, rows, sharded):
     tt_grid = ttnn.to_device(grid_host, mesh)
     kwargs = {}
     if sharded:
-        tt_grid = ttnn.to_memory_config(tt_grid, U.resolve_memcfg(("hs", (U.TILE, 2 * K)), mesh))
+        tt_grid = U.op("to_memory_config")(tt_grid, U.resolve_memcfg(("hs", (U.TILE, 2 * K)), mesh))
         kwargs["memory_config"] = U.resolve_memcfg(("hs", (U.TILE, K * c)), mesh)
 
     tt_inp = U.to_tt(inp, mesh, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)

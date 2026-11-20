@@ -85,17 +85,18 @@ GRIDS = {
 }
 
 # Device grids for attention, the block and the full model. Their CPU golden builds L x L scores per
-# head, which rules out 65,536 patches here.
+# head, which rules out the full padded length here.
 ATTENTION_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
 
 # Device grids for the parts that work on each row alone (everything but attention). Their CPU golden
 # grows only with the row count, so it runs at the full padded length in seconds. One P150 runs one
 # ring chip's quarter of the image (`MeshRows`):
 #   full:     fills the padded length exactly; real rows on every ring chip, no padding
-#   max_side: also fills it, with the longest side the processor allows (512)
+#   max_side: also fills it, with the longest side the processor allows (512); 510x132 is the largest
+#             grid the processor makes, so this one is a little over any real image
 #   partial:  nearly full; the real rows end inside a tile (not a multiple of 32) on the last chip
 #   small:    a small image, almost all padding; every real row is on the first chip
-PADDING_LAYOUT_SIZES = {"full": (256, 256), "max_side": (512, 128), "partial": (250, 250), "small": (40, 100)}
+PADDING_LAYOUT_SIZES = {"full": (256, 264), "max_side": (512, 132), "partial": (250, 250), "small": (40, 100)}
 PADDING_LAYOUT_GRIDS = pytest.mark.parametrize("size", list(PADDING_LAYOUT_SIZES))
 
 
@@ -202,7 +203,7 @@ TRACE_WARMUP = 2
 TRACE_ITERATIONS = 10
 
 # ttsim (TT_METAL_SIMULATOR) simulates one chip far slower than silicon, too slow for the
-# full padded length (16,384 rows per chip). Sim tests opt in with `@SIMULATOR`; on ttsim, conftest.py
+# full padded length (16,896 rows per chip). Sim tests opt in with `@SIMULATOR`; on ttsim, conftest.py
 # skips every other device test. Each row-wise part has one: one chip, random weights, SIMULATOR_GRID
 # in a config padded to SIMULATOR_ROWS (`simulator_config`), so the chip runs its quarter, 128 rows.
 # They also run on hardware.

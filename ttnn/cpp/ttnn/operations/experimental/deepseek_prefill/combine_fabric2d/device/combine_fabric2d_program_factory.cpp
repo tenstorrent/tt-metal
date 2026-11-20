@@ -267,24 +267,21 @@ struct ForwardingBuffer {
 
 // Never initialised and never read back: pure staging for tokens passing through a chip. A page is the token
 // and its forwarding metadata fused, so one fabric write lands both and a forwarded token costs one DRAM read
-// and one DRAM write.
+// and one DRAM write. The caller's buffer if it passed one, validated with the other inputs and kept alive by
+// the caller; else one the op allocates, which the workload holds so it lives as long as the cached program.
 ForwardingBuffer allocate_forwarding_buffer(
     ttnn::MeshDevice* mesh, const CombineFabric2dParams& args, const CombineFabric2dInputs& tensor_args) {
     ForwardingBuffer fwd;
     fwd.pages_per_stream = fwd_pages_per_stream(args);
     const uint32_t page_bytes = token_size_bytes(tensor_args) + cmbf2d::FORWARDING_METADATA_SIZE;
-    TT_FATAL(
-        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
-    const uint32_t pages = stream_count(args.num_links) * fwd.pages_per_stream;
-    const tt::tt_metal::TensorSpec spec(
-        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
-        tt::tt_metal::TensorLayout(
-            tt::tt_metal::DataType::UINT32,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
-    // Throws if it does not fit DRAM, which IS the "verify it fits" check.
-    fwd.owner = std::make_shared<ttnn::Tensor>(create_device_tensor(spec, mesh));
-    fwd.buffer = fwd.owner->buffer();
+    if (tensor_args.forwarding_buffer.has_value()) {
+        fwd.buffer = tensor_args.forwarding_buffer->buffer();
+    } else {
+        // Throws if it does not fit DRAM, which IS the "verify it fits" check.
+        fwd.owner = std::make_shared<ttnn::Tensor>(
+            create_device_tensor(forwarding_buffer_spec(args, token_size_bytes(tensor_args)), mesh));
+        fwd.buffer = fwd.owner->buffer();
+    }
     TT_FATAL(fwd.buffer != nullptr, "combine_fabric2d: forwarding buffer has no device buffer");
     TT_FATAL(
         fwd.buffer->aligned_page_size() == page_bytes,
@@ -559,6 +556,22 @@ tt::tt_metal::ProgramDescriptor build_program_for_coord(
 }
 }  // namespace
 
+tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
+    TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
+    const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
+    TT_FATAL(
+        page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
+    const uint32_t pages = stream_count(args.num_links) * fwd_pages_per_stream(args);
+    // Typed UINT32 so a page is exactly page_bytes, with no alignment rounding: the kernels address it by a page
+    // index they compute themselves.
+    return tt::tt_metal::TensorSpec(
+        ttnn::Shape({pages, page_bytes / static_cast<uint32_t>(sizeof(uint32_t))}),
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::UINT32,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
+            tt::tt_metal::MemoryConfig{tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM}));
+}
+
 tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_descriptor(
     const CombineFabric2dParams& operation_attributes,
     const CombineFabric2dInputs& tensor_args,
@@ -602,7 +615,10 @@ tt::tt_metal::WorkloadDescriptor CombineFabric2dProgramFactory::create_workload_
             workload_descriptor.semaphores.push_back(sem);
         }
     }
-    workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    // A caller's buffer is its own to keep alive; only an owned one has to outlive the call with the workload.
+    if (fwd.owner != nullptr) {
+        workload_descriptor.buffers.push_back({fwd.owner, fwd.buffer});
+    }
 
     for (const auto& coord : tensor_coords.coords()) {
         workload_descriptor.programs.push_back(

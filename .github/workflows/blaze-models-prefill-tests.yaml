@@ -38,7 +38,7 @@ on:
       kimi_k2_7:
         type: boolean
         default: false
-        description: "Kimi-K2.7: every K2.7 leg (also pulls kv_cache_table, kimi_moe_perf, ring_joint_sdpa_perf)"
+        description: "Kimi-K2.7: every K2.7 leg (also pulls kv_cache_table, ring_joint_sdpa_perf)"
       glm_5_3:
         type: boolean
         default: false

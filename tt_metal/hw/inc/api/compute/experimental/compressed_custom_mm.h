@@ -34,7 +34,7 @@ namespace ckernel {
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: even number from 2 to 254 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -82,7 +82,7 @@ ALWI void compressed_custom_mm_block_init(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: even number from 2 to 254 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -120,7 +120,7 @@ ALWI void compressed_custom_mm_block_init_short(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: even number from 2 to 254 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -161,7 +161,7 @@ ALWI void compressed_custom_mm_block(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: even number from 2 to 254 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
@@ -197,7 +197,7 @@ ALWI void compressed_custom_mm_block_unpack(
  * in1 tile shape: [32, 32]
  * rt_dim: 1
  * ct_dim: any integer from 1 to 64, as long as the output tiles fit in DEST (see CustomMmDestLayout)
- * kt_dim: even number from 2 to 256 (inclusive)
+ * kt_dim: even number from 2 to 254 (inclusive)
  * fidelity: LoFi only
  * throttle: not supported
  *
