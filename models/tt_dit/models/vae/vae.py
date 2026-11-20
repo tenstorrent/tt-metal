@@ -606,6 +606,7 @@ class VaeAttention(Module):
             is_causal=False,
             program_config=self._sdpa_program_config,
             compute_kernel_config=self._sdpa_compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
 
         x = self.to_out.forward(x, compute_kernel_config=self._mm_compute_kernel_config)

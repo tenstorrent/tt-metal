@@ -242,6 +242,7 @@ class WanAttentionBlock(Module):
             is_causal=False,
             program_config=self.sdpa_program_config,
             compute_kernel_config=self.sdpa_compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         out_THNC = ttnn.typecast(out_THNC, q_THNC.dtype) if out_THNC.dtype != q_THNC.dtype else out_THNC
         out_TNC = ttnn.transformer.concatenate_heads(out_THNC)
