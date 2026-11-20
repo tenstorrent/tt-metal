@@ -119,7 +119,7 @@ auto buffer = CreateBuffer(buff_config);
 
 // New MeshBuffer::create
 tt_metal::distributed::DeviceLocalBufferConfig  buff_config{.page_size = page_size,  .buffer_type = buffType};
-tt_metal::distributed::MeshBufferConfig  mesh_config = tt_metal::distributed::ReplicatedBufferConfig{.size = dram_buffer_size};
+tt_metal::distributed::ReplicatedBufferConfig  mesh_config{.size = dram_buffer_size};
 auto buffer = tt_metal::distributed::MeshBuffer::create(mesh_config, buff_config, device.get());
 
 // Old WriteToBuffer

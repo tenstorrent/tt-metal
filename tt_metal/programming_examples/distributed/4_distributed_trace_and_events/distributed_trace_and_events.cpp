@@ -2,9 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <map>
+#include <vector>
+
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -18,8 +22,7 @@ using namespace tt::tt_metal::distributed;
 // 1. Initializing a MeshDevice with 2 MeshCommandQueues and a dedicated memory region to store MeshWorkload Traces
 // 2. Loading a SubDevice configuration on a Virtual Mesh, and how this configuration gets replicated across all
 // physical devices
-// 3. Allocating MeshBuffers in the distributed memory space exposed by the Virtual Mesh, to shard data across physical
-// devices
+// 3. Allocating MeshBuffers in lock-step: the same buffer, at the same address, on every physical device
 // 4. Constructing programs targeting different SubDevices
 // 5. Constructing homogeneous (same program dispatched to all physical devices) and heterogeneous (different programs
 // dispatched
@@ -154,28 +157,20 @@ int main() {
     // =========== Step 2: Initialize IO Buffers and Workload parameters ===========
     uint32_t single_tile_size = sizeof(bfloat16) * TILE_HEIGHT * TILE_WIDTH;  // Using bfloat16 in this example
     uint32_t num_tiles_per_device = 2048;  // Number of tiles sent to each physical device
-    uint32_t num_tiles_in_mesh =
-        num_tiles_per_device * mesh_device->num_devices();  // The total number of tiles in the distributed memory space
 
-    // Specify data layout in distributed memory space - Data will be sharded in row major order across the Virtual Mesh
-    tt::tt_metal::distributed::ShardedBufferConfig global_buffer_config{
-        .global_size = single_tile_size * num_tiles_in_mesh,  // Total size of the sharded buffer
-        .global_buffer_shape =
-            {num_tiles_in_mesh * TILE_WIDTH, TILE_HEIGHT},  // Data represents horizontally concatenated tiles
-        .shard_shape = {num_tiles_per_device * TILE_WIDTH, TILE_HEIGHT},  // Row major sharding
-        .shard_orientation = ShardOrientation::ROW_MAJOR                  // Row major sharding
-    };
+    // Every physical device gets a buffer of the same size, at the same address
+    ReplicatedBufferConfig buffer_config{.size = single_tile_size * num_tiles_per_device};
     // Specify data layout on a single physical device
     DeviceLocalBufferConfig per_device_buffer_config{
         .page_size = single_tile_size, .buffer_type = tt_metal::BufferType::DRAM, .bottom_up = true};
     // Allocate buffers in distributed memory space for first MeshWorkload
-    auto add_src0_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-    auto add_src1_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-    auto add_output_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+    auto add_src0_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
+    auto add_src1_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
+    auto add_output_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
     // Allocate buffers in distributed memory space for second MeshWorkload
-    auto mul_sub_src0_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-    auto mul_sub_src1_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
-    auto mul_sub_output_buf = MeshBuffer::create(global_buffer_config, per_device_buffer_config, mesh_device.get());
+    auto mul_sub_src0_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
+    auto mul_sub_src1_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
+    auto mul_sub_output_buf = MeshBuffer::create(buffer_config, per_device_buffer_config, mesh_device.get());
 
     // =========== Step 3: Create Workloads to run on the Virtual Mesh ===========
     // Specify Device Ranges on which the Workloads will run
@@ -264,22 +259,23 @@ int main() {
     // Synchronize
     MeshEvent trace_event = workload_cq.enqueue_record_event();
     data_movement_cq.enqueue_wait_for_event(trace_event);
-    // =========== Step 9: Read Outputs on MeshCQ1 ===========
-    std::vector<bfloat16> add_dst_vec = {};
-    std::vector<bfloat16> mul_sub_dst_vec = {};
-    EnqueueReadMeshBuffer(data_movement_cq, add_dst_vec, add_output_buf);
-    EnqueueReadMeshBuffer(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf);
-
-    // =========== Step 10: Verify Outputs ===========
+    // =========== Step 9: Read and Verify Outputs on MeshCQ1 ===========
+    // Each physical device computed its own outputs, so they are read back and checked device by device: every device
+    // added, the top row multiplied and the bottom row subtracted.
     bool pass = true;
-    for (auto val : add_dst_vec) {
-        pass &= (static_cast<float>(val) == workload_0_src0_val + workload_0_src1_val);
-    }
-    for (int i = 0; i < mul_sub_dst_vec.size(); i++) {
-        if (i < mul_sub_dst_vec.size() / 2) {
-            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val * workload_1_src1_val);
-        } else {
-            pass &= (static_cast<float>(mul_sub_dst_vec[i]) == workload_1_src0_val - workload_1_src1_val);
+    for (const auto& coord : all_devices) {
+        std::vector<bfloat16> add_dst_vec;
+        std::vector<bfloat16> mul_sub_dst_vec;
+        ReadShard(data_movement_cq, add_dst_vec, add_output_buf, coord);
+        ReadShard(data_movement_cq, mul_sub_dst_vec, mul_sub_output_buf, coord);
+
+        for (auto val : add_dst_vec) {
+            pass &= (static_cast<float>(val) == workload_0_src0_val + workload_0_src1_val);
+        }
+        const float expected_mul_sub = top_row.contains(coord) ? workload_1_src0_val * workload_1_src1_val
+                                                               : workload_1_src0_val - workload_1_src1_val;
+        for (auto val : mul_sub_dst_vec) {
+            pass &= (static_cast<float>(val) == expected_mul_sub);
         }
     }
     mesh_device->release_mesh_trace(trace_id);
