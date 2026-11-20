@@ -13,7 +13,7 @@ using ttnn::prim::RingDistributedSDPAParams;
 namespace {
 PrecisionPolicy ring_distributed_policy(const RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& t) {
     return resolve_recipe_policy(
-        t.q, t.k, attrs.precision.value_or(SDPAPrecision::STANDARD), attrs.scale, std::nullopt, attrs.program_config);
+        t.q, t.k, attrs.precision.value_or(SDPAPrecision::STANDARD), attrs.scale, attrs.program_config);
 }
 
 uint32_t slab_rows(const RingDistributedSDPAParams& attrs, const RingDistributedSDPAInputs& t) {

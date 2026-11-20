@@ -6,7 +6,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/windowed_mode.hpp"
 #include <optional>
 
@@ -19,7 +18,6 @@ struct SDPAParams {
     bool is_causal = false;
     std::optional<int64_t> chunk_start_idx;        // Chunked legacy: scalar offset, part of program cache key
     std::optional<Tensor> chunk_start_idx_tensor;  // Chunked flexible: device tensor [1] int32, read at runtime
-    DeviceComputeKernelConfig compute_kernel_config;
     bool use_mla = false;
     std::optional<uint32_t> head_dim_v;
     std::optional<uint32_t> sliding_window_size;
@@ -34,7 +32,7 @@ struct SDPAParams {
     // ttnn::operations::transformer::PagedCacheGeometryOverride.
     ttnn::operations::transformer::PagedCacheGeometryOverride paged_cache_geometry;
     bool output_concat_heads = false;
-    // Precision recipe (device/recipe/); unset: the legacy kernels.
+    // Precision recipe (device/recipe/); resolved to STANDARD by default before dispatch.
     std::optional<ttnn::operations::transformer::SDPAPrecision> precision;
     // Recipe calls: the L1 their layout may use (recipe_l1_budget), set before the program-cache lookup.
     uint64_t recipe_l1_budget = 0;

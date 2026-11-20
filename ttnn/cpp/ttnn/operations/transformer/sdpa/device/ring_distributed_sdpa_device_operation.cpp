@@ -60,7 +60,7 @@ RingDistributedSdpaDeviceOperation::create_op_performance_model(
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(args.precision, tensor_args.k.dtype());
 
     // In chunked/paged-KV mode, k_shape[2] is the page block size, not the full KV sequence length.
     // Use chunk_start_idx + q_shape[2] as the effective Sk (similar to SDPAOperation).
@@ -96,7 +96,6 @@ Tensor ring_distributed_sdpa(
     std::optional<float> scale,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const std::optional<ttnn::operations::transformer::SDPAProgramConfig>& program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<ttnn::Tensor>& page_table,
     std::optional<int64_t> chunk_start_idx,
     std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
@@ -111,7 +110,6 @@ Tensor ring_distributed_sdpa(
         .scale = scale,
         .output_mem_config = output_mem_config,
         .program_config = program_config,
-        .compute_kernel_config = compute_kernel_config,
         .chunk_start_idx = chunk_start_idx,
         .precision = precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD),
     };

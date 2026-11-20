@@ -77,9 +77,6 @@ ttnn::Tensor scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attn_mask_block_map,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     // PyTorch semantics: softmax(Q·Kᵀ * scale + mask) · V. The recipe kernels fold `scale` into the exps and
     // multiply each attn_mask tile by 1 / scale on device, so the mask enters softmax unscaled.
     return ttnn::prim::sdpa(
@@ -98,7 +95,6 @@ ttnn::Tensor scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val,
         cu_window_seqlens,
         windowed_q_token_offset,
         windowed_q_token_offset_tensor,
@@ -124,9 +120,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -143,7 +136,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
@@ -169,9 +161,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& attention_sink,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -188,7 +177,6 @@ ttnn::Tensor chunked_scaled_dot_product_attention(
         std::nullopt,  // head_dim_v
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset (windowed mode only)
         std::nullopt,  // windowed_q_token_offset_tensor
@@ -230,13 +218,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
             std::nullopt,  // head_dim_v
             tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
             program_config,
-            init_device_compute_kernel_config(
-                input_tensor_q.device()->arch(),
-                compute_kernel_config,
-                tt::tt_metal::MathFidelity::HiFi2,
-                true,
-                false,
-                false),
             std::nullopt,  // cu_window_seqlens
             0,             // windowed_q_token_offset
             std::nullopt,  // windowed_q_token_offset_tensor
@@ -264,7 +245,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         joint_strategy,
         program_config,
         scale,
-        compute_kernel_config,
         precision);
     return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
@@ -539,9 +519,6 @@ ttnn::Tensor flash_mla_prefill(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -558,7 +535,6 @@ ttnn::Tensor flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset
         std::nullopt,  // windowed_q_token_offset_tensor
@@ -580,9 +556,6 @@ ttnn::Tensor chunked_flash_mla_prefill(
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     return ttnn::prim::sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -599,7 +572,6 @@ ttnn::Tensor chunked_flash_mla_prefill(
         head_dim_v,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         std::move(program_config),
-        kernel_config_val,
         std::nullopt,  // cu_window_seqlens
         0,             // windowed_q_token_offset
         std::nullopt,  // windowed_q_token_offset_tensor
@@ -624,9 +596,6 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     std::optional<int64_t> chunk_start_idx,
     std::optional<SDPAPrecision> precision) {
     warn_ignored_prefill_arguments(compute_kernel_config, program_config);
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
-
     return ttnn::prim::ring_distributed_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -636,7 +605,6 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
         scale,
         memory_config.value_or(tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG),
         program_config,
-        kernel_config_val,
         page_table,
         chunk_start_idx,
         precision);

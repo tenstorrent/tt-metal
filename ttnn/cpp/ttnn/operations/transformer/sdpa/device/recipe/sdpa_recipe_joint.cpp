@@ -22,7 +22,6 @@ PrecisionPolicy joint_recipe_policy(const JointSDPAParams& attrs, const JointSDP
         tensors.input_k,
         attrs.precision.value_or(SDPAPrecision::STANDARD),
         attrs.scale,
-        std::nullopt,
         attrs.program_config);
 }
 

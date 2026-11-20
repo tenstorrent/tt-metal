@@ -333,7 +333,6 @@ PrecisionPolicy resolve_recipe_policy(
     const Tensor& k,
     ttnn::transformer::SDPAPrecision precision,
     std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<SDPAProgramConfig>& program_config) {
     TT_FATAL(q.storage_type() == StorageType::DEVICE, "SDPA recipes require device inputs");
     require_recipe_sfploadmacro();
@@ -359,12 +358,16 @@ PrecisionPolicy resolve_recipe_policy(
     TT_FATAL(
         q.device()->arch() == tt::ARCH::BLACKHOLE || q.device()->arch() == tt::ARCH::WORMHOLE_B0,
         "SDPA precision recipes support Blackhole and Wormhole B0 only");
-    // The recipe owns the numerics: an explicit compute_kernel_config (math fidelity, approx mode, FP32 dest,
-    // packer L1 accumulation) and exp_approx_mode are accepted and ignored, so a caller that passes a shared
-    // config (or its legacy exp choice) gets the recipe it named. See SDPAPrecisionRecipes.md.
-    (void)compute_kernel_config;
+    // The recipe owns the numerics: exp_approx_mode is accepted and ignored, so a caller that passes its legacy exp
+    // choice gets the recipe it named. See SDPAPrecisionRecipes.md.
     (void)program_config;
     return resolve_precision_policy(select_recipe(precision, k.dtype()));
+}
+
+tt::tt_metal::MathFidelity recipe_math_fidelity(
+    std::optional<ttnn::transformer::SDPAPrecision> precision, DataType kv_type) {
+    return resolve_precision_policy(select_recipe(precision.value_or(ttnn::transformer::SDPAPrecision::STANDARD), kv_type))
+        .pv_fidelity;
 }
 
 // Reject a recipe CB layout that cannot fit the `available` L1 (a fused layout first falls back to the unfused

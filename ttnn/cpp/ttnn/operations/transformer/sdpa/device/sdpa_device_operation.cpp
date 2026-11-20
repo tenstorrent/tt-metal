@@ -93,7 +93,7 @@ SDPAOperation::create_op_performance_model(
     CoreCoord compute_grid_dims = args.program_config.has_value()
                                       ? args.program_config->compute_with_storage_grid_size
                                       : output_tensor.device()->compute_with_storage_grid_size();
-    tt::tt_metal::MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    tt::tt_metal::MathFidelity math_fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(args.precision, tensor_args.k.dtype());
 
     int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
         batch_size,
@@ -131,7 +131,6 @@ Tensor sdpa(
     std::optional<uint32_t> head_dim_v,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    ttnn::DeviceComputeKernelConfig compute_kernel_config,
     const std::optional<Tensor>& cu_window_seqlens,
     uint32_t windowed_q_token_offset,
     const std::optional<Tensor>& windowed_q_token_offset_tensor,
@@ -147,7 +146,6 @@ Tensor sdpa(
             .is_causal = is_causal,
             .chunk_start_idx = chunk_start_idx,
             .chunk_start_idx_tensor = chunk_start_idx_tensor,
-            .compute_kernel_config = compute_kernel_config,
             .use_mla = use_mla,
             .head_dim_v = head_dim_v,
             .sliding_window_size = sliding_window_size,

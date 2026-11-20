@@ -125,15 +125,18 @@ KVStorage recipe_kv_storage(DataType dtype);
 // validate_ring_recipe_inputs call it, so every recipe call checks it before dispatch.
 void require_recipe_sfploadmacro();
 
-// The recipe owns the numerics: compute_kernel_config (fidelity, approx mode, FP32 dest, L1 accumulation) and
-// program_config.exp_approx_mode are accepted and ignored. `scale` may be any finite positive value.
+// The recipe owns the numerics: the prims do not take a compute_kernel_config, and program_config.exp_approx_mode
+// is accepted and ignored. `scale` may be any finite positive value.
 PrecisionPolicy resolve_recipe_policy(
     const Tensor& q,
     const Tensor& k,
     ttnn::transformer::SDPAPrecision precision,
     std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<SDPAProgramConfig>& program_config);
+
+// The recipe's matmul fidelity (perf models); unresolved precision means STANDARD.
+tt::tt_metal::MathFidelity recipe_math_fidelity(
+    std::optional<ttnn::transformer::SDPAPrecision> precision, DataType kv_type);
 
 // L1 bytes per core an interleaved output of `pages` tiles of `page_bytes` takes in `memory_config` (0 for DRAM).
 // The dense blocking chooser reserves them, since the output is allocated after it runs.

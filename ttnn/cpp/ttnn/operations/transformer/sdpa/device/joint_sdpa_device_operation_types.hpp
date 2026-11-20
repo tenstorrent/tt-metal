@@ -8,7 +8,6 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
-#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
 namespace ttnn::prim {
@@ -18,8 +17,7 @@ struct JointSDPAParams {
     float scale = 0.0f;
     tt::tt_metal::MemoryConfig output_memory_config;
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
-    DeviceComputeKernelConfig compute_kernel_config;
-    // Precision recipe (device/recipe/); unset: the legacy kernels.
+    // Precision recipe (device/recipe/); resolved to STANDARD by default before dispatch.
     std::optional<ttnn::operations::transformer::SDPAPrecision> precision;
     // Recipe calls: the L1 their layout may use (recipe_l1_budget), set before the program-cache lookup.
     uint64_t recipe_l1_budget = 0;

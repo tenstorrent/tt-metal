@@ -41,7 +41,6 @@ PrecisionPolicy dense_recipe_policy(const SDPAParams& attrs, const SDPAInputs& t
         tensors.k,
         attrs.precision.value_or(SDPAPrecision::STANDARD),
         attrs.scale,
-        std::nullopt,
         attrs.program_config);
 }
 
