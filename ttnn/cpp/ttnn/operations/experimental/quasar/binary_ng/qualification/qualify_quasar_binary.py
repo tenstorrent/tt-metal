@@ -172,6 +172,65 @@ MAPPING: list = [
 
 
 # --------------------------------------------------------------------------------------------
+# CLI input validation (argparse `type=` callables; reject bad input at parse time)
+# --------------------------------------------------------------------------------------------
+_SAFE_OP_NAME = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.]{0,31}")
+_SAFE_GLOB = re.compile(r"[A-Za-z0-9_.*?\[\]!-]{1,128}")
+_SAFE_TIMESTAMP = re.compile(r"[0-9T:.+\-Z]{1,40}")
+
+
+def _arg_op_name(value: str) -> str:
+    # Used as a grep pattern and an inventory key: allow only identifier-like names (no leading '-',
+    # no regex metacharacters, no whitespace).
+    if not _SAFE_OP_NAME.fullmatch(value):
+        raise argparse.ArgumentTypeError(f"invalid op name {value!r} (expected e.g. 'pow', 'gt', 'add')")
+    return value
+
+
+def _arg_cell_glob(value: str) -> str:
+    if not _SAFE_GLOB.fullmatch(value) or value.startswith("-"):
+        raise argparse.ArgumentTypeError(f"invalid --cells glob {value!r}")
+    return value
+
+
+def _arg_timeout(value: str) -> int:
+    try:
+        n = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"timeout must be an integer, got {value!r}") from None
+    if not 1 <= n <= 86400:
+        raise argparse.ArgumentTypeError("timeout must be between 1 and 86400 seconds")
+    return n
+
+
+def _arg_sim_dir(value: str) -> str:
+    # Existence is checked later by ensure_sim() (the default dir need not exist for read-only commands).
+    if "\0" in value:
+        raise argparse.ArgumentTypeError("--sim-dir contains a NUL byte")
+    return str(Path(value).expanduser().resolve())
+
+
+def _arg_baseline(value: str) -> str:
+    path = Path(value).expanduser().resolve()
+    if not path.is_file():
+        raise argparse.ArgumentTypeError(f"--baseline is not a file: {value!r}")
+    return str(path)
+
+
+def _arg_out(value: str) -> str:
+    path = Path(value).expanduser().resolve()
+    if path.is_dir() or not path.parent.is_dir():
+        raise argparse.ArgumentTypeError(f"--out must be a file path in an existing directory: {value!r}")
+    return str(path)
+
+
+def _arg_timestamp(value: str) -> str:
+    if not _SAFE_TIMESTAMP.fullmatch(value):
+        raise argparse.ArgumentTypeError(f"--now must be an ISO timestamp, got {value!r}")
+    return value
+
+
+# --------------------------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------------------------
 def git_sha(path: Path) -> str:
@@ -682,7 +741,9 @@ def cmd_supports(args) -> int:
     hits_elsewhere = []
     for d in (TT_LLK_TESTS / "python_tests" / "quasar", TT_LLK_DIR / "tt_llk_quasar"):
         if d.is_dir():
-            out = subprocess.run(["grep", "-rilE", args.supports, str(d)], capture_output=True, text=True, timeout=60)
+            out = subprocess.run(
+                ["grep", "-rilF", "-e", args.supports, "--", str(d)], capture_output=True, text=True, timeout=60
+            )
             hits_elsewhere += [ln for ln in out.stdout.splitlines() if ln.strip()]
     if hits_elsewhere:
         print("\nName appears elsewhere in tt-llk (maybe a different / unary family -- inspect):")
@@ -718,6 +779,7 @@ def main() -> int:
     p.add_argument(
         "--supports",
         metavar="OP",
+        type=_arg_op_name,
         help="ask whether the LLK binary suite already supports OP (e.g. pow, gt) before broadening",
     )
     p.add_argument("--layer", choices=["both", "foundation", "op"], default="both")
@@ -728,12 +790,12 @@ def main() -> int:
         "(exhaustive, slow). Default: foundation is probed on-demand only when a cell's op fails. "
         "Use on a sim/tt-llk bump, when checking the foundation is the point.",
     )
-    p.add_argument("--cells", help="fnmatch glob over cell ids, e.g. '*.bf16.*'")
-    p.add_argument("--sim-dir", default=str(DEFAULT_SIM_DIR), help="dir containing libttsim.so")
-    p.add_argument("--timeout", type=int, default=420, help="per-probe pytest/sim timeout (s)")
-    p.add_argument("--baseline", help="prior JSON grid to diff against")
-    p.add_argument("--out", help="write the JSON grid here")
-    p.add_argument("--now", help="ISO timestamp to stamp the record with (default: now)")
+    p.add_argument("--cells", type=_arg_cell_glob, help="fnmatch glob over cell ids, e.g. '*.bf16.*'")
+    p.add_argument("--sim-dir", type=_arg_sim_dir, default=str(DEFAULT_SIM_DIR), help="dir containing libttsim.so")
+    p.add_argument("--timeout", type=_arg_timeout, default=420, help="per-probe pytest/sim timeout (s)")
+    p.add_argument("--baseline", type=_arg_baseline, help="prior JSON grid to diff against")
+    p.add_argument("--out", type=_arg_out, help="write the JSON grid here")
+    p.add_argument("--now", type=_arg_timestamp, help="ISO timestamp to stamp the record with (default: now)")
     args = p.parse_args()
 
     if args.show_mapping:
