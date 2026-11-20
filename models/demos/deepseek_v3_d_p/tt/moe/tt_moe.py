@@ -630,6 +630,45 @@ class TtMoe(LightweightModule):
         def rd(t, k):
             return ttnn.to_torch(ttnn.get_device_tensors(t)[k])
 
+        # DS41F-0169 WS10: V41_PREFILL_EXPERT_DUMP=<dir> saves chip k's exact op inputs (dispatch buffer, counts, region
+        # offsets, expert table, every local expert's gate / up / down weights in their device layout) and the first output,
+        # so the op can be replayed on one chip (tests/.../test_ws10_moe_replay.py).
+        dump_dir = os.environ.get("V41_PREFILL_EXPERT_DUMP")
+        if dump_dir:
+            import time
+
+            os.makedirs(dump_dir, exist_ok=True)
+            re = self.routed_expert
+            ckc = re.compute_kernel_config
+            for k in chips:
+                blob = {
+                    "dispatched": rd(dispatched, k),
+                    "dispatched_dtype": str(dispatched.dtype),
+                    "dispatched_layout": str(dispatched.layout),
+                    "counts": rd(counts, k),
+                    "offsets": rd(offsets, k),
+                    "idx_table": rd(re.global_expert_idx_table, k),
+                    "first_out": rd(first, k),
+                    "gate": [rd(w, k) for w in re.gate_projs],
+                    "up": [rd(w, k) for w in re.up_projs],
+                    "down": [rd(w, k) for w in re.down_projs],
+                    "w_dtype": str(re.gate_projs[0].dtype),
+                    "w_memcfg": str(re.gate_projs[0].memory_config()),
+                    "max_tokens": int(re.max_tokens),
+                    "activation": str(re.activation),
+                    "ckc": dict(
+                        math_fidelity=str(ckc.math_fidelity),
+                        math_approx_mode=bool(ckc.math_approx_mode),
+                        fp32_dest_acc_en=bool(ckc.fp32_dest_acc_en),
+                        packer_l1_acc=bool(ckc.packer_l1_acc),
+                    ),
+                    "biases": [b is not None for b in (re.gate_biases, re.up_biases, re.down_biases)],
+                    "layer": getattr(self, "layer_idx", None),
+                }
+                p = os.path.join(dump_dir, f"moe_l{blob['layer']}_chip{k}_{os.getpid()}_{int(time.time())}.pt")
+                torch.save(blob, p)
+                logger.info(f"[v41 0169] expert dump chip {k} -> {p}")
+
         for k in chips:
             cnt, off = rd(counts, k).flatten().to(torch.int64), rd(offsets, k).flatten().to(torch.int64)
             base = rd(first, k)
