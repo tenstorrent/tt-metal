@@ -12,8 +12,10 @@
 //   remote part: wait sem_landed >= expected_landings (the port readers notify per landed entry), zero the slice
 //                tails of the landed copy (padding only — a concurrent relay read of it is harmless: every
 //                receiver zero-fills again).
-// One cb_reserve_back / cb_push_back of the whole block. The 1.0 reduce scaler (and, LN with W_local % 32 != 0, the
-// 0/1 row-0 mask of a slice-last tile) are built while the remote slices are in flight.
+// One cb_reserve_back / cb_push_back of the whole block. AGRMS_LN_OWN_PIVOT (ln, OVERLAP): the own slice is also
+// read into cb_own (contiguous) and pushed right after the own read, so the compute forms its pivot before the landing.
+// The 1.0 reduce scaler (and, LN with W_local % 32 != 0, the 0/1 row-0 mask of a slice-last tile) are built while the
+// remote slices are in flight.
 
 #include <cstdint>
 
@@ -107,11 +109,19 @@ void kernel_main() {
     if (own_n > 0) {
         AGZ("rd_own");
         const auto x_acc = TensorAccessor(x_args, x_addr, tile_bytes);
+#ifdef AGRMS_LN_OWN_PIVOT
+        // a second copy of the own slice, contiguous (rows x own_n), for the compute's pre-landing pivot reduce
+        cb_reserve_back(cb_own, rows * own_n);
+        const uint32_t own_base = get_write_ptr(cb_own);
+#endif
         for (uint32_t r = 0; r < rows; ++r) {
             const uint32_t first = (row_start + r) * sw + own_c0;
             const uint32_t dst = base + (r * pitch + own_off) * tile_bytes;
             for (uint32_t j = 0; j < own_n; ++j) {
                 noc_async_read(x_acc.get_noc_addr(first + j), dst + j * tile_bytes, tile_bytes);
+#ifdef AGRMS_LN_OWN_PIVOT
+                noc_async_read(x_acc.get_noc_addr(first + j), own_base + (r * own_n + j) * tile_bytes, tile_bytes);
+#endif
             }
         }
         noc_async_read_barrier();
@@ -121,6 +131,9 @@ void kernel_main() {
             const uint32_t xy = arg(sig_idx + i);
             noc_semaphore_inc(get_noc_addr(xy & 0xFFFF, xy >> 16, own_sem), arg(sig_idx + n_sig + i));
         }
+#ifdef AGRMS_LN_OWN_PIVOT
+        cb_push_back(cb_own, rows * own_n);
+#endif
     }
 
     dataflow_kernel_lib::

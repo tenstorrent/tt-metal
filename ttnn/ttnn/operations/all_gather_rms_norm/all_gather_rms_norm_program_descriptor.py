@@ -67,6 +67,7 @@ CB_OWN_KG = 24  # ln owner -> writer: K_g = bf16(mu) of the owned rows (bf16)
 CB_DEV = 25  # ln owner scratch: per gather tile (n_m d_m, M2_m + n_m d_m^2) in row form
 CB_WCOL = 26  # ln owner: member weights n_m, column 0 of row m % 32 of gather tile m // 32 (accumulator format)
 CB_XG = 27  # rms with gamma, XG_FIRST: x * gamma of the member block (accumulator format)
+CB_OWN = 28  # ln, OWN_PIVOT: the reader's contiguous copy of the member's own slice (input format)
 NUM_CBS = 32
 
 # ---- semaphores (program-local; declared BEFORE setup_fabric_connection takes its ids) ----
@@ -106,6 +107,11 @@ PORT_PACK = int(os.environ.get("AGRMS_PACK", "0"))  # packets span the runs of a
 # pieces): full chunk_pages packets when a member run is not a multiple of chunk_pages (TRANSPORT, Refinement 3)
 PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode: packets per read barrier + push
 # (None = the batch; 1 measured +3.6 us on the focus case: one 14 KB L1 read in flight is latency-bound)
+# ln FPU path (fp32 DEST, k <= 8): the member pivot is the bf16 mean of the member's OWN slice, reduced from a reader
+# copy (cb_own) while the remote slices are in flight, instead of the whole block after the last landing (OVERLAP,
+# Refinement 5). Enabled only when the split chosen without it still fits L1 with cb_own (the split never changes for
+# it); members without an own slice keep the post-landing block pivot. 0 = block pivot everywhere.
+OWN_PIVOT = int(os.environ.get("AGRMS_OWN_PIVOT", "1"))
 OUT_DEPTH = 2
 OUT_UNIT_CAP = 4  # writer batch: small enough that the stores overlap the normalize of the same tile-row
 COMBINE_TILE_COST = 3  # base op: per tile-row collapse + exchange + combine cost (x-tile equivalents)
@@ -381,7 +387,7 @@ def cb_plan(sz: Sizes, k: int, pitch: int, rows: int, n_affine_slots: int, dense
         plan[CB_MOMENT_B] = ((1 if sz.ln_fpu else 2) * rows, sz.T_acc)  # FPU: D2 tiles; SFPU: (D1, D2) pairs
         # owner: cb_km also carries the owner's pivot K and K_g = bf16(mu) after the member pivots are popped
         plan[CB_KM] = (max(rows, 2) if is_owner(k) else rows, sz.T_bf16)
-        plan[CB_MSTAT] = (2 * rows, sz.T_acc)
+        plan[CB_MSTAT] = (2 * rows, sz.T_acc)  # (D1, D2); own pivot at k = 1: + K_m staged ahead (own_pivot)
         plan[CB_MU] = (2 if is_owner(k) else 1, sz.T_acc)  # owner: (mu, inv_std) between its two windows
         if sz.ln_fpu:
             plan[CB_CENT] = (rows * pitch, sz.T_acc)
@@ -888,6 +894,17 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         trial[CB_XG] = (xg_pages, sz.T_acc)
         if plan_bytes(trial, sz) <= budget:
             cplan, xg_first = trial, True
+    own_pivot = False
+    if OWN_PIVOT and ln_fpu and fp32_dest and not dense and not any(is_owner(kk) for kk, _, _ in split.classes()):
+        own_pages = rows_max * max(n for _, mmk, _ in split.classes() for s in mmk.members for (_, _, n, _) in s.parts)
+        trial = dict(cplan)
+        trial[CB_OWN] = (own_pages, sz.T_in)
+        if any(
+            kk == 1 for kk, _, _ in split.classes()
+        ):  # the compute stages K_m in cb_mstat ahead of (D1, D2) (stage_pivot_block)
+            trial[CB_MSTAT] = (3 * rows_max, sz.T_acc)
+        if plan_bytes(trial, sz) <= budget:
+            cplan, own_pivot = trial, True
     compute_used = compute_all[: split.cores_used()]
     out_e, in_e, n_waves = build_entries(chips, ring, L, split, geo, compute_used, vxy, wave_rg, chunk_pages)
     n_stat = 2 if cfg.is_ln else 1
@@ -920,6 +937,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         CB_DEV: t_acc,
         CB_WCOL: t_acc,
         CB_XG: t_acc,
+        CB_OWN: x_dtype,
     }
     port_cores = [ttnn.CoreCoord(x, y) for (x, y) in ports_union]
     crs_compute = _crs(compute_used)
@@ -967,6 +985,8 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         defines.append(("AGRMS_AFFINE_FIRST", "1"))
     if xg_first:
         defines.append(("AGRMS_XG_FIRST", "1"))
+    if own_pivot:
+        defines.append(("AGRMS_LN_OWN_PIVOT", "1"))
 
     x_acc = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
     o_acc = ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args()
@@ -1057,6 +1077,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             port_batch,
             ln_fpu,
             xg_first,
+            own_pivot,
             ckc.math_fidelity,
             fp32_dest,
             ckc.math_approx_mode,
@@ -1184,6 +1205,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
                     + segs
                     + n_m
                     + dense_c
+                    + ([own_n, _f32_bits(1.0 / (own_n * TILE)) if own_n else 0] if own_pivot else [])
                 )
                 gparts = []
                 for q, c0, n, off in spec.parts:
@@ -1301,6 +1323,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         tail_k=split.tail_k,
         tail_g0=split.tail_g0,
         xg_first=xg_first,
+        own_pivot=own_pivot,
         group_cores=[
             [(vxy(c).x, vxy(c).y) for c in compute_used[split.core0(g) : split.core0(g) + split.k_of(g)]]
             for g in range(split.num_groups)

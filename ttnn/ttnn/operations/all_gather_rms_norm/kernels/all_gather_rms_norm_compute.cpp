@@ -928,18 +928,32 @@ struct MulScalar {
     }
 };
 
-// Member pivot K_m (bf16). k == 1: one member holds the whole row, so its pivot IS the row pivot K_g of the normalize
-// (fp32 DEST): it is packed straight to cb_kg and the member finalize + Chan combine collapse into
-// ln_finalize_k1_block.
+// k == 1 with fp32 DEST: one member holds the whole row, so the member finalize and the Chan combine collapse into
+// one column-0 SFPU window (ln_finalize_k1_block) instead of ~15 full-tile SFPU init + op pairs in two windows.
+//  * kK1Direct (block pivot): K_m = bf16(member mean) = bf16(row mean) IS the normalize pivot K_g: the pivot reduce
+//    packs straight to cb_kg and the finalize forms only (inv_std, shift) — no bf16 re-rounding of mu.
+//  * own-slice pivot (AGRMS_LN_OWN_PIVOT): K_m is the own slice's mean, so K_g = bf16_rne(mu) is formed in the finalize
+//    (the normalize keeps its row-mean pivot: x - K_g stays small for the DEST -> srcA tf32 steps); K_m is staged
+//    into cb_mstat ahead of (D1, D2) before the landing (stage_pivot_block).
+#ifdef AGRMS_LN_OWN_PIVOT
+constexpr bool kOwnPivot = true;
+#else
+constexpr bool kOwnPivot = false;
+#endif
 constexpr bool kFusedK1 = w_split_cores == 1 && DST_ACCUM_MODE;
-constexpr uint32_t cb_pivot = kFusedK1 ? cb_kg : cb_km;
+constexpr bool kK1Direct = kFusedK1 && !kOwnPivot;
+constexpr uint32_t cb_pivot = kK1Direct ? cb_kg : cb_km;
+constexpr uint32_t kStagedK = (kFusedK1 && kOwnPivot) ? 1 : 0;  // K_m tiles per row ahead of (D1, D2) in cb_mstat
 
 // k == 1 finalize, column-0 SFPU scope (the base op's finalize_col0_body pattern: faces 0/2, the even dst rows =
-// columns 0-7, where a REDUCE_ROW result lives). DEST tile 0 = D1 = sum (x - K), tile 1 = D2 = sum (x - K)^2 ->
-//   t = D1 / n, M2 = D2 - D1 t, inv_std = rsqrt(M2 / W + eps) -> tile 1, shift = (K - mu) inv_std = -t inv_std -> tile
-//   0
-// (mu = K + t, K_g = K exactly: no bf16 re-rounding of mu, no second window). All fp32 in SFPU registers.
+// columns 0-7, where a REDUCE_ROW result lives). DEST tile 0 = D1 = sum (x - K), tile 1 = D2 = sum (x - K)^2
+// [, tile 2 = K (RoundKg)] ->
+//   t = D1 / n, M2 = D2 - D1 t, inv_std = rsqrt(M2 / W + eps) -> tile 1
+//   Direct : shift = (K - mu) inv_std = -t inv_std -> tile 0
+//   RoundKg: mu = K + t, K_g = bf16_rne(mu) -> tile 2, shift = (K_g - mu) inv_std -> tile 0
+// Same statistics as member_finalize_block + combine_block (k = 1), all fp32 in SFPU registers.
 #ifdef TRISC_MATH
+template <bool RoundKg>
 sfpi_inline void ln_finalize_k1_col0_body(uint32_t inv_n_bits, uint32_t inv_w_bits, uint32_t eps_bits) {
 #pragma GCC unroll 0
     for (int rg = 0; rg < 4; rg++) {
@@ -953,40 +967,89 @@ sfpi_inline void ln_finalize_k1_col0_body(uint32_t inv_n_bits, uint32_t inv_w_bi
         const sfpi::vFloat inv_std =
             ckernel::sfpu::_calculate_sqrt_body_<APPROX, true /*RECIPROCAL*/, false>(m2 * inv_w + eps);
         sfpi::dst_reg[32] = inv_std;
-        sfpi::dst_reg[0] = -t * inv_std;
+        if constexpr (RoundKg) {
+            const sfpi::vFloat mu = sfpi::dst_reg[64] + t;
+            const sfpi::vFloat kg = sfpi::convert<sfpi::vFloat16b>(mu, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0] = (kg - mu) * inv_std;
+            sfpi::dst_reg[64] = kg;
+        } else {
+            sfpi::dst_reg[0] = -t * inv_std;
+        }
         sfpi::dst_reg += 2;
     }
 }
 #endif
 
-// k == 1 (fp32 DEST): (D1, D2) per tile-row (cb_mstat) -> inv_std (cb_rowstat), shift (cb_shift); K_g already in cb_kg
+// own-slice pivot, k == 1: K_m (bf16 cb_km) -> fp32 cb_mstat AHEAD of (D1, D2), so the finalize copies its three inputs
+// in one format (a bf16 copy among the fp32 UnpackToDestFp32 ones cost ~0.27 us on the indexer tail); runs before
+// the landing.
+ALWI void stage_pivot_block(uint32_t rows) {
+    cb_wait_front(cb_km, rows);
+    pack_reconfig_data_format(cb_mstat);
+    reconfig_data_format_srca(cb_km);
+    copy_init(cb_km);
+    for (uint32_t r = 0; r < rows; ++r) {
+        cb_reserve_back(cb_mstat, 1);
+        tile_regs_acquire();
+        copy_tile(cb_km, r, 0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, cb_mstat);
+        tile_regs_release();
+        cb_push_back(cb_mstat, 1);
+    }
+}
+
+// k == 1 (fp32 DEST): cb_mstat = [K_m x rows (staged)][(D1, D2) per tile-row] -> shift (cb_shift), inv_std
+// (cb_rowstat) [, K_g (cb_kg)]
 ALWI void ln_finalize_k1_block(uint32_t rows, uint32_t inv_n_bits, uint32_t inv_w_bits, uint32_t eps_bits) {
-    cb_wait_front(cb_mstat, 2 * rows);
+    constexpr uint32_t n_out = 2 + kStagedK;
+    const uint32_t s0 = kStagedK * rows;  // first D tile
+    cb_wait_front(cb_mstat, s0 + 2 * rows);
     for (uint32_t r = 0; r < rows; ++r) {
         cb_reserve_back(cb_shift, 1);
         cb_reserve_back(cb_rowstat, 1);
+        if constexpr (kStagedK) {
+            cb_reserve_back(cb_kg, 1);
+        }
         tile_regs_acquire();
+        reconfig_data_format_srca(cb_mstat);
+        copy_init(cb_mstat);
 #ifdef AGRMS_LN_FPU
-        copy_to(cb_mstat, r, 0);         // D1 (D1 block, then D2 block)
-        copy_to(cb_mstat, rows + r, 1);  // D2
+        copy_tile(cb_mstat, s0 + r, 0);         // D1 (D1 block, then D2 block)
+        copy_tile(cb_mstat, s0 + rows + r, 1);  // D2
 #else
-        copy_to(cb_mstat, 2 * r, 0);      // D1
-        copy_to(cb_mstat, 2 * r + 1, 1);  // D2
+        copy_tile(cb_mstat, s0 + 2 * r, 0);      // D1
+        copy_tile(cb_mstat, s0 + 2 * r + 1, 1);  // D2
 #endif
+        if constexpr (kStagedK) {
+            copy_tile(cb_mstat, r, 2);  // K_m
+        }
         rsqrt_tile_init();
         MATH((_llk_math_eltwise_unary_sfpu_params_(
-            ln_finalize_k1_col0_body, 0, VectorMode::C, inv_n_bits, inv_w_bits, eps_bits)));
+            ln_finalize_k1_col0_body < kStagedK != 0 >, 0, VectorMode::C, inv_n_bits, inv_w_bits, eps_bits)));
         tile_regs_commit();
         tile_regs_wait();
         pack_reconfig_data_format(cb_shift);
         pack_tile(0, cb_shift);
         pack_reconfig_data_format(cb_rowstat);
         pack_tile(1, cb_rowstat);
+        if constexpr (kStagedK) {
+            pack_reconfig_data_format(cb_kg);
+            pack_tile(2, cb_kg);
+        }
         tile_regs_release();
         cb_push_back(cb_shift, 1);
         cb_push_back(cb_rowstat, 1);
+        if constexpr (kStagedK) {
+            cb_push_back(cb_kg, 1);
+        }
     }
-    cb_pop_front(cb_mstat, 2 * rows);
+    cb_pop_front(cb_mstat, s0 + 2 * rows);
+    if constexpr (kStagedK) {
+        cb_pop_front(cb_km, rows);
+    }
+    static_assert(n_out <= 3);
 }
 
 // pass A: per tile-row sum of the member's x tiles (fp32 DEST) -> cb_moment_a
@@ -1327,6 +1390,32 @@ ALWI void pivot_block_fpu(uint32_t rows, uint32_t core_w, uint32_t inv_n_bits) {
         MulScalar{inv_n_bits});
 }
 
+#ifdef AGRMS_LN_OWN_PIVOT
+#ifdef AGRMS_DENSE
+#error "AGRMS_LN_OWN_PIVOT: the own-slice arguments follow n_m, where the dense assembly's arguments start"
+#endif
+// OVERLAP: K_m = bf16(mean of the member's OWN slice), reduced from cb_own (the reader's copy of the own slice, pushed
+// with the own read), so the pivot is formed while the remote slices are still in flight. Any bf16 value near the
+// member mean is a valid pivot (M2 = D2 - D1^2 / n is exact algebra); an own-slice pivot bounds the cancellation in
+// D2 by n_m / n_own and leaves K_g (= bf16(mu), formed by the finalize / combine) unchanged.
+ALWI void own_pivot_block(uint32_t rows, uint32_t own_n, uint32_t inv_own_bits) {
+    reduce<
+        PoolType::SUM,
+        ReduceDim::REDUCE_ROW,
+        cb_own,
+        cb_ones,
+        cb_km,
+        ReduceInputPolicy::BulkWaitBulkPop,
+        ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT,
+        ReduceFp32Mode::Fast,
+        ReduceAlgorithm::ReduceTile>(
+        ReduceInputBlockShape::of(rows, own_n),
+        ReduceInputMemoryLayout::contiguous(),
+        NoAccumulation{},
+        MulScalar{inv_own_bits});
+}
+#endif
+
 // pass B: c' = x - K_m (FPU, bcast col) -> cb_cent (accumulator format); D1 = row-reduce(c') (block reduce),
 // D2 = row-reduce(sum_j c'_j^2) (DEST-accumulated squares) -> cb_mstat [D1 x rows, D2 x rows]
 ALWI void centered_moments_block_fpu(uint32_t rows, uint32_t core_w) {
@@ -1452,6 +1541,18 @@ void kernel_main() {
     const uint32_t nm_idx = segs_idx + 2 * n_segs;
 
     compute_kernel_hw_startup(cb_x, cb_x, cb_out);
+#ifdef AGRMS_LN_OWN_PIVOT
+    const uint32_t own_n = arg(nm_idx + w_split_cores);
+    if (own_n > 0) {
+        AGZ("c_opiv");
+        own_pivot_block(rows, own_n, arg(nm_idx + w_split_cores + 1));
+        if constexpr (kStagedK) {
+            stage_pivot_block(rows);
+        }
+    }
+#else
+    constexpr uint32_t own_n = 0;
+#endif
     {
         AGZ("c_waitx");
         cb_wait_front(cb_x, rows * pitch);
@@ -1462,7 +1563,12 @@ void kernel_main() {
             moments16_block(rows, n_segs, segs_idx, inv_n_bits);
         } else {
 #ifdef AGRMS_LN_FPU
-            pivot_block_fpu(rows, core_w, inv_n_bits);
+            if (own_n == 0) {
+                pivot_block_fpu(rows, core_w, inv_n_bits);
+                if constexpr (kStagedK) {
+                    stage_pivot_block(rows);
+                }
+            }
             cb_wait_front(cb_pivot, rows);
             centered_moments_block_fpu(rows, core_w);
 #else
@@ -1510,10 +1616,8 @@ void kernel_main() {
         cb_wait_front(cb_beta, pitch);
 #endif
         cb_wait_front(cb_shift, rows);
-#ifdef AGRMS_OWNER
-        cb_wait_front(cb_kg, rows);  // returned by the row owners (writer)
+        cb_wait_front(cb_kg, rows);  // owner: returned by the row owners (writer)
         cb_wait_front(cb_rowstat, rows);
-#endif
     }
     {
         AGZ("c_norm");
