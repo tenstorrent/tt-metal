@@ -2647,3 +2647,48 @@ def test_getitem_non_positive_step_raises(device, expect_error, layout, step, me
     tt_input = ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=layout, device=device)
     with expect_error(ValueError, message):
         tt_input[..., ::step]
+
+
+@pytest.mark.parametrize(
+    "grid_x, grid_y, orientation, shard_shape",
+    [
+        (2, 8, ttnn.ShardOrientation.ROW_MAJOR, (32, 128)),
+        (2, 8, ttnn.ShardOrientation.COL_MAJOR, (128, 32)),
+        (8, 2, ttnn.ShardOrientation.ROW_MAJOR, (128, 32)),
+        (8, 2, ttnn.ShardOrientation.COL_MAJOR, (32, 128)),
+    ],
+)
+@pytest.mark.parametrize(
+    "layout, slice_end",
+    [
+        (ttnn.TILE_LAYOUT, (1, 1, 256, 224)),
+        (ttnn.TILE_LAYOUT, (1, 1, 224, 256)),
+        (ttnn.ROW_MAJOR_LAYOUT, (1, 1, 256, 192)),
+        (ttnn.ROW_MAJOR_LAYOUT, (1, 1, 192, 256)),
+    ],
+)
+def test_slice_block_sharded_non_square_grid_default_memory_config(
+    device, grid_x, grid_y, orientation, shard_shape, layout, slice_end
+):
+    """A BLOCK_SHARDED input on a non-square grid, sliced without a memory_config, keeps its shard orientation."""
+    compute_grid = device.compute_with_storage_grid_size()
+    if grid_x > compute_grid.x or grid_y > compute_grid.y:
+        pytest.skip(f"needs a {grid_x}x{grid_y} core grid")
+    torch.manual_seed(0)
+    torch_input = torch.rand((1, 1, 256, 256), dtype=torch.bfloat16)
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid_x - 1, grid_y - 1))})
+    memory_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, shard_shape, orientation),
+    )
+    tt_input = ttnn.from_torch(
+        torch_input, dtype=ttnn.bfloat16, layout=layout, device=device, memory_config=memory_config
+    )
+
+    tt_output = ttnn.slice(tt_input, (0, 0, 0, 0), slice_end, (1, 1, 1, 1))
+
+    assert tt_output.memory_config().memory_layout == ttnn.TensorMemoryLayout.BLOCK_SHARDED
+    assert tt_output.memory_config().shard_spec.orientation == orientation
+    expected = torch_input[:, :, : slice_end[2], : slice_end[3]]
+    assert_exact(expected, ttnn.to_torch(tt_output))
