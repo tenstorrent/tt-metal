@@ -1044,3 +1044,4 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   was 0 without them): candidate to scope them to glued chunks (not queued).
 - Launch: tmux orch_pb, SKIP=check-models-do-not-import-tests, `orchestrator resume --spec <spec> --until <task>
   --attempts 20`; before accepting check `gate <task> --status` and the deliverable (skill rules of 2026-11-20).
+- 23:37 UTC overseer_batch started (claude session 9b97aa56-fe07-4a3a-8355-6e7082717eea, tmux overseer_batch) on dnijemcevic/model_bringup_batching; batching ledger records restored (stash popped, history chunks 0003 / 0004 back); model_bringup's local ledger records stashed ('model_bringup ledger local records'). This overseer session stops supervising (heartbeat cancelled).
