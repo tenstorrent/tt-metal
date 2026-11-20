@@ -320,6 +320,18 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
             global_sem_entries.push_back({name, addr_crta_word});
         });
 
+    // Fabric connection bindings: in user-specified order (matches Kernel::compute_hash).
+    struct FabricConnectionEntry {
+        string name;
+        uint32_t rta_word;
+        uint32_t num_targets;
+    };
+    vector<FabricConnectionEntry> fabric_connection_entries;
+    settings.process_fabric_connection_binding_handles(
+        [&fabric_connection_entries](const string& name, uint32_t rta_word, uint32_t num_targets) {
+            fabric_connection_entries.push_back({name, rta_word, num_targets});
+        });
+
     // PrefetcherPipe bindings: sorted by name for a deterministic header (Kernel::compute_hash
     // hashes them in binding order; both orders carry the same set, so the cache key is stable).
     struct PipeEntry {
@@ -394,6 +406,11 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
     if (!global_sem_entries.empty()) {
         // The kernel includes api/dataflow/global_semaphore.h itself.
         content << "#include \"api/dataflow/global_semaphore_binding_token.h\"\n";
+    }
+
+    if (!fabric_connection_entries.empty()) {
+        // The kernel includes the fabric connection headers itself.
+        content << "#include \"api/dataflow/fabric_connection_binding_token.h\"\n";
     }
 
     if (!tensor_binding_sequence_entries.empty()) {
@@ -540,6 +557,15 @@ void write_kernel_bindings_generated_header(const string& out_dir, const JitBuil
         content << "}  // namespace global_sem\n";
     }
 
+    if (!fabric_connection_entries.empty()) {
+        content << "namespace fabric {\n";
+        for (const auto& entry : fabric_connection_entries) {
+            content << "constexpr FabricConnectionBindingToken " << entry.name << "{" << entry.rta_word << "u, "
+                    << entry.num_targets << "u};\n";
+        }
+        content << "}  // namespace fabric\n";
+    }
+
     write_file(path, content.str());
 }
 
@@ -652,8 +678,8 @@ void write_kernel_args_generated_header(const std::filesystem::path& out_dir, co
     // around get_arg_val / get_common_arg_val.
     // CRTA-side note: the vararg section starts at crta_layout.vararg_section_offset,
     // which already accounts for both the user-named CRTAs and the TensorBinding section.
-    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs
-    // and the per-node TensorBinding section.
+    // RTA-side note: likewise, rta_layout.vararg_section_offset accounts for the user-named RTAs,
+    // the per-node TensorBinding section and the fabric connection section.
     content << "FORCE_INLINE uint32_t get_vararg(uint32_t idx) { return get_arg_val<uint32_t>("
             << rta_layout.vararg_section_offset << " + idx); }\n"
             << "FORCE_INLINE uint32_t get_common_vararg(uint32_t idx) { return get_common_arg_val<uint32_t>("

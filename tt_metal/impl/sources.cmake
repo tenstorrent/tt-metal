@@ -82,6 +82,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/placement/work_unit.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/program_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/dfb.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/fabric_connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/sram_arena.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/validation/resource/resource.cpp
@@ -94,6 +95,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/prefetcher_pipe.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/resource.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/scratchpad.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/fabric_connection.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/resource/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program_spec/construction/processor_assignment/processor_assignment.cpp

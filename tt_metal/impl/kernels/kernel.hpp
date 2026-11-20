@@ -216,6 +216,22 @@ struct GlobalSemaphoreBindingHandle {
     uint32_t addr_crta_word = 0;                  // word index of the address slot within the kernel's CRTA buffer
 };
 
+// Metal 2.0: per-kernel resolved fabric connection binding (KernelSpec::FabricConnectionBinding).
+// Emitted as a constexpr token in the `fabric::` namespace. On every node of the kernel, the binding owns
+// num_targets * kWordsPerTarget RTA words from rta_word, one block per target in target order:
+//   [connected (0 or 1), router ethernet channel, teardown semaphore id, buffer index semaphore id]
+// The words are immutable: the runtime writes them on every node when it creates the node's RTA buffer, zeros
+// where a node has no connection.
+struct FabricConnectionBindingHandle {
+    static constexpr uint32_t kWordsPerTarget = 4;
+
+    std::string accessor_name;  // user-facing identifier (kernel symbol in `fabric::`)
+    uint32_t rta_word = 0;      // word index of the binding's first RTA word, on every node
+    uint32_t num_targets = 0;
+    // The words of each node in the spec's links. Other nodes of the kernel get zeros.
+    std::unordered_map<CoreCoord, std::vector<uint32_t>> words_by_node;
+};
+
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
 // One accessor names one program PrefetcherPipe slot (dense id the kernel constructs its
 // PrefetcherPipe with); the slot resolves to whichever pipe of the accessor's group is present
@@ -401,6 +417,20 @@ public:
     void set_global_semaphore_binding_handles(std::vector<GlobalSemaphoreBindingHandle> handles) {
         global_semaphore_binding_handles_ = std::move(handles);
     }
+    // Fabric connection binding handles are set post-construction (before compile: they are part of
+    // the kernel cache key and of kernel_bindings_generated.h).
+    void process_fabric_connection_binding_handles(
+        std::function<void(const std::string& accessor_name, uint32_t rta_word, uint32_t num_targets)>) const override;
+    const std::vector<FabricConnectionBindingHandle>& fabric_connection_binding_handles() const {
+        return fabric_connection_binding_handles_;
+    }
+    void set_fabric_connection_binding_handles(std::vector<FabricConnectionBindingHandle> handles) {
+        fabric_connection_binding_handles_ = std::move(handles);
+    }
+    // Writes the words of each fabric connection binding into the RTA buffer of each node that the kernel runs on:
+    // the resolved words on a node in the spec's links, zeros on other nodes.
+    // precondition: each node of the kernel has an RTA buffer that holds the fabric connection section.
+    void write_fabric_connection_runtime_args();
     // PrefetcherPipe binding handles are set post-construction (before compile: they are part of
     // the kernel cache key and of kernel_bindings_generated.h).
     void process_prefetcher_pipe_binding_handles(
@@ -544,6 +574,8 @@ protected:
     std::vector<TensorBindingSequenceHandle> tensor_binding_sequences_;
     // Metal 2.0: GlobalSemaphore bindings (set post-construction, like scratchpads).
     std::vector<GlobalSemaphoreBindingHandle> global_semaphore_binding_handles_;
+    // Metal 2.0: fabric connection bindings (set post-construction; immutable per-node words).
+    std::vector<FabricConnectionBindingHandle> fabric_connection_binding_handles_;
     // Metal 2.0: PrefetcherPipe accessors -> program slot (set post-construction, like scratchpads).
     std::vector<PrefetcherPipeBindingHandle> prefetcher_pipe_binding_handles_;
     // Metal 2.0: number of user CTA-vararg words at the start of compile_time_args_.

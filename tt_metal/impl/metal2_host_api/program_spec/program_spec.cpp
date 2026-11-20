@@ -32,6 +32,16 @@ std::optional<distributed::MeshCoordinate> SingleDeviceOf(const distributed::Mes
     return range.start_coord();
 }
 
+// `spec`, after checking that the Program constructor can create its Program.
+const ProgramSpec& RequireProgramConstructorSupport(const ProgramSpec& spec) {
+    TT_FATAL(
+        spec.fabric_connections.empty(),
+        "ProgramSpec '{}' has fabric connections: only a MeshWorkload constructor can create its Program, because "
+        "the connection args differ per device",
+        spec.name);
+    return spec;
+}
+
 }  // namespace
 
 // `device`: the coordinate of the one device that the Program runs on, if the caller knows it.
@@ -57,7 +67,7 @@ Program BuildProgramFromSpec(
 // ============================================================================
 
 Program::Program(distributed::MeshDevice& mesh_device, const ProgramSpec& spec) :
-    Program(BuildProgramFromSpec(mesh_device, std::nullopt, spec)) {
+    Program(BuildProgramFromSpec(mesh_device, std::nullopt, RequireProgramConstructorSupport(spec))) {
     impl().compile_and_allocate(&mesh_device, false);
 }
 

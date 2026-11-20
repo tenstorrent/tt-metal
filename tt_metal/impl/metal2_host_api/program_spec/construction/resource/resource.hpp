@@ -5,10 +5,12 @@
 #pragma once
 
 #include <cstdint>
+#include <optional>
 #include <unordered_map>
 #include <vector>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
 #include "impl/context/metal_env_impl.hpp"
@@ -220,6 +222,38 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     size_t scratchpad_base_crta_word);
 
 // ----------------------------------------------------------------------------
+// Fabric connections (fabric_connection.cpp)
+// ----------------------------------------------------------------------------
+
+// One FabricConnectionSpec resolved on the Program's device.
+struct ResolvedFabricConnection {
+    uint32_t num_targets = 0;
+    // For each node in the spec's links: FabricConnectionBindingHandle::kWordsPerTarget words per target,
+    // in target order.
+    std::unordered_map<NodeCoord, std::vector<uint32_t>> words_by_node;
+};
+using FabricConnectionsBySpec = std::unordered_map<FabricConnectionSpecName, ResolvedFabricConnection>;
+
+// Resolve each fabric connection of `spec` on the device at `device`, check its links, and allocate the two
+// semaphores of each connection on its node.
+// precondition: the spec passed ValidateProgramSpec.
+FabricConnectionsBySpec RegisterFabricConnections(
+    distributed::MeshDevice& mesh_device,
+    const std::optional<distributed::MeshCoordinate>& device,
+    const ProgramSpec& spec,
+    detail::ProgramImpl& program_impl);
+
+// Per-kernel resolved fabric connection bindings: one section of per-node RTA words, one block per binding in
+// declaration order, starting at fabric_connection_base_rta_word.
+struct FabricConnectionBindingsForKernel {
+    std::vector<FabricConnectionBindingHandle> handles;
+    uint32_t section_words = 0;
+};
+
+FabricConnectionBindingsForKernel ResolveFabricConnectionBindingsForKernel(
+    const KernelSpec& kernel, const FabricConnectionsBySpec& connections, uint32_t fabric_connection_base_rta_word);
+
+// ----------------------------------------------------------------------------
 // Drivers (resource.cpp)
 // ----------------------------------------------------------------------------
 
@@ -238,12 +272,14 @@ struct ProgramResources {
     DataflowBufferHandles dfbs;
     PrefetcherPipeHandlesByKernel prefetcher_pipes;
     SemaphoreHandles semaphores;
+    FabricConnectionsBySpec fabric_connections;
     WatcherNodeRanges watcher_node_ranges;
 };
 
 // Register every resource with the Program (resource.cpp fixes the order).
 ProgramResources RegisterResources(
     distributed::MeshDevice& mesh_device,
+    const std::optional<distributed::MeshCoordinate>& device,
     const ProgramSpec& spec,
     const CollectedSpecData& collected,
     const KernelRiscMaskMap& risc_masks,
