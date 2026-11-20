@@ -85,12 +85,16 @@ def pad_logprobs(completions: List[List[int]], token_logprobs: List[List[float]]
 
 
 def encode_rollout(rollout: RolloutBatch) -> Dict[str, Any]:
-    """JSON fields of a rollout: completions, their log-probs without the padding, and the weight version."""
-    return {
+    """JSON fields of a rollout: completions, their log-probs and loss masks without the padding, and the weight
+    version."""
+    fields = {
         "completions": [[int(t) for t in c] for c in rollout.completions],
         "logprobs": [rollout.logprobs[r, : len(c)].tolist() for r, c in enumerate(rollout.completions)],
         "weight_version": int(rollout.weight_version),
     }
+    if rollout.loss_mask is not None:
+        fields["loss_mask"] = [rollout.loss_mask[r, : len(c)].tolist() for r, c in enumerate(rollout.completions)]
+    return fields
 
 
 def tokenize_prompts(

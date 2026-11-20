@@ -59,7 +59,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
             prompts = [list(p) for p in self._prompts[start : start + n]]
             extra = {k: list(col[start : start + n]) for k, col in self._extra_columns.items()}
             generate_start = time.perf_counter()
-            completions, token_logprobs, version = self._client.remote_generate(prompts)
+            completions, token_logprobs, version, loss_mask = self._client.remote_generate(prompts)
             generation_time_s = time.perf_counter() - generate_start
             if version != self._pushed_version:
                 raise RuntimeError(
@@ -70,6 +70,9 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
                 prompts=repeat_interleave(prompts, g),
                 completions=completions,
                 logprobs=pad_logprobs(completions, token_logprobs, self._max_completion_length),
+                loss_mask=None
+                if loss_mask is None
+                else pad_logprobs(completions, loss_mask, self._max_completion_length),
             )
             validate_rollout_batch(
                 rollout, num_prompts=len(prompts), num_generations=g, max_completion_length=self._max_completion_length

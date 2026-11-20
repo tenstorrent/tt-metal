@@ -1356,14 +1356,31 @@ def test_mpi_rollout_loopback(mpi_loopback, expect_error):
     assert at_exit == [os._exit, client.shutdown]
 
     client.send_weights({}, version=0)
-    assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0)
+    assert client.remote_generate([[1, 2], [3]]) == ([[1, 2], [3]], [[-0.5, -0.5], [-0.5]], 0, None)
     with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: empty prompt"):
         client.remote_generate([[1], []])
     with expect_error(RuntimeError, r"rollout rank 1 failed:[\s\S]*ValueError: version 0 <= 0"):
         client.send_weights({}, version=0)
-    _, _, version = client.remote_generate([[4]])
+    _, _, version, _ = client.remote_generate([[4]])
     assert version == 0
 
+    client.shutdown()
+
+
+class _MaskedEchoSampler(_EchoSampler):
+    """_EchoSampler with loss mask 1.0 on the first token of each completion and 0.0 on the others."""
+
+    def generate(self, prompts):
+        batch = super().generate(prompts)
+        batch.loss_mask = np.zeros_like(batch.logprobs)
+        batch.loss_mask[:, 0] = 1.0
+        return batch
+
+
+def test_mpi_rollout_loopback_sends_loss_mask(mpi_loopback):
+    client, _ = _start_rollout_server(_MaskedEchoSampler())
+    client.send_weights({}, version=0)
+    assert client.remote_generate([[1, 2], [3]])[3] == [[1.0, 0.0], [1.0]]
     client.shutdown()
     thread.join(timeout=30)
     assert at_exit == [client.shutdown]
@@ -1616,7 +1633,7 @@ class _FakeRolloutClient:
             self.version = version
 
     def remote_generate(self, prompts):
-        return prompts, [[-0.5] * len(p) for p in prompts], self.version
+        return prompts, [[-0.5] * len(p) for p in prompts], self.version, None
 
 
 def _sync_source(monkeypatch, client, weight_sync_every):
@@ -1632,6 +1649,17 @@ def _sync_source(monkeypatch, client, weight_sync_every):
         max_completion_length=4,
         weight_sync_every=weight_sync_every,
     )
+
+
+def test_sync_source_pads_the_loss_mask(monkeypatch):
+    class _MaskClient(_FakeRolloutClient):
+        def remote_generate(self, prompts):
+            return *super().remote_generate(prompts)[:3], [[0.0] * len(p) for p in prompts]
+
+    source = _sync_source(monkeypatch, _MaskClient(), weight_sync_every=1)
+    source.update_weights(None, 0)
+    rollout = next(iter(source)).rollout
+    assert rollout.loss_mask.shape == rollout.logprobs.shape and not rollout.loss_mask.any()
 
 
 def test_in_process_source_update_weights_returns_zero_duration_and_updates_sampler_version():
@@ -1709,6 +1737,16 @@ def _scored_batch(version):
         generation_time_s=0.25,
         reward_time_s=0.125,
     )
+
+
+def test_rollout_queue_codec_keeps_loss_mask():
+    scored = _scored_batch(0)
+    assert rollout_queue._decode(rollout_queue._encode(scored)).rollout.loss_mask is None
+    scored.rollout.loss_mask = np.zeros((2, 4), dtype=np.float32)
+    scored.rollout.loss_mask[0, :2] = [1.0, 0.0]
+    scored.rollout.loss_mask[1, 0] = 1.0
+    decoded = rollout_queue._decode(rollout_queue._encode(scored)).rollout.loss_mask
+    np.testing.assert_array_equal(decoded, scored.rollout.loss_mask)
 
 
 def test_rollout_queue_loopback(monkeypatch):
