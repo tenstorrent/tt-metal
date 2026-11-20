@@ -307,3 +307,13 @@ def install(mesh_device) -> HostWrites:
         _installed.entries, _installed.semaphores, _installed.refused = {}, [], {}
         _installed.mesh = mesh_device
     return _installed
+
+
+def uninstall() -> None:
+    """Take the wrappers off ttnn and drop the registry. The registry holds every tensor it lists, and the wrappers
+    register the writes of every fused piece: left installed after a model's device is closed, they keep the L1
+    tensors of whatever runs next in the process (another piece's tests) allocated."""
+    global _installed
+    if _installed is not None:
+        _installed.uninstall()
+        _installed = None

@@ -28,7 +28,7 @@ import ttnn
 
 from . import layout as L
 
-DEFAULT_OUT = "generated/hy4_preview/moe_streams"
+DEFAULT_OUT = os.environ.get("HY4_MOE_STREAMS", "generated/hy4_preview/moe_streams")
 
 
 def checkpoint_tensors(names):
