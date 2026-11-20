@@ -5,7 +5,9 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/constants.hpp>
+#include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt-logger/tt-logger.hpp>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
@@ -79,7 +81,17 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     const bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
     const auto& all_cores = shard_spec.grid;
 
-    const bool ht_gt_8 = ht > 8;
+    // The narrow-row pack_untilize packs H % 32 datums per output row straight into the output shard. It
+    // reads one face per row, so it is used only for a single tile column at most one face wide, with rows
+    // that fill the output shard's row pitch and whole 32-row tile columns. Every other shape packs full
+    // tile rows into the staging DFB, and the writer copies the H datums of each row into the shard at its
+    // row pitch.
+    const uint32_t output_row_bytes = H * output_tensor.element_size();
+    const uint32_t output_row_pitch = tt::align(output_row_bytes, tt::tt_metal::hal::get_l1_alignment());
+    const uint32_t h_remainder = H % TILE_HEIGHT;
+    const bool use_narrow_row = h_remainder != 0 && ht == 1 && h_remainder <= FACE_WIDTH &&
+                                output_row_bytes == output_row_pitch && W % TILE_WIDTH == 0;
+    const bool use_out_staging = ht > 8 || W % TILE_WIDTH != 0 || (h_remainder != 0 && !use_narrow_row);
 
     // Reader/writer geometry (CTAs), verbatim from legacy.
     const uint32_t H_per_tile = H > TILE_HEIGHT ? TILE_HEIGHT : H % TILE_HEIGHT;
@@ -113,8 +125,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         .num_entries = ht * wt,
         .data_format_metadata = src0_cb_data_format,
     });
-    if (!ht_gt_8) {
-        // ht<=8: compute writes the output shard in place via a borrowed INTRA self-loop DFB.
+    if (!use_out_staging) {
+        // No staging: compute writes the output shard in place via a borrowed INTRA self-loop DFB.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CB_OUT0,
             .entry_size = output_page_size,
@@ -123,7 +135,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .borrowed_from = OUTPUT_TENSOR,
         });
     } else {
-        // ht>8: compute drains to a staging DFB; the writer scatters it to the output shard, which it
+        // Staging: compute drains to a staging DFB; the writer scatters it to the output shard, which it
         // reaches via tensor::output (local TensorAccessor), not a borrowed self-loop fake-CB.
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = CB_OUT_STAGE,
@@ -190,7 +202,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
             .dfb_spec_name = CB_TILIZE, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::PRODUCER},
         DFBBinding{
             .dfb_spec_name = CB_TILIZE, .accessor_name = "cb_tilize", .endpoint_type = DFBEndpointType::CONSUMER}};
-    if (ht_gt_8) {
+    if (use_out_staging) {
         compute_bindings.push_back(DFBBinding{
             .dfb_spec_name = CB_OUT_STAGE, .accessor_name = "cb_out", .endpoint_type = DFBEndpointType::PRODUCER});
     } else {
@@ -211,10 +223,11 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
              {"HtWt", ht * wt},
              {"num_hw_blocks_per_core", num_hw_blocks_per_core},
              {"last_output_row_num_datums", last_output_row_num_datums},
+             {"use_narrow_row", static_cast<uint32_t>(use_narrow_row)},
              {"pack_num_pages_last_col", pack_num_pages_last_col},
              {"pack_num_pages_last_row_col", pack_num_pages_last_row_col},
-             // ht<=8: compute holds both ends of the output shard DFB and must pop what it pushes.
-             {"out_is_self_loop", static_cast<uint32_t>(!ht_gt_8)}},
+             // No staging: compute holds both ends of the output shard DFB and must pop what it pushes.
+             {"out_is_self_loop", static_cast<uint32_t>(!use_out_staging)}},
         .hw_config = compute_hw,
     };
 
@@ -227,7 +240,7 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
     wu_kernels.push_back(READER_KERNEL);
     wu_kernels.push_back(COMPUTE_KERNEL);
 
-    if (ht_gt_8) {
+    if (use_out_staging) {
         KernelSpec writer_spec{
             .unique_id = WRITER_KERNEL,
             .source =
@@ -244,7 +257,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
                  {"Wt", wt},
                  {"W_per_tile", W_per_tile},
                  {"W_per_tile_last", W_per_tile_last},
-                 {"H_size_bytes", H * output_tensor.element_size()},
+                 {"H_size_bytes", output_row_bytes},
+                 {"output_row_pitch_bytes", output_row_pitch},
                  {"l1_read_offset_bytes", ht * output_tensor.element_size() * TILE_HEIGHT}},
             .hw_config = ttnn::create_writer_datamovement_config(),
         };

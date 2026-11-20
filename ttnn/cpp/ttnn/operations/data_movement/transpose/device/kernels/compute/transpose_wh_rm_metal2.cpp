@@ -5,11 +5,11 @@
 // Row-major WH transpose: each block of Ht x Wt tiles is tilized, transposed tile by tile, and
 // pack-untilized back to rows.
 //   - dfb::in0 / dfb::tilize / dfb::out: the tilize input, the tilized tiles the transpose reads,
-//     and the pack destination. With OUT_STAGING (sharded path, Ht > 8) the pack destination is
-//     dfb::out_staging instead.
+//     and the pack destination. With OUT_STAGING (sharded path, whenever the host does not pack
+//     straight into the output shard) the pack destination is dfb::out_staging instead.
 //   - Ht / Wt / HtWt are compile-time args. num_hw_blocks_per_core is a runtime arg on the
-//     non-sharded path; under SHARDED it is a compile-time arg, as are the output-row and
-//     pack-page settings.
+//     non-sharded path; under SHARDED it is a compile-time arg, as are the output-row, narrow-row
+//     and pack-page settings.
 //
 // TransposeWHProgramFactory binds this source without SHARDED; TransposeWHShardedRMProgramFactory
 // binds it with SHARDED.
@@ -120,17 +120,10 @@ void kernel_main() {
     constexpr auto pack_num_pages_last_col = get_arg(args::pack_num_pages_last_col);
     constexpr auto pack_num_pages_last_row = get_arg(args::pack_num_pages_last_row);
     constexpr auto pack_num_pages_last_row_col = get_arg(args::pack_num_pages_last_row_col);
-    // In order to support full_ct_dim > block_ct_dim, we would need to change use_narrow_row and row_size conditions to
-    // be:
-    //
-    //     constexpr bool use_narrow_row = last_output_row_num_datums < FACE_WIDTH ? true : false;
-    //     constexpr uint32_t row_size = last_output_row_num_datums < FACE_WIDTH ? last_output_row_num_datums :
-    //     TILE_WIDTH;
-    //
-    // However, changing these conditions makes yolov4 and transpose tests fail with a PCC error. For the error to be
-    // present in BH, it needs to be run in the full model sweep, but for WH_B0 it can be seen in isolation.
-    constexpr bool use_narrow_row = last_output_row_num_datums < TILE_WIDTH ? true : false;
-    constexpr uint32_t row_size = last_output_row_num_datums < TILE_WIDTH ? last_output_row_num_datums : TILE_WIDTH;
+    // The host selects the narrow-row pack only for a single tile column at most one face wide; every
+    // other shape packs full tile rows (into the staging buffer when the row needs trimming).
+    constexpr bool use_narrow_row = get_arg(args::use_narrow_row) != 0;
+    constexpr uint32_t row_size = use_narrow_row ? last_output_row_num_datums : TILE_WIDTH;
 
 #else
     uint32_t num_hw_blocks_per_core = get_arg(args::num_hw_blocks_per_core);
@@ -139,8 +132,8 @@ void kernel_main() {
     constexpr auto dfb_in = dfb::in0;
     constexpr auto dfb_tilize = dfb::tilize;
 #ifdef OUT_STAGING
-    // Sharded path only, when Ht > 8: pack into the staging buffer the writer drains into the
-    // output shard. (temporary fix until pack_untilize is fully fixed)
+    // Sharded path only, when the host binds the staging buffer: pack into it, and the writer
+    // copies each row into the output shard.
     constexpr auto dfb_out_idx = dfb::out_staging;
 #else
     constexpr auto dfb_out_idx = dfb::out;
