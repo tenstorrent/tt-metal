@@ -10,6 +10,7 @@ fixed (quad_screen_runtime.py); every stage checks what it received and what it 
 
 from __future__ import annotations
 
+import contextlib
 import dataclasses
 import os
 from pathlib import Path
@@ -22,6 +23,23 @@ from models.demos.common.prefill.adapter import PrefillRunParams
 from models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7 import KimiK27Adapter
 
 _IN_REPO_CONFIG = Path(__file__).resolve().parents[3] / "reference" / "kimi_k2_7"
+
+
+@contextlib.contextmanager
+def _rank_local_cache_writes():
+    """Every rank writes its own weight-cache misses. ttnn.as_tensor's default (DISTRIBUTED_GATHER) writes only from
+    global rank 0 while every other rank waits at a world barrier: each quad stage builds different layers, so ranks
+    1-3 never wrote theirs, and a run where only rank 0's cache is complete would hang them at that barrier."""
+    as_tensor = ttnn.as_tensor
+
+    def local(*args, **kwargs):
+        return as_tensor(*args, **{**kwargs, "cache_dump_mode": ttnn.DumpTensorMode.LOCAL})
+
+    ttnn.as_tensor = local
+    try:
+        yield
+    finally:
+        ttnn.as_tensor = as_tensor
 
 
 class _QuadScreenAdapter(KimiK27Adapter):
@@ -76,14 +94,15 @@ class QuadBlockRandomAdapter(_QuadScreenAdapter):
             state_dict = {}
         else:
             state_dict = random_block_state_dict(self, hf_config)
-        return QuadBlockRandomRuntime(
-            mesh_device,
-            hf_config,
-            config,
-            state_dict,
-            is_first_rank=params.is_first_rank,
-            is_last_rank=params.is_last_rank,
-        )
+        with _rank_local_cache_writes():
+            return QuadBlockRandomRuntime(
+                mesh_device,
+                hf_config,
+                config,
+                state_dict,
+                is_first_rank=params.is_first_rank,
+                is_last_rank=params.is_last_rank,
+            )
 
 
 class QuadPassthroughAdapter(_QuadScreenAdapter):
