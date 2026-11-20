@@ -11,9 +11,10 @@ def ti_cond_skip(condition, reason):
         pytest.skip("Skipping unsupported case: " + reason)
 
 
-def validate_test(num_devices, topology, shape, cluster_axis):
+def validate_test(num_devices, topology, shape, cluster_axis, mesh_device=None):
     if topology is None:
-        fabric_config = ttnn.get_fabric_config()
+        assert mesh_device is not None, "validate_test needs mesh_device to read the fabric topology"
+        fabric_config = ttnn.get_fabric_config(mesh_device)
         topology = ttnn.Topology.Ring if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING else ttnn.Topology.Linear
     ti_cond_skip((1 == num_devices), "Can't run a CCL test on 1 device")
     ti_cond_skip(

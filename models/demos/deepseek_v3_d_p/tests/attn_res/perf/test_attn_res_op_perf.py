@@ -138,7 +138,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
     assert set(references) == set(OPS), f"{layout} references name {sorted(references)}, not {sorted(OPS)}"
     require_realtime_profiler("the AttnRes op perf gate")
     num_links = get_num_links(mesh_device, TP_AXIS)
-    topology = per_axis_topology()[TP_AXIS]
+    topology = per_axis_topology(mesh_device=mesh_device)[TP_AXIS]
     grid = mesh_device.compute_with_storage_grid_size()
 
     stream_mapper = _mapper(mesh_device, 2, 3)
@@ -230,7 +230,7 @@ def test_attn_res_op_perf(mesh_device, device_params):
         assert len(samples) == _ITERATIONS, f"expected {_ITERATIONS} {op} programs in the window, got {len(samples)}"
     device_us = {op: statistics.median(samples) for op, samples in durations_us.items()}
 
-    fabric = ttnn.get_fabric_config().name
+    fabric = ttnn.get_fabric_config(mesh_device).name
     logger.info(
         f"AttnRes ops, C = {sum(PLANES)}, {NUM_SITES} sites ({NUM_CLOSED} closed), {GLOBAL_TOKENS} tokens "
         f"({GLOBAL_TOKENS // sp_factor}/chip), {layout} {fabric}, {num_links} links, median of {_ITERATIONS}:"

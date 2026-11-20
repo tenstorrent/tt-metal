@@ -4,14 +4,63 @@
 
 #include "k_split_gram_matmul_program_factory.hpp"
 
+#include <algorithm>
+#include <map>
+#include <optional>
+#include <set>
+#include <string>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <utility>
+#include <vector>
 
+#include "k_split_gram_matmul_device_operation.hpp"
 #include "metal/common/program_utils.hpp"
 
 namespace ttml::metal::ops::k_split_gram_matmul::device {
 
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(KSplitGramMatmulDeviceOperation, KSplitGramMatmulProgramFactory);
+
 namespace {
+
+// Kernel handles in the built Program: the push order of ProgramDescriptor::kernels, followed by the three compute
+// kernels. The device grid is at least 4x3 (validated), so every kernel has cores.
+constexpr uint32_t kRowSenderReduceKernel = 0U;
+constexpr uint32_t kRowSenderKernel = 1U;
+constexpr uint32_t kColSenderKernel = 2U;
+constexpr uint32_t kRowLowerOffdiagKernel = 3U;
+constexpr uint32_t kRowLowerDiagKernel = 4U;
+constexpr uint32_t kRowUpperRecvKernel = 5U;
+constexpr uint32_t kColLowerRecvKernel = 6U;
+constexpr uint32_t kColLowerRecvEdgeKernel = 7U;
+constexpr uint32_t kColUpperRecvKernel = 8U;
+constexpr uint32_t kHelperRecvKernel = 9U;
+constexpr uint32_t kHelperDramReaderKernel = 10U;
+
+// Semaphore ids, in the order legacy CreateSemaphore handed them out; the kernels get them as compile-time args.
+constexpr uint32_t kRowSenderSemId = 0U;
+constexpr uint32_t kRowReceiverSemId = 1U;
+constexpr uint32_t kRowSenderSem2Id = 2U;
+constexpr uint32_t kRowReceiverSem2Id = 3U;
+constexpr uint32_t kColSenderSemId = 4U;
+constexpr uint32_t kColReceiverSemId = 5U;
+constexpr uint32_t kColSenderSem2Id = 6U;
+constexpr uint32_t kColReceiverSem2Id = 7U;
+constexpr uint32_t kReduceSemId = 8U;
+// Consumption credit for the reduce channel: the receiver increments the sender's
+// copy after reserving its c_5 slot; the sender waits for it before each NOC write.
+constexpr uint32_t kReduceAckSemId = 9U;
+
+// Runtime arg slots that override_runtime_arguments() rewrites on every cache hit: the only buffer addresses. Every
+// other runtime arg follows from the device grid and the input shape, which the program hash keys on.
+constexpr uint32_t kSenderInAddrIdx = 0U;      // row sender+reduce, row senders, col senders
+constexpr uint32_t kUpperRecvOutAddrIdx = 2U;  // row upper receivers, which write the combined output
+constexpr uint32_t kHelperInAddrIdx = 0U;      // diagonal helpers' DRAM reader
+constexpr uint32_t kHelperOutAddrIdx = 3U;
+
 tt::tt_metal::CoreRangeSet make_core_range_set(const std::vector<tt::tt_metal::CoreCoord>& cores) {
     std::set<tt::tt_metal::CoreRange> ranges;
     for (const auto& c : cores) {
@@ -19,19 +68,24 @@ tt::tt_metal::CoreRangeSet make_core_range_set(const std::vector<tt::tt_metal::C
     }
     return tt::tt_metal::CoreRangeSet(ranges);
 }
+
+// Largest square grid with room for a helper column at x=grid_dim
+uint32_t gram_grid_dim(const ttnn::distributed::MeshDevice& device) {
+    const auto device_grid = device.compute_with_storage_grid_size();
+    return static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
+}
+
 }  // namespace
 
-KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory::create(
+tt::tt_metal::ProgramDescriptor KSplitGramMatmulProgramFactory::create_descriptor(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     using namespace tt::tt_metal;
 
-    Program program = CreateProgram(*tensor_args.input_tensor.device());
+    ProgramDescriptor desc;
     const auto& input = tensor_args.input_tensor;
     auto* const device = input.device();
 
-    const auto device_grid = device->compute_with_storage_grid_size();
-    // Largest square grid with room for a helper column at x=grid_dim
-    const uint32_t grid_dim = static_cast<uint32_t>(std::min(device_grid.x - 1, device_grid.y));
+    const uint32_t grid_dim = gram_grid_dim(*device);
 
     // Tile counts from padded_shape (always tile-aligned, matches DRAM layout)
     const uint32_t tile_height = input.tensor_spec().tile().get_height();
@@ -51,6 +105,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     // Diagonal helper column: x=grid_dim cores compute odd-K partial for diagonal blocks.
     const tt::tt_metal::CoreRange helper_range({grid_dim, 0}, {grid_dim, grid_dim - 1});
     const auto all_cores = tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>{full_grid, helper_range});
+    const tt::tt_metal::CoreRangeSet helper_cores(helper_range);
     // Upper x-bound for row multicast (includes helper column)
     const uint32_t upper_x_end = grid_dim;
 
@@ -141,47 +196,43 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     const uint32_t send_out_cb = (uint32_t)tt::CBIndex::c_5;
     const uint32_t c5_tiles = M_block * N_block;
 
-    auto create_all_cbs = [&](const tt::tt_metal::CoreRange& range) {
-        create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_0, tile_format, tile_sz, cb_size);
-        create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_1, tile_format, tile_sz, cb_size);
-        create_circular_buffer(
-            program, range, (uint32_t)tt::CBIndex::c_2, intermed_format, intermed_tile_sz, M_block * N_block);
-        if (mirror_active) {
-            // c_4: mirror buffer for transposed tiles (M_block tiles, streamed col by col)
-            create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_4, out_tile_format, out_tile_sz, M_block);
-            // c_7: staging for transpose (mb tiles BF16, batched per-column)
-            create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_7, out_tile_format, out_tile_sz, M_block);
-        }
-        create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_5, out_tile_format, out_tile_sz, c5_tiles);
-        create_circular_buffer(program, range, (uint32_t)tt::CBIndex::c_6, out_tile_format, out_tile_sz, M_block);
-    };
-    create_all_cbs(full_grid);
-    {  // helpers
-        create_all_cbs(helper_range);
+    // Every CB lives on the square grid and on the helper column.
+    desc.cbs.push_back(make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_0, tile_format, tile_sz, cb_size));
+    desc.cbs.push_back(make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_1, tile_format, tile_sz, cb_size));
+    desc.cbs.push_back(make_cb_descriptor(
+        all_cores, (uint32_t)tt::CBIndex::c_2, intermed_format, intermed_tile_sz, M_block * N_block));
+    if (mirror_active) {
+        // c_4: mirror buffer for transposed tiles (M_block tiles, streamed col by col)
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_4, out_tile_format, out_tile_sz, M_block));
+        // c_7: staging for transpose (mb tiles BF16, batched per-column)
+        desc.cbs.push_back(
+            make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_7, out_tile_format, out_tile_sz, M_block));
     }
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_5, out_tile_format, out_tile_sz, c5_tiles));
+    desc.cbs.push_back(
+        make_cb_descriptor(all_cores, (uint32_t)tt::CBIndex::c_6, out_tile_format, out_tile_sz, M_block));
 
     // Semaphores on all cores (helpers need row sems for multicast reception)
-    auto row_sender_sem = CreateSemaphore(program, all_cores, INVALID);
-    auto row_receiver_sem = CreateSemaphore(program, all_cores, INVALID);
-    auto row_sender_sem2 = CreateSemaphore(program, all_cores, INVALID);
-    auto row_receiver_sem2 = CreateSemaphore(program, all_cores, INVALID);
-    auto col_sender_sem = CreateSemaphore(program, all_cores, INVALID);
-    auto col_receiver_sem = CreateSemaphore(program, all_cores, INVALID);
-    auto col_sender_sem2 = CreateSemaphore(program, all_cores, INVALID);
-    auto col_receiver_sem2 = CreateSemaphore(program, all_cores, INVALID);
-    auto reduce_sem = CreateSemaphore(program, all_cores, 0);
-    // Consumption credit for the reduce channel: the receiver increments the sender's
-    // copy after reserving its c_5 slot; the sender waits for it before each NOC write.
-    auto reduce_ack_sem = CreateSemaphore(program, all_cores, 0);
+    desc.semaphores.push_back(make_semaphore_descriptor(kRowSenderSemId, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kRowReceiverSemId, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kRowSenderSem2Id, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kRowReceiverSem2Id, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kColSenderSemId, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kColReceiverSemId, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kColSenderSem2Id, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kColReceiverSem2Id, all_cores, INVALID));
+    desc.semaphores.push_back(make_semaphore_descriptor(kReduceSemId, all_cores, 0U));
+    desc.semaphores.push_back(make_semaphore_descriptor(kReduceAckSemId, all_cores, 0U));
 
     const auto noc_1 = detail::preferred_noc_for_dram_write(device->arch());
     const auto noc_0 = detail::preferred_noc_for_dram_read(device->arch());
-    const auto risc_1 = DataMovementProcessor::RISCV_1;
-    const auto risc_0 = DataMovementProcessor::RISCV_0;
+    const DataMovementConfigDescriptor risc_0_config{.processor = DataMovementProcessor::RISCV_0, .noc = noc_0};
+    const DataMovementConfigDescriptor risc_1_config{.processor = DataMovementProcessor::RISCV_1, .noc = noc_1};
 
-    const uint32_t in_addr = input.mesh_buffer().address();
-
-    const uint32_t out_addr = output.mesh_buffer().address();
+    auto* const in_buffer = input.buffer();
+    auto* const out_buffer = output.buffer();
 
     const std::string base = "tt-train/sources/ttml/metal/ops/k_split_gram_matmul/device/kernels/";
     const std::string sender_path = base + "mcast_sender.cpp";
@@ -227,78 +278,70 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         }
     }
 
+    // Kernels are pushed in the order of the k*Kernel handles.
+
     // === Sender kernels ===
     // Row sender+reduce for (0,0): RISCV_0/NOC_0, sends partial to helper (grid_dim, 0)
-    KernelHandle row_sender_reduce_kid;
     {
         std::vector<uint32_t> ct = {
             num_tiles,
             tile_sz,
-            row_sender_sem,
-            row_receiver_sem,
-            row_sender_sem2,
-            row_receiver_sem2,
+            kRowSenderSemId,
+            kRowReceiverSemId,
+            kRowSenderSem2Id,
+            kRowReceiverSem2Id,
             (uint32_t)tt::CBIndex::c_0,
             block_sz,
             cb_size,
             send_out_cb,
             out_tile_sz,
             (uint32_t)tt::CBIndex::c_5,
-            reduce_sem,
+            kReduceSemId,
             num_m_blocks,
             M_block,
             num_n_blocks,
-            reduce_ack_sem};
-        TensorAccessorArgs(*input.buffer()).append_to(ct);
-        row_sender_reduce_kid = CreateKernel(
-            program,
-            sender_path,
-            make_core_range_set({{0, 0}}),
-            DataMovementConfig{
-                .processor = risc_0, .noc = noc_0, .compile_args = ct, .defines = {{"SENDER_REDUCE_SEND", "1"}}});
+            kReduceAckSemId};
+        TensorAccessorArgs(*in_buffer).append_to(ct);
+        desc.kernels.push_back(make_kernel_descriptor(
+            sender_path, make_core_range_set({{0, 0}}), ct, {{"SENDER_REDUCE_SEND", "1"}}, risc_0_config));
     }
 
     // Row sender for (0, y>0): RISCV_0/NOC_0, CB c_0
-    std::vector<uint32_t> row_sender_ct = {
-        num_tiles,
-        tile_sz,
-        row_sender_sem,
-        row_receiver_sem,
-        row_sender_sem2,
-        row_receiver_sem2,
-        (uint32_t)tt::CBIndex::c_0,
-        block_sz,
-        cb_size,
-        num_m_blocks,
-        num_n_blocks};
-    TensorAccessorArgs(*input.buffer()).append_to(row_sender_ct);
-    const KernelHandle row_sender_kid = CreateKernel(
-        program,
-        sender_path,
-        make_core_range_set(row_senders),
-        DataMovementConfig{.processor = risc_0, .noc = noc_0, .compile_args = row_sender_ct});
-
-    // Col sender: RISCV_1/NOC_1, CB c_1
-    KernelHandle col_sender_kid;
     {
         std::vector<uint32_t> ct = {
             num_tiles,
             tile_sz,
-            col_sender_sem,
-            col_receiver_sem,
-            col_sender_sem2,
-            col_receiver_sem2,
+            kRowSenderSemId,
+            kRowReceiverSemId,
+            kRowSenderSem2Id,
+            kRowReceiverSem2Id,
+            (uint32_t)tt::CBIndex::c_0,
+            block_sz,
+            cb_size,
+            num_m_blocks,
+            num_n_blocks};
+        TensorAccessorArgs(*in_buffer).append_to(ct);
+        desc.kernels.push_back(
+            make_kernel_descriptor(sender_path, make_core_range_set(row_senders), ct, {}, risc_0_config));
+    }
+
+    // Col sender: RISCV_1/NOC_1, CB c_1
+    {
+        std::vector<uint32_t> ct = {
+            num_tiles,
+            tile_sz,
+            kColSenderSemId,
+            kColReceiverSemId,
+            kColSenderSem2Id,
+            kColReceiverSem2Id,
             (uint32_t)tt::CBIndex::c_1,
             block_sz,
             cb_size,
             num_m_blocks,
             num_n_blocks};
-        TensorAccessorArgs(*input.buffer()).append_to(ct);
-        col_sender_kid = CreateKernel(
-            program,
-            sender_path,
-            make_core_range_set(col_senders),
-            DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct});
+        TensorAccessorArgs(*in_buffer).append_to(ct);
+        desc.kernels.push_back(
+            make_kernel_descriptor(sender_path, make_core_range_set(col_senders), ct, {}, risc_1_config));
     }
 
     // === Receiver kernels ===
@@ -316,11 +359,11 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             out_tile_sz,
             Mpc,
             (uint32_t)tt::CBIndex::c_5,
-            reduce_sem,
+            kReduceSemId,
             num_m_blocks,
             M_block,
             num_n_blocks,
-            reduce_ack_sem};
+            kReduceAckSemId};
     };
 
     auto make_recv_write_ct = [&](uint32_t sender_sem_id, uint32_t receiver_sem_id) {
@@ -336,12 +379,12 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             Mpc,  // cb_out = c_6 (combined)
             padded_out_tiles,
             (uint32_t)tt::CBIndex::c_5,
-            reduce_sem,
+            kReduceSemId,
             num_m_blocks,
             M_block,
             num_n_blocks,
-            reduce_ack_sem};
-        TensorAccessorArgs(*output.buffer()).append_to(ct);
+            kReduceAckSemId};
+        TensorAccessorArgs(*out_buffer).append_to(ct);
         return ct;
     };
 
@@ -355,126 +398,103 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     }
 
     // Lower off-diagonal: REDUCE_SEND
-    const KernelHandle row_lower_offdiag_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_writer_path,
         make_core_range_set(row_lower_offdiag),
-        DataMovementConfig{
-            .processor = risc_0,
-            .noc = noc_0,
-            .compile_args = make_recv_send_ct(row_sender_sem, row_receiver_sem),
-            .defines = {{"REDUCE_SEND", "1"}}});
+        make_recv_send_ct(kRowSenderSemId, kRowReceiverSemId),
+        {{"REDUCE_SEND", "1"}},
+        risc_0_config));
 
     // Lower diagonal (x == y, y > 0): REDUCE_SEND to helper
-    const KernelHandle row_lower_diag_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_writer_path,
         make_core_range_set(row_lower_diag),
-        DataMovementConfig{
-            .processor = risc_0,
-            .noc = noc_0,
-            .compile_args = make_recv_send_ct(row_sender_sem, row_receiver_sem),
-            .defines = {{"REDUCE_SEND", "1"}}});
+        make_recv_send_ct(kRowSenderSemId, kRowReceiverSemId),
+        {{"REDUCE_SEND", "1"}},
+        risc_0_config));
 
     // Row upper receivers (x > y): REDUCE_RECV — receive partner's partial, write combined
     auto upper_recv_defines = std::map<std::string, std::string>{{"REDUCE_RECV", "1"}};
     if (mirror_active)
         upper_recv_defines["MIRROR_OUTPUT"] = "1";
-    const KernelHandle row_upper_recv_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_writer_path,
         make_core_range_set(row_upper_recv),
-        DataMovementConfig{
-            .processor = risc_0,
-            .noc = noc_0,
-            .compile_args = make_recv_write_ct(row_sender_sem2, row_receiver_sem2),
-            .defines = upper_recv_defines});
+        make_recv_write_ct(kRowSenderSem2Id, kRowReceiverSem2Id),
+        upper_recv_defines,
+        risc_0_config));
 
     // Col lower receivers (interior, x>0, y≥x): plain receiver
-    const KernelHandle col_lower_recv_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_path,
         make_core_range_set(col_lower_recv_interior),
-        DataMovementConfig{
-            .processor = risc_1,
-            .noc = noc_1,
-            .compile_args = {
-                recv_tiles,
-                tile_sz,
-                col_sender_sem,
-                col_receiver_sem,
-                (uint32_t)tt::CBIndex::c_1,
-                block_sz,
-                num_m_blocks,
-                num_n_blocks}});
+        {recv_tiles,
+         tile_sz,
+         kColSenderSemId,
+         kColReceiverSemId,
+         (uint32_t)tt::CBIndex::c_1,
+         block_sz,
+         num_m_blocks,
+         num_n_blocks},
+        {},
+        risc_1_config));
 
     // Col lower receivers (edge, x=0, y>0): REDUCE_SEND to upper core (y, 0)
-    const KernelHandle col_lower_recv_edge_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_writer_path,
         make_core_range_set(col_lower_recv_edge),
-        DataMovementConfig{
-            .processor = risc_1,
-            .noc = noc_1,
-            .compile_args =
-                {recv_tiles,
-                 tile_sz,
-                 col_sender_sem,
-                 col_receiver_sem,
-                 (uint32_t)tt::CBIndex::c_1,
-                 block_sz,
-                 send_out_cb,
-                 out_tile_sz,
-                 Mpc,
-                 (uint32_t)tt::CBIndex::c_5,
-                 reduce_sem,
-                 num_m_blocks,
-                 M_block,
-                 num_n_blocks,
-                 reduce_ack_sem},
-            .defines = {{"REDUCE_SEND", "1"}}});
+        {recv_tiles,
+         tile_sz,
+         kColSenderSemId,
+         kColReceiverSemId,
+         (uint32_t)tt::CBIndex::c_1,
+         block_sz,
+         send_out_cb,
+         out_tile_sz,
+         Mpc,
+         (uint32_t)tt::CBIndex::c_5,
+         kReduceSemId,
+         num_m_blocks,
+         M_block,
+         num_n_blocks,
+         kReduceAckSemId},
+        {{"REDUCE_SEND", "1"}},
+        risc_1_config));
 
     // Col upper receivers (y<x, y>0): plain receiver
-    const KernelHandle col_upper_recv_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_path,
         make_core_range_set(col_upper_recv),
-        DataMovementConfig{
-            .processor = risc_1,
-            .noc = noc_1,
-            .compile_args = {
-                recv_tiles,
-                tile_sz,
-                col_sender_sem2,
-                col_receiver_sem2,
-                (uint32_t)tt::CBIndex::c_1,
-                block_sz,
-                num_m_blocks,
-                num_n_blocks}});
+        {recv_tiles,
+         tile_sz,
+         kColSenderSem2Id,
+         kColReceiverSem2Id,
+         (uint32_t)tt::CBIndex::c_1,
+         block_sz,
+         num_m_blocks,
+         num_n_blocks},
+        {},
+        risc_1_config));
 
     // === Diagonal helper kernels (x=grid_dim column) ===
     // Helper row receiver: REDUCE_RECV on RISCV_0 (receives diagonal's partial)
-    const KernelHandle helper_recv_kid = CreateKernel(
-        program,
+    desc.kernels.push_back(make_kernel_descriptor(
         receiver_path,
-        helper_range,
-        DataMovementConfig{
-            .processor = risc_0,
-            .noc = noc_0,
-            .compile_args =
-                {recv_tiles,
-                 tile_sz,
-                 row_sender_sem2,
-                 row_receiver_sem2,
-                 (uint32_t)tt::CBIndex::c_0,
-                 block_sz,
-                 (uint32_t)tt::CBIndex::c_5,
-                 reduce_sem,
-                 num_m_blocks,
-                 M_block,
-                 num_n_blocks,
-                 reduce_ack_sem},
-            .defines = {{"REDUCE_RECV", "1"}}});
+        helper_cores,
+        {recv_tiles,
+         tile_sz,
+         kRowSenderSem2Id,
+         kRowReceiverSem2Id,
+         (uint32_t)tt::CBIndex::c_0,
+         block_sz,
+         (uint32_t)tt::CBIndex::c_5,
+         kReduceSemId,
+         num_m_blocks,
+         M_block,
+         num_n_blocks,
+         kReduceAckSemId},
+        {{"REDUCE_RECV", "1"}},
+        risc_0_config));
 
     // Helper DRAM reader: reads odd K-columns, writes combined output (c_6) to DRAM
     std::vector<uint32_t> ct_dram = {
@@ -489,25 +509,28 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         num_m_blocks,
         M_block,
         num_n_blocks};
-    TensorAccessorArgs(*input.buffer()).append_to(ct_dram);
-    TensorAccessorArgs(*output.buffer()).append_to(ct_dram);
+    TensorAccessorArgs(*in_buffer).append_to(ct_dram);
+    TensorAccessorArgs(*out_buffer).append_to(ct_dram);
     auto dram_defines = std::map<std::string, std::string>{};
     if (mirror_active)
         dram_defines["MIRROR_OUTPUT"] = "1";
-    const KernelHandle helper_dram_reader_kid = CreateKernel(
-        program,
-        helper_dram_reader_path,
-        helper_range,
-        DataMovementConfig{.processor = risc_1, .noc = noc_1, .compile_args = ct_dram, .defines = dram_defines});
+    desc.kernels.push_back(
+        make_kernel_descriptor(helper_dram_reader_path, helper_cores, ct_dram, dram_defines, risc_1_config));
 
     // === Compute ===
     // Different defines per core group for reduction mode
-    auto compute_cfg = [&](std::map<std::string, std::string> defines = {}) {
-        return ComputeConfig{
-            .math_fidelity = attrs.math_fidelity,
-            .fp32_dest_acc_en = true,
-            .compile_args = {K_half, K_block_tiles, Mpc, subblock_w, M_block, subblock_h, N_block, num_n_blocks},
-            .defines = defines};
+    const std::vector<uint32_t> compute_ct = {
+        K_half, K_block_tiles, Mpc, subblock_w, M_block, subblock_h, N_block, num_n_blocks};
+    auto make_compute = [&](const CoreRangeSet& cores, const std::map<std::string, std::string>& defines) {
+        return make_compute_kernel_descriptor(
+            cores,
+            compute_ct,
+            defines,
+            compute_matmul_path,
+            /*fp32_dest_acc_en=*/true,
+            /*unpack_to_dest_mode=*/{},
+            attrs.math_fidelity,
+            /*math_approx_mode=*/false);
     };
 
     // Lower triangle + diagonal: REDUCE_SENDER_TRANSPOSE. Diagonal cores send transposed
@@ -516,11 +539,8 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     std::vector<tt::tt_metal::CoreCoord> sender_transpose_cores;
     for (uint32_t y = 0; y < grid_dim; y++)
         for (uint32_t x = 0; x <= y; x++) sender_transpose_cores.push_back({x, y});
-    CreateKernel(
-        program,
-        compute_matmul_path,
-        make_core_range_set(sender_transpose_cores),
-        compute_cfg({{"REDUCE_SENDER_TRANSPOSE", "1"}}));
+    desc.kernels.push_back(
+        make_compute(make_core_range_set(sender_transpose_cores), {{"REDUCE_SENDER_TRANSPOSE", "1"}}));
 
     // Upper: REDUCE_ACCUMULATOR
     std::vector<tt::tt_metal::CoreCoord> accum_cores;
@@ -529,12 +549,13 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
     auto accum_defines = std::map<std::string, std::string>{{"REDUCE_ACCUMULATOR", "1"}};
     if (mirror_active)
         accum_defines["MIRROR_OUTPUT"] = "1";
-    CreateKernel(program, compute_matmul_path, make_core_range_set(accum_cores), compute_cfg(accum_defines));
+    desc.kernels.push_back(make_compute(make_core_range_set(accum_cores), accum_defines));
 
     // Helpers: REDUCE_ACCUMULATOR (no mirror — diagonal blocks are self-symmetric)
-    CreateKernel(program, compute_matmul_path, helper_range, compute_cfg({{"REDUCE_ACCUMULATOR", "1"}}));
+    desc.kernels.push_back(make_compute(helper_cores, {{"REDUCE_ACCUMULATOR", "1"}}));
 
     // === Runtime args ===
+    // On a cache hit override_runtime_arguments() rewrites the input and output addresses (the k*AddrIdx slots).
 
     // --- Row sender+reduce at (0,0): sends partial to helper (grid_dim, 0) ---
     {
@@ -543,11 +564,9 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         auto row_upper_start_p = device->worker_core_from_logical_core({1, 0});
         auto row_upper_end_p = device->worker_core_from_logical_core({upper_x_end, 0});
         auto helper_p = device->worker_core_from_logical_core({grid_dim, 0});
-        SetRuntimeArgs(
-            program,
-            row_sender_reduce_kid,
+        desc.kernels[kRowSenderReduceKernel].emplace_runtime_args(
             tt::tt_metal::CoreCoord{0, 0},
-            {in_addr,
+            {in_buffer,
              (uint32_t)row_lower_start_p.x,
              (uint32_t)row_lower_start_p.y,
              (uint32_t)row_lower_end_p.x,
@@ -582,11 +601,9 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             (row_upper_num > 0) ? tt::tt_metal::CoreCoord{upper_x_end, y} : tt::tt_metal::CoreCoord{0, y};
         auto row_upper_start_p = device->worker_core_from_logical_core(row_upper_start_log);
         auto row_upper_end_p = device->worker_core_from_logical_core(row_upper_end_log);
-        SetRuntimeArgs(
-            program,
-            row_sender_kid,
+        desc.kernels[kRowSenderKernel].emplace_runtime_args(
             sender_core,
-            {in_addr,
+            {in_buffer,
              (uint32_t)row_lower_start_p.x,
              (uint32_t)row_lower_start_p.y,
              (uint32_t)row_lower_end_p.x,
@@ -626,11 +643,9 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
         std::swap(col_upper_start_p, col_upper_end_p);  // NOC_1: swap
         uint32_t keeps_odd = (x > 0) ? 1u : 0u;
         uint32_t loopback = (x == 0) ? 1u : 0u;
-        SetRuntimeArgs(
-            program,
-            col_sender_kid,
+        desc.kernels[kColSenderKernel].emplace_runtime_args(
             sender_core,
-            {in_addr,
+            {in_buffer,
              (uint32_t)col_lower_start_p.x,
              (uint32_t)col_lower_start_p.y,
              (uint32_t)col_lower_end_p.x,
@@ -658,25 +673,26 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             if (x < y) {
                 // Lower off-diagonal: REDUCE_SEND to upper core (y, x)
                 auto partner_p = device->worker_core_from_logical_core({y, x});
-                SetRuntimeArgs(
-                    program,
-                    row_lower_offdiag_kid,
+                desc.kernels[kRowLowerOffdiagKernel].emplace_runtime_args(
                     core,
                     {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, (uint32_t)partner_p.x, (uint32_t)partner_p.y});
             } else if (x == y) {
                 // Lower diagonal: REDUCE_SEND to helper (grid_dim, y)
                 auto partner_p = device->worker_core_from_logical_core({grid_dim, y});
-                SetRuntimeArgs(
-                    program,
-                    row_lower_diag_kid,
+                desc.kernels[kRowLowerDiagKernel].emplace_runtime_args(
                     core,
                     {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, (uint32_t)partner_p.x, (uint32_t)partner_p.y});
             } else {
                 // Upper: REDUCE_RECV, write combined output to DRAM
                 uint32_t M_start_tile = y * Mpc;
                 uint32_t N_start_tile = x * Mpc;
-                std::vector<uint32_t> rt = {
-                    (uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, out_addr, M_start_tile, N_start_tile, M_tiles};
+                KernelDescriptor::RTArgList rt;
+                rt.push_back((uint32_t)row_sender_p.x);
+                rt.push_back((uint32_t)row_sender_p.y);
+                rt.push_back(out_buffer);
+                rt.push_back(M_start_tile);
+                rt.push_back(N_start_tile);
+                rt.push_back(M_tiles);
                 if (mirror_active) {
                     rt.push_back(N_start_tile);  // mirror_M_start = N_start (swapped)
                     rt.push_back(M_start_tile);  // mirror_N_start = M_start (swapped)
@@ -685,7 +701,7 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
                 auto partner_p = device->worker_core_from_logical_core({y, x});
                 rt.push_back((uint32_t)partner_p.x);
                 rt.push_back((uint32_t)partner_p.y);
-                SetRuntimeArgs(program, row_upper_recv_kid, core, rt);
+                desc.kernels[kRowUpperRecvKernel].emplace_runtime_args(core, rt);
             }
         }
     }
@@ -698,106 +714,81 @@ KSplitGramMatmulProgramFactory::cached_program_t KSplitGramMatmulProgramFactory:
             if (x == 0) {
                 // Edge lower (0, y>0): REDUCE_SEND to upper core (y, 0)
                 auto partner_p = device->worker_core_from_logical_core({y, 0});
-                SetRuntimeArgs(
-                    program,
-                    col_lower_recv_edge_kid,
+                desc.kernels[kColLowerRecvEdgeKernel].emplace_runtime_args(
                     core,
                     {(uint32_t)col_sender_p.x, (uint32_t)col_sender_p.y, (uint32_t)partner_p.x, (uint32_t)partner_p.y});
             } else if (y >= x) {
-                SetRuntimeArgs(program, col_lower_recv_kid, core, {(uint32_t)col_sender_p.x, (uint32_t)col_sender_p.y});
+                desc.kernels[kColLowerRecvKernel].emplace_runtime_args(
+                    core, {(uint32_t)col_sender_p.x, (uint32_t)col_sender_p.y});
             } else {
-                SetRuntimeArgs(program, col_upper_recv_kid, core, {(uint32_t)col_sender_p.x, (uint32_t)col_sender_p.y});
+                desc.kernels[kColUpperRecvKernel].emplace_runtime_args(
+                    core, {(uint32_t)col_sender_p.x, (uint32_t)col_sender_p.y});
             }
         }
     }
 
     // --- Helper runtime args ---
-    {  // helpers
-        for (uint32_t y = 0; y < grid_dim; y++) {
-            tt::tt_metal::CoreCoord helper_core{grid_dim, y};
-            auto row_sender_p = device->worker_core_from_logical_core({0, y});
+    for (uint32_t y = 0; y < grid_dim; y++) {
+        tt::tt_metal::CoreCoord helper_core{grid_dim, y};
+        auto row_sender_p = device->worker_core_from_logical_core({0, y});
 
-            // RISCV_0: row receiver + REDUCE_RECV (receives diagonal's partial).
-            // Reduce partner is the diagonal core (y, y) — target of the consumption credit.
-            auto diag_p = device->worker_core_from_logical_core({y, y});
-            SetRuntimeArgs(
-                program,
-                helper_recv_kid,
-                helper_core,
-                {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, (uint32_t)diag_p.x, (uint32_t)diag_p.y});
+        // RISCV_0: row receiver + REDUCE_RECV (receives diagonal's partial).
+        // Reduce partner is the diagonal core (y, y) — target of the consumption credit.
+        auto diag_p = device->worker_core_from_logical_core({y, y});
+        desc.kernels[kHelperRecvKernel].emplace_runtime_args(
+            helper_core, {(uint32_t)row_sender_p.x, (uint32_t)row_sender_p.y, (uint32_t)diag_p.x, (uint32_t)diag_p.y});
 
-            // RISCV_1: DRAM reader + output writer for diagonal block G[y,y]
-            SetRuntimeArgs(
-                program,
-                helper_dram_reader_kid,
-                helper_core,
-                {in_addr,
-                 y * Mpc,  // tile_offset_row
-                 K_tiles,
-                 out_addr,
-                 y * Mpc,  // M_start_tile (diagonal)
-                 y * Mpc,  // N_start_tile (diagonal)
-                 M_tiles,
-                 K_tiles});
-        }
+        // RISCV_1: DRAM reader + output writer for diagonal block G[y,y]
+        desc.kernels[kHelperDramReaderKernel].emplace_runtime_args(
+            helper_core,
+            {in_buffer,
+             y * Mpc,  // tile_offset_row
+             K_tiles,
+             out_buffer,
+             y * Mpc,  // M_start_tile (diagonal)
+             y * Mpc,  // N_start_tile (diagonal)
+             M_tiles,
+             K_tiles});
     }
 
-    // Build core lists for override_runtime_arguments
-    std::vector<tt::tt_metal::CoreCoord> row_sender_cores_list;
-    for (uint32_t y = 1; y < grid_dim; y++) row_sender_cores_list.push_back({0, y});
-
-    std::vector<tt::tt_metal::CoreCoord> col_sender_cores_list;
-    col_sender_cores_list.reserve(grid_dim);
-    for (uint32_t x = 0; x < grid_dim; x++) col_sender_cores_list.push_back({x, 0});
-
-    std::vector<tt::tt_metal::CoreCoord> helper_cores_list;
-    helper_cores_list.reserve(grid_dim);
-    for (uint32_t y = 0; y < grid_dim; y++) helper_cores_list.push_back({grid_dim, y});
-
-    return {
-        std::move(program),
-        shared_variables_t{
-            .row_sender_reduce_kid = row_sender_reduce_kid,
-            .row_sender_kid = row_sender_kid,
-            .col_sender_kid = col_sender_kid,
-            .helper_dram_reader_kid = helper_dram_reader_kid,
-            .row_upper_recv_kid = row_upper_recv_kid,
-            .row_sender_cores = std::move(row_sender_cores_list),
-            .col_sender_cores = std::move(col_sender_cores_list),
-            .row_upper_cores = std::move(row_upper_recv),
-            .helper_cores = std::move(helper_cores_list)}};
+    return desc;
 }
 
 void KSplitGramMatmulProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program,
-    const operation_attributes_t&,
+    tt::tt_metal::Program& program,
+    const operation_attributes_t& /*attrs*/,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
-    auto& program = cached_program.program;
-    auto& sv = cached_program.shared_variables;
+    tensor_return_value_t& output,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
+    const uint32_t in_addr = tensor_args.input_tensor.buffer()->address();
+    const uint32_t out_addr = output.buffer()->address();
+    const uint32_t grid_dim = gram_grid_dim(*tensor_args.input_tensor.device());
 
-    const uint32_t in_addr = tensor_args.input_tensor.mesh_buffer().address();
-    const uint32_t out_addr = output.mesh_buffer().address();
+    // The input address, on the row sender+reduce at (0,0), the row senders (0, y>0) and the col senders (x, 0)
+    auto& row_sender_reduce_rt = tt::tt_metal::GetRuntimeArgs(program, kRowSenderReduceKernel);
+    row_sender_reduce_rt[0][0][kSenderInAddrIdx] = in_addr;
+    auto& row_sender_rt = tt::tt_metal::GetRuntimeArgs(program, kRowSenderKernel);
+    for (uint32_t y = 1; y < grid_dim; y++) {
+        row_sender_rt[0][y][kSenderInAddrIdx] = in_addr;
+    }
+    auto& col_sender_rt = tt::tt_metal::GetRuntimeArgs(program, kColSenderKernel);
+    for (uint32_t x = 0; x < grid_dim; x++) {
+        col_sender_rt[x][0][kSenderInAddrIdx] = in_addr;
+    }
 
-    // Update in_addr (runtime arg index 0) for all sender kernels
-    auto& rr_args = GetRuntimeArgs(program, sv.row_sender_reduce_kid);
-    rr_args[0][0][0] = in_addr;  // core (0,0)
+    // The output address, on the row upper receivers (x > y), which write the combined output
+    auto& row_upper_recv_rt = tt::tt_metal::GetRuntimeArgs(program, kRowUpperRecvKernel);
+    for (uint32_t y = 0; y < grid_dim; y++) {
+        for (uint32_t x = y + 1; x < grid_dim; x++) {
+            row_upper_recv_rt[x][y][kUpperRecvOutAddrIdx] = out_addr;
+        }
+    }
 
-    auto& rs_args = GetRuntimeArgs(program, sv.row_sender_kid);
-    for (const auto& c : sv.row_sender_cores) rs_args[c.x][c.y][0] = in_addr;
-
-    auto& cs_args = GetRuntimeArgs(program, sv.col_sender_kid);
-    for (const auto& c : sv.col_sender_cores) cs_args[c.x][c.y][0] = in_addr;
-
-    // Update out_addr (runtime arg index 2) for upper recv writer kernels
-    auto& ur_args = GetRuntimeArgs(program, sv.row_upper_recv_kid);
-    for (const auto& c : sv.row_upper_cores) ur_args[c.x][c.y][2] = out_addr;
-
-    // Update in_addr (index 0) and out_addr (index 3) for helper DRAM readers
-    auto& hd_args = GetRuntimeArgs(program, sv.helper_dram_reader_kid);
-    for (const auto& c : sv.helper_cores) {
-        hd_args[c.x][c.y][0] = in_addr;
-        hd_args[c.x][c.y][3] = out_addr;
+    // Both addresses, on the diagonal helpers' DRAM reader (x = grid_dim)
+    auto& helper_dram_reader_rt = tt::tt_metal::GetRuntimeArgs(program, kHelperDramReaderKernel);
+    for (uint32_t y = 0; y < grid_dim; y++) {
+        helper_dram_reader_rt[grid_dim][y][kHelperInAddrIdx] = in_addr;
+        helper_dram_reader_rt[grid_dim][y][kHelperOutAddrIdx] = out_addr;
     }
 }
 
