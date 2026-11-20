@@ -502,7 +502,9 @@ class TtAttention:
             **where,
         )
         if gathered.layout == ttnn.ROW_MAJOR_LAYOUT:
-            return gathered  # the persistent scratch itself: callers free only what is not self.kv_full
+            # the op returns a new handle on kv_full's buffer; hand back kv_full itself so callers, which free only
+            # what is not self.kv_full, keep the persistent scratch
+            return self.kv_full
         g = min(self.max_seq, -(-end // slab) * slab)
         if meta is None and settings.get("ATTN_KV_ROWS") == "gathered" and g < self.max_seq and gathered.dtype == ttnn.bfloat8_b:
             # only the gathered slabs (g / 8 rows of each rank's max_seq / 8) -> bf16 ROW_MAJOR [1, 1, g, 576], still
