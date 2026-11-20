@@ -286,9 +286,15 @@ def main(argv: list[str] | None = None) -> int:
         and checkout_skip != gwdt_quad.CHECKOUT_OFF
         and (err := gwdt_quad.checkout_error(repo, hosts, dirty=checkout_skip == gwdt_quad.CHECKOUT_FULL))
     ):
+        full = checkout_skip == gwdt_quad.CHECKOUT_FULL
+        env = gwdt_quad.SKIP_CHECKOUT_ENV
+        what = "commit and uncommitted changes" if full else "commit"
+        workaround = [f"  {env}=1  compare the commit only, ignore uncommitted changes"] if full else []
+        workaround.append(f"  {env}=2  skip the checkout check")
         print(
-            "error: --quad needs the same tt-metal checkout on every host (commit and uncommitted changes, outside "
-            f"{gwdt_quad.LAUNCHER_ONLY}); {err}.\nSync the checkouts and rerun."
+            f"error: --quad needs the same tt-metal checkout on every host ({what}; "
+            f"{gwdt_quad.LAUNCHER_ONLY} is not compared):\n{err}\n"
+            "Sync the checkouts and rerun. To run anyway, set:\n" + "\n".join(workaround)
         )
         return 2
     run_dir = log_root(os.environ.get("USER", ""), Path.home(), os.environ.get(SHARED_FOLDER_ENV)) / run

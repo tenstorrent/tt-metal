@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 import shlex
 from pathlib import Path
 
@@ -399,6 +400,15 @@ def _out(head: str, fp: str = CLEAN, *files: str) -> str:
     return "\n".join([head, fp, *files]) + "\n"
 
 
+def _cells(table: str) -> list[list[str]]:
+    """The table's cells per line; also checks every column starts at the same offset on every line."""
+    lines = table.splitlines()
+    for col in range(1, 3):
+        starts = {m.start(col) for m in (re.match(r"  (\S+)\s+(\S+)\s+(\S)", l) for l in lines) if m}
+        assert len(starts) == 1, table
+    return [re.split(r"\s{2,}", l.strip()) for l in lines]
+
+
 def test_checkout_same_everywhere(monkeypatch):
     _fake_checkouts(monkeypatch, dict.fromkeys(HOSTS, _out(A)))
     assert gwdt_quad.checkout_error(REPO, HOSTS) is None
@@ -414,11 +424,13 @@ def test_checkout_names_hosts_that_differ(monkeypatch):
         monkeypatch,
         {"h0": _out(A), "h1": _out(A, "f" * 40, "b.py", "a.py", "c.py", "d.py"), "h2": _out(B), "h3": None},
     )
-    assert gwdt_quad.checkout_error(REPO, HOSTS) == (
-        f"{REPO} here is at {A[:11]} with no uncommitted changes, but "
-        "h1 has uncommitted changes to a.py, b.py, c.py +1 more; "
-        f"h2 is at {B[:11]}; h3 has no readable git checkout at {REPO}"
-    )
+    assert _cells(gwdt_quad.checkout_error(REPO, HOSTS)) == [
+        ["host", "commit", "uncommitted changes"],
+        ["h0", A[:11], "none", "this host"],
+        ["h1", A[:11], "a.py, b.py, c.py +1 more", "DIFFERS"],
+        ["h2", B[:11], "none", "DIFFERS"],
+        ["h3", "-", "-", f"DIFFERS: no readable git checkout at {REPO}"],
+    ]
 
 
 def test_checkout_clean_remote_vs_dirty_here(monkeypatch):
@@ -431,9 +443,13 @@ def test_checkout_clean_remote_vs_dirty_here(monkeypatch):
             "h3": _out(A, "f" * 40, "r.py"),
         },
     )
-    assert gwdt_quad.checkout_error(REPO, HOSTS) == (
-        f"{REPO} here is at {A[:11]} with uncommitted changes to r.py, but h1 has no uncommitted changes"
-    )
+    assert _cells(gwdt_quad.checkout_error(REPO, HOSTS)) == [
+        ["host", "commit", "uncommitted changes"],
+        ["h0", A[:11], "r.py", "this host"],
+        ["h1", A[:11], "none", "DIFFERS"],
+        ["h2", A[:11], "r.py"],
+        ["h3", A[:11], "r.py"],
+    ]
 
 
 def test_checkout_unreadable_here(monkeypatch):
@@ -488,13 +504,42 @@ def test_quad_aborts_when_checkouts_differ(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts, **kw: "h2 is at bbbbbbbbbbb")
     monkeypatch.setattr(gwdt, "run_all", lambda *a, **k: pytest.fail("steps ran"))
     assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
-    assert "same tt-metal checkout" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "same tt-metal checkout" in out
+    assert "GWDT_SKIP_CHECKOUT_CHECK=1" in out and "GWDT_SKIP_CHECKOUT_CHECK=2" in out
+
+
+def test_quad_commit_only_mismatch_suggests_only_level_2(tmp_path, monkeypatch, capsys):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setenv("GWDT_SKIP_CHECKOUT_CHECK", "1")
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt_quad, "checkout_error", lambda repo, hosts, **kw: "  host  commit")
+    assert gwdt.main(["--quad", "--hosts", ",".join(HOSTS)]) == 2
+    out = capsys.readouterr().out
+    assert "GWDT_SKIP_CHECKOUT_CHECK=2  skip" in out and "GWDT_SKIP_CHECKOUT_CHECK=1  compare" not in out
     assert not list(tmp_path.rglob("LOG_*")), "a commit mismatch must not leave a run dir behind"
 
 
 def test_checkout_commit_only_ignores_uncommitted_changes(monkeypatch):
     _fake_checkouts(monkeypatch, {"h0": _out(A), "h1": _out(A, "f" * 40, "x.py"), "h2": _out(B), "h3": _out(A)})
-    assert gwdt_quad.checkout_error(REPO, HOSTS, dirty=False) == f"{REPO} here is at {A[:11]}, but h2 is at {B[:11]}"
+    assert _cells(gwdt_quad.checkout_error(REPO, HOSTS, dirty=False)) == [
+        ["host", "commit"],
+        ["h0", A[:11], "this host"],
+        ["h1", A[:11]],
+        ["h2", B[:11], "DIFFERS"],
+        ["h3", A[:11]],
+    ]
+
+
+def test_checkout_table_lists_this_host_first_when_not_in_hosts(monkeypatch):
+    _fake_checkouts(monkeypatch, {"h0": _out(A), "h1": _out(B)})
+    assert _cells(gwdt_quad.checkout_error(REPO, ["h1"])) == [
+        ["host", "commit", "uncommitted changes"],
+        ["h0", A[:11], "none", "this host"],
+        ["h1", B[:11], "none", "DIFFERS"],
+    ]
 
 
 def test_checkout_skip_level():

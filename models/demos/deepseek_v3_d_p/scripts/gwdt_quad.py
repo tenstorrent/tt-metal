@@ -382,9 +382,14 @@ def _checkout(repo: Path, host: str, timeout_s: int) -> Checkout | None:
 
 def _changes(c: Checkout) -> str:
     if not c.files:
-        return "no uncommitted changes"
+        return "none"
     more = f" +{len(c.files) - SHOWN_FILES} more" if len(c.files) > SHOWN_FILES else ""
-    return f"uncommitted changes to {', '.join(c.files[:SHOWN_FILES])}{more}"
+    return f"{', '.join(c.files[:SHOWN_FILES])}{more}"
+
+
+def _table(rows: list[list[str]]) -> str:
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]))]
+    return "\n".join("  " + "  ".join(f"{c:<{w}}" for c, w in zip(r, widths)).rstrip() for r in rows)
 
 
 # GWDT_SKIP_CHECKOUT_CHECK: 0 (default) commit + uncommitted changes, 1 commit only, 2 no check.
@@ -403,28 +408,30 @@ def checkout_skip_level(value: str | None) -> int:
 def checkout_error(
     repo: Path, hosts: list[str], timeout_s: int = SHARED_PROBE_TIMEOUT_S, dirty: bool = True
 ) -> str | None:
-    """None when every host has `repo` at this host's commit with the same uncommitted changes, else which hosts
-    differ. Every rank runs the code at the same path on its own host, so a stale or locally edited checkout fails
-    as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that code runs only here. With dirty=False
-    only the commits are compared."""
-    local = _checkout(repo, socket.gethostname(), timeout_s)
+    """None when every host has `repo` at this host's commit with the same uncommitted changes, else a table of every
+    host's checkout marking the ones that differ. Every rank runs the code at the same path on its own host, so a
+    stale or locally edited checkout fails as if a galaxy were bad. Changes under LAUNCHER_ONLY are ignored: that
+    code runs only here. With dirty=False only the commits are compared."""
+    here = socket.gethostname()
+    local = _checkout(repo, here, timeout_s)
     if local is None:
         return f"cannot read the git checkout {repo} here"
-    off = []
-    for h in hosts:
+    rows, differs = [], False
+    for h in hosts if any(_is_local(h) for h in hosts) else [here, *hosts]:
+        c = local if _is_local(h) else _checkout(repo, h, timeout_s)
         if _is_local(h):
-            continue
-        c = _checkout(repo, h, timeout_s)
+            note = "this host"
+        elif c is None or c.head != local.head or (dirty and c.fingerprint != local.fingerprint):
+            note, differs = "DIFFERS", True
+        else:
+            note = ""
         if c is None:
-            off.append(f"{_short(h)} has no readable git checkout at {repo}")
-        elif c.head != local.head:
-            off.append(f"{_short(h)} is at {c.head[:11]}")
-        elif dirty and c.fingerprint != local.fingerprint:
-            off.append(f"{_short(h)} has {_changes(c)}")
-    if off:
-        here = f"{local.head[:11]} with {_changes(local)}" if dirty else local.head[:11]
-        return f"{repo} here is at {here}, but {'; '.join(off)}"
-    return None
+            rows.append([_short(h), "-", *(["-"] if dirty else []), f"{note}: no readable git checkout at {repo}"])
+        else:
+            rows.append([_short(h), c.head[:11], *([_changes(c)] if dirty else []), note])
+    if not differs:
+        return None
+    return _table([["host", "commit", *(["uncommitted changes"] if dirty else []), ""], *rows])
 
 
 def reset_hosts(repo: Path, hosts: list[str], d: Path) -> Result:
