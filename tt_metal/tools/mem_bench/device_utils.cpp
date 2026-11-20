@@ -10,7 +10,7 @@
 #include <variant>
 
 #include "context.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device_utils.hpp"
 #include "kernel_types.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"

@@ -4,7 +4,6 @@
 
 #include "fabric_channel_allocator.hpp"
 #include <tt_stl/assert.hpp>
-#include <algorithm>
 #include <numeric>
 
 namespace tt::tt_fabric {

@@ -12,7 +12,7 @@ from models.experimental.mobileNetV3.tt.ttnn_invertedResidual import (
     ttnn_InvertedResidual,
 )
 from ttnn.model_preprocessing import preprocess_model_parameters
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 from models.experimental.mobileNetV3.tt.custom_preprocessor import create_custom_preprocessor
 from models.experimental.mobileNetV3.tests.pcc.common import inverted_residual_setting
 

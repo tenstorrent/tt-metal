@@ -11,7 +11,7 @@ import torch
 import ttnn
 from models.experimental.diffusion_gemma.reference.self_conditioning import SelfConditioning
 from models.experimental.diffusion_gemma.tt.self_conditioning import TtSelfConditioning
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tt_py_test_utils_common.utils_for_testing import assert_with_pcc
 
 
 def _generator(seed=0):

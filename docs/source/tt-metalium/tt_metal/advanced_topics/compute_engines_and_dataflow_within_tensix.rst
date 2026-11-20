@@ -167,6 +167,8 @@ The number of available tiles is determined by the combination of these two sett
 
     Setting ``fp32_dest_acc_en = true`` only allocates 32-bit per-element storage space in the ``Dst`` registers; it does not guarantee that computations are performed in 32-bit precision. For example, the matrix engine might still compute in bfloat16 and store the result in a 32-bit container. Also, the matrix engine's maximum accuracy is TF32 (19 active bits), which is less than the full 32-bit precision. On the other hand, the vector engine does support the full 32-bit precision (with some limitations as it does not strictly follow IEEE 754 rounding).
 
+    This holds even when the operands fit exactly in ``SrcA`` and ``SrcB``: the sum of two bfloat16 values from ``add_tiles`` or ``sub_tiles`` is not guaranteed to be exact in a 32-bit ``Dst``. On Blackhole, for example, the smaller operand is aligned to the larger one with 10 fraction bits, so adding the bfloat16 values ``1`` and ``2^-20`` gives ``1``, although their exact sum fits in 32 bits. Accumulating into ``Dst`` keeps 32-bit width: to sum tiles at full width on the FPU, keep the running sum in ``Dst`` (start it with ``copy_tile``) and add one tile at a time with ``add_init(..., acc_to_dest = true)``, pairing each tile with a tile of zeros. Otherwise, use the vector engine (see :ref:`achieving_fp32_accuracy_for_computation`).
+
     Accessing ``Dst`` register tiles beyond the number available for the current configuration results in undefined behavior.
 
 Matrix engine/FPU

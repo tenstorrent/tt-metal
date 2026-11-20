@@ -48,6 +48,19 @@ void RotaryEmbeddingHfDeviceOperation::validate_on_program_cache_miss(
         input_tensor.padded_shape()[-1],
         TILE_WIDTH,
         TILE_WIDTH * 2);
+
+    // Both factories take the rotate_half midpoint from the padded width, so a head_dim that carries implicit
+    // tile padding rotates at the padded midpoint instead of its own and silently corrupts the head.
+    const uint32_t logical_X = input_tensor.logical_shape()[-1];
+    const uint32_t padded_X = input_tensor.padded_shape()[-1];
+    TT_FATAL(
+        logical_X == padded_X,
+        "Input logical head_dim ({}) has implicit tile padding (padded to {}), which would rotate at {} "
+        "instead of {}.",
+        logical_X,
+        padded_X,
+        padded_X / 2,
+        logical_X / 2);
     uint32_t X = input_tensor.padded_shape()[-1];
     TT_FATAL(cos.dtype() == sin.dtype(), "Cos and Sin dtypes must match");
     TT_FATAL(cos.padded_shape() == sin.padded_shape(), "Cos and Sin shapes must match");
