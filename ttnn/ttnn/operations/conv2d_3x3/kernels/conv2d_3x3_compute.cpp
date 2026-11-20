@@ -2201,9 +2201,11 @@ void kernel_main() {
             // The K-blocked walk (conv2d_3x3_kblock_walk.hpp): caller-owned partials over the K-blocks; with a bias the
             // bias pass runs inside the last K-block, bias_batch_groups row groups behind its matmul (the output CB's
             // depth in row groups, so the writer drains one batch while the next multiplies); without one the last
-            // K-block reloads the partials and packs the output.
+            // K-block reloads the partials and packs the output. On TILE input the bias pass stays one batch after the
+            // last K-block's matmul (the earlier stores slowed 1024x1024 128->256 by 6.9%: 5645 -> 6037 us, Blackhole
+            // p150b, 3 runs each; the whole-block batch measured 5645).
             MaybeDeviceZoneScope("compute_matmul_walk");
-            constexpr uint32_t bias_batch_groups = 2;
+            constexpr uint32_t bias_batch_groups = tile_input ? in0_num_subblocks : 2;
 #ifdef WEIGHTS_RESIDENT
             // Weights resident (see ResidentIn1Offset): the rounds stay fronted across the M-blocks.
             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
