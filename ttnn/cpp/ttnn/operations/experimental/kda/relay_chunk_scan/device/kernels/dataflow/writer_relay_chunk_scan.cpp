@@ -4,18 +4,18 @@
 #include <cstdint>
 
 #include "api/dataflow/dataflow_api.h"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/correction_core.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/gate_matmul_dataflow.hpp"
 
 constexpr uint32_t cb_chron = get_compile_time_arg_val(0);
 constexpr uint32_t cb_norm = get_compile_time_arg_val(1);
 constexpr uint32_t kt = get_compile_time_arg_val(2);
 constexpr uint32_t num_chunks = get_compile_time_arg_val(3);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// The cores' layout (correction_core.hpp).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(4);
-constexpr uint32_t grid_x = get_compile_time_arg_val(5);
+constexpr uint32_t heads_per_column = get_compile_time_arg_val(5);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(6);
-constexpr uint32_t first_core = get_compile_time_arg_val(7);
+constexpr uint32_t first_row = get_compile_time_arg_val(7);
 // The normalized outputs are token-major [B, T, H*V]: head h's tiles of chunk c at tile row (h / heads) * num_chunks +
 // c, from tile column (h % heads) * kt.
 constexpr uint32_t heads = get_compile_time_arg_val(8);
@@ -27,9 +27,9 @@ using Gate = kda_gate::Operands<output_args.next_compile_time_args_offset()>;
 // place), then writes its chunk outputs.
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
-    const uint32_t head = core / cores_per_head;
-    const uint32_t place = core % cores_per_head;
+    const auto self = kda_relay::correction_core<heads_per_column, first_row, cores_per_head>();
+    const uint32_t head = self.head;
+    const uint32_t place = self.place;
     const uint32_t first_chunk = place * core_chunks;
     Gate::move_x((head / heads) * cores_per_head + place, (head / heads) * num_chunks + first_chunk, head);
 

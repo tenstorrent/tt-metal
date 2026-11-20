@@ -165,35 +165,49 @@ class RelayChunkScan:
         self.local_rows = local_rows
         # Each head's correction cores, then two senders per link (the relay's and the final carry's second), then the
         # relay cores (each runs the hop of two heads of a link). The senders take the grid's first cores, nearest the
-        # Ethernet cores they hand the relay's packets to; the heads' cores follow in row-major order, the relay cores
-        # take the last free cores. Up to max_cores correction cores: with the relay cores, their matmuls count toward
-        # the Blackhole di/dt bound.
+        # Ethernet cores they hand the relay's packets to. Head h's correction cores are a column from the next row
+        # (kernels/correction_core.hpp): x = h // heads_per_column, as the summary places a head's value blocks, so the
+        # terms it writes stay in the column. The relay cores take the last free cores. Up to max_cores correction
+        # cores: with the relay cores, theirs are the matmuls that count toward the Blackhole di/dt bound.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
         relay_count = sum(
             -(-len(range(link, batch_heads, num_links)) // _HEADS_PER_RELAY_CORE) for link in range(num_links)
         )
-        budget = min(max_cores, len(cores) - senders - relay_count)
-        if budget < batch_heads:
-            raise ValueError(
-                f"relay prefix needs {batch_heads} correction cores, {senders} senders and {relay_count} relay cores; "
-                f"max_cores={max_cores}, grid has {len(cores)}"
-            )
-        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard).
+        first_row = math.ceil(senders / grid.x)
+        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard), fit
+        # the budget and the grid's columns, and leave the relay cores room.
         num_chunks = local_rows // ttnn.TILE_SIZE
         if num_chunks == 0:
             raise ValueError(f"relay prefix needs at least one chunk of {ttnn.TILE_SIZE} rows, has {local_rows} rows")
+        budget = min(max_cores, len(cores) - senders - relay_count)
+
+        def fits(d):
+            per_column = (grid.y - first_row) // d
+            return (
+                batch_heads * d <= budget
+                and per_column > 0
+                and -(-batch_heads // per_column) <= grid.x
+                and len(cores) - senders - batch_heads * d >= relay_count
+            )
+
         self.cores_per_head = cores_per_head = max(
-            d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
+            (d for d in range(1, num_chunks + 1) if num_chunks % d == 0 and fits(d)), default=0
         )
-        # The heads' cores start on the first grid row after the senders' when they fit there: whole rows are one
-        # core range, which the dispatch writes the program to in one multicast.
-        first = math.ceil(senders / grid.x) * grid.x
-        if first + batch_heads * cores_per_head + relay_count > len(cores):
-            first = senders
-        correction = cores[first : first + batch_heads * cores_per_head]
-        relay = [core for core in cores[senders:] if core not in correction][-relay_count:]
+        if cores_per_head == 0:
+            raise ValueError(
+                f"relay prefix needs {batch_heads} correction cores, {senders} senders and {relay_count} relay cores; "
+                f"max_cores={max_cores}, grid is {grid.x}x{grid.y}"
+            )
+        per_column = (grid.y - first_row) // cores_per_head
+        correction = [
+            ttnn.CoreCoord(h // per_column, first_row + h % per_column * cores_per_head + q)
+            for h in range(batch_heads)
+            for q in range(cores_per_head)
+        ]
+        taken = set((c.x, c.y) for c in correction + cores[:senders])
+        relay = [core for core in cores if (core.x, core.y) not in taken][-relay_count:]
         self.cores = correction + cores[:senders] + relay
 
         def core_set(selected):
