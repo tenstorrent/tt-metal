@@ -157,4 +157,56 @@ SPARSE_RING_HOT void generate_key_bias_tile(const Noc& noc, uint32_t dst, uint32
     noc.async_read_barrier();
 }
 
+// The pooled-entry bias of every column of pooled tile rows [row0_t, row0_t + tiles), ignoring the mask: two packed bf16
+// per word, row-major, at L1 address lut (tiles * 16 words). It depends only on the piece, so it is built once and
+// shared by every Q block of the piece (generate_rows).
+template <bool has_counts>
+SPARSE_RING_HOT void build_chunk_lut(
+    uint32_t lut,
+    uint32_t row0_t,
+    uint32_t tiles,
+    const Geometry& geo,
+    uint32_t table_base_arg,
+    const volatile tt_l1_ptr uint8_t* counts) {
+    volatile tt_l1_ptr uint32_t* out = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lut);
+    uint32_t g = row0_t * 32;
+    uint32_t s = g / geo.nb_pad;
+    uint32_t b = g - s * geo.nb_pad;
+    for (uint32_t w = 0; w < tiles * 2 * kFaceRowWords; ++w) {
+        uint32_t half[2];
+        for (uint32_t h = 0; h < 2; ++h) {
+            half[h] = table_entry(table_base_arg, block_count<has_counts>(geo, counts, s, b));
+            if (++b == geo.nb_pad) {
+                b = 0;
+                ++s;
+            }
+        }
+        out[w] = half[0] | (half[1] << 16);
+    }
+}
+
+// generate_tiles from a piece's lut, writing only row 0 of each tile (compute adds it as a row broadcast). slice holds
+// the Q block's mask words of the piece's columns (tiles * 32 words): a set word makes its column "exact / padding".
+template <uint32_t tile_bytes>
+SPARSE_RING_HOT void generate_rows(uint32_t dst, uint32_t tiles, uint32_t slice, uint32_t lut, uint32_t table_base_arg) {
+    static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
+    const uint32_t exact_bias = table_entry(table_base_arg, 0);
+    const volatile tt_l1_ptr uint32_t* mask = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(slice);
+    const volatile tt_l1_ptr uint32_t* entries = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(lut);
+    for (uint32_t t = 0; t < tiles; ++t) {
+        volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * tile_bytes);
+        for (uint32_t w = 0; w < 2 * kFaceRowWords; ++w) {
+            const uint32_t e = entries[t * 2 * kFaceRowWords + w];
+            const uint32_t lo = mask[t * 32 + 2 * w] != 0 ? exact_bias : (e & 0xFFFFu);
+            const uint32_t hi = mask[t * 32 + 2 * w + 1] != 0 ? exact_bias : (e >> 16);
+            tile[w < kFaceRowWords ? w : kFaceWords + w - kFaceRowWords] = lo | (hi << 16);
+        }
+    }
+    if (tiles > 0) {
+        // Complete the stores before the push hands the tiles to compute (volatile read of the last word written).
+        (void)*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            dst + (tiles - 1) * tile_bytes + (kFaceWords + kFaceRowWords - 1) * sizeof(uint32_t));
+    }
+}
+
 }  // namespace pooled_bias_gen

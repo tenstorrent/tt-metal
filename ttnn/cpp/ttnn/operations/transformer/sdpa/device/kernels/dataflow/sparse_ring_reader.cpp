@@ -874,22 +874,47 @@ void kernel_main() {
                             noc.async_read_barrier();
                             noc.write_zeros_l1_barrier();
                             cb_v.push_back(v_chunk_tiles);
+                            // The piece's bias entries are the same for every Q block: when the piece's mask slice
+                            // and the entries fit in the scratch, build them once and read only the slice per block.
+                            const uint32_t slice_bytes = tiles * 32 * sizeof(uint32_t);
+                            const bool from_lut = slice_bytes + slice_bytes / 2 <= mask_row_bytes;
+                            const uint32_t lut = scratch + slice_bytes;
+                            if (from_lut) {
+                                pooled_bias_gen::build_chunk_lut<has_block_counts>(
+                                    lut, row0, tiles, geo, pooled_bias_table_base, counts_table);
+                            }
                             for (uint32_t i = i0; i < i1; ++i) {
-                                // The chunk's own row back into the plan scratch: compute reads only the header
-                                // words of a plan page, and every page has been popped by now.
-                                read_chunk_row(nq, res_qc[i]);
+                                // The chunk's own row (or slice) back into the plan scratch: compute reads only the
+                                // header words of a plan page, and every page has been popped by now.
+                                if (from_lut) {
+                                    noc.async_read(
+                                        mask_reader,
+                                        CoreLocalMem<uint32_t>(scratch),
+                                        slice_bytes,
+                                        {.page_id = nq * mask_nqb_pad + res_qc[i],
+                                         .offset_bytes = row0 * 32 * sizeof(uint32_t)},
+                                        {});
+                                    noc.async_read_barrier();
+                                } else {
+                                    read_chunk_row(nq, res_qc[i]);
+                                }
                                 CircularBuffer cb_bias(cb_pooled_bias);
                                 cb_bias.reserve_back(Sk_chunk_t);
                                 // Block-form row: exact iff the block's own bit is set on a block with a real token.
-                                pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes, has_block_counts>(
-                                    noc,
-                                    cb_bias.get_write_ptr(),
-                                    row0,
-                                    tiles,
-                                    geo,
-                                    CoreLocalMem<volatile uint32_t>(scratch),
-                                    pooled_bias_table_base,
-                                    counts_table);
+                                if (from_lut) {
+                                    pooled_bias_gen::generate_rows<pooled_bias_tile_bytes>(
+                                        cb_bias.get_write_ptr(), tiles, scratch, lut, pooled_bias_table_base);
+                                } else {
+                                    pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes, has_block_counts>(
+                                        noc,
+                                        cb_bias.get_write_ptr(),
+                                        row0,
+                                        tiles,
+                                        geo,
+                                        CoreLocalMem<volatile uint32_t>(scratch),
+                                        pooled_bias_table_base,
+                                        counts_table);
+                                }
                                 cb_bias.push_back(Sk_chunk_t);
                             }
                         }

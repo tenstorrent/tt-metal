@@ -885,6 +885,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
             recip_scratch, sum_in, sparse_plan, pooled_bias, block_counts, key_bias, sum_identity;
     };
+    // Pooled bias rows in flight: two (the reader builds the next member's while compute adds this one's) when L1
+    // allows, decided once the pass split is fixed.
+    uint32_t pooled_bias_rows = 1;
     const auto lay_out_cbs = [&](uint32_t slots, uint32_t kv_pages, bool pairs, const auto& alloc) -> CbLayout {
         const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
             return alloc(tile_size, num_tiles, data_format);
@@ -914,8 +917,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // Plan pages: a 16-word summary [kept-block words][union piece bits lo, hi][do_pooled], then the Q block's
         // mask row. Two pages: compute reads one iteration's records while the reader fills the next.
         l.sparse_plan = alloc(64 + mask_row_bytes, 2, tt::DataFormat::UInt32);
-        // One pooled chunk of bias tiles in flight; only with the pooled route.
-        l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
+        // Pooled chunks of bias tiles in flight; only with the pooled route.
+        l.pooled_bias = pooled_route ? tile_cb(pooled_bias_rows * Sk_chunk_t, mask_tile_size, mask_df)
                                      : std::numeric_limits<uint32_t>::max();  // inactive
         // One byte per global block, filled once by the reader.
         l.block_counts = has_block_counts ? alloc(block_counts_bytes, 1, tt::DataFormat::UInt32)
@@ -1002,6 +1005,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         "NH {}",
         NH);
     const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
+    if (pooled_route) {
+        pooled_bias_rows = 2;
+        if (cb_bytes_for_slots(resident_slots, kv_cb_pages, pair_steps) > usable_l1) {
+            pooled_bias_rows = 1;
+        }
+    }
     log_debug(
         tt::LogOp,
         "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {}, {} K/V pages, pair steps {} "
