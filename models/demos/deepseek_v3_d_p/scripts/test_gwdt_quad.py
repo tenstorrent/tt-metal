@@ -364,6 +364,17 @@ def test_shared_dir_names_blind_hosts(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".shared_probe_*"))
 
 
+def test_quad_status_json_lists_hosts_in_order(tmp_path, monkeypatch):
+    import galaxy_workload_deployment_test as gwdt
+
+    monkeypatch.setenv("GWDT_SHARED_FOLDER", str(tmp_path))
+    monkeypatch.setattr(gwdt_quad, "ring_order", lambda repo, hosts: None)
+    monkeypatch.setattr(gwdt, "run_all", lambda steps, ctx, skip, update: update(steps[0]))
+    assert gwdt.main(["--quad", "--co", "--hosts", ",".join(HOSTS)]) == 0
+    (status,) = tmp_path.glob("*/*/status.json")
+    assert json.loads(status.read_text())["hosts"] == HOSTS
+
+
 def test_shared_dir_unwritable(tmp_path):
     assert gwdt_quad.shared_dir_error(tmp_path / "missing", HOSTS).startswith("cannot write")
 

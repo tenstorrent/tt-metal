@@ -307,6 +307,8 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     header = [f"{TOOL_NAME}  {host}  run {run}  mode={'co' if args.co else 'real'}", f"logs  {run_dir}/"]
     meta = {"host": host, "run": run, "mode": "co" if args.co else "real", "commit": commit, "run_dir": str(run_dir)}
+    if args.quad:
+        meta["hosts"] = hosts  # in --hosts order: stage i runs on hosts[i]
     screen = Screen(steps, header, run_dir / "status.json", meta)
     ctx = Ctx(repo, run_dir, args.co, tick=screen.update)
     # Live redraws in place, so scrollback keeps only the command and the final table.
