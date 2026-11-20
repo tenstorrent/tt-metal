@@ -408,10 +408,12 @@ static double distributed_init_timeout_seconds() {
     return (end != v && s > 0.0) ? s : 0.0;
 }
 
-// The pause between two polls of a pending request: none (a yield) for the first kSpinS of a wait, so a collective that
-// completes promptly costs what a blocking call costs, then a short sleep growing to kMaxPauseUs, so a long wait does
-// not burn a core. A blocking MPI call spins the same way.
-constexpr double kSpinS = 0.02;
+// The pause between two polls of a pending request: a few yields for the first kSpinS of a wait, so a collective that
+// completes promptly costs about what a blocking call costs, then a short sleep growing to kMaxPauseUs. The spin is
+// kept short on purpose: with many ranks oversubscribed on few cores (the CPU-only lanes), a rank spinning for long takes
+// the CPU from ranks that are still starting (whose Tracy threads then read the environment late, while MPI_Init writes
+// it: tt-metal #64717).
+constexpr double kSpinS = 0.0002;
 constexpr int kMaxPauseUs = 1000;
 static void poll_pause(std::chrono::steady_clock::time_point start, int& pause_us) {
     if (std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count() < kSpinS) {
@@ -434,7 +436,7 @@ static void wait_or_abort(
     MPI_Comm comm, MPI_Request& req, const char* what, bool point_to_point = false, MPI_Status* status = nullptr) {
     const double timeout = operation_timeout_seconds();  // 0: no deadline, the wait is still a poll for the flag below
     const auto start = std::chrono::steady_clock::now();
-    int pause_us = 50;
+    int pause_us = 20;
     for (;;) {
         int flag = 0;
         MPI_CHECK(MPI_Test(&req, &flag, status != nullptr ? status : MPI_STATUS_IGNORE));
@@ -1220,7 +1222,7 @@ std::size_t MPIContext::snoop_incoming_msg_size(Rank source, Tag tag) const {
     MPI_Status status;
     // A polled probe, for the same reason as wait_or_abort: a blocking MPI_Probe never returns on a signal.
     const auto start = std::chrono::steady_clock::now();
-    int pause_us = 50;
+    int pause_us = 20;
     for (int found = 0; found == 0;) {
         MPI_CHECK(MPI_Iprobe(*source, *tag, comm_, &found, &status));
         if (found == 0) {

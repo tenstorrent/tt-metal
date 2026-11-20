@@ -1728,6 +1728,29 @@ class TestJobOwnership:
         monkeypatch.setenv("OMPI_MCA_btl_tcp_if_include", "eth0")
         assert "OMPI_MCA_btl_tcp_if_include" not in launch_env(["mpirun", "--mca", "btl_tcp_if_exclude", "lo", "p"])
 
+    def test_launch_presets_the_variables_mpi_init_would_add(self):
+        from ttnn.distributed.ttrun import MPI_INIT_PRESET_ENV, launch_env, with_mpi_init_preset_env
+
+        # tt-metal #64717: MPI_Init adding these to the environment races Tracy's getenv. Every rank gets them already
+        # set (remote ranks through -x), and a value the user set is left alone.
+        line = with_mpi_init_preset_env(["mpirun", "--tag-output", "-np", "1", "prog"])
+        assert line[:7] == [
+            "mpirun",
+            "-x",
+            "PMIX_MCA_psec=native",
+            "-x",
+            "IPATH_NO_BACKTRACE=1",
+            "-x",
+            "HFI_NO_BACKTRACE=1",
+        ], line
+        assert line[-4:] == ["--tag-output", "-np", "1", "prog"]
+        mine = ["mpirun", "-x", "HFI_NO_BACKTRACE=0", "prog"]
+        assert with_mpi_init_preset_env(mine).count("-x") == 2 and "HFI_NO_BACKTRACE=0" in with_mpi_init_preset_env(
+            mine
+        )
+        env = launch_env(["mpirun", "prog"])
+        assert all(env[k] == v for k, v in MPI_INIT_PRESET_ENV.items())
+
     def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
         from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop
 

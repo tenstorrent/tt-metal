@@ -122,10 +122,29 @@ def with_timeout_backstop(cmd: List[str], backstop_s: float) -> List[str]:
 _TCP_IF_PAIR = (("btl_tcp_if_include", "btl_tcp_if_exclude"), ("btl_tcp_if_exclude", "btl_tcp_if_include"))
 
 
+# A launched rank's MPI_Init adds PMIX_MCA_psec (PMIx's client init), IPATH_NO_BACKTRACE and HFI_NO_BACKTRACE (Open MPI)
+# to the environment when they are missing. Adding a variable can move glibc's environ array while the Tracy profiler's
+# threads, started when libtracy loads, are reading it: a segfault in getenv (tt-metal #64717), seen in phase 1 on busy
+# CI runners where a rank's Tracy threads start late. Set already, nothing is added. The values are the ones MPI writes.
+MPI_INIT_PRESET_ENV = {"PMIX_MCA_psec": "native", "IPATH_NO_BACKTRACE": "1", "HFI_NO_BACKTRACE": "1"}
+
+
+def with_mpi_init_preset_env(cmd: List[str]) -> List[str]:
+    """The launch line with MPI_INIT_PRESET_ENV forwarded to every rank (-x, before the first app context, so every
+    context and every host gets it), unless the line already sets it."""
+    extra = []
+    for key, value in MPI_INIT_PRESET_ENV.items():
+        if not any(a == key or a.startswith(f"{key}=") for a in cmd):
+            extra += ["-x", f"{key}={value}"]
+    return cmd[:1] + extra + cmd[1:] if extra else cmd
+
+
 def launch_env(cmd: List[str]) -> Dict[str, str]:
     """The environment for the launcher: os.environ, minus an OMPI_MCA_ TCP-interface variable that contradicts the one
     the launch line sets (the command line wins). Says so when it drops one."""
     env = dict(os.environ)
+    for key, value in MPI_INIT_PRESET_ENV.items():
+        env.setdefault(key, value)
     for on_line, opposite in _TCP_IF_PAIR:
         var = f"OMPI_MCA_{opposite}"
         if has_mca_param(cmd, on_line) and var in env:
@@ -346,6 +365,8 @@ class LaunchedJob:
         self.timed_out = False  # the --timeout was reached and tt-run stopped the job
         if self.job_timeout is not None:
             self.cmd = with_timeout_backstop(cmd, self.job_timeout + _stop_grace_s() + TIMEOUT_BACKSTOP_S)
+        if os.path.basename(self.cmd[0]).startswith(("mpirun", "prterun", "mpiexec")):
+            self.cmd = with_mpi_init_preset_env(self.cmd)
 
     def __enter__(self) -> "LaunchedJob":
         remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
