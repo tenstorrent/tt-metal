@@ -1827,6 +1827,17 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     if (!q_perm_words.empty()) {
         writer_kernel.common_runtime_args = q_perm_words;
     }
+    if (sparse_ring_dense_hifi() > 0 && dyn_dense_on) {
+        compute_kernel.defines.emplace_back("SPARSE_DENSE_HIFI", std::to_string(sparse_ring_dense_hifi()));
+        compute_kernel.common_runtime_args = dyn_dense_words;
+        log_info(
+            tt::LogOp,
+            "SparseRingSDPA: {} dense Q block(s) at fidelity {} (TT_SPARSE_RING_DENSE_HIFI)",
+            dense_local.size(),
+            sparse_ring_dense_hifi());
+    } else if (sparse_ring_dense_hifi() > 0 && args.dense_q_blocks.empty()) {
+        log_warning(tt::LogOp, "SparseRingSDPA: TT_SPARSE_RING_DENSE_HIFI has no effect without dense_q_blocks");
+    }
     desc.kernels.push_back(std::move(reader_kernel));
     desc.kernels.push_back(std::move(writer_kernel));
     desc.kernels.push_back(std::move(compute_kernel));

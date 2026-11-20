@@ -23,6 +23,54 @@ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width
 
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_streaming_common.hpp"
 
+// SPARSE_DENSE_HIFI (TT_SPARSE_RING_DENSE_HIFI): the dense Q blocks' Q.K^T, P.V and row-sum matmuls run at this
+// fidelity, the others at the usual one. Bit s of sparse_dense_slots: resident slot s holds a dense Q block (set per
+// pass by sdpa_ring_resident). A fidelity switch needs the full init, so each matmul's setup key carries the bit.
+#ifdef SPARSE_DENSE_HIFI
+constexpr MathFidelity kDenseFidelity = static_cast<MathFidelity>(SPARSE_DENSE_HIFI);
+static uint32_t sparse_dense_slots = 0;
+ALWI bool slot_hifi(uint32_t slot) { return ((sparse_dense_slots >> slot) & 1u) != 0; }
+static __attribute__((noinline)) void dense_mm_init(
+    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
+    mm_no_mop_init_short_fidelity<kDenseFidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+}
+static __attribute__((noinline)) void dense_mm(
+    uint32_t in0_cb,
+    uint32_t in1_cb,
+    uint32_t in0_index,
+    uint32_t in1_index,
+    uint32_t idst,
+    bool transpose,
+    uint32_t ct_dim,
+    uint32_t rt_dim,
+    uint32_t kt_dim) {
+    matmul_block_no_mop_fidelity<kDenseFidelity>(
+        in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+}
+#define RES_MM_INIT(hifi, init_call, ...) \
+    do {                                  \
+        if (hifi) {                       \
+            dense_mm_init(__VA_ARGS__);   \
+        } else {                          \
+            init_call(__VA_ARGS__);       \
+        }                                 \
+    } while (0)
+#define RES_MM(hifi, ...)                          \
+    do {                                           \
+        if (hifi) {                                \
+            dense_mm(__VA_ARGS__);                 \
+        } else {                                   \
+            sdpa_matmul_block_no_mop(__VA_ARGS__); \
+        }                                          \
+    } while (0)
+#define RES_HIFI_KEY(hifi) ((hifi) ? 0x10000u : 0u)
+#else
+#define slot_hifi(slot) false
+#define RES_MM_INIT(hifi, init_call, ...) init_call(__VA_ARGS__)
+#define RES_MM(hifi, ...) sdpa_matmul_block_no_mop(__VA_ARGS__)
+#define RES_HIFI_KEY(hifi) 0u
+#endif
+
 template <uint32_t Sq_chunk_t, uint32_t cb>
 static __attribute__((noinline, noclone)) void res_pack_units(
     const uint8_t* unit_g,
@@ -142,9 +190,10 @@ static __attribute__((noinline, noclone)) void res_pv_member(
     const uint32_t n_runs,
     uint32_t& pv_stride,
     uint32_t& pk_w) {
-    if (pv_stride != w) {
-        sdpa_pv_mm_setup(cb_qkt_im, cb_v_in, false, pv_w, Sq_chunk_t, w);
-        pv_stride = w;
+    [[maybe_unused]] const bool hifi = slot_hifi(slot);
+    if (pv_stride != (w | RES_HIFI_KEY(hifi))) {
+        RES_MM_INIT(hifi, sdpa_pv_mm_setup, cb_qkt_im, cb_v_in, false, pv_w, Sq_chunk_t, w);
+        pv_stride = w | RES_HIFI_KEY(hifi);
     }
     const bool blocked = should_use_blocked_pack_width(pv_w);
     const uint32_t want = blocked ? pv_w : 1u;
@@ -155,7 +204,8 @@ static __attribute__((noinline, noclone)) void res_pv_member(
         for (uint32_t s = 0; s < n_runs; ++s) {
             const uint32_t rw = run_ws[s];
             for (uint32_t t = 0; t < rw; ++t) {
-                sdpa_matmul_block_no_mop(
+                RES_MM(
+                    hifi,
                     cb_qkt_im,
                     cb_v_in,
                     off_g + col + t,
@@ -462,6 +512,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     {
         uint32_t mm_cw = 0;
         for (uint32_t g = 0; g < n_slots; ++g) {
+            [[maybe_unused]] const bool hifi = slot_hifi(slots[g]);
             uint32_t col = 0;
             for (uint32_t s = 0; s < n_runs[g]; ++s) {
                 const uint32_t rw = run_wd(g, s);
@@ -473,15 +524,15 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                     if (st.uu == 0) {
                         tile_regs_acquire();
                     }
-                    if (cw != mm_cw) {
-                        sdpa_mm_init(cb_q_in, cb_kt_in, true, cw, Sq_chunk_t, DHt);
-                        mm_cw = cw;
+                    if ((cw | RES_HIFI_KEY(hifi)) != mm_cw) {
+                        RES_MM_INIT(hifi, sdpa_mm_init, cb_q_in, cb_kt_in, true, cw, Sq_chunk_t, DHt);
+                        mm_cw = cw | RES_HIFI_KEY(hifi);
                     }
                     uint32_t in0 = slots[g] * q_chunk_tiles;
                     const uint32_t c1 = run_col(g, s) + q0;
                     uint32_t in1 = (c1 / Sk_chunk_t) * kt_entry_tiles + c1 % Sk_chunk_t;
                     for (uint32_t d = 0; d < DHt; ++d) {
-                        sdpa_matmul_block_no_mop(cb_q_in, cb_kt_in, in0, in1, st.uu_tiles, true, cw, Sq_chunk_t, DHt);
+                        RES_MM(hifi, cb_q_in, cb_kt_in, in0, in1, st.uu_tiles, true, cw, Sq_chunk_t, DHt);
                         in0++;
                         in1 += Sk_chunk_t;
                     }
@@ -912,13 +963,23 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
             tile_regs_acquire();
             for (uint32_t gg = 0; gg < n_g; ++gg) {
                 const uint32_t g = g0 + gg;
-                if (W[g] != rs_stride) {
-                    sdpa_pv_mm_setup(cb_qkt_im, cb_sum_identity, false, 1, Sq_chunk_t, W[g]);
-                    rs_stride = W[g];
+                [[maybe_unused]] const bool hifi = slot_hifi(slots[g]);
+                if ((W[g] | RES_HIFI_KEY(hifi)) != rs_stride) {
+                    RES_MM_INIT(hifi, sdpa_pv_mm_setup, cb_qkt_im, cb_sum_identity, false, 1, Sq_chunk_t, W[g]);
+                    rs_stride = W[g] | RES_HIFI_KEY(hifi);
                 }
                 for (uint32_t c = 0; c < W[g]; ++c) {
-                    sdpa_matmul_block_no_mop(
-                        cb_qkt_im, cb_sum_identity, sidx(g, 0, c), 0, gg * Sq_chunk_t, false, 1, Sq_chunk_t, W[g]);
+                    RES_MM(
+                        hifi,
+                        cb_qkt_im,
+                        cb_sum_identity,
+                        sidx(g, 0, c),
+                        0,
+                        gg * Sq_chunk_t,
+                        false,
+                        1,
+                        Sq_chunk_t,
+                        W[g]);
                 }
             }
             tile_regs_commit();
@@ -1085,6 +1146,18 @@ void sdpa_ring_resident(
 
     const uint32_t n_res = global_q_end - global_q_start;
     ASSERT(n_res <= resident_slots);
+#ifdef SPARSE_DENSE_HIFI
+    // Common args: n_dense, n_full, then the dense positions within a unit (the reader's dense list).
+    sparse_dense_slots = 0;
+    for (uint32_t i = 0; i < n_res; ++i) {
+        const uint32_t pos = (global_q_start + i) % num_q_chunks;
+        for (uint32_t j = 0; j < get_common_arg_val<uint32_t>(0); ++j) {
+            if (get_common_arg_val<uint32_t>(2 + j) == pos) {
+                sparse_dense_slots |= 1u << i;
+            }
+        }
+    }
+#endif
 
     constexpr uint32_t kRec = kBW + 3;
     constexpr bool kPlanInL1 = plan_rec_base != 0;

@@ -419,6 +419,7 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         sparse_ring_kv_pages_request(),
         sparse_ring_l1_reserve(),
         sparse_ring_member_rescale(),
+        sparse_ring_dense_hifi(),
         sparse_ring_dyn_extra_pass(),
         sparse_ring_multipass_pairs(),
         sparse_ring_banked_reads());

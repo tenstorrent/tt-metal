@@ -66,6 +66,15 @@ inline uint32_t sparse_ring_member_rescale() {
     return (s != nullptr && std::atoi(s) > 0) ? 1u : 0u;
 }
 
+// TT_SPARSE_RING_DENSE_HIFI=1 (HiFi2; or 2 / 3 / 4 for HiFi2 / HiFi3 / HiFi4): the dense Q blocks (dense_q_blocks)
+// run their Q.K^T, P.V and row-sum matmuls at that fidelity, every other block at the usual one (e.g. a LoFi
+// matmul_math_fidelity). Needs the dense list on the device, i.e. the dynamic split with dense_q_blocks. Default off.
+inline uint32_t sparse_ring_dense_hifi() {
+    const char* s = std::getenv("TT_SPARSE_RING_DENSE_HIFI");
+    const int v = s == nullptr ? 0 : std::atoi(s);
+    return v <= 0 ? 0u : (v == 1 ? 2u : static_cast<uint32_t>(v > 4 ? 4 : v));
+}
+
 // TT_SPARSE_RING_DYN_EXTRA_PASS=1 (with TT_SPARSE_RING_DYN_SPLIT=on): the dynamic split's per-core cap
 // (ceil(N / floor(C / U)) Q blocks) may need one pass more than the even split; accept that plan instead of falling
 // back to the even split. The later pass replays the gathered K/V from DRAM (the ring gather runs once), and halving

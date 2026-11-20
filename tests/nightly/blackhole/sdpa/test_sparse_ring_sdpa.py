@@ -260,6 +260,8 @@ class Case:
         pooled=True,
         dense_floor=False,
         counts=None,
+        sparse_config=None,
+        extra=None,
     ):
         """pooled=False omits pooled K / V: kept blocks only. dense_floor=True (with
         want_ref="slice") also computes the exact dense reference on the same slice (r["dense_ref"]). counts: the
@@ -290,7 +292,7 @@ class Case:
             persistent_output_buffer_k=self.buf_k,
             persistent_output_buffer_v=self.buf_v,
             logical_n=geo.logical_n,
-            program_config=self.sparse_config,
+            program_config=sparse_config or self.sparse_config,
             compute_kernel_config=rt.compute_kernel_config,
             dim=2,
             multi_device_global_semaphore=rt.ccl_semaphore_handles,
@@ -304,6 +306,7 @@ class Case:
             block_size=BLOCK,
             q_blocks_per_pass=q_blocks_per_pass,
             block_counts=t_counts,
+            **(extra or {}),
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -516,3 +519,82 @@ def test_production_15s(runtime, density):
     mask = make_mask(geo, case.S, case.H, density=density, seed=16)
     r = case.run(*case.inputs(16), mask, want_ref="slice", dense_floor=True)
     _check_vs_dense_floor(f"15s d{density}", r, _density(mask, geo, case.S))
+
+
+def _snr_db(ref, x):
+    ref, x = ref.double(), x.double()
+    return 10 * math.log10(float((ref**2).sum()) / max(float(((x - ref) ** 2).sum()), 1e-300))
+
+
+@pytest.mark.parametrize(
+    "geom",
+    [
+        "r1024k256",
+        pytest.param("p5s", marks=SLOW),
+    ],
+)
+def test_dense_hifi(runtime, geom, monkeypatch):
+    """TT_SPARSE_RING_DENSE_HIFI: with LoFi Q.K^T / P.V matmuls, the dense Q blocks (dense_q_blocks, every full key
+    block kept) run at HiFi2. Three calls on the same inputs: LoFi (A), LoFi with the switch (B), HiFi2 everywhere (C).
+    B's dense rows must match C's accuracy against exact fp64 attention, its other rows A's bit for bit."""
+    geo = {
+        "r1024k256": Geometry(1024, 1024 * MESH_CONFIG.sp_size, 256),
+        "p5s": Geometry(4736, 4736 * MESH_CONFIG.sp_size, 256, dense_chunks=(320, 384)),
+    }[geom]
+    case = Case(runtime, geo)
+    S, H, nb = case.S, case.H, geo.nb()
+    mask = make_mask(geo, S, H, density=0.2, seed=31)
+    dense = [(0, 0), (0, 1), (0, 2), (S - 1, nb - 3)]  # (shard, local Q block): like Sol's prefix rows
+    full = (_block_lengths(geo, S) == BLOCK).reshape(-1).to(mask.dtype)
+    for s, qb in dense:
+        mask[s, :, qb, :] = full
+    # Head weights (the dynamic split's per-(head, shard) cost): the kept blocks, head-major pages of 8 words.
+    hw = torch.zeros(1, 1, H * S, 8, dtype=torch.int64)
+    hw[0, 0, :, 0] = mask.sum(dim=(2, 3)).transpose(0, 1).reshape(-1)
+    t_hw = case._upload(hw, case.dims(None, 2), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    extra = dict(head_weights=t_hw, dense_q_blocks=[s * nb + qb for s, qb in dense])
+
+    def config(fidelity):
+        return ttnn.SDPAProgramConfig(
+            compute_with_storage_grid_size=runtime.sdpa_compute_grid,
+            q_chunk_size=BLOCK,
+            k_chunk_size=geo.k_chunk,
+            exp_approx_mode=False,
+            matmul_math_fidelity=fidelity,
+        )
+
+    q, k, v = case.inputs(31)
+    monkeypatch.setenv("TT_SPARSE_RING_DYN_SPLIT", "on")
+    outs = {}
+    for name, fidelity, hifi in (
+        ("A", ttnn.MathFidelity.LoFi, "0"),
+        ("B", ttnn.MathFidelity.LoFi, "1"),
+        ("C", ttnn.MathFidelity.HiFi2, "0"),
+    ):
+        monkeypatch.setenv("TT_SPARSE_RING_DENSE_HIFI", hifi)
+        outs[name] = case.run(
+            q, k, v, mask, want_dense=False, want_ref=False, sparse_config=config(fidelity), extra=extra
+        )["sparse"]
+    monkeypatch.delenv("TT_SPARSE_RING_DENSE_HIFI")
+
+    rows = torch.zeros(S * geo.rows, dtype=torch.bool)
+    for s, qb in dense:
+        rows[s * geo.rows + qb * BLOCK : s * geo.rows + (qb + 1) * BLOCK] = True
+    rows = rows[: geo.logical_n]
+    a, b, c = (outs[x][:, :, : geo.logical_n] for x in "ABC")
+    assert torch.isfinite(b).all()
+    assert torch.equal(b[:, :, ~rows], a[:, :, ~rows]), "the switch changed rows outside the dense Q blocks"
+
+    # Exact fp64 attention for the dense rows (every key kept: no pooled entries)
+    idx = rows.nonzero().flatten()
+    kk, vv = k[0, :, : geo.logical_n].double(), v[0, :, : geo.logical_n].double()
+    w = torch.softmax((q[0][:, idx].double() @ kk.transpose(1, 2)) * case.scale, dim=-1)
+    ref = (w @ vv).float()
+    snr = {x: _snr_db(ref, o[0][:, idx]) for x, o in (("A", a), ("B", b), ("C", c))}
+    diff = (b[:, :, rows] - c[:, :, rows]).abs().max().item()
+    logger.info(
+        f"[dense_hifi {geom}] dense rows SNR vs fp64: LoFi {snr['A']:.2f} dB, LoFi+switch {snr['B']:.2f} dB, "
+        f"HiFi2 {snr['C']:.2f} dB; max |B - C| on dense rows {diff:.3g}"
+    )
+    assert snr["B"] > snr["C"] - 0.5, snr
+    assert snr["B"] > snr["A"] + 3.0, snr
