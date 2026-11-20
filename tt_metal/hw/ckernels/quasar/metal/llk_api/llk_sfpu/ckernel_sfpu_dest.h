@@ -110,7 +110,7 @@ struct SfpuDestBinaryOp {
  *
  * Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
  *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format.
  * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
  */
 template <typename MATH, sfpi::DataLayout LAYOUT, int ITERATIONS = SFPU_ITERATIONS, SfpuImpl IMPL = SfpuImpl::Sfpi>
@@ -136,7 +136,7 @@ struct DestUnary<MATH, LAYOUT, ITERATIONS, SfpuImpl::Sfpi>
  *
  * Sfpi serves every MATH; LoadMacro versions are specialized next to the op.
  *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; the caller names it, there is no default.
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format.
  * @tparam OUT: Store policy of the output (rounding lives here, see DestBf16RneFormat).
  * @tparam TILE_SHAPE: Dest tile shape the indices are measured in; run<>() defaults to it.
  * @tparam IMPL: Sfpi or LoadMacro, see @ref resolve_sfpu_impl.
