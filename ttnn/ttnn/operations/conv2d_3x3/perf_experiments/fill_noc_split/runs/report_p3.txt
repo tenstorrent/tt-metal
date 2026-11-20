@@ -1,0 +1,6 @@
+p3-base_ls                 DKD   12644376 ns  fill  12467.1 us  NC p50 12152 max 12467  own NC p50 4367 max 12030
+p3-split_ls                DKD    7780864 ns  fill   7604.9 us  BR p50 7110 max 7188  NC p50 7289 max 7604  own BR p50 2517 max 6726  own NC p50 1956 max 7129
+p3-dyn_ls                  DKD    7739352 ns  fill   7553.4 us  BR p50 7081 max 7151  NC p50 7237 max 7553  own BR p50 2633 max 6402  own NC p50 3147 max 6615
+p3-base_store_ls           DKD   12941196 ns  fill  12763.6 us  BR p50 12000 max 12255  NC p50 12439 max 12763  own BR p50 1 max 1  own NC p50 3232 max 12330
+p3-split_store_late_ls     DKD    7965424 ns  fill   7792.2 us  BR p50 7307 max 7384  NC p50 7478 max 7792  own BR p50 2924 max 6981  own NC p50 1949 max 7308
+p3-dyn_store_mix_ls        DKD    8039999 ns  fill   7863.4 us  BR p50 7374 max 7443  NC p50 7533 max 7863  own BR p50 3196 max 6877  own NC p50 3761 max 7023

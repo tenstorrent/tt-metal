@@ -1,0 +1,650 @@
+--- a/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
++++ b/ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py
+@@ -293,6 +293,21 @@
+ TAP_DIRECT_GROUP = 3
+ # Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+ TAP_DIRECT_FIFO_GROUP = 4
++# ROW_MAJOR ring slab (perf experiment rm_ring_slab, kernels/conv2d_3x3_rm_ring.hpp): on the interleaved ROW_MAJOR
++# K-blocked tap-direct walk, cb_halo_slab is a FIFO ring of consecutive input pixels across a core's M-blocks, so each
++# input pixel is read once per core. RM_RING_OVERLAP: the next block's pixels are issued while compute works on this one
++# (False: at the block's start, after compute popped every entry). RM_RING_IN_SOLVE: the ring counts in the L1 solve
++# (blocks shrink for it); False: the ring only where it fits at the solved blocking. RM_RING_CHUNK: pixels per
++# opportunistic fill step.
++RM_RING = True
++RM_RING_OVERLAP = True
++RM_RING_IN_SOLVE = True
++# The ring keeps the bk the slab solve picked (shrinking only bm for it): a different K-block count changes the fp32
++# accumulation order, so the output stays bit-identical to the slab path.
++RM_RING_KEEP_BK = True
++RM_RING_CHUNK = 8
++# Transaction-id slots the ring fill leaves free: up to 255 - RM_RING_MIN_FREE reads in flight per core.
++RM_RING_MIN_FREE = 128
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+@@ -637,11 +652,15 @@
+     center_slot_blocks: int = 1
+     # Ring slab (see ring_capable): slab_tile_rows is then the ring capacity.
+     ring: bool = False
++    # ROW_MAJOR ring slab (see rm_ring_capable): ring capacity in pixels (0: the per-M-block slab).
++    rm_ring_px: int = 0
+ 
+     @property
+     def slab_px(self):
+         if self.slab_tile_rows:
+             return self.slab_tile_rows * TILE
++        if self.rm_ring_px:
++            return self.rm_ring_px
+         return 2 * self.band_stride_px + self.band_len_px
+ 
+ 
+@@ -1241,6 +1260,52 @@
+     return max(hi - lo for core in ring_plan(g, core_m_tiles, bm) for lo, hi, _ in core)
+ 
+ 
++def rm_ring_capable(g: Conv3x3Geometry, bm, bk):
++    """ROW_MAJOR ring slab (RM_RING): interleaved ROW_MAJOR input on the K-blocked tap-direct walk (the gather that
++    wraps ring reads). Not on a sharded input (its slab fill reads owner shards, split over two NoCs) nor a K split."""
++    return (
++        RM_RING
++        and not g.tile_input
++        and not g.sharded_output
++        and not g.k_split
++        and _tap_direct(g, bm, bk, False)
++        and _tap_direct_fifo_units(g, bm, bk, False) > 0
++        and not slab_direct_capable(g, bk)
++    )
++
++
++@functools.lru_cache(maxsize=1024)
++def rm_ring_plan(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
++    """ROW_MAJOR ring capacity in pixels (mirror of conv2d_3x3_rm_ring.hpp): max over every core's M-blocks of (the
++    highest window end so far - the lowest window start of this and every later block). None when a block touches no
++    in-image pixel."""
++    worst = 0
++    for start, actual in core_m_ranges(g, core_m_tiles):
++        wins = []
++        for block_start in range(0, actual, block_m_tiles):
++            tiles = min(block_m_tiles, actual - block_start)
++            o_first = (start + block_start) * TILE
++            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
++            band_len = _block_band_len(g, o_first, o_last)
++            f = _block_first_tap(g, o_first)
++            lo = hi = None
++            for kh in range(3):
++                v = f + kh * g.dilation * g.input_width
++                a, z = max(v, 0), min(v + band_len, g.num_in_px)
++                if a < z:
++                    lo = a if lo is None else min(lo, a)
++                    hi = z if hi is None else max(hi, z)
++            if lo is None:
++                return None
++            wins.append((lo, hi))
++        run_hi = None
++        for m, (_, hi) in enumerate(wins):
++            keep = min(w[0] for w in wins[m:])
++            run_hi = hi if run_hi is None else max(run_hi, hi)
++            worst = max(worst, run_hi - keep)
++    return worst
++
++
+ @functools.lru_cache(maxsize=256)
+ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+@@ -1275,7 +1340,7 @@
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
+ 
+-    def solve(candidates, nslice, shared=False):
++    def solve(candidates, nslice, shared=False, rm=True):
+         for bm, bk in candidates:
+             # The untilize batch shrinks first: a smaller batch costs one more read fence per tile-row,
+             # a smaller bk costs a whole K-block (tilize, matmul init, L1-acc pass).
+@@ -1283,12 +1348,31 @@
+             ub_default = _default_untilize_batch_rows(g, band_len, raw_slab_rows)
+             for ub_cap in range(ub_default, 0, -1):
+                 fit = _footprint(g, core_m_tiles, bm, bk, bn, ub_cap, nslice, shared=shared)
++                # ROW_MAJOR ring slab: replaces the per-block slab before the deep im2col ring takes the L1 left.
++                rm_delta = 0
++                # (One M-block per core has nothing to reuse: the ring would only cost L1.)
++                rm_px = (
++                    rm_ring_plan(g, core_m_tiles, bm)
++                    if rm and not nslice and _div_up(core_m_tiles, bm) > 1 and rm_ring_capable(g, bm, bk)
++                    else None
++                )
++                if rm_px:
++                    slab_px = 2 * fit["band_stride_px"] + fit["band_len_px"]
++                    rm_delta = (rm_px - slab_px) * g.c_in_p * BF16_BYTES
++                    if fit["footprint_bytes"] + rm_delta <= l1_budget:
++                        fit = dict(fit, rm_ring_px=rm_px, footprint_bytes=fit["footprint_bytes"] + rm_delta)
++                    elif RM_RING_IN_SOLVE:
++                        continue
++                    else:
++                        rm_delta = 0
+                 if fit["footprint_bytes"] <= l1_budget:
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+                             g, core_m_tiles, bm, bk, bn, ub_cap, nslice, im2col_depth=depth, shared=shared
+                         )
++                        if "rm_ring_px" in fit:
++                            deep = dict(deep, rm_ring_px=fit["rm_ring_px"], footprint_bytes=deep["footprint_bytes"] + rm_delta)
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = deep
+                             break
+@@ -1323,7 +1407,13 @@
+                     )
+         return None
+ 
+-    blocking = solve(search, nslice=False)
++    blocking = solve(search, nslice=False, rm=not RM_RING_KEEP_BK)
++    if RM_RING and RM_RING_KEEP_BK and blocking is not None and not g.k_split:
++        # ROW_MAJOR ring at the slab solve's bk: the largest bm whose ring fits; else the slab blocking.
++        bk0 = blocking.block_k_tiles
++        ring_blocking = solve([(bm, bk) for bm, bk in search if bk == bk0], nslice=False)
++        if ring_blocking is not None and ring_blocking.rm_ring_px:
++            blocking = ring_blocking
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+         # the gather / tilize granularity and costs almost no L1, so the coarsest that fits wins.
+@@ -3701,6 +3791,16 @@
+     _host_fill_defines = (
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
++    _rm_ring_defines = (
++        [
++            ("RM_RING_PX", str(b.rm_ring_px)),
++            ("RM_RING_OVERLAP", "1" if RM_RING_OVERLAP else "0"),
++            ("RM_RING_CHUNK", str(RM_RING_CHUNK)),
++            ("RM_RING_MIN_FREE", str(RM_RING_MIN_FREE)),
++        ]
++        if b.rm_ring_px
++        else []
++    )
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3712,7 +3812,8 @@
+             + _ring_owner_defines
+             + _sd_dm_defines
+             + _s2_dm_defines
+-            + _host_fill_defines,
++            + _host_fill_defines
++            + _rm_ring_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp
+@@ -151,6 +151,7 @@
+ #include "conv2d_3x3_nslice_order.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
++#include "conv2d_3x3_rm_ring.hpp"
+ 
+ namespace {
+ 
+@@ -159,6 +160,22 @@
+ constexpr uint32_t TRID_GATHER = 4;       // ROW_MAJOR bands use trids 1..3
+ constexpr uint32_t TRID_INPUT_TILES = 5;  // TILE footprint batches
+ constexpr uint32_t TRID_CENTER = 6;       // center-tap slots
++constexpr uint32_t TRID_RM_RING = 1;      // ROW_MAJOR ring slab fill (the per-block bands' trids 1..3 are unused there)
++// ROW_MAJOR ring slab (rm_ring_slab experiment, conv2d_3x3_rm_ring.hpp): RM_RING_PX ring pixels; RM_RING_OVERLAP 1 issues
++// the next block's pixels while the FIFO is full (compute behind), 0 issues each block's new pixels at its start.
++#ifdef RM_RING_PX
++constexpr bool rm_ring = true;
++constexpr int32_t rm_ring_px = RM_RING_PX;
++constexpr bool rm_ring_overlap = RM_RING_OVERLAP != 0;
++constexpr int32_t rm_ring_chunk = RM_RING_CHUNK;
++constexpr uint32_t rm_ring_min_free = RM_RING_MIN_FREE;
++#else
++constexpr bool rm_ring = false;
++constexpr int32_t rm_ring_px = 1;
++constexpr bool rm_ring_overlap = false;
++constexpr int32_t rm_ring_chunk = 1;
++constexpr uint32_t rm_ring_min_free = 0;
++#endif
+ 
+ }  // namespace
+ 
+@@ -484,7 +501,7 @@
+         c_in_p,
+         block_k_tiles,
+         center_mode == 2 ? 1 : -1,
+-        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : 0,
++        ring_slab ? static_cast<int32_t>(slab_tile_rows * TILE_DIM) : (rm_ring ? rm_ring_px : 0),
+         im2col_rm_depth_rows * fifo_taps,
+         (tap_direct_fifo_units > 0 ? tap_direct_fifo_units : 1),
+         cb_im2col_rm,
+@@ -710,6 +727,55 @@
+     [[maybe_unused]] uint32_t ring_sent = 0;
+     [[maybe_unused]] const uint32_t ring_count_words = nslice_outer ? get_read_ptr(cb_ring_token) : 0;
+     [[maybe_unused]] int32_t ring_pushed_hi = 0;
++    // ROW_MAJOR ring slab: the fill stream, this block's and the next block's windows, the lowest window pixel of every
++    // later block, and the lowest pixel the previous block's last K-block reads (live until this block's first K-block
++    // is reserved).
++    static_assert(!rm_ring || (!tile_input && kb_tap_direct && !channel_slice && !slab_split && !face_direct &&
++                               !ring_slab && center_mode == 0 && !slab_direct && !padded_slab),
++                  "ROW_MAJOR ring slab: interleaved ROW_MAJOR input, the K-blocked tap-direct walk");
++    using RmB = conv2d_3x3::RmBlocks<
++        output_width,
++        input_width,
++        stride,
++        pad_top,
++        pad_left,
++        dilation,
++        band_last_tap,
++        num_in_px,
++        num_out_px,
++        block_m_tiles>;
++    [[maybe_unused]] conv2d_3x3::RmRing<rm_ring_px, pixel_bytes, TRID_RM_RING, rm_ring_chunk, rm_ring_min_free> rm;
++    [[maybe_unused]] conv2d_3x3::RmWindow rm_win{};
++    [[maybe_unused]] conv2d_3x3::RmWindow rm_next{};
++    [[maybe_unused]] int32_t rm_keep_next = 0x7FFFFFFF;
++    [[maybe_unused]] int32_t rm_prev_last_lo = 0x7FFFFFFF;
++    // Pixel range [v_lo, v_hi) into consecutive L1 from l1: one page read per pixel (the baseline mechanism; a
++    // bank-coalesced reader can replace this lambda).
++    [[maybe_unused]] auto rm_read_px_range = [&](int32_t v_lo, int32_t v_hi, uint32_t l1) {
++        read_rows(static_cast<uint32_t>(v_lo), static_cast<uint32_t>(v_hi), l1);
++    };
++    // The next pixel a gather waits for after band kh of this block: a later band of this block, else the next block's.
++    [[maybe_unused]] auto rm_update_cap = [&](int32_t kh) {
++        int32_t x = rm.landed;
++        for (int32_t b = kh + 1; b < 3 && x == rm.landed; ++b) {
++            if (rm_win.band_hi[b] > rm.landed) {
++                x = rm_win.band_hi[b];
++            }
++        }
++        for (int32_t b = 0; b < 3 && x == rm.landed; ++b) {
++            if (rm_next.band_hi[b] > rm.landed) {
++                x = rm_next.band_hi[b];
++            }
++        }
++        rm.cap = x;
++    };
++    // While the unit FIFO is full: one chunk of the fill, then the gather's transaction id and a clean command buffer.
++    [[maybe_unused]] auto rm_idle = [&]() {
++        if (rm.step(reads, rm_read_px_range)) {
++            reads.begin(TRID_GATHER);
++            fifo.fixed_state = 0;
++        }
++    };
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -1183,6 +1249,34 @@
+                     Semaphore<>(slab_free_sem_id).up(1);
+                 }
+             }
++            if constexpr (rm_ring) {
++                // ---- fill_halo_slab (ROW_MAJOR ring): this block's window; every band gathers at one base.
++                rm_win = RmB::window(m_tile_start, actual_m_tiles, m_block_idx);
++                rm_next = m_block_idx + 1 < num_m_blocks_this_core
++                              ? RmB::window(m_tile_start, actual_m_tiles, m_block_idx + 1)
++                              : conv2d_3x3::RmWindow{0, 0, {0, 0, 0}, {0, 0, 0}};
++                rm_keep_next = RmB::keep_lo(m_tile_start, actual_m_tiles, m_block_idx + 1, num_m_blocks_this_core);
++                if (m_block_idx == 0) {
++                    // The core's footprint: its first output pixel to its last.
++                    const uint32_t core_first = m_tile_start * TILE_DIM;
++                    const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
++                    const conv2d_3x3::SlabFootprint core_fp = conv2d_3x3::
++                        block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                            core_first, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
++                    rm.template init<input_width, num_in_px, dilation>(
++                        slab_l1, RmB::keep_lo(m_tile_start, actual_m_tiles, 0, num_m_blocks_this_core), core_fp);
++                }
++                const int32_t base = rm.base_for(rm_win.lo);
++                for (int32_t kh = 0; kh < 3; ++kh) {
++                    slab_x_base[kh] = base;
++                }
++                if constexpr (!rm_ring_overlap) {
++                    // Serial: compute popped every entry of the previous block (end-of-block wait), so only this and
++                    // later blocks' pixels are live; issue this block's new pixels now, wait per band below.
++                    rm.release(rm_win.lo < rm_keep_next ? rm_win.lo : rm_keep_next);
++                    rm.issue_to(reads, rm_win.hi, rm_read_px_range);
++                }
++            } else {
+             conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
+                 footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                     reads.begin(kh + 1);
+@@ -1194,6 +1288,7 @@
+                         read_slab_pixels(x_lo, x_split, v_minus_x);
+                     }
+                 });
++            }
+             if constexpr (slab_split) {
+                 MaybeDeviceZoneScope("reader_fill_fwd_wait");
+                 Semaphore<>(slab_fwd_done_sem_id).wait_min(m_block_idx + 1);
+@@ -1615,7 +1710,34 @@
+                     continue;
+                 }
+             }
+-            if (col_lo == 0) {
++            if constexpr (rm_ring) {
++                if constexpr (rm_ring_overlap) {
++                    // The previous K-block's entries are all reserved, so compute popped every entry before it: the
++                    // lowest live pixel is the first in-image band this block still reads, or a later block's window.
++                    int32_t live = rm_keep_next;
++                    if (k_block_idx == 0) {
++                        live = rm_prev_last_lo;
++                        const int32_t keep = rm_win.lo < rm_keep_next ? rm_win.lo : rm_keep_next;
++                        live = keep < live ? keep : live;
++                    } else {
++                        const int32_t kh_prev = static_cast<int32_t>((k_block_idx - 1) * block_k_tiles / tensor_kkh_tiles);
++                        for (int32_t b = kh_prev; b < 3; ++b) {
++                            if (rm_win.band_hi[b] > 0) {
++                                live = rm_win.band_lo[b] < live ? rm_win.band_lo[b] : live;
++                                break;
++                            }
++                        }
++                    }
++                    rm.release(live);
++                }
++                if (col_lo == 0) {
++                    MaybeDeviceZoneScope("reader_band_wait");
++                    if (rm_win.band_hi[kh] > 0) {
++                        rm.need(reads, rm_win.band_hi[kh], rm_read_px_range);
++                    }
++                    rm_update_cap(kh);
++                }
++            } else if (col_lo == 0) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
+@@ -1686,7 +1808,11 @@
+                 fifo.fixed_state = 0;
+                 reads.begin(TRID_GATHER);
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+-                    fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
++                    if constexpr (rm_ring_overlap) {
++                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
++                    } else {
++                        fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
++                    }
+                     if constexpr (center_mode == 2) {
+                         if (tile_row == 0) {
+                             issue_center_rows(
+@@ -1754,14 +1880,26 @@
+         } else if constexpr ((window_direct && !s2_taps) || (tap_direct && nslice_outer)) {
+             // Compute tilizes slab runs in place: the slab is dead only once compute popped every unit.
+             cb_reserve_back(cb_im2col_rm, im2col_rm_depth_rows * block_k_tiles);
+-        } else if constexpr (kb_tap_direct && !tile_input) {
++        } else if constexpr (kb_tap_direct && !tile_input && !(rm_ring && rm_ring_overlap)) {
+             // ROW_MAJOR: this reader refills the slab for the next M-block itself, so it waits until compute popped
+             // every entry pointing into it. TILE needs no wait: compute's untilize of the next block, the slab's only
+-            // writer, runs after its own tilize of this one (same unpacker, in order).
++            // writer, runs after its own tilize of this one (same unpacker, in order). The overlapped ring slab instead
++            // frees ring slots K-block by K-block (rm.release).
+             if (m_block_idx + 1 < num_m_blocks_this_core) {
+                 cb_reserve_back(cb_src_table, tap_direct_fifo_units);
+             }
+         }
++        if constexpr (rm_ring) {
++            // The last K-block's band (live until the next block's first K-block is reserved).
++            rm_prev_last_lo = 0x7FFFFFFF;
++            const int32_t kh_last = static_cast<int32_t>((num_k_blocks - 1) * block_k_tiles / tensor_kkh_tiles);
++            for (int32_t b = kh_last; b < 3; ++b) {
++                if (rm_win.band_hi[b] > 0) {
++                    rm_prev_last_lo = rm_win.band_lo[b];
++                    break;
++                }
++            }
++        }
+         if constexpr (tile_input && !ring_slab && !s2_taps) {
+             const uint32_t slab_pages = slab_rows_m * c_in_tiles;
+             cb_wait_front(cb_halo_slab, slab_pages);
+--- a/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_gather_dataflow.hpp
+@@ -806,6 +806,22 @@
+         cb_reserve_back(cb_table, g);
+         tbl_reserved = g;
+     }
++    // rm_ring_slab: `idle` runs while the table is full (compute behind), e.g. to issue the ring fill.
++    template <typename Idle>
++    FORCE_INLINE void reserve(uint32_t group, uint32_t units_left, Idle&& idle) {
++        if (tbl_reserved > tbl_written) {
++            return;
++        }
++        // Here tbl_written == tbl_reserved == 0 (the caller flushes a full group).
++        const uint32_t to_end = table_units - tbl_head;
++        uint32_t g = group < units_left ? group : units_left;
++        g = g < to_end ? g : to_end;
++        while (!cb_pages_reservable_at_back(cb_table, g)) {
++            idle();
++        }
++        cb_reserve_back(cb_table, g);
++        tbl_reserved = g;
++    }
+ 
+     // One tap's 32 rows across output-row runs (a tile-row straddling two output rows) into dst.
+     template <typename Reads>
+--- /dev/null
++++ b/ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_rm_ring.hpp
+@@ -0,0 +1,227 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// ROW_MAJOR ring slab (perf experiment rm_ring_slab; the descriptor's rm_ring_capable / rm_ring_px).
++//
++// cb_halo_slab is a FIFO ring of ring_px consecutive input pixels across a core's M-blocks: pixel v lives at ring slot
++// (v - origin) mod ring_px, origin being the core's lowest window pixel. The fill is one monotone stream of flat pixels
++// [origin, ...), each read once per core (the per-M-block slab reads each pixel of three disjoint kh bands, and every
++// later block re-reads them: ~3x on the FLUX.2 shapes). Three cursors bound it:
++//   landed   pixels below it are in L1 (a gather reads only those);
++//   allowed  pixels below it may be written: the slot they reuse belongs to pixel v - ring_px, which no K-block still
++//            ahead of compute reads. The reader learns compute's progress from the tap-direct entry FIFO (one K-block
++//            deep): once K-block k's entries are all reserved, compute popped every entry of K-blocks < k;
++//   cap      the next pixel a gather waits for. The opportunistic fill never issues past it before that wait, so the
++//            wait (one transaction id for the whole stream) does not also wait for reads issued past it.
++// The fill of pixel range [lo, hi) into ring slots is fill_range(): one TensorAccessor page read per pixel today; a
++// bank-coalesced read can replace the per-range reader (read_px_range) without touching the cursors.
++//
++// Ring capacity (host mirror rm_ring_plan): max over M-blocks of (highest window end so far - lowest window start of
++// this and every later block), so a need never waits on a slot it would itself free (no deadlock), and a block's
++// pixels are at most one wrap apart (the tap-direct gather reduces ring positions once).
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++#include "conv2d_3x3_slab_dataflow.hpp"
++#include "conv2d_3x3_gather_dataflow.hpp"
++
++namespace conv2d_3x3 {
++
++// In-image pixel extent of one M-block's three bands: band kh is [band_lo[kh], band_hi[kh]) (empty: band_hi == 0),
++// the window [lo, hi) their union's hull.
++struct RmWindow {
++    int32_t lo;
++    int32_t hi;
++    int32_t band_lo[3];
++    int32_t band_hi[3];
++};
++
++template <int32_t input_width, int32_t num_in_px, int32_t dilation>
++FORCE_INLINE RmWindow rm_window(const SlabFootprint& fp) {
++    RmWindow w{0x7FFFFFFF, 0, {0, 0, 0}, {0, 0, 0}};
++    for (int32_t kh = 0; kh < 3; ++kh) {
++        const int32_t v_lo = fp.f + kh * dilation * input_width;
++        const int32_t lo = v_lo > 0 ? v_lo : 0;
++        const int32_t hi = v_lo + fp.band_len < num_in_px ? v_lo + fp.band_len : num_in_px;
++        if (lo >= hi) {
++            continue;
++        }
++        w.band_lo[kh] = lo;
++        w.band_hi[kh] = hi;
++        w.lo = lo < w.lo ? lo : w.lo;
++        w.hi = hi > w.hi ? hi : w.hi;
++    }
++    return w;
++}
++
++template <
++    uint32_t output_width,
++    int32_t input_width,
++    int32_t stride,
++    int32_t pad_top,
++    int32_t pad_left,
++    int32_t dilation,
++    int32_t band_last_tap,
++    int32_t num_in_px,
++    uint32_t num_out_px,
++    uint32_t block_m_tiles>
++struct RmBlocks {
++    static FORCE_INLINE RmWindow window(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m) {
++        const uint32_t done = m * block_m_tiles;
++        const uint32_t valid = actual_m_tiles - done < block_m_tiles ? actual_m_tiles - done : block_m_tiles;
++        const uint32_t o_first = (m_tile_start + done) * 32;
++        const uint32_t o_end_tiles = o_first + valid * 32;
++        const SlabFootprint fp =
++            block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
++                o_first, o_end_tiles < num_out_px ? o_end_tiles : num_out_px);
++        return rm_window<input_width, num_in_px, dilation>(fp);
++    }
++    // Lowest window pixel of M-blocks [m_first, num_blocks) (0x7FFFFFFF when there is none). A block's window starts
++    // at or above its first tap's pixel (clamped at 0), which never decreases from block to block.
++    static FORCE_INLINE int32_t keep_lo(uint32_t m_tile_start, uint32_t actual_m_tiles, uint32_t m_first, uint32_t num_blocks) {
++        int32_t lo = 0x7FFFFFFF;
++        for (uint32_t m = m_first; m < num_blocks; ++m) {
++            const uint32_t done = m * block_m_tiles;
++            const uint32_t o_first = (m_tile_start + done) * 32;
++            const int32_t ho = o_first / output_width;
++            const int32_t wo = o_first % output_width;
++            const int32_t f = (ho * stride - pad_top) * input_width + wo * stride - pad_left;
++            if ((f > 0 ? f : 0) >= lo) {
++                break;
++            }
++            const RmWindow w = window(m_tile_start, actual_m_tiles, m);
++            lo = w.lo < lo ? w.lo : lo;
++        }
++        return lo;
++    }
++};
++
++// min_free: transaction-id slots the fill leaves free (NIU outstanding-read counter of 255 per id); a chunk is issued
++// only when chunk_px + min_free are free, and each chunk restarts the TaggedReads throttle count (chunk_px < 64), so
++// up to 255 - min_free reads stay in flight: the fill is latency-bound per core (outstanding / round trip).
++template <int32_t ring_px, uint32_t pixel_bytes, uint32_t trid, int32_t chunk_px, uint32_t min_free>
++struct RmRing {
++    static_assert(chunk_px >= 1 && chunk_px < static_cast<int32_t>(TRID_CHECK_EVERY_PACKETS), "one throttle window");
++    static_assert(chunk_px + min_free <= NOC_MAX_TRANSACTION_ID_COUNT, "a chunk fits the id's counter");
++    int32_t origin = 0;
++    int32_t issued = 0;        // next pixel to read
++    int32_t issued_slot = 0;   // its ring slot
++    int32_t landed = 0;
++    int32_t allowed = 0;
++    int32_t cap = 0;
++    uint32_t slab_l1 = 0;
++    uint32_t reads_issued = 0;  // pixel reads issued (instrumentation)
++
++    // The core's needed pixels: the union of its three kh bands (gaps between them, when the core spans less than d
++    // image rows, are never read; their slots stay stale and nothing gathers them).
++    int32_t seg_lo[3] = {0, 0, 0};
++    int32_t seg_hi[3] = {0, 0, 0};
++    uint32_t num_segs = 0;
++
++    template <int32_t input_width, int32_t num_in_px, int32_t dilation>
++    FORCE_INLINE void init(uint32_t l1, int32_t first_px, const SlabFootprint& core_fp) {
++        slab_l1 = l1;
++        origin = first_px;
++        issued = landed = first_px;
++        issued_slot = 0;
++        allowed = first_px + ring_px;
++        cap = first_px;
++        num_segs = 0;
++        for (int32_t kh = 0; kh < 3; ++kh) {
++            const int32_t v_lo = core_fp.f + kh * dilation * input_width;
++            const int32_t lo = v_lo > 0 ? v_lo : 0;
++            const int32_t hi = v_lo + core_fp.band_len < num_in_px ? v_lo + core_fp.band_len : num_in_px;
++            if (lo >= hi) {
++                continue;
++            }
++            // Bands start in increasing order: merge into the last segment when they touch.
++            if (num_segs > 0 && lo <= seg_hi[num_segs - 1]) {
++                seg_hi[num_segs - 1] = hi > seg_hi[num_segs - 1] ? hi : seg_hi[num_segs - 1];
++            } else {
++                seg_lo[num_segs] = lo;
++                seg_hi[num_segs] = hi;
++                ++num_segs;
++            }
++        }
++    }
++
++    // Base the tap-direct gather adds to a pixel of a block whose lowest pixel is lo: v + base is v's ring slot or that
++    // plus ring_px (one wrap), for every v in [lo, lo + ring_px).
++    FORCE_INLINE int32_t base_for(int32_t lo) const {
++        const int32_t q = (lo - origin) / ring_px;
++        return -origin - q * ring_px;
++    }
++
++    FORCE_INLINE void release(int32_t live_lo) {
++        const int32_t a = live_lo + ring_px;
++        allowed = a > allowed ? a : allowed;
++    }
++
++    // Pixels [issued, hi) into their ring slots (split at the ring end) through read_px_range(v_lo, v_hi, l1).
++    template <typename ReadRange>
++    FORCE_INLINE void fill_range(int32_t hi, ReadRange&& read_px_range) {
++        while (issued < hi) {
++            const int32_t to_end = ring_px - issued_slot;
++            const int32_t n = hi - issued < to_end ? hi - issued : to_end;
++            for (uint32_t s = 0; s < num_segs; ++s) {
++                const int32_t a = issued > seg_lo[s] ? issued : seg_lo[s];
++                const int32_t z = issued + n < seg_hi[s] ? issued + n : seg_hi[s];
++                if (a < z) {
++                    read_px_range(
++                        a, z, slab_l1 + static_cast<uint32_t>(issued_slot + (a - issued)) * pixel_bytes);
++                    reads_issued += z - a;
++                }
++            }
++            issued += n;
++            issued_slot += n;
++            if (issued_slot == ring_px) {
++                issued_slot = 0;
++            }
++        }
++    }
++
++    // Opportunistic: at most one chunk, only while the transaction id has room (never blocks on the NIU counter).
++    // Returns true if it issued anything. The caller restores its own read transaction id afterwards.
++    template <typename Reads, typename ReadRange>
++    FORCE_INLINE bool step(Reads& reads, ReadRange&& read_px_range) {
++        const int32_t lim = cap < allowed ? cap : allowed;
++        if (issued >= lim) {
++            return false;
++        }
++        if (noc_available_transactions(reads.noc.get_noc_id(), trid) < min_free + chunk_px) {
++            return false;
++        }
++        reads.begin(trid);
++        const int32_t hi = issued + chunk_px < lim ? issued + chunk_px : lim;
++        fill_range(hi, read_px_range);
++        return true;
++    }
++
++    // Blocking issue of [issued, hi) in chunks under the same in-flight bound.
++    template <typename Reads, typename ReadRange>
++    FORCE_INLINE void issue_to(Reads& reads, int32_t hi, ReadRange&& read_px_range) {
++        while (issued < hi) {
++            while (noc_available_transactions(reads.noc.get_noc_id(), trid) < min_free + chunk_px) {
++            }
++            reads.begin(trid);
++            fill_range(issued + chunk_px < hi ? issued + chunk_px : hi, read_px_range);
++        }
++    }
++
++    // Blocking: every pixel below x is issued and landed. x must be <= allowed (the plan's ring capacity guarantees it).
++    template <typename Reads, typename ReadRange>
++    FORCE_INLINE void need(Reads& reads, int32_t x, ReadRange&& read_px_range) {
++        if (x <= landed) {
++            return;
++        }
++        ASSERT(x <= allowed);
++        issue_to(reads, x, read_px_range);
++        reads.wait(trid);
++        landed = issued;
++    }
++};
++
++}  // namespace conv2d_3x3

@@ -1,0 +1,11 @@
+--- ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3.py	2026-11-20 13:41:49.233325425 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/conv2d_3x3.py	2026-11-20 15:08:09.252343389 +0000
+@@ -696,6 +696,8 @@
+         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
+         resident_shard_bytes = 0
+     blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes, geometry.l1_small_bytes))
++    global LAST_BLOCKING
++    LAST_BLOCKING = blocking
+
+     output_tensor = ttnn.allocate_tensor_on_device(
+         ttnn.Shape([1, 1, h_out * w_out, c_out]),

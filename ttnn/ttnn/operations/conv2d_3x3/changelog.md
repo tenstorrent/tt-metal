@@ -2472,3 +2472,110 @@ The partner's round-0 read uses raw transaction-id reads and polls inside the ex
 - Golden test progress: targeted slices only. The 72 interleaved asymmetric test_op cells pass (24 INVALID skipped). The 20 asymmetric LOOSE_CASES pass, both dispatches, with a program-cache hit. The 144 sharded asymmetric cells xfail (EXCLUSIONS). 120 prior-passing interleaved test_op cells (`p1_s2`, `p0_s1`) pass. Expected full suite: 1604 + 92 = 1696 passed, 236 - 92 = 144 xfailed, 576 skipped.
 - Issues encountered: none in correctness. S2_TAPS cannot take left pad 0 by coordinate algebra. Its kw = 2 tap needs the next input tile's pixel 0, a new DEST move / packer window in raw LLK, so the stride-2 downsamplers keep the strided window (finding above).
 - Tests added: `tests/ttnn/unit_tests/operations/conv2d_3x3/test_conv2d_3x3_asymmetric_padding.py` (8 per-side shapes x {bf16 TILE, bf8_b TILE, bf16 RM}: each side alone and in pairs, stride 2 window and row gather, dilation 2, odd W, a multi-block (0, 0, 1, 1); plus the sharded refusal). Unit directory: 347 passed / 17 skipped before the new file, 25 / 25 in it.
+
+## Perf 16
+- Date: 2026-11-20
+- Scope: perf tournament (this run's round 1 of 5) on the 17 FLUX.2 Blackhole (2, 4) per-device decoder convs (feature_spec block `attention: PERF FOCUS (FLUX.2)`): bf16 activations and weights, HiFi4, fp32 DEST, bias, padding (0, 0, 1, 1), DRAM-interleaved ROW_MAJOR input. All 17 run the interleaved K-blocked tap-direct walk (R0) on 110 cores (11x10), Blackhole p150b, 8 DRAM banks. Hard gates: Panoptic's 22 `[perf]` cases and the 17 single-device FLUX.2 LOOSE cases (TILE input) must not get slower.
+- Outcome: 6 ideas floated (cap 6): 5 WIN, 1 NULL. 2 graduated (bank-run fill, weights resident). 1 WIN superseded by them (fill NoC split). 2 WINs not graduated this round (ROW_MAJOR ring slab, weight-stream stagger), with the reasons below.
+  - FLUX.2 bh2x4, call-weighted over the 17 cases (calls per 1024² + 2048² decode): **209.6 -> 78.9 ms (2.66x)**. The 110-core HiFi4 ideal is 40.2 ms, so utilization is 19% -> 51%. Every case is faster, and every case is now faster than ttnn.conv2d on the same ROW_MAJOR input.
+  - P1 1026x2048 32->128: 13.76 -> 2.61 ms (5.3x). P2 514x1024 64->256: 4.42 -> 1.62 ms. P3 conv_out 1026x2048 128->3: 13.78 -> 5.22 ms.
+  - End to end, one BH (2, 4) 1024² VAE decode (`test_vae_flux2_conv2d_3x3.py -k "bh2x4 and 1024 and conv2d_3x3"`): 197 -> 176.9 ms, PCC 0.99919. The same decode on ttnn.conv2d takes 328.2 ms.
+  - All outputs are bit-identical to the base: the 17 focus cases, 8 off-focus guard configs, 45 Panoptic LOOSE outputs.
+- Instrumentation: no zone added or removed. The bank-run fill runs inside `reader_fill`. The resident-weight first-pass wait has its own zone, `compute_weight_wait`. The P1 profile still exhausts the 250-marker budget on BRISC (12+ M-blocks x 9 K-blocks), so per-stage numbers on it come from the ablation below, not the zone sums.
+- Ablation hooks, scripts, raw results: `perf_experiments/ablation_r16/` (`ablation_hooks.patch` with tokens fill / weights / store / tilize / bias / matmul for this walk, `ab.sh`, `ab_results.txt`). Guard harness for arbitrary configs, with A/B sha1: `perf_experiments/graduation_r16/test_guard_cfg.py` (needs `--import-mode=prepend`).
+
+### Measured breakdown (before, device kernel us, median of 3, cases idx35 / idx41 / idx42 / idx43 / idx47 of `test_flux_conv3x3_compare.py`)
+
+| stubbed (cumulative) | conv_out 1026x2048 128->3 | P1 1026x2048 32->128 | P2 514x1024 64->256 | P7 258x512 128->512 | 514x1024 128->512 |
+|---|---|---|---|---|---|
+| none (full) | 13771 | 13728 | 4430 | 2049 | 7723 |
+| fill (ROW_MAJOR DRAM reads) | 2156 | 3232 | 2106 | 1644 | 6341 |
+| + weights (multicast rounds) | 1764 | 1827 | 1451 | 1334 | 4809 |
+| + store | 1707 | 1560 | 1283 | 1235 | 4669 |
+| + tilize | 1415 | 1461 | 1232 | 1210 | 4573 |
+| + bias | 1383 | 1397 | 1199 | 1193 | 4510 |
+| + matmul (everything) | 306 | 293 | 88 | 46 | 125 |
+| solo: weights | 13051 | 13012 | 4017 | 1468 | 4952 |
+| solo: tilize + bias + matmul | 12691 | 12783 | 3556 | 1280 | 4740 |
+| solo: store | 13491 | 12704 | 3922 | 1789 | 6741 |
+
+Ranked by measured headroom:
+1. **The ROW_MAJOR fill.** Every input pixel is one 64/128/256 B DRAM page and one NoC read; with disjoint kernel-row bands (bm * 32 < W) each pixel is read ~3x per core. The reader issues the whole slab, then waits for compute to pop every tap-direct entry before refilling, so fill and compute serialize. Cost: -76% to -84% on C_in 32 and conv_out, -52% on C_in 64, -18% to -20% on C_in 128. Bound (fill_noc_split's bench): the rate at which one NoC's DRAM endpoints accept reads, ~540 M reads/s across the chip on NoC0 (~900 M on both NoCs). It is not the RISC issue loop (the same reads from local L1 run 10x faster), not the bytes (64 / 128 / 256 B pages take the same time), and not the outstanding window.
+2. **The weight stream.** One fixed sender multicasts one round per K-block (cb_weights depth 2, every receiver acks every round): 108-153 lock-step rounds per call. Solo: -5% to -36% (514x1024 128->512); after the fill: -10% to -24%.
+3. **The store.** It is DRAM-write-bound (P1 writes 537 MB) and sits on the same writer as the weight rounds. Solo: -7% to -13%.
+4. **Matmul** runs at 93-108% of the 64-cycle/tile-MAC HiFi4 ideal (P1 matmul alone ~1.10 ms vs 1.02 ms ideal): no compute headroom. tilize and bias: < 5% each.
+
+### Portfolio and verdicts (each idea measured end to end in its own copy of the op; base = this round's start, median of 3)
+
+| idea | verdict | measured (base -> candidate) | precision | domain / notes |
+|---|---|---|---|---|
+| bank_run_fill: one DRAM read per bank per chunk (pages p, p + 8, ... sit back to back in bank p % 8), staged bank-major, de-interleaved into the slab by local NoC reads | **WIN, graduated** | P1 13.71 -> 3.64 ms, P3 13.76 -> 5.69, P2 4.44 -> 2.28, P4 2.81 -> 0.92, P5 14.81 -> 5.57, P6 17.47 -> 8.81, P7 2.05 -> 1.68, 514x1024 128->512 7.72 -> 6.39 | bit-identical (17 cases, sha1) | Bank runs reach ~410-420 GB/s aggregate (the fill becomes bandwidth-bound). NoC de-interleave ~24 NCRISC cycles per pixel, hidden except on P3 (0.23 ms). Rejected options: TRISC tilize + wide pack_untilize de-interleave (2 passes, the BH bf16 unpack-tilize leaves DEST row-swizzled; +0.41 ms TRISC on the compute-bound C_in 128 cases), RISC word copies (~60 cycles per 64 B), a dedicated 64 KB staging buffer (changed one shape's bk: not bit-identical). |
+| rm_ring_slab: ROW_MAJOR ring slab across M-blocks (each pixel read once per core), the next block filled under compute | **WIN, not graduated** | per-pixel reads: P1 13.77 -> 6.55 ms, P3 13.80 -> 5.63, P2 4.42 -> 2.70, P5 14.82 -> 7.03, P6 17.47 -> 10.12, 514x1024 128->512 7.73 -> 6.69 | bit-identical | Cuts reads per core 1.6-2.5x (P1 57288 -> 23170). It conflicts with the graduated bank-run fill as built: the overlapped ring fill keeps cb_im2col_rm live (where the bank-run staging lives) and refills in 8-pixel steps, against the >= 2 KB bank reads the bank-run fill needs. The fusion (bank-run reads into ring ranges, dedicated staging in the solve, coarser overlapped steps) is the next round's top candidate. After the graduations, P3 (5.22 ms), P5 and P6 are bound by the 3x DRAM re-read the ring removes. |
+| fill_noc_split: the per-pixel fill split between reader (NoC0) and writer (NoC1) | WIN, superseded | P1 13.72 -> 9.23 ms, P3 13.77 -> 8.82, P2 4.43 -> 3.42, 514x1024 128->512 7.73 -> 7.09 | bit-identical | Established the bound (row 1 above). The bank-run fill made the fill bandwidth-bound, so the split has nothing left to spread; not graduated. |
+| weights_resident (op_design R5): the whole [K, N] multicast once at kernel start, compute re-reads it per M-block (matmul_block in1 NoWaitNoPop + In1BaseOffsetFn), the solve shrinks bm to fit it | **WIN, graduated** | before the bank-run fill: P1 13.73 -> 13.08 ms (-4.8%), P2 -9.3%, P5 -7.0%, P6 -8.1%. With the fill stubbed: P1 3.23 -> 1.82, P2 2.11 -> 1.42 (the full weights-ablation value) | bit-identical where bk is kept (every focus case) | Not taken where [K, N] does not fit at any bm (258x512 / 514x1024 / 130x256 128->512: 1.15 MB), or with one M-block or one K-block per core. Its one measured regression (258x512 64->256, bf8_b weights, no bias, ReLU: +6.1%) came from fills contending once the lock-step stopped pacing them; on the bank-run tree that config is -6.5% (below). |
+| weight_stream_decouple: stagger each core's K-block order, poll weight rounds non-blocking from the store loop, stagger the first fill | WIN, not graduated | 514x1024 128->512 7.73 -> 5.00 ms, P7 2.05 -> 1.53, 514x1024 128->256 5.47 -> 4.57, P1 -7.4%, P2 -9.3% | not bit-identical: rotated K order, 0.0028% of outputs differ by 1 bf16 ulp, PCC equal | The cost it removes was not the stream: the lock-step made all 110 cores store and refill at the same M-block boundary, saturating DRAM (P7: 142 us fill + 100 us store per boundary). It was measured before the bank-run fill removed the fill half of that burst, so its value on the graduated tree is unmeasured. Its reader / writer changes conflict with the new fill code. Re-measure and integrate next round, for the cases whose weights stream (the three 128->512 shapes). Helper gap it hit: the multicast pipe's receive / send block; there is no ack-now / complete-later or non-blocking "all acks in" query. |
+| store_offload: store the output from the reader, or from inside the writer's weight waits | NULL | writer-serve P1 13.76 -> 13.68 ms, 514x1024 128->512 flat; reader store P1 +7.9%, 514x1024 128->512 +14.7%, P2 +11.9% | bit-identical | The store costs output bytes / ~500 GB/s whoever issues it. DRAM writes on NoC0 cost ~2x NoC1 (P1 +1.88 vs +1.09 ms), so the writer-on-NoC1 store is right. |
+
+### Graduated
+1. **Bank-run fill** (`8bc88914e73`). Domain: every DRAM-interleaved ROW_MAJOR input with one pixel per page (C_in a multiple of 32) on the K-blocked tap-direct walk, at any shape or padding. Carve-outs, all feasibility (they keep the per-pixel fill, which is still their path): TILE and sharded inputs (no pixel pages), L1-interleaved input (pages stride by the L1 bank count), C_in not a multiple of 32 (padded lanes), and the other walks (face-direct, row gather, strided window, slab-direct: their cb_im2col_rm is live during the fill, and the staging needs it dead). The staging ring aliases cb_im2col_rm: up to 4 chunks of up to 16 KB, at least 8 KB each (bank reads >= 1 KB) or 2 chunks of what fits. No new L1, no blocking change. DRAM trids 8-11 on this path.
+2. **Weights resident** (`cd0c2f659c3`). Domain: every interleaved K-blocked walk, ROW_MAJOR and TILE, with more than one K-block and more than one M-block per core, not face-direct or the split row gather, where the solve finds a block with the whole [K, N] resident. Otherwise the per-K-block stream, unchanged. Its experiment knobs ("leftover" / "trim" modes, the no-ack channel, an im2col cap) were deleted; the only path is the solve-counted one. No measured carve-out.
+
+FLUX.2 bh2x4 before / after (device kernel us, median of 3; `test_flux_conv3x3_compare.py`, ROW_MAJOR input):
+
+| prio | case (H x W, C_in->C_out) | calls | before | + bank-run | + resident | change | util (110-core HiFi4) | target | ttnn.conv2d |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 | 1026x2048 32->128 | 5 | 13758.4 | 3637.8 | 2606.7 | -81.1% | 39% | 1453 | 9227 |
+| 2 | 514x1024 64->256 | 6 | 4423.4 | 2282.7 | 1619.8 | -63.4% | 63% | 1453 | 50358 |
+| 3 | 1026x2048 128->3 | 1 | 13778.6 | 5696.9 | 5219.8 | -62.1% | 2% | 136 | 11752 |
+| 4 | 514x1024 32->128 | 5 | 2794.3 | 921.8 | 725.8 | -74.0% | 35% | 363 | 2189 |
+| 5 | 1026x2048 64->128 | 1 | 14800.1 | 5568.1 | 3892.0 | -73.7% | 52% | 2905 | 11395 |
+| 6 | 1026x2048 64->256 | 1 | 17483.2 | 8819.6 | 5881.2 | -66.4% | 69% | 5810 | 17224 |
+| 7 | 258x512 128->512 | 8 | 2049.8 | 1681.0 | 1682.0 | -17.9% | 60% | 1453 | 14637 |
+| 8 | 258x512 64->256 | 5 | 1078.8 | 591.8 | 510.8 | -52.7% | 50% | 363 | 10808 |
+| 9 | 514x1024 128->3 | 1 | 3425.9 | 1528.5 | 1409.7 | -58.9% | 2% | 34 | 2249 |
+| 10 | 130x256 128->512 | 17 | 544.2 | 445.5 | 444.9 | -18.2% | 57% | 363 | 3226 |
+| 11 | 514x1024 64->128 | 1 | 3436.1 | 1359.8 | 1077.1 | -68.7% | 47% | 726 | 2638 |
+| 12 | 514x1024 128->256 | 1 | 5469.8 | 3549.3 | 2762.5 | -49.5% | 74% | 2905 | 52918 |
+| 13 | 514x1024 128->512 | 1 | 7734.8 | 6392.9 | 6386.9 | -17.4% | 64% | 5810 | 58826 |
+| 14 | 258x512 128->256 | 1 | 1440.5 | 945.3 | 832.3 | -42.2% | 61% | 726 | 11439 |
+| 15 | 66x128 128->512 | 10 | 144.1 | 139.9 | 139.2 | -3.4% | 46% | 91 | 824 |
+| 16 | 130x256 32->128 | 1 | 191.4 | 73.9 | 73.9 | -61.4% | 22% | 23 | 135 |
+| 17 | 66x128 32->128 | 1 | 59.3 | 25.7 | 25.6 | -56.8% | 16% | 6 | 453 |
+
+Call-weighted 209.6 -> 95.8 -> 78.9 ms. 2 of 17 reach the 70% target (P6 at 69%, prio 12 at 74%). PCC vs torch 0.9999985 on all 17, unchanged.
+
+Where the time is now:
+- **P3 / prio 9 (conv_out, C_out 3 -> one N tile):** the 3x DRAM re-read of a 538 MB input. Its DRAM floor is ~1.7 ms, against 5.22 ms. Lever: the ring + bank-run fusion.
+- **P1 / P4 (C_in 32):** fill-stubbed + resident is ~1.8 ms on P1. The rest is the store's 537 MB of DRAM writes overlapping compute, plus the 0.3 ms everything-stubbed floor.
+- **The 128->512 shapes (P7, prio 10, 13):** the weight stream, whose weights do not fit. Lever: weight_stream_decouple, re-measured on this tree.
+
+### Guard set (no regression)
+- **Panoptic (22 compare cases, LoFi bf8_b sharded):** every new path is gated off on sharded input (the descriptor emits no new define, and the solve returns the same blocking), so the programs are unchanged. Outputs: 45 / 45 LOOSE outputs bit-identical to Refinement 7 (sha256, `panoptic_hashes.py`). Timing, before -> after, one run: 20 / 22 within +-1.5%; stem.conv1 +1.3%; res5.1 +3.1%. Re-measured on both trees (base = the Perf 16 code reverted in place), medians of 3-4 runs:
+  - stem.conv1 9711 vs 9719;
+  - res5.0 25295 vs 25407 (+0.4%);
+  - res5.1 25455 vs 25786 (+1.3%; base runs span 25010-25700, after 25479-25787);
+  - res5.2 24607 vs 24683.
+  All four are within run-to-run noise.
+- **Single-device FLUX.2 (the 17 LOOSE convs of a 1024² decode/encode, TILE input; resident on vs off on the bank-run tree):**
+  - 1024² 128->3 1725 -> 1292 (-25%);
+  - 1024² 128->128 5117 -> 3708 (-27.5%);
+  - 1024² 256->128 9715 -> 7232 (-25.6%);
+  - 512² 128->256 1708 -> 1561 (-8.6%);
+  - the other 13 within -0.1% / +0.8% (the stride-2 downsamplers and the one-M-block shapes do not take the path).
+  The bank-run fill does not touch TILE input; the 1024² 3->128 encoder conv_in (C_in 8, padded lanes) keeps the per-pixel fill: 9320 -> 9302.
+- **Off-focus configs, resident on vs off on the bank-run tree (`graduation_r16/test_guard_cfg.py`; sha1 identical on all 8):**
+  - ROW_MAJOR 258x512 64->256 bf8_b weights, no bias, ReLU: 490044 -> 458229, and 491008 -> 459897 with symmetric padding;
+  - ROW_MAJOR 258x512 64->256 bias: 591894 -> 512341;
+  - ROW_MAJOR 514x1024 32->128 no bias, ReLU: 914550 -> 730441;
+  - ROW_MAJOR 130x256 64->64: 69076 -> 69110;
+  - TILE 1026x2048 32->128: 3723575 -> 3112665;
+  - TILE 514x1024 64->256: 2305807 -> 1633334;
+  - TILE 258x512 64->256 bf8_b weights, no bias, ReLU: 471574 -> 432087.
+- **Golden:** interleaved ROW_MAJOR slice 210 passed (after each graduation); interleaved TILE slice 567 passed (after weights resident). Sharded programs are unchanged (see Panoptic). Unit tests: `test_conv2d_3x3.py`, `test_conv2d_3x3_layouts.py`, `test_conv2d_3x3_asymmetric_padding.py`: 113 passed.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| `dataflow_kernel_lib::read_with_state` (`local_copy_helpers_dataflow.hpp`) | capability | The stateful read fixes the source address and varies only the destination (or the reverse). The bank-run de-interleave moves one pixel per read from a staging row to a strided slab row, so both addresses change on every read. The raw `ncrisc_noc_read_set_state` / `ncrisc_noc_read_with_state` pair keeps the size in the command buffer and writes two addresses per read (~24 NCRISC cycles per pixel). The staging also borrows cb_im2col_rm's L1 through `get_local_cb_interface(...).fifo_limit - fifo_size`: there is no API for a CB's base address as scratch while the CB is idle. | n/a (inexpressible); a non-stateful `noc_async_read` per pixel was not measured | whole op P1 3637769 (vs 13758372 with the per-pixel page fill) | `kernels/conv2d_3x3_reader.cpp`, `#ifdef BANK_RUN_FILL` block in the ROW_MAJOR fill |
+
+Weights resident needed no bypass: `ckl::matmul_block` with in1 `NoWaitNoPop` + `In1BaseOffsetFn` expresses it. The first-M-block wait for each round is a PreKBlockFn wrapper (`ResidentWeightsPreKBlock`). Feedback for the helper: there is no in1 policy for "wait once on the first pass, keep fronted across calls". The caller has to own both the cumulative wait and the final pop.

@@ -1,0 +1,3 @@
+{"idx": 42, "shape": [514, 1024, 64, 256], "variants": {"base": {"pcc_vs_torch": 0.9999985523059673}, "split": {"bit_identical_to": "base", "n_diff": 0, "max_abs_diff": 0.0, "pcc_vs_torch": 0.9999985523059673}}}
+{"idx": 43, "shape": [258, 512, 128, 512], "variants": {"base": {"pcc_vs_torch": 0.9999985522014374}, "split": {"bit_identical_to": "base", "n_diff": 0, "max_abs_diff": 0.0, "pcc_vs_torch": 0.9999985522014374}}}
+{"idx": 47, "shape": [514, 1024, 128, 512], "variants": {"base": {"pcc_vs_torch": 0.9999985524030564}, "split": {"bit_identical_to": "base", "n_diff": 0, "max_abs_diff": 0.0, "pcc_vs_torch": 0.9999985524030564}}}

@@ -1,0 +1,1 @@
+{"idx": 41, "shape": [1026, 2048, 32, 128], "variants": {"static": {"pcc_vs_torch": 0.9999985539970446}, "split": {"bit_identical_to": "static", "n_diff": 0, "max_abs_diff": 0.0, "pcc_vs_torch": 0.9999985539970446}}}

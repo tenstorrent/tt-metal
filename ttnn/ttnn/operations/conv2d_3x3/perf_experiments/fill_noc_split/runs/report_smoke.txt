@@ -1,0 +1,4 @@
+test_fill[p1-split]              DKD   11777588 ns  fill window   11656.2 us  NCRISC p50 6994.6 max 11655.8 (n=110)
+test_fill[p1-inc]                DKD    7378550 ns  fill window    7257.2 us  BRISC p50 4948.4 max 7256.7 (n=110)  NCRISC p50 4948.6 max 7256.8 (n=110)
+test_fill[p1-bank]               DKD   11689147 ns  fill window   11567.7 us  NCRISC p50 6948.8 max 11567.4 (n=110)
+run4096                          DKD   18719050 ns  fill window   18597.6 us  NCRISC p50 10976.6 max 18597.3 (n=110)

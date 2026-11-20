@@ -1,0 +1,262 @@
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_compute.cpp
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_compute.cpp	2026-11-20 14:49:09.830598779 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-20 15:15:30.887823492 +0000
+@@ -1311,6 +1311,13 @@
+     [[maybe_unused]] const uint32_t rt_arg_base = 3 + ((rt_ring_groups + 9) / 10) * num_m_blocks_this_core;
+     // N-slice ring: incoming row groups packed onto so far, over all M-blocks (the arrival count each waits for).
+     [[maybe_unused]] uint32_t ring_need = 0;
++#ifdef WSD_KROT
++    // weight_stream_decouple K-rotation: the weight rounds before this core's first K-block are not its own.
++    for (uint32_t i = 0, n = get_arg_val<uint32_t>(WSD_ARG); i < n; ++i) {
++        weights.wait_front(block_k_tiles * block_n_tiles);
++        weights.pop_front(block_k_tiles * block_n_tiles);
++    }
++#endif
+     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+@@ -2225,6 +2232,13 @@
+             pack_relu_config(ReluConfig::none());
+         }
+     }
++#ifdef WSD_KROT
++    // ... nor the rounds after its last one.
++    for (uint32_t i = 0, n = get_arg_val<uint32_t>(WSD_ARG + 1); i < n; ++i) {
++        weights.wait_front(block_k_tiles * block_n_tiles);
++        weights.pop_front(block_k_tiles * block_n_tiles);
++    }
++#endif
+
+ #ifdef SD_BIAS_IN_WEIGHTS
+     constexpr bool bias_cb_used = false;  // the bias came with the weight rounds
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_reader.cpp
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_reader.cpp	2026-11-20 14:49:09.819598615 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-20 15:43:48.930003169 +0000
+@@ -300,6 +300,12 @@
+     [[maybe_unused]] const uint32_t slice_page_offset = get_arg_val<uint32_t>(5);
+     [[maybe_unused]] const uint32_t my_col = get_arg_val<uint32_t>(6);
+     [[maybe_unused]] const uint32_t my_shard = get_arg_val<uint32_t>(7);
++#ifdef WSD_KROT
++    // weight_stream_decouple K-rotation: this core walks every M-block's K-blocks from wsd_off (mod num_k_blocks).
++    const uint32_t wsd_off = get_arg_val<uint32_t>(WSD_ARG);
++#else
++    constexpr uint32_t wsd_off = 0;
++#endif
+     constexpr uint32_t row_peer_coords_arg = 8;  // (x, y) of grid columns 0..k_cols-1 of this row
+     // Split TILE fill on this core (runtime: the kernel is shared with the cores that keep the reader-only fill).
+     constexpr uint32_t split_flag_arg = row_peer_coords_arg + (channel_slice ? 2 * k_cols : 0);
+@@ -1183,6 +1189,13 @@
+                     Semaphore<>(slab_free_sem_id).up(1);
+                 }
+             }
++#ifdef WSD_FILL_SEM
++            if (m_block_idx == 0 && wsd_off > WSD_FILL_LEAD) {
++                // Staggered first fill: the writer's go once round wsd_off - WSD_FILL_LEAD is in.
++                MaybeDeviceZoneScope("reader_wsd_fill_gate");
++                Semaphore<>(WSD_FILL_SEM).wait_min(1);
++            }
++#endif
+             conv2d_3x3::slab_bands<input_width, num_in_px, dilation, band_stride_px>(
+                 footprint, slab_x_base, [&](int32_t kh, int32_t x_lo, int32_t x_hi, int32_t v_minus_x) {
+                     reads.begin(kh + 1);
+@@ -1566,7 +1579,11 @@
+             }
+         }
+         for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer || s2_taps ? 0 : num_k_blocks); ++k_block_idx) {
+-            const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++            uint32_t k_block_rot = k_block_idx + wsd_off;
++            if (k_block_rot >= num_k_blocks) {
++                k_block_rot -= num_k_blocks;
++            }
++            const uint32_t k_tile0 = k_block_rot * block_k_tiles;
+             const int32_t kh = k_tile0 / tensor_kkh_tiles;
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+             if constexpr (center_mode == 1) {
+@@ -1615,7 +1632,7 @@
+                     continue;
+                 }
+             }
+-            if (col_lo == 0) {
++            if (col_lo == 0 || (wsd_off != 0 && k_block_idx == 0)) {
+                 // The band's slab rows: compute's untilize (TILE) or this core's own band reads (ROW_MAJOR).
+                 MaybeDeviceZoneScope("reader_band_wait");
+                 for (int32_t band = kh; band < kh + static_cast<int32_t>(kh_per_k_block); ++band) {
+diff -ru '--exclude=__pycache__' ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_writer.cpp
+--- ttnn/ttnn/operations/conv2d_3x3/kernels/conv2d_3x3_writer.cpp	2026-11-20 14:49:09.824598690 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-20 15:48:10.565802640 +0000
+@@ -292,7 +292,15 @@
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+
+     // ---- stream_weight_blocks: K-block tiles k-major, n-fastest (matmul in1 layout).
++#ifdef WSD_KROT
++    // weight_stream_decouple K-rotation: this core's M-block m takes rounds wsd_off + m * num_k_blocks .. + 8; every
++    // channel participant takes all rounds up to the largest offset (the same slot sequence as the sender).
++    const uint32_t wsd_off = get_arg_val<uint32_t>(WSD_ARG);
++    const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks + get_arg_val<uint32_t>(WSD_ARG + 1);
++#else
++    constexpr uint32_t wsd_off = 0;
+     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
++#endif
+     uint32_t k_blocks_issued = 0;
+     // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
+     // under transaction id 8 at kernel entry (below), a receiver of the reader multicast reserves its slot before the
+@@ -1386,7 +1394,35 @@
+     constexpr uint32_t round0_chunks = 1;
+ #endif
+     [[maybe_unused]] uint32_t round0_pushed = 0;
++#ifdef WSD_SPLIT
++    // weight_stream_decouple split-phase rounds (store loop): a receiver reserves its slot and acks as soon as the slot
++    // is free, then keeps storing; the round completes when its flag is seen (a later poll, or the next blocking
++    // issue). A sender sends only once every ack is in. Same protocol and order as ReceiverPipe::receive / send.
++    constexpr uint32_t wsd_ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
++    bool wsd_pending = false;
++    auto wsd_data_ready = [&]() {
++        return Semaphore<>(dataflow_kernel_lib::detail::
++                               positional_mcast_semaphore<wsd_ct_base, dataflow_kernel_lib::mcast_wire::DATA_READY>());
++    };
++    auto wsd_consumer_ready = [&]() {
++        return Semaphore<>(dataflow_kernel_lib::detail::
++                               positional_mcast_semaphore<wsd_ct_base, dataflow_kernel_lib::mcast_wire::CONSUMER_READY>());
++    };
++#endif
+     auto issue_weight_k_block = [&]() {
++#ifdef WSD_SPLIT
++        if (wsd_pending) {
++            MaybeDeviceZoneScope("writer_weight_fetch");
++            auto dr = wsd_data_ready();
++            while (dr.value() != VALID) {
++            }
++            dr.set(INVALID);
++            cb_push_back(cb_weights, weight_k_block_tiles);
++            ++k_blocks_issued;
++            wsd_pending = false;
++            return;
++        }
++#endif
+         if (sd_w0 == 1) {
+             // Slab-direct round 0 (taken early): wait for it, serving the fill.
+             MaybeDeviceZoneScope("writer_weight_fetch");
+@@ -1469,9 +1505,29 @@
+                 serve_fill();
+             }
+ #endif
++#ifdef WSD_DIAG_ACKS
++            {
++                MaybeDeviceZoneScope("wsd_read");
++                read_weight_k_block(l1);
++            }
++            {
++                MaybeDeviceZoneScope("wsd_ackwait");
++                constexpr uint32_t wsd_ct_base = get_named_compile_time_arg_val("weight_mcast_ct_offset");
++                Semaphore<>(dataflow_kernel_lib::detail::positional_mcast_semaphore<
++                                wsd_ct_base,
++                                dataflow_kernel_lib::mcast_wire::CONSUMER_READY>())
++                    .wait_min(WSD_DIAG_ACKS);
++            }
++            MaybeDeviceZoneScope("wsd_send");
++            weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
++#else
++#ifndef WSD_NOREAD
++            // (WSD_NOREAD: timing-only ablation, the sender multicasts its stale slot; wrong output.)
+             read_weight_k_block(l1);
++#endif
+             MaybeDeviceZoneScope("writer_weight_send");
+             weight_sender->send(l1, l1, weight_k_block_tiles * weight_tile_bytes);
++#endif
+         } else if (weight_receiver) {
+             if constexpr (tile_fill_split || slab_direct) {
+                 // Round 0 of a slab-direct receiver came over the reader multicast, not this channel.
+@@ -1505,6 +1561,40 @@
+         }
+     };
+
++#ifdef WSD_SPLIT
++    // One non-blocking step of the round stream; true when a round completed (call again for the next).
++    auto wsd_try_weight = [&]() -> bool {
++        if (weight_receiver && !(weight_sender && weight_mcast.should_send(k_blocks_issued))) {
++            if (!wsd_pending) {
++                if (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
++                    return false;
++                }
++                cb_reserve_back(cb_weights, weight_k_block_tiles);
++                Noc ack_noc;
++                wsd_consumer_ready().up(ack_noc, weight_mcast.sender_x(), weight_mcast.sender_y(), 1);
++                wsd_pending = true;
++            }
++            auto dr = wsd_data_ready();
++            if (dr.value() != VALID) {
++                return false;
++            }
++            dr.set(INVALID);
++            cb_push_back(cb_weights, weight_k_block_tiles);
++            ++k_blocks_issued;
++            wsd_pending = false;
++            return true;
++        }
++        if (!cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
++            return false;
++        }
++        if (weight_sender && weight_mcast.should_send(k_blocks_issued) && wsd_consumer_ready().value() < WSD_ACKS) {
++            return false;
++        }
++        issue_weight_k_block();
++        return true;
++    };
++#endif
++
+     // ---- R4 row reduce-scatter (see the file comment).
+     constexpr uint32_t partials_tiles = block_m_tiles * block_n_tiles;
+     constexpr uint32_t slot_tiles = block_m_tiles * out_n_tiles;
+@@ -2571,7 +2661,12 @@
+             // kw-fold whole-K: the weights stay resident across this core's M-blocks: one stream.
+             while (k_blocks_issued < num_k_blocks) {
+ #else
+-            while (k_blocks_issued < (m_block_idx + 1) * num_k_blocks) {
++            while (k_blocks_issued < wsd_off + (m_block_idx + 1) * num_k_blocks) {
++#endif
++#ifdef WSD_FILL_SEM
++                if (m_block_idx == 0 && wsd_off > WSD_FILL_LEAD && k_blocks_issued + WSD_FILL_LEAD == wsd_off) {
++                    Semaphore<>(WSD_FILL_SEM).up(1);
++                }
+ #endif
+                 issue_weight_k_block();
+                 if constexpr (gather_split) {
+@@ -2626,6 +2721,14 @@
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef WSD_SPLIT
++                // Keep the round stream going (ack a freed slot, push a landed round) while compute packs the block.
++                while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
++                    if (k_blocks_issued < total_k_blocks) {
++                        wsd_try_weight();
++                    }
++                }
++#endif
+                 cb_wait_front(cb_output_tiles, row_group_tiles);
+                 uint32_t l1 = get_read_ptr(cb_output_tiles);
+                 for (uint32_t r = 0; r < out_subblock_h; ++r) {
+@@ -2641,13 +2744,23 @@
+                 noc_async_writes_flushed();
+                 cb_pop_front(cb_output_tiles, row_group_tiles);
+
++#ifdef WSD_SPLIT
++                while (k_blocks_issued < total_k_blocks && wsd_try_weight()) {
++                }
++#else
+                 while (k_blocks_issued < total_k_blocks &&
+                        cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
+                     issue_weight_k_block();
+                 }
++#endif
+             }
+         }
+     }
++#ifdef WSD_KROT
++    while (k_blocks_issued < total_k_blocks) {
++        issue_weight_k_block();
++    }
++#endif
+     drain_fill();
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();

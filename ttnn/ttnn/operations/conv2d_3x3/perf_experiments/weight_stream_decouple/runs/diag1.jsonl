@@ -1,0 +1,6 @@
+{"case": 43, "variant": "base", "knobs": {}, "log": "diag1", "t": 1795186924.6720307, "status": "ok", "pcc": 0.9999985522014374, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}
+{"case": 43, "variant": "copy", "knobs": {}, "log": "diag1", "t": 1795186925.4733121, "status": "ok", "pcc": 0.9999985522014374, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}
+{"case": 43, "variant": "diag", "knobs": {"WSD_DIAG": true}, "log": "diag1", "t": 1795186926.2822728, "status": "ok", "pcc": 0.9999985522014374, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}
+{"case": 47, "variant": "base", "knobs": {}, "log": "diag1", "t": 1795186929.2718964, "status": "ok", "pcc": 0.9999985524030564, "ref": true, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}
+{"case": 47, "variant": "copy", "knobs": {}, "log": "diag1", "t": 1795186931.3059642, "status": "ok", "pcc": 0.9999985524030564, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}
+{"case": 47, "variant": "diag", "knobs": {"WSD_DIAG": true}, "log": "diag1", "t": 1795186933.6066308, "status": "ok", "pcc": 0.9999985524030564, "bit_identical_to_first": true, "max_abs_vs_first": 0.0}

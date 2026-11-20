@@ -1,0 +1,197 @@
+--- ttnn/ttnn/operations/conv2d_3x3/conv2d_3x3_program_descriptor.py	2026-11-20 14:49:09.814598540 +0000
++++ ttnn/ttnn/operations/conv2d_3x3/perf_experiments/weight_stream_decouple/op_copy/conv2d_3x3_program_descriptor.py	2026-11-20 15:48:10.566802655 +0000
+@@ -294,6 +294,23 @@
+ # Tap-direct on the K-blocked walk: the reader reserves, fences and pushes this many unit entries at a time.
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
++# ---- weight_stream_decouple experiment knobs (perf_experiments/weight_stream_decouple/test_wsd.py)
++WSD_BK = None
++WSD_BM = None
++WSD_DIAG = False
++WSD_ROT = 0
++WSD_ROT_LOOKAHEAD = None
++WSD_NOACK = False
++WSD_EARLY_ACK = False
++# K-rotation stagger: per weight-channel participant i, K-block offset WSD_KROT[i % len]; () = off.
++WSD_KROT = ()
++# Split-phase weight rounds in the store loop (non-blocking ack / flag poll; sender sends only with every ack in).
++WSD_SPLIT = False
++# Staggered first fill under K-rotation: a core with offset o issues its first slab fill once its writer has received
++# round o - WSD_FILL_LEAD (None: at kernel start, as today).
++WSD_FILL_LEAD = None
++# Timing-only ablation: the multicast sender skips its DRAM read (upper bound for moving the read off the sender).
++WSD_NOREAD = False
+ OUT_DEPTH_ROW_GROUPS = 2
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+@@ -1274,6 +1291,12 @@
+     # A smaller bm frees L1, so each bm retries the coarsest bk again: at a fixed bm, bk costs no bytes.
+     search = [(bm, bk) for bm in bm_candidates for bk in bk_above_floor]
+     search += [(bm_candidates[-1], bk) for bk in bk_below_floor]
++    if not g.sharded_output and (WSD_BK is not None or WSD_BM is not None):
++        search = [
++            (bm, bk)
++            for bm, bk in search
++            if (WSD_BK is None or bk == WSD_BK) and (WSD_BM is None or bm <= WSD_BM)
++        ]
+
+     def solve(candidates, nslice, shared=False):
+         for bm, bk in candidates:
+@@ -2824,6 +2847,7 @@
+     # The weight multicast's cores (the channel below is built from the same set). The split TILE fill runs on its pure
+     # receivers: not the sender (work core 0), nor the own-stream cores outside the channel.
+     mcast_receivers = None if g.k_split else _weight_mcast_cores(core_list, [m_blocks_per_index[i] for _, i, _ in work])
++    weight_mcast_acks = mcast_receivers.num_cores() - 1 if mcast_receivers is not None else 0
+     weight_servers = None
+     if WEIGHT_SERVERS and g.sharded_output and not g.k_split and mcast_receivers is not None:
+         # Partners under kw-fold, where a chunk splits into two parts (see WEIGHT_SERVER_PARTNERS).
+@@ -3439,6 +3463,7 @@
+             lo = device.worker_core_from_logical_core(rect.start)
+             hi = device.worker_core_from_logical_core(rect.end)
+             sd_r0_args += [lo.x, lo.y, hi.x, hi.y, rect.grid_size().x * rect.grid_size().y - int(ins)]
++    _wsd_pending = []
+     for core, m_index, col in work:
+         m_tile_start, actual_m_tiles = m_ranges[m_index]
+         num_m_blocks_this_core = m_blocks_per_index[m_index]
+@@ -3493,7 +3518,7 @@
+             assert sd_r0_arg in (None, len(reader_args))
+             sd_r0_arg = len(reader_args)
+             reader_args += sd_r0_args if (core.x, core.y) == (core_list[0].x, core_list[0].y) else [0]
+-        reader_rt[core.x][core.y] = reader_args
++        _wsd_pending.append(("r", reader_rt, core, reader_args))
+         compute_args = [num_m_blocks_this_core, int(out_valid_tiles > 0), col]
+         if g.k_split and b.nslice and not kwf:
+             # The N-slice ring walk's kernel-row masks (args 3..: no ring slab under a K split).
+@@ -3514,12 +3539,12 @@
+             ub = b.untilize_batch_rows
+             for _, _, new_rows in ring_plan(g, b.core_m_tiles, bm)[m_index]:
+                 compute_args += [new_rows, -new_rows % ub]
+-        compute_rt[core.x][core.y] = compute_args
++        _wsd_pending.append(("c", compute_rt, core, compute_args))
+         writer_cores, writer_rt = writer_groups.setdefault(
+             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
+         )
+         writer_cores.append(core)
+-        writer_rt[core.x][core.y] = (
++        _wsd_w_args = (
+             [
+                 weight_addr,
+                 bias_addr,
+@@ -3543,6 +3568,56 @@
+             + (round0_args.get((core.x, core.y), [0] * (12 if spread_rounds else 11)) if round0_args else [])
+             + (host_fill_words[(core.x, core.y)][1] if host_fill else [])
+         )
++        _wsd_pending.append(("w", writer_rt, core, _wsd_w_args))
++
++    # ---- weight_stream_decouple: K-rotation stagger (WSD_KROT). Per core: (offset, max offset) on the weight
++    # channel's participants, (0, 0) elsewhere. Every kind's args are padded to one length L and the experiment's words
++    # appended at L (define WSD_ARG).
++    krot_active = (
++        bool(WSD_KROT)
++        and not g.sharded_output
++        and not g.k_split
++        and not g.tile_input
++        and mcast_receivers is not None
++        and weight_servers is None
++        and tap_direct
++        and not b.nslice
++        and center_mode == CENTER_NONE
++        and not slab_direct
++        and not kwf
++        and not face_direct
++        and not row_split
++        and not s2_taps
++        and not padded_slab
++        and not spread_rounds
++    )
++    krot = {}
++    if krot_active and b.num_k_blocks < 2:
++        krot_active = False
++    if krot_active:
++        offs = list(range(b.num_k_blocks)) if WSD_KROT == "all" else list(WSD_KROT)
++        assert all(0 <= o < b.num_k_blocks for o in offs), (offs, b.num_k_blocks)
++        top = max(offs)
++        part = {(c.x, c.y) for c in ttnn.corerange_to_cores(mcast_receivers)}
++        i = 0
++        for core, _, _ in work:
++            if (core.x, core.y) in part:
++                krot[(core.x, core.y)] = (offs[i % len(offs)], top)
++                i += 1
++    wsd_fill_sem = None
++    if krot_active and WSD_FILL_LEAD is not None:
++        wsd_fill_sem = len(sem_ids)
++        sem_ids += (wsd_fill_sem,)
++        assert len(sem_ids) <= MAX_SEMAPHORES
++    _wsd_len = {}
++    for kind, _, _, args in _wsd_pending:
++        _wsd_len[kind] = max(_wsd_len.get(kind, 0), len(args))
++    for kind, rt, core, args in _wsd_pending:
++        if krot_active:
++            o, top = krot.get((core.x, core.y), (0, 0))
++            extra = {"r": [o], "c": [o, top - o], "w": [o, top]}[kind]
++            args = list(args) + [0] * (_wsd_len[kind] - len(args)) + extra
++        rt[core.x][core.y] = args
+
+     # kw-fold kernels: the mode flag and its compile-time shape (defines keep the regular kernels' CT args intact).
+     _kwf_dm_defines, _kwf_compute_defines = [], []
+@@ -3701,6 +3776,32 @@
+     _host_fill_defines = (
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
++    _wsd_defines = []
++    if WSD_DIAG and weight_mcast_acks:
++        _wsd_defines.append(("WSD_DIAG_ACKS", str(weight_mcast_acks)))
++    if (
++        WSD_SPLIT
++        and weight_mcast_acks
++        and not g.sharded_output
++        and not g.k_split
++        and weight_servers is None
++        and not slab_direct
++        and not kwf
++        and not tile_fill_split
++        and not spread_rounds
++    ):
++        _wsd_defines += [("WSD_SPLIT", "1"), ("WSD_ACKS", str(weight_mcast_acks))]
++    if WSD_NOREAD:
++        _wsd_defines.append(("WSD_NOREAD", "1"))
++    _wsd_r_defines, _wsd_c_defines = [], []
++    if krot_active:
++        _wsd_r_defines = [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["r"]))]
++        _wsd_c_defines = [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["c"]))]
++        _wsd_defines += [("WSD_KROT", "1"), ("WSD_ARG", str(_wsd_len["w"]))]
++        if wsd_fill_sem is not None:
++            _fill = [("WSD_FILL_SEM", str(wsd_fill_sem)), ("WSD_FILL_LEAD", str(WSD_FILL_LEAD))]
++            _wsd_r_defines += _fill
++            _wsd_defines += _fill
+     readers = [
+         ttnn.KernelDescriptor(
+             kernel_source=str(KERNEL_DIR / "conv2d_3x3_reader.cpp"),
+@@ -3712,7 +3813,8 @@
+             + _ring_owner_defines
+             + _sd_dm_defines
+             + _s2_dm_defines
+-            + _host_fill_defines,
++            + _host_fill_defines
++            + _wsd_r_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -3731,6 +3833,7 @@
+             + _round0_defines
+             + slot_ack_defines
+             + _host_fill_defines
++            + _wsd_defines
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+                 [
+@@ -3758,7 +3861,8 @@
+         + _sd_compute_defines
+         + _wide_short_defines
+         + _s2_compute_defines
+-        + _ring_arrival_defines,
++        + _ring_arrival_defines
++        + _wsd_c_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
