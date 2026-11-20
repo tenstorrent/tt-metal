@@ -189,7 +189,7 @@ _ROW_BCAST_SHAPES = [
 
 @pytest.mark.parametrize("a_shape, b_shape", _ROW_BCAST_SHAPES)
 @pytest.mark.parametrize("op_name", ["add", "subtract", "multiply"])
-@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16", "bf8"])
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.bfloat4_b], ids=["bf16", "bf8", "bf4"])
 def test_row_bcast_low_precision_inputs_fp32_output(device, in_dtype, op_name, a_shape, b_shape):
     ttnn_op, torch_op = _OPS[op_name]
     torch.manual_seed(0)
