@@ -13,7 +13,8 @@ import torch
 from loguru import logger
 from torch import nn
 
-from models.experimental.alpamayo2_edge.reference.action import ActionInProj, action_to_traj
+from models.experimental.alpamayo2_edge.reference import golden_cache
+from models.experimental.alpamayo2_edge.reference.action import ActionInProj, action_to_traj, euler_sample
 from models.experimental.alpamayo2_edge.reference.model import CotOut, ReferenceModel
 from models.experimental.alpamayo2_edge.reference.text import TextModel
 from models.experimental.alpamayo2_edge.reference.weights import load_weights
@@ -110,42 +111,134 @@ def test_in_proj(mesh_device, cfg, in_proj_weights):
     assert_quality(golden, out, pcc=PCC, ccc=PCC)
 
 
+# Relative per-step velocity error injected into the reference flow by `test_flow_sensitivity`, below the TT
+# velocity's on either weight set.
+FLOW_NOISE = 0.004
+
+
+def _reference_flow(cfg, inputs, prefix, model: ReferenceModel, noise, *, step_noise: float = 0.0) -> dict:
+    """Euler-integrate the reference flow from `noise`, recording each step's input x and velocity.
+
+    With `step_noise` > 0 each velocity gets seeded Gaussian noise of that fraction of its std before the update.
+    """
+    cot = CotOut(tokens=prefix["tokens"], offsets=prefix["offsets"], logits=None)
+    cache = reference_cache(prefix)
+    generator = torch.Generator().manual_seed(1)
+    xs, vs = [], []
+
+    def step(x, t):
+        v = model.expert_velocity(cache, cot, inputs, x, t)
+        xs.append(x.clone())
+        vs.append(v)
+        print(f"reference flow step {len(vs)}/{cfg.action.steps}", flush=True)
+        return v + step_noise * v.std() * torch.randn(v.shape, generator=generator) if step_noise else v
+
+    with torch.no_grad():
+        actions = euler_sample(step, noise, cfg.action.steps)
+    return {"x": xs, "v": vs, "actions": actions}
+
+
+def _flow_key(inputs, prefix, noise, step_noise: float) -> dict:
+    return {
+        "input_ids": inputs.input_ids,
+        "position_ids": inputs.position_ids,
+        "patches": inputs.patches,
+        "grid": inputs.image_grid_thw,
+        "forced": prefix["tokens"],
+        "k": prefix["k"],
+        "v": prefix["v"],
+        "noise": noise,
+        "step_noise": step_noise,
+    }
+
+
+@pytest.fixture(scope="module")
+def reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights) -> ReferenceModel:
+    return _reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights)
+
+
+@pytest.fixture(scope="module")
+def reference_flow(cfg, sample_inputs, prefix, reference_model) -> dict:
+    """The reference's 10-step flow from `_noise`: each step's input x and velocity, and the final actions."""
+    noise = _noise(cfg, 1)
+    return golden_cache.cached(
+        "action_flow",
+        _flow_key(sample_inputs, prefix, noise, 0.0),
+        lambda: _reference_flow(cfg, sample_inputs, prefix, reference_model, noise),
+        cfg=cfg,
+    )
+
+
+@pytest.fixture
+def checkpoint_only(weights):
+    if weights != "checkpoint":
+        pytest.skip(
+            f"the flow of random weights is chaotic: a {FLOW_NOISE:.1%} per-step velocity error already moves the "
+            "reference's own 10-step actions below the PCC floor (test_flow_sensitivity), so the closed loop would "
+            "measure the weights, not the port"
+        )
+
+
+def test_flow_sensitivity(weights, cfg, sample_inputs, prefix, reference_model, reference_flow):
+    """How far a small per-step velocity error moves the reference's own 10-step actions.
+
+    The trained flow absorbs it; the random one is chaotic and decorrelates, which is why `test_actions_10_steps`
+    runs on the checkpoint only. If the random case passes the floor, that skip can go.
+    """
+    noise = _noise(cfg, 1)
+    perturbed = golden_cache.cached(
+        "action_flow",
+        _flow_key(sample_inputs, prefix, noise, FLOW_NOISE),
+        lambda: _reference_flow(cfg, sample_inputs, prefix, reference_model, noise, step_noise=FLOW_NOISE),
+        cfg=cfg,
+    )
+    flow_pcc = pcc(reference_flow["actions"], perturbed["actions"])
+    logger.info(f"{weights}: {FLOW_NOISE:.1%} per-step velocity noise -> 10-step actions PCC {flow_pcc * 100:.4f} %")
+    if weights == "checkpoint":
+        assert flow_pcc > 0.999
+    else:
+        assert flow_pcc < PCC, "the random-weight flow is no longer chaotic; drop the skip in test_actions_10_steps"
+
+
 @P100_MESH
 @pytest.mark.timeout(1500)
-def test_velocity_one_step(
-    mesh_device, cfg, sample_inputs, prefix, expert_setup, expert_weights, in_proj_weights, out_proj_weights
+def test_velocity_every_step(
+    mesh_device, cfg, expert_setup, expert_weights, in_proj_weights, out_proj_weights, reference_flow
 ):
-    inputs = sample_inputs
+    """The TT velocity at each Euler step's reference input, so a step's error cannot carry into the next."""
     cache, frame, prefix_len = expert_setup
-    noise = _noise(cfg, 1)
-    t = _timestep(cfg, 0, 1)
-
-    reference = _reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights)
-    cot = CotOut(tokens=prefix["tokens"], offsets=prefix["offsets"], logits=None)
-    golden = reference.expert_velocity(reference_cache(prefix), cot, inputs, noise, t)
-
     expert, in_proj, out_proj = _tt_action(mesh_device, cfg, expert_weights, in_proj_weights, out_proj_weights)
-    v = action_velocity_tt(expert, in_proj, out_proj, cache=cache, frame=frame, x=noise, t=t, acfg=cfg.action)
-
-    logger.info(f"{cfg.expert.layers} layers, prefix {prefix_len}: velocity PCC {pcc(golden, v) * 100:.4f} %")
-    assert v.dtype == torch.float32
-    assert v.shape == golden.shape
-    assert_quality(golden, v, pcc=PCC, ccc=PCC)
+    velocities = []
+    for step, (x, golden) in enumerate(zip(reference_flow["x"], reference_flow["v"])):
+        t = _timestep(cfg, step, 1)
+        v = action_velocity_tt(expert, in_proj, out_proj, cache=cache, frame=frame, x=x, t=t, acfg=cfg.action)
+        logger.info(f"{prefix_len}-row prefix, step {step}: velocity PCC {pcc(golden, v) * 100:.4f} %")
+        velocities.append(v)
+    # Every step is measured and logged before the first failing one stops the test.
+    for golden, v in zip(reference_flow["v"], velocities):
+        assert v.dtype == torch.float32
+        assert v.shape == golden.shape
+        assert_quality(golden, v, pcc=PCC, ccc=PCC)
 
 
 @P100_MESH
 @pytest.mark.timeout(1500)
 def test_actions_10_steps(
-    mesh_device, cfg, sample_inputs, prefix, expert_setup, expert_weights, in_proj_weights, out_proj_weights
+    checkpoint_only,
+    mesh_device,
+    cfg,
+    sample_inputs,
+    expert_setup,
+    expert_weights,
+    in_proj_weights,
+    out_proj_weights,
+    reference_flow,
 ):
     inputs = sample_inputs
     acfg = cfg.action
     cache, frame, prefix_len = expert_setup
     noise = _noise(cfg, 1)
-
-    reference = _reference_model(cfg, expert_weights, in_proj_weights, out_proj_weights)
-    cot = CotOut(tokens=prefix["tokens"], offsets=prefix["offsets"], logits=None)
-    golden = reference.sample_actions(reference_cache(prefix), cot, inputs, noise)
+    golden = reference_flow["actions"]
 
     expert, in_proj, out_proj = _tt_action(mesh_device, cfg, expert_weights, in_proj_weights, out_proj_weights)
     actions = sample_actions_tt(expert, in_proj, out_proj, cache=cache, frame=frame, noise=noise, acfg=acfg)

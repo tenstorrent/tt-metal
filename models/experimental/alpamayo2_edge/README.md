@@ -89,8 +89,21 @@ of a golden takes a few minutes of CPU time.
 | `tests/pcc/test_text.py` | P100 | ReLU² FFN, layer 0, prefill logits and K/V, cache sizing, lm_head dtype |
 | `tests/pcc/test_decode.py` | P100 | 128-step teacher-forced decode |
 | `tests/pcc/test_expert.py` | P100 | expert layer 0 and the 28-layer stack over the reference prefix |
-| `tests/pcc/test_action.py` | P100 | in-proj, one-step velocity, 10-step flow |
+| `tests/pcc/test_action.py` | P100 | in-proj, the velocity at each of the 10 steps' reference inputs, 10-step flow, the reference flow's sensitivity (host only) |
 | `tests/e2e/test_e2e.py` | P100 | full pipeline: teacher-forced, free-running, two samples; the lm_head dtype measurement runs only with `ALPAMAYO_MEASURE=1` |
+| `tests/test_random_checkpoint.py` | no | the random-weight checkpoint below |
+
+Every weight-dependent test under `tests/pcc/` runs twice: on the checkpoint and on seeded random
+weights of the same names and shapes (`reference/weights.py` `make_random_checkpoint`). Random weights put the activations
+in a different distribution than the trained ones, so a numerics problem the trained weights happen to
+hide shows up in one of the two. `-k checkpoint` or `-k random` selects one. The random checkpoint
+holds only an index; `load_weights` draws each tensor from a generator seeded by the seed and the
+tensor name, so nothing large is written. The 10-step flow test skips on random weights: their flow is
+chaotic. `test_flow_sensitivity` shows it on the reference alone: 0.4 % of seeded noise on each step's
+velocity moves the 10-step actions to PCC 0.988 on random weights and 0.99995 on the checkpoint. The
+per-step velocity test covers the flow on random weights instead. The end-to-end tests use the checkpoint
+only: their trajectory gate needs the trained flow, and sampling from random weights picks the CoT
+anchor with a chance of about one in the vocabulary size per step.
 
 ```bash
 HF_HOME=/path/to/hf_data HF_HUB_OFFLINE=1 pytest -s models/experimental/alpamayo2_edge/tests/pcc/test_decode.py
@@ -117,17 +130,17 @@ trajectory gate is the position error below.
 |---|---|---|
 | Vision block 0 | random input, two windows | 99.9984 % |
 | Projector | random input | 99.9988 % |
-| Vision tower + projector, 16:9 cameras | `synthetic_sample(0)`, 11568 patches | 99.9153 % |
-| Vision tower + projector, 4:3 cameras | 11904 patches | 99.8807 % |
+| Vision tower + projector, 16:9 cameras | `synthetic_sample(0)`, 11568 patches | 99.9152 % |
+| Vision tower + projector, 4:3 cameras | 11904 patches | 99.8806 % |
 | LM ReLU² FFN / layer 0 (S = 3256) | | 99.9989 % / 99.9997 % |
 | LM prefill, last-token logits | reference vision embeddings | 99.9742 % (argmax equal) |
 | LM prefill K/V, layers 0 and 27 | | ≥ 99.9866 % |
 | Teacher-forced decode logits, 128 steps | reference vision embeddings | min 99.7604 %, mean 99.9490 % |
 | Expert layer 0 / layer-0 update alone | reference prefix cache | 99.9997 % / 99.8095 % |
 | Expert, 28 layers | reference prefix cache | 99.8868 % |
-| Action in-proj / velocity at step 0 | reference prefix cache | 99.9996 % / 99.9992 % |
+| Action in-proj / velocity at each of the 10 steps | reference prefix cache | 99.9996 % / ≥ 99.9985 % |
 | Actions after 10 Euler steps | reference prefix cache | 99.9848 % (xyz error ≤ 4.92 cm) |
-| **End to end**, vision embeddings | TT path throughout | 99.9153 % |
+| **End to end**, vision embeddings | TT path throughout | 99.9152 % |
 | End to end, prefill last-token logits | | 99.9769 % |
 | End to end, decode logits, 128 steps | | min 99.7574 %, mean 99.9484 % |
 | End to end, actions | | 99.9628 % |
@@ -139,6 +152,21 @@ below is the meaningful trajectory metric.
 
 **Vision:** the tower stays at or above 0.99 at both camera aspect ratios: 99.915 % at 16:9 and
 99.881 % at 4:3.
+
+**Random weights** (seed 0, same inputs and thresholds):
+
+| Block | PCC |
+|---|---|
+| Vision block 0 / projector | 99.9985 % / 99.9983 % |
+| Vision tower + projector, 16:9 / 4:3 | 99.9864 % / 99.9864 % |
+| LM ReLU² FFN / layer 0 | 99.9918 % / 99.9933 % |
+| LM prefill, last-token logits / K/V, layers 0 and 27 | 99.9405 % / ≥ 99.9428 % |
+| Teacher-forced decode logits, 128 steps | min 99.9368 %, mean 99.9424 % |
+| Expert layer 0 / 28 layers | 99.9958 % / 99.9771 % |
+| Action in-proj / velocity at each of the 10 steps | 99.9985 % / ≥ 99.8987 % |
+
+On random weights the vision tower, the decode's worst step and the expert stack track the reference
+more closely than on the trained ones; the prefill logits, LM layer 0 and the velocity less closely.
 
 **Trajectory position error.** The max Euclidean error over the 64 waypoints, against the reference
 with the same CoT and noise, always occurs at the last waypoint:

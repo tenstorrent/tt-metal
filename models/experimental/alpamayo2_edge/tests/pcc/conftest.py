@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Fixtures of the expert and action tests: the reference's teacher-forced prefix cache, loaded into a TT cache."""
+"""Fixtures of the block PCC tests: the weights they run, and the reference's teacher-forced prefix cache."""
 
 import pytest
 import torch
@@ -10,9 +10,11 @@ import torch
 import ttnn
 from models.experimental.alpamayo2_edge.reference import golden_cache
 from models.experimental.alpamayo2_edge.reference.action import expert_mask
+from models.experimental.alpamayo2_edge.reference.config import load_config, resolve_model_dir
 from models.experimental.alpamayo2_edge.reference.forced_cot import driving_text_cot
+from models.experimental.alpamayo2_edge.reference.inputs import prepare_sample_inputs, synthetic_sample
 from models.experimental.alpamayo2_edge.reference.model import ReferenceModel
-from models.experimental.alpamayo2_edge.reference.weights import load_weights
+from models.experimental.alpamayo2_edge.reference.weights import load_weights, make_random_checkpoint
 from models.experimental.alpamayo2_edge.tests._util import reference_cache
 from models.experimental.alpamayo2_edge.tt.common import round_up
 from models.experimental.alpamayo2_edge.tt.expert import MASKED, ExpertFrame, make_expert_frame
@@ -22,6 +24,36 @@ from models.tt_dit.utils import tensor
 
 # Fills the cache rows between the prefix and p_pad: any attention weight that leaks onto them breaks the PCC.
 POISON = 1000.0
+
+
+@pytest.fixture(scope="session", params=["checkpoint", "random"])
+def weights(request) -> str:
+    """Every weight-dependent block test runs on the checkpoint and on seeded random weights of its shapes.
+
+    Random weights move the activations away from the trained distribution, so a numerics bug that the trained
+    weights happen to hide shows up in one of the two; `-k checkpoint` or `-k random` selects one.
+    """
+    return request.param
+
+
+# `model_dir`, `cfg` and `sample_inputs` override tests/conftest.py's. All three are redefined so that each is cached
+# per `weights` value: a parent session fixture depending on an overridden one would keep its first value.
+@pytest.fixture(scope="session")
+def model_dir(weights, tmp_path_factory):
+    checkpoint = resolve_model_dir()
+    if weights == "checkpoint":
+        return checkpoint
+    return make_random_checkpoint(checkpoint, tmp_path_factory.mktemp("random_checkpoint"), seed=0)
+
+
+@pytest.fixture(scope="session")
+def cfg(model_dir):
+    return load_config(model_dir)
+
+
+@pytest.fixture(scope="session")
+def sample_inputs(cfg):
+    return prepare_sample_inputs(cfg, synthetic_sample(0))
 
 
 def _reference_prefix(cfg, inputs, forced: torch.Tensor) -> dict:
