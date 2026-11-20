@@ -497,3 +497,18 @@ after the last landing ≈ 5.8 µs (moments 1 µs, exchange + combine ≈ 1.1 µ
 
 Raw TTI SFPU (documented helper bypass): no helper keeps a per-row accumulator in LREGs across tiles, and the
 row-per-lane load needs SFPTRANSP. fp32 DEST keeps the Phase 0 / Refinement 1 path byte-identical.
+
+## Refinement 3 deviations (TRANSPORT, as built)
+
+| Item | Phase 0 / plan | Built | Why (measured, focus case0 640×384 rms, 1×4 ring, 2 links; eval `ccl_perf`, fastest chip) |
+|---|---|---|---|
+| Port reader | batches of `port_batch_chunks` packets: issue the batch's L1 reads, one read barrier, one push | **stream** (`PORT_READ_STREAM = 1`): every stage slot's read carries its own NoC transaction id (1..slots); up to the whole ring in flight; each slot is pushed, in order, the moment its own read has landed (`ncrisc_noc_read_with_transaction_id_flushed`), polled between notifications | 21.29 → 20.98 µs. A per-packet barrier instead (`PORT_PUSH_PACKETS = 1`, batch mode) measured 24.94: one 14 KB L1→L1 read in flight is latency-bound, so reads must overlap. Batch mode stays as the `PORT_READ_STREAM = 0` path |
+| `port_batch_chunks` (sender flush + pop granularity) | 4 (the example's DRAM-sourced optimum) | **2** | 20.98 → 20.75 µs; case1 (1-tile packets) 16.24 → 15.68. 1: 22.62, 3: 20.77, 6: 21.69. The ring depth itself is flat (`STAGE_BATCHES` 2 / 3 / 4 at batch 2: 20.73–20.75): the cost is the sender stalling on `noc_async_writes_flushed` for a whole batch |
+| `INC_EVERY` (packets per entry) | 8 | 8 (unchanged) | 4: 22.75, 16: 23.69 µs (entry size also sets the wave: OVERLAP couples in) |
+| Packet fill (`PORT_PACK`) | one packet per ≤ `chunk_pages` piece of one member run (12-tile run → 7 + 5) | knob built, **default 0** (= the original packets); 1 = fabric scatter write packing up to 4 run pieces of one entry into a full packet (fused scatter + inc for 2-piece entry-last packets, a separate flushed inc after a > 2-piece one), shared packer `all_gather_rms_norm_port_pack.hpp` | with reads and relay waits stubbed the send takes the same time packed (28 packets) or not (30): ≈ 10.3–10.45 µs per port, so the link is byte-bound here, not packet-rate-bound; in the real run packing costs +0.4 µs (two L1 reads per slot). Expected to matter for 1-tile runs (case1, Refinement 6) |
+
+Transport breakdown after the refinement (zones, `tests/ttnn/unit_tests/operations/all_gather_rms_norm/zones_agrms.py`,
+probe-only ablation bits `AGRMS_ABL`: 1 = no port L1 reads, 2 = relay entries do not wait): per port 368 KB in
+≈ 11.2–11.6 µs real vs ≈ 10.4–10.6 µs with reads and relay waits both stubbed (≈ 35 GB/s per link direction: the
+link floor of this fabric at 2 links, cf. `fabric_all_gather` ≈ 37 GB/s per link at 2 links); the remaining ≈ 1 µs is
+the relay dependency (neighbour launch skew) and the ready fence ≈ 0.7–1.3 µs before the first send.

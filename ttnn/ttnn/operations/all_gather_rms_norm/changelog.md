@@ -135,3 +135,30 @@
   runs — found with DEVICE_PRINT of the row-form statistics.
 - Tests added: `test_all_gather_rms_norm_debug_ln16.py` (per-row scale / offset decomposition, 6 shapes × 2 offset
   modes, gated on the (bf16, False) tolerance); precision baseline drops the `bf16_ln_acc16` known-gap carve-out.
+
+## Refinement 3 — TRANSPORT: raise the focus case's link bandwidth
+- Date: 2026-11-20
+- What was done: measured the per-port send with device zones + port ablations (new probe `zones_agrms.py`,
+  probe-only `AGRMS_ABL` bits): 11.8 µs real, 11.1 without the port's L1 reads, 10.9 without relay waits, 10.4 with
+  both stubbed (= the link floor at the current 30 packets / 368 KB per port). Then:
+  (1) port reader **stream mode** (`PORT_READ_STREAM = 1`, default): each stage slot's L1 read carries its own NoC
+  transaction id, the whole ring is in flight, each slot is pushed the moment its own read has landed (no batch
+  barrier) — 21.29 → 20.98 µs; (2) **`port_batch_chunks` 4 → 2** (the sender's flush / pop granularity) — 20.98 →
+  20.75 µs, case1 16.24 → 15.68 µs; (3) **scatter packing** knob (`PORT_PACK`, fabric scatter write of up to 4 run
+  pieces per packet, fused scatter + inc / separate flushed inc at entry end, shared packer header
+  `kernels/all_gather_rms_norm_port_pack.hpp`) built and parked at 0: +0.4 µs here, link floor unchanged (byte-bound,
+  not packet-rate-bound). Knobs single-sourced in the descriptor (`PORT_READ_STREAM`, `PORT_PACK`, `STAGE_BATCHES`,
+  `PORT_PUSH_PACKETS`, env-overridable for probes); the sender no longer takes a host packet count (flushes its tail
+  batch after the loop). Reused: the port kernels, entry lists, stage CB; Added: the packer header, stream read loop.
+- Measured (eval `ccl_perf` via `perf_agrms.py`, 5 experiments, fastest / slowest chip): case0 21.29 / 22.12 →
+  **20.75 / 21.53 µs**; case1 16.24 / 17.05 (stream, batch 4) → **15.68 / 16.44 µs** (verifier 16.33). Nulls / losses:
+  per-packet read barrier 24.94, INC_EVERY 4 → 22.75, 16 → 23.69, batch 1 → 22.62, 6 → 21.69, 3 → 20.77, stage depth
+  3 / 4 batches → 20.72 / 20.73, packing → 21.39. Not dispatch-bound.
+- Accuracy achieved: unchanged (transport only; bit-identical data movement) — unit dir 70/70 pass.
+- Golden test progress: stratified slice (one cell per memory_layout × norm_type × topology × num_links × alignment,
+  random dtype / gamma / beta, both perf loose cases) + `test_ring_mock`: 137 passed, 29 skipped, 0 failed.
+- Issues encountered: the eval CSV of zones is written only when the mesh closes (the probe parses it afterwards).
+  Remaining transport gap ≈ 1 µs per port vs the link floor (relay dependency / launch skew) + the ready fence —
+  Refinement 4 territory.
+- Tests added: `tests/ttnn/unit_tests/operations/all_gather_rms_norm/zones_agrms.py` (zone breakdown probe, not
+  collected: no `test_` file prefix).

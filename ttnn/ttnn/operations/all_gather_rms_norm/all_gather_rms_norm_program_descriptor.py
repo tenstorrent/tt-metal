@@ -76,12 +76,18 @@ SEM_FOREIGN = 3  # compute cores: contributors that delivered their foreign tile
 SEM_INV = 4  # compute cores, owner combine: returned row statistics (one increment per returned row)
 
 # ---- knobs (op_design.md: catalog / example measurements) ----
-INC_EVERY = 8  # packets per fabric entry (fabric_all_gather: increment every 8 chunks)
-PORT_BATCH_CHUNKS = 4  # cap: packets per reader barrier / sender flush; cb_port_stage holds 2 batches (halved
-# under L1 pressure: port_batch_candidates)
+INC_EVERY = int(
+    os.environ.get("AGRMS_INC_EVERY", "8")
+)  # packets per fabric entry (fabric_all_gather: increment every 8 chunks)
+PORT_BATCH_CHUNKS = int(os.environ.get("AGRMS_BATCH", "2"))  # cap: packets per sender flush + pop (batch-mode reader:
+# per read barrier); cb_port_stage holds STAGE_BATCHES batches (halved under L1 pressure: port_batch_candidates).
+# Refinement 3: 2 measured best on both perf cases (4: +0.25 / +0.56 us, 1: +1.9, 3: flat, 6: +0.9)
 RELAY_LAG_WAVES = 1  # own entries lead relay entries by this many waves
+STAGE_BATCHES = int(os.environ.get("AGRMS_STAGE_BATCHES", "2"))  # cb_port_stage ring depth in sender batches
 PORT_READ_STREAM = int(os.environ.get("AGRMS_READ_STREAM", "1"))  # port reader: per-slot transaction ids, every
 # landed slot pushed at once, the whole stage ring in flight (TRANSPORT, Refinement 3); 0 = batch mode below
+PORT_PACK = int(os.environ.get("AGRMS_PACK", "0"))  # packets span the runs of an entry (fabric scatter write, <= 4
+# pieces): full chunk_pages packets when a member run is not a multiple of chunk_pages (TRANSPORT, Refinement 3)
 PORT_PUSH_PACKETS = int(os.environ.get("AGRMS_PUSH", "0")) or None  # batch mode: packets per read barrier + push
 # (None = the batch; 1 measured +3.6 us on the focus case: one 14 KB L1 read in flight is latency-bound)
 OUT_DEPTH = 2
@@ -299,7 +305,7 @@ def port_batch_candidates():
 
 
 def stage_pages(batch: int, chunk_pages: int) -> int:
-    return 2 * batch * chunk_pages
+    return STAGE_BATCHES * batch * chunk_pages
 
 
 def out_unit_candidates(pitch: int):
@@ -648,10 +654,6 @@ def q0_out(spec: MemberSpec, geo: Geometry) -> int:
     return q0 * geo.sw + c0
 
 
-def chunks_of(entries, chunk_pages):
-    return sum(_div_up(n, chunk_pages) for e in entries for (_, _, n, _) in e["runs"])
-
-
 # ---------------------------------------------------------------------------------------------------------------------
 # Descriptor
 # ---------------------------------------------------------------------------------------------------------------------
@@ -902,8 +904,10 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
         SEM_LANDED,
         min(PORT_PUSH_PACKETS or port_batch, port_batch),
         PORT_READ_STREAM,
+        PORT_PACK,
+        STAGE_BATCHES,
     ]
-    port_sender_ct = [tile_bytes, chunk_pages, port_batch]
+    port_sender_ct = [tile_bytes, chunk_pages, port_batch, PORT_PACK]
 
     inv_w_bits = _f32_bits(1.0 / geo.W)
     eps_bits = _f32_bits(cfg.epsilon)
@@ -1068,7 +1072,7 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             key = port_of.get((pc.x, pc.y))
             if key is None:
                 pr_rt[pc.x][pc.y] = [arrival_addr, 0, 0, 0]
-                ps_rt[pc.x][pc.y] = [arrival_addr, ready_addr, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+                ps_rt[pc.x][pc.y] = [arrival_addr, ready_addr, 0, 0, 0, 0, 0, 0, 0, 0, 0]
                 continue
             d, l = key
             outs = out_e[(coord, d, l)]
@@ -1099,11 +1103,11 @@ def create_mesh_program_descriptor(input_tensor, gamma, beta, output_tensor, cfg
             if has_conn:
                 pcv = vxy(chips[peer]["ports"][(d, l)]) if outs else ttnn.CoreCoord(0, 0)
                 pn = node(peer)
-                sd += [pcv.x, pcv.y, int(pn.mesh_id), int(pn.chip_id), 1, chunks_of(outs, chunk_pages), len(outs)]
+                sd += [pcv.x, pcv.y, int(pn.mesh_id), int(pn.chip_id), 1, len(outs)]
                 sd += sd_entries
                 sd += list(ttnn.setup_fabric_connection(node(coord), pn, ch["links"][d][l], program, pc))
             else:
-                sd += [0, 0, 0, 0, 0, 0, 0]
+                sd += [0, 0, 0, 0, 0, 0]
             ps_rt[pc.x][pc.y] = sd
 
         program.kernels = [

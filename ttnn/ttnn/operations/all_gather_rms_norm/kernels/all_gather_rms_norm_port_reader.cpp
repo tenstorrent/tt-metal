@@ -24,6 +24,7 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "all_gather_rms_norm_common.hpp"
+#include "all_gather_rms_norm_port_pack.hpp"
 
 using namespace agrms_cb;
 
@@ -34,7 +35,8 @@ constexpr uint32_t sem_own_loaded_id = get_compile_time_arg_val(3);
 constexpr uint32_t sem_landed_id = get_compile_time_arg_val(4);
 constexpr uint32_t push_every = get_compile_time_arg_val(5);  // batch mode: packets per read barrier + push (<= group)
 constexpr bool stream = get_compile_time_arg_val(6) != 0;     // stream mode: per-slot transaction ids, no batch barrier
-constexpr uint32_t slots = 2 * group;                         // cb_port_stage ring (one packet per slot)
+constexpr bool pack = get_compile_time_arg_val(7) != 0;       // packets span runs of an entry (fabric scatter write)
+constexpr uint32_t slots = get_compile_time_arg_val(8) * group;  // cb_port_stage ring (one packet per slot)
 static_assert(!stream || slots <= 15, "one NoC transaction id per stage slot (ids 1..15)");
 constexpr uint32_t chunk_bytes = chunk_pages * tile_bytes;
 #ifndef AGRMS_ABL
@@ -118,14 +120,25 @@ void kernel_main() {
                 }
             }
         }
-        for (uint32_t r = 0; r < n_runs; ++r) {
-            const uint32_t xy = arg(a + 2 * r);
-            const uint32_t offn = arg(a + 2 * r + 1);
-            const uint32_t off = offn & 0xFFFF;
-            const uint32_t n = offn >> 16;
-            for (uint32_t t = 0; t < n; t += chunk_pages) {
-                const uint32_t pieces = (n - t) < chunk_pages ? (n - t) : chunk_pages;
-                const uint64_t src = get_noc_addr(xy & 0xFFFF, xy >> 16, x_base + (off + t) * tile_bytes);
+        agrms_pack::EntryPacker<pack, chunk_pages> packer{a, n_runs};
+        agrms_pack::Piece pc[agrms_pack::MAX_PIECES];
+        // one packet = one stage slot; its pieces are read back to back into the slot
+        auto read_packet = [&](uint32_t dst, uint32_t np) {
+            if (!abl_no_read) {
+                for (uint32_t i = 0; i < np; ++i) {
+                    noc_async_read(
+                        get_noc_addr(pc[i].xy & 0xFFFF, pc[i].xy >> 16, x_base + pc[i].off * tile_bytes),
+                        dst,
+                        pc[i].n * tile_bytes);
+                    dst += pc[i].n * tile_bytes;
+                }
+            }
+        };
+        {
+            while (!packer.done()) {
+                uint32_t tiles;
+                bool last;
+                const uint32_t np = packer.next(pc, tiles, last);
                 if constexpr (stream) {
                     // a free slot: fewer than `slots` in flight + unpopped
                     while (pos - head == slots ||
@@ -133,10 +146,8 @@ void kernel_main() {
                         drain();
                         service();
                     }
-                    if (!abl_no_read) {
-                        noc_async_read_set_trid(1 + pos % slots);
-                        noc_async_read(src, stage_base + (pos % slots) * chunk_bytes, pieces * tile_bytes);
-                    }
+                    noc_async_read_set_trid(1 + pos % slots);
+                    read_packet(stage_base + (pos % slots) * chunk_bytes, np);
                     ++pos;
                     drain();
                 } else {
@@ -148,9 +159,7 @@ void kernel_main() {
                         cb_reserve_back(cb_stage, chunk_pages * need);
                         wptr = get_write_ptr(cb_stage);
                     }
-                    if (!abl_no_read) {
-                        noc_async_read(src, wptr + batch * chunk_bytes, pieces * tile_bytes);
-                    }
+                    read_packet(wptr + batch * chunk_bytes, np);
                     ++batch;
                     if (batch - pushed == push_every || batch == need) {
                         noc_async_read_barrier();

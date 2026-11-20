@@ -139,7 +139,7 @@ shifted sums, one RNE store per statistic); FPU normalize for every 16-bit-DEST 
 random samples of the family 51/51 and 126/126 executed cells pass; unit dir 70/70; regression 32/32. Perf cases
 unchanged (fp32 DEST path untouched): case0 21.30 µs, case1 16.32 µs.
 
-### [ ] Refinement 3 — TRANSPORT: raise the focus case's link bandwidth
+### [x] Refinement 3 — TRANSPORT: raise the focus case's link bandwidth
 
 **Type**: perf
 
@@ -160,6 +160,16 @@ harness. No SUPPORTED change.
 (`eval.ccl_perf compare`), golden green, and no regression across the config-spanning guard set (case1; one golden
 representative per kernel path × layout × placement: rms / LN FPU / LN SFPU / dense w_non_aligned / HEIGHT / WIDTH
 sharded, Linear 2×2 and Ring 1×4).
+
+**Outcome**: case0 fastest 21.29 → **20.75 µs**, slowest 22.12 → 21.53 (`eval.ccl_perf compare`: win); guard case1
+16.24 → **15.68 µs** (verifier baseline 16.33). Kept: stream port reader (per-slot NoC transaction ids, push on land:
+−0.31 µs) and sender batch 4 → 2 (−0.25 µs). Measured and parked: scatter packing to full packets (`PORT_PACK`, +0.4 µs
+here: with reads and relay stubbed the send is equal packed or not — the link is byte-bound at ≈ 35 GB/s per link
+direction, ≈ 10.4 µs per port for 368 KB), per-packet read barrier (+3.6), `INC_EVERY` 4 / 16 (+2.0 / +2.9), batch 1 / 6,
+stage depth 3 / 4 (flat). The send now runs within ≈ 1 µs of that link floor; what remains is the relay dependency on the
+neighbour's launch skew and the ready fence (≈ 1 µs) before the first packet — OVERLAP / start-up work (Refinement 4:
+`relay_lag_waves`, fence), not link bandwidth. The 7.6 µs roofline assumes ≈ 47 GB/s per link, which this fabric's
+worker→router path did not reach in the example either (≈ 37 GB/s at 2 links).
 
 ### [ ] Refinement 4 — OVERLAP: shorten the focus case's exposed tail and start
 

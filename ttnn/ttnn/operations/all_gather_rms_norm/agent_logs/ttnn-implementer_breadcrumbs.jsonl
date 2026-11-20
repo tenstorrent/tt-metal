@@ -5,3 +5,6 @@
 {"event":"hypothesis","refinement":1,"detail":"small CB budgets in batch runs = persistent global semaphores allocated below the first sharded call tensors; confirmed by L1 block view (test_all_gather_rms_norm_debug_l1.py); fixed by relocation","ts":"2026-11-19T22:53:35+00:00"}
 {"event":"test_run","what":"full golden suite after 1b fix","passed":29118,"failed":1284,"hangs":0,"oom":0,"l1prof_errors":0,"regressions_vs_phase0":0,"ts":"2026-11-20T02:18:38+00:00"}
 {"event":"test_run","status":"pass","detail":"R2: golden ln16 slice 39/39, samples 51/51+126/126, unit 70/70, regression 32/32, perf unchanged","ts":"2026-11-20T04:24:43+00:00"}
+{"event":"test_run","status":"pass","test":"perf_agrms.py case0","fastest_us":20.745,"base_us":21.288,"ts":"2026-11-20T06:12:08+00:00"}
+{"event":"fix_applied","what":"stream port reader (trid per slot) + port_batch 2; PORT_PACK parked 0","ts":"2026-11-20T06:12:08+00:00"}
+{"event":"test_run","status":"pass","test":"golden stratified slice + ring_mock","passed":137,"failed":0,"ts":"2026-11-20T06:12:08+00:00"}

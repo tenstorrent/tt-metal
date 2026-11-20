@@ -148,7 +148,7 @@ for row-0 data (24 KB on the focus case vs ~2.3 KB with the base op's compact 19
 | CB (index) | Capacity | Format | Producer | Consumer | Delta / Shares with / why not |
 |---|---|---|---|---|---|
 | `cb_gamma` / `cb_beta` (2/3) | `pitch + g_tail` pages of `gamma_page_layout()` stride (192 B bf16 / fp32) | gamma dtype | writer | compute | compact row-0 pages (was a full tile per page: 24 KB → 2.5 KB on the focus case) |
-| `cb_port_stage` (1) | `2 · port_batch · chunk_pages`, `port_batch` ∈ {4, 2, 1} largest that fits | input dtype | port_reader | port_sender | the batch halves under L1 pressure (cap = the measured 4) |
+| `cb_port_stage` (1) | `STAGE_BATCHES · port_batch · chunk_pages` = `2 · port_batch · chunk_pages`, `port_batch` ∈ {2, 1} largest that fits | input dtype | port_reader | port_sender | Refinement 3: cap 4 → 2 (the sender's flush-per-batch granularity: case0 −0.25 µs, case1 −0.56 µs; 1 measured +1.9 µs, 6 +0.7 µs); ring depth in batches `STAGE_BATCHES` (3, 4 measured flat). Stream reader: one NoC transaction id per slot (≤ 15 slots). Port footprint 139,264 → 81,920 B on the focus case |
 | `cb_gathered` (10, owner k > 8) | `ceil(rows/k) · n_stat · ceil(k/32)` | T_acc | writer (peers, row form) | compute (owner) | row-form gather: 32 members per page instead of one page per member |
 | `cb_own_ret` (23, owner) | `ceil(rows/k) · n_stat` | T_acc | compute (owner) | writer | rms inv_rms; ln (inv_std, shift) per owned row |
 | `cb_own_kg` (24, owner ∧ ln) | `ceil(rows/k)` | bf16 | compute (owner) | writer | K_g per owned row |

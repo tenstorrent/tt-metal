@@ -20,6 +20,7 @@
 #include "tt_metal/fabric/hw/inc/packet_header_pool.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "all_gather_rms_norm_common.hpp"
+#include "all_gather_rms_norm_port_pack.hpp"
 
 using namespace tt::tt_fabric;
 using namespace agrms_cb;
@@ -28,7 +29,8 @@ constexpr uint32_t tile_bytes = get_compile_time_arg_val(0);
 constexpr uint32_t chunk_pages = get_compile_time_arg_val(1);
 constexpr uint32_t group = get_compile_time_arg_val(2);
 constexpr uint32_t chunk_bytes = chunk_pages * tile_bytes;
-constexpr uint32_t num_headers = group;
+constexpr bool pack = get_compile_time_arg_val(3) != 0;  // packets span runs of an entry (fabric scatter write)
+constexpr uint32_t num_data_headers = group;             // reused after the batch flush
 
 // One hop: 2D fabrics route by destination fabric node, 1D fabrics by hop count (ROUTING_MODE from the build).
 inline void route_one_hop(volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr, uint16_t chip_id, uint16_t mesh_id) {
@@ -57,19 +59,23 @@ void kernel_main() {
     const uint32_t peer_y = arg(6);
     const uint16_t dst_mesh_id = static_cast<uint16_t>(arg(7));
     const uint16_t dst_chip_id = static_cast<uint16_t>(arg(8));
-    uint32_t chunks_left = arg(10);
-    const uint32_t num_out = arg(11);
-    uint32_t a = 12;
+    const uint32_t num_out = arg(10);
+    uint32_t a = 11;
     uint32_t fab = a;
     for (uint32_t e = 0; e < num_out; ++e) {
         fab += 1 + 2 * arg(fab);
     }
     size_t fa = fab;
     auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(fa);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_headers];
-    for (uint32_t h = 0; h < num_headers; ++h) {
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* hdrs[num_data_headers];
+    for (uint32_t h = 0; h < num_data_headers; ++h) {
         hdrs[h] = PacketHeaderPool::allocate_header();
         route_one_hop(hdrs[h], dst_chip_id, dst_mesh_id);
+    }
+    volatile tt_l1_ptr PACKET_HEADER_TYPE* inc_hdr = hdrs[0];  // entry-end increments after a >2-piece scatter
+    if constexpr (pack) {
+        inc_hdr = PacketHeaderPool::allocate_header();
+        route_one_hop(inc_hdr, dst_chip_id, dst_mesh_id);
     }
     conn.open();
     {
@@ -91,41 +97,80 @@ void kernel_main() {
     AGZ("ps_send");
     const uint32_t x_base = get_write_ptr(cb_x);
     const uint64_t arrival_noc = get_noc_addr(peer_x, peer_y, arrival_addr);
+    auto dst_of = [&](const agrms_pack::Piece& p) {
+        return get_noc_addr(p.xy & 0xFFFF, p.xy >> 16, x_base + p.off * tile_bytes);
+    };
     uint32_t h = 0, unflushed = 0;
+    bool inc_hdr_busy = false;
+    agrms_pack::Piece pc[agrms_pack::MAX_PIECES];
     for (uint32_t e = 0; e < num_out; ++e) {
         const uint32_t n_runs = arg(a);
         a += 1;
-        for (uint32_t r = 0; r < n_runs; ++r) {
-            const uint32_t xy = arg(a + 2 * r);
-            const uint32_t offn = arg(a + 2 * r + 1);
-            const uint32_t off = offn & 0xFFFF;
-            const uint32_t n = offn >> 16;
-            for (uint32_t t = 0; t < n; t += chunk_pages) {
-                const uint32_t pieces = (n - t) < chunk_pages ? (n - t) : chunk_pages;
-                cb_wait_front(cb_stage, chunk_pages * (unflushed + 1));
-                const uint32_t src = get_read_ptr(cb_stage) + unflushed * chunk_bytes;
-                const uint32_t bytes = pieces * tile_bytes;
-                const uint64_t dst = get_noc_addr(xy & 0xFFFF, xy >> 16, x_base + (off + t) * tile_bytes);
-                volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
-                h = (h + 1 == num_headers) ? 0 : h + 1;
-                const bool entry_last = (r + 1 == n_runs) && (t + chunk_pages >= n);
+        agrms_pack::EntryPacker<pack, chunk_pages> packer{a, n_runs};
+        while (!packer.done()) {
+            uint32_t tiles;
+            bool entry_last;
+            const uint32_t np = packer.next(pc, tiles, entry_last);
+            cb_wait_front(cb_stage, chunk_pages * (unflushed + 1));
+            const uint32_t src = get_read_ptr(cb_stage) + unflushed * chunk_bytes;
+            const uint32_t bytes = tiles * tile_bytes;
+            volatile tt_l1_ptr PACKET_HEADER_TYPE* hdr = hdrs[h];
+            h = (h + 1 == num_data_headers) ? 0 : h + 1;
+            bool separate_inc = false;
+            if (np == 1) {
                 if (entry_last) {
                     hdr->to_noc_fused_unicast_write_atomic_inc(
-                        NocUnicastAtomicIncFusedCommandHeader{dst, arrival_noc, 1, true}, bytes);
+                        NocUnicastAtomicIncFusedCommandHeader{dst_of(pc[0]), arrival_noc, 1, true}, bytes);
                 } else {
-                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst}, bytes);
+                    hdr->to_noc_unicast_write(NocUnicastCommandHeader{dst_of(pc[0])}, bytes);
                 }
-                conn.wait_for_empty_write_slot();
-                conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
-                --chunks_left;
-                if (++unflushed == group || chunks_left == 0) {
+            } else if (np == 2 && entry_last) {
+                hdr->to_noc_fused_unicast_scatter_write_atomic_inc(
+                    NocUnicastScatterAtomicIncFusedCommandHeader(
+                        {dst_of(pc[0]), dst_of(pc[1])},
+                        arrival_noc,
+                        {static_cast<uint16_t>(pc[0].n * tile_bytes)},
+                        1,
+                        true),
+                    bytes);
+            } else {
+                uint64_t dsts[agrms_pack::MAX_PIECES];
+                uint16_t sizes[agrms_pack::MAX_PIECES - 1];
+                for (uint32_t i = 0; i < np; ++i) {
+                    dsts[i] = dst_of(pc[i]);
+                    if (i + 1 < np) {
+                        sizes[i] = static_cast<uint16_t>(pc[i].n * tile_bytes);
+                    }
+                }
+                hdr->to_noc_unicast_scatter_write(
+                    NocUnicastScatterCommandHeader(dsts, sizes, static_cast<uint8_t>(np)), bytes);
+                separate_inc = entry_last;  // the fused scatter + inc form carries 2 write chunks only
+            }
+            conn.wait_for_empty_write_slot();
+            conn.send_current_slot_non_blocking(src, bytes, reinterpret_cast<uint32_t>(hdr));
+            if (separate_inc) {
+                // header-only increment, flushed by the receiving router after every earlier write of the channel
+                if (inc_hdr_busy) {
                     noc_async_writes_flushed();
-                    cb_pop_front(cb_stage, chunk_pages * unflushed);
-                    unflushed = 0;
                 }
+                inc_hdr->to_noc_unicast_atomic_inc(NocUnicastAtomicIncCommandHeader{arrival_noc, 1, true});
+                conn.wait_for_empty_write_slot();
+                conn.send_payload_flush_non_blocking_from_address(
+                    reinterpret_cast<uint32_t>(inc_hdr), sizeof(PACKET_HEADER_TYPE));
+                inc_hdr_busy = true;
+            }
+            if (++unflushed == group) {
+                noc_async_writes_flushed();
+                cb_pop_front(cb_stage, chunk_pages * unflushed);
+                unflushed = 0;
+                inc_hdr_busy = false;
             }
         }
         a += 2 * n_runs;
+    }
+    if (unflushed > 0) {
+        noc_async_writes_flushed();
+        cb_pop_front(cb_stage, chunk_pages * unflushed);
     }
     conn.close();
     noc_async_write_barrier();
