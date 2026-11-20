@@ -1,6 +1,6 @@
 # Invariant tests
 
-The tests in this folder check that `MakeProgramFromSpec` accepts valid `ProgramSpec`s and rejects invalid ones. An
+The tests in this folder check that the `Program` constructor accepts valid `ProgramSpec`s and rejects invalid ones. An
 invalid `ProgramSpec` is one that violates one of its invariants. Each subfolder's README lists the invariants it
 tests.
 
@@ -33,6 +33,7 @@ It is inevitable that these invariants exist but we should keep them to a minimu
 | `scratchpad_spec/` | `scratchpad_spec.hpp` |
 | `semaphore_spec/` | `semaphore_spec.hpp` |
 | `tensor_parameter/` | `tensor_parameter.hpp` |
+| `sram_arena_parameter/` | `sram_arena_parameter.hpp` |
 | `prefetcher_pipe_parameter/` | `prefetcher_pipe_parameter.hpp` |
 | `advanced_options/` | `advanced_options.hpp` |
 | `program_spec/` | `program_spec.hpp` |
@@ -47,7 +48,9 @@ The section includes: The definition of constructs within the respective headers
 
 Keep a listing in step with its header: when a struct gains, loses or renames a field, update the listing; when a new
 check is added to `tt_metal/impl/metal2_host_api/program_spec/validation/`, list the rule on the struct that owns it and
-add a test. The `*AdvancedOptions` structs have no listing yet.
+add a test. Borrowed-memory fields from `DFBAdvancedOptions` and `ScratchpadAdvancedOptions` are listed
+alongside their resource specs in `dataflow_buffer_spec/` and `scratchpad_spec/`; other advanced-options
+listings remain incomplete.
 
 ### Example: `SemaphoreSpec` in `semaphore_spec.hpp`
 

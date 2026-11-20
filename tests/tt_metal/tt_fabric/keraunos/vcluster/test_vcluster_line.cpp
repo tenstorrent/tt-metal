@@ -75,7 +75,7 @@ const vc::Device& device_of_chip(const vc::Manifest& manifest, uint32_t fabric_c
 // lists none.
 std::string package_core(const YAML::Node& package, uint32_t tile, uint32_t cce) {
     for (const auto& entry : package["keraunos"]["cores"]) {
-        if (entry["hsio"].as<uint32_t>() == tile && entry["cce"].as<uint32_t>() == cce) {
+        if (entry["hsio"].as<uint32_t>() == tile && entry["eth_cce"].as<uint32_t>() == cce) {
             return entry["core"].as<std::string>();
         }
     }

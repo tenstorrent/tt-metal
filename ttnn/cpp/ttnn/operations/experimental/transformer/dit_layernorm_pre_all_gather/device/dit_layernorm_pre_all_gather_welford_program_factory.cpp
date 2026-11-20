@@ -24,11 +24,12 @@ tt::tt_metal::ProgramDescriptor PreAllGatherWelfordProgramFactory::create_descri
     Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& shape = a.padded_shape();
-    const uint32_t W = shape[-1], H = shape[-2];
-    const uint32_t HW = H * W;
+    const uint32_t W = a.logical_shape()[-1];
+    const uint32_t padded_W = shape[-1], H = shape[-2];
+    const uint32_t HW = H * padded_W;
     const uint32_t NC = a.physical_volume() / HW;
 
-    const uint32_t Wt = W / TILE_WIDTH;
+    const uint32_t Wt = padded_W / TILE_WIDTH;
     const uint32_t Ht = H / TILE_HEIGHT;
 
     MeshDevice* device = a.device();

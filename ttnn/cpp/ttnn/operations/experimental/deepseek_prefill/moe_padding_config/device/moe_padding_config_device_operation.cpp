@@ -74,7 +74,7 @@ void validate_runtime_args(
             name,
             meta.logical_volume());
         TT_FATAL(!meta.is_sharded(), "metadata tensor {} must not be sharded", name);
-        // The kernel resolves meta.buffer()->address() against config.device(); a tensor on a
+        // The kernel resolves meta.mesh_buffer().address() against config.device(); a tensor on a
         // different mesh device would bake the wrong address and fail obscurely on device.
         TT_FATAL(meta.device() == config.device(), "metadata tensor {} must be on the same device as config", name);
     };
@@ -164,7 +164,7 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
 
     // Write the config row a full page at a time (the row may be padded up to the buffer's aligned
     // page size); the kernel zeroes the slot first so the padding bytes are deterministic.
-    const uint32_t out_page_size = config.buffer()->aligned_page_size();
+    const uint32_t out_page_size = config.mesh_buffer().aligned_page_size();
 
     tt::tt_metal::ProgramDescriptor desc;
 
@@ -207,9 +207,9 @@ tt::tt_metal::ProgramDescriptor MoePaddingConfigDeviceOperation::ProgramFactory:
         my_sp_coord,
         sp_factor,
         args.tokens_per_chip,
-        tensor_args.actual_start.buffer()->address(),  // smuggled-rta-ok: 1-element metadata tensor DRAM
-                                                       // addr; read on-device (trace-safe, unhashed)
-        tensor_args.actual_end.buffer()->address(),    // smuggled-rta-ok: as above
+        tensor_args.actual_start.mesh_buffer().address(),  // smuggled-rta-ok: 1-element metadata tensor DRAM
+                                                           // addr; read on-device (trace-safe, unhashed)
+        tensor_args.actual_end.mesh_buffer().address(),    // smuggled-rta-ok: as above
     });
 
     // The config buffer is passed as a Buffer* binding (not a raw address) so cache hits take the fast
@@ -240,8 +240,8 @@ void MoePaddingConfigDeviceOperation::MeshWorkloadFactory::override_runtime_argu
     // path does not refresh — patch them on every cached program or the kernel would keep reading a
     // stale (possibly freed) address.
     constexpr uint32_t kWriterKernelHandle = 0;  // the only kernel pushed in create_descriptor
-    const uint32_t start_addr = tensor_args.actual_start.buffer()->address();
-    const uint32_t end_addr = tensor_args.actual_end.buffer()->address();
+    const uint32_t start_addr = tensor_args.actual_start.mesh_buffer().address();
+    const uint32_t end_addr = tensor_args.actual_end.mesh_buffer().address();
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& writer_common = GetCommonRuntimeArgs(program, kWriterKernelHandle);
         TT_FATAL(

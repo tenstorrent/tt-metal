@@ -14,7 +14,7 @@
 
 #include "api/debug/assert.h"
 #include "dev_mem_map.h"
-#include "hostdev/cce_spa_routes.h"
+#include "hostdev/cce_noc_routes.h"
 #include "hostdev/eth_link.h"
 #include "internal/risc_attribs.h"
 #include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"

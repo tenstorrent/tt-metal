@@ -65,13 +65,13 @@ FORCE_INLINE int32_t get_packets_sent_unprocessed() {
     }
 }
 
-// The receiver consumed one packet.
+// The receiver consumed @p num_packets packets.
 template <uint32_t PKTS_SENT_ID>
-FORCE_INLINE void consume_packets_sent_credit() {
+FORCE_INLINE void consume_packets_sent_credit(uint32_t num_packets = 1) {
     if constexpr (stream_registers_available) {
-        increment_local_update_ptr_val<PKTS_SENT_ID>(-1);
+        increment_local_update_ptr_val<PKTS_SENT_ID>(-static_cast<int32_t>(num_packets));
     } else {
-        packets_sent_processed[receiver_channel_of_packets_sent_stream<PKTS_SENT_ID>()]++;
+        packets_sent_processed[receiver_channel_of_packets_sent_stream<PKTS_SENT_ID>()] += num_packets;
     }
 }
 
@@ -113,6 +113,26 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         completion_counters_base_ptr[src_id] = completion_counters[src_id];
         update_sender_side_credits();
     }
+
+    // One more completion credit (or num_completions) for sender channel src_id, sent with the next
+    // flush_completion_credits: the counters go to the sender as one block, so credits for several channels can share a
+    // send.
+    FORCE_INLINE void accumulate_completion_credit(uint8_t src_id, uint32_t num_completions = 1) {
+        const uint32_t c = completion_counters[src_id] + num_completions;
+        completion_counters[src_id] = c;
+        completion_counters_base_ptr[src_id] = c;
+    }
+
+    // One more first-level ack for sender channel src_id, sent with the next flush (as accumulate_completion_credit).
+    FORCE_INLINE void accumulate_ack_credit(uint8_t src_id) {
+        const uint32_t c = ack_counters[src_id] + 1;
+        ack_counters[src_id] = c;
+        ack_counters_base_ptr[src_id] = c;
+    }
+
+    // Sends the accumulated credits (the whole counter block).
+    // Assumes !ReceiverLinkTransport::is_busy() -- PLEASE CHECK BEFORE CALLING
+    FORCE_INLINE void flush_completion_credits() const { update_sender_side_credits(); }
 
     // Assumes !ReceiverLinkTransport::is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
@@ -206,6 +226,13 @@ constexpr FORCE_INLINE auto init_receiver_channel_response_credit_senders()
     -> ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS> {
     return ReceiverChannelResponseCreditSenders<NUM_RECEIVER_CHANNELS>{};
 }
+// Sender channel `ch`'s counter in a block of per-sender-channel counters at `base`, one word each: where the far
+// router's receiver writes that channel's completions and first-level acks (the receiver's credit sender indexes its
+// block by the packet's source channel; the receiver below reads them).
+constexpr uint32_t sender_channel_counter_addr(uint32_t base, size_t ch) {
+    return base + static_cast<uint32_t>(ch * sizeof(uint32_t));
+}
+
 struct SenderChannelFromReceiverCounterBasedCreditsReceiver {
     SenderChannelFromReceiverCounterBasedCreditsReceiver() = default;
     SenderChannelFromReceiverCounterBasedCreditsReceiver(size_t sender_channel_index) :
