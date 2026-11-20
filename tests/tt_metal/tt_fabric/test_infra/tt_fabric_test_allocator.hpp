@@ -736,8 +736,10 @@ public:
      *
      * A sender core runs at most get_max_hot_state_configs() configs from its hot path and generates payloads on its
      * compute engine for at most SFPU_PAYLOAD_MAX_CONFIGS; past either it falls back to slower paths. Each piece costs
-     * a sender core and a full-size channel on every mux its flows go through, and a mux serves at most
-     * get_max_mux_channels() channels, so for each (device, link) this picks the smallest piece size that still fits:
+     * a sender core and a full-size channel on every mux its flows go through. A mux serves at most
+     * get_max_mux_channels() channels, and its channel buffers must fit in its core's L1
+     * (FabricMuxConfig::compute_memory_map_end_address()), so for each (device, link) this picks the smallest piece
+     * size that still fits both:
      * 1. The hot-path cap, if the mux still fits receiver cores with at most SFPU_VERIFY_MAX_CONFIGS configs each, so
      *    receivers keep deep rings and can verify on their compute engine.
      * 2. Otherwise SFPU_PAYLOAD_MAX_CONFIGS, if the mux fits receiver cores at the most configs per core.
@@ -753,6 +755,7 @@ public:
     static void split_senders_to_fit_core_limits(
         TestConfig& config,
         const IRouteManager& route_manager,
+        const IDeviceInfoProvider& device_info_provider,
         std::optional<uint32_t> fixed_receiver_configs_per_core = std::nullopt) {
         // Latency / bandwidth test mode and non-packet-validation mode don't use hot state, so don't benefit here
         if (config.performance_test_mode != PerformanceTestMode::NONE || config.skip_packet_validation) {
@@ -760,6 +763,11 @@ public:
         }
         const uint32_t hot_state_max_configs = get_max_hot_state_configs();
         const uint32_t max_mux_channels = get_max_mux_channels();
+        // A test mux is a worker core whose memory map starts at the unreserved base
+        const auto& mesh_device = device_info_provider.get_mesh_device();
+        const size_t mux_base_address = device_info_provider.get_l1_unreserved_base();
+        const size_t full_size_buffer_bytes = device_info_provider.get_channel_buffer_size_bytes();
+        const size_t mux_l1_end = tt::tt_fabric::FabricMuxConfig::compute_l1_end_address(mesh_device);
         const auto receive_configs = count_receive_configs_per_device_and_link(config, route_manager);
 
         // Create ({device id, routing plane (aka link id)}, sender config indices) map
@@ -795,10 +803,12 @@ public:
             // Receivers only use the mux when returning credits
             const uint32_t num_receive_configs =
                 (!config.enable_flow_control || receive_it == receive_configs.end()) ? 0 : receive_it->second;
-            // Includes sync + senders that don't need to be split
-            const size_t channels_for_others = 1 /* sync */ + (sender_indices.size() - splittable.size());
+            // Senders that don't need to be split keep one full-size channel each
+            const size_t unsplit_senders = sender_indices.size() - splittable.size();
 
-            // Check if the given configs per piece + receiver configs per core fit the mux channel cap
+            // Check if the given configs per piece + receiver configs per core fit the mux: its channel cap, and its
+            // channel buffers in L1. Sender pieces take full-size channels; sync and receivers (returning credits)
+            // take header-only channels.
             const auto fits = [&](size_t configs_per_piece, uint32_t receiver_configs_per_core) {
                 size_t pieces = 0;
                 for (const size_t i : splittable) {
@@ -806,7 +816,19 @@ public:
                 }
                 const uint32_t configs_per_core = fixed_receiver_configs_per_core.value_or(receiver_configs_per_core);
                 const size_t receiver_cores = tt::div_up(num_receive_configs, std::max(configs_per_core, 1u));
-                return channels_for_others + pieces + receiver_cores <= max_mux_channels;
+                const size_t full_size_channels = unsplit_senders + pieces;
+                const size_t header_only_channels = 1 /* sync */ + receiver_cores;
+                if (full_size_channels + header_only_channels > max_mux_channels) {
+                    return false;
+                }
+                return tt::tt_fabric::FabricMuxConfig::compute_memory_map_end_address(
+                           mesh_device,
+                           static_cast<uint8_t>(full_size_channels),
+                           static_cast<uint8_t>(header_only_channels),
+                           MUX_BUFFERS_PER_CHANNEL,
+                           MUX_BUFFERS_PER_CHANNEL,
+                           full_size_buffer_bytes,
+                           mux_base_address) <= mux_l1_end;
             };
 
             // Two cases:
