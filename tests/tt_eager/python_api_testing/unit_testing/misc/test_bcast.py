@@ -427,3 +427,53 @@ def test_bcast_float32_precision(device, dim, op, dtype, max_mean_rel_err):
     mean_rel_err = ((out - ref).abs().mean() / ref.abs().mean()).item()
     logger.info(f"mean relative error {mean_rel_err}")
     assert mean_rel_err < max_mean_rel_err[op], f"mean relative error {mean_rel_err} for {dtype} {op} {dim}"
+
+
+# fp32 output with a sharded input: the optimised sharded-H factory binds the resident output DFB as
+# a CONSUMER self-loop, so it needs an unpack mode. Its kernel also writes h_blk = min(Ht, 8) tiles
+# to Dest per acquire, which overruns a double-buffered fp32 Dest once Ht > 4. Shard height 256 is
+# 8 tiles, so this reaches both.
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+def test_bcast_h_sharded_float32_optimised(device, op):
+    torch.manual_seed(0)
+    a_torch = torch.rand([1, 1, 256, 64], dtype=torch.float32)
+    b_torch = torch.rand([1, 1, 1, 64], dtype=torch.float32)
+    ref = a_torch + b_torch if op == ttnn.BcastOpMath.ADD else a_torch * b_torch
+
+    mem_config = _sharded_h_bcast_mem_config(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 0, 0, [256, 64])
+    a = ttnn.from_torch(a_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_config)
+    b = ttnn.from_torch(b_torch, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    out = ttnn.to_torch(ttnn.bcast(a, b, op, ttnn.BcastOpDim.H))
+    assert torch.allclose(out, ref, rtol=1e-6, atol=1e-6)
+
+
+# Same fp32 self-loop requirement on the non-optimised sharded-H factory: b's batch dim is not 1, so
+# the batching bypasses the optimised factory (mirrors test_bcast_h_width_sharded_batched_channel).
+@pytest.mark.parametrize("op", [ttnn.BcastOpMath.ADD, ttnn.BcastOpMath.MUL])
+def test_bcast_h_width_sharded_float32_batched_channel(device, op):
+    torch.manual_seed(0)
+    batch, height_per_batch, width, num_cores = 2, 64, 256, 8
+    a_torch = torch.rand([1, batch, height_per_batch, width], dtype=torch.float32)
+    b_torch = torch.rand([batch, 1, 1, width], dtype=torch.float32)
+    ref = (
+        a_torch + b_torch.reshape(1, batch, 1, width)
+        if op == ttnn.BcastOpMath.ADD
+        else a_torch * b_torch.reshape(1, batch, 1, width)
+    )
+
+    input_tensor = ttnn.from_torch(
+        a_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+    sharded_mem_config = ttnn.create_sharded_memory_config(
+        shape=(batch * height_per_batch, width // num_cores),
+        core_grid=get_shard_grid_from_num_cores(num_cores, device),
+        strategy=ttnn.ShardStrategy.WIDTH,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+    tt_input = ttnn.to_memory_config(input_tensor, memory_config=sharded_mem_config)
+    tt_weight = ttnn.from_torch(b_torch, device=device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.float32)
+
+    out = ttnn.to_torch(ttnn.bcast(tt_input, tt_weight, op, ttnn.BcastOpDim.H))
+    assert torch.allclose(out, ref, rtol=1e-6, atol=1e-6)

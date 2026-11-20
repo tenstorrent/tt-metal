@@ -164,7 +164,11 @@ ttnn::device_operation::ProgramArtifacts BcastShardedHOptimisedProgramFactory::c
         .hw_config = ttnn::create_reader_datamovement_config(),
     };
 
-    ComputeHardwareConfig compute_hw = make_bcast_compute_hw_config(a, b, output, IN0, IN1);
+    ComputeHardwareConfig compute_hw = make_bcast_compute_hw_config(a, b, output, IN0, IN1, OUT);
+    // h_blk tiles live in Dest per acquire (up to 8); fp32 double-buffered Dest only holds 4.
+    if (compute_hw.enable_32_bit_dest) {
+        compute_hw.double_buffer_dest = false;
+    }
     KernelSpec compute{
         .unique_id = COMPUTE,
         .source = std::filesystem::path(

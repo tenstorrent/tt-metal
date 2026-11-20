@@ -400,11 +400,18 @@ def test_data_types(device, dtype):
         (ttnn.bfloat16, 1e-2),
     ],
 )
-def test_bilinear_float32_precision(device, angle, dtype, max_mean_rel_err):
+@pytest.mark.parametrize(
+    "input_shape",
+    [
+        (1, 32, 32, 32),
+        # 256 channels are 8 tiles: more than the 4 an fp32 half-sync Dest holds, so this needs dst_full_sync_en.
+        (1, 16, 16, 256),
+    ],
+)
+def test_bilinear_float32_precision(device, angle, dtype, max_mean_rel_err, input_shape):
     """Bilinear rotation by multiples of 90 degrees selects exact pixels, so only the math precision is measured."""
     torch.manual_seed(0)
 
-    input_shape = (1, 32, 32, 32)
     torch_dtype = torch.float32 if dtype == ttnn.float32 else torch.bfloat16
     torch_input_nhwc = torch.rand(input_shape, dtype=torch_dtype) + 0.5
 
