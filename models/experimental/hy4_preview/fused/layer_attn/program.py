@@ -58,7 +58,7 @@ import torch
 import ttnn
 from models.experimental.hy4_preview.fused.collective import collective as cl
 from models.experimental.hy4_preview.fused.ihc_site import layout as ihc_layout
-from models.experimental.hy4_preview.fused.ihc_site.op import IhcSite, NormOut, SiteRef
+from models.experimental.hy4_preview.fused.ihc_site.op import IhcSite, NormOut, SiteRef, View
 from models.experimental.hy4_preview.fused.kv_store import device as kv_device
 from models.experimental.hy4_preview.fused.kv_store import frames as kv_frames
 from models.experimental.hy4_preview.fused.layer_common import transport as tp
@@ -82,6 +82,10 @@ PRE_RECT, PRE_HUB = ((0, 0), (3, 3)), (3, 3)
 QUERY_RECT, QUERY_HUB = ((7, 0), (10, 3)), (10, 3)
 MERGE = [(5, y) for y in range(8)]  # merge core of user y; landing core of query group y (P2 reads it)
 SITE = dict(num_cores=16, origin=(5, 0), per_row=2, cb_base=32)
+# 16 token rows (PLAN.md section 19.15): the root's site is two sites side by side, one per row block of 8; the
+# second one's cores (free in P1; sparse_mla's in P2, which uses the first tiles of their arena copies only) and
+# its rows as ranges of the arena on them
+SITE2 = dict(num_cores=16, origin=(0, 4), per_row=4, cb_base=32)
 POST_RECT, POST_HUB = ((0, 8), (11, 9)), (5, 8)
 POST_CORES = [(x, y) for y in (8, 9) for x in (0, 1, 2, 3, 4, 7, 8, 9, 10, 11)]  # 4 value units, 16 o_proj units
 POST_O_CT = 12
@@ -275,6 +279,22 @@ class Layout:
         self.idx_work = -(-(self.idx_w + t) // 4096) * 4096
         self.idx_mult = self.idx_work + 2 * IDX_QUERY_BYTES
         self.idx_end = self.idx_mult + 4096
+        # the second site's cores (16 rows; section 19.15): its streams (fp32 pages), y (fp32), x (BF16), its
+        # coefficient and statistic pages, per core
+        px = HIDDEN // 32 // SITE2["num_cores"]
+        self.s2_x = 32_768
+        self.s2_y = self.s2_x + px * 4096
+        self.s2_xn = self.s2_y + px * 1024
+        self.s2_coef = self.s2_xn + px * 512
+        self.s2_stat = self.s2_coef + 4096
+        self.s2_end = self.s2_stat + 4096
+        self.s2_sizes = dict(x=px * 4096, y=px * 1024, xn=px * 512, coef=4096, stat=4096)
+        # the append core and the key core: the pool tiles' landing and what the core keeps for tests (8 rows: the
+        # module's constants; a 16-row layout: behind the two final partials an attention core holds in P2)
+        self.ap_raw = A_AP_RAW if cap == L.ROWS else 32_768
+        self.ap_lat = A_AP_LAT if cap == L.ROWS else self.ap_raw + AP_TILES * t
+        self.key_raw = A_KEY_RAW if cap == L.ROWS else 32_768
+        self.key_keep = A_KEY_KEEP if cap == L.ROWS else self.key_raw + KEY_TILES * t
         self.roles = dict(
             sender=sender,
             reduce=reduce,
@@ -284,6 +304,8 @@ class Layout:
             pre=self.pre_status + 4 * P.STATUS_WORDS,
             attention=k * PART,
         )
+        if cap != L.ROWS:
+            self.roles["site2"] = self.s2_end
         if cap == L.ROWS:
             self.arena = ARENA_BYTES
             assert (self.col, self.row_stage, sender) == (A_COL, A_ROW_STAGE, ARENA_BYTES)
@@ -301,6 +323,7 @@ class Layout:
         else:
             self.arena = -(-max(self.roles.values()) // 4096) * 4096
         assert k * PART <= self.idx_land and self.idx_end <= self.arena, (self.idx_end, self.arena)
+        assert k * PART <= self.s2_x and (cap == L.ROWS or self.s2_end <= self.arena)
 
 
 def is_mock() -> bool:
@@ -329,6 +352,19 @@ def bytes_bf16(raw, shape=None) -> torch.Tensor:
 
 def bytes_f32(raw) -> torch.Tensor:
     return torch.from_numpy(np.frombuffer(bytes(raw), dtype=np.float32).copy())
+
+
+def pages_bytes(m: torch.Tensor, bf16=False) -> bytes:
+    """A [32, w] page matrix (fused/ihc_site layout.py) -> the bytes of its w / 32 [32, 32] tiles as a TILE tensor
+    holds them: per tile the faces (rows 0..15 | 16..31) x (columns 0..15 | 16..31), row major, fp32 or BF16."""
+    v = m.float().reshape(2, 16, m.shape[1] // 32, 2, 16).permute(2, 0, 3, 1, 4).contiguous()
+    return bf16_bytes(v) if bf16 else v.numpy().astype(np.float32).tobytes()
+
+
+def bytes_pages(raw, bf16=False) -> torch.Tensor:
+    """Inverse of pages_bytes: -> [32, w]."""
+    v = bytes_bf16(raw) if bf16 else bytes_f32(raw)
+    return v.reshape(-1, 2, 2, 16, 16).permute(1, 3, 0, 2, 4).reshape(32, -1).contiguous()
 
 
 def _cb_roles(kernel):
@@ -573,7 +609,9 @@ class AttnLayer:
             host.mesh is mesh_device and host.rows >= rows and rows == L.ROWS
         ), "a host has the larger layout"
         self.rows, self.lay = rows, Layout(rows, None if host is None else host.rows)
-        assert rows == L.ROWS or (fidelity != "custom_mm" and append is None), "16 rows: P2 only, hifi_mm units"
+        assert rows == L.ROWS or (
+            fidelity != "custom_mm" and not full
+        ), "16 rows: hifi_mm units; a shared-indexer layer"
         if host is None:
             self.n_words = A_WORDS if rows == L.ROWS else WORDS16
             self.arena = tp.core_buffer(mesh_device, tp.grid_set(mesh_device), self.lay.arena, ttnn.uint32, width=256)
@@ -628,7 +666,28 @@ class AttnLayer:
                 host.streams,
             )
         self.f = self.site_f
+        self.site2 = self.site2_views = None
         if rows != L.ROWS:
+            # P1 at 16 rows (PLAN.md section 19.15): a second site for token rows 8..15 on cores of its own, its
+            # rows ranges of the root's arena on those cores (no L1 address space of its own); the staging of X1
+            # takes both sites' rows as [16, 32] tiles (fused/ihc_site NormOut.block)
+            owner = self if host is None else host
+            if host is None:
+                arena_root = ttnn.get_device_tensors(self.arena)[self.topo.chip(self.topo.root)]
+                lay = self.lay
+                view = lambda name, dtype: View(
+                    arena_root, getattr(lay, "s2_" + name), lay.s2_sizes[name], dtype, self.arena
+                )
+                f32 = ttnn.float32
+                self.site2_views = dict(x=view("x", f32), y=view("y", f32), xn=view("xn", ttnn.bfloat16))
+                self.site2 = IhcSite(
+                    mesh_device,
+                    self.cfg,
+                    f_dtype=ttnn.bfloat16,
+                    coef=view("coef", f32),
+                    stat=view("stat", f32),
+                    **SITE2,
+                )
             # F at 16 rows is twice the site's row tensor (the site at 16 rows is rung (c)): a buffer of its own on
             # the site's cores, a core's share of the payload each, in the reduce's order
             (ox, oy), per_row = SITE["origin"], SITE["per_row"]
@@ -660,7 +719,7 @@ class AttnLayer:
             )
             self.cs = dram((1, 1, 32, 4 * L.TILE), ttnn.bfloat16, ttnn.TILE_LAYOUT)  # cos 0, cos 1, sin 0, sin 1
             self.positions = dram((1, 1, 1, 16), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-            self.frames = kv_device.FrameTables(mesh_device, [APPEND], rows=L.ROWS)
+            self.frames = kv_device.FrameTables(mesh_device, [APPEND], rows=rows)
         self.keys = self.key_wb = self.key_h = self.key_frames = self.key_geometry = None
         # key_dry (bring-up): the key core reads and keeps the blocks its rows would go to and writes nothing
         self.key_dry = key_dry
@@ -758,7 +817,10 @@ class AttnLayer:
             "query": set(rect_cores(QUERY_RECT)),
             "sender": {SENDER},
             "site": site,
+            "appends and the index query": {APPEND, KEY, *IDX_CORES},
         }
+        if self.site2 is not None:
+            roles["site2"] = {(c.x, c.y) for c in self.site2.cores}
         names = list(roles)
         for i, a in enumerate(names):
             for b in names[i + 1 :]:
@@ -934,8 +996,13 @@ class AttnLayer:
         """``sites`` [(fn, base, scale), ...]: the iHC sites in the DRAM table (``site_index``: this layer's
         attention site), ``gamma``: the input norm's weight [6144]."""
         self.site_index = site_index
-        self.table = self.site.site_table(sites)
-        self.gamma = self.site.gamma_to_device(gamma)
+        if self.rows != L.ROWS:
+            # (16 rows: both sites take the norm's weight from the table: no L1 tensor per norm on either's cores)
+            self.table = self.site.site_table(sites, gammas=[gamma] * len(sites))
+            self.gamma = None
+        else:
+            self.table = self.site.site_table(sites)
+            self.gamma = self.site.gamma_to_device(gamma)
         self._programs = {}
         ttnn.synchronize_device(self.mesh)
 
@@ -954,11 +1021,18 @@ class AttnLayer:
         assert len(others) <= cl.PACKET_HEADERS_PER_RISC
         return [unicast(c) for c in others]
 
-    def _norm_out(self):
+    def _norm_out(self, block=None):
+        """block (16 rows): the site of token rows 8 block .. 8 block + 7; both count their shards on site core 0 of
+        block 0, which makes the broadcast's op ready."""
         sender, staging, ready, bit = self.t.x_source_args()
+        blocks = {}
+        if block is not None:
+            c = self.site.cores[0]
+            blocks = dict(block=block, blocks=self.rows // L.ROWS, gather_core=self.noc_word((c.x, c.y)))
         return NormOut(
+            **blocks,
             gamma=self.gamma,
-            xn=self.xn,
+            xn=self.xn if not block else self.site2_views["xn"],
             sender=sender,
             staging=staging,
             ready=ready,
@@ -1000,18 +1074,23 @@ class AttnLayer:
         if root:
             t.broadcast_op(sender)
         routes = self._all_routes(coord)
+        # (row_tile: a [rows, 32] BF16 tile. The pre hub puts the statistic tile 4 row tiles into Xa's staging; it
+        # travels as a Float32 page whose first quarter (16 rows: half) it is; the rest of the page is added lane
+        # by lane beside it on the query hub and read by nobody)
+        row_tile, query_out = lay.row_tile, lay.query_out
+        assert self.rows != L.ROWS or (4 * row_tile, query_out) == (2048, QUERY_OUT)
         op_qa = sender.op(
             self.at(lay.xa),
-            2 * ROW_TILE,
-            2 * ROW_TILE,
+            2 * row_tile,
+            2 * row_tile,
             QUERY_HUB,
-            self.at(lay.q_x) + 2 * chip * ROW_TILE,
+            self.at(lay.q_x) + 2 * chip * row_tile,
             self.aword(W_QA),
             routes,
             own=True,
         )
         op_stat = sender.op(
-            self.at(lay.xa) + 2048,
+            self.at(lay.xa) + 4 * row_tile,
             STAT_PAGE,
             STAT_PAGE,
             QUERY_HUB,
@@ -1022,10 +1101,10 @@ class AttnLayer:
         )
         op_x3 = sender.op(
             self.at(lay.x3),
-            QUERY_OUT,
-            min(t.chunk, QUERY_OUT),
+            query_out,
+            min(t.chunk, query_out),
             MERGE[chip // 4],
-            self.at(lay.m_query) + (chip % 4) * QUERY_OUT,
+            self.at(lay.m_query) + (chip % 4) * query_out,
             self.aword(W_QARR),
             routes,
             own=True,
@@ -1037,13 +1116,13 @@ class AttnLayer:
         pool = L.pool_of(chip, self.full) if self.append is not None else None
         has_pool = pool is not None and pool[0] in ("kv", "key")
         if has_pool:
-            core, landing = (APPEND, A_AP_RAW) if pool[0] == "kv" else (KEY, A_KEY_RAW)
+            core, landing = (APPEND, lay.ap_raw) if pool[0] == "kv" else (KEY, lay.key_raw)
             op_pool = sender.op(
-                self.at(lay.xa) + 2 * ROW_TILE,
-                ROW_TILE,
-                ROW_TILE,
+                self.at(lay.xa) + 2 * row_tile,
+                row_tile,
+                row_tile,
                 core,
-                self.at(landing) + pool[1] * ROW_TILE,
+                self.at(landing) + pool[1] * row_tile,
                 self.aword(W_POOL),
                 routes,
                 own=True,
@@ -1056,9 +1135,9 @@ class AttnLayer:
                 assert not has_pool
                 has_pool = True
                 op_w = sender.op(
-                    self.at(lay.xa) + 2 * ROW_TILE,
-                    ROW_TILE,
-                    ROW_TILE,
+                    self.at(lay.xa) + 2 * row_tile,
+                    row_tile,
+                    row_tile,
                     IDX,
                     self.at(lay.idx_w),
                     self.aword(W_IDXW),
@@ -1066,9 +1145,9 @@ class AttnLayer:
                     own=True,
                 )
                 xa_bits |= Sender.bit(op_w)
-            idx_bytes = P.IDX_TILES * ROW_TILE
+            idx_bytes = P.IDX_TILES * row_tile
             op_idx = sender.op(
-                self.at(lay.xa) + XA_IDX_TILE * ROW_TILE,
+                self.at(lay.xa) + XA_IDX_TILE * row_tile,
                 idx_bytes,
                 idx_bytes,
                 IDX,
@@ -1116,7 +1195,7 @@ class AttnLayer:
                 self.query.done_units(0),
                 self.query.done_address(0),
                 self.at(lay.q_out),
-                QUERY_OUT,
+                query_out,
                 present,
                 self.rope.buffer_address(),
                 P.Q_A_TILES,
@@ -1193,7 +1272,21 @@ class AttnLayer:
             k, a_io = self._idx_chip(coord)
             desc.kernels = list(desc.kernels) + k
             io += a_io
-        if root:
+        if root and self.rows != L.ROWS:
+            # 16 rows: two sites side by side, one per row block (PLAN.md section 19.15). The post-mix of a 16-row F
+            # (its [16, 32] tiles taken apart per block) is not built.
+            assert not post, "P1 at 16 rows: the leading post-mix is not built"
+            owner = self if self.host is None else self.host
+            v = owner.site2_views
+            for site, streams, y, block in ((self.site, self.streams, self.y, 0), (owner.site2, v["x"], v["y"], 1)):
+                s_io, s_desc = site.program(
+                    streams, params=SiteRef(self.table, self.site_index), y=y, norm_out=self._norm_out(block)
+                )
+                desc.kernels = list(desc.kernels) + list(s_desc.kernels)
+                desc.cbs = list(desc.cbs) + list(s_desc.cbs)
+                desc.semaphores = list(desc.semaphores) + list(s_desc.semaphores)
+                io += s_io
+        elif root:
             s_io, s_desc = self.site.program(
                 self.streams,
                 f=self.f if post else None,
@@ -1256,7 +1349,7 @@ class AttnLayer:
             cb(AP_SCALE, ttnn.float32, f32, 4),
             cb(AP_INVS, ttnn.float32, f32, 1),
             cb(AP_E4M3, ttnn.fp8_e4m3, L.TILE * L.TILE, 16),
-            cb(AP_ROWS, ttnn.uint32, sm.cfg.row_stride, L.ROWS),
+            cb(AP_ROWS, ttnn.uint32, sm.cfg.row_stride, self.rows),
             cb(AP_POS, ttnn.uint32, 64, 1),
         ]
         frames = ttnn.cb_descriptor_from_sharded_tensor(AP_FRAMES, ttnn.get_device_tensors(self.frames.tensor)[chip])
@@ -1264,16 +1357,19 @@ class AttnLayer:
         n_pool = sum(1 for c in topo.chips if (L.pool_of(topo.chip(c), self.full) or ("", 0))[0] == "kv")
         dev = lambda tensor: ttnn.get_device_tensors(tensor)[chip].buffer_address()
         feed = ttnn.RuntimeArgs()
-        feed[x][y] = [n_pool, self.at(A_AP_RAW), dev(self.kv_norm), dev(self.cs)]
+        feed[x][y] = [n_pool, self.at(self.lay.ap_raw), dev(self.kv_norm), dev(self.cs)]
         write = ttnn.RuntimeArgs()
         write[x][y] = [
             chip,
             dev(self.positions),
             dev(self.kv),
             self.append_geometry().slot_bytes(self.cache_layer),
-            self.at(A_AP_LAT) if self.append_keep else 0,
+            self.at(self.lay.ap_lat) if self.append_keep else 0,
         ]
         eps = int.from_bytes(np.float32(self.kv_norm_eps).tobytes(), "little")
+        # (16 rows: the feeder's and the writer's row tile and row count; the compute kernel works on standard
+        # 32-row tiles and has no row count)
+        rows_def = [] if self.rows == L.ROWS else [("HY4A_APPEND_ROWS", str(self.rows))]
         kernels = [
             self._dm(
                 "attn_append_dm.cpp",
@@ -1282,13 +1378,14 @@ class AttnLayer:
                 ttnn.DataMovementProcessor.RISCV_0,
                 ttnn.NOC.NOC_0,
                 ct=[AP_RAW, AP_W, AP_CS, AP_MEAN, AP_ONE],
+                defines=rows_def,
             ),
             ttnn.KernelDescriptor(
                 kernel_source=str(KERNEL_DIR / "attn_append_write.cpp"),
                 core_ranges=cores,
                 compile_time_args=[AP_E4M3, AP_SCALE, AP_ROPE, AP_KEEP, AP_ROWS, AP_POS, AP_FRAMES],
                 runtime_args=write,
-                defines=self.defines,
+                defines=self.defines + rows_def,
                 config=ttnn.DataMovementConfigDescriptor(
                     processor=ttnn.DataMovementProcessor.RISCV_1, noc=ttnn.NOC.NOC_1
                 ),
@@ -1367,14 +1464,14 @@ class AttnLayer:
         n_key = sum(1 for c in topo.chips if (L.pool_of(topo.chip(c), True) or ("", 0))[0] == "key")
         dev = lambda tensor: ttnn.get_device_tensors(tensor)[chip].buffer_address()
         feed = ttnn.RuntimeArgs()
-        feed[x][y] = [n_key, self.at(A_KEY_RAW), dev(self.key_wb), dev(self.cs), dev(self.key_h)]
+        feed[x][y] = [n_key, self.at(self.lay.key_raw), dev(self.key_wb), dev(self.cs), dev(self.key_h)]
         write = ttnn.RuntimeArgs()
         write[x][y] = [
             chip,
             dev(self.positions),
             dev(self.keys),
             self.key_geometry.slot_bytes(self.key_rank),
-            self.at(A_KEY_KEEP) if self.append_keep else 0,
+            self.at(self.lay.key_keep) if self.append_keep else 0,
         ]
         eps = int.from_bytes(np.float32(self.key_eps).tobytes(), "little")
         kernels = [
@@ -1481,7 +1578,6 @@ class AttnLayer:
         if layer is not None:
             with self._bound(layer):
                 return self.p1(post)
-        assert self.rows == L.ROWS, "P1 at 16 rows is not built (PLAN.md section 19, rung (c))"
         key = ("p1", post)
         if key not in self._programs:
             assert self.pre is not None and self.table is not None, "set_weights and set_site first"
@@ -1822,9 +1918,21 @@ class AttnLayer:
         ttnn.synchronize_device(self.mesh)
 
     def set_streams(self, x):
-        """[8, 4, 6144] -> the root's streams (written to every chip: only the root's are used)."""
-        pages = ihc_layout.streams_to_pages(x).reshape(1, 1, 32, -1)
+        """[8, 4, 6144] -> the root's streams (written to every chip: only the root's are used). 16 rows
+        ([16, 4, 6144]): rows 8..15 are the second site's, a range of the root's arena on its cores: they go
+        through write_arena (a host write of the whole arena: before a step, never between P1 and P2)."""
+        pages = ihc_layout.streams_to_pages(x[: L.ROWS]).reshape(1, 1, 32, -1)
         ttnn.copy_host_to_device_tensor(self._replicated(pages, ttnn.float32, ttnn.TILE_LAYOUT), self.streams)
+        if self.rows != L.ROWS:
+            assert x.shape[0] == self.rows, tuple(x.shape)
+            m = ihc_layout.streams_to_pages(x[L.ROWS :])
+            per = HIDDEN // len(self.site2.cores)
+            self.write_arena(
+                {
+                    (self.topo.root, (c.x, c.y)): [(self.lay.s2_x, pages_bytes(m[:, k * per : (k + 1) * per]))]
+                    for k, c in enumerate(self.site2.cores)
+                }
+            )
 
     def set_f(self, f):
         pages = ihc_layout.rows_to_pages(f).reshape(1, 1, 32, -1)
@@ -1832,11 +1940,11 @@ class AttnLayer:
 
     def set_rope(self, cos, sin):
         """The interleaved RoPE tables of the 8 rows' positions ([8, 64] each, tt/frames.py rope_tables)."""
-        tiles = L.to_row_tiles(torch.cat((L.rope_tile(cos), L.rope_tile(sin)), dim=1))
+        tiles = L.to_row_tiles(torch.cat((L.rope_tile(cos), L.rope_tile(sin)), dim=1)).reshape(-1, 256)
         ttnn.copy_host_to_device_tensor(self._replicated(tiles, ttnn.bfloat16), self.rope)
         if self.append is not None:  # the append's own copy: plain [32, 32] tiles, rows 0..7 the token rows
             cs = torch.zeros(1, 1, 32, 4 * L.TILE)
-            cs[0, 0, : L.ROWS] = torch.cat((cos, sin), dim=1).float()
+            cs[0, 0, : self.rows] = torch.cat((cos, sin), dim=1).float()
             ttnn.copy_host_to_device_tensor(self._replicated(cs, ttnn.bfloat16, ttnn.TILE_LAYOUT), self.cs)
 
     # ------------------------------------------------------------------------------------------ the latent append
@@ -1852,8 +1960,12 @@ class AttnLayer:
 
     def set_positions(self, positions):
         """positions [8]: the token rows' sequence positions of this step (0xFFFFFFFF: an idle row). In place."""
-        value = torch.zeros(16, dtype=torch.int64)
-        value[: L.ROWS] = torch.as_tensor(positions, dtype=torch.int64) & 0xFFFFFFFF
+        value = (
+            torch.full((16,), 0xFFFFFFFF, dtype=torch.int64)
+            if self.rows != L.ROWS
+            else torch.zeros(16, dtype=torch.int64)
+        )
+        value[: len(positions)] = torch.as_tensor(positions, dtype=torch.int64) & 0xFFFFFFFF
         value = torch.where(value >= 1 << 31, value - (1 << 32), value).to(torch.int32).reshape(1, 1, 1, 16)
         ttnn.copy_host_to_device_tensor(self._replicated(value, ttnn.uint32), self.positions)
 
@@ -1869,7 +1981,7 @@ class AttnLayer:
         the slot-major store, under which the append writes where sparse_mla's reader reads)."""
         if tables is None:
             g = self.append_geometry()
-            tables = [g.identity_table(u) for u in range(L.ROWS)]
+            tables = [g.identity_table(u) for u in range(self.rows)]
         self.frames.write([v for t in tables for v in t])
 
     # ------------------------------------------------------------------------------------------ the index-key append
@@ -1964,7 +2076,7 @@ class AttnLayer:
         as arena updates for every chip that takes part: its tile of the raw key [8, 32] (BF16 values)."""
         pool = L.pool_of(self.topo.chip(coord), True)
         assert pool is not None and pool[0] == "key"
-        item = (A_KEY_RAW + pool[1] * ROW_TILE, bf16_bytes(L.to_row_tiles(tile)))
+        item = (self.lay.key_raw + pool[1] * ROW_TILE, bf16_bytes(L.to_row_tiles(tile)))
         return {(c, KEY): [item] for c in self.topo.chips}
 
     def read_key(self, coord, image=None):
@@ -1979,7 +2091,9 @@ class AttnLayer:
         tiles = lambda off: L.from_row_tiles(
             bytes_bf16(self.arena_bytes(image, KEY, off, KEY_TILES * ROW_TILE), (KEY_TILES, ROW_TILE // 2))
         )
-        raw = lambda off, n: np.frombuffer(self.arena_bytes(image, KEY, A_KEY_KEEP + off, n), dtype=np.uint8).copy()
+        raw = lambda off, n: np.frombuffer(
+            self.arena_bytes(image, KEY, self.lay.key_keep + off, n), dtype=np.uint8
+        ).copy()
         info = raw(K_INFO, 64).view(np.uint32)
         where = [None if int(w) == 0xFFFFFFFF else (int(w) & 15, int(w) & ~15) for w in info[1 : 1 + L.ROWS]]
         groups = []
@@ -2002,8 +2116,8 @@ class AttnLayer:
                 )
         assert int(info[0]) == len(groups), (int(info[0]), len(groups))
         return {
-            "raw": tiles(A_KEY_RAW),
-            "rot": tiles(A_KEY_KEEP + K_ROT),
+            "raw": tiles(self.lay.key_raw),
+            "rot": tiles(self.lay.key_keep + K_ROT),
             "packed": raw(K_PACKED, KEY_BLOCK_BYTES),
             "where": where,
             "groups": groups,
@@ -2014,7 +2128,7 @@ class AttnLayer:
         for every chip that takes part: its pool tile [8, 32] (BF16 values)."""
         chip = self.topo.chip(coord)
         assert (L.pool_of(chip, self.full) or ("", 0))[0] == "kv"
-        item = (A_AP_RAW + chip * ROW_TILE, bf16_bytes(L.to_row_tiles(tile)))
+        item = (self.lay.ap_raw + chip * self.lay.row_tile, bf16_bytes(L.to_row_tiles(tile)))
         return {(c, APPEND): [item] for c in self.topo.chips}
 
     def read_append(self, coord, image=None):
@@ -2022,10 +2136,11 @@ class AttnLayer:
         rotation); "rows": the rows the append core finished, BF16 [8, 576] (k_pass after the kv norm | k_rope after
         the rotation): what its cast saw and what it stored as the RoPE part (append_keep)."""
         image = self.read_arena(coord) if image is None else image
+        rt = self.lay.row_tile
         tiles = lambda off: L.from_row_tiles(
-            bytes_bf16(self.arena_bytes(image, APPEND, off, AP_TILES * ROW_TILE), (AP_TILES, ROW_TILE // 2))
+            bytes_bf16(self.arena_bytes(image, APPEND, off, AP_TILES * rt), (AP_TILES, rt // 2))
         )
-        return {"raw": tiles(A_AP_RAW), "rows": tiles(A_AP_LAT)}
+        return {"raw": tiles(self.lay.ap_raw), "rows": tiles(self.lay.ap_lat)}
 
     def _core_index(self, core) -> int:
         return core[1] * self.grid[0] + core[0]
@@ -2120,15 +2235,51 @@ class AttnLayer:
             ttnn.copy_host_to_device_tensor(self._replicated(go, ttnn.uint32), prog.go)
         ttnn.synchronize_device(self.mesh)
 
-    def read_root(self):
-        """What the root's site holds: y [8, 6144] fp32, 1 / RMS [8], x [8, 6144] (the BF16 it broadcast), F."""
+    def scribble_site2(self, seed=0):
+        """Bring-up / tests: random bytes over every range of the second site (16 rows) in the root's arena, its
+        streams included, as a pass of other programs between two steps may leave them (a whole-arena host write:
+        everything not written through write_arena before becomes zero). The step's first program must write the
+        streams again before P1 (the embedding; in this piece's tests set_streams)."""
+        lay = self.lay
+        g = np.random.default_rng(seed)
+        self.write_arena(
+            {
+                (self.topo.root, (c.x, c.y)): [
+                    (lay.s2_x, g.integers(0, 256, lay.s2_end - lay.s2_x, dtype=np.uint8).tobytes())
+                ]
+                for c in self.site2.cores
+            }
+        )
+
+    def read_root(self, image=None):
+        """What the root's site holds: y [8, 6144] fp32, 1 / RMS [8], x [8, 6144] (the BF16 it broadcast), F.
+        16 rows: F [16, 6144]; with ``image`` (the root's arena, read_arena) also y, 1 / RMS and x of the 16 rows."""
         root = self.topo.chip(self.topo.root)
-        if self.rows != L.ROWS:  # (16 rows, P2 only: F [16, 6144] from its own buffer, [16, 32] tiles in core order)
-            raw = ttnn.to_torch(ttnn.get_device_tensors(self.f)[root]).float()
-            return {"f": L.from_row_tiles(raw.reshape(-1, self.lay.row_tile // 2))}
         m = lambda t: ttnn.to_torch(ttnn.get_device_tensors(t)[root]).float()[0, 0]
         rows = lambda t: ihc_layout.pages_to_rows(m(t))
         stat = ihc_layout.stat_from_page(m(self.site.stat)[:, :32])
+        if self.rows != L.ROWS:
+            # 16 rows: F [16, 6144] from its own buffer ([16, 32] tiles in core order); y, 1 / RMS and x of rows
+            # 0..7 from the first site's tensors, of rows 8..15 from the second site's ranges of the root's arena
+            raw = ttnn.to_torch(ttnn.get_device_tensors(self.f)[root]).float()
+            out = {"f": L.from_row_tiles(raw.reshape(-1, self.lay.row_tile // 2))}
+            if image is None:  # (F alone: what P2's checks read)
+                return out
+            lay = self.lay
+            part = lambda name, bf16=False: torch.cat(
+                [
+                    bytes_pages(
+                        self.arena_bytes(image, (c.x, c.y), getattr(lay, "s2_" + name), lay.s2_sizes[name]), bf16
+                    )
+                    for c in self.site2.cores
+                ],
+                dim=1,
+            )
+            both = lambda a, b: torch.cat((a, ihc_layout.pages_to_rows(b)), dim=0)
+            out["y"] = both(rows(self.y), part("y"))
+            out["x"] = both(rows(self.xn), part("xn", True))
+            out["inv_rms"] = torch.cat((stat, ihc_layout.stat_from_page(part("stat")[:, :32])))
+            return out
         return {"y": rows(self.y), "inv_rms": stat, "x": rows(self.xn), "f": rows(self.f)}
 
     def read_streams(self):
@@ -2141,26 +2292,27 @@ class AttnLayer:
         landing [32 chips, 8, 8]; the query group's output [2 heads, 8, 576]; the head group's query landing on the
         merge core [4 chips, 2 heads, 8, 576]."""
         image = self.read_arena(coord) if image is None else image
+        lay, n_rows = self.lay, self.rows
+        rt = lay.row_tile  # (a [rows, 32] BF16 tile; its Float32 form is twice the bytes: two faces of [rows, 16])
         tiles = lambda core, off, n: L.from_row_tiles(
-            bytes_bf16(self.arena_bytes(image, core, off, n * ROW_TILE), (n, ROW_TILE // 2))
+            bytes_bf16(self.arena_bytes(image, core, off, n * rt), (n, rt // 2))
         )
-        lay = self.lay
         pre_out = tiles(PRE_HUB, lay.pre_out, P.PRE_IDX)
-        stat = bytes_f32(self.arena_bytes(image, PRE_HUB, lay.pre_stat, 2 * ROW_TILE)).reshape(2, L.ROWS, 16)
+        stat = bytes_f32(self.arena_bytes(image, PRE_HUB, lay.pre_stat, 2 * rt)).reshape(2, n_rows, 16)
         lanes = bytes_f32(self.arena_bytes(image, QUERY_HUB, lay.q_lanes, CHIPS * STAT_PAGE)).reshape(CHIPS, 4, 16, 16)
         q_out = tiles(QUERY_HUB, lay.q_out, L.HEADS_PER_CHIP * P.LAT_TILES)
         group = self.topo.chip(coord) // 4
-        landing = tiles(MERGE[group], A_M_QUERY, 4 * L.HEADS_PER_CHIP * P.LAT_TILES)
+        landing = tiles(MERGE[group], lay.m_query, 4 * L.HEADS_PER_CHIP * P.LAT_TILES)
         return {
-            "x": tiles(PRE_HUB, A_PRE_X, P.PRE_HIDDEN_TILES),
+            "x": tiles(PRE_HUB, lay.pre_x, P.PRE_HIDDEN_TILES),
             "q_a": pre_out[:, : 2 * L.TILE],
             "pool": pre_out[:, P.PRE_POOL * L.TILE : P.PRE_GATE * L.TILE],
             "gate": pre_out[:, P.PRE_GATE * L.TILE : P.PRE_IDX * L.TILE],
             "lanes": stat[0, :, 0::2],
-            "q_a_all": tiles(QUERY_HUB, A_Q_X, P.Q_A_TILES),
-            "lanes_all": lanes[:, 0, : L.ROWS, 0::2],
-            "q_lat": q_out.reshape(L.ROWS, L.HEADS_PER_CHIP, L.LATENT).permute(1, 0, 2),
-            "q_landing": landing.reshape(L.ROWS, 4, L.HEADS_PER_CHIP, L.LATENT).permute(1, 2, 0, 3),
+            "q_a_all": tiles(QUERY_HUB, lay.q_x, P.Q_A_TILES),
+            "lanes_all": lanes[:, 0, :n_rows, 0::2],
+            "q_lat": q_out.reshape(n_rows, L.HEADS_PER_CHIP, L.LATENT).permute(1, 0, 2),
+            "q_landing": landing.reshape(n_rows, 4, L.HEADS_PER_CHIP, L.LATENT).permute(1, 2, 0, 3),
             "status": {"pre": self.proj_status(image, self.pre), "query": self.proj_status(image, self.query)},
         }
 
@@ -2169,9 +2321,9 @@ class AttnLayer:
         its q_a tiles [8, 64] (BF16 values) and its lane sums [8, 8] (fp32)."""
         chip = self.topo.chip(coord)
         page = torch.zeros(4, 16, 16)
-        page[0, : L.ROWS, 0::2] = lanes.float()
+        page[0, : self.rows, 0::2] = lanes.float()
         items = [
-            (self.lay.q_x + 2 * chip * ROW_TILE, bf16_bytes(L.to_row_tiles(q_a))),
+            (self.lay.q_x + 2 * chip * self.lay.row_tile, bf16_bytes(L.to_row_tiles(q_a))),
             (self.lay.q_lanes + chip * STAT_PAGE, page.numpy().astype(np.float32).tobytes()),
         ]
         return {(c, QUERY_HUB): list(items) for c in self.topo.chips}

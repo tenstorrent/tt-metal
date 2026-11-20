@@ -111,6 +111,22 @@ class SiteRef:
 
 
 @dataclass
+class View:
+    """A site tensor that is a range of ANOTHER L1 tensor: ``nbytes`` at ``offset`` of ``tensor`` (one chip's device
+    tensor, allocated on a core set that contains the site's cores: the same address on each of them) on every site
+    core, in place of a tensor of the site's own (IhcSite.program takes one wherever it takes a tensor; IhcSite(
+    coef=, stat=) for the two it otherwise allocates). The bytes of a core's range are what its shard of the tensor
+    would be. ``io``: the tensor a caller lists among the program's io tensors (the mesh tensor ``tensor`` is a
+    shard of). For a layer whose L1 address space is taken: a second site's rows live in the layer's arena."""
+
+    tensor: object
+    offset: int
+    nbytes: int
+    dtype: object
+    io: object = None
+
+
+@dataclass
 class NormOut:
     """The layer program's form of a pre-mix (IhcSite.program norm_out): the site cores also apply the sublayer's
     RMSNorm, x = y * (1 / RMS(y) of the row) * gamma, fp32 in the SFPU, leave it as BF16 in ``xn`` and hand it to the
@@ -131,6 +147,15 @@ class NormOut:
     status: int
     wait_limit: int = 30_000_000
     stamps: int = 0  # measurement: two L1 words on site core 0 for (writer start, op made ready), wall clock; 0: none
+    # Row blocks (a pass of 8 * blocks token rows as ``blocks`` sites side by side, each on its own cores with its
+    # own rows: kernels/ihc_site.cpp HY4_IHC_ROW_BLOCK). ``block``: this site's block, or None: the form above.
+    # With it the staging holds [8 * blocks, 32] row tiles: core k's shard is ``blocks`` times the bytes at
+    # ``staging + k * blocks * shard bytes``, and this site writes its 8 rows of every tile's two halves into
+    # them; every core of every block counts itself in ``gather`` on the core ``gather_core`` (NoC x | y << 16:
+    # site core 0 of block 0), and that core alone, once all blocks' K are in, makes the op ready.
+    block: int = None
+    blocks: int = 1
+    gather_core: int = 0
 
 
 def site_cores(num_cores: int, origin=(0, 0), per_row: int = 8):
@@ -169,10 +194,13 @@ class IhcSite:
         per_row: int = 8,
         cb_base: int = 0,
         sem_base: int = 0,
+        coef: View = None,
+        stat: View = None,
     ):
         """per_row: site cores per grid row (the site is a rectangle of cores, row major). cb_base / sem_base: added
         to every CB id (0..10, 16..22) and semaphore id (0..2) of the site's programs, for a program that has other
-        kernels' buffers on the site cores."""
+        kernels' buffers on the site cores. coef / stat: Views (a page per core each) in place of the two tensors
+        the site allocates."""
         self.device = device
         self.cb_base, self.sem_base = cb_base, sem_base
         # The 4 streams pages of a batch in one unpacker run (16 faces) rather than one run per page: bit-equal
@@ -210,9 +238,14 @@ class IhcSite:
         self.noc = [device.worker_core_from_logical_core(c) for c in self.cores]
         self.y_dtype, self.f_dtype = y_dtype, f_dtype
         self.lanes = lanes or layout.SFPU_LANES
-        self.coef = self._pages(torch.zeros(32, 32 * num_cores), ttnn.float32)
-        self.stat = self._pages(torch.zeros(32, 32 * num_cores), ttnn.float32)
+        assert (coef is None) == (stat is None), "coef and stat: both the site's own or both views"
+        self.coef = self._pages(torch.zeros(32, 32 * num_cores), ttnn.float32) if coef is None else coef
+        self.stat = self._pages(torch.zeros(32, 32 * num_cores), ttnn.float32) if stat is None else stat
         self.dbg = None  # tests: every core's scratch page after a pre run with debug=True
+        # measurement: the L1 address of 8 words on every site core (a caller's persistent buffer) where the reader
+        # and the writer leave wall-clock stamps of the fetch and of what they see of the compute's stages
+        # (kernels/ihc_site.cpp HY4_IHC_FETCH_STAMPS); None: no stamps, the kernels' text as it is
+        self.fetch_stamps = None
 
     # ------------------------------------------------------------------ tensors
     def _memory_config(self, width):
@@ -306,7 +339,13 @@ class IhcSite:
 
     # ------------------------------------------------------------------ programs
     def _cb(self, index, tensor, tile=(32, 32), dtype=ttnn.float32):
-        cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
+        if isinstance(tensor, View):
+            cb = ttnn.cb_descriptor_from_sharded_tensor(
+                index, tensor.tensor, address_offset=tensor.offset, total_size=tensor.nbytes
+            )
+            cb.core_ranges = self.grid
+        else:
+            cb = ttnn.cb_descriptor_from_sharded_tensor(index, tensor)
         fmt = ttnn.CBFormatDescriptor(
             buffer_index=index,
             data_format=dtype,
@@ -480,6 +519,10 @@ class IhcSite:
                 params.index,
             ] + ([table.gamma.buffer_address(), params.index * g_pages + k * self.py] if gamma_dram else [])
         shard = self.py * 2048  # a core's BF16 shard of the rows
+        blocked = norm_out is not None and do_pre and norm_out.block is not None
+        if blocked:  # (row blocks: the staging holds [8 * blocks, 32] tiles; two more arguments)
+            assert norm_out.blocks == 2 and 0 <= norm_out.block < norm_out.blocks, (norm_out.block, norm_out.blocks)
+            shard *= norm_out.blocks
         norm_args = lambda k: (
             []
             if norm_out is None or not do_pre
@@ -492,6 +535,7 @@ class IhcSite:
                 norm_out.status,
                 norm_out.stamps,
             ]
+            + ([norm_out.gather_core, K * norm_out.blocks] if blocked else [])
         )
         per_core = PerCoreRuntimeArgsDescriptor(
             ncrisc_args=[
@@ -509,6 +553,8 @@ class IhcSite:
             trisc_named_compile_time_args=ct,
             trisc_compute_config=config,
             per_core_runtime_args_descriptor=per_core,
+            defines=([("HY4_IHC_ROW_BLOCK", str(norm_out.block))] if blocked else [])
+            + ([("HY4_IHC_FETCH_STAMPS", f"{int(self.fetch_stamps)}u")] if self.fetch_stamps is not None else []),
         )
         semaphores = [
             ttnn.SemaphoreDescriptor(int(SEM_PART), ttnn.CoreType.WORKER, self.grid, 0),
@@ -518,6 +564,7 @@ class IhcSite:
         descriptor = ttnn.ProgramDescriptor(
             kernels=kernel.get_kernel_descriptors().kernels, semaphores=semaphores, cbs=cbs
         )
+        io = [t.io if isinstance(t, View) else t for t in io]
         return io, descriptor
 
     def pre(self, streams, params: SiteParams, y=None, stop_after=0, debug=False):

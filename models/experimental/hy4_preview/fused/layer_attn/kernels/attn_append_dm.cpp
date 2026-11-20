@@ -32,7 +32,14 @@ constexpr uint32_t cb_mean = get_compile_time_arg_val(3);
 constexpr uint32_t cb_one = get_compile_time_arg_val(4);
 
 namespace {
+#ifdef HY4A_APPEND_ROWS
+// (a pass of HY4A_APPEND_ROWS = 16 token rows, PLAN.md section 19.15: the pool tiles are [16, 32] tiles, whose two
+// halves fill faces 0 and 1 of a standard tile; rows 0..15 are the token rows)
+constexpr uint32_t TINY = 64 * HY4A_APPEND_ROWS;
+static_assert(HY4A_APPEND_ROWS == 16, "a row tile is [8, 32] or [16, 32]");
+#else
 constexpr uint32_t TINY = 512;     // one [8, 32] BF16 tile
+#endif
 constexpr uint32_t TILE16 = 2048;  // one [32, 32] BF16 tile
 constexpr uint32_t TILE32 = 4096;  // one [32, 32] Float32 tile
 constexpr uint32_t PASS = 16, ROPE = 2, POOL = PASS + ROPE;

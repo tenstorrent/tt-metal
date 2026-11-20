@@ -49,6 +49,18 @@ IDLE = 0xFFFFFFFF
 # the second frame of a user whose table has only one (not written); one idle row
 POSITIONS = [5, 4096 + 3, 128 + 9, 4 * 128 + 127, 17 * 128 + 64, 31 * 128 + 1, 2 * 4096 + 11, IDLE]
 UNMAPPED_USER = 6
+# 16 token rows (PLAN.md section 19.15): 8 more: chip 0 a third time (another slot), chips 2, 9, 30, an idle row,
+# chip 16, chip 0 in a second frame that IS mapped, chip 23
+POSITIONS16 = POSITIONS + [
+    6,
+    2 * 128 + 40,
+    9 * 128 + 100,
+    30 * 128 + 2,
+    IDLE,
+    16 * 128 + 77,
+    2 * 4096 + 7,
+    23 * 128 + 127,
+]
 
 
 class AppendCase(Case):
@@ -56,7 +68,7 @@ class AppendCase(Case):
         super().__init__(mesh_device, layer=1, chips=chips, append=mode, **kw)
         a = self.a
         self.mesh, self.mode = mesh_device, mode
-        self.cfg = cfg = SL.SparseMlaConfig(rows_per_slot=ROWS_PER_SLOT, num_layers=1)
+        self.cfg = cfg = SL.SparseMlaConfig(rows_per_slot=ROWS_PER_SLOT, num_layers=1, users=a.rows)
         latent, rope = hs.random_latents(cfg.users, cfg.rows_per_slot, cfg, seed=3)
         packed = hs.pack_rows(mesh_device, latent[:, None], rope[:, None])
         self.kv = ttnn.to_memory_config(packed, hs.kv_memory_config(mesh_device, cfg))
@@ -66,7 +78,7 @@ class AppendCase(Case):
         tables = [a.append_geometry().identity_table(u) for u in range(cfg.users)]
         tables[UNMAPPED_USER] = a.append_geometry().identity_table(UNMAPPED_USER, frames=1)
         a.set_frames(tables)
-        self.positions = list(POSITIONS)
+        self.positions = list(POSITIONS if a.rows == L.ROWS else POSITIONS16)
         real = torch.tensor([p if p != IDLE else 0 for p in self.positions])
         cos, sin = rope_cos_sin(real, AttentionConfig())
         self.cos, self.sin = frames.rope_tables(cos, sin)
@@ -79,7 +91,7 @@ class AppendCase(Case):
         super().prefill_absent(x)
         absent = [c for c in ALL if c not in self.a.topo.chips and L.pool_of(self.a.topo.chip(c), False) is not None]
         updates = {}
-        ones = torch.ones(L.ROWS)
+        ones = torch.ones(self.a.rows)
         for coord in absent:
             g = L.pre_golden(x, ones, self.share(self.a.topo.chip(coord))[1])
             for key, items in self.a.pool_prefill(coord, g["pool"].to(torch.bfloat16).float()).items():
@@ -133,8 +145,8 @@ def check_append(case, before, label):
             f"the pool tiles or the finished rows differ between chips ({same} of {len(topo.chips)} equal the first)"
         )
     # the chips' own pool tiles against exact arithmetic on the stored weights for the device's x
-    x = a.read_root()["x"]
-    ones = torch.ones(L.ROWS)
+    x = (a.read_root(images[topo.root]) if a.rows != L.ROWS else a.read_root())["x"]
+    ones = torch.ones(a.rows)
     worst_pool = 1.0
     for c in topo.chips:
         chip = topo.chip(c)
@@ -265,6 +277,40 @@ def test_rung(mesh_device, rung, mode):
         check_append(case, before, f"append {rung} step {step}")
         a.reset_words()
         # the second step writes the same rows again: restore nothing, the bytes must be the same
+
+
+@galaxy
+@pytest.mark.parametrize("rung", list(RUNGS))
+def test_rung16(mesh_device, rung):
+    """The append at 16 token rows (PLAN.md section 19.15; "truncate": the mode of record): P1 at 16 rows with the
+    append, every check of test_rung on 16 rows and 16 positions."""
+    from models.experimental.hy4_preview.fused.layer_attn.tests.test_p1 import KW16, cb_report, streams16
+
+    hf = golden_layer(1)
+    case = AppendCase(mesh_device, "truncate", chips=RUNGS[rung], **KW16)
+    a = case.a
+    streams = streams16(hf, 0)
+    _, _, x = case.golden_x(streams)
+    case.prefill_absent(x.to(torch.bfloat16).float())
+    a.set_streams(streams)
+    if A.is_mock():
+        a.run_p1()
+        cb_report(
+            mesh_device,
+            a,
+            lambda c: a._p1_chip(c, False),
+            (("root", (0, 0)), ("other", (0, 1)), ("no pool tile", (7, 3))),
+        )
+        logger.info(
+            f"HY4_MK8A append 16 rows mock: P1 at 16 rows with the append compiled; persistent L1 {a.l1_bytes()} B per core"
+        )
+        return
+    before = case.store_bytes()
+    for step in (1, 2):
+        a.run_p1()
+        ttnn.synchronize_device(mesh_device)
+        check_append(case, before, f"append 16 rows {rung} step {step}")
+        a.reset_words()
 
 
 @galaxy

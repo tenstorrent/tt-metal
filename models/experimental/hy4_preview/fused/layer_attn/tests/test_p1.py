@@ -100,7 +100,7 @@ class Case:
         self.a.set_site([self.site], 0, self.gamma)
         self.a.set_weights(self.lw)
         self._shares = {}
-        _, _, self.cos, self.sin = tables()
+        _, _, self.cos, self.sin = tables(self.a.rows)
         self.a.set_rope(self.cos, self.sin)
 
     def share(self, chip):
@@ -120,7 +120,7 @@ class Case:
         if not absent:
             return
         updates = {}
-        ones = torch.ones(L.ROWS)
+        ones = torch.ones(self.a.rows)
         for coord in absent:
             g = L.pre_golden(x, ones, self.share(self.a.topo.chip(coord))[1])
             q_a = L.round7(g["q_a"])
@@ -137,7 +137,8 @@ def check_p1(case, streams, label):
     if status:
         failed.append(f"words not at rest: {status}")
     a.reset_words()
-    root = a.read_root()
+    images = {c: a.read_arena(c) for c in topo.chips}
+    root = a.read_root(images[topo.root]) if a.rows != L.ROWS else a.read_root()
     r_y, r_inv, r_x = case.golden_x(streams)
     x = root["x"]
     logger.info(
@@ -145,13 +146,13 @@ def check_p1(case, streams, label):
         f"{((root['inv_rms'] - r_inv).abs() / r_inv).max():.3e}; x vs the reference norm max_abs={(r_x - x).abs().max():.3e} "
         f"(BF16 rounding alone {(r_x - r_x.to(torch.bfloat16).float()).abs().max():.3e})"
     )
-    images = {c: a.read_arena(c) for c in topo.chips}
     got = {c: a.read_p1(c, images[c]) for c in topo.chips}
     x_ok = sum(torch.equal(v["x"], x) for v in got.values())
     if x_ok != len(got):
         failed.append(f"x bit-equal on {x_ok} of {len(got)} chips")
-    ones = torch.ones(L.ROWS)
+    ones = torch.ones(a.rows)
     worst = {}
+    lay = a.lay
 
     def note(name, ref, dev):
         p, g, r = pcc(ref.float(), dev.float()), gain(ref, dev), rel_rms(ref, dev)
@@ -201,9 +202,11 @@ def check_p1(case, streams, label):
         for other in topo.chips:
             o = topo.chip(other)
             if o // 4 != chip // 4:
-                raw = a.arena_bytes(images[coord], A.MERGE[o // 4], A.A_M_QUERY + (o % 4) * A.QUERY_OUT, A.QUERY_OUT)
-                landed = L.from_row_tiles(A.bytes_bf16(raw, (A.QUERY_OUT // A.ROW_TILE, A.ROW_TILE // 2)))
-                landed = landed.reshape(L.ROWS, L.HEADS_PER_CHIP, L.LATENT).permute(1, 0, 2)
+                raw = a.arena_bytes(
+                    images[coord], A.MERGE[o // 4], lay.m_query + (o % 4) * lay.query_out, lay.query_out
+                )
+                landed = L.from_row_tiles(A.bytes_bf16(raw, (lay.query_out // lay.row_tile, lay.row_tile // 2)))
+                landed = landed.reshape(a.rows, L.HEADS_PER_CHIP, L.LATENT).permute(1, 0, 2)
                 if not torch.equal(landed, got[other]["q_lat"]):
                     failed.append(f"chip {coord}: the landed queries of chip {other} (group {o // 4}) differ")
     for name, w in worst.items():
@@ -329,6 +332,181 @@ def test_parse(mesh_device, rung):
     assert not wrong, f"{rung}: the sender parsed its table differently: {wrong}"
 
 
+# ---- 16 token rows (PLAN.md section 19.15): two sites side by side on the root, [16, 32] tiles from X1 on ------------
+KW16 = dict(rows=16, fidelity="recommended")
+
+
+def streams16(hf, step):
+    """16 token rows of the golden's streams for step 0 or 1 (other rows, or the same ones in another order)."""
+    s = hf["streams_in"].float()
+    if s.shape[0] >= 32:
+        return s[16 * step : 16 * step + 16]
+    return s[:16] if step == 0 else s[:16].flip(0)
+
+
+@galaxy
+def test_mock16(mesh_device):
+    """Compiles the 32 programs of P1 at 16 rows and checks every buffer against L1 (nothing runs)."""
+    if not A.is_mock():
+        pytest.skip("the mock's compile and size check")
+    case = Case(mesh_device, timing=bool(os.environ.get("HY4_ATTN_TIMING")), **KW16)
+    a = case.a
+    logger.info(
+        f"HY4_MK8A p1 16 rows mock: L1 address space taken by persistent tensors {a.l1_bytes()} B per core; arena {a.lay.arena} B, by role {a.lay.roles}"
+    )
+    a.run_p1()
+    cb_report(mesh_device, a, lambda c: a._p1_chip(c, False), (("root", (0, 0)), ("other", (0, 1))))
+    for name, coord in (("root", (0, 0)), ("other", (0, 1))):
+        for row in A.noc_audit(a._p1_chip(coord, False)[0]):
+            logger.info(f"HY4_MK8A p1 16 rows mock NoC {name} chip: {row}")
+    logger.info("HY4_MK8A p1 16 rows mock: P1 compiled")
+
+
+@galaxy
+@pytest.mark.parametrize("rung", list(RUNGS))
+def test_rung16(mesh_device, rung):
+    """P1 at 16 rows on the root alone (no fabric connection; the absent chips' Xa host-written), on two chips, on
+    all 32: two steps, every check of the 8-row rung on 16 rows."""
+    hf = golden_layer(1)
+    case = Case(mesh_device, chips=RUNGS[rung], wait_limit=FIRST_WAIT, **KW16)
+    a = case.a
+    for step in (0, 1):
+        streams = streams16(hf, step)
+        _, _, r_x = case.golden_x(streams)
+        case.prefill_absent(r_x.to(torch.bfloat16).float())
+        a.set_streams(streams)
+        ttnn.synchronize_device(mesh_device)
+        a.run_p1()
+        if A.is_mock():
+            return
+        ttnn.synchronize_device(mesh_device)
+        check_p1(case, streams, f"p1 16 rows {rung} step {step + 1}")
+
+
+@galaxy
+@pytest.mark.parametrize("rung", list(RUNGS))
+def test_parse16(mesh_device, rung):
+    """test_parse for P1 at 16 rows: the senders' tables as the kernel reads them, nothing sent."""
+    hf = golden_layer(1)
+    case = Case(mesh_device, chips=RUNGS[rung], wait_limit=2_000_000, parse_only=True, **KW16)
+    a = case.a
+    a.set_streams(streams16(hf, 0))
+    ttnn.synchronize_device(mesh_device)
+    a.run_p1()
+    if A.is_mock():
+        return
+    ttnn.synchronize_device(mesh_device)
+    wrong = []
+    for c in a.topo.chips:
+        want = a.parsed[("p1", c)]
+        page = a.read_parsed(c, len(want))
+        logger.info(
+            f"HY4_MK8A p1 16 rows parse {rung} chip {c}: {len(want)} words, {'equal to the host table' if page == want else 'DIFFERENT'}; "
+            f"ops {want[4]}, connections {want[5]}, routes {want[6]}, fabric arguments from index {want[-2]}"
+        )
+        if page != want:
+            wrong.append((c, [(i, hex(x), hex(y)) for i, (x, y) in enumerate(zip(page, want)) if x != y][:8]))
+    a.reset()
+    assert not wrong, f"{rung}: the sender parsed its table differently: {wrong}"
+
+
+@galaxy
+def test_site_time16(mesh_device):
+    """What the root's site stage costs at 16 rows (two sites side by side, 32 writers counting into one gather word)
+    against the 8-row site, on ONE chip (no fabric; the absent chips' Xa host-written), from the stamps of site core
+    0 (its writer's start; the broadcast's op made ready) and of the pre hub (its start; x arrived): 4 launches each,
+    the first one aside."""
+    hf = golden_layer(1)
+    for rows, kw in ((8, dict(fidelity="recommended")), (16, KW16)):
+        case = Case(mesh_device, chips=[(0, 0)], wait_limit=FIRST_WAIT, timing=True, **kw)
+        a = case.a
+        streams = streams16(hf, 0)[:rows]
+        _, _, r_x = case.golden_x(streams)
+        case.prefill_absent(r_x.to(torch.bfloat16).float())
+        a.set_streams(streams)
+        ttnn.synchronize_device(mesh_device)
+        site, arrived = [], []
+        for launch in range(4):
+            a.run_p1()
+            if A.is_mock():
+                break
+            ttnn.synchronize_device(mesh_device)
+            words = a.t.read_words()
+            five = lambda core: [int(v) for v in a.t.core_words(words[(0, 0)], core)[[8, 9, 10, 11, 15]]]
+            s, p = five(A.SITE["origin"]), five(A.PRE_HUB)
+            site.append(us(s[1] - s[0]))
+            arrived.append(us(p[1] - p[0]))
+            status = a.status(p1_only=True)
+            assert not status, f"{rows} rows, launch {launch}: words not at rest: {status}"
+            a.reset_words()
+        if site:
+            logger.info(
+                f"HY4_MK8A p1 site time, one chip, {rows} rows: site core 0's writer start -> the broadcast's op ready "
+                f"{[round(v, 1) for v in site]} us; the pre hub's start -> x in its buffer {[round(v, 1) for v in arrived]} us"
+            )
+        a.release()
+
+
+@galaxy
+def test_site_fetch(mesh_device):
+    """Is the site's stage bound by its fetch of fn^T from the DRAM table (PLAN.md 19.15)? One chip, P1 at 8 rows
+    and at 16 rows, the site's data-movement kernels built with HY4_IHC_FETCH_STAMPS: per site core the reader's
+    start, its constants page landed, its fn^T and gamma pages landed; the writer's start, the projection's partial
+    seen, the mix's sum seen, x seen, its shard written. 4 launches, the last one reported (us after the core's
+    reader started; min / median / max over a site's 16 cores)."""
+    from models.experimental.hy4_preview.fused.layer_common import transport as tp
+
+    hf = golden_layer(1)
+    names = [
+        "constants landed",
+        "fn^T and gamma landed",
+        "writer started",
+        "projection's partial seen",
+        "mix's sum seen",
+        "x seen (norm done)",
+        "shard written",
+    ]
+    for rows, kw in ((8, dict(fidelity="recommended")), (16, KW16)):
+        case = Case(mesh_device, chips=[(0, 0)], wait_limit=FIRST_WAIT, timing=True, **kw)
+        a = case.a
+        stamps = tp.core_buffer(mesh_device, tp.grid_set(mesh_device), 64, ttnn.uint32, width=16)
+        sites = [a.site] + ([a.site2] if a.site2 is not None else [])
+        for site in sites:
+            site.fetch_stamps = tp.address(stamps)
+        a._programs = {}
+        streams = streams16(hf, 0)[:rows]
+        _, _, r_x = case.golden_x(streams)
+        case.prefill_absent(r_x.to(torch.bfloat16).float())
+        a.set_streams(streams)
+        ttnn.synchronize_device(mesh_device)
+        for launch in range(4):
+            a.run_p1()
+            if A.is_mock():
+                break
+            ttnn.synchronize_device(mesh_device)
+            status = a.status(p1_only=True)
+            assert not status, f"{rows} rows, launch {launch}: words not at rest: {status}"
+            a.reset_words()
+        if not A.is_mock():
+            words = ttnn.to_torch(ttnn.get_device_tensors(stamps)[0]).to(torch.int64).reshape(-1, 16) & 0xFFFFFFFF
+            tw = a.t.read_words()
+            s = [int(v) for v in a.t.core_words(tw[(0, 0)], A.SITE["origin"])[[8, 9]]]
+            logger.info(
+                f"HY4_MK8A p1 site fetch, one chip, {rows} rows: site core 0's writer start -> the broadcast's op ready {us(s[1] - s[0]):.1f} us"
+            )
+            for b, site in enumerate(sites):
+                per = [words[c.y * a.grid[0] + c.x] for c in site.cores]
+                for i, name in zip((1, 2, 3, 4, 5, 6, 7), names):
+                    # (signed: a core's writer may start before its reader)
+                    v = [((int(w[i]) - int(w[0]) + (1 << 31)) % (1 << 32) - (1 << 31)) * CYCLE_NS / 1e3 for w in per]
+                    logger.info(
+                        f"HY4_MK8A p1 site fetch, one chip, {rows} rows, site {b} ({len(per)} cores), us after the core's reader "
+                        f"started: {name}: min {min(v):.1f} median {statistics.median(v):.1f} max {max(v):.1f}"
+                    )
+        ttnn.deallocate(stamps)
+        a.release()
+
+
 CYCLE_NS = (
     1e3 / 1350
 )  # the cores' wall clock counts AICLK cycles (1350 MHz), as fused/layer_mlp/tests/test_transport.py
@@ -347,14 +525,28 @@ def test_latency(mesh_device):
     hf = golden_layer(1)
     streams = hf["streams_in"][slice(0, 8)].float()
     fid = os.environ.get("HY4_ATTN_FIDELITY", "custom_mm")
+    p1_latency(mesh_device, fid, streams, {})
+
+
+@galaxy
+def test_latency16(mesh_device):
+    """test_latency for P1 at 8 rows and at 16 rows in one job, both at "recommended" (PLAN.md 19.15)."""
+    hf = golden_layer(1)
+    p1_latency(mesh_device, "recommended", hf["streams_in"][slice(0, 8)].float(), {}, release=True)
+    p1_latency(mesh_device, "recommended, 16 rows", streams16(hf, 0), dict(rows=16), release=True)
+
+
+def p1_latency(mesh_device, fid, streams, kw, release=False):
     out = {}
     for timing in (False, True):
-        case = Case(mesh_device, timing=timing, fidelity=fid, watch_x3=True)
+        case = Case(mesh_device, timing=timing, fidelity=fid.split(",")[0], watch_x3=True, **kw)
         a = case.a
         a.set_streams(streams)
         ttnn.synchronize_device(mesh_device)
         if A.is_mock():
             a.run_p1()
+            if release:
+                a.release()
             continue
         a.run_p1()
         ttnn.synchronize_device(mesh_device)
@@ -416,3 +608,5 @@ def test_latency(mesh_device):
                 f"{out[(False, 1)]:.1f} as a trace of its own; with stamps {out[(True, 8)]:.1f}"
             )
         a.reset()
+        if release:  # (several layers in one process)
+            a.release()

@@ -185,6 +185,48 @@ def selection_table(cfg: SparseMlaConfig, lists: list[torch.Tensor]) -> torch.Te
     return table
 
 
+def selection_table_frames(
+    cfg: SparseMlaConfig, lists: list[torch.Tensor], tables, chip=None, positions=None
+) -> torch.Tensor:
+    """selection_table for a store read through fused/kv_store's FRAME TABLES (SparseMla(frames=...), a paged pool):
+    an id is a STRIPE ROW of the chip in the row's conversation (frame = id >> 8, row of the frame = id & 255), not
+    a row of a slot, so it is not bounded by ``rows_per_slot``. ``tables``: per token row its frame table (128 frame
+    bases, kv_store UNMAPPED where the conversation has no frame). Validated, since a reader sent to an unmapped
+    frame reads through a garbage address: at most top-k ids a row, every id distinct, non-negative and in a frame
+    its row's table maps. With ``chip`` and ``positions`` (the token rows' own positions; None for an idle row, which
+    must have no ids): every id a position at or below the row's own, and the frame of the row's own position
+    mapped (the append writes there).
+    Returns int32 [1 + users, topk]: row 0 the counts, row 1 + u the ids."""
+    from models.experimental.hy4_preview.fused.kv_store import frames as kv_frames
+
+    assert len(lists) == cfg.users and len(tables) == cfg.users, (len(lists), len(tables), cfg.users)
+    assert (chip is None) == (positions is None) and (positions is None or len(positions) == cfg.users)
+    table = torch.zeros(1 + cfg.users, cfg.topk, dtype=torch.int32)
+    for u, ids in enumerate(lists):
+        row_table = list(tables[u])
+        assert len(row_table) == kv_frames.TABLE_FRAMES, (u, len(row_table))
+        n = int(ids.numel())
+        assert n <= cfg.topk, f"row {u}: {n} ids, top-k {cfg.topk}"
+        own = None if positions is None else positions[u]
+        if positions is not None and own is None:
+            assert n == 0, f"row {u}: an idle row with {n} ids"
+        if own is not None:
+            frame = kv_frames.stripe_row(int(own)) >> 8
+            assert row_table[frame] != kv_frames.UNMAPPED, f"row {u}: the frame of its own position {own} is not mapped"
+        if n:
+            ids = ids.to(torch.int64)
+            assert int(ids.min()) >= 0 and len(set(ids.tolist())) == n, f"row {u}: negative or repeated ids"
+            frames = sorted(set((ids >> 8).tolist()))
+            unmapped = [f for f in frames if f >= kv_frames.TABLE_FRAMES or row_table[f] == kv_frames.UNMAPPED]
+            assert not unmapped, f"row {u}: ids in frames {unmapped} that its table does not map"
+            if own is not None:
+                last = max(kv_frames.position_of(int(chip), int(r)) for r in ids.tolist())
+                assert last <= int(own), f"row {u} chip {chip}: a position {last} beyond its own {own}"
+            table[1 + u, :n] = ids.to(torch.int32)
+        table[0, u] = n
+    return table
+
+
 # ---------------------------------------------------------------------------------------------------------------
 # Goldens
 # ---------------------------------------------------------------------------------------------------------------

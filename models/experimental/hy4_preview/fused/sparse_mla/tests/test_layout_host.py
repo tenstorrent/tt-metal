@@ -104,3 +104,35 @@ def test_frame_identity_addresses():
                     assert tuple(got) == tuple(want), (rows_per_slot, user, layer, row, got, want)
                     checked += 1
         assert checked
+
+
+def test_selection_table_frames():
+    """The frame form's table: ids are stripe rows of a conversation of several frames (beyond rows_per_slot), each
+    checked against its row's frame table and, with the positions, against what the row may see."""
+    import pytest
+
+    from models.experimental.hy4_preview.fused.kv_store import frames as fr
+
+    cfg = lo.SparseMlaConfig(rows_per_slot=256)
+    two = [0, 4352] + [fr.UNMAPPED] * (fr.TABLE_FRAMES - 2)  # a conversation of two frames
+    one = [8704] + [fr.UNMAPPED] * (fr.TABLE_FRAMES - 1)
+    tables = [two, one] + [one] * (cfg.users - 2)
+    none = torch.zeros(0, dtype=torch.long)
+    lists = [torch.tensor([5, 255, 256, 300]), torch.tensor([7])] + [none] * (cfg.users - 2)
+    with pytest.raises(AssertionError):  # allow-pytest.raises: host-side check
+        lo.selection_table(cfg, lists)  # (the slot form refuses stripe rows of a second frame)
+    t = lo.selection_table_frames(cfg, lists, tables)
+    assert t[0].tolist()[:3] == [4, 1, 0] and t[1, :4].tolist() == [5, 255, 256, 300]
+    # with the rows' positions on chip 3: position_of(3, 300) is the last the first row may hold
+    own = [fr.position_of(3, 300), fr.position_of(3, 7)] + [None] * (cfg.users - 2)
+    assert torch.equal(lo.selection_table_frames(cfg, lists, tables, chip=3, positions=own), t)
+    for bad_lists, bad_tables, bad_own, why in (
+        ([torch.tensor([5, 512])] + lists[1:], tables, own, "an id in a frame the table does not map"),
+        ([lists[0], torch.tensor([7, 256])] + lists[2:], tables, own, "a second frame the one-frame row does not have"),
+        ([torch.tensor([5, 5])] + lists[1:], tables, own, "a repeated id"),
+        (lists, tables, [fr.position_of(3, 299)] + own[1:], "an id beyond the row's own position"),
+        (lists[:2] + [torch.tensor([1])] + lists[3:], tables, own, "an idle row with ids"),
+        (lists, tables, [fr.position_of(3, 600)] + own[1:], "the own position's frame is not mapped"),
+    ):
+        with pytest.raises(AssertionError):  # allow-pytest.raises: host-side check
+            lo.selection_table_frames(cfg, bad_lists, bad_tables, chip=3, positions=bad_own)

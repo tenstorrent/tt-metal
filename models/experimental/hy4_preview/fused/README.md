@@ -10,7 +10,7 @@ change), replayed as one device trace. The ttnn-op decode in `../tt/` is the fun
 State on 2026-11-20: one decode step of all 78 layers runs on the device as one trace, token ids in and token ids
 out, with nothing from the host in between; it is bit-equal from replay to replay; its tokens are the reference's on
 the contexts checked (see "Accuracy"). Not done: the 21 full-indexer layers chained into the 78-layer step (the
-layer exists as a traced unit of its own), the first attention program and the MLP half at 16 rows, serving.
+layer exists as a traced unit of its own), the MLP half and the full-indexer layer at 16 rows, serving.
 
 ## Design
 1. Programs are non-persistent and run under fast dispatch inside one device trace, so they share the open device
@@ -34,7 +34,7 @@ layer exists as a traced unit of its own), the first attention program and the M
 | `projections/` | the attention's dense projections as streamed units, 8 and 16 rows | 32 chips |
 | `sparse_mla/` | selected rows read by id from the packed storage, latent attention with the sink | 32 chips |
 | `indexer_scan/`, `merges/` | index-key scan with a chip-local top-2048; the cross-chip cut | 32 chips, exact ids |
-| `layer_attn/` | the attention half of a layer: two programs (P1, P2); latent and index-key append; the full-indexer layer as one traced unit; the second program (P2) at 16 rows per pass; a fixed merge order | 32 chips |
+| `layer_attn/` | the attention half of a layer: two programs (P1, P2); latent and index-key append; the full-indexer layer as one traced unit; a shared-indexer layer at 16 rows per pass; a fixed merge order | 32 chips |
 | `moe/`, `layer_mlp/` | router, union of picks, DRAM-streamed experts, shared expert, dense FFN; the MLP half | 32 chips at 8 rows |
 | `fidelity/` | a multi-phase matmul for BFP weights (`hifi_mm.h`) and what each fidelity costs | measured |
 | `kv_store/` | a paged KV store (8192-token frames, frame tables in L1, bank-local copies, LRU by tokens) | 32 chips, with the prefill stack |
@@ -47,7 +47,7 @@ layer exists as a traced unit of its own), the first attention program and the M
 | the same step replayed 200 times | bit-equal in residual streams, logits and ids |
 | attention half of a shared-indexer layer | 275 us (281 us with the fixed merge order) |
 | attention half of a full-indexer layer, selection on the chips | 395 us (the selection 110 us of it) |
-| attention half's second program (P2) at 16 rows / the 8-row P2 twice | 203 us / 248 us |
+| attention half of a shared-indexer layer at 16 rows / the 8-row step twice | 389 us / 550 us (with 8 live rows or fewer the 8-row programs are 27 to 54 us faster; both sets share one layout and alternate bit for bit) |
 | MLP half at a union of 48 | 250 to 300 us |
 | embedding gather / LM head with greedy merge | 20 us / 189 us inside the step |
 | prefill pass by trace replay between decode replays (6 layers) | about 30 ms, then 30 us to restore the decode step's L1 state |

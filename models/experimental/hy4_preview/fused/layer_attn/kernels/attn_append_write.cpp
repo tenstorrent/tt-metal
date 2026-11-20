@@ -35,9 +35,18 @@ constexpr uint32_t cb_pos = get_compile_time_arg_val(5);
 constexpr uint32_t cb_frames = get_compile_time_arg_val(6);
 
 namespace {
+#ifdef HY4A_APPEND_ROWS
+// (a pass of HY4A_APPEND_ROWS = 16 token rows, PLAN.md section 19.15: 16 positions, 16 frame tables, 16 row pages;
+// the kept rows as [16, 32] tiles)
+constexpr uint32_t USERS = HY4A_APPEND_ROWS;
+constexpr uint32_t PASS = 16, ROPE = 2, BLOCKS = 4;
+constexpr uint32_t TINY = 64 * HY4A_APPEND_ROWS, TILE16 = 2048, TILE32 = 4096;
+static_assert(HY4A_APPEND_ROWS == 16, "a row tile is [8, 32] or [16, 32]");
+#else
 constexpr uint32_t USERS = 8;
 constexpr uint32_t PASS = 16, ROPE = 2, BLOCKS = 4;
 constexpr uint32_t TINY = 512, TILE16 = 2048, TILE32 = 4096;
+#endif
 constexpr uint32_t STRIDE = 704;           // a row's DRAM page
 constexpr uint32_t ROW_BYTES = 656;        // 512 e4m3 | 16 scales | 128 rope
 constexpr uint32_t BLOCK_PAGE = 4 * 1024;  // one block of the cast's output: 32 rows x 128 bytes

@@ -170,6 +170,13 @@ FORCE_INLINE void fetch_site() {
     noc_async_read(consts.get_noc_addr(get_arg_val<uint32_t>(8)), get_write_ptr(cb_const), 4096);
     noc_async_read_barrier();
     cb_push_back(cb_const, 1);
+#ifdef HY4_IHC_FETCH_STAMPS
+    // Measurement (op.py IhcSite.fetch_stamps; the define's value is the address of 8 words of a persistent L1
+    // buffer on every site core): wall clock, low word, on the data-movement side only. Reader: 0 its start, 1 the
+    // constants page landed, 2 this core's fn^T (and gamma) pages landed. Writer: 3 its start, 4 the projection's
+    // partial seen, 5 the mix's sum of squares seen, 6 x seen (the norm done), 7 the shard written to the sender.
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(HY4_IHC_FETCH_STAMPS)[1] = get_timestamp_32b();
+#endif
     const auto weights = TensorAccessor(w_args, get_arg_val<uint32_t>(5), w_page);
     const uint32_t page0 = get_arg_val<uint32_t>(7);
     cb_reserve_back(cb_w, w_tiles);
@@ -188,6 +195,9 @@ FORCE_INLINE void fetch_site() {
         }
     }
     noc_async_read_barrier();
+#ifdef HY4_IHC_FETCH_STAMPS
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(HY4_IHC_FETCH_STAMPS)[2] = get_timestamp_32b();
+#endif
     cb_push_back(cb_w, w_tiles);
     if constexpr (gamma_dram) {
         cb_push_back(cb_gamma, py);
@@ -199,6 +209,9 @@ void kernel_main() {
         return;
     }
     const uint32_t is_root = get_arg_val<uint32_t>(0);
+#ifdef HY4_IHC_FETCH_STAMPS
+    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(HY4_IHC_FETCH_STAMPS)[0] = get_timestamp_32b();
+#endif
     if constexpr (probe) {
         present(cb_x, 1);
         present(cb_const, 1);
@@ -288,8 +301,16 @@ void kernel_main() {
     if constexpr (do_pre && !probe && !empty_program && (stop_after == 0 || stop_after >= 3)) {
         // runtime args: [index of this core, root noc x, root noc y, (noc x, noc y) of every site core]
         const uint32_t index = get_arg_val<uint32_t>(0);
+#ifdef HY4_IHC_FETCH_STAMPS
+        volatile tt_l1_ptr uint32_t* fetch_stamps =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(HY4_IHC_FETCH_STAMPS);
+        fetch_stamps[3] = started;
+#endif
         {
             cb_wait_front(cb_part, 1);
+#ifdef HY4_IHC_FETCH_STAMPS
+            fetch_stamps[4] = get_timestamp_32b();
+#endif
             const uint32_t src = get_read_ptr(cb_part) + PART_OFFSET;
             const uint32_t dst = get_write_ptr(cb_xchg) + index * PART_BYTES;  // same address on every site core
             const uint32_t sem = get_semaphore(sem_part);
@@ -317,6 +338,9 @@ void kernel_main() {
         }
         if constexpr (stop_after == 0) {
             cb_wait_front(cb_part, 1);
+#ifdef HY4_IHC_FETCH_STAMPS
+            fetch_stamps[5] = get_timestamp_32b();
+#endif
             const uint32_t src = get_read_ptr(cb_part) + STAT_OFFSET;
             const uint32_t dst = get_write_ptr(cb_xchg2) + index * STAT_BYTES;
             const uint32_t rx = get_arg_val<uint32_t>(1);
@@ -339,9 +363,56 @@ void kernel_main() {
             const uint32_t ry = get_arg_val<uint32_t>(2);
             const uint32_t gather = get_arg_val<uint32_t>(base + 4);
             cb_wait_front(cb_xn, py);
+#ifdef HY4_IHC_FETCH_STAMPS
+            fetch_stamps[6] = get_timestamp_32b();
+#endif
+#ifdef HY4_IHC_ROW_BLOCK
+            // Row blocks (op.py NormOut.block; the define's value is this site's block): a pass of 16 token rows is
+            // two sites side by side, each with 8 rows on its own cores. The staging holds [16, 32] row tiles: a
+            // tile is two faces of [16, 16] (1,024 B), a face the two blocks' [8, 16] halves in turn (256 B each).
+            // A rows page of this core is 4 [8, 32] tiles of 2 halves: each half goes to its place by a write of
+            // its own. Two more runtime args: the core that gathers (site core 0 of block 0), how many it waits
+            // for (the cores of all blocks); every core of every block counts itself there, and that core alone
+            // makes the op ready.
+            const uint32_t gather_core = get_arg_val<uint32_t>(base + 7);
+            const uint32_t gather_need = get_arg_val<uint32_t>(base + 8);
+            {
+                constexpr uint32_t HALF = 256;  // [8, 16] BF16
+                const uint32_t src = get_read_ptr(cb_xn);
+                const uint32_t dst = get_arg_val<uint32_t>(base + 1) + HY4_IHC_ROW_BLOCK * HALF;
+                for (uint32_t t = 0; t < 4 * py; ++t) {
+                    for (uint32_t h = 0; h < 2; ++h) {
+                        noc_async_write(
+                            src + (2 * t + h) * HALF, get_noc_addr(sx, sy, dst + (2 * t + h) * 2 * HALF), HALF);
+                    }
+                }
+            }
+            noc_async_write_barrier();
+#ifdef HY4_IHC_FETCH_STAMPS
+            fetch_stamps[7] = get_timestamp_32b();
+#endif
+            noc_semaphore_inc(get_noc_addr(gather_core & 0xFFFF, gather_core >> 16, gather), 1);
+            noc_async_atomic_barrier();
+            cb_pop_front(cb_xn, py);
+            if (index == 0 && HY4_IHC_ROW_BLOCK == 0) {
+                volatile tt_l1_ptr uint32_t* gathered = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather);
+                uint32_t seen = 0;
+                bool all = false;
+                for (uint32_t polls = 0; polls < norm_wait_limit && !all; ++polls) {
+                    invalidate_l1_cache();
+                    seen = gathered[0];
+                    all = seen >= gather_need;
+                }
+                if (all) {
+                    noc_semaphore_inc(get_noc_addr(gather), 0u - gather_need);
+                } else {
+#else
             noc_async_write(
                 get_read_ptr(cb_xn), get_noc_addr(sx, sy, get_arg_val<uint32_t>(base + 1)), py * ROW_PAGE_BF16);
             noc_async_write_barrier();
+#ifdef HY4_IHC_FETCH_STAMPS
+            fetch_stamps[7] = get_timestamp_32b();
+#endif
             noc_semaphore_inc(get_noc_addr(rx, ry, gather), 1);
             noc_async_atomic_barrier();
             cb_pop_front(cb_xn, py);
@@ -357,6 +428,7 @@ void kernel_main() {
                 if (all) {
                     noc_semaphore_inc(get_noc_addr(gather), 0u - K);  // taken off: zero again for the next launch
                 } else {
+#endif
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_arg_val<uint32_t>(base + 5))[0] =
                         (0xC5u << 24) | (seen & 0xFFFFFF);
                 }
