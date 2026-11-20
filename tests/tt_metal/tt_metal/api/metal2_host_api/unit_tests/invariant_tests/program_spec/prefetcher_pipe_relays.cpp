@@ -145,5 +145,14 @@ TEST_F(PrefetcherPipeSpecTestQuasar, CPU_MultiPipeRelayProducerBindsSubsetFails)
         spec, "Kernel covers 6 node(s) besides 0 extra node(s): 3 of the 3 receiver node(s), 3 outside the receivers");
 }
 
+TEST_F(PrefetcherPipeSpecTestQuasar, CPU_RelayConsumerOnTrisc3Fails) {
+    // Relays run on trisc0 / trisc2 only.
+    ProgramSpec spec = MakeFullPipeSpec();
+    auto consumer = ConsumerOf(relay_dfb_name, "relay");
+    consumer.use_trisc3 = true;
+    KernelNamed(spec, "compute").dfb_bindings = {consumer};
+    EXPECT_SPEC_REJECTED(spec, "use_trisc3 is not supported on a PrefetcherPipe relay DFB");
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

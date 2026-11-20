@@ -58,6 +58,14 @@ struct KernelSpec {
         // - Cannot be blocked (not yet supported).
         // - For a producer binding, must be STRIDED.
         AccessPattern access_pattern = AccessPattern::STRIDED;
+
+        // Run this endpoint on trisc3 instead of trisc0 (consumer) / trisc2 (producer). A kernel may
+        // set it on both sides of one DFB.
+        // Invariant:
+        // - Only on a compute kernel.
+        // - Only on Gen2 (Quasar).
+        // - Not on a PrefetcherPipe relay DFB.
+        bool use_trisc3 = false;
     };
     // Invariant:
     // - Each DFB has at most one PRODUCER binding and at most one CONSUMER binding.
