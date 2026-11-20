@@ -26,6 +26,7 @@ import ttnn
 from loguru import logger
 from mpmath import mp, erf as mp_erf, erfc as mp_erfc, exp as mp_exp, sqrt as mp_sqrt
 from tests.ttnn.unit_tests.operations.eltwise.eltwise_test_utils import (
+    to_float32_tt_tensor,
     float_to_bf16_bits,
     bf16_bits_to_float,
     bf16_daz_normalize,
@@ -467,3 +468,28 @@ def test_gelu_bw_bf16_exhaustive(device):
     assert torch.allclose(
         z_torch_valid, tt_out_valid.to(torch.float32), rtol=2e-2, atol=2e-2
     ), "gelu_bw(variant=ttnn.GeluVariant.Tanh) output does not match float32 reference within tolerance"
+
+
+def test_gelu_bw_fp32_positive_tail(device):
+    """float32 gelu_bw above x = 3.1719, where GELU'(x) is still above 1 and reaches 1 only near x = 5.9.
+
+    The kernel used to clamp GELU' to exactly 1.0 from 3.1719 on, a threshold derived for bfloat16:
+    GELU'(3.1719) = 1.00751, so the float32 gradient was up to 7.5e-3 off.
+
+    | x            | max abs error |
+    |--------------|---------------|
+    | [3.1719, 4)  | 4e-5          |
+    | [4, 14]      | 6e-7          |
+    """
+    x = torch.cat([torch.linspace(3.1719, 4.0, 256), torch.linspace(4.0, 14.0, 768)]).reshape(1, 1, 32, 32)
+    x64 = x.double()
+    expected = (0.5 * (1 + torch.erf(x64 / 2**0.5)) + x64 * torch.exp(-x64 * x64 / 2) / (2 * torch.pi) ** 0.5).float()
+
+    tt_grad = to_float32_tt_tensor(torch.ones_like(x), device)
+    tt_input = to_float32_tt_tensor(x, device)
+    result = ttnn.to_torch(ttnn.gelu_bw(tt_grad, tt_input, variant=ttnn.GeluVariant.Accurate)[0])
+
+    error = (result - expected).abs()
+    near = x < 4.0
+    assert error[near].max() <= 4e-5, f"max error {error[near].max()} for x in [3.1719, 4)"
+    assert error[~near].max() <= 6e-7, f"max error {error[~near].max()} for x in [4, 14]"

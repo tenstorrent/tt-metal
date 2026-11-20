@@ -500,7 +500,28 @@ sfpi_inline sfpi::vFloat calculate_gelu_derivative_simple(sfpi::vFloat x) {
     }
 
     // For x >= 3.1719, output saturates to 1 (verified saturation threshold)
-    v_if(x >= 3.1719f) { result = 1.0f; }
+    v_if(x >= 3.1719f) {
+        result = 1.0f;
+        if constexpr (is_fp32_dest_acc_en) {
+            // GELU'(x) is still above 1 here (1.0075 at 3.1719, 1 + 6e-8 at 5.9), so a clamp to 1.0 is up to 7.5e-3
+            // off in fp32; the clamp is exact only for bf16. GELU'(x) = 1 - GELU'(-x), and the tail formula below
+            // is accurate for -x <= -3.17. Past 13.375 the correction is under one fp32 ulp of 1.0.
+            v_if(x < 13.375f) {
+                constexpr float INV_SQRT_2PI = 0.3989422804014327f;  // 1/sqrt(2*pi)
+                sfpi::vFloat t = x2_all * (-0.5f);
+                sfpi::vFloat neg_x_exp = x_times_exp_negative_tail(-x, t);
+                if constexpr (APPROXIMATION_MODE) {
+                    result = 1.0f - neg_x_exp * INV_SQRT_2PI;
+                } else {
+                    sfpi::vFloat inv_x2 = sfpu_reciprocal_iter<2>(x2_all);
+                    sfpi::vFloat inv_x4 = inv_x2 * inv_x2;
+                    sfpi::vFloat correction = 1.0f - inv_x2 + inv_x4;
+                    result = 1.0f - neg_x_exp * INV_SQRT_2PI * correction;
+                }
+            }
+            v_endif;
+        }
+    }
     // Core region [-3, 3.1719]: GELU'(x) = 0.5 + x * h(x²)
     // Odd-function decomposition: GELU'(x) + GELU'(-x) = 1, so GELU'(x) - 0.5
     // is odd and can be written as x * h(x²). Degree-8 in u=x² (~12 ops vs ~32).
