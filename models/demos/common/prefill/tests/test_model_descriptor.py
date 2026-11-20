@@ -58,7 +58,7 @@ def test_remove_drops_a_previous_runs_descriptor(tmp_path):
     model_descriptor.remove(str(path))
 
 
-def test_a_master_rank_launched_without_the_descriptor_path_stops_the_run(monkeypatch):
+def test_a_master_rank_launched_without_the_descriptor_path_stops_the_run(monkeypatch, expect_error):
     """Only the master rank writes the descriptor, so the ranks agree on its path before any of them sets up."""
     from models.demos.common.prefill.runners import prefill_runner as runner
 
@@ -69,7 +69,7 @@ def test_a_master_rank_launched_without_the_descriptor_path_stops_the_run(monkey
     runner._assert_ranks_agree_on_config(0, 2)
     monkeypatch.delenv(model_descriptor.PATH_ENV)
     monkeypatch.setattr(runner.ttnn, "distributed_context_allgather_int", lambda d: [rank0[0], d])
-    with pytest.raises(RuntimeError, match="DIFFERENT prefill configs"):
+    with expect_error(RuntimeError, "DIFFERENT prefill configs"):
         runner._assert_ranks_agree_on_config(1, 2)
 
 
