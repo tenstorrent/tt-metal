@@ -1231,6 +1231,7 @@ class TPAttention:
                 windowed_q_token_offset_tensor=chunk_start_idx_tensor,
                 program_config=sdpa_cfg,
                 compute_kernel_config=self.compute_cfg,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
             ttnn.deallocate(k)
             ttnn.deallocate(v)
@@ -1242,6 +1243,7 @@ class TPAttention:
                 page_table_tensor=sdpa_page_table,
                 chunk_start_idx_tensor=chunk_start_idx_tensor,
                 compute_kernel_config=self.compute_cfg,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=sdpa_cfg,
             )
         else:
@@ -1252,6 +1254,7 @@ class TPAttention:
                 page_table_tensor=sdpa_page_table,
                 chunk_start_idx=chunk_start_idx,
                 compute_kernel_config=self.compute_cfg,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 program_config=sdpa_cfg,
             )
         if sdpa_page_table is not page_table:

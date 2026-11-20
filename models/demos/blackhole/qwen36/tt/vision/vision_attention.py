@@ -123,6 +123,10 @@ class VisionAttention(LightweightModule):
         self.sdpa_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.SDPA_PREFILL, configuration=configuration
         )
+        # Prefill SDPA ignores compute_kernel_config: FP32 accumulation is the ACCURATE recipe.
+        self.sdpa_prefill_precision = (
+            ttnn.SDPAPrecision.ACCURATE if self.sdpa_prefill_compute_kernel_cfg.fp32_dest_acc_en else None
+        )
         self.li_qkv_prefill_compute_kernel_cfg = self.decoders_optimizations.get_math_fidelity(
             decoder_id=layer_num, op=OpGroup.LI_QKV_PREFILL, configuration=configuration
         )
@@ -385,6 +389,7 @@ class VisionAttention(LightweightModule):
             cu_window_seqlens=cu_window_seqlens,
             scale=self.scale,
             compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
+            precision=self.sdpa_prefill_precision,
             program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
         )
 
