@@ -59,10 +59,9 @@ const ttnn::Tensor& native(const autograd::TensorPtr& tensor) {
 }  // namespace
 
 // The runners' config parsers check the block before the model is built: the same errors as apply_precision_config,
-// and nothing stored or converted.
+// and no reduce dtype stored. It gets no parameters, so there is nothing it could convert.
 TEST_F(ParameterDtypeTest, ValidatesThePrecisionConfigWithoutApplyingIt) {
-    auto parameter = autograd::create_tensor(random_values(ttnn::DataType::BFLOAT16), /* requires_grad */ true);
-    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::FLOAT32);
     for (const char* training_config :
          {"seed: 5489",
           "precision: ~",
@@ -71,9 +70,9 @@ TEST_F(ParameterDtypeTest, ValidatesThePrecisionConfigWithoutApplyingIt) {
           "precision: {master_dtype: float32, reduce_dtype: float32}",
           "precision: {master_dtype: bfloat16, reduce_dtype: bfloat16}"}) {
         EXPECT_NO_THROW(core::validate_precision_config(YAML::Load(training_config))) << training_config;
+        // Applied, every block here but the fp32 one would store bf16 or nothing instead.
+        EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::FLOAT32) << training_config;
     }
-    EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
-    EXPECT_EQ(native(parameter).dtype(), ttnn::DataType::BFLOAT16);
 
     const auto validate = [](const char* training_config) {
         core::validate_precision_config(YAML::Load(training_config));
