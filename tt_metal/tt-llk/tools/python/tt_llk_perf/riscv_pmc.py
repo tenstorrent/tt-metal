@@ -5,6 +5,7 @@
 Names come from tools/include/perf_counters/riscv_pmc_*.h through headers.py; the formulas are in metrics.py.
 """
 
+from functools import lru_cache
 from typing import Dict, NamedTuple, Optional
 
 from . import headers, riscv_metrics
@@ -71,6 +72,7 @@ def unpack_launch(counts, cycles, events, counts_upper=0, events_upper=0) -> Lau
     )
 
 
+@lru_cache(maxsize=None)
 def event_label(arch, kind, select, include_dir=None) -> str:
     """Name of the events a select arms, joined with '|'; 'DISABLED' for a zero select."""
     names = headers.riscv_select_events(arch, kind, select, include_dir)

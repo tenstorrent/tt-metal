@@ -100,6 +100,29 @@ def test_select_round_trip():
                 assert name in headers.riscv_select_events(arch, kind, select)
 
 
+def test_events_that_share_a_select_field_combine():
+    select = headers.riscv_event_select(
+        "quasar", "dm", ["DM_PIPE_LOAD_USE", "DM_PIPE_FLUSH"]
+    )
+    assert select == 0x8101
+    assert headers.riscv_select_events("quasar", "dm", select) == [
+        "DM_PIPE_LOAD_USE",
+        "DM_PIPE_FLUSH",
+    ]
+
+
+@pytest.mark.parametrize(
+    "arch, kind, names",
+    [
+        ("blackhole", "baby", ["BP_PC_STALL_ANY", "BP_STALL_NO_ID_RTR"]),
+        ("quasar", "dm", ["DM_COMMIT_LOAD", "DM_PIPE_FLUSH"]),
+    ],
+)
+def test_events_that_need_different_values_of_one_field_raise(arch, kind, names):
+    with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
+        headers.riscv_event_select(arch, kind, names)
+
+
 def test_unknown_kind_and_event_raise():
     with pytest.raises(ValueError):  # allow-pytest.raises: no expect_error in LLK suite
         headers.riscv_select_events("blackhole", "dm", 1)
