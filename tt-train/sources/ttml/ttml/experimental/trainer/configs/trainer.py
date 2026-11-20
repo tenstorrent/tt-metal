@@ -42,10 +42,10 @@ class TrainerConfig(BaseModel):
     @model_validator(mode="after")
     def _check_best_rotation(self) -> "TrainerConfig":
         # The metrics a checkpoint carries come from validation.
-        if self.checkpoint.rotation_strategy.type == "best" and self.metrics.validation.steps_freq == 0:
+        if self.checkpoint.rotation_strategy.type == "best" and self.metrics.validation.frequency == 0:
             raise ValueError(
                 "checkpoint.rotation_strategy: best ranks checkpoints by validation, so set "
-                "metrics.validation.steps_freq"
+                "metrics.validation.frequency"
             )
         return self
 
