@@ -30,9 +30,10 @@ def barrier():
         ttnn.distributed_context_barrier()
 
 
-def local_shards(tensor):
+def local_shards(tensor, mesh_device):
     """`{(row, col): single-device host tensor}` for the shards this process holds."""
-    coords = list(tensor.device_coords())
+    view = mesh_device.get_view()
+    coords = [c for c in tensor.device_coords() if view.is_local(c)]
     return {(int(c[0]), int(c[1])): s for c, s in zip(coords, tensor.cpu_shards(coords))}
 
 
@@ -77,7 +78,7 @@ def test_high_bw_all_gather(rr_mesh, cluster_axis):
         device_input, dim=2, output_tensor=output, cluster_axis=cluster_axis, num_links=NUM_LINKS
     )
     ttnn.synchronize_device(rr_mesh)
-    shards = local_shards(gathered)
+    shards = local_shards(gathered, rr_mesh)
     assert shards, "this process holds no shard"
     for coord, shard in shards.items():
         assert torch.equal(ttnn.to_torch(shard), host_input), f"chip {coord}: gathered rows differ"
@@ -116,7 +117,7 @@ def test_matmul_reduce_scatter_prefill(rr_mesh, cluster_axis):
         compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
     )
     ttnn.synchronize_device(rr_mesh)
-    shards = local_shards(out)
+    shards = local_shards(out, rr_mesh)
     assert shards, "this process holds no shard"
     for (r, c), shard in shards.items():
         line = [(g, c) if cluster_axis == 0 else (r, g) for g in range(SIDE)]

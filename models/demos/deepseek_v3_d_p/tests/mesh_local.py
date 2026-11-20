@@ -15,6 +15,7 @@ def local_device_tensors(tensor, mesh_device):
     whole mesh, so a test checks its own chips against the reference for those positions.
     """
     cols = tuple(mesh_device.shape)[1]
-    coords = list(tensor.device_coords())
+    view = mesh_device.get_view()
+    coords = [coord for coord in tensor.device_coords() if view.is_local(coord)]
     shards = tensor.cpu_shards(coords)
     return {int(coord[0]) * cols + int(coord[1]): shard for coord, shard in zip(coords, shards)}
