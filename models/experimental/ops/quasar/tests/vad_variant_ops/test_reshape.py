@@ -42,6 +42,6 @@ def test_reshape(ttnn_mesh_device, reset_seeds, in_shape, out_shape, layout, mem
     mesh = ttnn_mesh_device
     x_torch = U.torch_rand(in_shape)
     x = U.to_tt_mem(x_torch, mesh, mem, layout=layout)
-    out = ttnn.reshape(x, out_shape, memory_config=U.resolve_memcfg(mem, mesh))
+    out = U.op("reshape")(x, out_shape, memory_config=U.resolve_memcfg(mem, mesh))
     assert tuple(out.shape) == tuple(out_shape)
     U.assert_lossless(x_torch.reshape(out_shape), out, mesh_device=mesh)

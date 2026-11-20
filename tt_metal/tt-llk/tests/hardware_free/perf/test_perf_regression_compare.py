@@ -12,7 +12,6 @@ Run: pytest test_perf_regression_compare.py
 """
 
 import pathlib
-import runpy
 import sys
 
 import pandas as pd
@@ -29,7 +28,6 @@ from regression_compare import (  # noqa: E402
     compare_runs,
     render_report,
 )
-from test_name_aliases import TEST_NAME_ALIASES  # noqa: E402
 
 # Magnitudes are realistic cycle counts, not toy numbers: the verdict depends on
 # an absolute cycle floor, so a test written at 100 cycles would prove nothing
@@ -168,29 +166,64 @@ def test_renamed_module_compares_through_schema_alias(tmp_path):
     }
 
 
-def test_sparse_gate_aliases_match_schema_catalog():
-    catalog = runpy.run_path(
-        str(
-            _PERF.parent
-            / "tests"
-            / "python_tests"
-            / "helpers"
-            / "perf"
-            / "test_schemas.py"
-        )
-    )
-    schema_aliases = {}
-    for catalog_name in ("PERF_TEST_SCHEMAS", "PERF_TEST_SCHEMAS_QSR"):
-        for entry in catalog[catalog_name].values():
-            schema_aliases.update(
-                {
-                    old: current
-                    for old, current in entry.get("test_name_aliases", {}).items()
-                    if old != current
-                }
-            )
+def _column_csv(tmp_path, name, module, column, value=4):
+    path = tmp_path / name / f"{module}.csv"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(
+        {
+            "marker": ["TILE_LOOP"],
+            column: [value],
+            "mean(L1_TO_L1)": [_TILE_LOOP],
+        }
+    ).to_csv(path, index=False)
+    return str(path)
 
-    assert TEST_NAME_ALIASES == schema_aliases
+
+@pytest.mark.parametrize(
+    "module, old, new",
+    [
+        ("perf_sfpu_reduce_sdpa", "reduce_pool_type", "pool_type"),
+        ("perf_sfpu_ternary", "ternary_mathop", "mathop"),
+    ],
+)
+def test_renamed_column_matches_old_baseline(tmp_path, module, old, new):
+    baseline = [_column_csv(tmp_path, "b", module, old, "X")]
+    current = [_column_csv(tmp_path, "c", module, new, "X")]
+
+    result = compare_runs(current, baseline)
+
+    assert len(result["records"]) == 1
+    assert not result["new_points"]
+
+
+def test_renamed_module_and_column_match_together(tmp_path):
+    baseline = [_column_csv(tmp_path, "b", "perf_pack_dest_bank", "tile_cnt")]
+    current = [_column_csv(tmp_path, "c", "perf_pack_l1_acc", "tile_cnt")]
+
+    assert len(compare_runs(current, baseline)["records"]) == 1
+
+
+def test_column_alias_only_applies_to_its_own_test(tmp_path):
+    # `ternary_mathop` is only a legacy name inside perf_sfpu_ternary.
+    baseline = [_column_csv(tmp_path, "b", "perf_x", "ternary_mathop", "X")]
+    current = [_column_csv(tmp_path, "c", "perf_x", "mathop", "X")]
+
+    result = compare_runs(current, baseline)
+
+    assert not result["records"]
+    assert len(result["new_points"]) == 1
+
+
+def test_missing_schema_catalog_stops_the_gate(tmp_path, monkeypatch):
+    import regression_compare
+
+    monkeypatch.setattr(regression_compare, "SCHEMA_CATALOG", tmp_path / "none.py")
+    monkeypatch.setattr(regression_compare, "_HISTORY", None)
+
+    with pytest.raises(  # allow-pytest.raises: no expect_error fixture in LLK suite
+        SystemExit
+    ):
+        regression_compare._naming_history()
 
 
 def test_new_config_is_reported_not_flagged(tmp_path):

@@ -127,8 +127,8 @@
 #   # Perf report, speed-of-light build as the nightly LLK perf run measures.
 #   # A run tag is single-use: pick a new one for every run.
 #   bash "$WORKTREE_DIR/.claude/scripts/run_test.sh" run \
-#       --worktree "$WORKTREE_DIR" --arch wormhole --test perf_pack_dest_bank.py \
-#       --perf --speed-of-light --run-tag pack-dest-bank-sol
+#       --worktree "$WORKTREE_DIR" --arch wormhole --test perf_pack_l1_acc.py \
+#       --perf --speed-of-light --run-tag pack-l1-acc-sol
 
 # ── Parse ────────────────────────────────────────────────────────────────────
 
