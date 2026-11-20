@@ -278,8 +278,9 @@ void check_not_owners(nb::handle self, const nb::str& name) {
 // nb::dynamic_attr()). On an instance of bound_type itself it sets the class's own attributes and rejects any other
 // name with AttributeError, as the classes without dynamic_attr do; a Python subclass may set attributes of its own.
 // The attributes that hold the owners (_tensor_args and _global_semaphore_args) and the instance __dict__ that holds
-// them cannot be assigned or deleted through these classes, for both: only set_owners writes them. object.__setattr__
-// and code that edits these dicts in place can still drop the objects, as with any private Python state.
+// them cannot be assigned or deleted through these classes, for both: only set_owners writes them.
+// object.__setattr__, object.__delattr__ and code that edits these dicts in place can still drop the objects, as with
+// any private Python state.
 void set_known_attribute(nb::handle self, const nb::str& name, nb::handle value, nb::handle bound_type) {
     check_not_owners(self, name);
     if (self.type().is(bound_type) && !nb::hasattr(bound_type, name)) {
