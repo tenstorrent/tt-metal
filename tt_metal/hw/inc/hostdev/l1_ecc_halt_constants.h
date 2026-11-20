@@ -35,6 +35,13 @@ enum class EccView : uint32_t {
     LAST_L1_ERROR_BANKS_16_31 = 6,
 };
 
+// ECC_CTRL's interrupt enables while armed. The hardware interrupts only on an error in a word other than the last
+// error's, so the SBE interrupt is enabled and every SBE clears the last error: a later DBE in the same word is then
+// new and interrupts.
+constexpr uint32_t l1_ecc_ctrl_irq_enables = ECC_CTRL_L1_SBE_IRQ_EN | ECC_CTRL_L1_DBE_IRQ_EN;
+// ECC_CTRL after arming and after a false error.
+constexpr uint32_t l1_ecc_ctrl_armed = static_cast<uint32_t>(EccView::L1_COUNTS) | l1_ecc_ctrl_irq_enables;
+
 // ECC_STATUS fields. Masks are in place; a field's value is (status & MASK) >> SHIFT.
 enum EccStatus : uint32_t {
     // Views 1 and 2: L1 counts.
