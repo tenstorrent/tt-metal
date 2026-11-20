@@ -99,6 +99,12 @@ void CopyDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.output_dtype == DataType::FP8_E4M3,
         "ttnn.copy only supports float, bfloat, fp8_e4m3, int32, uint32, uint16 and uint8 output tensors but got {}",
         operation_attributes.output_dtype);
+    TT_FATAL(
+        ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+            input_tensor_a.dtype(), operation_attributes.output_dtype),
+        "ttnn.copy: datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+        input_tensor_a.dtype(),
+        operation_attributes.output_dtype);
     TT_FATAL(input_tensor_a.storage_type() == StorageType::DEVICE, "Operands to copy need to be on device!");
     TT_FATAL(input_tensor_a.is_allocated(), "Operands to copy need to be allocated in buffers on device!");
 

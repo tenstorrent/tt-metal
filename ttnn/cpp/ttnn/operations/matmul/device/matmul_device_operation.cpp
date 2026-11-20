@@ -2793,6 +2793,10 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     const auto& input_tensor_b = args.input_tensors.at(1);
     const auto& optional_input_tensors = args.optional_input_tensors;
 
+    if (attributes.output_dtype.has_value()) {
+        ttnn::operations::matmul::validate_matmul_output_dtype(attributes.output_dtype.value());
+    }
+
     auto a_shape =
         operations::matmul::utilities::get_matmul_tensor_logical_shape(input_tensor_a, attributes.transpose_a);
     const auto& b_shape =

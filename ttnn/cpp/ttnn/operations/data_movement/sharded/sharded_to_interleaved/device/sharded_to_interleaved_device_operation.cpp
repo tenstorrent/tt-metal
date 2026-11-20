@@ -69,6 +69,13 @@ std::pair<bool, std::string> ShardedToInterleavedDeviceOperation::validate_input
         if (input_tensor.layout() != Layout::TILE) {
             return {false, "If diff output type, tensor must be TILED"};
         }
+        if (!ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+                input_tensor.dtype(), args.output_dtype)) {
+            return {
+                false,
+                "sharded_to_interleaved: datacopy cannot convert this dtype pair (reinterprets bits); use "
+                "ttnn.typecast."};
+        }
     }
     if (input_tensor.layout() == Layout::TILE) {
         auto tile = input_tensor.tensor_spec().tile();

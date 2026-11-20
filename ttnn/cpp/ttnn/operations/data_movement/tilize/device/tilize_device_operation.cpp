@@ -15,6 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
@@ -224,6 +225,13 @@ void TilizeDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             input_tensor_a.dtype() != DataType::FP8_E4M3 || (is_floating_point(out_dt) && out_dt != DataType::FP8_E4M3),
             "FP8_E4M3 input to tilize requires a float TILE output (FLOAT32, BFLOAT16, BFLOAT8_B, or BFLOAT4_B)");
+        // Datacopy via unpack/pack cannot convert values across int<->float or the uint16<->{int32,uint32}
+        // pairs; forbid those pairs the same way FP8 is forbidden above. Issue #58372.
+        TT_FATAL(
+            ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(input_tensor_a.dtype(), out_dt),
+            "tilize: datacopy cannot convert {} -> {} (reinterprets bits); use ttnn.typecast.",
+            input_tensor_a.dtype(),
+            out_dt);
         // The Blackhole 8-bit unpack-tilize path corrupts odd rows when the block is a single column
         // tile (ct_dim == 1, i.e. one tile per row); wider outputs are correct. Reject the broken
         // narrow case for fp8 to avoid silently-wrong data (tt-llk narrow 8-bit tilize bug).

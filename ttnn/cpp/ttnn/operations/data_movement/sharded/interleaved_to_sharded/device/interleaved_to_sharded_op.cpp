@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include <tt-metalium/hal.hpp>
 #include <ttnn/operation.hpp>
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 namespace ttnn::prim {
@@ -95,6 +96,13 @@ std::pair<bool, std::string> InterleavedToShardedDeviceOperation::validate_input
     if (input_tensor.dtype() != output_dtype) {
         if (input_tensor.layout() != Layout::TILE) {
             return {false, "Input tensor layout must be TILE when dtype conversion is needed"};
+        }
+        if (!ttnn::operations::data_movement::is_datacopy_safe_dtype_conversion(
+                input_tensor.dtype(), output_dtype)) {
+            return {
+                false,
+                "interleaved_to_sharded: datacopy cannot convert this dtype pair (reinterprets bits); use "
+                "ttnn.typecast."};
         }
     }
     if (input_tensor.layout() == Layout::TILE) {

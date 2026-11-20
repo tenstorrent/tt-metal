@@ -39,6 +39,25 @@ inline bool requires_unpack_to_dest(tt::tt_metal::DataType dtype) {
            dtype == tt::tt_metal::DataType::UINT32;
 }
 
+// Datacopy ops (clone/copy/sharding/tilize) convert dtype via the unpack/pack format conversion,
+// which reinterprets integer<->float bits instead of converting the value. Only pairs listed here
+// preserve values; others must go through ttnn.typecast's SFPU kernel. Issue #58372.
+inline bool is_datacopy_safe_dtype_conversion(tt::tt_metal::DataType src, tt::tt_metal::DataType dst) {
+    using tt::tt_metal::DataType;
+    if (src == dst) {
+        return true;
+    }
+    // Float formats convert between each other through the packer (precision only, no value drift).
+    if (tt::tt_metal::is_floating_point(src) && tt::tt_metal::is_floating_point(dst)) {
+        return true;
+    }
+    // Same-bit-width integer aliases: packer keeps the bit pattern and the value is preserved.
+    const bool int32_uint32 =
+        (src == DataType::INT32 && dst == DataType::UINT32) || (src == DataType::UINT32 && dst == DataType::INT32);
+    const bool uint8_wide_int = src == DataType::UINT8 && (dst == DataType::INT32 || dst == DataType::UINT32);
+    return int32_uint32 || uint8_wide_int;
+}
+
 // Deprecated: use requires_unpack_to_dest(fmt) directly. Kept until all callers migrate.
 inline bool needs_fp32_unpack_to_dest(bool fp32_dest_acc_en, tt::tt_metal::DataType dtype) {
     return fp32_dest_acc_en && requires_unpack_to_dest(dtype);
