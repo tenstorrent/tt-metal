@@ -112,11 +112,11 @@ void expect_cluster_is_manifest(const vc::Manifest& manifest, const YAML::Node& 
     }
 }
 
-// Step 4: the manifest's worker slots are exactly hart 1 of the CCE of the router that faces the line on the first
-// chip and on the last, the two the line's traffic uses.
+// The manifest's idle slots on CCE1 are exactly CCE1 of the tile of the router that faces the line on the first
+// chip and on the last, where the line's two workers run.
 void expect_workers_are_the_lines(const vc::Manifest& manifest) {
     const Line line = line_ends();
-    std::set<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> expected;  // (fabric_chip, (tile, cce))
+    std::set<std::pair<uint32_t, uint32_t>> expected;  // (fabric_chip, tile)
     for (const Worker& end : {line.sender, line.receiver}) {
         const vc::Device& device = device_of_chip(manifest, end.node.chip_id);
         const vc::Slot* router = vc::find_router(manifest, {device.name, end.router_chan});
@@ -124,21 +124,15 @@ void expect_workers_are_the_lines(const vc::Manifest& manifest) {
                                    << static_cast<uint32_t>(end.router_chan) << ", which faces the line";
         expected.insert({device.fabric_chip, router->tile});
     }
-    std::set<std::pair<uint32_t, std::pair<uint32_t, uint32_t>>> workers;
-    size_t num_workers = 0;
+    std::set<std::pair<uint32_t, uint32_t>> workers;
     for (const auto& device : manifest.devices) {
         for (const auto& slot : device.slots) {
-            if (slot.role != vc::SlotRole::Worker) {
-                continue;
+            if (slot.role == vc::SlotRole::Idle && slot.cce == 1) {
+                workers.insert({device.fabric_chip, slot.tile});
             }
-            ++num_workers;
-            EXPECT_EQ(slot.hart, 1u) << "device " << device.name << " has a worker on hart " << slot.hart
-                                     << "; the line's workers are on hart 1";
-            workers.insert({device.fabric_chip, {slot.tile, slot.cce}});
         }
     }
-    EXPECT_EQ(num_workers, 2u) << "the line uses two workers";
-    EXPECT_EQ(workers, expected) << "the workers are not beside the routers that face the line on its two ends";
+    EXPECT_EQ(workers, expected) << "the idle CCE1 slots are not beside the routers that face the line on its two ends";
 }
 
 // With TT_VCLUSTER_MANIFEST set, every skip but Mock's is a failure, so this fixture does not skip in SetUp when fewer
