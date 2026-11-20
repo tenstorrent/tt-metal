@@ -28,6 +28,8 @@ FORCE_INLINE void zero_out_tiles(Noc noc, DataflowBuffer dfb) {
     noc.write_zeros_l1_barrier();
 }
 
+// window_h_reads > 1 (full_inner_dim on a height sharded conv): each pixel's activation row holds all window_h
+// kernel rows, read window_h_stride_bytes apart; otherwise one kernel row per call (the inner dim is sliced).
 template <
     uint32_t dilation_w,
     uint32_t coalesced_read_bytes,
@@ -35,7 +37,9 @@ template <
     uint32_t act_block_w_extra_align_bytes,
     uint32_t stride_w_bytes,
     uint32_t weight_size_w,
-    uint32_t stride_w>
+    uint32_t stride_w,
+    uint32_t window_h_reads = 1,
+    uint32_t window_h_stride_bytes = 0>
 FORCE_INLINE void read_sticks(
     Noc noc,
     volatile tt_l1_ptr uint32_t* packed_reader_indices_ptr,
@@ -52,16 +56,26 @@ FORCE_INLINE void read_sticks(
         if constexpr (dilation_w == 1) {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
                 uint32_t src_addr = reader_offset + (ind * conv_act_c_read_bytes);
-                experimental::read_with_state(noc, l1_write_addr_act, src_addr);
-                l1_write_addr_act += (coalesced_read_bytes + act_block_w_extra_align_bytes);
+#pragma GCC unroll(window_h_reads)
+                for (uint32_t kh = 0; kh < window_h_reads; kh++) {
+                    experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+                    l1_write_addr_act += coalesced_read_bytes;
+                    src_addr += window_h_stride_bytes;
+                }
+                l1_write_addr_act += act_block_w_extra_align_bytes;
             }
         } else {
             for (uint16_t ind = start_ind; ind <= end_ind; ind += stride_w) {
-                uint32_t src_addr = reader_offset + (ind * conv_act_c_read_bytes);
-                for (uint32_t inner = 0; inner < weight_size_w; inner++) {
-                    experimental::read_with_state(noc, l1_write_addr_act, src_addr);
-                    l1_write_addr_act += conv_act_c_read_bytes;
-                    src_addr += stride_w_bytes;
+                uint32_t row_addr = reader_offset + (ind * conv_act_c_read_bytes);
+#pragma GCC unroll(window_h_reads)
+                for (uint32_t kh = 0; kh < window_h_reads; kh++) {
+                    uint32_t src_addr = row_addr;
+                    for (uint32_t inner = 0; inner < weight_size_w; inner++) {
+                        experimental::read_with_state(noc, l1_write_addr_act, src_addr);
+                        l1_write_addr_act += conv_act_c_read_bytes;
+                        src_addr += stride_w_bytes;
+                    }
+                    row_addr += window_h_stride_bytes;
                 }
                 l1_write_addr_act += act_block_w_extra_align_bytes;
             }
@@ -69,6 +83,12 @@ FORCE_INLINE void read_sticks(
     }
     reader_idx++;
 }
+
+#ifdef ACT_WINDOW_H_READS
+constexpr uint32_t act_window_h_reads = ACT_WINDOW_H_READS;
+#else
+constexpr uint32_t act_window_h_reads = 1;
+#endif
 
 template <uint32_t coalesced_read_bytes, uint32_t stride_h_bytes>
 FORCE_INLINE void read_kernel_w(Noc noc, uint32_t& l1_write_addr_act, uint32_t& act_l1_offset) {

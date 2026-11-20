@@ -41,6 +41,20 @@ the 7x7/s2 conv becomes pixel_unshuffle(2) + a 4x4/s1 conv on re-packed weights,
 conv input is [1,1,159744,12] in L1 (no tilize of the image, 4x smaller permute, no DRAM
 slicing, no to_memory_config before the grouped conv). Everything from the grouped conv on
 is identical between the two tests.
+
+Third test, test_evo50_input_preproc_s2d_nhwc: pixel_unshuffle(channels_last=True) writes the
+conv input directly (NHWC, height-sharded) plus the sweep-tuned conv configs.
+
+Fourth test, test_evo50_input_preproc_s2d_nhwc_opt (docs/evo50_input_preproc_s2d_nhwc_opt.md):
+the third test plus
+  * conv2 (grouped 3x3) with full_inner_dim=True, act_block_h_override=192: the whole 3x3
+    window is one inner-dim block (no fp32 partial spill/reload per kernel row);
+  * the output tail rebuilt from existing ops: per-image-row WH transpose on the shards ->
+    sharded untilize -> H<->C row-major transpose of 1664 B sticks straight into DRAM, instead
+    of permute(0,3,1,2) on TILE (16 channels padded to 32) + move to DRAM + untilize.
+Same math, same compute config (HiFi2, fp32 accumulation); kernel-side changes it relies on:
+pixel_unshuffle gather split across all five RISCs, full_inner_dim for height-sharded conv2d,
+halo NOC-direction block split and 64-row untilize blocks.
 """
 
 import pytest
@@ -549,5 +563,105 @@ def test_evo50_input_preproc_s2d_nhwc(device):
     ttnn.synchronize_device(device)
     result = ttnn.to_torch(out)
     signpost(header="evo50_s2d_nhwc_inference-end")
+
+    _check(result, golden)
+
+
+def _tail_opt(t7):
+    """Output tail without the TILE permute. conv2's output is [1,1,159744,16] TILE height-sharded, 2496 pixels
+    (= 3 whole image rows) per core.
+      1. reshape [1,192,832,16]   view: 832 is tile-aligned
+      2. transpose(2,3)           WH tile transpose on the shards -> [1,192,16,832], still height-sharded
+      3. to_layout ROW_MAJOR      sharded -> sharded untilize; every (h, c) row is one 1664 B stick
+      4. transpose(1,2) -> DRAM   swaps H and C on whole sticks -> [1,16,192,832] ROW_MAJOR DRAM
+    """
+    t8 = ttnn.reshape(t7, (BATCH, MID_H, MID_W, C2_OUT))
+    _free_unless_alias(t7, t8)
+    t9 = ttnn.transpose(t8, 2, 3)
+    ttnn.deallocate(t8)
+    t10 = ttnn.to_layout(t9, ttnn.ROW_MAJOR_LAYOUT, memory_config=t9.memory_config())
+    ttnn.deallocate(t9)
+    out = ttnn.transpose(t10, 1, 2, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    ttnn.deallocate(t10)
+    return out
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_evo50_input_preproc_s2d_nhwc_opt(device):
+    """test_evo50_input_preproc_s2d_nhwc + conv2 full_inner_dim (abh 192) + the row-wise output tail."""
+    x, w1, b1, w2, b2 = _make_inputs()
+    _, golden = torch_golden(x.float(), w1.float(), b1.float(), w2.float(), b2.float())
+
+    tt_in = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    w1_packed16 = F.pad(pack_weight_s2d(w1.float()), (0, 0, 0, 0, 0, S2D_CP - S2D_C))
+    tt_w1_packed16 = ttnn.from_torch(w1_packed16.to(torch.bfloat16), dtype=ttnn.bfloat16)
+    tt_b1 = ttnn.from_torch(b1.reshape(1, 1, 1, C1_OUT), dtype=ttnn.bfloat16)
+    tt_w2 = ttnn.from_torch(w2, dtype=ttnn.bfloat16)
+    tt_b2 = ttnn.from_torch(b2.reshape(1, 1, 1, C2_OUT), dtype=ttnn.bfloat16)
+
+    compute_cfg, _, slice_l1_full = _common_configs(device)
+    tuned = dict(
+        weights_dtype=ttnn.bfloat16,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU),
+        deallocate_activation=True,
+        reallocate_halo_output=False,
+        act_block_h_override=832,
+        enable_act_double_buffer=True,
+        shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        enable_kernel_stride_folding=False,
+        config_tensors_in_dram=True,
+    )
+    # conv1 (4x4, 16 in-channels) stays sliced per kernel row: full_inner_dim measured slower at every block
+    # height (abh 416: 148 us, 192: 136 us, 832 single-buffered: 168 us vs 131 us).
+    conv1_cfg = ttnn.Conv2dConfig(**tuned)
+    # conv2 (grouped 3x3): the whole window as one inner-dim block, 123 -> 110 us. abh 832/416 overflow L1 with the
+    # 3x wider activation block (one 9-tile inner block instead of 3 x 3 tiles), 96 is slower (127 us).
+    conv2_cfg = ttnn.Conv2dConfig(**{**tuned, "full_inner_dim": True, "act_block_h_override": 192})
+
+    hs_rm_cfg = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(HS_CORE_GRID[0] - 1, HS_CORE_GRID[1] - 1))}
+            ),
+            (S2D_H * S2D_W // (HS_CORE_GRID[0] * HS_CORE_GRID[1]), S2D_CP),
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    def run():
+        y1 = _stem_s2d_nhwc(device, tt_in, tt_w1_packed16, tt_b1, conv1_cfg, compute_cfg, slice_l1_full, hs_rm_cfg)
+        t7 = ttnn.conv2d(
+            input_tensor=y1,
+            weight_tensor=tt_w2,
+            bias_tensor=tt_b2,
+            device=device,
+            in_channels=C2_OUT,
+            out_channels=C2_OUT,
+            batch_size=BATCH,
+            input_height=MID_H,
+            input_width=MID_W,
+            kernel_size=C2_K,
+            stride=C2_STRIDE,
+            padding=C2_PAD,
+            dilation=(1, 1),
+            groups=C2_GROUPS,
+            conv_config=conv2_cfg,
+            compute_config=compute_cfg,
+            slice_config=slice_l1_full,
+        )
+        return _tail_opt(t7)
+
+    ttnn.deallocate(run())
+    ttnn.synchronize_device(device)
+
+    signpost(header="evo50_s2d_nhwc_opt_inference-start")
+    out = run()
+    ttnn.synchronize_device(device)
+    result = ttnn.to_torch(out)
+    signpost(header="evo50_s2d_nhwc_opt_inference-end")
 
     _check(result, golden)

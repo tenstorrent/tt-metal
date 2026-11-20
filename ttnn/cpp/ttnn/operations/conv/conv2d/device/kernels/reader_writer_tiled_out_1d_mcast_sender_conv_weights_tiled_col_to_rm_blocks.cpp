@@ -173,7 +173,10 @@ void kernel_main() {
                         act_block_w_extra_align_bytes,
                         stride_w_bytes,
                         weight_size_w,
-                        stride_w>(noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
+                        stride_w,
+                        act_window_h_reads,
+                        window_outer_offset>(
+                        noc, packed_reader_indices_ptr, reader_offset, l1_write_addr_act, reader_idx);
                     noc.async_read_barrier();
                     dfb_act_second_obj.push_back(act_block_num_tiles);
 

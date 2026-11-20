@@ -171,6 +171,20 @@ static inline void write_stick_async(
         {.noc_x = dst_noc_x, .noc_y = dst_noc_y, .addr = dst_addr});
 }
 
+// Block -> gather RISC assignment, shared with the host (sliding_window.cpp divide_blocks_between_cores) and the
+// compute kernel (pack_untilize.cpp): blocks [0, left_blocks) write to cores behind this core in NOC-0 order and go to
+// RISC 1 (NOC 1, the short way round the torus), blocks [right_block_start, n) write ahead and go to RISC 0 (NOC 0),
+// the blocks in between alternate.
+FORCE_INLINE uint32_t halo_block_owner(uint32_t block_id, uint32_t left_blocks, uint32_t right_block_start) {
+    if (block_id < left_blocks) {
+        return 1;
+    }
+    if (block_id >= right_block_start) {
+        return 0;
+    }
+    return (block_id - left_blocks) & 1;
+}
+
 template <
     uint32_t InputCBIndex,
     uint32_t OutputCBIndex,
@@ -178,7 +192,7 @@ template <
     uint32_t BlockSizeHeight,
     uint32_t BlockSizeWidthTiles,
     uint32_t BlockStride,
-    uint32_t BlockStartOffset,
+    uint32_t MyRisc,
     bool EnableBlocking,
     bool IsBlockSharded,
     bool IsWidthSharded,
@@ -189,7 +203,10 @@ static inline void run_halo_gather(
     experimental::CB out_cb,
     const tt_l1_ptr uint16_t* config,
     uint16_t my_noc_x,
-    uint16_t my_noc_y) {
+    uint16_t my_noc_y,
+    uint32_t left_blocks,
+    uint32_t right_block_start,
+    uint32_t total_blocks) {
     static_assert(BlockStride >= 1, "Blocks stride must be at least 1");
 
     constexpr uint32_t block_size_height_tiles = BlockSizeHeight / TILE_SIZE;
@@ -210,8 +227,12 @@ static inline void run_halo_gather(
         in_cb.wait_front(total_tiles_in_single_block);
     }
 
-    uint16_t block_id = BlockStartOffset;
-    uint16_t block_boundary_offset = BlockSizeHeight + (BlockSizeHeight * BlockStartOffset);
+    // First block owned by this RISC (a RISC with segments owns at least one block).
+    uint32_t block_id = 0;
+    while (block_id < total_blocks && halo_block_owner(block_id, left_blocks, right_block_start) != MyRisc) {
+        block_id++;
+    }
+    uint32_t block_boundary_offset = BlockSizeHeight * (block_id + 1);
     while (number_of_segments_remaining) {
         //  Read header for to get destination for this route
         const uint16_t destination_noc_x = config[current_config_index++];
@@ -234,11 +255,14 @@ static inline void run_halo_gather(
                     noc.async_write_barrier();
                     in_cb.pop_front(total_tiles_in_single_block);
                     in_cb.wait_front(total_tiles_in_single_block);
-                    block_boundary_offset +=
-                        BlockSizeHeight *
-                        BlockStride;  // When block stride > 1 we are expecting the input CB to skip
-                                      // BlockStride number of blocks (like when splitting work across cores)
-                    block_id += BlockStride;
+                    // Advance to the next block owned by this RISC (the compute kernel pushes exactly those blocks
+                    // into this RISC's CB).
+                    block_id++;
+                    while (block_id < total_blocks &&
+                           halo_block_owner(block_id, left_blocks, right_block_start) != MyRisc) {
+                        block_id++;
+                    }
+                    block_boundary_offset = BlockSizeHeight * (block_id + 1);
                     // in_src tracks the CB's read_ptr dynamically via AddrSelector::READ_PTR
                 }
             }
@@ -311,6 +335,9 @@ void kernel_main() {
 
     const uint16_t my_noc_x = my_x[noc.get_noc_id()];
     const uint16_t my_noc_y = my_y[noc.get_noc_id()];
+    const uint32_t left_blocks = get_arg_val<uint32_t>(1);
+    const uint32_t right_block_start = get_arg_val<uint32_t>(2);
+    const uint32_t total_blocks = get_arg_val<uint32_t>(3);
 
     // Only one of the cores should push the input
     if constexpr (block_start_offset == 0) {
@@ -359,7 +386,8 @@ void kernel_main() {
         enable_blocking,
         is_block_sharded,
         is_width_sharded,
-        is_col_major>(noc, in_cb, out_cb, config_data, my_noc_x, my_noc_y);
+        is_col_major>(
+        noc, in_cb, out_cb, config_data, my_noc_x, my_noc_y, left_blocks, right_block_start, total_blocks);
 
     noc.async_read_barrier();
     noc.async_write_barrier();

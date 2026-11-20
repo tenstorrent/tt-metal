@@ -485,7 +485,9 @@ Conv2dBlockConfig determine_per_core_conv_block_config(
             const uint32_t depthwise_window_scaler = coalesce_1d_depthwise_kw_reads ? window_w : 1;
             act_block_w = tt::round_up(padded_in_channels * depthwise_window_scaler, tt::constants::TILE_WIDTH);
         } else {
-            act_block_w = enable_activation_reuse
+            // Activation reuse and full_inner_dim both put the whole kh x kw window of a pixel in one activation
+            // block row (one inner-dim block, no partial-sum spill/reload between kernel rows).
+            act_block_w = (enable_activation_reuse || full_inner_dim)
                               ? tt::round_up(padded_in_channels * window_h * window_w, tt::constants::TILE_WIDTH)
                               : tt::round_up(padded_in_channels * window_w, tt::constants::TILE_WIDTH);
         }

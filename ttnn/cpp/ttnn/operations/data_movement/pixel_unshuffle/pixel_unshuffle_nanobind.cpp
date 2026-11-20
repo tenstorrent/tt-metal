@@ -24,7 +24,12 @@ void bind_pixel_unshuffle(nb::module_& mod) {
             "SPATIAL_MAJOR",
             ttnn::PixelUnshuffleChannelOrder::SPATIAL_MAJOR,
             "Input channels are interleaved across sub-pixels "
-            "(c_out = rh*(r*C) + rw*C + c_in). Matches ONNX SpaceToDepth channel ordering.");
+            "(c_out = rh*(r*C) + rw*C + c_in). Matches ONNX SpaceToDepth channel ordering.")
+        .value(
+            "COLUMN_MAJOR_PADDED",
+            ttnn::PixelUnshuffleChannelOrder::COLUMN_MAJOR_PADDED,
+            "channels_last only: c_out = rw*32 + rh*C + c_in, every sub-pixel column zero-padded to 32 channels "
+            "(padded_channels = r*32); produced on the compute engine by tilize, tile transpose and untilize.");
 
     const auto* doc = R"doc(
         pixel_unshuffle(input, downscale_factor, *, memory_config=None, output_layout=None, channel_order=PixelUnshuffleChannelOrder.CHANNEL_MAJOR, channels_last=False, padded_channels=None) -> ttnn.Tensor
@@ -67,6 +72,11 @@ void bind_pixel_unshuffle(nb::module_& mod) {
                 packed into the output channel axis. Only matters when C > 1.
                 ``CHANNEL_MAJOR`` (default) → PyTorch ordering (c_out = c_in*r^2 + rh*r + rw).
                 ``SPATIAL_MAJOR`` → ONNX SpaceToDepth ordering (c_out = rh*(r*C) + rw*C + c_in).
+                ``COLUMN_MAJOR_PADDED`` → channels_last only: c_out = rw*32 + rh*C + c_in with every
+                sub-pixel column zero-padded to 32 channels (padded_channels = r*32). Produced by the
+                compute engine (tilize, tile transpose, untilize) instead of per-element gathers;
+                needs bfloat16, r | 32, C*r <= 32, W % 32 == 0 and a shard height that is a multiple
+                of 32/r pixels.
 
         Returns:
             ttnn.Tensor: Output tensor ``[N, C * r^2, H / r, W / r]``.

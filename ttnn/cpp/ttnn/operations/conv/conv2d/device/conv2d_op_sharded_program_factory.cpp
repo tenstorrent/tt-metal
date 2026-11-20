@@ -289,7 +289,10 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     const uint32_t per_core_out_matrix_width_ntiles = parallelization_config.per_core_out_matrix_width_ntile;
     const uint32_t per_core_out_matrix_height_ntiles = parallelization_config.per_core_out_matrix_height_ntile;
 
-    const bool slice_inner_dim = (height_sharded && !enable_activation_reuse) || (block_sharded && !full_inner_dim);
+    // Height sharded: the inner dim is sliced per kernel row unless activation reuse or full_inner_dim is on (both
+    // read the whole window per pixel). Block sharded: sliced unless full_inner_dim.
+    const bool slice_inner_dim =
+        (height_sharded && !enable_activation_reuse && !full_inner_dim) || (block_sharded && !full_inner_dim);
 
     uint32_t conv_act_c_blocks = 1;
     uint32_t out_conv_c_blocks = 1;
@@ -870,7 +873,7 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         reader_defines["CONFIG_TENSOR_IN_DRAM"] = "1";
         writer_defines["CONFIG_TENSOR_IN_DRAM"] = "1";               // Needed for split reader
         writer_mcast_sender_defines["CONFIG_TENSOR_IN_DRAM"] = "1";  // Needed for split reader
-        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());
+        reader_compile_time_args.push_back(conv_reader_indices_buffer->address());  // smuggled-rta-ok: pre-existing
         reader_compile_time_args.push_back(conv_reader_indices_buffer->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_buffer).append_to(reader_compile_time_args);
     } else {
@@ -930,6 +933,13 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
         writer_defines["SPLIT_READER"] = "1";
     }
 
+    if (height_sharded && !slice_inner_dim && !enable_activation_reuse && !is_conv_1d_depthwise_conv) {
+        // full_inner_dim on a height sharded conv: every activation reader reads filter_h kernel rows per pixel
+        // (one window_outer_offset apart) into one activation block row instead of one kernel row per block.
+        reader_defines["ACT_WINDOW_H_READS"] = std::to_string(filter_h);
+        writer_defines["ACT_WINDOW_H_READS"] = std::to_string(filter_h);
+        writer_mcast_sender_defines["ACT_WINDOW_H_READS"] = std::to_string(filter_h);
+    }
     if (enable_activation_reuse) {
         reader_defines["ACTIVATION_REUSE"] = "1";
         writer_mcast_sender_defines["ACTIVATION_REUSE"] = "1";

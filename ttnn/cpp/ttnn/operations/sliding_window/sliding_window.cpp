@@ -746,22 +746,101 @@ static GatherConfig quantize_transfers_along_block_boundaries(const GatherConfig
 
 const uint32_t NUM_RISCV_DATA_MOVEMENT_CORES = 2;
 
-// Round-robin blocks between two cores
-static std::tuple<GatherConfig, GatherConfig, uint32_t> divide_blocks_between_cores(
-    const GatherConfig& input, uint32_t block_size) {
-    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
-    std::vector<DestinationTransferPair> first;
-    std::vector<DestinationTransferPair> second;
-    int32_t number_of_blocks = 0;
-    for (const auto& transfer : all) {
-        const auto block_id = transfer.src_id / block_size;
-        (block_id % NUM_RISCV_DATA_MOVEMENT_CORES == 0 ? first : second).push_back(transfer);
-        number_of_blocks = std::max(number_of_blocks, static_cast<int32_t>(block_id + 1));
+// Each NOC routes one way round the torus (NOC 0: +x then +y, NOC 1: -x then -y), so a transfer to a core that is
+// "behind" the sending core in NOC-0 order (smaller x, or same x and smaller y) travels the long way on NOC 0 and the
+// short way on NOC 1, and vice versa. The halo rows a shard sends to its neighbours are exactly such transfers, and
+// every core sends them at the same time, so routing them the long way congests the NOC rings (measured: the halo
+// gather of a 46080x192 shard took 47 us on the cores whose remote writes went the long way and 20 us on the rest).
+// The two gather kernels run on RISC 0 / NOC 0 and RISC 1 / NOC 1, so work is divided by direction: transfers behind
+// go to RISC 1, transfers ahead go to RISC 0, local transfers alternate.
+// Returns -1 when NOC 1 reaches the destination in fewer hops (dimension-ordered, x then y, each NOC wrapping one way
+// round the torus), +1 when NOC 0 does, 0 for local or equal.
+static int transfer_direction(
+    const DestinationTransferPair& t, uint16_t my_noc_x, uint16_t my_noc_y, uint32_t noc_w, uint32_t noc_h) {
+    const int dx = static_cast<int>(t.noc_x) - static_cast<int>(my_noc_x);
+    const int dy = static_cast<int>(t.noc_y) - static_cast<int>(my_noc_y);
+    if (dx == 0 && dy == 0) {
+        return 0;
     }
-    return std::make_tuple(reduce_flattened_transfers(first), reduce_flattened_transfers(second), number_of_blocks);
+    const int w = static_cast<int>(noc_w), h = static_cast<int>(noc_h);
+    const int hops0 = (dx >= 0 ? dx : w + dx) + (dy >= 0 ? dy : h + dy);
+    const int hops1 = (dx <= 0 ? -dx : w - dx) + (dy <= 0 ? -dy : h - dy);
+    return hops1 < hops0 ? -1 : (hops0 < hops1 ? 1 : 0);
 }
 
-// Round-robin transfers between two cores
+// Divide blocks between the two gather RISCs. Blocks that write behind this core form a prefix [0, left_blocks),
+// blocks that write ahead form a suffix [right_block_start, n) (halo rows sit at the shard edges); the prefix goes to
+// RISC 1, the suffix to RISC 0 and the middle alternates. The kernels recompute the same assignment from
+// (left_blocks, right_block_start), see halo_gather.cpp / pack_untilize.cpp.
+struct BlockDivision {
+    GatherConfig first;
+    GatherConfig second;
+    uint32_t number_of_blocks = 0;
+    uint32_t left_blocks = 0;
+    uint32_t right_block_start = 0;
+};
+
+static uint32_t block_owner(uint32_t block_id, uint32_t left_blocks, uint32_t right_block_start) {
+    if (block_id < left_blocks) {
+        return 1;
+    }
+    if (block_id >= right_block_start) {
+        return 0;
+    }
+    return (block_id - left_blocks) % NUM_RISCV_DATA_MOVEMENT_CORES;
+}
+
+static BlockDivision divide_blocks_between_cores(
+    const GatherConfig& input,
+    uint32_t block_size,
+    uint16_t my_noc_x,
+    uint16_t my_noc_y,
+    uint32_t noc_w,
+    uint32_t noc_h) {
+    std::vector<DestinationTransferPair> all = flatten_gather_config(input);
+    BlockDivision out;
+    uint32_t number_of_blocks = 0;
+    for (const auto& transfer : all) {
+        number_of_blocks = std::max(number_of_blocks, static_cast<uint32_t>(transfer.src_id / block_size + 1));
+    }
+    std::vector<bool> has_behind(number_of_blocks, false), has_ahead(number_of_blocks, false);
+    for (const auto& transfer : all) {
+        const int dir = transfer_direction(transfer, my_noc_x, my_noc_y, noc_w, noc_h);
+        const auto block_id = transfer.src_id / block_size;
+        if (dir < 0) {
+            has_behind[block_id] = true;
+        } else if (dir > 0) {
+            has_ahead[block_id] = true;
+        }
+    }
+    uint32_t left_blocks = 0;
+    while (left_blocks < number_of_blocks && has_behind[left_blocks]) {
+        left_blocks++;
+    }
+    uint32_t right_block_start = number_of_blocks;
+    while (right_block_start > 0 && has_ahead[right_block_start - 1]) {
+        right_block_start--;
+    }
+    // Keep the two RISCs balanced: when the halo rows cover most of a small shard the prefix and suffix would
+    // otherwise swallow it, so cap each side at half the blocks (the middle alternates).
+    const uint32_t half = (number_of_blocks + 1) / 2;
+    left_blocks = std::min(left_blocks, half);
+    right_block_start = std::max({right_block_start, number_of_blocks - half, left_blocks});
+    std::vector<DestinationTransferPair> first, second;
+    for (const auto& transfer : all) {
+        const auto block_id = transfer.src_id / block_size;
+        (block_owner(block_id, left_blocks, right_block_start) == 0 ? first : second).push_back(transfer);
+    }
+    out.first = reduce_flattened_transfers(first);
+    out.second = reduce_flattened_transfers(second);
+    out.number_of_blocks = number_of_blocks;
+    out.left_blocks = left_blocks;
+    out.right_block_start = right_block_start;
+    return out;
+}
+
+// Round-robin transfers between two cores (row-major input, no blocking). Dividing these whole-row transfers by
+// direction was measured slower than round-robin on the BEV pools' halos, so they keep the original split.
 static std::pair<GatherConfig, GatherConfig> divide_transfers_between_cores(const GatherConfig& input) {
     std::vector<DestinationTransferPair> all = flatten_gather_config(input);
     std::vector<DestinationTransferPair> first;
@@ -887,18 +966,31 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
     std::vector<GatherConfig> ordered_gather_configs0;
     std::vector<GatherConfig> ordered_gather_configs1;
     std::vector<uint16_t> number_of_blocks_per_core;
-    for (const auto& config : gather_configs) {
+    std::vector<uint16_t> left_blocks_per_core;
+    std::vector<uint16_t> right_block_start_per_core;
+    const uint32_t noc_w = device->grid_size().x;  // NOC grid (torus) dimensions, for the hop-count direction rule
+    const uint32_t noc_h = device->grid_size().y;
+    for (uint32_t core_id = 0; core_id < gather_configs.size(); core_id++) {
+        const auto& config = gather_configs[core_id];
+        const CoreCoord my_noc = core_id_to_noc_coords(core_id);
+        const uint16_t my_noc_x = static_cast<uint16_t>(my_noc.x);
+        const uint16_t my_noc_y = static_cast<uint16_t>(my_noc.y);
         if (use_blocking) {
             const auto quantized = quantize_transfers_along_block_boundaries(config, block_size);
             const auto ordered = reorder_transfers_globally(quantized);
-            const auto [first, second, number_of_blocks] = divide_blocks_between_cores(ordered, block_size);
-            ordered_gather_configs0.push_back(first);
-            ordered_gather_configs1.push_back(second);
-            number_of_blocks_per_core.push_back(number_of_blocks);
+            const auto division = divide_blocks_between_cores(ordered, block_size, my_noc_x, my_noc_y, noc_w, noc_h);
+            ordered_gather_configs0.push_back(division.first);
+            ordered_gather_configs1.push_back(division.second);
+            number_of_blocks_per_core.push_back(division.number_of_blocks);
+            left_blocks_per_core.push_back(division.left_blocks);
+            right_block_start_per_core.push_back(division.right_block_start);
         } else {
             const auto [first, second] = divide_transfers_between_cores(config);
             ordered_gather_configs0.push_back(first);
             ordered_gather_configs1.push_back(second);
+            number_of_blocks_per_core.push_back(0);  // no blocking: the kernels only read these as runtime args
+            left_blocks_per_core.push_back(0);
+            right_block_start_per_core.push_back(0);
         }
     }
 
@@ -967,7 +1059,9 @@ HaloGatherKernelConfig generate_halo_kernel_config_tensors(
         flattened_pad_config1,
         serialized_gather_configs0,
         serialized_gather_configs1,
-        number_of_blocks_per_core};
+        number_of_blocks_per_core,
+        left_blocks_per_core,
+        right_block_start_per_core};
 }
 
 void visualize_sliding_window_op_config(const std::vector<std::vector<uint16_t>>& config) {
