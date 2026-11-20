@@ -25,10 +25,12 @@ class KimiK31Config(KimiK3Config):
     INDEX_TOPK_FREQ = 1
     INDEX_SKIP_TOPK_OFFSET = 1
 
-    # K3's 1536 B/bank is spent by KDA's long-lived semaphores, MoE routing and dense MLA; a DSA layer's
-    # early-Q all-to-all then needs one more 16 B slot per bank (OOM at 1536 with KDA layers 1-2 and DSA
-    # layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window).
-    L1_SMALL_SIZE = 2048
+    # K3's (which includes the MoE block's persistent words' slab), + 1552 B for the DSA layers: 6656 B a bank.
+    # A DSA layer's early-Q all-to-all needs more than K3's layers (OOM at K3's then-1536 B with KDA layers 1-2
+    # and DSA layer 3 in one forward, test_kimi_k3_1_dsa_trace.py hybrid_L0_3 window). Measured on the block:
+    # K3's + 512 B ran out of L1_SMALL in that all-to-all during the traced warmup, 6656 B passes (sc1 runner,
+    # 2x[4,4], 96 users, traced, bh-glx-110-c10u20, 2026-11-19; not bisected below).
+    L1_SMALL_SIZE = KimiK3Config.L1_SMALL_SIZE + 1552
 
     # 1-indexed as in the HF config; identical to the full-attention layers.
     DSA_LAYERS_1BASED = list(KimiK3Config.FULL_ATTN_LAYERS_1BASED)
@@ -52,8 +54,4 @@ def kimi_k3_1_hf_config(max_seq: int = 8192):
     cfg.index_hadamard = False
     # Overlap the indexer TopK with the sparse-KV gather, as GLM-5.3 (serial on SP=1).
     cfg.sparse_mla_overlap_profile = "auto"
-    # Indexer score matmul at HiFi2, not the op's LoFi default for bf8 x bf8: LoFi was the
-    # largest device score error at DSA layers 3/7. Top-k recall vs the trace L3/L7 +0.015/+0.016 at 10K,
-    # +0.033/+0.038 at 128K, for +0.2% / +0.9% scenario TTFT (stage 2, indicative 75 W).
-    cfg.index_score_math_fidelity = "HiFi2"
     return cfg

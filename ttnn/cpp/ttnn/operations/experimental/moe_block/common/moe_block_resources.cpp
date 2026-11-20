@@ -149,7 +149,7 @@ MoEBlockResources::MoEBlockResources(
     dims_(dims),
     config_(config),
     dtypes_(dtypes),
-    fabric_config_(tt::tt_fabric::GetFabricConfig()),
+    fabric_config_(tt::tt_fabric::GetFabricConfig(mesh_device)),
     max_payload_bytes_(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes()) {
     dims_.check();
     config_.check();

@@ -21,7 +21,7 @@ sdpa_custom_mm is the SDPA QK^T / PV matmul. operand0 (in0) -> SrcB (lhs), opera
 with the custom_mm layout limits:
     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}
     in1 (SrcA) tile shape [32, 32]
-    ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
+    ct_dim = N/32 in [1,16], kt_dim = K/32 even, >= 2
 
 The math LLK zeroes DEST (mask_chunk=false path) then accumulates the full kt walk, so the
 result is a plain LoFi tiled matmul. The FPU->SFPU semaphore posts (signal_granularity
@@ -45,6 +45,7 @@ from dataclasses import dataclass
 import pytest
 import torch
 from conftest import skip_for_quasar, skip_for_wormhole
+from helpers.custom_mm_utils import face_walk_operands
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import MatmulGolden
 from helpers.llk_params import DestAccumulation, MathFidelity
@@ -138,7 +139,8 @@ class _SdpaCustomMMStimuli(StimuliConfig):
             tile_count_A=len(packed_in1) // 2048 + (mask is not None),
             buffer_B=torch.zeros(1, dtype=torch.float32),  # placeholder
             stimuli_B_format=DataFormat.Float16_b,
-            tile_count_B=kt,
+            # in0 is packed densely; reserve only its bytes
+            tile_count_B=max(1, -(-len(packed_in0) // 2048)),
             stimuli_res_format=DataFormat.Float16_b,
             tile_count_res=ct * (2 if mask is not None else 1),
         )
@@ -356,6 +358,27 @@ def test_sdpa_custom_mm(request, shape):
     # so unwrap one level before destructuring.
     (M, K, N) = shape[0] if len(shape) == 1 and isinstance(shape[0], tuple) else shape
     _run(M, K, N, signal_granularity=1, read_transposed=False, mm_transpose=False)
+
+
+def test_sdpa_custom_mm_face_walk_exact(request):
+    """kt_dim = 256 as two SrcB face walks, compared exactly against A @ B."""
+    _skip_on_simulator(request)
+    M, kt, ct = 8, 256, 1
+    torch_a, torch_b = (t.to(torch.bfloat16) for t in face_walk_operands(M, kt, ct))
+    res = _run(
+        M,
+        kt * DEFAULT_TILE_R_DIM,
+        ct * DEFAULT_TILE_C_DIM,
+        signal_granularity=1,
+        read_transposed=False,
+        mm_transpose=False,
+        operands=(torch_a, torch_b),
+    )
+    golden = (torch_a.float() @ torch_b.float()).to(res.dtype)
+    assert torch.equal(res, golden), (
+        f"sdpa_custom_mm kt={kt}: {(res != golden).sum().item()} of {res.numel()} "
+        "outputs differ from the exact golden"
+    )
 
 
 @parametrize(

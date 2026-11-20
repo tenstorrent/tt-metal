@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""The model adapter (TtK3MoEBlockFfn) keeps a layer's prepared weights by their packing - host only, no device.
+"""The model adapter (TtMoEBlockFfn) keeps a layer's prepared weights by their packing - host only, no device.
 
 The chunk picks the block's plans, and the head's weights are packed for its plan's layout (GX x GY matmul cores, MT,
 the K step KB): a layer whose calls change chunk must get weights packed for each block's plan, not the first block's.
@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from models.demos.deepseek_v3_d_p.tt.kimi_k3 import moe_block_ffn as mbf
+from models.demos.deepseek_v3_d_p.tt.moe_block import moe_block_ffn as mbf
 
 H, IS, E, LAT = 64, 32, 32, 48  # (small dims: the fakes only read them)
 
@@ -93,7 +93,7 @@ def ops(monkeypatch):
         fake.routed.append(packed)
         return packed, packed, packed
 
-    monkeypatch.setattr(mbf.TtK3MoEBlockFfn, "_routed", routed)
+    monkeypatch.setattr(mbf.TtMoEBlockFfn, "_routed", routed)
     return fake
 
 
@@ -105,7 +105,13 @@ def _cfg(latent: bool):
         routed_width=LAT if latent else H,
         routed_expert_hidden_dim=IS,
     )
-    return SimpleNamespace(__name__="fake", moe_block_dims=lambda: (dims, "silu"))
+    return SimpleNamespace(__name__="fake", dims=dims)  # (no adapter: its dims are the fake's, _fake_dims)
+
+
+@pytest.fixture(autouse=True)
+def _fake_dims(monkeypatch):
+    """The fake config's dims as the block's (moe_impl.moe_block_dims reads a real config's fields)."""
+    monkeypatch.setattr(mbf, "moe_block_dims", lambda cfg: (cfg.dims, "silu"))
 
 
 def _sd(latent: bool):
@@ -133,7 +139,7 @@ def _block(head_lay, flat=None, accumulators=16):
 
 def _ffn(latent: bool):
     mesh = SimpleNamespace(shape=(8, 4))
-    return mbf.TtK3MoEBlockFfn(mesh, _cfg(latent), layer_idx=1, state_dict=_sd(latent))
+    return mbf.TtMoEBlockFfn(mesh, _cfg(latent), layer_idx=1, state_dict=_sd(latent))
 
 
 def _same(a, b):

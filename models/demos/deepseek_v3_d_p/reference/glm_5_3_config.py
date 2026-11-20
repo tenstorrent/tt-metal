@@ -24,6 +24,11 @@ class GLM53Config:
     # Callers can override this default with use_fused_rmsnorm at model initialization.
     USE_FUSED_PREFILL_RMSNORM = True
     FABRIC_PAYLOAD_SIZE = EMB_SIZE  # max fabric packet payload; must stay in sync with migration code
+    # The one definition of GLM's l1_small pool, read by the runner adapter and the tests. 5696 = the model's own ops'
+    # 3328 B (routing, the sparse-MLA high-bandwidth-gather and all-gather semaphores, matmul_reduce_scatter_prefill's
+    # semaphores and mailbox; the GLM chunked-accuracy CI job, Nov 6) + the MoE block's persistent words' slab (2304 B,
+    # MoEBlockConfig.words_slab_bytes) + 64 B allocator alignment. Was 1536 on TtMoe.
+    L1_SMALL_SIZE = 5696
     MOE_INTERMEDIATE_SIZE = 2048  # MoE FFN hidden dimension
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The crossover is a function of the
@@ -41,9 +46,11 @@ class GLM53Config:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 256
     NUM_EXPERTS_PER_TOKEN = 8
-    # Depth of the MoE forwarding buffers. Any value would make model functional,
-    # but larger values make it faster and consume more DRAM, so it's a compromise.
-    MOE_FWD_VC_PAGES = 64
+    # Depth of the MoE forwarding buffers, in pages per channel. Before #63483 combine_fabric2d's depth scaled with
+    # the tokens a chip holds: about 66 pages at one 5,120-token chunk on 8x4, about 267 for a packed forward of four
+    # (2,560 rows a chip). At 64, packed 8x4 forwards hang in combine_fabric2d (one TP column never finishes the
+    # routed expert / combine op), so this keeps the depth packed forwards had.
+    MOE_FWD_VC_PAGES = 256
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1

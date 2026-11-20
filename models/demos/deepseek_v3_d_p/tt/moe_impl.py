@@ -3,16 +3,18 @@
 
 """Which MoE a prefill block builds: TtMoe or the MoE block's C++ ops (ttnn.experimental.moe_block).
 
-GLM-5.3 and Kimi-K3 (and Kimi-K3.1, a KimiK3Config subclass) default to the MoE block (tt/kimi_k3/moe_block_ffn.py): the gate / shared expert (K3: and the
-latent pair) from the checkpoint, the routed experts from the TtMoe tensorbin cache. Every other model stays on TtMoe.
-Order: the caller's ``moe_impl`` ("block" / "ttmoe"), then $MOE_IMPL (Kimi-K3 and K3.1: $K3_MOE_IMPL first), then the
-model's default. A model config class takes the per-model entries below from the nearest class in its MRO that has one,
-so Kimi-K3.1 inherits Kimi-K3's unless it lists its own.
+The model's adapter decides (PrefillModelAdapter.moe_impl, "ttmoe" by default); a caller's ``moe_impl`` ("block" /
+"ttmoe"), else $MOE_IMPL, overrides it. Everything the block needs of a model comes through its adapter: its dims
+from the adapter's model_config (moe_block_dims), the non-routed weights from moe_block_nonrouted_weights, the routed
+experts from the TtMoe tensorbin cache (moe_block_routed_cache, else the caller's cache_path) and the persistent words'
+slab from moe_block_words_slab. Nothing here names a model.
 
-A mesh that runs the block needs room for its persistent words and semaphores in L1_SMALL (moe_block_l1_small: the
-words' slab, on top of the model's own L1_SMALL use) and a fabric payload that holds one combine row
-(moe_block_fabric_payload); moe_block_mesh_params gives both for any model (the prefill runner's mesh open). Paths that cannot give it that (the synthetic-weight block tests, the TtMoe cache
-build) pass moe_impl="ttmoe".
+A mesh that runs the block opens with:
+- L1_SMALL: the model's L1_SMALL_SIZE, its one figure, which holds the block's persistent words' slab
+  (moe_block_words_slab) on top of the model's own ops' use;
+- a fabric payload that holds one combine row (moe_block_fabric_payload_size / moe_block_device_params).
+Paths that do not open their mesh for it (the synthetic-weight block tests, the TtMoe cache build) pass
+moe_impl="ttmoe".
 """
 
 from __future__ import annotations
@@ -26,95 +28,102 @@ moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
 BLOCK = "block"
 TTMOE = "ttmoe"
-_BLOCK_DEFAULT = ("GLM53Config", "KimiK3Config")  # model config classes whose MoE is the block by default
-
-# The model's own L1_SMALL use a bank next to the block (its other ops' semaphores and words, allocated before the
-# block's slab), where the model's l1_small_size is not that figure:
-# - Kimi-K3: 3328 B (measured on the K3 L24 test, a07u02, torus XY, Nov 9, the block's token loops in: l1s_plugin): the
-#   untraced test 5120 B a bank in all, its traced test in the same process 128 B more (5248 B: the metadata variant's
-#   programs - KDA's select_final_carry, all-gathers - make their own semaphores next to the untraced ones'), + 64 B of
-#   headroom. KDA / MLA / all-gather semaphores and matmul_reduce_scatter_prefill's (KDA's fused output projection,
-#   #64213 / #64415) four semaphores and mailbox (2304 B) are most of it. Was 3008 B (Nov 6, untraced only): the traced
-#   test that followed the untraced one ran out of L1_SMALL. KimiK3Config.L1_SMALL_SIZE (4096) is inherited, not
-#   measured, and still floors the mesh open. L1_SMALL is carved from the top of L1 and MLA's chunked attention
-#   (ring_mla) puts its static CBs up to a fixed L1 ceiling, so less is better (both tests pass at 5504 B a bank).
-# - GLM-5.3: 3328 B (the GLM chunked-accuracy CI job, Nov 6: the 576 B its 3904 B mesh left the block), with
-#   matmul_reduce_scatter_prefill's semaphores and mailbox. Was 1536 B, its runner adapter's l1_small_size.
-# Every other model: its l1_small_size.
-_MODEL_L1_SMALL = {
-    "KimiK3Config": 3328,
-    # - Kimi-K3.1: 4880 B (measured on the sc1 runner, 2x[4,4], 96 users, traced, bh-glx-110-c10u20, Nov 19): 3840 B
-    #   (K3's 3328 + K3.1's 512 B rise of L1_SMALL_SIZE) ran out of L1_SMALL in the DSA layers' early-Q all-to-all
-    #   during the traced warmup (5632 B a bank in all); 4880 B (6656 B a bank) passes. Not bisected below that.
-    "KimiK31Config": 4880,
-    "GLM53Config": 3328,
-}
-_L1_SMALL_ALIGN = 64  # (the allocator's alignment of the slab and of the model's last buffer)
-
-# The persistent words' slab a core, where the model's word sets need less than MoEBlockConfig.words_slab_bytes. The
-# slab sits in L1_SMALL, at the top of L1 with the model's own L1_SMALL and its top L1 buffers, all above ring_mla's
-# static CBs (MLA's chunked attention places them up to a fixed ceiling, 1564224): every byte here is a byte less for
-# them, so the slab is the busiest core's need plus 16 B.
-# - Kimi-K3: 1712 B. Its busiest cores are the head's ports at chunk 5120 (4x4 SP-axis-1 stage and 8x4): the mailbox,
-#   the x gather's and routing exchange's words, the padded-forward metadata (64 B aligned), the combine barrier, the
-#   dispatch semaphores and the router iteration words - 1696 B.
-_MODEL_WORDS_SLAB = {
-    "KimiK3Config": 1712,
-}
 
 
-def _model_name(model_cfg) -> Optional[str]:
-    return model_cfg if isinstance(model_cfg, str) else getattr(model_cfg, "__name__", None)
+def model_adapter(model):
+    """The adapter of `model`: an adapter itself, else the registered adapter whose model_config is this config class
+    (common/prefill/adapter.adapter_of_model_config); None for a config no adapter names (the block tests' synthetic
+    configs)."""
+    if model is None or hasattr(model, "model_config"):
+        return model
+    from models.demos.common.prefill.adapter import adapter_of_model_config
+
+    return adapter_of_model_config(model)
 
 
-def _model_names(model_cfg) -> tuple:
-    """The config class's name and its bases' names, nearest first (a name alone: just it)."""
-    if model_cfg is None:
-        return ()
-    if isinstance(model_cfg, str):
-        return (model_cfg,)
-    return tuple(c.__name__ for c in getattr(model_cfg, "__mro__", (model_cfg,)))
+def model_config_of(model):
+    """The config class of `model` (an adapter or a config class)."""
+    return getattr(model, "model_config", model)
 
 
-def _per_model(table: dict, model_cfg, default):
-    """The table's entry for the nearest class in model_cfg's MRO that has one, else default."""
-    return next((table[n] for n in _model_names(model_cfg) if n in table), default)
+def moe_block_words_slab(model=None) -> int:
+    """The MoE block's persistent words' slab a core for this model: its adapter's moe_block_words_slab, else
+    MoEBlockConfig.words_slab_bytes."""
+    adapter = model_adapter(model)
+    own = getattr(adapter, "moe_block_words_slab", None)
+    return int(own) if own is not None else int(moe_block_utils.MoEBlockConfig().words_slab_bytes)
 
 
-def moe_block_words_slab(model_cfg=None) -> int:
-    """The MoE block's persistent words' slab a core for this model (MoEBlockConfig.words_slab_bytes by default)."""
-    default = int(moe_block_utils.MoEBlockConfig().words_slab_bytes)
-    return _per_model(_MODEL_WORDS_SLAB, model_cfg, default)
+def moe_impl_of(model=None, moe_impl: Optional[str] = None) -> str:
+    """ "block" or "ttmoe" for a model (its adapter, or its config class)."""
+    choice = moe_impl or os.environ.get("MOE_IMPL")
+    if not choice:
+        choice = getattr(model_adapter(model), "moe_impl", None) or TTMOE
+    assert choice in (
+        BLOCK,
+        TTMOE,
+    ), f"MOE_IMPL / moe_impl / adapter.moe_impl must be '{BLOCK}' or '{TTMOE}', got {choice!r}"
+    return choice
 
 
-def moe_block_l1_small(model_cfg=None) -> int:
-    """L1_SMALL the MoE block holds a bank: its persistent words' slab (moe_block_words_slab, sized so every word set
-    of the block fits) plus the allocator's alignment."""
-    return moe_block_words_slab(model_cfg) + _L1_SMALL_ALIGN
+_SCORE_FUNCS = {"sigmoid": "Sigmoid", "sqrtsoftplus": "SqrtSoftplus"}
 
 
-def model_l1_small_with_block(model_cfg, l1_small_size: int) -> int:
-    """L1_SMALL a mesh of this model opens with when the MoE block is its MoE: the model's own use (its l1_small_size,
-    or the measured figure where that is not one) plus the block's, at least l1_small_size."""
-    own = _per_model(_MODEL_L1_SMALL, model_cfg, l1_small_size)
-    return max(l1_small_size, own + moe_block_l1_small(model_cfg))
+def _expert_activation(cfg, name: str):
+    """The block's ExpertActivation for a config's activation name, its parameters from the config."""
+    kinds = moe_block_utils.ExpertActivationKind
+    if name == "silu":
+        return moe_block_utils.ExpertActivation(kind=kinds.Silu)
+    if name == "situ":
+        return moe_block_utils.ExpertActivation(
+            kind=kinds.Situ, beta=cfg.ACTIVATION_SITU_BETA, linear_beta=cfg.ACTIVATION_SITU_LINEAR_BETA
+        )
+    if name == "clamped_silu":
+        return moe_block_utils.ExpertActivation(kind=kinds.ClampedSilu, limit=cfg.SWIGLU_LIMIT)
+    if name == "swigluoai":
+        return moe_block_utils.ExpertActivation(kind=kinds.SwigluOai, limit=cfg.SWIGLU_LIMIT, alpha=cfg.SWIGLU_ALPHA)
+    raise AssertionError(f"MoE block: no expert activation {name!r} (silu, situ, clamped_silu, swigluoai)")
 
 
-def moe_impl_of(model_cfg=None, moe_impl: Optional[str] = None) -> str:
-    """ "block" or "ttmoe" for a model config class (or its name)."""
-    names = _model_names(model_cfg)
-    choice = (
-        moe_impl or (os.environ.get("K3_MOE_IMPL") if "KimiK3Config" in names else None) or os.environ.get("MOE_IMPL")
+def moe_block_dims(model):
+    """(MoEModelDims, the routed experts' activation name) of a model (its adapter, or a config class), all from the
+    config's fields: NUM_ROUTED_EXPERTS, NUM_EXPERTS_PER_TOKEN, EMB_SIZE, MOE_INTERMEDIATE_SIZE; the router's SCORE_FUNC
+    (default sigmoid) and ROUTE_SCALE; the shared expert's SHARED_EXPERT_INTERMEDIATE_SIZE (default
+    MOE_INTERMEDIATE_SIZE x NUM_SHARED_EXPERTS); ROUTED_EXPERT_ACTIVATION / SHARED_EXPERT_ACTIVATION (default silu, with
+    their parameters); a latent MoE's ROUTED_EXPERT_HIDDEN_SIZE and LATENT_MOE_USE_NORM."""
+    cfg = model_config_of(model)
+    groups = getattr(cfg, "NUM_EXPERT_GROUPS", 1)
+    assert groups == 1, f"MoE block: {cfg.__name__} routes over {groups} expert groups (the block: one, top-k of all)"
+    score = getattr(cfg, "SCORE_FUNC", "sigmoid")
+    assert score in _SCORE_FUNCS, f"MoE block: {cfg.__name__} SCORE_FUNC {score!r} (block: {sorted(_SCORE_FUNCS)})"
+    routed = getattr(cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
+    shared_hidden = getattr(cfg, "SHARED_EXPERT_INTERMEDIATE_SIZE", None)
+    if shared_hidden is None:
+        shared_hidden = cfg.MOE_INTERMEDIATE_SIZE * getattr(cfg, "NUM_SHARED_EXPERTS", 1)
+    kw = {}
+    latent = getattr(cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None)
+    if latent is not None and latent != cfg.EMB_SIZE:
+        kw = dict(latent_dim=latent, latent_norm=bool(getattr(cfg, "LATENT_MOE_USE_NORM", False)))
+    dims = moe_block_utils.MoEModelDims(
+        num_experts=cfg.NUM_ROUTED_EXPERTS,
+        top_k=cfg.NUM_EXPERTS_PER_TOKEN,
+        emb_dim=cfg.EMB_SIZE,
+        routed_expert_hidden_dim=cfg.MOE_INTERMEDIATE_SIZE,
+        routed_expert_activation=_expert_activation(cfg, routed),
+        router=moe_block_utils.RouterSpec(
+            score_func=getattr(moe_block_utils.RouterScoreFunc, _SCORE_FUNCS[score]), route_scale=cfg.ROUTE_SCALE
+        ),
+        shared_expert_hidden_dim=shared_hidden,
+        shared_expert_activation=_expert_activation(cfg, getattr(cfg, "SHARED_EXPERT_ACTIVATION", routed)),
+        **kw,
     )
-    if choice:
-        assert choice in (BLOCK, TTMOE), f"MOE_IMPL / moe_impl must be '{BLOCK}' or '{TTMOE}', got {choice!r}"
-        return choice
-    return BLOCK if any(n in _BLOCK_DEFAULT for n in names) else TTMOE
+    return dims, routed
 
 
-def moe_block_enabled(model_cfg=None, moe_impl: Optional[str] = None) -> bool:
-    """True when a prefill block of this model builds the MoE block instead of TtMoe."""
-    return moe_impl_of(model_cfg, moe_impl) == BLOCK
+def moe_block_enabled(model=None, moe_impl: Optional[str] = None) -> bool:
+    """True when a prefill block of this model (its adapter, or its config class) builds the MoE block instead of
+    TtMoe."""
+    return moe_impl_of(model, moe_impl) == BLOCK
 
 
 def moe_block_fabric_payload(emb_dim: int) -> int:
@@ -122,31 +131,24 @@ def moe_block_fabric_payload(emb_dim: int) -> int:
     return (2 * emb_dim + 32 + 63) // 64 * 64
 
 
-def moe_block_mesh_params(
-    model_cfg, fabric_payload: int, l1_small_size: int, moe_impl: Optional[str] = None
-) -> tuple[int, int]:
-    """(fabric payload, L1_SMALL) a mesh of this model opens with: the model's own, raised to what the MoE block needs
-    when it is the model's MoE - one combine row of the routed width (Kimi-K3: the latent) and L1_SMALL room for the
-    block's persistent words and semaphores. Unchanged on TtMoe. Model-generic: the prefill runner's mesh open."""
+def moe_block_fabric_payload_size(model_cfg, fabric_payload: int, moe_impl: Optional[str] = None) -> int:
+    """The fabric payload a mesh of this model opens with: the model's own, raised to one combine row of the routed
+    width (Kimi-K3: the latent) when the MoE block is the model's MoE."""
     if not moe_block_enabled(model_cfg, moe_impl):
-        return fabric_payload, l1_small_size
-    width = getattr(model_cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or model_cfg.EMB_SIZE
-    return max(fabric_payload, moe_block_fabric_payload(width)), model_l1_small_with_block(model_cfg, l1_small_size)
+        return fabric_payload
+    cfg = model_config_of(model_cfg)
+    width = getattr(cfg, "ROUTED_EXPERT_HIDDEN_SIZE", None) or cfg.EMB_SIZE
+    return max(fabric_payload, moe_block_fabric_payload(width))
 
 
-def k3_moe_block_device_params(params: dict, moe_impl: Optional[str] = None) -> dict:
-    """A Kimi-K3 mesh's device_params with what the MoE block needs when it is K3's MoE: a fabric payload holding one
-    combine row of the latent (2 x 3584 + 32 B) and L1_SMALL room for its persistent words and semaphores
-    (model_l1_small_with_block). The fabric config is the caller's. Unchanged on TtMoe."""
-    if not moe_block_enabled("KimiK3Config", moe_impl):
-        return params
-    from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+def moe_block_device_params(model_cfg, params: dict, moe_impl: Optional[str] = None) -> dict:
+    """A device_params dict (a mesh fixture's) with its fabric router's payload raised to moe_block_fabric_payload_size.
+    L1_SMALL and the fabric config stay the caller's."""
     from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_fabric_router_config
 
-    out = dict(params)
-    payload = moe_block_fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
-    router = out.get("fabric_router_config")
-    if router is None or router.max_packet_payload_size_bytes < payload:
-        out["fabric_router_config"] = create_fabric_router_config(payload)
-    out["l1_small_size"] = model_l1_small_with_block("KimiK3Config", int(out.get("l1_small_size", 0)))
-    return out
+    router = params.get("fabric_router_config")
+    own = router.max_packet_payload_size_bytes if router is not None else 0
+    payload = moe_block_fabric_payload_size(model_cfg, own, moe_impl)
+    if payload == own:
+        return params
+    return {**params, "fabric_router_config": create_fabric_router_config(payload)}

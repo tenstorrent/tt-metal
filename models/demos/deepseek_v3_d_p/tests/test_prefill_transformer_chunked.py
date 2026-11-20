@@ -73,12 +73,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import (
     rotated_chip_positions,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, assert_gate_mode_matches_adapter
-from models.demos.deepseek_v3_d_p.tt.moe_impl import (
-    k3_moe_block_device_params,
-    model_l1_small_with_block,
-    moe_block_enabled,
-    moe_block_fabric_payload,
-)
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params, moe_block_fabric_payload_size
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import _SPARSE_MLA_OVERLAP_GATHER_ROWS, per_axis_topology
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_block import get_block_timings, reset_block_timings
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_transformer import TtPrefillTransformer
@@ -111,39 +106,26 @@ SEQ_CACHE = 55 * 1024  # 56320 KV cache length (1 user)
 # are untouched.
 SEQ_CACHE_NOPCC = 100 * 1024  # 102400 KV cache length (1 user)
 
-# GLM rows only; the Kimi/Mistral rows keep their own device params. 1216 overflowed on the traced path
-# once #58681 added a second all_gather semaphore; 1536 verified on HW for both traced CI legs. Keep in
-# sync with the glm_5_3 runner adapter.
-# GLM-5.3's MoE is the MoE block by default (tt/moe_impl.py; MOE_IMPL=ttmoe for TtMoe): room for its persistent words
-# and semaphores, which live in L1_SMALL (its first call logs the total), and a fabric payload holding one combine row.
-GLM_MOE_BLOCK = moe_block_enabled(GLM53Config)
-GLM_L1_SMALL_SIZE = model_l1_small_with_block(GLM53Config, 1536) if GLM_MOE_BLOCK else 1536
+# GLM rows only; the Kimi/Mistral rows keep their own device params.
+GLM_L1_SMALL_SIZE = GLM53Config.L1_SMALL_SIZE
 
 
 def _glm_payload():
-    """GLM's TtMoe payload; with the MoE block at least its combine's (2 x 6144 + 32 B, 64-B aligned)."""
-    payload = moe_fabric_payload(GLM53Config)
-    if GLM_MOE_BLOCK:
-        payload = max(payload, moe_block_fabric_payload(GLM53Config.EMB_SIZE))
-    return payload
-
-
-# K3's fabric: the XY torus when the MoE block is K3's MoE (the default; on the 2D mesh fabric the block's first call
-# hangs); Fabric2D on TtMoe (K3_MOE_IMPL=ttmoe).
-K3_TORUS = moe_block_enabled(KimiK3Config)
+    """GLM's fabric payload: TtMoe's, raised to one combine row of GLM's MoE, the MoE block (tt/moe_impl.py)."""
+    return moe_block_fabric_payload_size(GLM53Config, moe_fabric_payload(GLM53Config))
 
 
 def _k3_device_params():
-    """K3's fabric (K3_TORUS) plus what the MoE block needs when it is K3's MoE: its combine's fabric payload and
-    L1_SMALL (tt/moe_impl.py)."""
-    fabric = ttnn.FabricConfig.FABRIC_2D_TORUS_XY if K3_TORUS else ttnn.FabricConfig.FABRIC_2D
-    return k3_moe_block_device_params(
+    """K3's mesh: the XY torus (K3's MoE, the MoE block, hangs at its first call on the 2D mesh fabric) with a fabric
+    payload of one combine row (tt/moe_impl.py)."""
+    return moe_block_device_params(
+        KimiK3Config,
         fabric2d_device_params(
             fabric_payload_size=moe_fabric_payload(KimiK3Config),
             l1_small_size=KimiK3Config.L1_SMALL_SIZE,
             trace_region_size=256 * 1024 * 1024,
-            fabric_config=fabric,
-        )
+            fabric_config=ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
+        ),
     )
 
 
@@ -297,20 +279,11 @@ KIMI_UNTRACED_BASELINE_CHUNK_TIMES_S = {
 TRACED_PERF_MARGIN = 0.03
 UNTRACED_PERF_MARGIN = 0.05
 
-GLM_TRACED_BASELINE_CHUNK_TIMES_S = (
-    {
-        # C++ MoE block (ttnn.experimental.moe_block), router on the matmul cores, main 860b4917979 merged:
-        # CI run 41926693153 / job 126931997069 (bh_sc1_high_power). Measured before split-K sparse_sdpa (#64435).
-        (78, 11, 10): [0.263, 0.260, 0.267, 0.266, 0.270, 0.271, 0.268, 0.271, 0.276, 0.280, 0.284],
-    }
-    if GLM_MOE_BLOCK
-    else {
-        # TtMoe (MOE_IMPL=ttmoe). Scaled-FP8 KV cache, fabric2d MoE transport, q all-to-all before wkv_b1, sparse KV push
-        # in the shared layers, split-K sparse_sdpa. Cut on bh_sc1_high_power: per-chunk mean of CI jobs 135059812486,
-        # 135088765704 and 135100701074 (runs 44375823809 and 44383551427).
-        (78, 11, 10): [0.346, 0.337, 0.340, 0.335, 0.339, 0.338, 0.334, 0.334, 0.340, 0.342, 0.348],
-    }
-)
+GLM_TRACED_BASELINE_CHUNK_TIMES_S = {
+    # GLM's MoE on the MoE block (ttnn.experimental.moe_block): CI run 44645427912 / job 135990820740
+    # (bh_sc1_high_power).
+    (78, 11, 10): [0.271, 0.263, 0.265, 0.261, 0.264, 0.264, 0.261, 0.260, 0.266, 0.267, 0.271],
+}
 # There is NO GLM_UNTRACED_BASELINE_CHUNK_TIMES_S, on purpose (way too many CI oscilations).
 
 GLM_TRACED_PERF_MARGIN = TRACED_PERF_MARGIN
@@ -1390,7 +1363,7 @@ def test_kimi_prefill_transformer_chunked_padded(
         pytest.param(
             (8, 4),
             # L1_SMALL holds the routing semaphores plus the sparse-MLA high-bandwidth-gather
-            # semaphores; GLM needs 1536, not Kimi's 768 (see GLM_L1_SMALL_SIZE).
+            # semaphores and the MoE block's persistent words (GLM53Config.L1_SMALL_SIZE).
             torus_xy_device_params(
                 fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
@@ -1752,6 +1725,29 @@ def _llama4_scale_buffer(transformer, chunk_size_global):
     """
     rope_setup = getattr(transformer, "rope_setup", None)
     return rope_setup.make_llama4_scale_buffer(chunk_size_global) if rope_setup is not None else None
+
+
+def _kv_divergence_by_iteration(det_copies, chips):
+    """Where a non-deterministic KV cache came apart, for the failure message: per iteration, on the first and the
+    last failing chip, the elements that differ from iteration 0 by cache slab (dim 0: user slot x MLA layer) and the
+    sequence rows (dim -2) they span."""
+    lines = []
+    for chip in sorted({chips[0], chips[-1]}):
+        want = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(det_copies[0]))[chip])
+        for it, copy in enumerate(det_copies[1:], start=1):
+            got = ttnn.to_torch(ttnn.get_device_tensors(ttnn.from_device(copy))[chip])
+            differs = want != got
+            if not differs.any():
+                lines.append(f"  chip {chip} iteration {it}: identical")
+                continue
+            per_slab = differs.flatten(1).sum(dim=1)
+            slabs = {int(i): int(per_slab[i]) for i in torch.nonzero(per_slab).flatten()}
+            rows = torch.nonzero(differs.transpose(0, -2).flatten(1).any(dim=1)).flatten()
+            lines.append(
+                f"  chip {chip} iteration {it}: {int(differs.sum())} differ; slabs {slabs}; "
+                f"rows {int(rows[0])}..{int(rows[-1])} ({len(rows)} rows)"
+            )
+    return "KV divergence by iteration (shape " + str(tuple(want.shape)) + "):\n" + "\n".join(lines)
 
 
 def run_chunked_transformer_updated(
@@ -2469,6 +2465,8 @@ def run_chunked_transformer_updated(
                 ttnn.deallocate(mismatch)
             chips = marker_chips(det_marker)
             detail = mismatch_report(["KV cache, last iteration"], [det_copies[0]], [det_copies[-1]]) if chips else ""
+            if chips:
+                detail += "\n" + _kv_divergence_by_iteration(det_copies, chips)
         finally:
             for t in [det_marker, *det_copies]:
                 if t is not None:
@@ -2985,7 +2983,7 @@ def test_kimi_prefill_transformer_chunked(
             _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-            id="torus-xy-8x4" if K3_TORUS else "fabric2d-8x4",
+            id="torus-xy-8x4",
         ),
     ],
     indirect=["mesh_device", "device_params"],

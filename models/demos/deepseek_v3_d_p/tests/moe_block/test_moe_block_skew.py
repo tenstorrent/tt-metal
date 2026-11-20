@@ -208,7 +208,9 @@ class _Skew:
 
 @pytest.fixture(scope="module")
 def mesh():
-    if ttnn.get_num_devices() < R * C:
+    if ttnn.get_num_devices() != R * C:
+        # (a LoudBox's 8 chips exactly: a 2x4 corner of a Galaxy does not open - its fabric routers have no peer past
+        # the corner)
         pytest.skip(f"needs a {R}x{C} LoudBox")
     rc = ttnn._ttnn.fabric.FabricRouterConfig()
     rc.max_packet_payload_size_bytes = (2 * H + 32 + 63) // 64 * 64

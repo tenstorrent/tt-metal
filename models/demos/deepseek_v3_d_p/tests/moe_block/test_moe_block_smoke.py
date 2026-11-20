@@ -6,8 +6,8 @@
 build and launch together (the arena spec accepted by the head and the combine, the output's shape) and gates the
 block's host time a forward on program-cache hits: the median of op_checks.PERF_RUNS (5) runs, each the best of
 HOST_TRIES timings of HOST_CALLS forwards (few: the command queue never fills, so no forward waits on the device), the
-timed thread pinned to a core no busy thread shares (_quiet_cpu), against smoke_perf_baselines.json (per machine;
-MOE_PERF_RECORD=1 records it; not on the mock Galaxy). No numerics (the ops' own tests check those bit-exact).
+timed thread pinned to a core no busy thread shares (_quiet_cpu), against HOST_US (not on the mock Galaxy). No numerics
+(the ops' own tests check those bit-exact).
 
 Needs an 8x4 Galaxy, or the mock Galaxy (plan, build and launch only):
 
@@ -28,7 +28,7 @@ from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import flat_weights_m
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock, MoEBlockWeights
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
-from op_checks import PerfBaselines, median_of_runs  # noqa: E402
+from op_checks import check_perf, median_of_runs  # noqa: E402
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
@@ -88,7 +88,8 @@ def _quiet_cpu():
 
 
 HOST_MARGIN = 0.15  # (host time: noisier than device time)
-BASELINES = PerfBaselines(Path(__file__).with_name("smoke_perf_baselines.json"))
+# The block's host time a forward (us; GLM-5.3 8x4, chunk 5120, program-cache hits) on a Blackhole Galaxy's host.
+HOST_US = 834.1
 MOCK = "blackhole_galaxy" in os.environ.get("TT_METAL_MOCK_CLUSTER_DESC_PATH", "")
 
 
@@ -184,8 +185,8 @@ def test_moe_block_smoke(mesh):
             f"MoEBlock glm53 {R}x{C} chunk {CHUNK}: {us:.1f} us of host a forward (program-cache hits, untraced; "
             f"median of {', '.join(f'{r:.0f}' for r in runs)}; timed thread on cpu {cpu})"
         )
-        if not MOCK:
-            BASELINES.check(f"glm53 {R}x{C} {CHUNK} host a forward", us, HOST_MARGIN)
+        if not MOCK:  # (the mock Galaxy: the number above, ungated)
+            check_perf(f"glm53 {R}x{C} {CHUNK} host a forward", us, HOST_US, HOST_MARGIN, where="HOST_US")
         experts.close()
     finally:
         res.release()

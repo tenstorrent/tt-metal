@@ -455,7 +455,13 @@ def test_kimi_k3_kv_cache_table(mesh_device, device_params, sp_axis, chunk, mode
         sparse_kv_cache_format=None,  # the adapter's default: scaled FP8 on K3.1, none (bf8 TILE) on K3
         chunk_size=chunk,
         dflash_enabled=False,
+        # Untraced, one chunk per forward: kv_cache_slots allocates exactly num_users slots (no packed-forward
+        # scratch slot), which is what the table publishes.
+        use_trace=False,
+        forward_chunks=1,
     )
+    # The runtime below reads params as its config, whose cache_num_users the allocation sizes the caches by.
+    params.cache_num_users = adapter.kv_cache_slots(params)
     caches = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     token_caches = {"kvpe": caches.kvpe.storage}
     if caches.index is not None:

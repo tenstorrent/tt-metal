@@ -18,7 +18,7 @@ The usual "post-combine reduce" is folded in as well. A plain combine would brin
 home as k separate rows, and a second op would compute `sum_k gate_k * y_k`. Here that sum is accumulated as the rows
 arrive, so the output is already one row per token:
 
-    out[token] = sum over the token's routed experts e of  gate_e * y_e[token]      (fp32 sums, bf16 out)
+    out[token] = sum over the token's routed experts e of  gate_e * y_e[token]      (int32 sums of q, bf16 out)
 
 ## Data flow
 
@@ -40,9 +40,16 @@ Rows from different chips arrive in an order that depends on fabric timing, whic
 addition is not associative, so summing the same rows in a different order can give a different result in the last
 bits: without care, the op would not be bit-reproducible.
 
-`combine_snap` (a power of two q; on by default, q = 2^-14) rounds every weighted row to a multiple of q before it is
-added. Sums of multiples of q are exact in fp32 (while they stay below 2^24 q), so the result is the same in any
-arrival order.
+`combine_snap` (a power of two q; on by default, q = 2^-14) turns every weighted row into whole multiples of q, and the
+accumulators sum those as int32 counts of q: the SFPU rounds each term v to round(v / q) (ties to even) as a
+sign-magnitude int32, and the packer adds it into the token's sum in L1 with its INT32 L1 accumulation
+([tt-isa-documentation, packer accumulation](https://github.com/tenstorrent/tt-isa-documentation/blob/main/WormholeB0/TensixTile/TensixCoprocessor/Packers/Accumulation.md)).
+Integer adds are exact, so the result is the same in any arrival order, up to (2^31 - 1) q (2^17 at q = 2^-14; the
+fp32 sums of multiples of q this replaced were exact only below 2^24 q). Past that the L1 add saturates at
++-(2^31 - 1) and stays there (Blackhole treats the largest magnitude as an infinity), and a single term is clamped to
++-(2^31 - 128) q (inf / NaN too), so an overflowing token reads out as about +-2^31 q, never a wrapped value. The output is the count cast to fp32, times q, rounded to bf16.
+
+With `combine_snap` 0 the sums are fp32 (FP32 L1 accumulation), order-dependent in the last bits.
 
 ## Tensix core types (per chip)
 
@@ -51,7 +58,7 @@ arrival order.
 * **Ports**: one per fabric direction and link, next to that link's Ethernet core. A port sends its rows over the
   fabric to their home chips and returns flow-control messages for the rows its own chip consumed.
 * **Accumulators**: A per chip; token t is summed on accumulator t % A. Each has a reader (collects the landed rows),
-  a compute kernel (the weighted fp32 sum, `kernels/compute/accumulator_compute.cpp`) and a writer (the output rows).
+  a compute kernel (the weighted sum, `kernels/compute/accumulator_compute.cpp`) and a writer (the output rows).
 
 The planner (`combine_auto`) picks the arrangement that fits the L1 the experts leave free:
 

@@ -10,7 +10,7 @@ Against torch on the same weights (the shared expert's on the bf8 grid, the rout
     matches, in bf16 ulps against the reference rounded to bf16 (see _check_gate_weights_ulp);
   * the planner's counts: each chip's experts' counts = the routing rows' picks (a histogram);
   * the dispatch buffer's own slots: GLM x itself (bit-exact), K3 the latent rows x @ latent_down^T.
-Perf baselines: moe_head_lb_perf_baselines.json."""
+Perf baselines: HEAD_US below."""
 
 import sys
 from pathlib import Path
@@ -27,7 +27,7 @@ from op_checks import (  # noqa: E402
     BLOCK_OPS,
     PERF_RUNS,
     DeterminismMarker,
-    PerfBaselines,
+    check_perf,
     median_us,
     traced_op_device_times,
 )
@@ -52,7 +52,12 @@ from head_tail_lb_cases import (
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
-BASELINES = PerfBaselines(HERE / "moe_head_lb_perf_baselines.json")
+# The head's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id. Recorded on a
+# Galaxy's 2x4 tray (bh-glx, 2026-11); a LoudBox run logs its own - re-baseline from a LoudBox's log.
+HEAD_US = {
+    "glm53-row640": 321.6,
+    "glm53-row384": 212.9,
+}
 HEAD_OPS = {"moe_head": BLOCK_OPS["moe_head"]}
 
 
@@ -235,5 +240,5 @@ def test_moe_head_perf(mesh_device, device_params, case):
     finally:
         head.close()
     us = median_us(t)
-    logger.info(f"PERF moe_head {case.id}: median {us:.1f} us over {len(t)} replays")
-    BASELINES.check(f"moe_head {case.id}", us, case.margin)
+    logger.info(f"PERF moe_head {case.id}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})")
+    check_perf(f"moe_head {case.id}", us, HEAD_US.get(case.id), case.margin, where=f'HEAD_US["{case.id}"]')

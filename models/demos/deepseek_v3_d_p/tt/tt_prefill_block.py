@@ -15,6 +15,7 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
+from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SAME_CHUNK_NEXT_LAYER, PushStep, packed_push_targets
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
@@ -22,7 +23,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     routed_expert_combine_overlap_arg,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, gate_bias_centered
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, PackedPadding, gate_bias_centered
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
     DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE,
     ROUTED_EXPERT_ACTIVATION_BY_NAME,
@@ -295,9 +296,15 @@ class TtPrefillBlock(LightweightModule):
         first_layer_idx: Optional[int] = None,
         llama4_scale_cache: Optional[dict] = None,
         use_fused_rmsnorm: Optional[bool] = None,
+        forward_chunks: int = 1,
         moe_impl: Optional[str] = None,
     ):
         super().__init__()
+        # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
+        # attention half runs per chunk and keeps the per-chunk sizing; the FFN half (ffn_norm, MoE / dense
+        # FFN) runs once over all forward_chunks * seq_len tokens and is sized for them.
+        assert forward_chunks >= 1, f"forward_chunks must be positive, got {forward_chunks}"
+        self.forward_chunks = forward_chunks
         self.routing_use_l1_small_for_semaphores = routing_use_l1_small_for_semaphores
         # Overlap the shared expert with dispatch via a sub-device manager (default). Must be False
         # for ttnn trace capture: load/clear_sub_device_manager resets worker state inside forward,
@@ -415,18 +422,19 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
             use_fused=use_fused_rmsnorm,
-            post_use_2d_core_grid=use_mistral4_2d_post_norm,
+            # The 2D split is tuned for 640 rows per device; a packed forward's FFN half has more.
+            post_use_2d_core_grid=use_mistral4_2d_post_norm and forward_chunks == 1,
         )
 
         # --- FFN (MoE or dense) ---
-        # (the MoE block's C++ ops - router, shared expert and routed experts in one call, tt/kimi_k3/moe_block_ffn.py;
-        # the gate / shared expert from the checkpoint, the routed experts from this cache's TtMoe tensorbins):
-        # GLM-5.3's default, else MOE_IMPL=block / moe_impl="block" (tt/moe_impl.py)
+        # (the MoE block's C++ ops - router, shared expert and routed experts in one call,
+        # tt/moe_block/moe_block_ffn.py; the gate / shared expert from the checkpoint, the routed experts from this
+        # cache's TtMoe tensorbins): the model's default MoE, tt/moe_impl.py)
         self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
         if self.moe_block:
-            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockFfnOptions, TtK3MoEBlockFfn
+            from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
 
-            self.ffn = TtK3MoEBlockFfn(
+            self.ffn = TtMoEBlockFfn(
                 mesh_device,
                 model_cfg,
                 layer_idx,
@@ -441,7 +449,7 @@ class TtPrefillBlock(LightweightModule):
                 model_cfg=model_cfg,
                 config=config,
                 state_dict=state_dict,
-                seq_len=seq_len,
+                seq_len=seq_len * forward_chunks,
                 sp_axis=sp_axis,
                 emb_dim=emb_dim,
                 num_links=num_links,
@@ -701,7 +709,269 @@ class TtPrefillBlock(LightweightModule):
             ttnn.synchronize_device(self.mesh_device)
             _t_start = time.perf_counter()
 
-        # --- Attention ---
+        x, mla_indices, kv_intermediates = self._attention_half(
+            x,
+            rope_tensors,
+            kvpe_cache,
+            cache_layer_idx=cache_layer_idx,
+            d2h_service=d2h_service,
+            metadata_msg=metadata_msg,
+            on_layer_complete=on_layer_complete,
+            actual_start=actual_start,
+            actual_end=actual_end,
+            cache_user_id=cache_user_id,
+            return_kv_intermediates=return_kv_intermediates,
+            indexer_indices=indexer_indices,
+            return_indexer_indices=return_indexer_indices,
+            index_kv_cache=index_kv_cache,
+            metadata=metadata,
+            ack_layer_idx=ack_layer_idx,
+            ack_alias_layer_ids=ack_alias_layer_ids,
+            kv_only=kv_only,
+        )
+
+        if kv_only:
+            kv_cache = (
+                ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis)
+                if return_kv_cache
+                else None
+            )
+            if return_indexer_indices:
+                return None, kv_cache, None
+            return None, kv_cache
+
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
+        if return_kv_intermediates:
+            # post-MLA residual (x + mla_out), TP-sharded on hidden.
+            kv_intermediates["post_mla_residual"] = ttnn.clone(x)
+
+        x = self._ffn_half(
+            x,
+            kv_intermediates=kv_intermediates,
+            return_intermediates=return_intermediates,
+            actual_isl=actual_isl,
+            padding_side=padding_side,
+            actual_start=actual_start,
+            metadata=metadata,
+            cache_user_id=cache_user_id,
+        )
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_ffn = time.perf_counter()
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
+            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
+
+        # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
+        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
+        # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.mla.layer_idx, x)
+
+        if return_kv_intermediates:
+            if return_indexer_indices:
+                return x, kv_intermediates, mla_indices
+            return x, kv_intermediates
+
+        kv_cache = (
+            ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis) if return_kv_cache else None
+        )
+        if return_indexer_indices:
+            return x, kv_cache, mla_indices
+        return x, kv_cache
+
+    def forward_packed(
+        self,
+        x: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: MlaKvCache,
+        chunks: list,
+        cache_layer_idx: int = 0,
+        return_intermediates: bool = False,
+        on_layer_complete: Optional[Callable[[int, object], None]] = None,
+        on_layer_hidden: Optional[Callable[[int, ttnn.Tensor], None]] = None,
+        indexer_indices: Optional[list] = None,
+        return_indexer_indices: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
+        metadata: Optional[list] = None,
+        padding_config: Optional[PackedPadding] = None,
+        zero_pad: bool = False,
+        ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
+        force_kv_only: bool = False,
+    ):
+        """One packed forward: ``chunks`` (PrefillChunk) back to back, ``x.shape[2] // len(chunks)`` rows each.
+
+        The attention half (attn_norm, MLA, KV write, residual) runs once per non-empty chunk on that chunk's
+        rows, against its slot_id and actual_start; an empty chunk's rows pass through untouched. The FFN half
+        (ffn_norm, MoE or dense FFN, residual) then runs ONCE over all rows, with the MoE skipping each chunk's
+        pad rows. Eager by default; ``metadata`` selects the traced form. D2H acks go out after the forward, from
+        TtPrefillRuntime.prefill_forward.
+
+        on_layer_complete: host completion callback, fired as (global layer index, chunk) once per non-empty
+            chunk after that chunk's KV is written, so a consumer can retire each chunk separately.
+        indexer_indices: GLM-5.3 reuse, one entry per chunk (None for an empty chunk) from the last "full"
+            layer; None when this layer computes its own.
+        metadata: the traced form. One ChunkMetadata per chunk position, read on device; ``chunks`` is then
+            unused (None). Every position runs its attention half, so the caller points an empty chunk at
+            a scratch slot. Requires ``padding_config``, the persistent MoE padding config, and no ack.
+        padding_config: the MoE padding (PackedPadding) for the whole forward, built once by the caller for every
+            layer (TtPrefillTransformer.forward_packed, packed_padding); None when every row is real.
+        zero_pad: zero each chunk's KV pad window without acking, for a caller sending D2H acks afterwards.
+        ack_layer_idx / ack_alias_layer_ids / force_kv_only: as in forward(), for the MTP block TtMTPPredictor
+            replays once per level.
+
+        Returns:
+            (x, kv_cache=None) or, with return_indexer_indices, (x, None, per-chunk indices list). x is None
+            for a kv_only block.
+        """
+        traced = metadata is not None
+        n = len(metadata) if traced else len(chunks)
+        assert n == self.forward_chunks, f"{n} chunks for a block built for {self.forward_chunks}"
+        assert not traced or (padding_config is not None and on_layer_complete is None)
+        assert indexer_indices is None or len(indexer_indices) == n
+        rows = x.shape[2] // n
+        assert rows * n == x.shape[2], f"{x.shape[2]} rows do not split into {n} chunks"
+        kv_only = self.kv_only or force_kv_only
+        # Same TT_PREFILL_BLOCK_TIMING split as forward(): "mla" covers every chunk's attention half, "ffn"
+        # the one FFN half over all rows.
+        _timing = _BLOCK_TIMING_ENABLED and not kv_only
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_start = time.perf_counter()
+
+        # The sparse-KV push (shared layers) fills each attention step's buffer beside the step before it.
+        push_targets = packed_push_targets([traced or not c.is_empty for c in (chunks or [None] * n)])
+        first_step = min(push_targets, default=None)
+        outs, chunk_indices = [], []
+        for k in range(n):
+            chunk = None if traced else chunks[k]
+            x_k = ttnn.slice(x, (0, 0, k * rows, 0), (1, 1, (k + 1) * rows, x.shape[-1]))
+            if not traced and chunk.is_empty:
+                outs.append(x_k)
+                chunk_indices.append(None)
+                continue
+            next_step = self._packed_next_step(
+                push_targets[k],
+                chunks=chunks,
+                metadata=metadata,
+                indexer_indices=indexer_indices,
+                own=k,
+                chunk_indices=chunk_indices,
+            )
+            out_k, idx_k, _ = self._attention_half(
+                x_k,
+                rope_tensors,
+                kvpe_cache,
+                cache_layer_idx=cache_layer_idx,
+                on_layer_complete=(
+                    None if on_layer_complete is None else (lambda layer, c=chunk: on_layer_complete(layer, c))
+                ),
+                actual_start=None if traced else chunk.actual_start,
+                actual_end=None if traced else chunk.actual_end,
+                cache_user_id=0 if traced else chunk.slot_id,
+                indexer_indices=None if indexer_indices is None else indexer_indices[k],
+                return_indexer_indices=return_indexer_indices,
+                index_kv_cache=index_kv_cache,
+                metadata=metadata[k] if traced else None,
+                kv_only=kv_only,
+                zero_pad_only=zero_pad,
+                next_step=next_step,
+                # Injected indices are new to the push planner once per forward, at its first step.
+                push_new_indices=k == first_step,
+                ack_layer_idx=ack_layer_idx,
+                ack_alias_layer_ids=ack_alias_layer_ids,
+            )
+            ttnn.deallocate(x_k)
+            outs.append(out_k)
+            if (
+                idx_k is not None
+                and indexer_indices is None
+                and self.mla.tp_factor > 1
+                and not self.mla._needs_head_to_seq_reshard
+            ):
+                # A head-sharded TP>1 indexer (e.g. 64 heads at TP=2) returns its gathered top-k in a shared
+                # all-gather buffer that the next chunk's gather overwrites; keep this chunk's copy.
+                idx_k = ttnn.clone(idx_k)
+            chunk_indices.append(idx_k)
+
+        if kv_only:
+            return (None, None, chunk_indices) if return_indexer_indices else (None, None)
+
+        x = outs[0] if len(outs) == 1 else ttnn.concat(outs, dim=2)
+        if len(outs) > 1:
+            for out in outs:
+                ttnn.deallocate(out)
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            _t_mla = time.perf_counter()
+        x = self._ffn_half(
+            x,
+            return_intermediates=return_intermediates,
+            packed=True,
+            packed_padding_config=padding_config,
+        )
+        if _timing:
+            ttnn.synchronize_device(self.mesh_device)
+            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
+            rec["mla"].append(_t_mla - _t_start)
+            rec["ffn"].append(time.perf_counter() - _t_mla)
+        if on_layer_hidden is not None:
+            on_layer_hidden(self.mla.layer_idx, x)
+        return (x, None, chunk_indices) if return_indexer_indices else (x, None)
+
+    @staticmethod
+    def _packed_next_step(target, *, chunks, metadata, indexer_indices, own, chunk_indices):
+        """The PushStep for packed_push_targets' `target` (layer offset, chunk position) of the step at position
+        `own`, or None when that step computes its own top-k (the next chunk of a full layer), so has nothing to
+        pre-send. The next layer's first step reuses this layer's indices for its chunk: injected ones in a shared
+        layer, else this full layer's, which chunk_indices holds for every earlier position (`own`: not yet)."""
+        offset, j = target
+        if indexer_indices is not None:
+            indices = indexer_indices[j]
+        elif offset == 0:
+            return None
+        else:
+            indices = None if j == own else chunk_indices[j]
+        if metadata is not None:
+            return PushStep(layer_offset=offset, indices=indices, metadata=metadata[j])
+        return PushStep(
+            layer_offset=offset,
+            indices=indices,
+            cache_user_id=chunks[j].slot_id,
+            kv_actual_isl=chunks[j].actual_start,
+        )
+
+    def _attention_half(
+        self,
+        x: ttnn.Tensor,
+        rope_tensors: dict,
+        kvpe_cache: MlaKvCache,
+        *,
+        cache_layer_idx: int,
+        kv_only: bool,
+        d2h_service=None,
+        metadata_msg: Optional[ttnn.Tensor] = None,
+        on_layer_complete: Optional[Callable[[int], None]] = None,
+        actual_start: Optional[int] = None,
+        actual_end: Optional[int] = None,
+        cache_user_id: int = 0,
+        return_kv_intermediates: bool = False,
+        indexer_indices: Optional[ttnn.Tensor] = None,
+        return_indexer_indices: bool = False,
+        index_kv_cache: Optional[ttnn.Tensor] = None,
+        metadata: Optional[ttnn.Tensor] = None,
+        ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
+        zero_pad_only: bool = False,
+        next_step=SAME_CHUNK_NEXT_LAYER,
+        push_new_indices: Optional[bool] = None,
+    ):
+        """attn_norm -> MLA (KV write) -> pad-zero / ack -> residual. next_step / push_new_indices: the sparse-KV
+        push's pre-send target and plan freshness (ttMLA.forward). Returns (x + mla_out, this layer's
+        top-k indices or None, kv_intermediates or None); x is None for a kv_only block."""
         attn_norm_out = self.attn_norm(x)
         seq_len_local = attn_norm_out.shape[2]
         mla_out = self.mla.forward(
@@ -718,6 +988,8 @@ class TtPrefillBlock(LightweightModule):
             index_kv_cache=index_kv_cache,
             metadata=metadata,
             force_kv_only=kv_only,
+            next_step=next_step,
+            push_new_indices=push_new_indices,
         )
         kv_intermediates = None
         mla_indices = None  # GLM-5.3 reuse: this layer's top-k indices (full layer) for downstream shared layers
@@ -754,30 +1026,33 @@ class TtPrefillBlock(LightweightModule):
             trace_controller=getattr(self, "_trace_controller", None),
             tp_axis=self.mla.tp_shard_kv_axis,
             alias_layer_ids=ack_alias_layer_ids,
+            zero_only=zero_pad_only,
         )
 
         if kv_only:
-            kv_cache = (
-                ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis)
-                if return_kv_cache
-                else None
-            )
-            if return_indexer_indices:
-                return None, kv_cache, None
-            return None, kv_cache
+            return None, None, None
 
         x = ttnn.add(x, mla_out, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         ttnn.deallocate(mla_out)
-        if _timing:
-            ttnn.synchronize_device(self.mesh_device)
-            _t_mla = time.perf_counter()
-        if return_kv_intermediates:
-            # post-MLA residual (x + mla_out), TP-sharded on hidden.
-            kv_intermediates["post_mla_residual"] = ttnn.clone(x)
+        return x, mla_indices, kv_intermediates
 
-        # --- FFN ---
+    def _ffn_half(
+        self,
+        x: ttnn.Tensor,
+        *,
+        kv_intermediates: Optional[dict] = None,
+        return_intermediates: bool = False,
+        actual_isl: Optional[int] = None,
+        padding_side: str = "right",
+        actual_start: Optional[int] = None,
+        metadata: Optional[ttnn.Tensor] = None,
+        cache_user_id: int = 0,
+        packed: bool = False,
+        packed_padding_config: Optional[PackedPadding] = None,
+    ) -> ttnn.Tensor:
+        """ffn_norm -> MoE | dense FFN -> residual."""
         ffn_norm_out = self.ffn_norm(x)
-        if return_kv_intermediates:
+        if kv_intermediates is not None:
             # post_attention_layernorm output (the FFN norm), TP-sharded on hidden.
             kv_intermediates["post_attn_norm"] = ttnn.clone(ffn_norm_out)
 
@@ -792,6 +1067,8 @@ class TtPrefillBlock(LightweightModule):
                 actual_start=actual_start,
                 metadata=metadata,
                 cache_user_id=cache_user_id,
+                packed=packed,
+                packed_padding_config=packed_padding_config,
                 residual=x if fold_residual else None,
             )
         else:
@@ -804,30 +1081,7 @@ class TtPrefillBlock(LightweightModule):
         else:
             x = ttnn.add(x, ffn_out)
             ttnn.deallocate(ffn_out)
-        if _timing:
-            ttnn.synchronize_device(self.mesh_device)
-            _t_ffn = time.perf_counter()
-            rec = _BLOCK_TIMINGS.setdefault(self.mla.layer_idx, {"mla": [], "ffn": []})
-            rec["mla"].append(_t_mla - _t_start)  # attn_norm + MLA + residual
-            rec["ffn"].append(_t_ffn - _t_mla)  # ffn_norm + (MoE|dense FFN) + residual
-
-        # Post-FFN output-residual tap (e.g. the DFlash drafter): fire with this block's GLOBAL layer
-        # index (self.mla.layer_idx) and its final output residual. Not reached for kv_only blocks (they
-        # returned above with no output). The callback must NOT free/mutate x — it flows to the next layer.
-        if on_layer_hidden is not None:
-            on_layer_hidden(self.mla.layer_idx, x)
-
-        if return_kv_intermediates:
-            if return_indexer_indices:
-                return x, kv_intermediates, mla_indices
-            return x, kv_intermediates
-
-        kv_cache = (
-            ttMLA.kv_cache_to_host(kvpe_cache, self.mesh_device, sp_axis=self.mla.sp_axis) if return_kv_cache else None
-        )
-        if return_indexer_indices:
-            return x, kv_cache, mla_indices
-        return x, kv_cache
+        return x
 
     def _moe_path(
         self,
@@ -838,12 +1092,19 @@ class TtPrefillBlock(LightweightModule):
         actual_start: Optional[int] = None,
         metadata: Optional[ttnn.Tensor] = None,
         cache_user_id: int = 0,
+        packed: bool = False,
+        packed_padding_config: Optional[PackedPadding] = None,
         residual: Optional[ttnn.Tensor] = None,
     ) -> ttnn.Tensor:
         """MoE FFN path: 4D TILE → 3D TILE → MoE → 3D TILE → 4D TILE.
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
+        if self.moe_block and packed:  # (a packed forward: the forward's chunks or metadata words, MoEBlockPacking)
+            assert packed_padding_config is not None and hasattr(
+                packed_padding_config, "ffn_kwargs"
+            ), f"MoE block: a packed forward takes its MoEBlockPacking, got {type(packed_padding_config).__name__}"
+            return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
         if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
             return self.ffn(
                 ffn_norm_out,
@@ -863,6 +1124,8 @@ class TtPrefillBlock(LightweightModule):
             metadata=metadata,
             # Only consumed by the env-gated routing dump, which names its files by KV slot.
             cache_user_id=cache_user_id,
+            packed=packed,
+            packed_padding_config=packed_padding_config,
             residual=None if residual is None else ttnn.squeeze(residual, dim=0),
         )
 

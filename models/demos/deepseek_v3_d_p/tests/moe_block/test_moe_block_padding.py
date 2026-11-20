@@ -23,7 +23,7 @@ MOE_PAD_CHUNK: the chunk (1280; 2560 fits too, 5120 not on the LoudBox's grid).
 test_padding_perf (TT_METAL_DEVICE_PROFILER=1, TT_METAL_PROFILER_MID_RUN_DUMP=1, TT_METAL_PROFILER_CPP_POST_PROCESS=1):
 the traced forward's device time with 40% real + identical padding, with / without the span, and fully real - each the
 median of op_checks.PERF_RUNS (5) replays, the forward and each program against its baseline in
-padding_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records them)."""
+PADDING_US (a run without its baselines logs its numbers with a reminder to add them)."""
 
 import os
 import sys
@@ -38,11 +38,20 @@ from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import flat_weights_m
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock, MoEBlockWeights
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
-from op_checks import PERF_RUNS, PerfBaselines  # noqa: E402
+from op_checks import PERF_RUNS, assert_no_perf_failures, perf_failure  # noqa: E402
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
-BASELINES = PerfBaselines(Path(__file__).with_name("padding_perf_baselines.json"))
+# The traced forward's device time (us, a chip; the median of PERF_RUNS replays) by chunk and run: (the forward's
+# span, head, dispatch, experts+combine, tail). Recorded on a Galaxy's 2x4 tray (bh-glx, 2026-11); a LoudBox run logs
+# its own - re-baseline from a LoudBox's log.
+PADDING_US = {
+    "chunk 1280 100% real, no span": (2246.0, 230.9, 106.1, 1298.7, 43.5),
+    "chunk 1280 100% real, span (0, 1280)": (2252.1, 234.2, 104.8, 1297.6, 44.5),
+    "chunk 1280 512 real + identical padding, no span": (2512.1, 251.5, 151.4, 1451.1, 130.3),
+    "chunk 1280 512 real + identical padding, rotated span (100, 612)": (2177.2, 222.2, 78.2, 1286.9, 42.3),
+    "chunk 1280 512 real + identical padding, span (0, 512)": (2173.7, 221.5, 76.3, 1284.7, 45.1),
+}
 
 R, C = 2, 4
 CHUNK = int(os.environ.get("MOE_PAD_CHUNK", "1280"))
@@ -66,7 +75,9 @@ class _Capture:
 
 @pytest.fixture(scope="module")
 def mesh():
-    if ttnn.get_num_devices() < R * C:
+    if ttnn.get_num_devices() != R * C:
+        # (a LoudBox's 8 chips exactly: a 2x4 corner of a Galaxy does not open - its fabric routers time out in their
+        # first handshake)
         pytest.skip(f"needs a {R}x{C} LoudBox")
     rc = ttnn._ttnn.fabric.FabricRouterConfig()
     rc.max_packet_payload_size_bytes = (2 * H + 32 + 63) // 64 * 64
@@ -500,9 +511,13 @@ def test_padding_perf(setup):
         span, us = _device_us(s, rows, sp)
         parts = ", ".join(f"{n} {u:.1f}" for n, u in zip(names, us))
         logger.info(f"MOE_PAD (e) chunk {CHUNK}, {what}: forward {span:.1f} us a chip (traced); programs: {parts}")
-        BASELINES.check(f"chunk {CHUNK} {what}: forward", span, 0.05)
-        for n, u in zip(names, us):
-            BASELINES.check(f"chunk {CHUNK} {what}: {n}", u, 0.05)
+        key = f"chunk {CHUNK} {what}"
+        base = dict(zip(["forward", *names], PADDING_US[key])) if key in PADDING_US else {}
+        where = f'PADDING_US["{key}"] (forward, {", ".join(names)})'
+        assert_no_perf_failures(
+            perf_failure(f"{key}: {n}", u, base.get(n), 0.05, where=where)
+            for n, u in zip(["forward", *names], [span, *us])
+        )
 
     V = CHUNK * 2 // 5
     run("100% real, no span", s["base"], None)

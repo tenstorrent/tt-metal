@@ -26,8 +26,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc, is_blackhole
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import block_dims
-from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_words_slab
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_dims, moe_block_words_slab
 from block_cases import MESHES, MODELS
 from models.demos.deepseek_v3_d_p.tt.moe_block.flat_gather import flat_weights_module
 from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import MoEBlock
@@ -49,7 +48,7 @@ class Case:
     model: str  # test_moe_block_models.MODELS key
     mesh: str = "8x4"  # test_moe_block_models.MESHES key
     chunk: int = 5120
-    perf_margin: float = 0.05  # (the baselines: experts_combine_perf_baselines.json)
+    perf_margin: float = 0.05  # (over the baseline in test_experts_combine_checks.COMBINE_US)
     seed: int = 5
 
     @property
@@ -75,7 +74,11 @@ def _params(routings):
     out = []
     for c in CASES:
         shape, make_params, topology = MESHES[c.mesh]
-        dp = make_params(**MODELS[c.model].mesh_params())
+        # exactly the machine's chip count (conftest's mesh_device skips any other before the mesh opens): an 8x4 case
+        # on a Galaxy, a 4x4 / 2x4 one on the tray (half) TT_VISIBLE_DEVICES narrows it to, with its
+        # TT_MESH_GRAPH_DESC_PATH (block_cases.MESHES) - a sub-mesh of a whole Galaxy does not open (its fabric routers
+        # time out in their first handshake). (requires_mesh_topology is the model tests' conftest's: not run here.)
+        dp = {**make_params(**MODELS[c.model].mesh_params()), "require_exact_physical_num_devices": True}
         mark = pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology)
         for r in routings:
             out.append(pytest.param(c, r, shape, dp, marks=mark, id=f"{c.id}-{r}" if r else c.id))
@@ -162,7 +165,7 @@ class BlockStages:
         """layout: the flat expert's FlatLayoutOptions (e.g. x_bf16 / h_bf16), None: the block's default."""
         self.mesh, self.case = mesh, case
         model = MODELS[case.model]
-        self.dims, self.act = block_dims(model.cfg)
+        self.dims, self.act = moe_block_dims(model.cfg)
         d = self.dims
         R, C = tuple(mesh.shape)
         self.N = R * C

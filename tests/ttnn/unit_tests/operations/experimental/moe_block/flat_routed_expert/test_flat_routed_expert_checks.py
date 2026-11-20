@@ -10,7 +10,7 @@ device time the op is expected to take there.
 * test_flat_expert_accuracy: every routed row against a torch reference of the bfp4-quantized weights.
 * test_flat_expert_determinism: CALLS calls on the same inputs, bit-identical on the device (op_checks.DeterminismMarker).
 * test_flat_expert_perf: the op's device time from the real-time profiler (the median of op_checks.PERF_RUNS (5)
-  calls) against its baseline in flat_expert_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records it).
+  calls) against its baseline in FLAT_US (a Galaxy chip's; on a p150 the time is logged, not gated).
 
 Weights: flat_cases.weight_sets (seeded random, N_W sets round-robin over the experts)."""
 
@@ -29,7 +29,7 @@ from models.common.utility_functions import comp_pcc
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parents[6]
 sys.path.insert(0, str(HERE.parent))
-from op_checks import PERF_RUNS, DeterminismMarker, PerfBaselines, median_us, op_device_times  # noqa: E402
+from op_checks import PERF_RUNS, DeterminismMarker, check_perf, machine, median_us, op_device_times  # noqa: E402
 
 
 def _load(name, path):
@@ -48,7 +48,29 @@ weights_py = _load(
 FLAT_OPS = {"flat_routed_expert": "moe_block/flat_routed_expert/device/kernels"}
 CALLS = 10  # (determinism calls; perf: PERF_RUNS)
 PCC = 0.99
-BASELINES = PerfBaselines(HERE / "flat_expert_perf_baselines.json")
+# The op's device time (us; the median of PERF_RUNS calls) by case id, on one chip of a Blackhole Galaxy - gated there
+# only (a p150's chip runs at its own clock: its numbers are logged, not checked).
+FLAT_US = {
+    "dsv41_flash-8x4-10240-uniform": 730.4,
+    "dsv41_flash-8x4-5120-hot": 1736.5,
+    "dsv41_flash-8x4-5120-uniform": 641.9,
+    "dsv41_flash-8x4-5120-zipf": 684.8,
+    "glm53-4x4-5120-uniform": 1005.8,
+    "glm53-4x4-7680-uniform": 1115.4,
+    "glm53-8x4-10240-uniform": 721.2,
+    "glm53-8x4-10240-zipf": 714.5,
+    "glm53-8x4-5120-hot": 1426.4,
+    "glm53-8x4-5120-uniform": 529.4,
+    "glm53-8x4-5120-zipf": 551.1,
+    "glm53_flash-8x4-5120-uniform": 387.9,
+    "k27-8x4-5120-uniform": 848.7,
+    "k3-4x4-2560-uniform": 2606.5,
+    "k3-8x4-10240-uniform": 1446.8,
+    "k3-8x4-5120-hot": 1860.7,
+    "k3-8x4-5120-uniform": 1348.8,
+    "k3-8x4-5120-zipf": 1460.9,
+    "m3-8x4-5120-uniform": 415.5,
+}
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -106,7 +128,7 @@ class FlatCase:
     stage: str  # flat_cases.STAGES key: the mesh the per-chip load is taken from
     chunk: int  # tokens a chunk (the capacity per expert: an expert can take every token)
     routing: str  # ROUTINGS key
-    perf_margin: float = 0.05  # (the baseline: flat_expert_perf_baselines.json)
+    perf_margin: float = 0.05  # (over the baseline in FLAT_US)
     seed: int = 1
     marks: tuple = field(default=())
 
@@ -281,4 +303,5 @@ def test_flat_expert_perf(device, case):
         f"PERF {case.id}: flat_routed_expert median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})"
     )
     op.close()
-    BASELINES.check(f"flat expert {case.id}", us, case.perf_margin)
+    baseline = FLAT_US.get(case.id) if machine() == "BLACKHOLE_GALAXY" else None
+    check_perf(f"flat expert {case.id}", us, baseline, case.perf_margin, where=f'FLAT_US["{case.id}"]')

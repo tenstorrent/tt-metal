@@ -14,7 +14,7 @@ block_stages.py.
 * test_experts_combine_reroute: routing A, then B, then A again on the same op and buffers - each right, and the second
   A bit-identical to the first (nothing of a call's routing left in the next).
 * test_experts_combine_perf: PERF_RUNS (5) traced replays (a barrier ahead of the op in the trace: every chip starts
-  it together), the op's slowest chip, median, against its baseline in experts_combine_perf_baselines.json.
+  it together), the op's slowest chip, median, against its baseline in COMBINE_US.
 """
 
 import sys
@@ -40,13 +40,25 @@ from op_checks import (  # noqa: E402
     DeterminismMarker,
     PERF_RUNS,
     MeshBarrier,
-    PerfBaselines,
+    check_perf,
     median_us,
     traced_op_device_times,
 )
 
 OPS = {"routed_experts_combine": BLOCK_OPS["routed_experts_combine"]}
-BASELINES = PerfBaselines(Path(__file__).with_name("experts_combine_perf_baselines.json"))
+# The op's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id and routing, on a
+# Blackhole Galaxy. The 8x4 hotchip rows are a capped (8 kW) CI Galaxy's: one chip runs most of the experts and
+# throttles there (2043.1 / 2890.3 us uncapped).
+COMBINE_US = {
+    "dsv41_flash-8x4-5120": {"uniform": 692.5, "zipf": 908.3, "hotchip": 1181.0},
+    "glm53-4x4-y-5120": {"uniform": 1207.4, "zipf": 1462.8, "hotchip": 2828.7},
+    "glm53-8x4-5120": {"uniform": 673.5, "zipf": 1123.9, "hotchip": 2166.5},
+    "kimi_k3-4x4-y-2560": {"uniform": 2724.4, "zipf": 2760.0, "hotchip": 3148.6},
+    "kimi_k3-8x4-5120": {"uniform": 1447.1, "zipf": 1614.7, "hotchip": 3237.5},
+    "minimax_m3-2x4-2048": {"uniform": 1344.7, "zipf": 1434.4, "hotchip": 1965.2},
+    "minimax_m3-2x4-4096": {"uniform": 1422.0, "zipf": 1802.9, "hotchip": 3070.9},
+    "minimax_m3-2x4-5120": {"uniform": 1496.9, "zipf": 2109.6, "hotchip": 3686.9},
+}
 
 
 # ---------------------------------------------------------------------------------------------------- the tests
@@ -117,4 +129,5 @@ def test_experts_combine_perf(case, routing, mesh_device, device_params, host_we
     us = median_us(t)
     label = f"experts + combine {case.id} {routing}"
     logger.info(f"PERF {label}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f}) x{len(t)}")
-    BASELINES.check(label, us, case.perf_margin)
+    baseline = COMBINE_US.get(case.id, {}).get(routing)
+    check_perf(label, us, baseline, case.perf_margin, where=f'COMBINE_US["{case.id}"]["{routing}"]')

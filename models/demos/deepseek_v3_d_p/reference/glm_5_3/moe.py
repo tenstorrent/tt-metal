@@ -57,10 +57,11 @@ def glm_moe_reference(
     # only a handful of values; centred it keeps ~1e-3 resolution. The MoE block (GLM-5.3's default MoE,
     # tt/moe_impl.py) keeps the checkpoint's fp32. Top-k is shift-invariant, so centring changes no selection in exact
     # arithmetic -- only the rounding, which is why the reference mirrors each device path's values exactly.
+    from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
     from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_enabled
 
     bias = gate_weights["e_score_correction_bias"].float()
-    if not moe_block_enabled("GLM53Config"):
+    if not moe_block_enabled(GLM53Config):
         bias = (bias - bias.mean()).to(torch.bfloat16).float()
     gate.e_score_correction_bias.data = bias
     # MoEGate.forward expects [bsz, seq, hidden] (it unpacks 3 dims); it flattens internally and

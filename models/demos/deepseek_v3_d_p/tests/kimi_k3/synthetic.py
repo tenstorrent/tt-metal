@@ -201,8 +201,6 @@ def build_stack(
         slot_num=num_users,
         sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
         tp_shard_kv=True,
-        # (TtMoe: these meshes open without the MoE block's L1_SMALL / fabric payload, and the weights are synthetic)
-        moe_impl="ttmoe",
     )
     if is_first_rank and first_layer_idx > 0:
         # The transformer reads a first rank past layer 0 as a capacity probe (PREFILL_PP_LAYER_OFFSET) and

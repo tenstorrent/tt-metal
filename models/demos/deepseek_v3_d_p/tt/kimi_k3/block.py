@@ -125,17 +125,13 @@ class TtKimiK3Block(LightweightModule):
         )
 
         self.moe_block = self.is_moe and moe_block_enabled(model_cfg, moe_impl)
-        if self.moe_block and forward_chunks != 1:
-            raise NotImplementedError(
-                f"the MoE block has no packed forward (forward_chunks={forward_chunks}); run MOE_IMPL=ttmoe"
-            )
         if self.moe_block:
             # (the MoE block's C++ ops: router, shared expert, latent and routed experts in one call -
-            # tt/kimi_k3/moe_block_ffn.py)
-            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockFfnOptions, TtK3MoEBlockFfn
+            # tt/moe_block/moe_block_ffn.py)
+            from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
 
             # (the routed experts from TtMoe's tensorbins in weight_cache_path, laid out for this mesh and SP axis)
-            self.ffn = TtK3MoEBlockFfn(
+            self.ffn = TtMoEBlockFfn(
                 mesh_device,
                 model_cfg,
                 layer_idx,
@@ -411,10 +407,11 @@ class TtKimiK3Block(LightweightModule):
         packed_padding_config=None,
     ) -> ttnn.Tensor:
         """`ctx` is None for a packed forward (``packed``), which passes its MoE padding as ``packed_padding_config``
-        instead of one chunk's bounds."""
-        if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding tokens skipped as TtMoe's)
+        instead of one chunk's bounds (TtMoe: a PackedPadding; the MoE block: a MoEBlockPacking)."""
+        if self.moe_block:  # ([1, 1, rows/SP, H/TP] in and out; pad rows skipped by the block's own planner)
             if packed:
-                raise NotImplementedError("the MoE block has no packed forward; run MOE_IMPL=ttmoe or forward_chunks=1")
+                assert packed_padding_config is not None, "MoE block: a packed forward takes its MoEBlockPacking"
+                return self.ffn(ffn_norm_out, forward_chunks=self.forward_chunks, **packed_padding_config.ffn_kwargs())
             return self.ffn(
                 ffn_norm_out,
                 actual_isl=actual_isl,

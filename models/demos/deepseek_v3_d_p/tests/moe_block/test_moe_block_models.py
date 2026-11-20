@@ -5,7 +5,7 @@
 """The whole MoE block (MoE head -> sparse dispatch -> flat experts + combine -> MoE tail) for every model it runs:
 accuracy, determinism and per-op device time, each its own test function, all parametrized by the same test cases.
 
-* A model config (BlockModel, MODELS) is what a model brings: its block dims (through TtK3MoEBlockFfn), seeded random
+* A model config (BlockModel, MODELS) is what a model brings: its block dims (through TtMoEBlockFfn), seeded random
   weights, the host reference on them, and - Kimi-K3 - its real layers and golden activations on Weka.
 * A test config (BlockCase, CASES) is one run of a model: the mesh (8x4 torus, 4x4 SP ring / TP line, 4x4 torus), the
   chunk, random or Weka weights, and the expected numbers - the accuracy floor and each op's traced device time.
@@ -14,11 +14,11 @@ test_moe_block_accuracy: the block's output vs the model's host reference (rando
     output (Weka), PCC at least the case's floor.
 test_moe_block_determinism: `calls` eager calls, then `calls` replays of a captured trace, every output bit-identical to
     the first - compared on the device, one scalar a chip read back (op_checks.DeterminismMarker). Runs with the
-    combine's snap (q 2^-14): without it the combine's fp32 sums depend on the rows' arrival order.
+    combine's snap (q 2^-14: int32 sums of whole q's): without it the combine's fp32 sums depend on the rows' arrival
+    order.
 test_moe_block_perf: traced replays on the real-time program profiler, each op's device time (its slowest chip,
-    the median over op_checks.PERF_RUNS (5) replays) no slower than its baseline + margin; baselines in
-    moe_block_perf_baselines.json, per machine and case (MOE_PERF_RECORD=1 records them; a case without them on the
-    machine skips, naming the command that records them).
+    the median over op_checks.PERF_RUNS (5) replays) no slower than its baseline + margin; baselines in BLOCK_US by
+    case (a case without them runs and logs its numbers with a reminder to add them).
 
 4x4 cases run on half a Galaxy: TT_MESH_GRAPH_DESC_PATH (the sub-torus descriptor) and TT_VISIBLE_DEVICES set as for
 test_k3_moe_block's 4x4 runs. Kimi-K3 Weka cases need $KIMI_K3_CKPT and the golden trace ($KIMI_K3_GOLDEN_TRACE or the
@@ -44,13 +44,12 @@ from block_cases import MESH_SP_AXIS, MESHES, MODELS  # noqa: E402
 from op_checks import (  # noqa: E402
     BLOCK_OPS,
     PERF_RUNS,
-    RECORD,
     DeterminismMarker,
     MeshBarrier,
-    PerfBaselines,
-    machine,
+    assert_no_perf_failures,
     median_us,
     op_device_times,
+    perf_failure,
     traced_op_device_times,
 )
 
@@ -67,7 +66,7 @@ class BlockCase:
     weights: str = "random"  # "random" | "weka" (Kimi-K3: the layer's real weights, the golden trace's activations)
     layer: int = 1  # (weka: the model layer)
     pcc: Optional[float] = None  # (None: the model's floor; weka: K3_GOLDEN_PCC)
-    perf_margin: float = 0.05  # (the baselines: moe_block_perf_baselines.json)
+    perf_margin: float = 0.05  # (over the baselines in BLOCK_US)
     calls: int = 10
     # a padded chunk (actual_start, actual_end): main's chunked-prefill metadata - the chunk's real tokens, in main's
     # rotated layout over the SP rows (chunk_layout.rotated_chunk_positions); None: every row real
@@ -132,7 +131,7 @@ CASES = [
     BlockCase("kimi_k3", "8x4", 5120, weights="weka", layer=1),
     BlockCase("dsv41_flash", "8x4", 5120),
     *M3_PRODUCTION,
-    # padding / packed forwards through the model adapter (TtK3MoEBlockFfn: main's metadata, or the forward's words)
+    # padding / packed forwards through the model adapter (TtMoEBlockFfn: main's metadata, or the forward's words)
     BlockCase("glm53", "8x4", 5120, pad=(1000, 4100)),
     BlockCase("kimi_k3", "8x4", 5120, pad=(5120, 5120 + 2000)),
     BlockCase("glm53", "8x4", 5120, chunks=((0, 0, 2560), (1, 300, 2000))),
@@ -204,7 +203,7 @@ class _Run:
     F: int = 1
 
     def __call__(self, eager: bool = False):
-        """One call through the model adapter (TtK3MoEBlockFfn) on the case's input, its padding as the model passes it:
+        """One call through the model adapter (TtMoEBlockFfn) on the case's input, its padding as the model passes it:
         main's one-chunk contract - eager, actual_isl / actual_start (host-written words); else the metadata tuple of
         device scalars (traceable) - or a packed forward's metadata words."""
         if self.meta is not None:
@@ -260,10 +259,10 @@ def _setup(
     sd: Optional[dict] = None,
 ) -> _Run:
     """The block for the case (weights loaded on its first call) and its input on the device. combine_snap: the
-    combine's snap q (None: production's, off); landing: the combine's landing (None: the planner's); sd: the model's
+    combine's snap q (None: production's, 2^-14); landing: the combine's landing (None: the planner's); sd: the model's
     random state dict, when the caller already made it (random-weight cases)."""
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import MoEBlockFfnOptions, TtK3MoEBlockFfn
     from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block import forward_words
+    from models.demos.deepseek_v3_d_p.tt.moe_block.moe_block_ffn import MoEBlockFfnOptions, TtMoEBlockFfn
 
     opts = MoEBlockFfnOptions(combine_snap=combine_snap, sp_axis=case.sp_axis, combine_landing=landing)
 
@@ -286,13 +285,13 @@ def _setup(
         s0, s1 = K3_GOLDEN_START, K3_GOLDEN_START + case.chunk
         x = trace.rows("moe_io", f"moe_input_layer_{L}", s0, s1).to(torch.bfloat16)
         want = trace.rows("moe_io", f"moe_output_layer_{L}", s0, s1).float()
-        ffn = TtK3MoEBlockFfn(mesh_device, m.cfg, layer_idx=L, options=opts)
+        ffn = TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=L, options=opts)
         pcc = case.pcc if case.pcc is not None else K3_GOLDEN_PCC
     else:
         sd = sd if sd is not None else m.weights(R * C)
         x = (torch.randn(case.chunk, H, generator=torch.Generator().manual_seed(7)) * m.x_scale).to(torch.bfloat16)
         want = None  # (computed only by the accuracy test: the host reference costs minutes)
-        ffn = TtK3MoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, state_dict=sd, options=opts)
+        ffn = TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, state_dict=sd, options=opts)
         ffn._test_sd = sd
         pcc = case.pcc if case.pcc is not None else m.pcc
     x_tt = ttnn.from_torch(
@@ -349,7 +348,7 @@ def test_moe_block_accuracy(case, mesh_device, device_params):
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 def test_moe_block_determinism(case, mesh_device, device_params):
-    # (with the combine's snap: every routed term rounded to a multiple of q, so its fp32 sums do not depend on the order
+    # (with the combine's snap: every routed term an int32 count of q, so its integer sums do not depend on the order
     # the rows land in - without it they do, and runs differ in the last bits)
     run = _setup(case, mesh_device, combine_snap=COMBINE_SNAP)
     ttnn.deallocate(run())  # (weights, programs)
@@ -368,7 +367,38 @@ def test_moe_block_determinism(case, mesh_device, device_params):
     det.assert_identical(f"{case.id}: {case.calls} eager calls + {case.calls} traced replays")
 
 
-BASELINES = PerfBaselines(Path(__file__).with_name("moe_block_perf_baselines.json"))
+# Each op's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id, on a Blackhole Galaxy:
+# (moe_head, sparse_dispatch_2d, routed_experts_combine, moe_tail) - op_checks.BLOCK_OPS's order.
+BLOCK_US = {
+    "dsv41_flash-8x4-5120": (221.5, 178.7, 687.2, 43.8),
+    "glm53-4x4-sp1-10240": (1217.9, 613.9, 1910.4, 193.2),
+    "glm53-4x4-sp1-2560": (317.3, 182.6, 998.2, 73.1),
+    "glm53-4x4-sp1-5120": (533.4, 323.1, 1158.5, 117.1),
+    "glm53-4x4-xy-7680": (625.5, 343.1, 1294.5, 98.6),
+    "glm53-4x4-y-10240": (1232.1, 607.3, 2015.9, 190.0),
+    "glm53-4x4-y-5120": (534.4, 320.2, 1178.1, 100.8),
+    "glm53-8x4-10240": (395.9, 385.8, 1273.6, 78.2),
+    "glm53-8x4-5120": (198.8, 212.4, 675.0, 50.7),  # (combine: 702 - 705 us on a capped Galaxy, 2026-11-19)
+    "kimi_k3-4x4-sp1-10240": (2624.1, 478.4, 3106.9, 553.8),
+    "kimi_k3-4x4-sp1-2560": (520.9, 157.2, 2748.1, 153.4),
+    "kimi_k3-4x4-sp1-5120": (1103.6, 300.3, 2800.4, 260.8),
+    "kimi_k3-4x4-y-10240": (1180.0, 520.2, 3100.7, 248.5),
+    "kimi_k3-4x4-y-2560": (578.7, 155.3, 2727.1, 152.3),
+    "kimi_k3-4x4-y-5120": (1177.8, 287.5, 2772.4, 251.5),
+    "kimi_k3-4x4-y-7680": (585.4, 363.5, 2867.4, 143.9),
+    "kimi_k3-8x4-10240": (870.3, 324.8, 1686.2, 248.0),
+    "kimi_k3-8x4-5120": (408.3, 184.4, 1495.9, 140.0),  # (moe_tail: 137.9 us uncapped, 151.2 us on an 8 kW CI Galaxy)
+    "kimi_k3-8x4-5120-weka-L1": (427.1, 203.2, 1542.2, 163.3),
+    "minimax_m3-2x4-2048-c2048": (564.8, 195.7, 1345.9, 85.6),
+    "minimax_m3-2x4-4096-4xc1024": (1107.0, 345.0, 1440.9, 153.0),
+    "minimax_m3-2x4-5120-c5120": (1292.0, 431.8, 1483.2, 185.9),
+    "minimax_m3-2x4-5120-c5120-real1600@61440": (1094.2, 1086.2, 1525.2, 205.2),
+    "minimax_m3-2x4-5120-c5120-real1780@61440": (1127.3, 1120.0, 1529.4, 205.2),
+    "minimax_m3-2x4-5120-c5120-real3072@61440": (1297.1, 773.7, 1461.6, 186.8),
+    "minimax_m3-2x4-5120-c5120-real640@61440": (870.6, 798.3, 1379.8, 245.8),
+    "minimax_m3-2x4-5120-c5120-resume-real1780@63040": (948.5, 322.6, 1425.3, 208.2),
+    "minimax_m3-2x4-5120-c5120-resume-real5120@63040": (1298.1, 420.0, 1485.5, 186.6),
+}
 
 
 def _spread(t):
@@ -411,16 +441,6 @@ def _traced_times(run: _Run, mesh_device, out=None) -> dict:
 @pytest.mark.skipif(not is_blackhole(), reason="Blackhole only")
 @pytest.mark.timeout(1800)
 def test_moe_block_perf(case, mesh_device, device_params):
-    if TEST_LANDING is None and not RECORD:
-        # (a case without its baselines on this machine is not gated - skipped before it takes the mesh, as tt-metal's
-        # perf tests treat a missing baseline; it is recorded on the machine with MOE_PERF_RECORD=1)
-        missing = [op for op in BLOCK_OPS if BASELINES.expected(f"{case.id} {op}") is None]
-        if missing:
-            pytest.skip(
-                f"no recorded {machine()} baseline for {case.id} ({', '.join(missing)}) in {BASELINES.path.name}; "
-                f"record with MOE_PERF_RECORD=1 pytest '{Path(__file__).name}::test_moe_block_perf[{case.id}]' "
-                "(4x4-sp1: TT_MESH_GRAPH_DESC_PATH / TT_VISIBLE_DEVICES as block_cases.MESHES says)"
-            )
     run = _setup(case, mesh_device)
     ttnn.deallocate(run())  # (weights, programs)
 
@@ -437,9 +457,18 @@ def test_moe_block_perf(case, mesh_device, device_params):
     if TEST_LANDING is not None:
         logger.info(f"PERF {case.id} landing {TEST_LANDING}: measured only")
         return
-    for op in BLOCK_OPS:
-        if t[op]:  # (an op the block did not run: none)
-            BASELINES.check(f"{case.id} {op}", measured[op], case.perf_margin)
+    baselines = dict(zip(BLOCK_OPS, BLOCK_US[case.id])) if case.id in BLOCK_US else {}
+    assert_no_perf_failures(
+        perf_failure(
+            f"{case.id} {op}",
+            measured[op],
+            baselines.get(op),
+            case.perf_margin,
+            where=f'BLOCK_US["{case.id}"] ({", ".join(BLOCK_OPS)})',
+        )
+        for op in BLOCK_OPS
+        if t[op]  # (an op the block did not run: none)
+    )
 
 
 # ------------------------------------------------------------------------------------------------- eager (untraced) time
@@ -543,7 +572,7 @@ def test_combine_landing_fit(model, mesh, mesh_device, device_params):
     """Each landing's plan (fits or why not; accumulators, landing depth, injection / local rings, accumulators on the
     ports, the flat expert cores' pool) for every chunk: LANDING lines, one per (chunk, landing). Fails only if
     production's planner choice (landing None) does not fit a chunk the model runs at on this stage."""
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import moe_block_ffn as mbf
+    from models.demos.deepseek_v3_d_p.tt.moe_block import moe_block_ffn as mbf
 
     m = MODELS[model]
     sp_axis = MESH_SP_AXIS.get(mesh, 0)
@@ -553,7 +582,7 @@ def test_combine_landing_fit(model, mesh, mesh_device, device_params):
             continue
         for landing in LANDINGS:
             opts = mbf.MoEBlockFfnOptions(sp_axis=sp_axis, combine_landing=landing)
-            ffn = mbf.TtK3MoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, options=opts)
+            ffn = mbf.TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, options=opts)
             tag = f"LANDING {model} {mesh} {chunk} {landing or 'auto'}:"
             try:
                 block = ffn._block(chunk)
@@ -593,7 +622,7 @@ def test_combine_landing_fit(model, mesh, mesh_device, device_params):
 
 def _release_blocks(mesh_device):
     """Drop the model adapter's cached blocks on this mesh and release their resources (arena, words)."""
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import moe_block_ffn as mbf
+    from models.demos.deepseek_v3_d_p.tt.moe_block import moe_block_ffn as mbf
 
     mbf.release_blocks(mesh_device)
 
@@ -684,7 +713,7 @@ def test_combine_landing_sweep(model, mesh, mesh_device, device_params):
 
 # ------------------------------------------------------------------------------------------------------- chunk switch
 # One layer's adapter called at two chunks whose plans pack its weights differently (a model whose calls change chunk):
-# each block must get weights packed for its own plans (TtK3MoEBlockFfn._packing), so each output is a fresh adapter's at
+# each block must get weights packed for its own plans (TtMoEBlockFfn._packing), so each output is a fresh adapter's at
 # that chunk, bit for bit (the combine's snap: the sums do not depend on the rows' landing order).
 SWITCH_STAGES = {"glm53": ("8x4", "4x4-sp1"), "kimi_k3": ("8x4", "4x4-y", "4x4-sp1")}
 
@@ -701,7 +730,7 @@ def test_moe_block_chunk_switch(model, mesh, mesh_device, device_params):
     chunk. Skips when no two chunks pack the layer's weights differently on this stage."""
     import gc
 
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3 import moe_block_ffn as mbf
+    from models.demos.deepseek_v3_d_p.tt.moe_block import moe_block_ffn as mbf
 
     m = MODELS[model]
     sp_axis = MESH_SP_AXIS.get(mesh, 0)
@@ -713,7 +742,7 @@ def test_moe_block_chunk_switch(model, mesh, mesh_device, device_params):
     try:
         for chunk in chunks:
             opts = mbf.MoEBlockFfnOptions(combine_snap=COMBINE_SNAP, sp_axis=sp_axis)
-            probe = mbf.TtK3MoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, state_dict=sd, options=opts)
+            probe = mbf.TtMoEBlockFfn(mesh_device, m.cfg, layer_idx=m.layer, state_dict=sd, options=opts)
             keys[chunk] = probe._packing(probe._block(chunk))
             logger.info(f"SWITCH {model} {mesh} {chunk}: head (GX, GY, MT, KB, dtype) {keys[chunk][0]}")
             _release_blocks(mesh_device)

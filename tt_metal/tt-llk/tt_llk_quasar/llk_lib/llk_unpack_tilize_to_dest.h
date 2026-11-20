@@ -33,7 +33,7 @@ using namespace ckernel::trisc;
  * @ref _llk_unpack_tilize_to_dest_init_), so a run lands its tiles at consecutive DEST tile indices. The last tile's
  * instruction resets the counters instead; every run sets them explicitly first.
  *
- * @param buf_desc_id: Buffer descriptor id, allocated from the unpack TRISC partition at op-init time (llk_bfd_alloc.h)
+ * @param buf_desc_id: Buffer descriptor id, the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param num_tiles: Tiles per MOP run
  */
 inline void _llk_unpack_tilize_to_dest_mop_config_(const std::uint32_t buf_desc_id, const std::uint32_t num_tiles)
@@ -59,7 +59,7 @@ inline void _llk_unpack_tilize_to_dest_mop_config_(const std::uint32_t buf_desc_
  * block_ct_dim-tile MOP. Per-op init: it does not touch the DEST bank tracking, so it is safe to call inside a tile loop; the once-per-program
  * bank reset is @ref _llk_unpack_dest_init_.
  *
- * @param buf_desc_id: Buffer descriptor id, allocated from the unpack TRISC partition at op-init time (llk_bfd_alloc.h)
+ * @param buf_desc_id: Buffer descriptor id, the fixed per-engine BFD id (ckernel_buf_desc.h)
  * @param full_ct_dim: Tiles in a row of the row-major input tensor
  * @param block_ct_dim: Tiles per @ref _llk_unpack_tilize_to_dest_ run, a divisor of full_ct_dim; at most the DEST section
  *        capacity

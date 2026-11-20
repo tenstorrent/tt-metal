@@ -29,7 +29,6 @@ public:
 
 protected:
     std::unique_ptr<FabricRouterBuilder> make_router(const RouterLocation& location) override;
-    chan_id_t pick_master_router_chan() const override;
     KernelCreationContext kernel_creation_context() const override;
 
 private:

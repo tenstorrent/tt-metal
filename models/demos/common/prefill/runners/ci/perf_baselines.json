@@ -26,10 +26,16 @@
     "glm53": {
       "sc4": {
         "probe": "@1020k",
+        "margin": {
+          "@1020k": {
+            "throughput_tok_s": 0.03,
+            "ttft_s": 0.03
+          }
+        },
         "8kw": {
-          "throughput_tok_s": 31687,
-          "ttft_s": 23.79,
-          "chunk_time_ms": 522
+          "throughput_tok_s": 33161,
+          "ttft_s": 23.04,
+          "chunk_time_ms": 502
         }
       },
       "sc1": {
@@ -51,9 +57,9 @@
       "sc1_4x4": {
         "probe": "@1020k",
         "14kw": {
-          "throughput_tok_s": 6122,
-          "ttft_s": 115.12,
-          "chunk_time_ms": 801
+          "throughput_tok_s": 6579,
+          "ttft_s": 108.88,
+          "chunk_time_ms": 748
         }
       }
     },

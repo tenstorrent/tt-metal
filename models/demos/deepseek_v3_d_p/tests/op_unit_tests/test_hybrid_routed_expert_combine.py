@@ -34,7 +34,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
-from models.demos.deepseek_v3_d_p.reference.glm_5_3_config import GLM53Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k2_7_config import KimiK27Config
 from models.demos.deepseek_v3_d_p.reference.tt.moe.combine import TorchCombineModule
 from models.demos.deepseek_v3_d_p.reference.tt.moe.dispatch import TorchDispatchModule
@@ -66,10 +65,10 @@ _CAPACITY_FACTOR = 8
 # Pages one of combine's forwarding channels holds, for the overlap and the standalone combine alike.
 _FWD_VC_PAGES = 64
 # The models this op is deployed for. Each contributes its own emb, MoE hidden, expert count and top-k.
-_MODELS = {"kimi-k27": KimiK27Config, "glm-53": GLM53Config}
+_MODELS = {"kimi-k27": KimiK27Config}
 # Routing captured off-device from total_counts_per_expert, one dispatch group of a 32-chip chunked prefill
 # of each model's code_debug golden, scaled to this test's 10240 in-group routings. Scaling leaves the mean
-# intact -- 106.7 for Kimi's 96 experts, 160 for GLM's 64 -- and keeps the shape the model actually routes.
+# intact -- 106.7 for Kimi's 96 experts -- and keeps the shape the model actually routes.
 # Real routing is far lumpier than a uniform draw: the flattest captured layer still runs max/mean 1.8-2.8,
 # and the most skewed puts a quarter of the chunk on one expert.
 # fmt: off
@@ -90,21 +89,6 @@ _CAPTURED_COUNTS = {
             41, 17, 53, 288, 130, 66, 49, 230, 52, 6, 47, 163, 6, 42, 17, 65, 56, 6, 2, 98, 138, 16, 43, 31,
             112, 49, 110, 94, 85, 44, 121, 140, 76, 124, 65, 155, 181, 109, 60, 29, 38, 16, 53, 16, 139, 54, 82,
             58
-        ),
-    },
-    "glm-53": {
-        "balanced": (
-            # MoE layer 3, chunk 5
-            196, 166, 180, 180, 212, 259, 136, 103, 250, 195, 176, 66, 203, 171, 179, 111, 61, 211, 78, 130,
-            129, 152, 231, 92, 178, 145, 149, 198, 92, 181, 126, 180, 216, 85, 192, 135, 190, 129, 205, 159,
-            114, 44, 157, 102, 123, 151, 146, 288, 167, 101, 185, 172, 204, 120, 249, 108, 179, 224, 208, 190,
-            66, 188, 102, 225
-        ),
-        "hot-expert": (
-            # MoE layer 21, chunk 9
-            146, 56, 90, 99, 149, 120, 215, 350, 25, 55, 129, 58, 153, 80, 155, 91, 52, 3, 143, 115, 32, 183,
-            142, 62, 148, 23, 0, 33, 69, 85, 178, 145, 4, 148, 23, 226, 129, 2877, 264, 54, 163, 117, 91, 49,
-            14, 182, 223, 419, 114, 78, 185, 124, 150, 209, 33, 120, 4, 177, 55, 29, 68, 67, 308, 152
         ),
     },
 }

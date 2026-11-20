@@ -34,7 +34,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import TRACE_1M, resolve_checkpoint, resolve_trace
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
@@ -53,6 +53,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import (
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.transformer import TtKimiK3Transformer
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.weights import cache_root
 from models.demos.deepseek_v3_d_p.tt.mla.utils import blockcyclic_positions
+from models.demos.deepseek_v3_d_p.tt.moe_impl import moe_block_device_params
 from models.demos.deepseek_v3_d_p.tt.runners.input_prep import prepare_prefill_input_tensor
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import allocate_mla_kvpe_cache
 from models.demos.deepseek_v3_d_p.utils.test_utils import cache_half_pccs, gather_cache_tp0, unrotate_cache_layer
@@ -72,13 +73,14 @@ RECOVERY_FROM = 22
 PLACEMENTS = [
     pytest.param(
         (8, 4),
-        fabric2d_device_params(
-            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
+        moe_block_device_params(
+            KimiK3Config,
+            {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY, "l1_small_size": KimiK3Config.L1_SMALL_SIZE},
         ),
         0,
         1,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
-        id="fabric2d-8x4",
+        id="torus-xy-8x4",
     ),
     # Two 4x4 stages (SP=4 on the axis-1 ring, TP=4 on the axis-0 line) run back to back on one
     # tray half: the boundary is the one between a Galaxy's top and bottom stages. Needs the Galaxy
@@ -86,9 +88,7 @@ PLACEMENTS = [
     # tests/run_4x4_stage_tests.sh); unnarrowed, the system mesh is 8x4 and requires_mesh_topology skips it.
     pytest.param(
         (4, 4),
-        torus_x_device_params(
-            fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, l1_small_size=KimiK3Config.L1_SMALL_SIZE
-        ),
+        moe_block_device_params(KimiK3Config, torus_x_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE)),
         1,
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -131,7 +131,6 @@ def _build_rank(
         max_seq_len=SEQ_LEN,
         weight_cache_path=cache,
         kv_only_last_layer=kv_only,
-        moe_impl="ttmoe",  # (TtMoe: this test opens its mesh without the MoE block's L1_SMALL / payload)
     )
 
 
@@ -376,8 +375,8 @@ def _run_window(mesh_device, state_dict, ids):
 
 # This test builds three stacks in one process (undivided, then the two ranks), and a released stack does not
 # return all its L1_SMALL: about 3.7 KB/bank once, then +128 B/bank per further stack (3776 / 3904 / 4032 B
-# after each release at 8192 B), so K3.1's own L1_SMALL_SIZE (2048 B) runs out building the split's first
-# stack. The fix is PR #65843 (TT_CCL keeps the sparse-MLA overlap semaphores for the mesh's lifetime); this
+# after each release at 8192 B), so K3.1's L1_SMALL_SIZE before the MoE block (2048 B) ran out building the
+# split's first stack. The fix is PR #65843 (TT_CCL keeps the sparse-MLA overlap semaphores for the mesh's lifetime); this
 # test-local size goes away once it lands. The runner's constant stays.
 SPLIT_L1_SMALL_SIZE = 8192
 

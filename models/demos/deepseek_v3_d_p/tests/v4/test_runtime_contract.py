@@ -234,7 +234,7 @@ def test_adapter_allocates_no_kv_cache_and_no_weight_cache(name, model_cfg):
 def test_adapter_builds_the_runner_single_rank_params_without_a_kv_only_layer(monkeypatch, name, model_cfg):
     adapter = get_adapter(name)
     tt = "models.demos.deepseek_v3_d_p.tt"
-    monkeypatch.setattr(f"{tt}.tt_ccl.per_axis_topology", lambda: None)
+    monkeypatch.setattr(f"{tt}.tt_ccl.per_axis_topology", lambda **kwargs: None)
     monkeypatch.setattr(type(adapter), "checkpoint_path", lambda self: Path("/checkpoint"))
     monkeypatch.setattr(f"{tt}.v4.weights.v4_model_from_checkpoint", lambda *args, **kwargs: {})
     monkeypatch.setattr(f"{tt}.v4.weights.V4CheckpointLayers", Mock())

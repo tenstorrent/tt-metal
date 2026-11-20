@@ -7,7 +7,7 @@ test.
 From random owner rows and shared-expert output:
   * GLM (all-to-all): out = y_own + se in the residual's layout [rows, H / TP];
   * K3 (engine): out = rmsnorm(y_own) * norm @ latent_up^T + se.
-Perf baselines: moe_tail_lb_perf_baselines.json."""
+Perf baselines: TAIL_US below."""
 
 import sys
 from pathlib import Path
@@ -24,7 +24,7 @@ from op_checks import (  # noqa: E402
     BLOCK_OPS,
     PERF_RUNS,
     DeterminismMarker,
-    PerfBaselines,
+    check_perf,
     median_us,
     traced_op_device_times,
 )
@@ -45,7 +45,12 @@ from head_tail_lb_cases import (
 
 moe_block_utils = ttnn._ttnn.operations.experimental.moe_block
 
-BASELINES = PerfBaselines(HERE / "moe_tail_lb_perf_baselines.json")
+# The tail's traced device time (us; the slowest chip, median of PERF_RUNS replays) by case id. Recorded on a
+# Galaxy's 2x4 tray (bh-glx, 2026-11); a LoudBox run logs its own - re-baseline from a LoudBox's log.
+TAIL_US = {
+    "glm53-row640": 64.0,
+    "glm53-row384": 47.3,
+}
 TAIL_OPS = {"moe_tail": BLOCK_OPS["moe_tail"]}
 
 
@@ -142,8 +147,8 @@ def test_moe_tail_perf(mesh_device, device_params, case):
     finally:
         tail.close()
     us = median_us(t)
-    logger.info(f"PERF moe_tail {case.id}: median {us:.1f} us over {len(t)} replays")
-    BASELINES.check(f"moe_tail {case.id}", us, case.margin)
+    logger.info(f"PERF moe_tail {case.id}: median {us:.1f} us (min {min(t) / 1e3:.1f}, max {max(t) / 1e3:.1f})")
+    check_perf(f"moe_tail {case.id}", us, TAIL_US.get(case.id), case.margin, where=f'TAIL_US["{case.id}"]')
 
 
 # ---------------------------------------------------------------------------------------------------- row blocks
