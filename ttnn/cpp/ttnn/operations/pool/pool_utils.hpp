@@ -132,7 +132,7 @@ struct pool_op_l1_usage {
 
 uint32_t get_bf16_pool_scalar(
     Pool2DType pool_type, uint32_t kernel_h, uint32_t kernel_w, std::optional<int32_t> divisor_override);
-uint32_t get_bf16_pool_init_value(Pool2DType pool_type);
+uint32_t get_bf16_pool_init_value(Pool2DType pool_type, bool return_indices = false);
 std::map<std::string, std::string> get_defines(Pool2DType pool_type);
 
 bool is_pool_op_one_scalar_per_core(

@@ -7,7 +7,8 @@ import ttnn
 import math
 import pytest
 
-from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices
+from tests.sweep_framework.sweep_utils.pool2d_common import run_max_pool2d_with_indices, validate_maxpool2d_indices
+from ttnn.operations.pool import golden_maxpool2d
 
 pytestmark = pytest.mark.use_module_device
 
@@ -293,3 +294,74 @@ def test_mpwi_32_bit_index(device, ttnn_dtype, input_spec):
         run_twice=True,
         config_tensor_in_dram=True,
     )
+
+
+@pytest.mark.parametrize(
+    "kernel_size, padding",
+    [
+        ((5, 5), (2, 2)),  # 32-row SFPU walk
+        ((4, 4), (2, 2)),  # even kernel: first and last windows share no valid offset
+        ((3, 3), (1, 1)),  # 9-row SFPU network
+    ],
+)
+def test_mpwi_padded_all_neg_inf(device, kernel_size, padding):
+    """Every window ties on -inf with its padding; each returned index must be a valid input
+    position inside its own window (padding positions are not input elements)."""
+    in_n, in_c, in_h, in_w = 1, 32, 32, 32
+    stride = (1, 1)
+    dilation = (1, 1)
+    torch_input = torch.full((1, 1, in_n * in_h * in_w, in_c), float("-inf"), dtype=torch.bfloat16)
+    ttnn_input = ttnn.from_torch(torch_input, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+
+    ttnn_output, ttnn_indices = ttnn.max_pool2d(
+        input_tensor=ttnn_input,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        applied_shard_scheme=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        deallocate_input=False,
+        reallocate_halo_output=True,
+        return_indices=True,
+        config_tensor_in_dram=True,
+    )
+    torch_output, torch_indices = golden_maxpool2d(
+        input_tensor=torch_input,
+        batch_size=in_n,
+        input_h=in_h,
+        input_w=in_w,
+        channels=in_c,
+        kernel_size=list(kernel_size),
+        stride=list(stride),
+        padding=list(padding),
+        dilation=list(dilation),
+        ceil_mode=False,
+        return_indices=True,
+    )
+    out_h = in_h + 2 * padding[0] - kernel_size[0] + 1
+    out_w = in_w + 2 * padding[1] - kernel_size[1] + 1
+
+    assert torch.equal(ttnn.to_torch(ttnn_output).reshape(torch_output.shape), torch_output)
+
+    ttnn_indices_torch = ttnn.to_torch(ttnn_indices, dtype=torch.int64)
+    wrap = 65536 if ttnn_indices.dtype == ttnn.uint16 else 4294967296
+    ttnn_indices_torch = torch.where(ttnn_indices_torch < 0, ttnn_indices_torch + wrap, ttnn_indices_torch)
+    ttnn_indices_nhwc = ttnn_indices_torch.reshape(in_n, out_h, out_w, in_c)
+    out_of_range = (ttnn_indices_nhwc < 0) | (ttnn_indices_nhwc >= in_h * in_w)
+    assert not out_of_range.any(), f"{int(out_of_range.sum())} indices are not input positions"
+
+    indices_valid, _, actual_errors, _, window_violations = validate_maxpool2d_indices(
+        torch_input.reshape(in_n, in_h, in_w, in_c),
+        torch_indices.reshape(in_n, out_h, out_w, in_c),
+        ttnn_indices_nhwc,
+        kernel_size,
+        stride,
+        padding,
+        dilation,
+        ttnn.bfloat16,
+    )
+    assert indices_valid, f"{actual_errors} wrong indices, {window_violations} outside their window"
