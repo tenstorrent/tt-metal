@@ -18,7 +18,7 @@ void kernel_main() {
     while (received < rows) {
         if (credited < rows && n.pages_reservable_at_back((credited - received + 1) * row_tiles)) {
             const uint32_t producer = credited % norm_cores;
-            Semaphore<>(CT_ARG("sem_n_free") + credited / norm_cores % (depth / norm_cores))
+            Semaphore<>(CT_ARG("sem_n_free") + credited % depth)
                 .up(noc, norm[producer].x_start, norm[producer].y_start, 1);
             credited++;
         }

@@ -61,6 +61,7 @@ void kernel_main() {
                 {},
                 {.noc_x = RT_ARG("collector_x"), .noc_y = RT_ARG("row_y"), .addr = destination});
             Semaphore<>(CT_ARG("sem_gather_valid") + slot).wait_min((row_cores - 1) * (use + 1));
+
             Semaphore<>(CT_ARG("sem_a_free") + slot).wait_min(CT_ARG("b_cores") * (use + 1));
 
             noc.async_writes_flushed();

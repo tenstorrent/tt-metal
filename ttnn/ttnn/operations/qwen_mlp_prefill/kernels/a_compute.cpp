@@ -34,9 +34,11 @@ void kernel_main() {
         a_out.reserve_back(columns / pair);
         for (uint32_t first = 0; first < columns; first += pair) {
             tile_regs_acquire();
+
             for (uint32_t k = 0; k < k_tiles; k++) {
                 matmul_block(cb_n, cb_wg, k, k * columns + first, 0, false, pair, 1, k_tiles);
             }
+
             reconfig_data_format_srca(cb_n);
             copy_init(cb_n);
             copy_tile(cb_n, k_tiles, scale_tile);

@@ -19,6 +19,7 @@ void kernel_main() {
     fill_reduce_scaler(noc, CT_ARG("cb_norm_scaler"), tile_bytes);
     fill_ones(noc, CT_ARG("cb_norm_ones"), tile_bytes);
     in.reserve_back(row_tiles);
+
     for (uint32_t t = 0; t < row_tiles; t++) {
         noc.async_read(
             w_norm, CoreLocalMem<uint32_t>(in.get_write_ptr() + t * tile_bytes), tile_bytes, {.page_id = t}, {});

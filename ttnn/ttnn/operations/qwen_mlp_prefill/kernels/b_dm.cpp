@@ -25,7 +25,6 @@ void kernel_main() {
     CircularBuffer h_segment(CT_ARG("cb_h"));
     CircularBuffer y_segment(CT_ARG("cb_y"));
     CircularBuffer send(CT_ARG("cb_send"));
-    Semaphore<> a_valid[a_depth] = {Semaphore<>(CT_ARG("sem_a_valid")), Semaphore<>(CT_ARG("sem_a_valid") + 1)};
     Semaphore<> land_ready[RING_CHIPS - 1] = {
         Semaphore<>(CT_ARG("sem_land_ready")),
         Semaphore<>(CT_ARG("sem_land_ready") + 1),
@@ -79,13 +78,8 @@ void kernel_main() {
         }
     };
 
-    for (uint32_t slot = 0; slot < a_depth; slot++) {
-        Semaphore<> a_free(CT_ARG("sem_a_free") + slot);
-        a_collectors.increment(noc, a_free, 1);
-    }
-
+    uint32_t a_credited = 0;
     uint32_t a_rows = 0;
-    bool a_credited = true;
     uint32_t h_rows = 0;
     uint32_t y_rows = 0;
     uint32_t sent_rows = 0;
@@ -101,18 +95,17 @@ void kernel_main() {
     };
     while (a_rows < rows ||
            (owner ? (h_rows < rows || y_rows < rows || !landed_all()) : (sent_rows < rows || received_rows < rows))) {
-        if (a_rows < rows) {
-            const uint32_t slot = a_rows % a_depth;
-            if (!a_credited && a.pages_reservable_at_back(CT_ARG("i_tiles"))) {
-                Semaphore<> a_free(CT_ARG("sem_a_free") + slot);
-                a_collectors.increment(noc, a_free, 1);
-                a_credited = true;
-            }
-            if (a_credited && a_valid[slot].value() >= CT_ARG("a_collectors") * (a_rows / a_depth + 1)) {
-                a.push_back(CT_ARG("i_tiles"));
-                a_rows++;
-                a_credited = a_rows < a_depth;
-            }
+        if (a_credited < rows && a.pages_reservable_at_back((a_credited - a_rows + 1) * CT_ARG("i_tiles"))) {
+            Semaphore<> a_free(CT_ARG("sem_a_free") + a_credited % a_depth);
+            a_collectors.increment(noc, a_free, 1);
+
+            a_credited++;
+        }
+        if (a_rows < rows && Semaphore<>(CT_ARG("sem_a_valid") + a_rows % a_depth).value() >=
+                                 CT_ARG("a_collectors") * (a_rows / a_depth + 1)) {
+            a.push_back(CT_ARG("i_tiles"));
+
+            a_rows++;
         }
         if (owner) {
             if (h_rows < rows && h_segment.pages_reservable_at_back(columns)) {

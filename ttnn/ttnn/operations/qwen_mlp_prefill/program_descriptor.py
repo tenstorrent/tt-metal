@@ -60,7 +60,7 @@ def _packed(entries):
 
 
 def _semaphores():
-    return [ttnn.SemaphoreDescriptor(id=i, core_ranges=L.GRID.core_range_set(), initial_value=0) for i in range(11)]
+    return [ttnn.SemaphoreDescriptor(id=i, core_ranges=L.GRID.core_range_set(), initial_value=0) for i in range(16)]
 
 
 def _relay_sources():

@@ -102,6 +102,7 @@ void kernel_main() {
 
         rstd.wait_front(1);
         out.reserve_back(CT_ARG("n_row_tiles"));
+
         reconfig_data_format(cb_ones, cb_rstd);
         pack_reconfig_data_format(cb_out);
         mul_bcast_cols_init(cb_ones, cb_rstd);
