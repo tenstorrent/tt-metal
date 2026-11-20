@@ -22,9 +22,6 @@
 // leader has cleared its words.
 namespace kda_gate {
 
-// The progress words in the gate cores' progress CB: x's from its start, W's from here.
-constexpr uint32_t w_progress = 128;
-
 FORCE_INLINE uint64_t noc_address(uint32_t xy, uint32_t address) {
     return get_noc_addr(xy & 0xFFFF, xy >> 16, address);
 }
@@ -262,8 +259,9 @@ FORCE_INLINE void swap_partials(
 // K block and K (tiles); the K tiles of the local input (0: none); W's tile columns; the heads per batch; the x groups
 // (`ways` per place: the pairs' first heads' cores, then their second's; W's groups follow, one per head); where the
 // group table and the gate's common args start; the CBs of the partial sums of a pair's other head and of the pair's
-// of this core's head, and the swap's two semaphores; `ways`; then the input's, the local input's and W's accessor
-// args. Common args: the input, the local input, W, the TP rank, and x's and W's block counts.
+// of this core's head, and the swap's two semaphores; `ways`; the progress words each operand has in the progress CB
+// (x's, then W's); then the input's, the local input's and W's accessor args. Common args: the input, the local input,
+// W, the TP rank, and x's and W's block counts.
 template <uint32_t ct>
 struct Operands {
     static constexpr uint32_t cb_x = get_compile_time_arg_val(ct);
@@ -284,15 +282,17 @@ struct Operands {
     static constexpr uint32_t ready_id = get_compile_time_arg_val(ct + 15);
     static constexpr uint32_t partial_id = get_compile_time_arg_val(ct + 16);
     static constexpr uint32_t ways = get_compile_time_arg_val(ct + 17);
-    static constexpr auto input_args = TensorAccessorArgs<ct + 18>();
+    static constexpr uint32_t progress_words = get_compile_time_arg_val(ct + 18);
+    static constexpr auto input_args = TensorAccessorArgs<ct + 19>();
     static constexpr auto local_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     static constexpr auto weight_args = TensorAccessorArgs<local_args.next_compile_time_args_offset()>();
     // Each core's share of K.
     static constexpr uint32_t blocks = k / kb / ways;
 
     static uint32_t half(uint32_t head) { return ways == 2 && head % heads >= heads / 2; }
-    // A pair's first head.
+    // A pair's first head, and a head's pair.
     static uint32_t first(uint32_t head) { return head - half(head) * (heads / 2); }
+    static uint32_t partner(uint32_t head) { return half(head) ? head - heads / 2 : head + heads / 2; }
 
     // x of a correction core's chunks (in the x group of the head batch's cores at its place), or its head's W.
     static void move_x(uint32_t group, uint32_t first_row, uint32_t head) {
@@ -339,7 +339,7 @@ struct Operands {
             kb * ways * columns,
             kb * ways * columns * get_tile_size(cb_w),
             common + 5,
-            get_write_ptr(cb_progress) + w_progress);
+            get_write_ptr(cb_progress) + progress_words * sizeof(uint32_t));
     }
     static auto w_read(uint32_t head) {
         const auto weight = TensorAccessor(weight_args, get_common_arg_val<uint32_t>(common + 2));

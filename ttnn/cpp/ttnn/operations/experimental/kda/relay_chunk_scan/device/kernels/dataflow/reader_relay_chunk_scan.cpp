@@ -212,8 +212,7 @@ void kernel_main() {
             Gate::move_w(head);
         }
         if constexpr (Gate::ways == 2) {
-            const uint32_t pair = Gate::half(head) ? head - heads / 2 : head + heads / 2;
-            Gate::swap(get_common_arg_val<uint32_t>(14 + pair * cores_per_head + place));
+            Gate::swap(get_common_arg_val<uint32_t>(14 + Gate::partner(head) * cores_per_head + place));
         }
     }
 

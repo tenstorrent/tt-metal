@@ -68,8 +68,12 @@ class OutputNorm:
     gate_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
 
+# The relay's persistent counters (relay_semaphores in relay_chunk_scan_device_operation_types.hpp): its entry-state,
+# final-state and final-carry arrivals, then the output gate's x and W block counts and a head core's g landed.
+RELAY_SEMAPHORES = 6
+
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
-_MAX_HEADS_PER_LINK = 14
+_MAX_HEADS_PER_LINK = 12
 
 # The output gate's working L1 per core (the K blocks of x and W in flight, a pair's partial sums): with Kimi-K3's 5
 # chunk rows per core (4 cores a head), K blocks of 8 tiles for paired heads. Allocated right before the relay, it takes
@@ -158,8 +162,8 @@ class RelayChunkScan:
         self.local_rows = local_rows
         # Each head's cores, then two senders per link (the relay's and the final carry's second), then a helper per
         # head. The senders take the grid's first cores, nearest the Ethernet cores they hand the relay's packets to;
-        # the heads' cores follow in row-major order. Up to max_cores correct chunks: their products, and the output
-        # gate's, count toward the Blackhole di/dt bound.
+        # the heads' cores follow in row-major order. Up to max_cores correct chunks: their products count toward the
+        # Blackhole di/dt bound (the output gate's matmul runs under the dynamic throttle, kernels/compute/gate_matmul.hpp).
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
@@ -169,13 +173,21 @@ class RelayChunkScan:
                 f"relay prefix needs {batch_heads} head cores and {senders} senders; max_cores={max_cores}, "
                 f"grid has {len(cores)}"
             )
-        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard).
+        # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard) and
+        # leave a helper per head (a free core or a sender).
         num_chunks = local_rows // ttnn.TILE_SIZE
         if num_chunks == 0:
             raise ValueError(f"relay prefix needs at least one chunk of {ttnn.TILE_SIZE} rows, has {local_rows} rows")
         self.cores_per_head = cores_per_head = max(
-            d for d in range(1, min(num_chunks, budget // batch_heads) + 1) if num_chunks % d == 0
+            (
+                d
+                for d in range(1, min(num_chunks, budget // batch_heads) + 1)
+                if num_chunks % d == 0 and batch_heads * (d + 1) <= len(cores)
+            ),
+            default=0,
         )
+        if cores_per_head == 0:
+            raise ValueError(f"relay prefix needs a core and a helper per head ({batch_heads}), grid has {len(cores)}")
         # The heads' cores start on the first grid row after the senders' when they fit there: whole rows are one
         # core range, which the dispatch writes the program to in one multicast.
         first = math.ceil(senders / grid.x) * grid.x
@@ -231,7 +243,7 @@ class RelayChunkScan:
         self._landing = None
         # A peer can bump the entry, final and carry arrival counters before this rank's call starts; the output gate's
         # handshakes count across the program's cores.
-        self.semaphores = persistent_semaphores(mesh_device, 6)
+        self.semaphores = persistent_semaphores(mesh_device, RELAY_SEMAPHORES)
         # The hop's, the correction's and the norm's products run at math_fidelity, accumulating in an FP32 DST.
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(), math_fidelity=math_fidelity, math_approx_mode=False, fp32_dest_acc_en=True

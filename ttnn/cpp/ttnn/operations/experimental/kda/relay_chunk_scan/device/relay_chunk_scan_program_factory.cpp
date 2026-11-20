@@ -75,10 +75,10 @@ constexpr uint32_t ack_semaphore_id = 0;
 constexpr uint32_t landed_semaphore_id = 1;
 // On the sender cores, ids 0, 1, ...: per head the sender serves, the head's finished columns.
 constexpr uint32_t first_notify_semaphore_id = 0;
-// On the cores that form the output gate, past the senders': the pair's core may send its partial sums, and they have
-// landed.
-constexpr uint32_t gate_ready_semaphore_id = 14;
-constexpr uint32_t gate_partial_semaphore_id = 15;
+// On the cores that form the output gate, the last two ids (past the senders' and their connections'): the pair's core
+// may send its partial sums, and they have landed.
+constexpr uint32_t gate_ready_semaphore_id = relay_chunk_scan_sender_semaphores - relay_chunk_scan_gate_semaphores;
+constexpr uint32_t gate_partial_semaphore_id = gate_ready_semaphore_id + 1;
 constexpr const char* kernel_dir = "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/";
 
 uint32_t xy(const tt::tt_metal::CoreCoord& noc) {
@@ -211,7 +211,8 @@ tt::tt_metal::ProgramDescriptor build_program(
         // A connection takes two of a sender core's semaphores, beside one per head the sender serves.
         const uint32_t max_connections = std::min(
             relay_chunk_scan_max_connections,
-            (relay_chunk_scan_sender_semaphores - heads_per_link) / relay_chunk_scan_connection_semaphores);
+            (relay_chunk_scan_sender_semaphores - relay_chunk_scan_gate_semaphores - heads_per_link) /
+                relay_chunk_scan_connection_semaphores);
         // Routes in one direction share its links, so a link's ETH core tells the direction.
         const auto same_direction = [&](const tt::tt_fabric::FabricNodeId& peer,
                                         const tt::tt_fabric::FabricNodeId& node) {
@@ -347,10 +348,21 @@ tt::tt_metal::ProgramDescriptor build_program(
             }
         }
     }
+    TT_FATAL(gate_k % 2 == 0, "relay_chunk_scan: the output gate's K ({} tiles) must be a multiple of 2 tiles", gate_k);
     TT_FATAL(
         gate_ways != 0,
         "relay_chunk_scan: the output gate's buffers do not fit gate_workspace's {} B per core",
         workspace_bytes);
+    {
+        // Each slot reads under its own transaction id (gate_matmul_dataflow.hpp), of which there are 15.
+        const auto buffers = gate_buffers(gate_kb, gate_ways);
+        const uint32_t x_slots = buffers[0].total_size / (core_chunks * gate_kb * tt::tile_size(x_format));
+        const uint32_t w_slots = buffers[1].total_size / (gate_kb * gate_ways * kt * tt::tile_size(w_format));
+        TT_FATAL(
+            std::max(x_slots, w_slots) <= 15,
+            "relay_chunk_scan: the output gate's buffers hold {} K blocks, more than the 15 read transaction ids",
+            std::max(x_slots, w_slots));
+    }
     // Paired, x is shared among the cores at a place of the pairs' first heads, and among those of their second.
     const uint32_t batches = batch_heads / attrs.num_heads;
     const uint32_t gate_x_groups = batches * cores_per_head * gate_ways;
@@ -384,11 +396,12 @@ tt::tt_metal::ProgramDescriptor build_program(
                     return static_cast<uint32_t>(std::ranges::find(correction_cores, core) - correction_cores.begin()) /
                            cores_per_head;
                 };
-                // Alternate runs flow on NoC 0 from their first core (its head's x on the reader) and on NoC 1 from
-                // their last (its head's x on the writer), so the two NoCs carry x evenly.
-                const bool from_front =
-                    place != 0 && north(head_of(run.front())) && (r % 2 == 0 || north(head_of(run.back())));
-                leaders.push_back(from_front ? run.front() : run.back());
+                // A run is led on NoC 0 from its first core (where that core's head moves x on the reader) or on NoC 1
+                // from its last (where it moves x on the writer; the helpers' x is on NoC 1), alternately where both
+                // can lead, so the two NoCs carry x evenly.
+                const bool front = place != 0 && north(head_of(run.front()));
+                const bool back = place == 0 || !north(head_of(run.back()));
+                leaders.push_back(front && (!back || r % 2 == 0) ? run.front() : run.back());
             }
             auto& sets = gate_groups.emplace_back();
             for (size_t r = 0; r < runs.size(); ++r) {
@@ -540,7 +553,8 @@ tt::tt_metal::ProgramDescriptor build_program(
              cb_gate_partial,
              gate_ready_semaphore_id,
              gate_partial_semaphore_id,
-             gate_ways});
+             gate_ways,
+             gate_progress_words});
         tt::tt_metal::TensorAccessorArgs(in.gate_input.buffer()).append_to(ct);
         tt::tt_metal::TensorAccessorArgs(gate_local.buffer()).append_to(ct);
         tt::tt_metal::TensorAccessorArgs(in.gate_weight.buffer()).append_to(ct);

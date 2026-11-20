@@ -34,7 +34,7 @@ pytestmark = run_for_blackhole()
 
 _ROWS, _HEADS, _KEY = 640, 24, 128
 _CHUNKS = _ROWS // 32
-# The gated output norm, its gate x @ W from a [B, T, X] input: two of the relay's K blocks.
+# The gated output norm, its gate x @ W from a [B, T, X] input of a few of the relay's K blocks.
 _GATE_INPUT, _NORM_EPSILON = 512, 1e-6
 # The model's relay runs at the affine prefix's fidelity, on the model's cores.
 _PROGRAM_CONFIG = kimi_k3_program_config(active_seq_len_local=_ROWS, tp_ccl_topology=ttnn.Topology.Linear).recurrence

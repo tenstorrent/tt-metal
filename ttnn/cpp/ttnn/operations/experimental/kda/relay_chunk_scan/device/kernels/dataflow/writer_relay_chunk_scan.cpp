@@ -39,7 +39,8 @@ constexpr bool w_north = get_compile_time_arg_val(slab_ct + 6);
 using Gate = kda_gate::Operands<slab_ct + 7>;
 constexpr uint32_t state_tiles = kt * kt;
 
-// Every core of a head writes its chunk outputs, and every other core of a head first shares the output gate's W. The
+// Every core of a head writes its chunk outputs, and every other core of a head first moves one of the output gate's
+// operands (the reader moves the other). The
 // head's first core is also the relay's head core: it first hands each tile column of the next entry state to the
 // head's sender, and on the first rank, before its chunk outputs, hands on and writes the final carry.
 void kernel_main() {

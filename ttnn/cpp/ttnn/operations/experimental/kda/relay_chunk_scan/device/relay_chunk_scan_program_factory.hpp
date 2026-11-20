@@ -40,17 +40,19 @@ inline uint32_t relay_chunk_scan_sender_slots(uint32_t key_tiles, tt::ARCH arch)
     return std::min(4u, fabric_packet_headers_per_risc(arch) / relay_chunk_scan_column_packets(key_tiles));
 }
 
-// Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes
-// two more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes).
+// Heads one sender serves: each needs its own count semaphore on the sender core, the fabric connection takes two
+// more of the core's 16 (tt::tt_metal::NUM_SEMAPHORES, which no public header exposes), and the output gate's partial
+// sums swap takes the last two (a sender may be a helper).
 inline constexpr uint32_t relay_chunk_scan_sender_semaphores = 16;
 inline constexpr uint32_t relay_chunk_scan_connection_semaphores = 2;
+inline constexpr uint32_t relay_chunk_scan_gate_semaphores = 2;
 inline constexpr uint32_t relay_chunk_scan_max_heads_per_link =
-    relay_chunk_scan_sender_semaphores - relay_chunk_scan_connection_semaphores;
+    relay_chunk_scan_sender_semaphores - relay_chunk_scan_connection_semaphores - relay_chunk_scan_gate_semaphores;
 // The fabric connections a sender may open (the fewest RoutingPlaneConnectionManager::MaxConnections allows).
 inline constexpr uint32_t relay_chunk_scan_max_connections = 4;
 
-// The cores of each head: the op's cores are the heads' cores, head by head, then two senders per link.
-// The cores are each head's cores, then two senders per link, then a helper per head.
+// The cores of each head: the op's cores are the heads' cores, head by head, then two senders per link, then a helper
+// per head.
 inline uint32_t relay_chunk_scan_cores_per_head(size_t cores, uint32_t heads, uint32_t num_links) {
     return (cores - 2 * num_links - heads) / heads;
 }

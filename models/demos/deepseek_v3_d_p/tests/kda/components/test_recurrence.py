@@ -282,7 +282,7 @@ def _activation_dims(sp_axis: int, tp_axis: int) -> tuple:
 _NORM_EPSILON = 1e-6
 
 
-# The output gate's input width: two of the relay's K blocks.
+# The output gate's input width: a few of the relay's K blocks.
 _GATE_INPUT = 256
 
 

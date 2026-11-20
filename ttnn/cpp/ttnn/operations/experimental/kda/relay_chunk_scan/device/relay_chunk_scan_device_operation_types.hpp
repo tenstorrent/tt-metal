@@ -24,7 +24,7 @@ struct RelayChunkScanParams {
     uint32_t num_links;
     // The same number of cores per head, head by head (core j of a head corrects its j-th share of the chunks, and the
     // head's first core also runs the relay's hop), then two sender cores per link: the relay's, and the final carry's
-    // second.
+    // second, then a helper core per head (which forms the output gate of the head's first core's chunks).
     std::vector<tt::tt_metal::CoreCoord> cores;
     // The gated output norm: heads per batch (the output is [B, T, H*V]), the output gate's math fidelity, epsilon,
     // and the output's dtype and memory.
@@ -36,7 +36,7 @@ struct RelayChunkScanParams {
     DeviceComputeKernelConfig compute_kernel_config;
     // L1 addresses of the caller's counters, kept alive across calls (each call subtracts what it consumed): the
     // entry-state, final-state and final-carry arrivals, which a peer counts into before this rank's call starts, then
-    // the output gate's (relay_gate_semaphores).
+    // the output gate's block counts and landed count.
     std::array<uint32_t, relay_semaphores> semaphore_addresses{};
     uint32_t slab_index_scale = 1;
     uint32_t slab_index_offset = 0;

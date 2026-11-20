@@ -199,6 +199,9 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
     gate_cores.insert(gate_cores.end(), helper_cores.begin(), helper_cores.end());
     kda_factory_detail::check_allocated_device_tensor(in.gate_workspace, operation_name, "gate_workspace");
     kda_factory_detail::check_same_device(in.packed, in.gate_workspace, operation_name, "gate_workspace");
+    kda_factory_detail::check_layout(in.gate_workspace, tt::tt_metal::Layout::TILE, operation_name, "gate_workspace");
+    kda_factory_detail::check_dtype(
+        in.gate_workspace, tt::tt_metal::DataType::FLOAT32, operation_name, "gate_workspace");
     const auto& workspace = in.gate_workspace.memory_config();
     TT_FATAL(
         workspace.buffer_type() == tt::tt_metal::BufferType::L1 &&
@@ -291,6 +294,13 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         kda_factory_detail::check_layout(*tensor, tt::tt_metal::Layout::TILE, operation_name, name);
         if (tensor != &in.gate_weight) {
             kda_factory_detail::check_dtype(*tensor, tt::tt_metal::DataType::BFLOAT16, operation_name, name);
+        } else {
+            TT_FATAL(
+                tensor->dtype() == tt::tt_metal::DataType::BFLOAT16 ||
+                    tensor->dtype() == tt::tt_metal::DataType::BFLOAT8_B,
+                "{}: gate_weight must be BFLOAT16 or BFLOAT8_B, got {}",
+                operation_name,
+                tensor->dtype());
         }
         kda_factory_detail::check_interleaved(*tensor, operation_name, name);
         kda_factory_detail::check_same_device(in.packed, *tensor, operation_name, name);

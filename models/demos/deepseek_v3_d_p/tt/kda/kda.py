@@ -677,7 +677,8 @@ class ttKDA:
         # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
         # keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
-        if gathered:
+        # With SP the relay forms the output gate from the gathered input: it is freed after the relay.
+        if gathered and not self.recurrence.applies_output_norm:
             ttnn.deallocate(hidden_states)
         convolution, convolution_slab = state.convolution, {}
         if isinstance(convolution, SlabEntry):
@@ -738,7 +739,7 @@ class ttKDA:
             output = self._kda_rms_norm(output, inputs)
             ttnn.deallocate(result.output)
             ttnn.deallocate(inputs.projected)
-        if gathered:
+        if gathered and relay_norm:
             ttnn.deallocate(hidden_states)
         output = self._project_output(output)
         return output, KdaState(recurrent=result.final_state, convolution=new_convolution)
