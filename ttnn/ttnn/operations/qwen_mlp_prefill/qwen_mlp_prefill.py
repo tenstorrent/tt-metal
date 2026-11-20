@@ -22,12 +22,12 @@ def _startup_addresses(mesh):
     return [ttnn.get_global_semaphore_address(semaphore) for semaphore in _startup_semaphores[mesh]]
 
 
-def _program(tensors):
+def _program(tensors, groups):
     device = tensors[0].device()
-    key = (device, *((tuple(tensor.shape), tensor.buffer_address()) for tensor in tensors))
+    key = (device, groups, *((tuple(tensor.shape), tensor.buffer_address()) for tensor in tensors))
     if key not in _programs:
         if not isinstance(device, ttnn.MeshDevice):
-            _programs[key] = create_program_descriptor(*tensors, 0, 1, None, None)
+            _programs[key] = create_program_descriptor(*tensors, 0, 1, groups, None, None)
         else:
             chips = device.shape[1]
             node_ids = [device.get_fabric_node_id(ttnn.MeshCoordinate(0, chip)) for chip in range(chips)]
@@ -35,14 +35,14 @@ def _program(tensors):
             for chip in range(chips):
                 coordinate = ttnn.MeshCoordinate(0, chip)
                 program[ttnn.MeshCoordinateRange(coordinate, coordinate)] = create_program_descriptor(
-                    *tensors, chip, chips, node_ids, _startup_addresses(device)
+                    *tensors, chip, chips, groups, node_ids, _startup_addresses(device)
                 )
             _programs[key] = program
     return _programs[key]
 
 
-def qwen_mlp_prefill(h, w_norm, w_gate_up, w_down):
+def qwen_mlp_prefill(h, w_norm, w_gate_up, w_down, groups=L.MAX_GROUPS):
     y = _allocate_dram(h.device(), *h.shape)
     tensors = [h, w_norm, w_gate_up, w_down, y]
-    ttnn.generic_op(tensors, _program(tensors))
+    ttnn.generic_op(tensors, _program(tensors, groups))
     return y

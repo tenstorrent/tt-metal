@@ -20,36 +20,6 @@ def _cb(index, data_format, page_bytes, tiles, cores):
     )
 
 
-def _role_cbs():
-    bf16, bfp4, fp32, act = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32, ttnn.bfloat8_b
-    t = L.HIDDEN_TILES
-    seg = L.B_TILES_PER_CORE
-    norm, a, b = L.core_range_set(L.NORM_CORE_LIST), L.core_range_set(L.A_CORE_LIST), L.B_GRID.core_range_set()
-    return [
-        _cb(L.CB_A, act, L.ACT_TILE_BYTES, L.A_DEPTH * L.INTERMEDIATE_TILES, b),
-        _cb(L.CB_NORM_OUT, act, L.ACT_TILE_BYTES, L.NORM_CORES * L.N_ROW_TILES, norm),
-        _cb(L.CB_N, act, L.ACT_TILE_BYTES, L.N_DEPTH * L.N_ROW_TILES, a),
-        _cb(L.CB_GATHER, act, L.ACT_TILE_BYTES, L.GATHER_DEPTH * L.GATHER_TILES, a),
-        *[_cb(L.CB_LANDING + i, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, b) for i in range(L.CHIPS - 1)],
-        _cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, 2 * L.RELAY_SOURCE_SLOTS, b),
-        _cb(L.CB_NORM_SCALER, bf16, L.BF16_TILE_BYTES, 1, norm),
-        _cb(L.CB_NORM_STARTUP, bfp4, L.BFP4_TILE_BYTES, 1, norm),
-        _cb(L.CB_NORM_ONES, bf16, L.BF16_TILE_BYTES, 1, norm),
-        _cb(L.CB_NORM_SUM, fp32, 4096, L.NORM_DEST_TILES, norm),
-        _cb(L.CB_NORM_RSTD, bf16, L.BF16_TILE_BYTES, 1, norm),
-        _cb(L.CB_NORM_WEIGHT, bf16, L.BF16_TILE_BYTES, t, norm),
-        _cb(L.CB_NORM_IN, bf16, L.BF16_TILE_BYTES, 2 * t, norm),
-        _cb(L.CB_WG, bfp4, L.BFP4_TILE_BYTES, t * 2 * L.A_TILES_PER_CORE, a),
-        _cb(L.CB_A_OUT, act, L.ACT_TILE_BYTES, L.A_OUT_DEPTH * L.A_TILES_PER_CORE, a),
-        _cb(L.CB_WD, bfp4, L.BFP4_TILE_BYTES, L.INTERMEDIATE_TILES * seg, b),
-        _cb(L.CB_PARTIAL_OWN, bf16, L.BF16_TILE_BYTES, (L.OWNER_LAG + 1) * seg, b),
-        _cb(L.CB_H, bf16, L.BF16_TILE_BYTES, (L.OWNER_LAG + 1) * seg, b),
-        _cb(L.CB_Y, bf16, L.BF16_TILE_BYTES, 2 * seg, b),
-        _cb(L.CB_SEND, bf16, L.BF16_TILE_BYTES, 2 * seg, b),
-        _cb(L.CB_MESSAGE, ttnn.uint32, 64, 1, b),
-    ]
-
-
 def _packed(entries):
     names = {}
     flat = []
@@ -59,35 +29,28 @@ def _packed(entries):
     return names, flat
 
 
-def _semaphores():
-    roles = [
-        (L.core_range_set(L.NORM_CORE_LIST), L.N_DEPTH),
-        (L.core_range_set(L.A_CORE_LIST), L.SEM_GATHER_FREE + L.GATHER_DEPTH),
-        (L.B_GRID.core_range_set(), L.SEM_RELAY_FREE + 2),
-    ]
-    return [
-        ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0)
-        for cores, count in roles
-        for i in range(count)
-    ]
-
-
-def _relay_sources():
+def _relay_sources(groups, chips):
     sources = [[] for _ in range(L.RELAY_COUNT)]
-    for row in range(L.B_ROWS):
-        for group, (_, _, relay) in L.PARTIAL_ROUTE.items():
-            sources[relay].append((L.b_core(group, row), 0))
-        sources[0 if row < L.B_ROWS // 2 else 1].append((L.b_core(L.OWNER_GROUP, row), 0))
-        sources[3].append((L.b_core(L.OWNER_GROUP, row), 1))
+    if chips == 1:
+        return sources
+    for group in range(groups):
+        for row in range(L.B_ROWS):
+            for block, (_, _, relay) in L.PARTIAL_ROUTE.items():
+                sources[relay].append((L.b_core(group, block, row), 0))
+            sources[0 if row < L.B_ROWS // 2 else 1].append((L.b_core(group, L.OWNER_BLOCK, row), 0))
+            sources[3].append((L.b_core(group, L.OWNER_BLOCK, row), 1))
     return sources
 
 
-def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node_ids, startup):
+def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, groups, node_ids, startup):
     device = h.device()
-    rows = h.shape[0] // L.TILE
-    assert rows % L.NORM_CORES == 0
+    total_rows = h.shape[0] // L.TILE
+    assert total_rows % groups == 0
+    rows = total_rows // groups
     assert chips in (1, L.CHIPS)
+    assert groups in range(1, L.MAX_GROUPS + 1)
     owner_lag = L.OWNER_LAG if chips > 1 else 0
+    all_groups = range(groups)
 
     def physical(x, y_):
         core = device.worker_core_from_logical_core(ttnn.CoreCoord(x, y_))
@@ -103,6 +66,9 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
             f"{name}_cores": block.cores,
         }
 
+    def partner(core, group):
+        return physical(core[0], core[1] + (L.GROUP_ROWS if group == 0 else -L.GROUP_ROWS)) if groups > 1 else (0, 0)
+
     tensors = dict(zip(TENSORS, [h, w_norm, w_gate_up, w_down, y]))
     accessor_args = []
     accessor_offsets = {}
@@ -112,6 +78,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
 
     named = {
         "rows": rows,
+        "groups": groups,
         "chips": chips,
         "owner_lag": owner_lag,
         "n_depth": L.N_DEPTH,
@@ -125,38 +92,37 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "tile_bytes_bf16": L.BF16_TILE_BYTES,
         "tile_bytes_bfp4": L.BFP4_TILE_BYTES,
         "tile_bytes_act": L.ACT_TILE_BYTES,
-        "norm_cores": L.NORM_CORES,
+        "norm_chunk_tiles": L.NORM_CHUNK_TILES,
+        "norm_in_chunks": L.NORM_IN_CHUNKS,
+        "norm_reads_in_flight": L.NORM_READS_IN_FLIGHT,
         "norm_dest_tiles": L.NORM_DEST_TILES,
-        "mcast_chunk_tiles": L.MCAST_CHUNK_TILES,
         "norm_inv_width_bits": struct.unpack("I", struct.pack("f", 1.0 / (L.HIDDEN_TILES * L.TILE)))[0],
         "norm_eps_bits": struct.unpack("I", struct.pack("f", EPS))[0],
         "a_active": L.A_ACTIVE,
-        "a_collectors": L.A_COLLECTORS,
         "a_tiles_per_core": L.A_TILES_PER_CORE,
         "a_columns_per_core": 2 * L.A_TILES_PER_CORE,
         "b_cores": L.B_CORES,
         "b_tiles_per_core": L.B_TILES_PER_CORE,
+        "packet_tiles": L.PACKET_TILES,
+        "weight_chunk_rows": L.WEIGHT_CHUNK_ROWS,
+        "weight_reads_in_flight": L.WEIGHT_READS_IN_FLIGHT,
+        "relay_slots": L.RELAY_SLOTS,
         "relay_slot_bytes": L.RELAY_SLOT_BYTES,
-        "relay_y": physical(0, L.RELAY_ROW)[1],
         "sem_n_valid": L.SEM_N_VALID,
         "sem_n_free": L.SEM_N_FREE,
         "sem_a_valid": L.SEM_A_VALID,
         "sem_a_free": L.SEM_A_FREE,
         "sem_gather_valid": L.SEM_GATHER_VALID,
         "sem_gather_free": L.SEM_GATHER_FREE,
+        "sem_a_weights": L.SEM_A_WEIGHTS,
+        "sem_b_weights": L.SEM_B_WEIGHTS,
         "gather_tiles": L.GATHER_TILES,
         "sem_land_ready": L.SEM_LAND_READY,
         "sem_credit_partial": L.SEM_CREDIT_PARTIAL,
         "sem_credit_y": L.SEM_CREDIT_Y,
         "sem_relay_free": L.SEM_RELAY_FREE,
-        **{f"b_group_x{group}": physical(*L.b_core(group, 0))[0] for group in range(L.B_COLUMNS)},
+        **{f"b_block_x{block}": physical(*L.b_core(0, block, 0))[0] for block in range(L.B_COLUMNS)},
         **accessor_offsets,
-        **rect("a_collectors", L.Block(L.A_COLUMNS - 1, 0, L.A_COLUMNS - 1, L.GRID_ROWS - 1)),
-        **rect("b_grid", L.B_GRID),
-        **rect("a_main", L.Block(0, 1, L.A_COLUMNS - 1, L.GRID_ROWS - 1)),
-        **rect("a_top", L.Block(2, 0, L.A_COLUMNS - 1, 0)),
-        **rect("norm0", L.Block(*L.NORM_CORE_LIST[0], *L.NORM_CORE_LIST[0])),
-        **rect("norm1", L.Block(*L.NORM_CORE_LIST[1], *L.NORM_CORE_LIST[1])),
     }
     cb_names = {
         "cb_norm_weight": L.CB_NORM_WEIGHT,
@@ -166,6 +132,7 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "cb_norm_ones": L.CB_NORM_ONES,
         "cb_norm_sum": L.CB_NORM_SUM,
         "cb_norm_rstd": L.CB_NORM_RSTD,
+        "cb_norm_rstd_out": L.CB_NORM_RSTD_OUT,
         "cb_norm_out": L.CB_NORM_OUT,
         "cb_n": L.CB_N,
         "cb_wg": L.CB_WG,
@@ -178,7 +145,6 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
         "cb_y": L.CB_Y,
         "cb_send": L.CB_SEND,
         "cb_landing": L.CB_LANDING,
-        "cb_relay_slots": L.CB_RELAY_SLOTS,
         "cb_message": L.CB_MESSAGE,
     }
     addresses = {f"{name}_addr": tensor.buffer_address() for name, tensor in tensors.items()}
@@ -194,13 +160,13 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
             **options,
         )
 
-    def role_kernels(cores, entries, sources, extra_named=None):
+    def role_kernels(cores, entries, sources, extra_named):
         runtime_args = ttnn.RuntimeArgs()
         names = None
         for (x, y_), extra in entries:
             names, flat = _packed([("chip", chip), *addresses.items(), *extra])
             runtime_args[x][y_] = flat
-        return [kernel(source, cores, config, runtime_args, extra_named or {}, names) for source, config in sources]
+        return [kernel(source, cores, config, runtime_args, extra_named, names) for source, config in sources]
 
     def data_movement(processor):
         noc = ttnn.NOC.RISCV_0_default if processor == ttnn.DataMovementProcessor.RISCV_0 else ttnn.NOC.RISCV_1_default
@@ -214,82 +180,170 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
             dst_full_sync_en=full_sync,
         )
 
-    def a_entry(index, core):
-        row = L.a_row_cores(core[1])
-        collector = row[-1]
-        return [
-            ("index", index),
-            ("position", row.index(core)),
-            ("row_cores", len(row)),
-            ("row_first", L.A_CORE_LIST.index(row[0])),
-            ("is_collector", int(core == collector)),
-            ("collector_x", physical(*collector)[0]),
-            ("row_x_start", physical(*row[0])[0]),
-            ("row_y", physical(*core)[1]),
-        ]
-
     risc0, risc1 = ttnn.DataMovementProcessor.RISCV_0, ttnn.DataMovementProcessor.RISCV_1
-    relay_sources = _relay_sources()
+    relay_sources = _relay_sources(groups, chips)
 
     def source_index(relay, core, port):
         return relay_sources[relay].index((core, port))
 
-    def b_entry(group, row):
-        core = L.b_core(group, row)
-        x, y_ = core
-        first_column = (L.HIDDEN_TILES // L.CHIPS) * ((chip + group) % L.CHIPS) + L.B_TILES_PER_CORE * row
-        extra = [("group", group), ("first_column", first_column), ("self_y", physical(x, y_)[1])]
+    def a_entry(group, index, core):
+        row = L.a_row_cores(group, core[1] - L.first_row(group))
+        collector = row[-1]
+        return core, [
+            ("index", index),
+            ("position", row.index(core)),
+            ("row_cores", len(row)),
+            ("row_first", L.a_cores(group).index(row[0])),
+            ("is_collector", int(core == collector)),
+            ("collector_x", physical(*collector)[0]),
+            ("row_x_start", physical(*row[0])[0]),
+            ("row_y", physical(*core)[1]),
+            ("partner_x", partner(core, group)[0]),
+            ("partner_y", partner(core, group)[1]),
+        ]
+
+    def b_entry(group, block, row):
+        core = L.b_core(group, block, row)
+        first_column = (L.HIDDEN_TILES // L.CHIPS) * ((chip + block) % L.CHIPS) + L.B_TILES_PER_CORE * row
+        extra = [
+            ("block", block),
+            ("first_column", first_column),
+            ("self_y", physical(*core)[1]),
+            ("partner_x", partner(core, group)[0]),
+            ("partner_y", partner(core, group)[1]),
+        ]
         relay0 = relay1 = (0, 0)
         hops = 0
-        if chips > 1 and group == L.OWNER_GROUP:
+        if chips > 1 and block == L.OWNER_BLOCK:
             relay0 = (0 if row < L.B_ROWS // 2 else 1, 0)
             relay1 = (3, 1)
         elif chips > 1:
-            _, hops, relay = L.PARTIAL_ROUTE[group]
+            _, hops, relay = L.PARTIAL_ROUTE[block]
             relay0 = (relay, 0)
         extra += [
             ("hops", hops),
             ("relay_x0", physical(*L.RELAY_CORE_LIST[relay0[0]])[0]),
+            ("relay_y0", physical(*L.RELAY_CORE_LIST[relay0[0]])[1]),
             ("relay_source0", source_index(relay0[0], core, relay0[1]) if chips > 1 else 0),
             ("relay_x1", physical(*L.RELAY_CORE_LIST[relay1[0]])[0]),
+            ("relay_y1", physical(*L.RELAY_CORE_LIST[relay1[0]])[1]),
             ("relay_source1", source_index(relay1[0], core, 1) if chips > 1 and relay1[1] else 0),
         ]
         return core, extra
 
-    def b_cores(groups):
-        return [b_entry(group, row) for group in groups for row in range(L.B_ROWS)]
+    owner_blocks = [L.OWNER_BLOCK] if chips > 1 else list(range(L.B_COLUMNS))
+    other_blocks = [block for block in range(L.B_COLUMNS) if block not in owner_blocks]
+    b_roles = [(owner_blocks, 1, chips - 1)] + ([(other_blocks, 0, 0)] if other_blocks else [])
 
-    owner_groups = [L.OWNER_GROUP] if chips > 1 else list(range(L.B_COLUMNS))
-    other_groups = [group for group in range(L.B_COLUMNS) if group not in owner_groups]
-    b_roles = [(owner_groups, 1, chips - 1)] + ([(other_groups, 0, 0)] if other_groups else [])
+    def b_role_cores(group, blocks):
+        return [(group, block, row) for block in blocks for row in range(L.B_ROWS)]
 
-    kernels = [
-        *role_kernels(
-            L.core_range_set(L.NORM_CORE_LIST),
-            [(core, [("index", i)]) for i, core in enumerate(L.NORM_CORE_LIST)],
+    def group_cores(entries):
+        return [L.b_core(*entry) for entry in entries]
+
+    norm_cores = [L.norm_core(group) for group in all_groups]
+    a_core_lists = [L.a_cores(group) for group in all_groups]
+    a_rects = L.core_range_set([c for group in all_groups for c in [L.norm_core(group)] + L.a_cores(group)])
+    a_all = L.core_range_set([c for cores in a_core_lists for c in cores])
+    b_all = L.core_range_set(
+        [L.b_core(group, block, row) for group in all_groups for block in range(L.B_COLUMNS) for row in range(L.B_ROWS)]
+    )
+    owner_all = L.core_range_set(group_cores([e for g in all_groups for e in b_role_cores(g, owner_blocks)]))
+    other_all = (
+        L.core_range_set(group_cores([e for g in all_groups for e in b_role_cores(g, other_blocks)]))
+        if other_blocks
+        else None
+    )
+
+    bf16, bfp4, fp32, act = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.float32, ttnn.bfloat8_b
+    t, seg = L.HIDDEN_TILES, L.B_TILES_PER_CORE
+    norm_set = L.core_range_set(norm_cores)
+    max_relay_sources = max(len(sources) for sources in relay_sources)
+    cbs = [
+        _cb(L.CB_N, act, L.ACT_TILE_BYTES, L.N_DEPTH * L.N_ROW_TILES, a_rects),
+        _cb(L.CB_A, act, L.ACT_TILE_BYTES, L.A_DEPTH * L.INTERMEDIATE_TILES, b_all),
+        _cb(L.CB_NORM_WEIGHT, bf16, L.BF16_TILE_BYTES, t, norm_set),
+        _cb(L.CB_NORM_IN, bf16, L.BF16_TILE_BYTES, L.NORM_IN_CHUNKS * L.NORM_CHUNK_TILES, norm_set),
+        _cb(L.CB_NORM_OUT, act, L.ACT_TILE_BYTES, L.NORM_OUT_CHUNKS * L.NORM_CHUNK_TILES, norm_set),
+        _cb(L.CB_NORM_SCALER, bf16, L.BF16_TILE_BYTES, 1, norm_set),
+        _cb(L.CB_NORM_STARTUP, bfp4, L.BFP4_TILE_BYTES, 1, norm_set),
+        _cb(L.CB_NORM_ONES, bf16, L.BF16_TILE_BYTES, 1, norm_set),
+        _cb(L.CB_NORM_SUM, fp32, 4096, L.NORM_DEST_TILES, norm_set),
+        _cb(L.CB_NORM_RSTD, bf16, L.BF16_TILE_BYTES, 1, norm_set),
+        _cb(L.CB_NORM_RSTD_OUT, act, L.ACT_TILE_BYTES, 1, norm_set),
+        _cb(L.CB_WG, bfp4, L.BFP4_TILE_BYTES, t * 2 * L.A_TILES_PER_CORE, a_all),
+        _cb(L.CB_A_OUT, act, L.ACT_TILE_BYTES, L.A_OUT_DEPTH * L.A_TILES_PER_CORE, a_all),
+        _cb(L.CB_GATHER, act, L.ACT_TILE_BYTES, L.GATHER_DEPTH * L.GATHER_TILES, a_all),
+        *(
+            [_cb(L.CB_RELAY_SLOTS, ttnn.uint32, L.RELAY_SLOT_BYTES, L.RELAY_SLOTS * max_relay_sources, other_all)]
+            if other_all is not None and chips > 1
+            else []
+        ),
+        *[_cb(L.CB_LANDING + i, bf16, L.BF16_TILE_BYTES, L.LANDING_DEPTH * seg, owner_all) for i in range(L.CHIPS - 1)],
+        _cb(L.CB_WD, bfp4, L.BFP4_TILE_BYTES, L.INTERMEDIATE_TILES * seg, b_all),
+        _cb(L.CB_PARTIAL_OWN, bf16, L.BF16_TILE_BYTES, (owner_lag + 1) * seg, owner_all),
+        _cb(L.CB_H, bf16, L.BF16_TILE_BYTES, (owner_lag + 1) * seg, owner_all),
+        _cb(L.CB_Y, bf16, L.BF16_TILE_BYTES, 2 * seg, owner_all),
+        *([_cb(L.CB_SEND, bf16, L.BF16_TILE_BYTES, 2 * seg, other_all)] if other_all is not None else []),
+        _cb(L.CB_MESSAGE, ttnn.uint32, 64, 1, b_all),
+    ]
+    semaphores = [
+        ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0)
+        for cores, count in [
+            (norm_set, L.N_DEPTH),
+            (a_all, L.SEM_A_WEIGHTS + 1),
+            (b_all, L.SEM_B_WEIGHTS + 1),
+        ]
+        for i in range(count)
+    ]
+
+    kernels = []
+    for group in all_groups:
+        group_named = {
+            "group": group,
+            **rect("a_rect", L.a_rect(group)),
+            **rect("b_rect", L.b_rect(group)),
+            **rect("norm", L.Block(*L.norm_core(group), *L.norm_core(group))),
+            **rect("a_collectors", L.a_collectors(group)),
+        }
+        kernels += role_kernels(
+            L.core_range_set([L.norm_core(group)]),
+            [
+                (
+                    L.norm_core(group),
+                    [("self_x", physical(*L.norm_core(group))[0]), ("self_y", physical(*L.norm_core(group))[1])],
+                )
+            ],
             [
                 ("norm_in.cpp", data_movement(risc1)),
                 ("norm_out.cpp", data_movement(risc0)),
                 ("norm_compute.cpp", compute(False)),
             ],
-        ),
-        *role_kernels(
-            L.core_range_set(L.A_CORE_LIST),
-            [(core, a_entry(i, core)) for i, core in enumerate(L.A_CORE_LIST)],
+            group_named,
+        )
+        kernels += role_kernels(
+            L.core_range_set(L.a_cores(group)),
+            [a_entry(group, i, core) for i, core in enumerate(L.a_cores(group))],
             [
                 ("a_dm_in.cpp", data_movement(risc1)),
                 ("a_dm_out.cpp", data_movement(risc0)),
                 ("a_compute.cpp", compute(False)),
             ],
-        ),
-    ]
-    for groups, owner, remote_sources in b_roles:
-        kernels += role_kernels(
-            L.core_range_set([L.b_core(group, row) for group in groups for row in range(L.B_ROWS)]),
-            b_cores(groups),
-            [("b_dm.cpp", data_movement(risc1)), ("b_compute.cpp", compute(True))],
-            {"owner": owner, "remote_sources": remote_sources},
+            group_named,
         )
+        for blocks, owner, remote_sources in b_roles:
+            entries = b_role_cores(group, blocks)
+            kernels += role_kernels(
+                L.core_range_set(group_cores(entries)),
+                [b_entry(*entry) for entry in entries],
+                [("b_dm.cpp", data_movement(risc1)), ("b_compute.cpp", compute(True))],
+                {
+                    **group_named,
+                    "owner": owner,
+                    "remote_sources": remote_sources,
+                    "cb_relay_slots": L.CB_LANDING if owner else L.CB_RELAY_SLOTS,
+                },
+            )
     relay_kernels = []
     if chips > 1:
         fabric_defines = ttnn.get_fabric_kernel_defines("Linear")
@@ -317,12 +371,13 @@ def create_program_descriptor(h, w_norm, w_gate_up, w_down, y, chip, chips, node
                     {
                         "relay_forward": int(direction == 0),
                         "relay_sources": len(relay_sources[relay]),
+                        "cb_relay_slots": L.CB_RELAY_SLOTS,
                     },
                     {**names, "rt_fabric": len(flat)},
                     defines=fabric_defines,
                 )
             )
-    program = ttnn.ProgramDescriptor(kernels=kernels + relay_kernels, semaphores=_semaphores(), cbs=_role_cbs())
+    program = ttnn.ProgramDescriptor(kernels=kernels + relay_kernels, semaphores=semaphores, cbs=cbs)
     for relay, (x, y_) in enumerate(L.RELAY_CORE_LIST[: len(relay_kernels)]):
         direction, link = divmod(relay, 2)
         step = 1 if direction == 0 else -1
