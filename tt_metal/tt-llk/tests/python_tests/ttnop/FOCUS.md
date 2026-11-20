@@ -16,7 +16,7 @@ Run from the `ttnop` directory and quote the full pytest node id.
 
 ```bash
 ./scripts/focus.sh \
-    'test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-num_faces:1-tilize:No-input_dimensions:[64, 64]]'
+    'test_eltwise_unary_datacopy.py::test_eltwise_unary_datacopy[formats:Float16_b->Float16_b-dest_acc:No-tile_dimensions:[16, 16]-tilize:No-input_dimensions:[64, 64]]'
 ```
 
 To measure a known site with one filler and a small delay range:
@@ -268,7 +268,7 @@ own cores. The script cannot replace the hung worker or reset the card.
 Reset the card before running more device tests after a hang:
 
 ```bash
-tt-smi -r
+python3 -c "import tt_umd; tt_umd.WarmResetWithRecovery.warm_reset(max_attempts=3)"
 ```
 
 
@@ -295,7 +295,7 @@ core — run only when you can reset the card afterward)
 make check-hang
 ```
 
-The hang check runs `tt-smi -r` when it finishes. If a previous run left the
+The hang check runs a UMD warm reset when it finishes. If a previous run left the
 core wedged, reset the card before `make check`.
 
 ## Exit status

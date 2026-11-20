@@ -138,7 +138,11 @@ def tt_all_reduce(
         input_tensor: The input tensor to reduce.
         mesh_device: The mesh device to perform the operation on.
         tt_ccl: The TT_CCL instance for semaphore management.
-        cluster_axis: The cluster axis for the reduction (default: 0).
+        cluster_axis: Logical model reduction axis (default: 0). On a 2D mesh,
+            this is the physical mesh axis. On a 1D mesh, axis 1 is a no-op
+            (QKV/lm-head); axis 0 or None reduce-scatters across all devices
+            (WO/FF2), without an all-gather. This differs from tt_all_gather,
+            whose cluster_axis always denotes a physical mesh axis.
         dim: The dimension to reduce along (default: 0).
         num_reduce_scatter_links: Number of links for reduce_scatter. If None, uses max available.
         num_all_gather_links: Number of links for all_gather. If None, uses max available.
@@ -155,7 +159,7 @@ def tt_all_reduce(
     if rs_memory_config is _DEFAULT_RS_MEMORY_CONFIG:
         rs_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
-    # Skip CCL if single device or only 1 device on the target axis
+    # Axis 1 is a model-parallel no-op on 1D meshes; see the contract above.
     mesh_shape = list(mesh_device.shape)
     if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
         return input_tensor
@@ -300,7 +304,8 @@ def tt_all_gather(
         input_tensor: The input tensor to gather.
         mesh_device: The mesh device to perform the operation on.
         tt_ccl: The TT_CCL instance for semaphore management.
-        cluster_axis: The cluster axis for the gather operation.
+        cluster_axis: Physical mesh axis to gather along; None gathers across
+            the whole mesh. A singleton target axis returns the input unchanged.
         dim: The dimension to gather along.
         num_links: Number of links to use. If None, uses max available.
         memory_config: Memory configuration for the output.
@@ -313,7 +318,7 @@ def tt_all_gather(
     """
     # Skip CCL if single device or only 1 device on the target axis
     mesh_shape = list(mesh_device.shape)
-    if mesh_shape == [1, 1] or (cluster_axis == 1 and 1 in list(mesh_device.shape)):
+    if mesh_shape == [1, 1] or (cluster_axis is not None and mesh_shape[cluster_axis] == 1):
         return input_tensor
 
     # Auto-detect num_links if not provided

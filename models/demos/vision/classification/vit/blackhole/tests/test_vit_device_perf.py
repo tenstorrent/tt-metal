@@ -6,6 +6,7 @@ import pytest
 import torch
 
 import ttnn
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_target, device_grid_width
 from models.demos.vision.classification.vit.common.tests.vit_test_infra import create_test_infra
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
@@ -17,7 +18,17 @@ except ModuleNotFoundError:
     use_signpost = False
 
 
-@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
+# Device kernel throughput at batch 10 by card type prefix and device grid width. The model's grid width is
+# the largest divisor of 12 that fits the device grid, so an 11-wide grid (P100, or P150 with two Tensix
+# columns disabled) runs on 6 core columns and a 12- or 13-wide one on 12.
+EXPECTED_KERNEL_SAMPLES_PER_SEC = {
+    ("p100", 11): 3135,
+    ("p150", 11): 3135,
+    ("p150", 12): 4500,
+    ("p150", 13): 4500,
+}
+
+
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
 @pytest.mark.parametrize("batch_size", [10])
 def test_vit_device_ops(
@@ -43,16 +54,16 @@ def test_vit_device_ops(
     ttnn.synchronize_device(device)
 
 
-@pytest.mark.skip(reason="Sharding issue: 120 shards exceeds 110 L1 banks on BH compute cores github issue #38877")
 @pytest.mark.parametrize("batch_size", [10])
-@pytest.mark.parametrize(
-    "expected_kernel_samples_per_sec",
-    [
-        4500,
-    ],
-)
 @pytest.mark.models_device_performance_bare_metal
-def test_vit_perf_device(batch_size, expected_kernel_samples_per_sec):
+# Three profiled runs of the model take close to the default 300 s.
+@pytest.mark.timeout(600)
+def test_vit_perf_device(batch_size):
+    grid_x = device_grid_width()
+    expected_kernel_samples_per_sec = card_target(EXPECTED_KERNEL_SAMPLES_PER_SEC, grid_x)
+    if expected_kernel_samples_per_sec is None:
+        pytest.skip(f"No device kernel throughput target for this card on a {grid_x}-wide grid")
+
     command = f"pytest models/demos/vision/classification/vit/blackhole/tests/test_vit_device_perf.py::test_vit_device_ops[{batch_size}-device_params0]"
     cols = ["DEVICE FW", "DEVICE KERNEL", "DEVICE BRISC KERNEL"]
 

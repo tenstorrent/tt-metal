@@ -215,6 +215,7 @@ def _build_exchange_program(
     if use_fabric_on_sender:
         for idx in range(num_fwd_links):
             fwd_fabric_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_downstream_fabric_node_id,
                 idx,
@@ -226,6 +227,7 @@ def _build_exchange_program(
     if use_fabric_on_receiver:
         for idx in range(num_bwd_links):
             bwd_fabric_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_upstream_fabric_node_id,
                 idx,
@@ -639,6 +641,7 @@ class SocketInterface:
 
         if use_fabric_on_sender:
             fwd_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_downstream_fabric_node_id,
                 0,
@@ -649,6 +652,7 @@ class SocketInterface:
 
         if use_fabric_on_receiver:
             bwd_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_upstream_fabric_node_id,
                 0,
@@ -663,6 +667,7 @@ class SocketInterface:
 
         if use_fabric_on_sender:
             fwd_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_downstream_fabric_node_id,
                 1,
@@ -673,6 +678,7 @@ class SocketInterface:
 
         if use_fabric_on_receiver:
             bwd_args = ttnn.setup_fabric_connection(
+                my_mesh_device,
                 my_fabric_node_id,
                 my_upstream_fabric_node_id,
                 1,

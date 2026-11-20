@@ -5,7 +5,7 @@
 import numpy as np
 import torch
 
-from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import get_atol_rtol_pcc
+from tt_py_test_utils_common.comparison_funcs import get_atol_rtol_pcc
 
 
 def basic_layernorm(x, gamma, beta, epsilon=1e-5):

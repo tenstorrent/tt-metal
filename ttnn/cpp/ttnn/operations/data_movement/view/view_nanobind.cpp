@@ -35,14 +35,14 @@ void bind_view(nb::module_& mod) {
 
         Args:
             * input_tensor: Input Tensor.
-            * new_shape: New shape of tensor.
+            * shape: New shape of tensor.
 
         Returns:
             ttnn.Tensor: a reference to the input tensor but with the new shape.
 
         Example:
 
-            >>> tensor = ttnn.from_torch(torch.tensor((2, 1, 1, 1, 4), dtype=torch.bfloat16), device=device)
+            >>> tensor = ttnn.from_torch(torch.rand(2, 1, 1, 1, 4, dtype=torch.bfloat16), device=device)
             >>> output = ttnn.view(tensor, (2, 1, 4))
 
         )doc";

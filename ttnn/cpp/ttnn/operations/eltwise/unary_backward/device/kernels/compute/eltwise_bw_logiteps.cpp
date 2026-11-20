@@ -12,9 +12,8 @@ namespace ckl = compute_kernel_lib;
 
 // Reads D0 and D1 and writes D0; the kernel needs no scratch tile, so a lane spans 2 slots.
 struct LogitepsBw : ckl::BinaryOp<LogitepsBw, ckl::Dst::D0, ckl::Dst::D1, ckl::Dst::D0> {
-    static constexpr uint32_t lane_width = 2;
     static ALWI void init() { logiteps_bw_tile_init(); }
-    static ALWI void exec_impl(uint32_t slot_offset) { logiteps_bw_tile(slot_offset); }
+    static ALWI void exec_impl(uint32_t slot_offset) { logiteps_bw_tile(ckl::to_u32(ckl::Dst::D0) + slot_offset); }
 };
 
 void kernel_main() {

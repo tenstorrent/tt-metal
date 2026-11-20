@@ -422,3 +422,79 @@ def test_multi_chunk_random(device, num_tokens, config):
 
 
 # ============================================================================
+# Batched reads (c_0 / c_1) across chunk transitions and expert skipping
+# ============================================================================
+
+# The reader batches a token's expert rows when two tokens of them fit c_0's 64 KiB budget; the writer
+# batches a token's weights when two tokens of them fit c_1's 32 KiB. The model shapes above mostly take
+# the streaming paths (8 experts x >= 2880 wide), so these pin each combination explicitly:
+#   (num_experts, emb_dim) -> (c_0, c_1)
+_BATCHED_PATH_SHAPES = [
+    pytest.param(4, 4096, id="e4-d4096-rows_batched-weights_batched"),  # Mistral-Small-4 shape
+    pytest.param(8, 2048, id="e8-d2048-rows_batched-weights_batched"),
+    pytest.param(4, 2880, id="e4-d2880-rows_batched-weights_batched"),  # non-1024-aligned row
+    pytest.param(16, 1024, id="e16-d1024-rows_batched-weights_streamed"),
+    pytest.param(32, 512, id="e32-d512-rows_streamed-weights_streamed"),  # wide top-k: no L1 growth
+]
+# 200 chunks of 32 tokens, more than the worker grid, so cores carry batches across chunk boundaries.
+_BATCHED_PATH_NUM_TOKENS = 6400
+_BATCHED_PATH_ROUTED_EXPERTS = 64  # experts [0, 32) are local, [32, 64) are not
+
+
+def _batched_path_indices(num_tokens, num_experts, mode):
+    """Per-token expert ids. 'all_local' / 'all_nonlocal' draw every token from one half; 'mixed' draws
+    from both halves and makes every fourth token all non-local, which takes the writer's zero-weight
+    path, and every fourth token (offset 1) all local."""
+    half = _BATCHED_PATH_ROUTED_EXPERTS // 2
+    rows = []
+    for t in range(num_tokens):
+        if mode == "all_local" or (mode == "mixed" and t % 4 == 1):
+            row = torch.randperm(half)[:num_experts]
+        elif mode == "all_nonlocal" or (mode == "mixed" and t % 4 == 0):
+            row = half + torch.randperm(half)[:num_experts]
+        else:
+            row = torch.randperm(_BATCHED_PATH_ROUTED_EXPERTS)[:num_experts]
+        rows.append(row)
+    return torch.stack(rows).unsqueeze(0)  # [1, num_tokens, num_experts], int64: torch can't compare uint16 on CPU
+
+
+@pytest.mark.parametrize("mode", ["no_table", "all_local", "mixed", "all_nonlocal"])
+@pytest.mark.parametrize("num_experts, emb_dim", _BATCHED_PATH_SHAPES)
+def test_batched_paths(device, num_experts, emb_dim, mode):
+    """Every c_0 / c_1 batching combination against the reference, with and without the dispatch-table
+    skip: non-local experts must be dropped and a token with no local expert must come out zero."""
+    torch.manual_seed(42)
+    num_tokens = _BATCHED_PATH_NUM_TOKENS
+    combine = torch.randn(1, num_tokens, num_experts, emb_dim, dtype=torch.bfloat16)
+    weights = torch.randn(1, num_tokens, num_experts, 1, dtype=torch.bfloat16)
+
+    if mode == "no_table":
+        ref = pytorch_reference(combine, weights)
+        indices_tt = dispatch_table_tt = None
+    else:
+        indices = _batched_path_indices(num_tokens, num_experts, mode)
+        local = indices < _BATCHED_PATH_ROUTED_EXPERTS // 2  # [1, num_tokens, num_experts]
+        ref = pytorch_reference(combine * local.unsqueeze(-1), weights)
+        indices_tt = ttnn.from_torch(
+            indices.to(torch.uint16),
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        table = torch.where(torch.arange(_BATCHED_PATH_ROUTED_EXPERTS) < _BATCHED_PATH_ROUTED_EXPERTS // 2, 0, -1)
+        dispatch_table_tt = ttnn.from_torch(
+            table.to(torch.int32), device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+    result = ttnn.to_torch(
+        new_implementation(to_device(combine, device), to_device(weights, device), indices_tt, dispatch_table_tt)
+    )
+    label = f"batched_paths_{num_experts}x{emb_dim}_{mode}"
+    if mode == "all_nonlocal":
+        assert torch.count_nonzero(result) == 0, f"{label}: tokens with no local expert must be zero"
+        return
+    if mode == "mixed":
+        no_local_tokens = result.reshape(num_tokens, emb_dim)[0::4]  # every fourth token has no local expert
+        assert torch.count_nonzero(no_local_tokens) == 0, f"{label}: tokens with no local expert must be zero"
+    assert_pcc(result, ref, label=label)

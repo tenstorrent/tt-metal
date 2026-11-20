@@ -59,6 +59,7 @@
 //       ./build/test/ttnn/multiprocess/unit_tests_cross_process_d2d
 
 #include <cstdint>
+#include <exception>
 #include <map>
 #include <memory>
 #include <string>
@@ -372,7 +373,7 @@ MeshWorkload make_relay_like_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -460,7 +461,7 @@ MeshWorkload make_d2h_relay_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -549,7 +550,7 @@ MeshWorkload make_stress_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -650,7 +651,7 @@ MeshWorkload make_stress_d2h_compute_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto cb_cfg = CircularBufferConfig(page_size, {{kScratchCb, tt::DataFormat::UInt32}})
                           .set_page_size(kScratchCb, page_size);
         CreateCircularBuffer(program, worker_cores, cb_cfg);
@@ -721,7 +722,7 @@ MeshWorkload make_stress_signal_workload(D2DStreamServiceSender* outbound, const
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto kernel = CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_stress_relay.cpp",
@@ -758,7 +759,7 @@ MeshWorkload make_gate_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         CreateKernel(
             program,
             "tests/ttnn/unit_tests/gtests/tensor/kernels/d2d_sync.cpp",
@@ -794,7 +795,7 @@ MeshWorkload make_stub_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : coords) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const tt::tt_fabric::FabricNodeId downstream_node(
             down_mesh_id, mesh_graph.coordinate_to_chip(down_mesh_id, coord, down_host_rank));
@@ -809,7 +810,7 @@ MeshWorkload make_stub_fabric_workload(
 
         std::vector<uint32_t> rt_args;
         tt::tt_fabric::append_fabric_connection_rt_args(
-            sender_node, downstream_node, links.front(), program, stub_core, rt_args);
+            *mesh, sender_node, downstream_node, links.front(), program, stub_core, rt_args);
         SetRuntimeArgs(program, kernel, stub_core, rt_args);
         workload.add_program(MeshCoordinateRange(coord), std::move(program));
     }
@@ -836,7 +837,7 @@ MeshWorkload make_stress_fabric_workload(
 
     MeshWorkload workload;
     for (const auto& coord : MeshCoordinateRange(mesh->shape())) {
-        auto program = CreateProgram();
+        auto program = CreateProgram(*mesh);
         auto* device = tt::tt_metal::internal::get_device(*mesh, coord);
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const auto fabric_core_phys = device->worker_core_from_logical_core(fabric_core);
@@ -890,7 +891,8 @@ MeshWorkload make_stress_fabric_workload(
             expected_per_iter,
         };
         for (const auto& [neighbor_node, link] : conns) {
-            tt::tt_fabric::append_fabric_connection_rt_args(sender_node, neighbor_node, link, program, fabric_core, rt);
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                *mesh, sender_node, neighbor_node, link, program, fabric_core, rt);
             rt.push_back(static_cast<uint32_t>(neighbor_node.chip_id));
             rt.push_back(static_cast<uint32_t>(*neighbor_node.mesh_id));
         }
@@ -1329,6 +1331,77 @@ TEST_F(CrossProcessD2DFixture, MismatchedRelayThrows) {
             std::exception);
     }
     ctx->barrier();
+}
+
+D2DStreamConfig make_relay_cfg(const std::shared_ptr<MeshDevice>& mesh, const ttnn::Shape& global_shape) {
+    auto cfg = make_cfg(mesh, global_shape);
+    cfg.relay = true;
+    return cfg;
+}
+
+// Builds a relay-mode pair holder_sender -> the other rank of {0, 1} and keeps it, so its relays hold
+// their fabric routers. Then builds a relay-mode pair rank 0 -> rank 1 whose relays need the same chips'
+// routers, so `failing_rank`'s side finds none free. That side's claim fails before the relay exchange;
+// it must tell its peer, and both ranks must throw instead of one waiting forever in the exchange.
+void expect_relay_claim_failure_on_both_ranks(
+    const std::shared_ptr<MeshDevice>& mesh,
+    const std::shared_ptr<DistributedContext>& ctx,
+    Rank holder_sender,
+    Rank failing_rank) {
+    const int rank = *ctx->rank();
+    const ttnn::Shape global_shape({1, 1, 32, 64});
+
+    const Rank holder_receiver{1 - *holder_sender};
+    const D2DEndpointConfig holder_endpoints{
+        .sender_rank = holder_sender, .receiver_rank = holder_receiver, .distributed_context = ctx};
+    std::unique_ptr<D2DStreamServiceSender> holder_tx;
+    std::unique_ptr<D2DStreamServiceReceiver> holder_rx;
+    if (rank == *holder_sender) {
+        holder_tx = D2DStreamService::create_sender(mesh, make_relay_cfg(mesh, global_shape), holder_endpoints);
+    } else if (rank == *holder_receiver) {
+        holder_rx = D2DStreamService::create_receiver(mesh, make_relay_cfg(mesh, global_shape), holder_endpoints);
+    }
+
+    const D2DEndpointConfig endpoints{.sender_rank = Rank{0}, .receiver_rank = Rank{1}, .distributed_context = ctx};
+    std::string error;
+    try {
+        if (rank == 0) {
+            (void)D2DStreamService::create_sender(mesh, make_relay_cfg(mesh, global_shape), endpoints);
+        } else if (rank == 1) {
+            (void)D2DStreamService::create_receiver(mesh, make_relay_cfg(mesh, global_shape), endpoints);
+        }
+    } catch (const std::exception& e) {
+        error = e.what();
+    }
+    if (rank == *failing_rank) {
+        EXPECT_NE(error.find("no free fabric router"), std::string::npos) << "rank " << rank << ": " << error;
+    } else if (rank == 0 || rank == 1) {
+        EXPECT_NE(error.find("failed to set up its relay side"), std::string::npos)
+            << "rank " << rank << ": " << error;
+    }
+    ctx->barrier();
+}
+
+// The holder 0 -> 1 holds both cable links of each exit chip on rank 0, so the second sender's exit
+// relays find no cable router. Its receiver claims fine and waits in the relay exchange: it must hear
+// that the sender failed.
+TEST_F(CrossProcessD2DFixture, RelaySenderClaimFailureThrowsOnBothRanks) {
+    const auto& ctx = DistributedContext::get_current_world();
+    if (*ctx->size() < 2) {
+        GTEST_SKIP() << "needs >= 2 ranks; got " << *ctx->size();
+    }
+    expect_relay_claim_failure_on_both_ranks(mesh_device_, ctx, /*holder_sender=*/Rank{0}, /*failing_rank=*/Rank{0});
+}
+
+// The holder 1 -> 0 has its exit relays on rank 1's cable chips, which are the second pair's entry
+// chips, and holds both cable links there. The second receiver's entry relays find no router back over
+// the cable, after its sender has already sent its relay words: the sender must hear that the receiver failed.
+TEST_F(CrossProcessD2DFixture, RelayReceiverClaimFailureThrowsOnBothRanks) {
+    const auto& ctx = DistributedContext::get_current_world();
+    if (*ctx->size() < 2) {
+        GTEST_SKIP() << "needs >= 2 ranks; got " << *ctx->size();
+    }
+    expect_relay_claim_failure_on_both_ranks(mesh_device_, ctx, /*holder_sender=*/Rank{1}, /*failing_rank=*/Rank{1});
 }
 
 // Every rank exports its inbound boundary; rank 0 gets the whole chain. Each boundary has two

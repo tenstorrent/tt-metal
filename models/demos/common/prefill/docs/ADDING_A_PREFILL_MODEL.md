@@ -60,16 +60,17 @@ class MyModelAdapter(PrefillModelAdapter):
                                # Kimi-K2.7), so leave it False unless a matching drafter exists.
     supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Without
                                # it, a forward of several chunks runs prefill_chunk once per chunk.
-    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Packed
-                               # forwards do not carry them, so the runner refuses F > 1 across ranks.
+    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Unless
+                               # supports_packed_forward_indexer_indices, the runner refuses F > 1 across ranks.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
         hf_model_default). The engine sets `.max_seq_len` on the returned config."""
 
-    def weight_cache_path(self, mesh_shape: tuple):
+    def weight_cache_path(self, mesh_shape: tuple, sp_axis: int = 0):
         """The TTNN weight-cache dir for this model + mesh (or None if disabled).
-        Mirror the layout the cache-populate run wrote so the runner reads the same files."""
+        Mirror the layout the cache-populate run wrote so the runner reads the same files.
+        `sp_axis` is the mesh axis SP runs on (PREFILL_SP_AXIS); raise if your model does not support it."""
 
     def allocate_kv_cache(self, *, mesh_device, hf_config, params: PrefillRunParams) -> KvCaches:
         """Allocate (and zero) this model's KV cache(s) on device and return them as a `KvCaches` — your
@@ -181,7 +182,7 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
     # state as configs 1 and 2 this way (models/demos/deepseek_v3_d_p/tt/kda/KDA_STATE_MIGRATION.md).
     # If a layer's cache is not on the token axis, also override `layer_position_range(layer_idx,
     # real_len)` (default `(0, real_len)`): the driver issues one /migrate per run of consecutive layers
-    # with equal ranges and byte-verifies that range. Kimi-K3 returns the KDA version window there.
+    # with equal ranges and byte-verifies that range. Kimi-K3 returns its KDA window there.
 
     def set_layer_completion_sink(self, sink) -> None:
         """Register the per-layer completion sink. Required at any rank count, unless the runner runs
@@ -237,7 +238,11 @@ contract, validated on the first rank (`prefill_chunk.validate_chunks`):
   into the cache instead of moving back over its predecessor;
 - `actual_start % 32 == 0`, `actual_start < actual_end <= actual_start + chunk_size`,
   `actual_start + chunk_size <= max_seq_len`;
-- runs of different slots may come in any order.
+- runs of different slots may come in any order, and partial chunks may sit anywhere in the forward. The MoE skips
+  every pad row: its padding config holds one leading real-row count per SP chip, which masks the pad rows after
+  a chip's last real row, and the gate sets the top-k ids of the rest (a partial chunk's, ahead of a non-empty
+  chunk) to the sentinel from a per-row real mask (`PackedPadding`, `packed_real_row_mask`). Putting partial
+  chunks last still shortens the dispatch loop, which stops at the leading count, so the producer does.
 
 Each layer completion names one chunk, on either path, so a consumer retires each chunk on its own.
 
@@ -247,6 +252,39 @@ whose `prefill_forward` handles them lifts the last two: `supports_packed_forwar
 chunk's inputs before a trace replay) and `supports_packed_forward_d2h_acks = True` (it sends one 12 B
 `(slot_id, actual_start, actual_end)` record per chunk per KV-writing layer through the D2H ack service, each
 chunk's records contiguous, since the decoder treats an identity change mid-chunk as a lost record).
+
+A pipeline split that passes indexer indices between ranks (`passes_indexer_indices`, GLM-5.3's cross-layer reuse) is
+refused at F > 1 too, unless `supports_packed_forward_indexer_indices = True`: the runtime's
+`indexer_indices_shape()` then covers all F chunks (GLM-5.3 stacks them chunk-major along rows), `prefill_forward`
+takes the upstream rank's as `indexer_indices=`, and `outbound_indexer_indices` holds its own for every chunk, so the
+runner sends one index tensor per forward exactly as it does per chunk at F = 1. On any rank but the first,
+`prefill_forward` takes the upstream rank's packed activation (every chunk's rows back to back on each chip) and a
+non-last rank returns its own.
+
+MTP is refused at F > 1 too, unless `supports_packed_forward_mtp = True` (GLM-5.3), eager or traced. A packed
+forward then carries every chunk's MTP lookahead, chunk by chunk:
+
+- **H2D row, per SP chip**: every chunk's ids back to back (as above), then one `num_mtp_tokens(K)`-id lookahead
+  block per chunk, in chunk order: `F * (chunk_size / sp + num_mtp_tokens(K))` ids
+  (`make_h2d_spec(..., forward_chunks=F)`). Block k is exactly what a one-chunk forward of chunk k sends after its
+  ids; an empty chunk's block is all `MTP_PAD_TOKEN_ID`. The H2D metadata is unchanged.
+- **D2D record**: the forward's chunk metadata, then one provided-levels word per chunk (empty chunks 0), which
+  the first rank's runner counts from each chunk's block (`chunk_provided_levels`). At F = 1 this is today's single
+  word, so the record is unchanged.
+- **D2D id segments**: as at F = 1, the ids ride as two segments of the activation's service, split per chip as
+  the first rank cuts its H2D row: every chunk's ids (`F * chunk_size / sp`), then every chunk's lookahead block
+  (`F * num_mtp_tokens(K)`; `mtp_id_segment_specs(..., forward_chunks=F)`). The activation itself is the forward's
+  hidden rows only.
+- **`prefill_forward(..., mtp_tokens=, mtp_id_segments=, provided_levels=)`**: the first rank's lookahead blocks
+  (`[sp, 1, F * num_mtp_tokens]`), a downstream rank's two id segments, and one provided-levels count per chunk. A
+  non-last rank returns `[activation, chunk ids, lookahead ids]`. The last rank builds each chunk's MTP input from
+  that chunk's ids and block alone, then runs the MTP layer packed like a trunk layer; each chunk's acks include
+  its MTP layers (`layer_ack_layers`).
+- **Traced** (`PREFILL_USE_TRACE=1`): the first rank keeps the lookahead blocks in a persistent buffer
+  (`claim_persistent_overhang`), a downstream rank its id segments (`claim_persistent_extras`), and the last rank
+  refreshes one level geometry per chunk position before each replay
+  (an empty chunk provides every level). The MTP region is captured twice: "generate", replayed when any chunk
+  generates a level, and "provided", when none does.
 
 ---
 

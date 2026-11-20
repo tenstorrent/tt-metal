@@ -18,8 +18,6 @@
 
 namespace ckernel {
 
-MATH(static_assert(!DST_ACCUM_MODE, "logiteps_bw_tile evaluates BF16 DEST"));
-
 // clang-format off
 /**
  * Computes the input gradient grad * f'(x) of logiteps over one tile, in BF16 DEST.
@@ -32,14 +30,18 @@ MATH(static_assert(!DST_ACCUM_MODE, "logiteps_bw_tile evaluates BF16 DEST"));
  * | idst     | Index of the DST tile holding x; grad is next | uint32_t | idst + 1 must be less than the DST register capacity | True     |
  */
 // clang-format on
-template <bool on_board = false>
+template <bool on_board = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void logiteps_bw_tile([[maybe_unused]] uint32_t idst) {
 #if defined(ARCH_BLACKHOLE) || defined(ARCH_WORMHOLE)
+    // Dependent on the template parameter, so only a call fails to build in an FP32 DEST kernel, not an include
+    // (#61751 review).
+    MATH(static_assert(!is_fp32_dest_acc_en, "logiteps_bw_tile evaluates BF16 DEST"));
     // SFPU_UNARY_CALL checks idst alone; the kernel uses DEST tiles up to idst + 1.
     MATH(LLK_ASSERT(
         (idst + 2 <= get_dest_max_tiles_rt<DST_SYNC_MODE, DstTileShape::Tile32x32>()),
         "logiteps_bw_tile needs DEST tiles idst to idst + 1"));
-    MATH(SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logiteps_bw_bf16, (32), idst, VectorMode::None));
+    MATH(SFPU_UNARY_CALL(
+        DST_SYNC_MODE, DST_ACCUM_MODE, calculate_logiteps_bw_bf16, (32 /*ITERATIONS*/), idst, VectorMode::None));
 #else
     static_assert(on_board, "logiteps_bw_tile: Blackhole and Wormhole only");
 #endif
