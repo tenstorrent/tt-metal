@@ -5,7 +5,7 @@
 """MiniMax-M3's MoE layer on its production stage (one [2, 4] tray, SP 2 x TP 4, Fabric2D, no wrap) over the production
 packings (test_moe_block_models.M3_PRODUCTION), timed two ways for each implementation:
 
-* moe_block: the shared MoE block (TtK3MoEBlockFfn: moe_head -> sparse_dispatch_2d -> routed_experts_combine ->
+* moe_block: the shared MoE block (TtMoEBlockFfn: moe_head -> sparse_dispatch_2d -> routed_experts_combine ->
   moe_tail), x [1, 1, S/SP, H/TP] a chip;
 * ttmoe: M3's own production MLP (models/demos/minimax_m3/tt/mlp.py: TopKRouter, the shared expert on its own
   sub-device concurrently with dispatch, TtMiniMaxMoE - DeepSeek's TtMoe dispatch / unified_routed_expert_moe /
@@ -21,7 +21,7 @@ slowest chip, grouped by the ttnn op directory its kernels come from):
 TtMiniMaxMoE frees its input after dispatch (the layer's tensor in the model), so each TtMoe call takes its own copy,
 made before the timed calls. Every number is the median of op_checks.PERF_RUNS (5) runs (wall: runs of CALLS calls;
 device: single calls, each on its own profiler window); the wall and device times a call are gated against
-m3_moe_perf_baselines.json (per machine; MOE_PERF_RECORD=1 records them).
+M3_US (a Galaxy's numbers; a case without them is logged with a reminder to add them).
 Random weights, every expert distinct. Run as test_moe_block_models' 2x4 cases (its descriptor, one tray)."""
 
 import statistics
@@ -41,12 +41,34 @@ from models.demos.deepseek_v3_d_p.tests.moe_block.test_moe_block_models import M
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[5] / "tests/ttnn/unit_tests/operations/experimental/moe_block"))
-from op_checks import PERF_RUNS, PerfBaselines, median_of_runs  # noqa: E402
+from op_checks import PERF_RUNS, assert_no_perf_failures, machine, median_of_runs, perf_failure  # noqa: E402
 
 CALLS = 10  # (calls a timed wall run)
 WALL_MARGIN, DEVICE_MARGIN = 0.10, 0.05
 EAGER_MARGIN = 0.20  # (eager numbers carry host dispatch: a program that waits on the host shows it as device time)
-BASELINES = PerfBaselines(Path(__file__).with_name("m3_moe_perf_baselines.json"))
+# Per (impl, case): wall and device us a call, median of PERF_RUNS runs, on a Blackhole Galaxy's 2x4 tray (elsewhere
+# logged, not gated). The block: (eager wall, eager device, traced wall, traced device); TtMoe: (eager wall, eager
+# device) - M3 runs its TtMoe prefill untraced.
+M3_US = {
+    ("moe_block", "minimax_m3-2x4-2048-c2048"): (2217.1, 2202.0, 2192.7, 2201.2),
+    ("moe_block", "minimax_m3-2x4-4096-4xc1024"): (3074.9, 3048.2, 3044.7, 3049.7),
+    ("moe_block", "minimax_m3-2x4-5120-c5120"): (3439.8, 3389.3, 3401.2, 3394.9),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-real1600@61440"): (3059.7, 3911.8, 3022.5, 3907.1),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-real1780@61440"): (3104.6, 3991.6, 3069.7, 3971.7),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-real3072@61440"): (3304.0, 3701.0, 3286.6, 3697.2),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-real640@61440"): (2669.7, 3308.5, 2634.7, 3293.0),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-resume-real1780@63040"): (2844.1, 2889.4, 2815.6, 2901.0),
+    ("moe_block", "minimax_m3-2x4-5120-c5120-resume-real5120@63040"): (3441.3, 3398.8, 3405.3, 3398.8),
+    ("ttmoe", "minimax_m3-2x4-2048-c2048"): (3431.1, 3329.5),
+    ("ttmoe", "minimax_m3-2x4-4096-4xc1024"): (4892.8, 4957.9),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120"): (5541.0, 5975.6),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-real1600@61440"): (4687.2, 4518.6),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-real1780@61440"): (4858.5, 4657.3),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-real3072@61440"): (5391.1, 5725.0),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-real640@61440"): (4357.2, 4353.1),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-resume-real1780@63040"): (4592.0, 4437.1),
+    ("ttmoe", "minimax_m3-2x4-5120-c5120-resume-real5120@63040"): (5580.3, 5773.3),
+}
 CASES = [c for c in M3_PRODUCTION]
 
 
@@ -226,10 +248,18 @@ def test_m3_moe_e2e_perf(impl, case, mesh_device, device_params):
         fn, make_arg = (lambda x: mlp(x, chunks=chunks)), (lambda: ttnn.clone(x_tt))
     for _ in range(2):  # (weights, programs, the padding config)
         ttnn.deallocate(fn(make_arg()))
+    base = M3_US.get((impl, case.id)) if machine() == "BLACKHOLE_GALAXY" else None
+    base = base or (None,) * 4
+    where = f'M3_US[("{impl}", "{case.id}")]'
     wall, _, dev = _eager(mesh_device, fn, make_arg, label)
-    BASELINES.check(f"{label} eager wall", wall, EAGER_MARGIN)
-    BASELINES.check(f"{label} eager device", dev, EAGER_MARGIN)
+    failures = [
+        perf_failure(f"{label} eager wall", wall, base[0], EAGER_MARGIN, where=where),
+        perf_failure(f"{label} eager device", dev, base[1], EAGER_MARGIN, where=where),
+    ]
     if impl == "moe_block":
         wall, _, dev, _ = _traced(mesh_device, run, label)
-        BASELINES.check(f"{label} traced wall", wall, WALL_MARGIN)
-        BASELINES.check(f"{label} traced device", dev, DEVICE_MARGIN)
+        failures += [
+            perf_failure(f"{label} traced wall", wall, base[2], WALL_MARGIN, where=where),
+            perf_failure(f"{label} traced device", dev, base[3], DEVICE_MARGIN, where=where),
+        ]
+    assert_no_perf_failures(failures)
