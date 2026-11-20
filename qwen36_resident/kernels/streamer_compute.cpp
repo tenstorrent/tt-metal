@@ -351,12 +351,16 @@ FORCE_INLINE void add_residual(uint32_t nd, uint32_t pout_off) {
 // are picked from y and the two history blocks by 0/1 matmuls (see streamer_common.hpp). Rows mode: the shifted
 // history (h1, h2, y) goes to cb_hist_out (the history operands are still intact in DST after the conv).
 FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
-    cb_wait_front(cb_qkvz, kBlk);
-    cb_reserve_back(cb_qkvz_out, kBlk);
+    // row groups: q|k|v|z, its output and the history slots per group (block gr at gr * kBlk tiny tiles / gr *
+    // kBlkViews views; history and the shifted history 3 slots per group); the conv taps are the layer's, shared
+    static_assert(groups == 1 || (!verify_rows && !verify_pair), "verify runs one group");
+    constexpr uint32_t hist_slots = verify_pair || rows_mode ? 3 : 1;
+    cb_wait_front(cb_qkvz, groups * kBlk);
+    cb_reserve_back(cb_qkvz_out, groups * kBlk);
     if (gdn) {
         cb_wait_front(cb_conv_w, 4 * kBlk);
-        cb_wait_front(cb_conv_hist, 3 * kBlk);
-        cb_reserve_back(cb_hist_out, (verify_pair || rows_mode ? 3 : 1) * kBlkViews);
+        cb_wait_front(cb_conv_hist, groups * 3 * kBlk);
+        cb_reserve_back(cb_hist_out, groups * hist_slots * kBlkViews);
     }
     if (n_conv > 0) {
         reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
@@ -364,103 +368,108 @@ FORCE_INLINE void conv_pass(uint32_t nq, uint32_t n_conv, bool gdn) {
         pack_init(cb_qkvz_out_full);
         // view v of the block: taps and history slots j hold their own view v at j * kBlkViews + v; all eight
         // operands of a view go to DST first (slot 0 keeps y for the history), one init per op
-        for (uint32_t v = 0; v < views_of(n_conv); v++) {
-            tile_regs_acquire();
-            if constexpr (verify_rows) {
-                // the windows of taps 0..2: S_j y + H_j,0 block 0 + H_j,1 block 1 (exact 0/1 products, fp32)
-                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
-                matmul_init(cb_shift, cb_qkvz_full);
-                for (uint32_t j = 0; j < 3; j++) {
-                    matmul_tiles(cb_shift, cb_qkvz_full, j, v, 2 + 2 * j);
-                }
-                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
-                matmul_init(cb_shift, cb_conv_hist_full);
-                for (uint32_t j = 0; j < 3; j++) {
-                    for (uint32_t b = 0; b < 2; b++) {
-                        matmul_tiles(cb_shift, cb_conv_hist_full, 3 + 2 * j + b, b * kBlkViews + v, 2 + 2 * j);
-                    }
-                }
-                reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
-            }
-            if constexpr (verify_pair) {
-                // newest history slot: its row 0, and row 0 of y as row 1 (exact 0/1 products)
-                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
-                matmul_init(cb_shift, cb_conv_hist_full);
-                matmul_tiles(cb_shift, cb_conv_hist_full, 0, 2 * kBlkViews + v, 6);
-                matmul_tiles(cb_shift, cb_qkvz_full, 1, v, 6);
-                reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
-            }
-            copy_init(cb_qkvz_full);
-            copy_tile(cb_qkvz_full, v, 0);
-            copy_tile(cb_conv_w_full, 3 * kBlkViews + v, 1);
-            for (uint32_t j = 0; j < 3; j++) {
-                if (!verify_rows && (!verify_pair || j < 2)) {
-                    copy_tile(cb_conv_hist_full, j * kBlkViews + v, 2 + 2 * j);
-                }
-                copy_tile(cb_conv_w_full, j * kBlkViews + v, 3 + 2 * j);
-            }
-            mul_binary_tile_init();
-            mul_binary_tile(0, 1, 1);
-            for (uint32_t j = 0; j < 3; j++) {
-                mul_binary_tile(2 + 2 * j, 3 + 2 * j, 3 + 2 * j);
-            }
-            add_binary_tile_init();
-            for (uint32_t j = 0; j < 3; j++) {
-                add_binary_tile(1, 3 + 2 * j, 1);
-            }
-            silu_tile_init();
-            silu_tile(1);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(1, cb_qkvz_out_full, v);
-            if constexpr (verify_pair) {
-                pack_tile<true>(6, cb_hist_out, v);
-                pack_tile<true>(0, cb_hist_out, kBlkViews + v);
-            } else if constexpr (rows_mode) {
-                pack_tile<true>(4, cb_hist_out, v);
-                pack_tile<true>(6, cb_hist_out, kBlkViews + v);
-                pack_tile<true>(0, cb_hist_out, 2 * kBlkViews + v);
-            } else {
-                pack_tile<true>(0, cb_hist_out, v);
-            }
-            tile_regs_release();
-            if constexpr (verify_pair) {
-                // (y1, -) for the slot after y
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            const uint32_t oq = gr * kBlkViews, oh = gr * 3 * kBlkViews, oo = gr * hist_slots * kBlkViews;
+            for (uint32_t v = 0; v < views_of(n_conv); v++) {
                 tile_regs_acquire();
-                reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
-                matmul_init(cb_shift, cb_qkvz_full);
-                matmul_tiles(cb_shift, cb_qkvz_full, 2, v, 0);
+                if constexpr (verify_rows) {
+                    // the windows of taps 0..2: S_j y + H_j,0 block 0 + H_j,1 block 1 (exact 0/1 products, fp32)
+                    reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
+                    matmul_init(cb_shift, cb_qkvz_full);
+                    for (uint32_t j = 0; j < 3; j++) {
+                        matmul_tiles(cb_shift, cb_qkvz_full, j, v, 2 + 2 * j);
+                    }
+                    reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
+                    matmul_init(cb_shift, cb_conv_hist_full);
+                    for (uint32_t j = 0; j < 3; j++) {
+                        for (uint32_t b = 0; b < 2; b++) {
+                            matmul_tiles(cb_shift, cb_conv_hist_full, 3 + 2 * j + b, b * kBlkViews + v, 2 + 2 * j);
+                        }
+                    }
+                    reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
+                }
+                if constexpr (verify_pair) {
+                    // newest history slot: its row 0, and row 0 of y as row 1 (exact 0/1 products)
+                    reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_conv_hist_full);
+                    matmul_init(cb_shift, cb_conv_hist_full);
+                    matmul_tiles(cb_shift, cb_conv_hist_full, 0, 2 * kBlkViews + v, 6);
+                    matmul_tiles(cb_shift, cb_qkvz_full, 1, v, 6);
+                    reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
+                }
+                copy_init(cb_qkvz_full);
+                copy_tile(cb_qkvz_full, oq + v, 0);
+                copy_tile(cb_conv_w_full, 3 * kBlkViews + v, 1);
+                for (uint32_t j = 0; j < 3; j++) {
+                    if (!verify_rows && (!verify_pair || j < 2)) {
+                        copy_tile(cb_conv_hist_full, oh + j * kBlkViews + v, 2 + 2 * j);
+                    }
+                    copy_tile(cb_conv_w_full, j * kBlkViews + v, 3 + 2 * j);
+                }
+                mul_binary_tile_init();
+                mul_binary_tile(0, 1, 1);
+                for (uint32_t j = 0; j < 3; j++) {
+                    mul_binary_tile(2 + 2 * j, 3 + 2 * j, 3 + 2 * j);
+                }
+                add_binary_tile_init();
+                for (uint32_t j = 0; j < 3; j++) {
+                    add_binary_tile(1, 3 + 2 * j, 1);
+                }
+                silu_tile_init();
+                silu_tile(1);
                 tile_regs_commit();
                 tile_regs_wait();
-                pack_tile<true>(0, cb_hist_out, 2 * kBlkViews + v);
+                pack_tile<true>(1, cb_qkvz_out_full, oq + v);
+                if constexpr (verify_pair) {
+                    pack_tile<true>(6, cb_hist_out, v);
+                    pack_tile<true>(0, cb_hist_out, kBlkViews + v);
+                } else if constexpr (rows_mode) {
+                    pack_tile<true>(4, cb_hist_out, oo + v);
+                    pack_tile<true>(6, cb_hist_out, oo + kBlkViews + v);
+                    pack_tile<true>(0, cb_hist_out, oo + 2 * kBlkViews + v);
+                } else {
+                    pack_tile<true>(0, cb_hist_out, v);
+                }
                 tile_regs_release();
-                reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
+                if constexpr (verify_pair) {
+                    // (y1, -) for the slot after y
+                    tile_regs_acquire();
+                    reconfig_full_operand<SrcOrder::Reverse>(cb_shift, cb_qkvz_full);
+                    matmul_init(cb_shift, cb_qkvz_full);
+                    matmul_tiles(cb_shift, cb_qkvz_full, 2, v, 0);
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_tile<true>(0, cb_hist_out, 2 * kBlkViews + v);
+                    tile_regs_release();
+                    reconfig_full_operand(cb_qkvz_full, cb_qkvz_full);
+                }
             }
         }
-        cb_push_back(cb_qkvz_out_full, kBlkViews);  // wraps the view's write pointer back to the base
+        cb_push_back(cb_qkvz_out_full, groups * kBlkViews);  // wraps the view's write pointer back to the base
     }
     if (n_conv < nq) {
         reconfig_full_operand(cb_qkvz, cb_qkvz);
         pack_reconfig_data_format<true>(cb_qkvz_out);
         pack_init(cb_qkvz_out);
         copy_init(cb_qkvz);
-        for (uint32_t i = n_conv; i < nq; i++) {
-            tile_regs_acquire();
-            copy_tile(cb_qkvz, i, 0);
-            tile_regs_commit();
-            tile_regs_wait();
-            pack_tile<true>(0, cb_qkvz_out, i);
-            tile_regs_release();
+        for (uint32_t gr = 0; gr < groups; gr++) {
+            for (uint32_t i = n_conv; i < nq; i++) {
+                tile_regs_acquire();
+                copy_tile(cb_qkvz, gr * kBlk + i, 0);
+                tile_regs_commit();
+                tile_regs_wait();
+                pack_tile<true>(0, cb_qkvz_out, gr * kBlk + i);
+                tile_regs_release();
+            }
         }
     }
     pack_reconfig_data_format<true>(cb_qkvz_out);
-    cb_push_back(cb_qkvz_out, kBlk);
-    cb_pop_front(cb_qkvz, kBlk);
+    cb_push_back(cb_qkvz_out, groups * kBlk);
+    cb_pop_front(cb_qkvz, groups * kBlk);
     if (gdn) {
         // with no q|k|v columns the writer skips it
-        cb_push_back(cb_hist_out, (verify_pair || rows_mode ? 3 : 1) * kBlkViews);
+        cb_push_back(cb_hist_out, groups * hist_slots * kBlkViews);
         cb_pop_front(cb_conv_w, 4 * kBlk);
-        cb_pop_front(cb_conv_hist, 3 * kBlk);
+        cb_pop_front(cb_conv_hist, groups * 3 * kBlk);
     }
 }
 
