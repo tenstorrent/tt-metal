@@ -1676,10 +1676,6 @@ def test_auto_config_block_sharded_caps_per_core_to_output(
     The auto-config used to start per_core_M/N at 16 tiles and never cap them to the output, so a 13x13 tile output
     came back with a 512x512 shard.
     """
-    if fp32_dest_acc_en and _on_quasar(device):
-        # On Quasar the auto-config takes the unified matmul, whose fp32 partials unpack to Dest; without a Dest
-        # section hand-off its matmul section deadlocks once the SrcA/SrcB run outgrows the source banks.
-        pytest.skip("#62102: unified matmul with fp32 accumulation hangs on Quasar")
     torch.manual_seed(0)
     a, b = _randn(*a_shape), _randn(*b_shape)
     a_t = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device)
