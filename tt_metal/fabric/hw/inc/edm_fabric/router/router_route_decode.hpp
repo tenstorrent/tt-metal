@@ -83,7 +83,17 @@ struct Routing2D {
     // The packet's route word: its action byte, landed first on an ingress channel; on an edge router, the exit's
     // direction bit for a packet that leaves the mesh here (its destination mesh, a header field, read volatile as the
     // action bytes are).
-    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates& my_chip) {
+    // `header_word` is the payload/send-type/source word the receiver has already loaded.
+    static FORCE_INLINE uint32_t
+    read(tt_l1_ptr PACKET_HEADER_TYPE* header, [[maybe_unused]] uint32_t header_word, const ChipCoordinates& my_chip) {
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+        // Neighbour shortcut (#65575): the flag is bit 31 of a word already in a register, so the test is a sign
+        // branch. A flagged packet is delivered here: no action-byte loads, no landing, no exit check.
+        static_assert(PACKET_HEADER_TYPE::WORD_NEIGHBOUR_ONLY == 0x80000000u);
+        if (static_cast<int32_t>(header_word) < 0) {
+            return Routing2DCodec::ACTION_LOCAL_DELIVER;
+        }
+#endif
         if constexpr (INTERMESH_INGRESS) {
             set_landing_route(header);
         }
@@ -123,7 +133,7 @@ struct Routing1D {
     // The packet's route word: the routing word, whose low FIELD_WIDTH bits are this hop's field. One word, as 2D's
     // action: the extension words of packets past 16 hops are read only when the next-hop update needs them
     // (update_for_next_hop).
-    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, const ChipCoordinates&) {
+    static FORCE_INLINE uint32_t read(tt_l1_ptr PACKET_HEADER_TYPE* header, uint32_t, const ChipCoordinates&) {
         return header->routing_fields.value;
     }
 

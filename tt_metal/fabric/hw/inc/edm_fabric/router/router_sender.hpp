@@ -546,11 +546,22 @@ FORCE_INLINE bool send(
     const uint32_t slot_addr = next_slot_addr;
     auto* header = reinterpret_cast<volatile tt_l1_ptr PACKET_HEADER_TYPE*>(slot_addr);
 
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+    // One word load gives the payload size and the producer's neighbour flag (src_ch_id bit 7), which the channel
+    // id stamp below must keep: same load count as the halfword load it replaces.
+    const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
+    const uint32_t payload_size = header_word & 0xFFFFu;
+    const uint32_t status = read_txq_status(sender_txq_id);
+    if constexpr (!skip_src_ch_id_update) {
+        header->src_ch_id = static_cast<uint8_t>(CH | ((header_word >> 24) & PACKET_HEADER_TYPE::SRC_CH_NEIGHBOUR_ONLY));
+    }
+#else
     const uint32_t payload_size = header->get_payload_size_excluding_header();
     const uint32_t status = read_txq_status(sender_txq_id);
     if constexpr (!skip_src_ch_id_update) {
         header->src_ch_id = static_cast<uint8_t>(CH);
     }
+#endif
     if (txq_busy(status)) {
         send_yielded = true;
         return false;

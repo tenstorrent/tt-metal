@@ -5,12 +5,22 @@
 #pragma once
 
 #include <array>
+#include <cstdlib>
 #include <vector>
 
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_fabric_test_common_types.hpp"  // For SenderCreditInfo
 
 namespace tt::tt_fabric::fabric_tests {
+
+// Neighbour-send prototype (#65575). With TT_FABRIC_TEST_NEIGHBOUR_SEND set, a 2D unicast to a chip one hop away is
+// marked in bit 31 of its mesh-id runtime arg, and the kernel then routes it with fabric_set_neighbour_route
+// (the explicit neighbour_send API) instead of fabric_set_unicast_route. Same arg layout either way.
+inline constexpr uint32_t NEIGHBOUR_SEND_MESH_ARG_FLAG = 1u << 31;
+inline uint32_t neighbour_send_mesh_arg(uint32_t mesh_id, uint32_t total_hops) {
+    static const bool enabled = std::getenv("TT_FABRIC_TEST_NEIGHBOUR_SEND") != nullptr;
+    return (enabled && total_hops == 1) ? (mesh_id | NEIGHBOUR_SEND_MESH_ARG_FLAG) : mesh_id;
+}
 
 using FlowUid = uint32_t;
 
@@ -76,13 +86,13 @@ struct ChipUnicastFields1D {
 };
 
 struct ChipUnicastFields2D {
-    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
-        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint32_t dst_mesh_arg) :
+        dst_device_id(dst_device_id), dst_mesh_arg(dst_mesh_arg) {}
 
-    std::vector<uint32_t> get_args() const { return {dst_device_id, dst_mesh_id}; }
+    std::vector<uint32_t> get_args() const { return {dst_device_id, dst_mesh_arg}; }
 
     uint16_t dst_device_id;
-    uint16_t dst_mesh_id;
+    uint32_t dst_mesh_arg;  // mesh id, | NEIGHBOUR_SEND_MESH_ARG_FLAG for a neighbour send
 };
 
 struct ChipMulticastFields1D {
@@ -394,7 +404,14 @@ inline std::vector<uint32_t> TestTrafficSenderConfig::get_args(bool is_sync_conf
         if (this->parameters.chip_send_type == ChipSendType::CHIP_UNICAST) {
             TT_FATAL(this->dst_node_ids.size() == 1, "2D unicast should have exactly one destination node.");
             const auto& dst_node_id = this->dst_node_ids[0];
-            const auto unicast_fields = ChipUnicastFields2D(dst_node_id.chip_id, *dst_node_id.mesh_id);
+            uint32_t total_hops = 0;
+            if (this->hops.has_value()) {
+                for (const auto& [_, h] : *(this->hops)) {
+                    total_hops += h;
+                }
+            }
+            const auto unicast_fields =
+                ChipUnicastFields2D(dst_node_id.chip_id, neighbour_send_mesh_arg(*dst_node_id.mesh_id, total_hops));
             const auto unicast_args = unicast_fields.get_args();
             args.insert(args.end(), unicast_args.begin(), unicast_args.end());
         } else if (this->parameters.chip_send_type == ChipSendType::CHIP_MULTICAST) {

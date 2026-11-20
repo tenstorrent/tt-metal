@@ -164,7 +164,11 @@ FORCE_INLINE uint8_t source_channel(uint8_t header_src_ch_id) {
     if constexpr (skip_src_ch_id_update) {
         return 0;
     } else {
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+        return header_src_ch_id & PACKET_HEADER_TYPE::SRC_CH_ID_MASK;  // bit 7 is the neighbour flag
+#else
         return header_src_ch_id;
+#endif
     }
 }
 
@@ -420,7 +424,7 @@ FORCE_INLINE bool receive(
     const uint32_t header_word = PACKET_HEADER_TYPE::PackedPayloadAndSendType::load_word(header);
     uint32_t route_word = 0;
     if constexpr (ReceiverChannel<VC>::forwards) {
-        route_word = ReceiverChannel<VC>::Routing::read(header, my_chip);
+        route_word = ReceiverChannel<VC>::Routing::read(header, header_word, my_chip);
     }
     return handle<VC>(progress, sources, downstreams, header_word, route_word);
 }

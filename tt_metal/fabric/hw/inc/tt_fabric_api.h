@@ -95,12 +95,25 @@ inline uint8_t get_router_direction(uint32_t eth_channel) {
 // The packet carries widened action-byte maps instead of a hop program plus branch offsets:
 // route_buffer[0..Y) holds the Y map, route_buffer[Y..Y+X) the X map.
 
+// neighbour_send route: the destination is the chip at the far end of the link the packet is sent on.
+// No route map is built; src_ch_id bit 7 tells the receiving router to deliver without decoding. Only
+// valid when the fabric's routers are built with FABRIC_2D_NEIGHBOUR_SHORTCUT (a router without it
+// would decode whatever map the header last held).
+inline void fabric_set_neighbour_route(
+    volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
+    packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
+    packet_header->src_ch_id = HybridMeshPacketHeader::SRC_CH_NEIGHBOUR_ONLY;
+}
+
 // Unicast setup retains the final destination in packet metadata, then expands one destination-major
 // table entry into the packet's [Y | X] map. A remote destination temporarily expands the local exit
 // chip instead; the destination-mesh landing later rebuilds the final map.
 inline bool fabric_set_unicast_route(
     volatile tt_l1_ptr HybridMeshPacketHeader* packet_header, uint16_t dst_dev_id, uint16_t dst_mesh_id) {
     tt_l1_ptr routing_l1_info_t* routing_table = reinterpret_cast<tt_l1_ptr routing_l1_info_t*>(ROUTING_TABLE_BASE);
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+    packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
+#endif
     const uint8_t mesh_y_size = routing_table->mesh_y_size;
     const uint8_t mesh_x_size = routing_table->mesh_x_size;
     ASSERT(mesh_y_size > 0 && mesh_x_size > 0);
@@ -147,6 +160,9 @@ inline std::uint8_t fabric_set_2d_mcast_route(
     packet_header->mcast_params_64 = ((uint64_t)s_num_hops << 48) | ((uint64_t)n_num_hops << 32) |
                                      ((uint64_t)w_num_hops << 16) | ((uint64_t)e_num_hops);
     packet_header->routing_fields.value = 0;
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+    packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
+#endif
 
     const uint32_t root_y = routing_table->my_mesh_coord_y;
     const uint32_t root_x = routing_table->my_mesh_coord_x;
@@ -317,6 +333,9 @@ inline void fabric_set_single_hop_unicast_route_from_direction(
     packet_header->dst_start_node_id = ((uint32_t)dst_mesh_id << 16) | (uint32_t)dst_dev_id;
     packet_header->mcast_params_64 = 0;
     packet_header->routing_fields.value = 0;
+#if defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+    packet_header->src_ch_id = 0;  // decoded route: no neighbour flag
+#endif
 }
 
 // Overload: For 1D LowLatencyPacketHeader

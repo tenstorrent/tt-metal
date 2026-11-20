@@ -243,15 +243,15 @@ struct ChipUnicastFields1D {
 struct ChipUnicastFields2D {
     static ChipUnicastFields2D build_from_args(size_t& arg_idx) {
         uint16_t dst_device_id = get_local_arg_val<uint32_t>(arg_idx++);
-        uint16_t dst_mesh_id = get_local_arg_val<uint32_t>(arg_idx++);
-        return ChipUnicastFields2D(dst_device_id, dst_mesh_id);
+        uint32_t dst_mesh_arg = get_local_arg_val<uint32_t>(arg_idx++);
+        return ChipUnicastFields2D(dst_device_id, dst_mesh_arg);
     }
 
-    ChipUnicastFields2D(uint16_t dst_device_id, uint16_t dst_mesh_id) :
-        dst_device_id(dst_device_id), dst_mesh_id(dst_mesh_id) {}
+    ChipUnicastFields2D(uint16_t dst_device_id, uint32_t dst_mesh_arg) :
+        dst_device_id(dst_device_id), dst_mesh_arg(dst_mesh_arg) {}
 
     uint16_t dst_device_id;
-    uint16_t dst_mesh_id;
+    uint32_t dst_mesh_arg;  // mesh id; bit 31 asks for the neighbour_send route (#65575)
 };
 
 struct ChipMulticastFields1D {
@@ -465,8 +465,17 @@ struct ChipSendTypeHandler<ChipSendType::CHIP_UNICAST, true> {
     static void parse_and_setup(
         size_t& arg_idx, uint32_t packet_header_address, volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header) {
         const auto unicast_fields = ChipUnicastFields2D::build_from_args(arg_idx);
-        fabric_set_unicast_route(
-            (HybridMeshPacketHeader*)packet_header_address, unicast_fields.dst_device_id, unicast_fields.dst_mesh_id);
+        if (unicast_fields.dst_mesh_arg & (1u << 31)) {
+            fabric_set_neighbour_route(
+                (HybridMeshPacketHeader*)packet_header_address,
+                unicast_fields.dst_device_id,
+                static_cast<uint16_t>(unicast_fields.dst_mesh_arg));
+        } else {
+            fabric_set_unicast_route(
+                (HybridMeshPacketHeader*)packet_header_address,
+                unicast_fields.dst_device_id,
+                static_cast<uint16_t>(unicast_fields.dst_mesh_arg));
+        }
     }
 };
 

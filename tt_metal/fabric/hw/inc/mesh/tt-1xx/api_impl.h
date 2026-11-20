@@ -43,6 +43,30 @@ FORCE_INLINE void fabric_unicast_noc_unicast_write(
     client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
 }
 
+#if defined(FABRIC_2D) && defined(FABRIC_2D_NEIGHBOUR_SHORTCUT)
+// neighbour_send (#65575): a unicast write to the chip at the far end of `client_interface`'s link. No route is
+// generated; the receiving router delivers without decoding one. The caller guarantees the destination is that
+// neighbour (fabric_is_neighbour_chip). With SetRoute false the header keeps the route a previous call set.
+template <typename FabricSenderType, bool SetRoute = true>
+FORCE_INLINE void fabric_neighbour_send_noc_unicast_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint8_t dst_dev_id,
+    uint16_t dst_mesh_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastCommandHeader noc_unicast_command_header) {
+    [[maybe_unused]] CheckFabricSenderType<FabricSenderType> check;
+    if constexpr (SetRoute) {
+        fabric_set_neighbour_route(packet_header, dst_dev_id, dst_mesh_id);
+    }
+    packet_header->to_noc_unicast_write(noc_unicast_command_header, size);
+    client_interface->wait_for_empty_write_slot();
+    client_interface->send_payload_without_header_non_blocking_from_address(src_addr, size);
+    client_interface->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+}
+#endif
+
 template <bool SetRoute>
 FORCE_INLINE void fabric_unicast_noc_unicast_write(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,

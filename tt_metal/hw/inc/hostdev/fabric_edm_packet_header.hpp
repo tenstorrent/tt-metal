@@ -419,6 +419,14 @@ public:
     // For now, kept it separate so I could do reads which would be handled differently
     // but for our purposes we shouldn't need read so we should be able to omit the support
     NocSendType noc_send_type;
+    // Neighbour shortcut (#65575, FABRIC_2D_NEIGHBOUR_SHORTCUT): bit 7 of src_ch_id means "deliver at the chip
+    // that receives this packet, do not route". The producer sets it with the route (workers never write
+    // src_ch_id per packet); the sending router keeps it when it stamps its channel id into bits 0..6. It sits
+    // in the payload/send-type/source word the receiver already loads, so the test costs no extra L1 read:
+    // bit 31 of PackedPayloadAndSendType::load_word.
+    static constexpr uint8_t SRC_CH_NEIGHBOUR_ONLY = 0x80;
+    static constexpr uint8_t SRC_CH_ID_MASK = 0x7F;
+    static constexpr uint32_t WORD_NEIGHBOUR_ONLY = static_cast<uint32_t>(SRC_CH_NEIGHBOUR_ONLY) << 24;
     // Used only by the EDM sender and receiver channels. Populated by EDM sender channel to
     // indicate to the receiver channel what channel was the source of this packet. Reserved
     // otherwise.
