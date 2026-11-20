@@ -35,7 +35,7 @@ import ttnn
 
 import ttml
 
-from ._errors import CheckpointError, IncompleteCheckpointError, VersionError
+from ._errors import CheckpointError, IncompleteCheckpointError, MissingKeyError, VersionError
 from ._index import HEADER_NAME, check_json, read_checked_header
 
 TRAIN_STATE_KEY = "train_state"
@@ -276,6 +276,18 @@ def missing_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bo
     """``train_state/<component>`` for every component asked for that the checkpoint does not hold."""
     wanted = (("scheduler", scheduler is not None), ("dataloader", dataloader is not None), ("rng", rng))
     return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and name not in state]
+
+
+def missing_train_state_error(missing: list[str], *, rng_by_default: bool) -> MissingKeyError:
+    """A strict load's refusal of components asked for that the checkpoint lacks. When the RNG block is one of them and
+    the caller left ``rng`` at its default, which asks for it on a resume, it says how to load without it."""
+    message = f"the checkpoint holds no state for {missing}"
+    if rng_by_default and f"{TRAIN_STATE_KEY}/rng" in missing:
+        message += (
+            "; rng was not passed, and a load that restores a scheduler or dataloader restores the generators too: "
+            "pass rng=False to keep the current ones (a checkpoint saved with rng=False has none)"
+        )
+    return MissingKeyError(message)
 
 
 def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0) -> None:

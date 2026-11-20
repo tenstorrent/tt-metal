@@ -45,7 +45,13 @@ from ._state_dict import (
     world_record,
 )
 from ._topology import chunk_boxes
-from ._train_state import check_train_state, missing_train_state, restore_train_state, train_state_of
+from ._train_state import (
+    check_train_state,
+    missing_train_state,
+    missing_train_state_error,
+    restore_train_state,
+    train_state_of,
+)
 
 
 @dataclass
@@ -331,7 +337,8 @@ def load(
     if optimizer is not None and model is None:
         raise TypeError("optimizer state is keyed by the model's parameters; pass model= as well")
     check_threads(threads)
-    if rng is None:  # a resume: the generators come back with the scheduler or the dataloader
+    rng_by_default = rng is None
+    if rng_by_default:  # a resume: the generators come back with the scheduler or the dataloader
         rng = scheduler is not None or dataloader is not None
     t0 = time.perf_counter()
     ckpt_dir = os.path.abspath(ckpt_dir)
@@ -345,7 +352,7 @@ def load(
     train_state = train_state_of(header, ckpt_dir)
     missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
     if strict and missing_state:
-        raise MissingKeyError(f"the checkpoint holds no state for {missing_state}")
+        raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
     check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)
 
     fsdp_states = reshard_fsdp_modules(model)

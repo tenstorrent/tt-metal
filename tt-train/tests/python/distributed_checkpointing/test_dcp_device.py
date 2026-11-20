@@ -590,6 +590,12 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     train_step(model3, opt3, DIM, input_scale=0.5)
     assert_some_differ(model_shards(params3), after_step)
 
+    # A dataloader alone brings the generators back too, by default.
+    ctx.set_seed(999)
+    alone = dcp.load(path, model=model3, dataloader=Loader())
+    assert alone.restored == ["dataloader", "rng.ttml", "rng.python", "rng.numpy", "rng.ttml_init", "rng.torch"]
+    assert ctx.get_generator_state() == stored["rng"]["ranks"]["0"]["ttml"]
+
     # A load of the model alone leaves the generators alone.
     before = ctx.get_generator_state()
     plain = dcp.load(path, model=model2)
@@ -602,9 +608,13 @@ def test_train_state_resumes_where_the_save_left_it(tp_mesh, tmp_path, expect_er
     assert dcp.read_train_state(bare) == {}
     untouched = model_shards(params2), sched2.get_state_dict()
     with expect_error(
-        dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/scheduler', 'train_state/rng'\]"
+        dcp.MissingKeyError,
+        r"the checkpoint holds no state for \['train_state/scheduler', 'train_state/rng'\]; rng was not passed, .* "
+        r"pass rng=False to keep the current ones",
     ):
         dcp.load(bare, model=model2, scheduler=sched2)
+    with expect_error(dcp.MissingKeyError, r"the checkpoint holds no state for \['train_state/rng'\]$"):
+        dcp.load(bare, model=model2, rng=True)  # asked for explicitly: nothing to suggest
     assert sched2.get_state_dict() == untouched[1]
     assert_same_shards(model_shards(params2), untouched[0])
     lenient = dcp.load(bare, model=model2, scheduler=sched2, strict=False)
