@@ -471,8 +471,12 @@ class TtPrefillBlock(LightweightModule):
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 clamped_silu_glu_limit=getattr(model_cfg, "SWIGLU_LIMIT", None),
+                fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
                 **_dense_ffn_kwargs,
             )
+            if self.ffn.fuses_tp_collectives:
+                # Over all forward_chunks chunks' rows at once.
+                self.ffn.prepare_fused(seq_len * forward_chunks // mesh_device.shape[sp_axis])
 
     @staticmethod
     def _build_moe(
@@ -1101,8 +1105,9 @@ class TtPrefillBlock(LightweightModule):
         return moe_out
 
     def _dense_ffn_path(self, ffn_norm_out: ttnn.Tensor) -> ttnn.Tensor:
-        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally)."""
-        if self.mesh_device.shape[self.tp_axis] > 1:
+        """Dense FFN path: all_gather to get full emb_dim → TtFfn (does reduce_scatter internally). With
+        fuse_tp_collectives TtFfn takes the TP-sharded input and runs both collectives inside its matmuls."""
+        if self.mesh_device.shape[self.tp_axis] > 1 and not self.ffn.fuses_tp_collectives:
             gathered = ttnn.all_gather(
                 ffn_norm_out,
                 dim=-1,

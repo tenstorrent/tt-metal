@@ -166,7 +166,11 @@ class TtKimiK3Block(LightweightModule):
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 hidden_dim=config.intermediate_size,
+                fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
             )
+            if self.ffn.fuses_tp_collectives:
+                # Over all forward_chunks chunks' rows at once.
+                self.ffn.prepare_fused(seq_len * forward_chunks // mesh_device.shape[sp_axis])
 
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController, so a ttnn trace captured over
@@ -415,8 +419,9 @@ class TtKimiK3Block(LightweightModule):
             return ttnn.unsqueeze(moe_out, dim=0)
 
         # Dense: gather to the full hidden dim, then TtFfn reduce-scatters internally — the same
-        # collective pair the KDA attention above already uses.
-        if self.mesh_device.shape[self.tp_axis] > 1:
+        # collective pair the KDA attention above already uses. With fuse_tp_collectives TtFfn takes the
+        # TP-sharded input and runs both collectives inside its matmuls.
+        if self.mesh_device.shape[self.tp_axis] > 1 and not self.ffn.fuses_tp_collectives:
             gathered = ttnn.all_gather(
                 ffn_norm_out, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
             )

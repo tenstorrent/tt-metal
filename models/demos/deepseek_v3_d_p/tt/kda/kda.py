@@ -129,11 +129,11 @@ _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 # fuse_tp_gather: all_gather_minimal_matmul_async's gathered input, per-direction arrival counters and entry barrier.
 # Peers may write them before this rank's call starts, so they persist; a mesh's layers share them (the entry barrier
-# orders calls, not layers).
+# orders calls, not layers), and so does the dense FFN's fused gather (TtFfn).
 _tp_gathers: dict[tuple[int, int, int], dict] = {}
 
 
-def _tp_gather(mesh_device: ttnn.MeshDevice, rows: int, width: int) -> dict:
+def tp_gather_resources(mesh_device: ttnn.MeshDevice, rows: int, width: int) -> dict:
     key = (mesh_device.id(), rows, width)
     if key not in _tp_gathers:
         # Registered with reset_persistent_semaphores, so recovery after an interrupted call clears them too.
@@ -338,7 +338,7 @@ class ttKDA:
         if fuse:
             links = max(1, min(self._tp_num_links, self._matmul_grid.y // 2))
             self._tp_gather_kwargs = dict(
-                _tp_gather(mesh_device, self.active_seq_len_local, config.hidden_size),
+                tp_gather_resources(mesh_device, self.active_seq_len_local, config.hidden_size),
                 config=ttnn.MinimalMatmulConfig(
                     M_block_size=tuned.per_core_M,
                     K_block_size=tuned.in0_block_w,
