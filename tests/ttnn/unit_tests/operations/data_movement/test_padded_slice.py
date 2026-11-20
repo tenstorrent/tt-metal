@@ -400,11 +400,13 @@ def test_padded_slice_rm_pad_value_program_cache(device, pad_values):
     "ttnn_dtype, torch_dtype, pad_value",
     (
         (ttnn.uint8, torch.uint8, 5.0),
+        (ttnn.int8, torch.int8, -9.0),
+        (ttnn.int8, torch.int8, 0.0),
         (ttnn.uint16, torch.int32, 7.0),
         (ttnn.int32, torch.int32, -9.0),
         (ttnn.uint32, torch.int32, 123456.0),
     ),
-    ids=["uint8", "uint16", "int32", "uint32"],
+    ids=["uint8", "int8_negative", "int8_zero", "uint16", "int32", "uint32"],
 )
 def test_padded_slice_rm_integer_pad_value(device, ttnn_dtype, torch_dtype, pad_value):
     torch_input, tt_input, begins, ends, shard_shape, output_mem_config = _rm_pad_value_setup(
@@ -426,6 +428,8 @@ def test_padded_slice_rm_integer_pad_value(device, ttnn_dtype, torch_dtype, pad_
     (
         (ttnn.uint8, torch.uint8, -3.0),
         (ttnn.uint8, torch.uint8, 256.0),
+        (ttnn.int8, torch.int8, 128.0),
+        (ttnn.int8, torch.int8, -129.0),
         (ttnn.uint16, torch.int32, 65536.0),
         (ttnn.int32, torch.int32, 5.5),
         (ttnn.int32, torch.int32, float("nan")),
@@ -433,7 +437,18 @@ def test_padded_slice_rm_integer_pad_value(device, ttnn_dtype, torch_dtype, pad_
         (ttnn.int32, torch.int32, 1e10),
         (ttnn.uint32, torch.int32, -1.0),
     ),
-    ids=["uint8_neg", "uint8_256", "uint16_65536", "int32_frac", "int32_nan", "int32_inf", "int32_1e10", "uint32_neg"],
+    ids=[
+        "uint8_neg",
+        "uint8_256",
+        "int8_128",
+        "int8_-129",
+        "uint16_65536",
+        "int32_frac",
+        "int32_nan",
+        "int32_inf",
+        "int32_1e10",
+        "uint32_neg",
+    ],
 )
 def test_padded_slice_rm_integer_pad_value_rejected(device, ttnn_dtype, torch_dtype, pad_value, expect_error):
     _, tt_input, begins, ends, _, output_mem_config = _rm_pad_value_setup(device, ttnn_dtype, torch_dtype)

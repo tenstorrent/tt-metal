@@ -29,6 +29,8 @@ bool pad_value_fits_output_dtype(float value, DataType dtype) {
             return std::isfinite(value) && std::trunc(value) == value && value >= 0.0f && value < 65536.0f;
         case DataType::UINT8:
             return std::isfinite(value) && std::trunc(value) == value && value >= 0.0f && value < 256.0f;
+        case DataType::INT8:
+            return std::isfinite(value) && std::trunc(value) == value && value >= -128.0f && value < 128.0f;
         default: return true;
     }
 }

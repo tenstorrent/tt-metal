@@ -44,6 +44,7 @@ uint32_t pad_value_to_element_bits(const std::optional<float>& pad_value, DataTy
         case DataType::UINT32: return static_cast<uint32_t>(value);
         case DataType::UINT16: return static_cast<uint16_t>(value);
         case DataType::UINT8: return static_cast<uint8_t>(value);
+        case DataType::INT8: return static_cast<uint8_t>(static_cast<int8_t>(value));
         default: TT_THROW("pad_value is not supported for output dtype {} in padded_slice", output_dtype);
     }
 }
