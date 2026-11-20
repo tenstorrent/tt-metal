@@ -5,7 +5,7 @@
 #
 # TEMPLATE for rr_pipeline_binding.py, which fills TT_VISIBLE_DEVICES (a 2x4-slice map per rank) and prints
 # the rankfile, with the hosts in cabling ring order h0 -> h1 -> h2 -> h3:
-#   on a pod host:   python models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py generate --host h0 ... --out <yaml>
+#   on a pod host:   python models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py generate --hosts h0,h1,h2,h3 --out <yaml> --rankfile-out <rankfile>
 #   host order:      python models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py check --mapping <descriptors> --auto-order
 # TT_VISIBLE_DEVICES is per Galaxy and a wrong map does not error.
 

@@ -11,7 +11,7 @@ every chip the rank owns.
 
 Launch with a binding from models/demos/deepseek_v3_d_p/utils/rr_pipeline_binding.py:
 
-    tt-run --rank-binding <binding.yaml> --mpi-args "--map-by rankfile:file=<rankfile>" \\
+    tt-run --rank-binding <binding.yaml> --mpi-args "--map-by rankfile:file=<rankfile> --bind-to none" \\
         pytest tests/ttnn/distributed/test_rr_prefill_mesh_allgather.py
 """
 

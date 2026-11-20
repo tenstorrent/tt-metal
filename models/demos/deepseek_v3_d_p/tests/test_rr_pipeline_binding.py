@@ -244,3 +244,20 @@ def test_slice_map_is_read_from_the_discovery_output(tmp_path):
     path = tmp_path / "slice_to_pcie_device_mapping.yaml"
     path.write_text("device_mapping:\n  hostA:\n    0: [0, 1]\n    3: [6, 7]\n  hostB:\n    0: [9]\n")
     assert rr.load_slices(path) == {0: {0, 1}, 3: {6, 7}}
+
+
+@pytest.mark.parametrize("hosts, stages", [(1, 2), (2, 3), (3, 6), (4, 8)])
+def test_default_stages_make_a_chain_for_a_galaxy_pair_and_a_ring_otherwise(hosts, stages):
+    assert rr.default_stages(hosts) == stages
+
+
+def test_ring_orders_permute_only_the_hosts_the_stages_use():
+    h0, h1 = fake_pod()
+    spare = FakeGalaxy("h2", 2)
+    found = rr.ring_orders([spare, h1, h0], 3, FAKE_SLICES)
+    assert [[g.name for g in order] for _, order in found] == [["h0", "h1"]]
+
+
+def test_template_and_mapping_paths_do_not_depend_on_the_working_directory():
+    assert rr.TEMPLATE_SC4.is_absolute() and rr.TEMPLATE_SC4.exists()
+    assert rr.SC4_MAPPING.is_absolute()

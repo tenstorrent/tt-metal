@@ -1265,10 +1265,10 @@ TEST(MultiHost, TestSubtorus4x4PipelineMgdPinningsExact) {
     }
 }
 
-// [RING,RING] 4x4 prefill carve (ci/sc4_4x4_rr_mgd.textproto, ci/sc2_4x4_rr_mgd.textproto and their 1-link
-// variants): even meshes are the single-host in-Galaxy tori (the even-mesh pin profile), odd meshes are seam
-// tori (the odd-mesh profile) whose rows 0-1 and 2-3 sit on two different hosts, and every pair of
-// neighbouring stages shares 8 inter-mesh links. The meshes form a chain, with no wrap from the last stage.
+// [RING,RING] 4x4 prefill carve (ci/sc4_4x4_rr_mgd.textproto, ci/sc2_4x4_rr_mgd.textproto): even meshes are the
+// single-host in-Galaxy tori (the even-mesh pin profile), odd meshes are seam tori (the odd-mesh profile) whose
+// rows 0-1 and 2-3 sit on two different hosts, and every pair of neighbouring stages shares 8 inter-mesh links.
+// The meshes form a chain, with no wrap from the last stage.
 TEST(MultiHost, TestSubtorus4x4RingRingPrefillMgd) {
     if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
         tt::tt_metal::ClusterType::BLACKHOLE_GALAXY) {

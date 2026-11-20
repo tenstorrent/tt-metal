@@ -23,14 +23,16 @@ tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py (shared with the blitz 
               binding is launched.
 
 generate writes a rankfile (`rank i=host slot=<n>`, n counting the ranks on that host), the placement the binding needs: tt-run takes no host
-field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile>"`.
+field, so launch with `--mpi-args "--map-by rankfile:file=<rankfile> --bind-to none"`. Without --bind-to none, Open MPI
+binds each rank to logical CPU <n>, pinning the rank and all its host threads to one core.
+
+Without --out and --rankfile-out, generate prints the binding and the rankfile to stdout.
 """
 import argparse
 import collections
 import contextlib
 import importlib.util
 import itertools
-import os
 import sys
 from pathlib import Path
 
@@ -43,14 +45,14 @@ REPO = Path(__file__).resolve().parents[4]
 @contextlib.contextmanager
 def _import_root(root):
     """Put the tt-metal checkout first on sys.path for the imports inside the block only."""
-    sys.path.insert(0, root)
+    sys.path.insert(0, str(root))
     try:
         yield
     finally:
-        sys.path.remove(root)
+        sys.path.remove(str(root))
 
 
-with _import_root(os.environ.get("TT_METAL_HOME", str(REPO))):
+with _import_root(REPO):
     from models.demos.deepseek_v3_d_p.utils.assemble_pipeline_binding import SC4_MAPPING, Galaxy, load_mapping
     from models.demos.deepseek_v3_d_p.utils.gen_pipeline_binding import TOPO, fill_rank_bindings
 
@@ -68,6 +70,8 @@ def _load_rank_table_module(root):
 
 grb = _load_rank_table_module(REPO)
 
+TOPO = REPO / TOPO
+SC4_MAPPING = REPO / SC4_MAPPING
 TEMPLATE_SC4 = TOPO / "pipeline_prefill_request_sc4_rr_12rank_4x4_sp1.yaml"
 TEMPLATE_SC2 = TOPO / "pipeline_prefill_request_sc2_rr_4rank_4x4_sp1.yaml"
 TORUS_SIDE = 4
@@ -188,8 +192,9 @@ def ring_orders(galaxies, num_stages, slices):
     """Host orders whose stages all hold a torus: [(min torus edge links, order)], best first.
 
     The order sets which host pairs form seam stages, and the cabling is directional: host i's slice 3 is
-    cabled to host i+1's slice 0. A full ring (2 stages per host) is the same under rotation, so its first
-    host stays fixed; a chain tries every order."""
+    cabled to host i+1's slice 0. Only the first ceil(num_stages / 2) hosts are used, so only those are
+    permuted. A full ring (2 stages per host) is the same under rotation, so its first host stays fixed;
+    a chain tries every order."""
     cache = {}
 
     def torus_links(chips):
@@ -201,10 +206,13 @@ def ring_orders(galaxies, num_stages, slices):
     counts = link_counts(galaxies)
     host_index = {g.name: i for i, g in enumerate(galaxies)}
     found = []
-    full_ring = num_stages == 2 * len(galaxies)
+    used = (num_stages + 1) // 2
+    full_ring = num_stages == 2 * used
     indices = range(len(galaxies))
     orders = (
-        [(0, *rest) for rest in itertools.permutations(indices[1:])] if full_ring else itertools.permutations(indices)
+        [(0, *rest) for rest in itertools.permutations(indices[1:], used - 1)]
+        if full_ring
+        else itertools.permutations(indices, used)
     )
     for permutation in orders:
         order = [galaxies[i] for i in permutation]
@@ -234,6 +242,13 @@ def stage_report(galaxies, table, slices):
 
 
 # --- binding --------------------------------------------------------------------------------------
+
+
+def default_stages(num_hosts):
+    """Stages of the default pipeline: a full ring, except that two hosts form a chain (the Galaxy pair).
+
+    Two neighbouring Galaxies are not cabled back to back, so the pair's third seam does not exist."""
+    return 2 * num_hosts - 1 if num_hosts == 2 else 2 * num_hosts
 
 
 def default_template(num_stages):
@@ -280,14 +295,19 @@ def write_outputs(args, text, rank_table):
     if args.rankfile_out:
         Path(args.rankfile_out).write_text(rankfile(rank_table))
         logger.info(f"wrote {args.rankfile_out}")
+    if not (args.out or args.rankfile_out):
+        print(text)
+        print("# rankfile")
+        print(rankfile(rank_table), end="")
 
 
 def cmd_generate(args):
     hosts = [h for h in args.hosts.split(",") if h]
+    stages = args.stages or default_stages(len(hosts))
+    template = args.template or default_template(stages)
     rank_table = grb.resolve_split_ring_rank_table(
-        hosts, args.stages, mpi_if=args.mpi_if, run_discovery=not args.no_discovery, work_dir=args.work_dir
+        hosts, stages, mpi_if=args.mpi_if, run_discovery=not args.no_discovery, work_dir=args.work_dir
     )
-    template = args.template or default_template(args.stages)
     write_outputs(args, render(template, rank_table, "slice discovery", hosts, args.mgd), rank_table)
     return 0
 
@@ -301,12 +321,16 @@ def cmd_check(args):
         if missing:
             raise SystemExit(f"hosts {missing} are not in {args.mapping} (has {sorted(by_name)})")
         galaxies = [by_name[h] for h in args.host]
-    num_stages = args.stages or 2 * len(galaxies)
+    num_stages = args.stages or default_stages(len(galaxies))
+    auto_order = args.auto_order or args.print_order
     if args.print_order:
         counts = link_counts(galaxies)
         print(f"RR_CROSS_LINKS {sum(n for pair, n in counts.items() if len({host for host, _ in pair}) > 1)}")
-    if args.auto_order:
+    if auto_order:
         orders = ring_orders(galaxies, num_stages, slices)
+        if args.print_order:
+            # The descriptors need 2 links on every torus edge; an order with 1-link edges fails the final check.
+            orders = [o for o in orders if o[0] >= 2]
         if args.print_order and not orders:
             print("RR_ORDER none")
             return 3
@@ -353,22 +377,26 @@ def main(argv=None):
     c.add_argument(
         "--host", action="append", help="host to use, repeated in cabling ring order (default: the mapping's)"
     )
-    c.add_argument("--auto-order", action="store_true", help="search the host orders for the ring order")
+    c.add_argument(
+        "--auto-order", action="store_true", help="search the host orders for the ring order (implied by --print-order)"
+    )
     c.add_argument(
         "--print-order",
         action="store_true",
-        help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order",
+        help="print RR_CROSS_LINKS and RR_ORDER lines for scripts; exit 3 if no order with 2-link tori",
     )
-    c.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
-    g.add_argument("--stages", type=int, default=None, help="pipeline stages (default 2 per host)")
+    c.add_argument(
+        "--stages", type=int, default=None, help="pipeline stages (default: 2 per host, 2*hosts-1 for two hosts)"
+    )
+    g.add_argument(
+        "--stages", type=int, default=None, help="pipeline stages (default: 2 per host, 2*hosts-1 for two hosts)"
+    )
     g.add_argument("--template")
     g.add_argument("--mgd", help="mesh graph descriptor to name instead of the template's")
     g.add_argument("--out", help="binding to write")
     g.add_argument("--rankfile-out", help="rankfile to write")
     args = ap.parse_args(argv)
     if args.cmd == "generate":
-        if not args.stages:
-            args.stages = 2 * len([h for h in args.hosts.split(",") if h])
         return cmd_generate(args)
     return cmd_check(args)
 
