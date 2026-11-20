@@ -60,8 +60,6 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
 
     std::optional<MeshCoordinate> e_coord, w_coord, n_coord, s_coord;
     uint32_t e_hops = 0, w_hops = 0, n_hops = 0, s_hops = 0;
-    uint32_t num_active_axes = 0;
-    bool axis_load_balance = false;  // an even ring of 4 or more devices
 
     for (uint32_t axis = 0; axis < 2; ++axis) {
         const uint32_t axis_size = operation_attributes.axis_num_devices[axis];
@@ -69,7 +67,6 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         if (!is_axis_active) {
             continue;
         }
-        ++num_active_axes;
         // A true 2D collective cannot fall back to unicast, so factory selection cannot save us
         // here. No mesh view bends a true 2D axis today, so this only guards a future one.
         TT_FATAL(
@@ -82,7 +79,6 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         // An even ring's antipode is reached on the forward route (route 0; the alternate route reaches it backward).
         auto [fwd_hops, bwd_hops] = ::ttnn::ccl::get_forward_backward_line_mcast_distance(
             axis_size, axis_index, axis_topology, /*static_alternate=*/false);
-        axis_load_balance = tt::tt_fabric::is_ring_or_torus(axis_topology) && axis_size % 2 == 0 && axis_size >= 4;
         auto fwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
             input_tensor, sender_device_coord, 1, axis_topology, axis);
         auto bwd_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
@@ -104,11 +100,12 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
         e_coord.has_value() || w_coord.has_value() || n_coord.has_value() || s_coord.has_value(),
         "No neighboring devices");
     // An even ring's forward route reaches N/2 devices and its backward route N/2-1, so one link direction carries
-    // more. The writer then alternates packets with a route that swaps the two hop counts. Only on one ring axis of 4
-    // or more devices: at 2 the swapped backward route has no hop, and two axes' 4 connections would need more packet
-    // headers than the writer's RISC has.
-    const bool load_balance_across_alt_routes = axis_load_balance && num_active_axes == 1;
-    const uint32_t num_routes = load_balance_across_alt_routes ? 2 : 1;
+    // more. The writer can alternate packets with a route that swaps the two hop counts, on one ring axis of 4 or more
+    // devices: at 2 the swapped backward route has no hop, and two axes' 4 connections would need more packet headers
+    // than the writer's RISC has. It stays off: the done on the second route costs a fixed round trip per gather, and
+    // the bandwidth it gains only shows at sizes where unicast is selected.
+    constexpr bool load_balance_across_alt_routes = false;
+    constexpr uint32_t num_routes = load_balance_across_alt_routes ? 2 : 1;
 
     // Derive {E, W, N, S} physical directions, which depend on sender's mesh position + topology.
     const auto sender_fabric_node_id = mesh_device->get_fabric_node_id(sender_device_coord);
