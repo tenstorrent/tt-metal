@@ -147,10 +147,40 @@ struct RowOwner {
     uint32_t core;
     uint32_t local_row;
 };
-constexpr RowOwner row_owner(uint32_t row, uint32_t num_rows, uint32_t split_rows, uint32_t num_cores) {
+// Without split rows, when the whole rows leave a partial round and phase 1 is short (extra_first, below
+// split_first_below), the cores with one row more (the first whole_rows % num_cores) take the first rows, round-robin
+// among themselves, and the other cores the last ones: the cores with the most sorting get their rows early. With a
+// long phase 1 the plain round-robin, whose last rows go to cores already done with their first, measured faster.
+constexpr bool extra_rows_first(uint32_t search_len) { return search_len < split_first_below; }
+constexpr RowOwner whole_row_owner(
+    uint32_t row, uint32_t whole_rows, uint32_t split_rows, uint32_t num_cores, bool extra_first) {
+    const uint32_t extra = whole_rows % num_cores;
+    if (split_rows != 0 || extra == 0 || !extra_first) {
+        return {whole_row_core(row % num_cores, split_rows), row / num_cores};
+    }
+    const uint32_t head = extra * (whole_rows / num_cores + 1);
+    if (row < head) {
+        return {row % extra, row / extra};
+    }
+    return {extra + (row - head) % (num_cores - extra), (row - head) / (num_cores - extra)};
+}
+// The inverse: the row that is local row `local_row` of `core`.
+constexpr uint32_t whole_row_of(
+    uint32_t core, uint32_t local_row, uint32_t whole_rows, uint32_t split_rows, uint32_t num_cores, bool extra_first) {
+    const uint32_t extra = whole_rows % num_cores;
+    if (split_rows != 0 || extra == 0 || !extra_first) {
+        return whole_row_position(core, split_rows) + local_row * num_cores;
+    }
+    if (core < extra) {
+        return core + local_row * extra;
+    }
+    return extra * (whole_rows / num_cores + 1) + (core - extra) + local_row * (num_cores - extra);
+}
+constexpr RowOwner row_owner(
+    uint32_t row, uint32_t num_rows, uint32_t split_rows, uint32_t num_cores, bool extra_first) {
     const uint32_t whole_rows = num_rows - split_rows;
     if (row < whole_rows) {
-        return {whole_row_core(row % num_cores, split_rows), row / num_cores};
+        return whole_row_owner(row, whole_rows, split_rows, num_cores, extra_first);
     }
     return {2 * (row - whole_rows), whole_rows / num_cores};
 }

@@ -154,7 +154,11 @@ FORCE_INLINE void two_level_unit(
     noc.async_write_barrier();
     const uint32_t num_cores = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores);
     const RowOwner owner = row_owner(
-        row, units.num_rows, get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows), num_cores);
+        row,
+        units.num_rows,
+        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows),
+        num_cores,
+        extra_rows_first(search_len));
     if (!cleared) {
         // The coordinator counts the cores that have cleared; the staging word is free once the maxima are written.
         const uint32_t coordinator = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords);
