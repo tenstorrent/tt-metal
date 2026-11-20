@@ -269,10 +269,18 @@ def _answer(tokenizer, completion):
 def sampler():
     import ttnn
     from _ttt_sampler_utils import open_sampler
+    from ttml.trainers import MultiTurnConfig
 
     if not ttnn.get_device_ids():
         pytest.skip("needs a Blackhole chip")
-    with open_sampler(dummy_weights=False, model_source=MODEL_ID, max_batch_size=2, max_seq_len=4096) as s:
+    with open_sampler(
+        dummy_weights=False,
+        model_source=MODEL_ID,
+        max_batch_size=2,
+        max_seq_len=4096,
+        multi_turn=MultiTurnConfig(max_turns=8, tool_call_format="qwen3"),
+        tools=[CalculatorTool()],
+    ) as s:
         yield s
 
 
@@ -360,3 +368,25 @@ def test_max_new_tokens_per_row(sampler):
     completions, logprobs = sampler.generate_and_get_log_probs(prompts, [5, 17])
     assert [len(c) for c in completions] == [5, 17]
     assert [len(lp) for lp in logprobs] == [5, 17]
+
+
+@pytest.mark.timeout(0)
+def test_calculator_tool_calls_match_gold_answer(sampler, monkeypatch):
+    tok = sampler.tokenizer
+    gold = _gold(NUMBERS)
+    calls = _record_start_pos(monkeypatch, sampler)
+    batch = sampler.generate([_task_ids(tok, NUMBERS)])
+    monkeypatch.undo()
+
+    completion = batch.completions[0]
+    text = tok.decode(completion)
+    results = [int(float(r)) for r in re.findall(r"<tool_response>\n(.*?)\n</tool_response>", text)]
+    print(
+        f"\n[multi-turn] tool results: {results}\n[multi-turn] answer: {text.rsplit('<|im_start|>assistant', 1)[-1]!r}"
+    )
+    assert results == gold
+    assert _answer(tok, completion) == gold
+    assert any(c is not None and c[0] > 0 for c in calls), "the tool-response turn must be infilled"
+    tool_ids = tok.encode(Qwen3ToolCallParser(tok).tool_response_text([str(g) for g in gold]), add_special_tokens=False)
+    start = next(i for i in range(len(completion)) if completion[i : i + len(tool_ids)] == tool_ids)
+    assert batch.logprobs[0, start : start + len(tool_ids)].tolist() == [0.0] * len(tool_ids)
