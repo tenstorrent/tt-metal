@@ -2230,8 +2230,7 @@ void call_binary_sfpu_operation(
         // float elementwise max/min (SFPSWAP min/max). Operands read from two dst tiles.
         constexpr bool IS_MAX = (BINOP == BinaryOp::MAX);
 #ifdef ARCH_WORMHOLE
-        // Mirrors binary_max_tile / binary_min_tile: a full-tile call runs the kernel once for
-        // all 32 rows (one macro drain per tile instead of one per face).
+        // Mirrors binary_max_tile / binary_min_tile
         llk_math_eltwise_binary_sfpu_max_min<DST_SYNC_MODE, DST_ACCUM_MODE, IS_MAX>(dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
 #else
         SFPU_BINARY_CALL(
@@ -2457,9 +2456,9 @@ void call_binary_sfpu_operation(
         constexpr bool IS_MAX      = (BINOP == BinaryOp::MAX_INT32 || BINOP == BinaryOp::MAX_UINT32);
         constexpr bool IS_UNSIGNED = (BINOP == BinaryOp::MAX_UINT32 || BINOP == BinaryOp::MIN_UINT32);
 #ifdef ARCH_WORMHOLE
-        // Mirrors binary_{max,min}_{int32,uint32}_tile: one 32-row call per tile (the replay
-        // record and its tail are issued once per tile instead of once per face).
-        llk_math_eltwise_binary_sfpu_max_min_int32<DST_SYNC_MODE, DST_ACCUM_MODE, IS_MAX, IS_UNSIGNED>(dst_index_in0, dst_index_in1, dst_index_out);
+        // Mirrors binary_{max,min}_{int32,uint32}_tile
+        llk_math_eltwise_binary_sfpu_max_min_int32<DST_SYNC_MODE, DST_ACCUM_MODE, IS_MAX, IS_UNSIGNED>(
+            dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
 #else
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,

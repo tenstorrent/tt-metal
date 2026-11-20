@@ -33,6 +33,7 @@ from helpers.llk_params import (
     DstRoundingMode,
     MathOperation,
     PerfRunType,
+    VectorMode,
     format_dict,
 )
 from helpers.param_config import (
@@ -71,8 +72,10 @@ from helpers.test_variant_parameters import (
     OUT_ZERO_POINT,
     SFPU_BCAST_DIM,
     SFPU_DST_ROUNDING_MODE,
+    SFPU_TILE_INDICES,
     SIGN_MAGNITUDE_FORMAT,
     TILE_COUNT,
+    VECTOR_MODE,
     ZERO_POINT,
     generate_input_dim,
 )
@@ -3016,4 +3019,114 @@ def test_eltwise_binary_sfpu_bcast_col_nonfinite_ignored_columns(
         dest_acc,
         src_B_override=_column_vector_with_nonfinite_ignored_columns(),
         **run_kwargs,
+    )
+
+
+# Faces each partial VECTOR_MODE processes; the rest of the output tile keeps its old value.
+_VECTOR_MODE_FACES = {
+    VectorMode.R: (0, 1),
+    VectorMode.C: (0, 2),
+    VectorMode.RC: (0, 1, 2, 3),
+}
+
+_MAX_MIN_VECTOR_MODE_OPS = {
+    MathOperation.SfpuBinaryMax: (torch.maximum, DataFormat.Float16_b),
+    MathOperation.SfpuBinaryMin: (torch.minimum, DataFormat.Float16_b),
+    MathOperation.SfpuMaxInt32: (torch.maximum, DataFormat.Int32),
+    MathOperation.SfpuMinInt32: (torch.minimum, DataFormat.Int32),
+}
+
+
+def _max_min_vector_mode_formats(mathop):
+    if _MAX_MIN_VECTOR_MODE_OPS[mathop][1] == DataFormat.Int32:
+        return [InputOutputFormat(DataFormat.Int32, DataFormat.Int32)]
+    return input_output_formats([DataFormat.Float16_b, DataFormat.Float32], same=True)
+
+
+@parametrize(
+    mathop=list(_MAX_MIN_VECTOR_MODE_OPS),
+    formats=_max_min_vector_mode_formats,
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    vector_mode=[VectorMode.C, VectorMode.R, VectorMode.RC],
+    out_tile=[0, 2],
+)
+def test_eltwise_binary_sfpu_max_min_vector_mode(
+    mathop, formats, dest_acc, vector_mode, out_tile
+):
+    """Binary max/min on the faces of *vector_mode*, in place (out_tile 0) or into a third tile.
+
+    Dest holds in0, in1 and a third tile; bit-exact on all three, so a write outside the
+    selected faces or tile is caught.
+    """
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
+    op, _ = _MAX_MIN_VECTOR_MODE_OPS[mathop]
+    is_int = formats.input_format == DataFormat.Int32
+    gen = torch.Generator().manual_seed(7)
+    if is_int:
+        tiles = torch.randint(
+            -(2**31),
+            2**31 - 1,
+            (3, _ELEMENTS_PER_TILE),
+            dtype=torch.int64,
+            generator=gen,
+        ).to(torch.int32)
+        # Ties and sign/extreme pairs land in every face.
+        specials = torch.tensor([0, -1, 1, -(2**31), 2**31 - 1], dtype=torch.int32)
+        lanes = _ELEMENTS_PER_TILE // 16
+        tiles[0, ::16] = specials.repeat(lanes // 5 + 1)[:lanes]
+        tiles[1, ::16] = specials.flip(0).repeat(lanes // 5 + 1)[:lanes]
+        tiles[1, 1::32] = tiles[0, 1::32]
+    else:
+        torch_format = format_dict[formats.input_format]
+        tiles = (torch.randn(3, _ELEMENTS_PER_TILE, generator=gen) * 100.0).to(
+            torch_format
+        )
+        tiles[1, 1::32] = tiles[0, 1::32]
+    src_A = tiles.flatten()
+
+    expected = tiles.clone()
+    faces = expected[out_tile].view(4, _ELEMENTS_PER_TILE // 4)
+    result = op(tiles[0], tiles[1]).view(4, _ELEMENTS_PER_TILE // 4)
+    for face in _VECTOR_MODE_FACES[vector_mode]:
+        faces[face] = result[face]
+
+    configuration = TestConfig(
+        "sources/sfpu_binary_max_min_vector_mode_test.cpp",
+        formats,
+        templates=[
+            generate_input_dim([96, 32], [96, 32]),
+            MATH_OP(mathop=mathop),
+            APPROX_MODE(ApproximationMode.No),
+            ITERATIONS(8),
+            SIGN_MAGNITUDE_FORMAT(False),
+            VECTOR_MODE(vector_mode),
+        ],
+        runtimes=[SFPU_TILE_INDICES(0, 1, out_tile)],
+        variant_stimuli=StimuliConfig(
+            src_A,
+            formats.input_format,
+            src_A[:_ELEMENTS_PER_TILE],
+            formats.input_format,
+            formats.output_format,
+            tile_count_A=3,
+            tile_count_B=1,
+            tile_count_res=3,
+            twos_complement=is_int,
+        ),
+        dest_acc=dest_acc,
+        unpack_to_dest=formats.input_format.is_32_bit(),
+        disable_format_inference=is_int,
+        compile_time_formats=True,
+    )
+    res = configuration.run().result
+    got = torch.tensor(res, dtype=format_dict[formats.output_format]).flatten()
+    if is_int:
+        got_bits, want_bits = got.to(torch.int32), expected.flatten()
+    else:
+        got_bits = got.to(torch.float32).view(torch.int32)
+        want_bits = expected.flatten().to(torch.float32).view(torch.int32)
+    differ = (got_bits != want_bits).view(3, _ELEMENTS_PER_TILE)
+    assert not differ.any(), (
+        f"{mathop.name} {vector_mode.name} out_tile={out_tile}: lanes differ per "
+        f"tile/face {differ.view(3, 4, -1).sum(dim=2).tolist()}"
     )
