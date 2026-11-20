@@ -1745,7 +1745,7 @@ class TestJobOwnership:
         ], line
         assert line[-4:] == ["--tag-output", "-np", "1", "prog"]
         mine = ["mpirun", "-x", "HFI_NO_BACKTRACE=0", "prog"]
-        assert with_mpi_init_preset_env(mine).count("-x") == 2 and "HFI_NO_BACKTRACE=0" in with_mpi_init_preset_env(
+        assert with_mpi_init_preset_env(mine).count("-x") == 3 and "HFI_NO_BACKTRACE=0" in with_mpi_init_preset_env(
             mine
         )
         env = launch_env(["mpirun", "prog"])
