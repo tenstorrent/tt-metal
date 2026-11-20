@@ -50,6 +50,9 @@ class KimiK31Adapter(KimiK3Adapter):
 
     # Kimi-K3-DSpark was trained against K3, not K3.1.
     supports_dflash = False
+    # K3's packed forward has no indexer path (the DSA layers' index cache and top-k), so K3.1 runs one chunk per
+    # forward.
+    supports_packed_forward = False
     # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
     l1_small_size = KimiK31Config.L1_SMALL_SIZE
     dflash_model_default = ""

@@ -273,7 +273,7 @@ std::set<experimental::quasar::QuasarComputeProcessor> GetComputeProcessorSet(Co
 }
 
 // A KernelSpec lowered into a core-runtime Kernel, plus the runtime-arg schema the ProgramImpl
-// registers for it (consumed by ValidateProgramRunArgs / SetProgramRunArgs).
+// registers for it (consumed by ValidateProgramRunArgs / Program::set_program_run_args).
 struct LoweredKernel {
     std::shared_ptr<Kernel> kernel;
     detail::ProgramImpl::KernelRTASchema rta_schema;
@@ -383,7 +383,7 @@ LoweredKernel LowerKernel(
     // Resolve scratchpad bindings for this kernel. The scratchpad section follows the TensorBinding
     // section and precedes varargs, so it begins at the tensor-binding resolution's (pre-scratchpad)
     // vararg offset; we then push the vararg section out by the scratchpad section's width so the
-    // crta_layout that flows into the kernel ctor reflects all four sections.
+    // crta_layout that flows into the kernel ctor reflects every section.
     ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
         kernel_spec,
         node_ranges,
@@ -391,6 +391,19 @@ LoweredKernel LowerKernel(
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;
     ta_bindings.crta_layout.vararg_section_offset += sp_bindings.section_words;
+
+    // GlobalSemaphore bindings: one address word each, after the scratchpad section.
+    std::vector<GlobalSemaphoreBindingHandle> global_semaphore_handles;
+    global_semaphore_handles.reserve(kernel_spec.global_semaphore_bindings.size());
+    for (const auto& binding : kernel_spec.global_semaphore_bindings) {
+        global_semaphore_handles.push_back(GlobalSemaphoreBindingHandle{
+            .accessor_name = binding.accessor_name,
+            .global_semaphore_parameter_name = binding.global_semaphore_parameter_name.get(),
+            .addr_crta_word = ta_bindings.crta_layout.vararg_section_offset});
+        ++ta_bindings.crta_layout.vararg_section_offset;
+    }
+    ta_bindings.crta_layout.global_semaphore_section_words =
+        static_cast<uint32_t>(kernel_spec.global_semaphore_bindings.size());
 
     // Positional CTAs: [ user CTA varargs | TensorBinding CTA payloads ]
     std::vector<uint32_t> compile_args = cta_varargs;
@@ -489,6 +502,8 @@ LoweredKernel LowerKernel(
     // or SRAMArena argument binding will later fill each handle's allocated_address.
     kernel->set_scratchpad_binding_handles(std::move(sp_bindings.handles));
 
+    kernel->set_global_semaphore_binding_handles(std::move(global_semaphore_handles));
+
     // PrefetcherPipe accessors -> program slot ids (also part of the kernel cache key).
     if (!resource_bindings.prefetcher_pipes.empty()) {
         kernel->set_prefetcher_pipe_binding_handles(resource_bindings.prefetcher_pipes);
@@ -509,7 +524,7 @@ LoweredKernel LowerKernel(
     kernel->set_array_args(std::move(array_args));
 
     // Build the RTA+CRTA schema (named lists, array slots + vararg counts) for the ProgramImpl.
-    // Used by ValidateProgramRunArgs and SetProgramRunArgs to validate and serialize
+    // Used by ValidateProgramRunArgs and Program::set_program_run_args to validate and serialize
     // the user-provided values at dispatch time.
     //
     // User-facing vararg RTA specification (see kernel_spec.hpp):
@@ -527,10 +542,10 @@ LoweredKernel LowerKernel(
     // Pass the user CRTA list through.
     // NOTE: The TensorBinding address section is tracked separately on the Kernel
     // (via tensor_binding_handles) and its slot offsets are baked into each binding handle's
-    // addr_crta_offset; SetProgramRunArgs uses BOTH to assemble the per-enqueue CRTA buffer.
+    // addr_crta_offset; Program::set_program_run_args uses BOTH to assemble the per-enqueue CRTA buffer.
     runtime_schema.common_runtime_arg_names = user_named_crtas;
 
-    // Precompute the name -> slot-index maps so the hot UpdateProgramRunArgs path does O(1)
+    // Precompute the name -> slot-index maps so the hot Program::update_program_run_args path does O(1)
     // lookups rather than rebuilding a map per call.
     for (size_t i = 0; i < runtime_schema.runtime_arg_names.size(); ++i) {
         runtime_schema.runtime_arg_name_to_slot.emplace(runtime_schema.runtime_arg_names[i], i);

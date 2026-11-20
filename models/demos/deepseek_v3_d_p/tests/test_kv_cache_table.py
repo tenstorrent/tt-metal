@@ -282,9 +282,14 @@ def test_kimi_kv_cache_mock(
 @pytest.mark.parametrize("seq_len", [5 * 1024, 25 * 1024], ids=["seq5k", "seq25k"])
 @pytest.mark.parametrize("num_users", [1, 2], ids=["1user", "2users"])
 @pytest.mark.parametrize("num_layers", [2], ids=["2layers"])
+# A traced packed forward allocates one scratch slot after the users (kv_cache_slots); the table must not count
+# it as layers or publish it.
+@pytest.mark.parametrize("scratch_slots", [0, 1], ids=["no-scratch", "scratch"])
 @pytest.mark.skipif(not is_blackhole(), reason="Kimi requires Blackhole")
 @pytest.mark.timeout(0)
-def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers, device_params, monkeypatch):
+def test_kimi_runner_kv_cache_table(
+    mesh_device, seq_len, num_users, num_layers, scratch_slots, device_params, monkeypatch
+):
     from types import SimpleNamespace
 
     from models.demos.deepseek_v3_d_p.tt.runners import kv_chunk_table
@@ -295,7 +300,8 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
     sp, tp = mesh_shape
     hf_config = SimpleNamespace(kv_lora_rank=512, qk_rope_head_dim=64)  # Kimi-K2.7 / DeepSeek MLA geometry
     kvpe_dim = hf_config.kv_lora_rank + hf_config.qk_rope_head_dim
-    num_slots = num_users * num_layers
+    cache_num_users = num_users + scratch_slots
+    num_slots = cache_num_users * num_layers
 
     kvpe_cache = allocate_mla_kvpe_cache(
         mesh_device=mesh_device,
@@ -304,7 +310,7 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
         mesh_shape=mesh_shape,
         sp_axis=sp_axis,
         num_layers=num_layers,
-        num_users=num_users,
+        num_users=cache_num_users,
         tp_axis=tp_axis,
     )
     assert is_tp_deduped_kv_cache(kvpe_cache.storage, mesh_shape)
@@ -350,10 +356,12 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
         sp_axis=sp_axis,
         tp_axis=tp_axis,
         num_users=num_users,
+        cache_num_users=cache_num_users,
         chunk_size_global=PREFILL_CHUNK_TOKENS,
         path="unused",
     )
     lookup_table = built["table"]
+    assert lookup_table.config(0).num_layers == num_layers
 
     reference_bf8 = ttnn.to_torch(ttnn.from_torch(reference, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT)).to(
         torch.bfloat16
