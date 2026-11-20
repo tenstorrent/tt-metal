@@ -61,6 +61,18 @@ inline void llk_unpack_AB_matmul_init_impl(
         partial_face_b);
 }
 
+// A LoFi kernel that names no K block and holds a Bfp4_b CB (moe_fused_swiglu's 1x1x64 calls, -27 % in VCS): its
+// run-time one-tile calls take the direct UNPACR; a block of any other shape keeps the MOP
+template <std::uint32_t kt_per_section>
+constexpr bool llk_unpack_AB_matmul_runtime_one_tile() {
+    bool bfp4 = false;
+    for (const std::uint8_t format : unpack_src_format) {
+        bfp4 = bfp4 || format == static_cast<std::uint8_t>(DataFormat::Bfp4_b);
+    }
+    return kt_per_section == 0 && !LLK_SIZE_MODE && MATH_FIDELITY == MathFidelity::LoFi &&
+           llk_unpack_AB_matmul_named_k_steps() == 0 && bfp4;
+}
+
 // kt_per_section and out_format pick the per-row or hoisted call (unpack_AB_matmul_hoist_rows); 0 and Invalid when
 // unknown.
 template <
@@ -105,7 +117,8 @@ inline void llk_unpack_AB_matmul_impl(
         kt_per_section == 0 ? 8u : get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>(),
         stream_z,
         reuse_dir,
-        one_tile_key || llk_unpack_AB_matmul_named_1x1_long_k()>(
+        one_tile_key || llk_unpack_AB_matmul_named_1x1_long_k() ||
+            llk_unpack_AB_matmul_runtime_one_tile<kt_per_section>()>(
         base_address_a,
         base_address_b,
         tile_index_a,
