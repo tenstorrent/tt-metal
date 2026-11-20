@@ -457,7 +457,10 @@ jobs:
             export OMP_NUM_THREADS=2
             export MKL_NUM_THREADS=2
             export OMP_WAIT_POLICY=passive
-            export PYTEST_ADDOPTS="-p no:timeout -n 4 ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
+            # --dist worksteal: each worker runs a contiguous range of tests, so neighboring parametrizations
+            # (which mostly compile the same kernels) don't build them on several workers at once, and a worker
+            # that runs out takes tests from the end of a busy worker's range.
+            export PYTEST_ADDOPTS="-p no:timeout -n 4 --dist worksteal ${{ startsWith(matrix.test-group.sku, 'sim_wh') && needs.load-test-matrix.outputs.skip-args-wormhole_b0 || startsWith(matrix.test-group.sku, 'sim_bh') && needs.load-test-matrix.outputs.skip-args-blackhole || startsWith(matrix.test-group.sku, 'sim_quasar') && needs.load-test-matrix.outputs.skip-args-quasar || '' }}"
             # Strip the per-test `pytest --timeout N` from the cmd: the simulator is ~10-50x slower than
             # HW, so that per-op limit kills slow-but-correct ops (the job timeout-minutes is the backstop;
             # PYTEST_ADDOPTS also sets -p no:timeout). Run that cmd with xdist; if a worker crashes (xdist
