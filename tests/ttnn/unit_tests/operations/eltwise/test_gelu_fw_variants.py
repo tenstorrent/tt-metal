@@ -133,6 +133,12 @@ def test_gelu_variant_accuracy(device, variant_name, dtype_name, torch_dtype, tt
     # Reference: compute in FP32 from the dtype-quantised input, then round to the
     # input dtype. For both BF16 and FP32 we use torch's FP32 path as the reference.
     expected = torch.nn.functional.gelu(input_tensor.float(), approximate=torch_approximate).to(torch_dtype)
+    if variant_name == "tanh":
+        # torch's float32 0.5 * x * (1 + tanh(u)) cancels for x < -3, so use the cancellation-free
+        # x / (1 + exp(-2u)) in float64 as the reference.
+        x64 = input_tensor.double()
+        u = math.sqrt(2.0 / math.pi) * (x64 + 0.044715 * x64**3)
+        expected = (x64 / (1.0 + torch.exp(-2.0 * u))).to(torch_dtype)
 
     tt_input = ttnn.from_torch(input_tensor, dtype=tt_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     tt_output = ttnn.gelu(tt_input, variant=variant_enum)
