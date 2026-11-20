@@ -675,10 +675,10 @@ void expect_views_agree(std::optional<bool> noc_translation) {
                 ++num_eth_cores;
             }
         }
-        // The comparison is of four distinct cores, and the chips' channel numbers are not the package's:
-        // § Why it is sound, "chip 1's channel 0 is 4-1 to metal and 4-0 to UMD".
-        EXPECT_EQ(num_eth_cores, 4u);
-        EXPECT_EQ(eth_cores_of_all_chips, (std::set<std::string>{"4-0", "4-1", "4-2", "4-3"}));
+        // The comparison is of six distinct cores, the four routers' and CCE1 of the end routers' tiles, and the chips'
+        // channel numbers are not the package's: chip 1's channel 0 is 4-1 to metal and 4-0 to UMD.
+        EXPECT_EQ(num_eth_cores, 6u);
+        EXPECT_EQ(eth_cores_of_all_chips, (std::set<std::string>{"4-0", "4-1", "4-2", "4-3", "5-0", "5-3"}));
         fs::remove_all(dir);
     }
 }
