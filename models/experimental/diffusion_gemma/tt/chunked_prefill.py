@@ -166,6 +166,7 @@ def _sliding_window_square_sdpa(tt_q, tt_k, tt_v, sliding_window, scale=1.0):
         scale=scale,
         sliding_window_size=sliding_window,
         compute_kernel_config=compute_kernel_config,
+        precision=ttnn.SDPAPrecision.ACCURATE,
     )
 
 
@@ -428,6 +429,7 @@ def chunked_prefill_attention_forward(
             scale=1.0,
             program_config=_chunked_sdpa_program_config(head_dim),
             compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
         if pad:
             q_in.deallocate(True)

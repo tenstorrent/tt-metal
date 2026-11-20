@@ -674,6 +674,7 @@ def _full_commit_attention_paged(tt_q, *, kv_cache, page_table, start_pos: int, 
             fp32_dest_acc_en=True,
             packer_l1_acc=False,
         ),
+        precision=ttnn.SDPAPrecision.ACCURATE,
     )
     if not owns_q_in:
         return out_full
