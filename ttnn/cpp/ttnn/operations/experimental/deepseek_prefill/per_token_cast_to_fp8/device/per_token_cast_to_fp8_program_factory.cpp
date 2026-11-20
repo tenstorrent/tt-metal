@@ -274,7 +274,7 @@ ttnn::device_operation::CachedProgram<PerTokenCastToFp8SharedVariables> create_p
         scale_scratch_bytes = scale_page_bytes;
     }
 
-    Program program{};
+    Program program = CreateProgram(*input.device());
     auto compute_grid = input.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, crs1, crs2, upc1, upc2] = split_work_to_cores(compute_grid, total_units);
 

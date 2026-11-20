@@ -58,6 +58,9 @@ constexpr auto kRelationalDtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), "
     "UINT8 "
     "(cast to UINT16)";
+constexpr auto kSubtractDtypes =
+    "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]), "
+    "UINT8 (range: [0, 255]), INT8 (range: [-128, 127])";
 constexpr auto kFloatAndInt32Dtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32";
 constexpr auto kFloatAndInt32UInt32Dtypes =
     "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295])";
@@ -75,7 +78,14 @@ constexpr auto kDivideInplaceDtypes = "BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32";
 
 constexpr auto kMixedFloatFamilyFootnote =
     R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.)doc";
+constexpr auto kSubtractDtypeFootnote =
+    R"doc(Operands may mix float-family dtypes (BFLOAT16, BFLOAT8_B, BFLOAT4_B, FLOAT32); all other dtype pairs must match.
+
+            UINT8 and INT8 results are returned in the input dtype and wrap modulo 256 on overflow. A scalar operand must be an integer within the dtype's range. Output activations run on the wrapped result. Input activations are not supported for these dtypes.)doc";
 constexpr auto kSameDtypeRequiredFootnote = R"doc(Operands must have the same dtype.)doc";
+constexpr auto kBitwiseScalarFootnote = R"doc(Operands must have the same dtype.
+
+            The scalar :attr:`input_b` must be representable in the input dtype: [-2147483648, 2147483647] for INT32, [0, 4294967295] for UINT32, and [0, 65535] for UINT16.)doc";
 constexpr auto kInt32FloatScalarPromotionNote =
     R"doc(An INT32 tensor with a floating-point scalar is promoted to FLOAT32 before computation, including integral-valued floats such as `2.0`. The default output dtype is FLOAT32. Use an integer scalar (for example, `2` instead of `2.0`) to retain integer-scalar semantics.)doc";
 constexpr auto kIscloseMixedDtypeFootnote = R"doc(The only allowed mixed-dtype pair is FLOAT32 with BFLOAT16.)doc";
@@ -171,9 +181,9 @@ using BitwiseScalarFn = Tensor (*)(
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
     const std::optional<CoreRangeSet>&,
     const std::optional<tt::tt_metal::SubDeviceId>&);
-using BitwiseWideScalarFn = Tensor (*)(
+using BitwiseUInt32ScalarFn = Tensor (*)(
     const Tensor&,
-    int64_t,
+    uint32_t,
     const std::optional<MemoryConfig>&,
     const std::optional<Tensor>&,
     ttsl::Span<const unary::EltwiseUnaryWithParam>,
@@ -732,7 +742,11 @@ void bind_binary_with_float_param(
         nb::arg("output_tensor") = nb::none());
 }
 
-template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
+template <
+    ttnn::unique_string Name,
+    typename TensorScalarFn,
+    typename TensorTensorFn,
+    typename TensorUInt32ScalarFn = std::nullptr_t>
 void bind_bitwise_binary_ops_operation(
     nb::module_& mod,
     const std::string& description,
@@ -741,7 +755,8 @@ void bind_bitwise_binary_ops_operation(
     TensorTensorFn tensor_tensor_fn,
     const std::string& info = ". ",
     const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
+    const std::string& note = " ",
+    TensorUInt32ScalarFn tensor_uint32_scalar_fn = nullptr) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -788,11 +803,9 @@ void bind_bitwise_binary_ops_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    ttnn::bind_function<Name>(
-        mod,
-        doc.c_str(),
-        ttnn::overload_t(
-            tensor_scalar_fn,
+    auto scalar_overload = [](auto fn) {
+        return ttnn::overload_t(
+            fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
@@ -802,19 +815,32 @@ void bind_bitwise_binary_ops_operation(
             nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
             nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()),
-        ttnn::overload_t(
-            tensor_tensor_fn,
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
-            nb::arg("sub_core_grids") = nb::none(),
-            nb::arg("sub_device_id") = nb::none()));
+            nb::arg("sub_device_id") = nb::none());
+    };
+    auto tensor_overload = ttnn::overload_t(
+        tensor_tensor_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttsl::Span<const unary::EltwiseUnaryWithParam>{}),
+        nb::arg("sub_core_grids") = nb::none(),
+        nb::arg("sub_device_id") = nb::none());
+
+    // The uint32 overload must follow the int32 one so negative and small scalars keep the int32 path.
+    if constexpr (std::is_same_v<TensorUInt32ScalarFn, std::nullptr_t>) {
+        ttnn::bind_function<Name>(mod, doc.c_str(), scalar_overload(tensor_scalar_fn), tensor_overload);
+    } else {
+        ttnn::bind_function<Name>(
+            mod,
+            doc.c_str(),
+            scalar_overload(tensor_scalar_fn),
+            scalar_overload(tensor_uint32_scalar_fn),
+            tensor_overload);
+    }
 }
 
 template <ttnn::unique_string Name, typename Fn>
@@ -2199,8 +2225,8 @@ void py_module(nb::module_& mod) {
         &detail::subtract_fast_approx_tensor_scalar,
         &detail::subtract_fast_approx_tensor_tensor,
         &detail::subtract_fast_approx_scalar_tensor,
-        detail::kArithmeticFpuDtypes,
-        detail::kMixedFloatFamilyFootnote,
+        detail::kSubtractDtypes,
+        detail::kSubtractDtypeFootnote,
         detail::kAdditiveFastApproxPostNote,
         /*fast_approx_default*/ true);
 
@@ -2210,8 +2236,8 @@ void py_module(nb::module_& mod) {
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
         static_cast<detail::InplaceFastApproxScalarFn>(&ttnn::subtract_),
         static_cast<detail::InplaceFastApproxTensorFn>(&ttnn::subtract_),
-        detail::kArithmeticFpuDtypes,
-        detail::kMixedFloatFamilyFootnote,
+        detail::kSubtractDtypes,
+        detail::kSubtractDtypeFootnote,
         detail::kAdditiveFastApproxPostNote,
         /*fast_approx_default*/ true,
         /*lhs_arg_name*/ "input_tensor_a",
@@ -2396,31 +2422,34 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_and),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_and),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_and),
         ". ",
         detail::kBitwiseShiftDtypes,
-        detail::kSameDtypeRequiredFootnote);
+        detail::kBitwiseScalarFootnote,
+        static_cast<detail::BitwiseUInt32ScalarFn>(&ttnn::detail::bitwise_and_uint32_scalar));
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_or">(
         mod,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_or),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_or),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_or),
         ". ",
         detail::kBitwiseShiftDtypes,
-        detail::kSameDtypeRequiredFootnote);
+        detail::kBitwiseScalarFootnote,
+        static_cast<detail::BitwiseUInt32ScalarFn>(&ttnn::detail::bitwise_or_uint32_scalar));
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_xor">(
         mod,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
-        static_cast<detail::BitwiseWideScalarFn>(&ttnn::bitwise_xor),
+        static_cast<detail::BitwiseScalarFn>(&ttnn::bitwise_xor),
         static_cast<detail::BitwiseTensorFn>(&ttnn::bitwise_xor),
         ". ",
         detail::kBitwiseShiftDtypes,
-        detail::kSameDtypeRequiredFootnote);
+        detail::kBitwiseScalarFootnote,
+        static_cast<detail::BitwiseUInt32ScalarFn>(&ttnn::detail::bitwise_xor_uint32_scalar));
 
     detail::bind_bitwise_binary_ops_operation<"bitwise_left_shift">(
         mod,

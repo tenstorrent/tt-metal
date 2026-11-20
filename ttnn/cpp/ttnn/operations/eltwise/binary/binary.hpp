@@ -9,6 +9,8 @@
 #include "ttnn/types.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 
+#include <concepts>
+
 // Macros for binary operations with identical argument signatures and implementation.
 // Each macro generates function declaration(s). Use the corresponding TTNN_*_IMPL macro in .cpp.
 
@@ -168,11 +170,11 @@
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
 
-// Tensor-integer-scalar bitwise binary op (no output_dtype, calls invoke_binary_ng)
-#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE, SCALAR_T)                      \
+// Tensor-int32_t bitwise binary op (no output_dtype, calls invoke_binary_ng)
+#define TTNN_BINARY_OP_TENSOR_INT32_BITWISE(NAME, OP_TYPE)                                \
     Tensor NAME(                                                                          \
         const Tensor& lhs,                                                                \
-        SCALAR_T rhs,                                                                     \
+        int32_t rhs,                                                                      \
         const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
         const std::optional<Tensor>& output = std::nullopt,                               \
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
@@ -180,6 +182,46 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
         const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
+
+// Scalars must be in the range of the input dtype.
+// The public overload only accepts exactly uint32_t so that other integer types (int64_t, long, ...) still resolve
+// unambiguously to the int32_t overload. Those are narrowed to int32_t before the range check, so a wider scalar above
+// INT32_MAX (including the literal 3000000000, which is a long) must be passed as a uint32_t to reach this overload.
+#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(NAME, OP_TYPE)                               \
+    namespace detail {                                                                    \
+    Tensor NAME##_uint32_scalar(                                                          \
+        const Tensor& lhs,                                                                \
+        uint32_t rhs,                                                                     \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);    \
+    }                                                                                     \
+    template <std::same_as<uint32_t> T>                                                   \
+    Tensor NAME(                                                                          \
+        const Tensor& lhs,                                                                \
+        T rhs,                                                                            \
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,                  \
+        const std::optional<Tensor>& output = std::nullopt,                               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {}, \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},  \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},  \
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt,                 \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt) {   \
+        return detail::NAME##_uint32_scalar(                                              \
+            lhs,                                                                          \
+            rhs,                                                                          \
+            memory_config,                                                                \
+            output,                                                                       \
+            post_activations,                                                             \
+            lhs_activations,                                                              \
+            rhs_activations,                                                              \
+            sub_core_grids,                                                               \
+            sub_device_id);                                                               \
+    }
 
 // Inplace binary op that calls invoke_binary_ng (logical_and_, logical_or_, logical_xor_, rsub_, bias_gelu_)
 #define TTNN_BINARY_OP_INPLACE_INVOKE(NAME, OP_TYPE)                                      \
@@ -512,17 +554,20 @@ Tensor subalpha(
 TTNN_BINARY_OP_TENSOR_TENSOR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_SCALAR(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_and, BITWISE_AND)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND, int64_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_or, BITWISE_OR)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR, int64_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_xor, BITWISE_XOR)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR, int64_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_left_shift, LEFT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT, int32_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT, int32_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(bitwise_right_shift, RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE(logical_left_shift, LEFT_SHIFT)
-TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT, int32_t)
+TTNN_BINARY_OP_TENSOR_INT32_BITWISE(logical_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR(xlogy, XLOGY)
 TTNN_BINARY_OP_TENSOR_SCALAR(xlogy, XLOGY)
 Tensor hypot(
@@ -589,6 +634,7 @@ ttnn::Tensor operator<=(const ttnn::Tensor& lhs, InputBType rhs) {
 #undef TTNN_BINARY_OP_TENSOR_SCALAR
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE
+#undef TTNN_BINARY_OP_TENSOR_UINT32_BITWISE
 #undef TTNN_BINARY_OP_INPLACE
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE

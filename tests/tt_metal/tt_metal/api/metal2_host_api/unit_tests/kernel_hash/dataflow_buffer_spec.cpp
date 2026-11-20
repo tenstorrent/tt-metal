@@ -9,7 +9,7 @@
 #include <optional>
 
 #include <tt-metalium/workload/specification/program_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/program_impl.hpp"
@@ -29,8 +29,8 @@ TEST_F(ProgramSpecTestQuasar, DFBTileMetadataAffectsKernelHash) {
         return spec;
     };
 
-    Program prog_default = MakeProgramFromSpec(*mesh_device_, make_spec(std::nullopt));
-    Program prog_wide = MakeProgramFromSpec(*mesh_device_, make_spec(Tile{{16, 32}}));
+    Program prog_default(*mesh_device_, make_spec(std::nullopt));
+    Program prog_wide(*mesh_device_, make_spec(Tile{{16, 32}}));
 
     auto hash_default = prog_default.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();
     auto hash_wide = prog_wide.impl().get_kernel_by_spec_name("compute_kernel")->compute_hash();

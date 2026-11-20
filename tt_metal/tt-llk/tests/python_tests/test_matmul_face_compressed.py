@@ -240,6 +240,12 @@ def run_face_compressed(
     pcc_threshold=None,
     calls=CUSTOM_MM_CALLS(),
     golden_multiplier=1,
+    compression_case=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
 ):
     run_compressed(
         M,
@@ -256,6 +262,11 @@ def run_face_compressed(
         pcc_threshold=pcc_threshold,
         calls=calls,
         golden_multiplier=golden_multiplier,
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
 
 

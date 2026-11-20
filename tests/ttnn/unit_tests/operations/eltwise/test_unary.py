@@ -520,17 +520,9 @@ def test_unary_log_operations_ttnn(
     torch.manual_seed(data_seed)
     in_data = torch.Tensor(size=input_shapes).uniform_(low_range, high_range).to(torch_dtype)
 
-    # Only use pad_value=1.0 for bfloat8_b to avoid log(0) issues with shared exponent flushing
-    tensor_kwargs = {
-        "dtype": ttnn_dtype,
-        "layout": ttnn.TILE_LAYOUT,
-        "device": device,
-        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-    }
-    if ttnn_dtype == ttnn.bfloat8_b:
-        tensor_kwargs["pad_value"] = 1.0
-
-    input_tensor = ttnn.from_torch(in_data, **tensor_kwargs)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
     output_tensor = log_function(input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
     golden_function = ttnn.get_golden_function(log_function)
@@ -1098,6 +1090,61 @@ def test_unary_rejects_unsupported_integer_dtype(ttnn_op, ttnn_dtype, extra_kwar
         ttnn_op(input_tensor, **extra_kwargs)
 
 
+def test_unary_chain_checks_ops_before_typecast(device, expect_error):
+    # FMOD has no integer kernel. Placed before the TYPECAST it would run on the raw int32 tile
+    # bits, so the chain must be rejected; placed after the cast it sees bfloat16 and is accepted.
+    input_tensor = ttnn.from_torch(
+        torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32),
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    fmod = ttnn.UnaryWithParam(ttnn.UnaryOpType.FMOD, 2.0)
+    to_bfloat16 = ttnn.UnaryWithParam(
+        ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.BFLOAT16.value
+    )
+
+    with expect_error(RuntimeError, "does not support integer input dtype"):
+        ttnn.unary_chain(input_tensor, [fmod, to_bfloat16])
+
+    # Only the position matters: the same ops with the cast first pass validation.
+    ttnn.unary_chain(input_tensor, [to_bfloat16, fmod])
+
+
+@pytest.mark.parametrize(
+    "typecast_param",
+    [
+        # UnaryWithParam holds float parameters; EltwiseUnaryWithParam given Python ints holds int32 parameters.
+        # The cast's target dtype must be read from whichever type backs the TYPECAST.
+        pytest.param(ttnn.UnaryWithParam, id="float_params"),
+        pytest.param(ttnn._ttnn.activation.EltwiseUnaryWithParam, id="int_params"),
+    ],
+)
+@pytest.mark.parametrize(
+    "op_type, scalar, torch_op",
+    [
+        (ttnn.UnaryOpType.UNARY_GT, 2.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, 0.5, torch.gt),
+        (ttnn.UnaryOpType.UNARY_GT, -3.0, torch.gt),
+        (ttnn.UnaryOpType.UNARY_EQ, 2.0, torch.eq),
+    ],
+)
+def test_unary_chain_ops_after_typecast_use_cast_dtype(device, typecast_param, op_type, scalar, torch_op):
+    # After TYPECAST(INT32->FLOAT32) the tile holds float32, so a relational op placed after the cast
+    # must be generated for FLOAT32 (the float compare against the scalar) and not for the tensor's
+    # INT32 (the int32 compare, which reads the float bits as integers). The trailing cast back to
+    # INT32 gives the chain a well-defined output dtype so the result can be checked exactly.
+    torch_input = torch.arange(-512, 512, dtype=torch.int32).reshape(1, 1, 32, 32)
+    input_tensor = ttnn.from_torch(torch_input, dtype=ttnn.int32, layout=ttnn.TILE_LAYOUT, device=device)
+    to_float32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.INT32.value, ttnn.DataType.FLOAT32.value)
+    to_int32 = typecast_param(ttnn.UnaryOpType.TYPECAST, ttnn.DataType.FLOAT32.value, ttnn.DataType.INT32.value)
+
+    output = ttnn.unary_chain(input_tensor, [to_float32, ttnn.UnaryWithParam(op_type, scalar), to_int32])
+
+    expected = torch_op(torch_input.to(torch.float32), scalar).to(torch.int32)
+    assert_equal(expected, ttnn.to_torch(output))
+
+
 @pytest.mark.parametrize(
     "ttnn_op, extra_kwargs",
     [
@@ -1323,7 +1370,7 @@ def test_unary_zero_comp_edge_case(input_shapes, ttnn_function, device):
         (torch.Size([1, 3, 320, 384])),
     ),
 )
-@pytest.mark.parametrize("scalar", [-54, -1, 0, 1, 13, -0])
+@pytest.mark.parametrize("scalar", [-54, -1, 0, 1, 13])
 @pytest.mark.parametrize("ttnn_op", [ttnn.ne, ttnn.eq, ttnn.gt, ttnn.lt, ttnn.ge, ttnn.le])
 def test_unary_comp_ops(input_shapes, scalar, ttnn_op, device):
     # Generate a uniform range of values across the valid int32 range
@@ -1625,9 +1672,12 @@ def test_unary_acosh_special_cases_ttnn(device):
         (torch.bfloat16, ttnn.bfloat16),
     ],
 )
+# Each lambd is baked into the kernel, so every value is a separate compile. Small lambd values are
+# swept over every bfloat16 / a float32 grid in test_unary_category4_*.py; these cover a small and a
+# large lambd relative to the [-100, 100] input range.
 @pytest.mark.parametrize(
     "param",
-    (0.65, 7.7, 36, 58.6, 74, 97.2),
+    (0.65, 58.6),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1656,7 +1706,7 @@ def test_unary_shrink_functions_ttnn(input_shapes, param, torch_dtype, ttnn_dtyp
 )
 @pytest.mark.parametrize(
     "param",
-    (7.0, 36.49, 58.5, 97.2),
+    (7.0, 58.5),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1829,12 +1879,11 @@ def test_unary_hardswish_bf8b_ttnn(input_shapes, low, high, device):
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
+# float32 and bfloat16 bounds are swept exhaustively in test_unary_category6_*.py::test_hardtanh*.
 @pytest.mark.parametrize(
     "min_val, max_val",
     [
-        (-2.0, 2.0),
         (-26.5, 33.6),
-        (-0.5, 21.0),
     ],
 )
 def test_unary_hardtanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, min_val, max_val, device):
@@ -2176,13 +2225,9 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
         (torch.bfloat16, ttnn.bfloat8_b),
     ],
 )
-@pytest.mark.parametrize("negative_slope", [0.01, 0.1, 1.0, 5.75, 10.0])
+# Slopes 0.01, 0.1 and 1.0 are covered for float32 and bfloat16 by test_unary_category4_*.py.
+@pytest.mark.parametrize("negative_slope", [5.75, 10.0])
 def test_unary_leaky_relu_ttnn(input_shapes, negative_slope, torch_dtype, ttnn_dtype, device):
-    if ttnn_dtype == ttnn.bfloat16 and negative_slope in (0.01, 0.1, 1.0):
-        # Exhaustively covered (all bf16 bit patterns) by test_leaky_relu_op in
-        # test_unary_category4_bfloat16.py; only the slopes unique to this test remain.
-        pytest.skip("covered by test_unary_category4_bfloat16.py::test_leaky_relu_op")
-
     in_data = torch.empty(input_shapes, dtype=torch_dtype).uniform_(-100, 100)
     input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
     if ttnn_dtype == ttnn.bfloat8_b:
@@ -2288,9 +2333,11 @@ def test_unary_rdiv_inf_nan_check(param, rounding_mode, device):
         (torch.Size([1, 1, 3, 64, 12])),
     ),
 )
+# The divisor is baked into the kernel, so every value is a separate compile. Divisors 1.0, -1.0,
+# 2.5 and 100.0 in every rounding mode are covered in test_unary_category6_*.py::test_rdiv*.
 @pytest.mark.parametrize(
     "param",
-    (-98.5, -43.7, -8.5, 0.45, 7.7, 58.4, 89.9),
+    (-43.7, 0.45),
 )
 @pytest.mark.parametrize(
     "torch_dtype, ttnn_dtype",
@@ -2422,7 +2469,8 @@ def test_unary_bitcast_ttnn(
         (0, 2),
     ],
 )
-@pytest.mark.parametrize("scalar", [0.25, 0.38, 0.5, 0.85])
+# eps clamping is swept in test_unary_category6_*.py::test_logit*.
+@pytest.mark.parametrize("scalar", [0.25])
 def test_unary_logit(input_shape, scalar, torch_dtype, ttnn_dtype, high, low, device):
     torch.manual_seed(0)
     in_data = torch.empty(input_shape, dtype=torch_dtype).uniform_(low, high)
@@ -2675,6 +2723,38 @@ def test_unary_preallocated_output_shape_match(device):
 
     assert list(result.shape) == shape
     assert_with_pcc(torch.exp(torch_input.float()), ttnn.to_torch(output_tensor).float(), 0.999)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor)
+
+
+@pytest.mark.parametrize("tile_shape", [(16, 32), (8, 32), (4, 32)], ids=lambda s: f"tile_{s[0]}x{s[1]}")
+def test_unary_rejects_non_default_output_tile(device, expect_error, tile_shape):
+    tensor = ttnn.from_torch(
+        torch.rand((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+    )
+    output = ttnn.from_torch(
+        torch.zeros((1, 1, 64, 64), dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        tile=ttnn.Tile(tile_shape),
+        device=device,
+    )
+    with expect_error(RuntimeError, "supports only 32x32 tiles"):
+        ttnn.relu(tensor, output_tensor=output)
 
 
 def test_unary_preallocated_output_shape_mismatch_program_cache_hit(device, expect_error):

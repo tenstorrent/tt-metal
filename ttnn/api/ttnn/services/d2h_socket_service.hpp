@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 
 #include "ttnn/distributed/distributed_tensor.hpp"
+#include "ttnn/services/stream_counter.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace tt::tt_metal::distributed {
@@ -108,6 +109,8 @@ public:
     CoreRange get_worker_cores() const;
     CoreCoord get_metadata_master_core() const;
     DeviceAddr get_write_ack_counter_addr(const distributed::MeshCoordinate& coord) const;
+    // This coord's write-ack word: one step is every worker's inc for a transfer, or the host's 1 without workers.
+    StreamCounter get_write_ack_counter(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_data_ready_counter_addr(const distributed::MeshCoordinate& coord) const;
     DeviceAddr get_transfer_done_sem_addr() const;
     DeviceAddr get_worker_metadata_addr() const;

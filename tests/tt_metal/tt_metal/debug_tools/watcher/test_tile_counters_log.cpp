@@ -13,7 +13,8 @@
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include "debug_tools_fixture.hpp"
 #include "debug_tools_test_utils.hpp"
 #include "impl/context/metal_context.hpp"
@@ -123,7 +124,7 @@ void RunTest(
         .work_units = {wu},
     };
 
-    Program program = tt_metal::experimental::MakeProgramFromSpec(*mesh_device, spec);
+    Program program(*mesh_device, spec);
     workload.add_program(device_range, std::move(program));
 
     distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
@@ -169,10 +170,11 @@ void RunTest(
     constexpr uint32_t poll_interval_ms = 1000;
     auto start = std::chrono::steady_clock::now();
 
-    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns)) {
+    while (!FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns, /*report_missing=*/false)) {
         auto elapsed_ms =
             std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - start).count();
         if (elapsed_ms >= timeout_ms) {
+            FileContainsAllStrings(fixture->log_file_name, expected_mismatch_patterns);  // logs what's missing
             release_threads();
             FAIL() << "Timed out after " << timeout_ms << "ms waiting for watcher to log TC mismatches (" << mode_name
                    << ")";
