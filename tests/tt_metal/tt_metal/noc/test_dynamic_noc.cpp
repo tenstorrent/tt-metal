@@ -44,8 +44,7 @@ void build_and_run_program(
     bool mix_noc_mode) {
     const uint32_t num_nocs = MetalContext::instance().hal().get_num_nocs();
     if (num_nocs < 2) {
-        GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << tt::arch_to_str(device->arch()) << " has only "
-                     << num_nocs;
+        GTEST_SKIP() << "Dynamic NOC mode needs 2 NOCs, but " << device->arch() << " has only " << num_nocs;
     }
 
     CoreCoord worker_grid_size = {1,1};
