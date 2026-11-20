@@ -990,6 +990,7 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
                 device_grid=sdpa_device_grid(tt_q),
             ),
             compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
         )
     return ttnn.transformer.scaled_dot_product_attention(
         tt_q,
@@ -1006,6 +1007,7 @@ def _sdpa_single_chunk(tt_q, tt_k, tt_v, config, seq_len, sliding_window, comput
             device_grid=sdpa_device_grid(tt_q),
         ),
         compute_kernel_config=compute_kernel_config,
+        precision=ttnn.SDPAPrecision.ACCURATE,
     )
 
 
@@ -1650,6 +1652,7 @@ def _prefill_forward_single(
                         device_grid=sdpa_device_grid(q_cat),
                     ),
                     compute_kernel_config=sdpa_ckc,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                 )
             else:
                 sdpa_full = ttnn.transformer.scaled_dot_product_attention(
@@ -1667,6 +1670,7 @@ def _prefill_forward_single(
                         device_grid=sdpa_device_grid(q_cat),
                     ),
                     compute_kernel_config=sdpa_ckc,
+                    precision=ttnn.SDPAPrecision.ACCURATE,
                 )
             q_cat.deallocate(True)
             k_cat.deallocate(True)
@@ -2197,6 +2201,7 @@ def prefill_forward(
             device_grid=sdpa_device_grid(tt_q),
         ),
         compute_kernel_config=sdpa_compute_kernel_config,
+        precision=ttnn.SDPAPrecision.ACCURATE,
     )
     tt_q.deallocate(True)
     kept_kv = None

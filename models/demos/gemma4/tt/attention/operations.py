@@ -547,6 +547,7 @@ def chunked_prefill_sdpa(
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 paged_cache_geometry=paged_cache_geometry,
             )
             chunk_start_t.deallocate(True)
@@ -574,6 +575,7 @@ def chunked_prefill_sdpa(
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 paged_cache_geometry=paged_cache_geometry,
             )
             if start:
@@ -588,6 +590,7 @@ def chunked_prefill_sdpa(
                 scale=scale,
                 program_config=program_config,
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
                 paged_cache_geometry=paged_cache_geometry,
             )
         q_chunk.deallocate(True)
@@ -689,6 +692,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
                     head_dim, slice_len, sliding_window=None, num_heads=nh, device_grid=sdpa_device_grid(tt_q)
                 ),
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         else:
             o = ttnn.transformer.scaled_dot_product_attention(
@@ -702,6 +706,7 @@ def chunked_prefill_sdpa_sliding(tt_q, tt_k, tt_v, sliding_window, head_dim, sca
                     head_dim, slice_len, sliding_window=sliding_window, num_heads=nh, device_grid=sdpa_device_grid(tt_q)
                 ),
                 compute_kernel_config=compute_kernel_config,
+                precision=ttnn.SDPAPrecision.ACCURATE,
             )
         q_slice.deallocate(True)
         k_slice.deallocate(True)

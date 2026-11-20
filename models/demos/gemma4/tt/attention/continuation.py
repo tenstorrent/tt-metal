@@ -256,6 +256,7 @@ def sliding_continuation_sdpa(
             scale=1.0,
             program_config=program_config,
             compute_kernel_config=compute_kernel_config,
+            precision=ttnn.SDPAPrecision.ACCURATE,
             paged_cache_geometry=paged_cache_geometry,
             sliding_window_size=int(sliding_window),
         )
