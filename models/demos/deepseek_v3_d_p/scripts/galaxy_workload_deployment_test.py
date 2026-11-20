@@ -59,6 +59,10 @@ def quad_rows(state) -> list[tuple[str, Result]]:
     return [(label, r) for label, r in zip(labels, state.rows)]
 
 
+# Where the status column of a model / quad row starts; wider when a label (e.g. a stage's hostname) needs it.
+LABEL_COL = 23
+
+
 class Screen:
     def __init__(self, steps: list[Step], header: list[str], status_json: Path, meta: dict[str, str]):
         self.steps, self.header, self.status_json, self.meta = steps, header, status_json, meta
@@ -66,6 +70,7 @@ class Screen:
         self.last_draw = 0.0
         self.done = False
         self.live: Live | None = None
+        self.label_col = LABEL_COL
 
     def paint(self, status: Status, text: str, width: int = 0) -> str:
         text = f"{text:<{width}}"
@@ -93,6 +98,9 @@ class Screen:
                 out.append(self.model_row(5, f"fallback {i}", r, f.start, f.end))
                 out += [self.model_row(7, label, r) for label, r in device_rows(f.result)]
         quad = [s for s in self.steps if s.group == "quad"]
+        labels = [(3, s.title) for s in quad] + [(5, label) for s in quad for label, _ in quad_rows(s.state)]
+        labels += [(7, label) for s in quad for f in s.state.fallbacks for label, _ in quad_rows(f)]
+        self.label_col = max([LABEL_COL] + [indent + len(label) + 1 for indent, label in labels])
         if quad:
             out += ["", "QUAD PREFILL RUNNER"]
         for s in quad:
@@ -141,7 +149,7 @@ class Screen:
         self, indent: int, label: str, r: Result, start: float | None = None, end: float | None = None
     ) -> str:
         took = dur((end or time.time()) - start) if start else ""
-        return f"{' ' * indent}{label:<{23 - indent}}{self.paint(r.status, r.status.value, 6)} {took:>8}    {r.reason}".rstrip()
+        return f"{' ' * indent}{label:<{self.label_col - indent}}{self.paint(r.status, r.status.value, 6)} {took:>8}    {r.reason}".rstrip()
 
     def sub_rows(self, step: Step) -> list[tuple[str, Result]]:
         """Layer-type rows for pytest steps, loop rows for multi-loop stress steps, device rows for matmul runs."""

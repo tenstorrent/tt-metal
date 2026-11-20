@@ -1048,3 +1048,27 @@ def test_log_root_prefers_shared_folder(tmp_path):
         log_root("u", tmp_path / "home", str(tmp_path / "weka"))
         == tmp_path / "weka" / "galaxy-workload-deployment-test"
     )
+
+
+def test_quad_rows_fit_long_hostnames(tmp_path, monkeypatch):
+    import re
+
+    from galaxy_workload_deployment_test import Screen
+    from gwdt_steps import State, Step
+
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    hosts = [f"bh-glx-803-a34u{x}" for x in ("20", "02")]
+    details = [f"stage {k} {h}: 16 iters" for k, h in enumerate(hosts)]
+    s = Step("quad:passthrough-smoke", "passthrough-smoke", "quad", None, True, None)
+    s.state.result = Result(Status.FAIL, "stage 1 failed", details)
+    s.state.rows = [Result(Status.PASS, "16 iters"), Result(Status.FAIL, "hash differs")]
+    f = State(Result(Status.PASS, "4/4", details), env={"PREFILL_FABRIC_MODE": "2d"})
+    f.rows = [Result(Status.PASS, "16 iters"), Result(Status.PASS, "16 iters")]
+    s.state.fallbacks.append(f)
+    lines = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in Screen([s], ["hdr"], tmp_path / "s", {}).lines()]
+    q = lines.index("QUAD PREFILL RUNNER")
+    rows = lines[q + 1 : q + 7]
+    assert [r.split()[0] for r in rows] == ["passthrough-smoke", "stage", "stage", "fallback", "stage", "stage"]
+    assert rows[2].split()[3] == "FAIL" and rows[5].split()[3] == "PASS"
+    cols = {r.index(st) for r in rows for st in ("PASS", "FAIL") if st in r.split()}
+    assert len(cols) == 1, rows
