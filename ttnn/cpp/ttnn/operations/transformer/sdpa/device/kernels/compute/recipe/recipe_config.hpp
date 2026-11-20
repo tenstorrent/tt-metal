@@ -41,6 +41,9 @@ constexpr uint32_t k_joint_rows = get_named_compile_time_arg_val("recipe_k_joint
 // QK and PV matmul subblock widths: the largest of 4, 2 and 1 dividing the K chunk and the head dim.
 constexpr uint32_t qk_w = get_named_compile_time_arg_val("recipe_qk_w");
 constexpr uint32_t pv_w = get_named_compile_time_arg_val("recipe_pv_w");
+// STANDARD, FAST: the most K tiles a PV accumulates in DEST before the packer adds it to O in FP32 (the policy's
+// pv_fold_tiles; 0: no limit).
+constexpr uint32_t pv_fold = get_named_compile_time_arg_val("recipe_pv_fold");
 
 constexpr bool k_tail = k_primary_rows > 0;
 constexpr bool sink = sink_cb != 0;

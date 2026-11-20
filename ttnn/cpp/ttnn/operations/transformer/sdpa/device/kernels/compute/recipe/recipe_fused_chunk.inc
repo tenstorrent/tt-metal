@@ -33,10 +33,16 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     constexpr uint32_t sbw = qkt_subblock_w;
     constexpr uint32_t n_kb = Sk_chunk_t / sbw;
     static_assert(Sk_chunk_t % sbw == 0 && vDHt % qktv_subblock_w == 0 && vDHt <= DHt);
-    // PV of a pipelined group runs in n_pieces K pieces, each after QK subblocks of the next group.
-    constexpr uint32_t n_pieces = n_kb % 2 == 0 ? 2 : 1;
-    constexpr uint32_t kb_per_piece = n_kb / n_pieces;
-    constexpr uint32_t piece_k = kb_per_piece * sbw;
+    // PV of a pipelined group runs in n_pieces K pieces, each after QK subblocks of the next group: two when the QK
+    // subblocks split evenly, and at least enough that no piece accumulates more than the recipe's fold interval in
+    // DEST (recipe::pv_fold; the packer adds each piece to O in FP32). Pieces split the K tiles and the QK subblocks
+    // as evenly as they divide.
+    constexpr uint32_t n_sched_pieces = n_kb % 2 == 0 ? 2 : 1;
+    constexpr uint32_t fold = recipe::pv_fold == 0 ? KT : recipe::pv_fold;
+    constexpr uint32_t n_fold_pieces = (KT + fold - 1) / fold;
+    constexpr uint32_t n_pieces = n_fold_pieces > n_sched_pieces ? n_fold_pieces : n_sched_pieces;
+    auto piece_kb = [](uint32_t piece) -> uint32_t { return piece * n_kb / n_pieces; };
+    auto piece_k0 = [](uint32_t piece) -> uint32_t { return piece * KT / n_pieces; };
     constexpr uint32_t pv_w = qktv_subblock_w;
     constexpr uint32_t n_pv = vDHt / pv_w;
     constexpr bool tail = Sq_chunk_t % H != 0;
@@ -402,7 +408,9 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         pack_cb = cb_qkt_im;
         srca = cb_qkt_im;
         pack_to_unpack_barrier();
-        pv_piece(g, 0, KT, vDHt, false);
+        for (uint32_t piece = 0; piece < n_pieces; ++piece) {
+            pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
+        }
         pack_to_unpack_barrier();
         const uint32_t read_base = is_last_iter ? 0 : row0;
         for (uint32_t r = 0; r < h; ++r) {
@@ -538,7 +546,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         }
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
             if (do_qk) {
-                for (uint32_t kb = piece * kb_per_piece; kb < (piece + 1) * kb_per_piece; ++kb) {
+                for (uint32_t kb = piece_kb(piece); kb < piece_kb(piece + 1); ++kb) {
                     qk_subblock(it, kb);
                 }
                 if (piece == n_pieces - 1) {
@@ -549,7 +557,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 check_groups(cg_last - cg_last % CG, cg_last % CG + 1);
             }
             if (do_pv) {
-                pv_piece(pg, piece * piece_k, piece_k, 0, true);
+                pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
             }
         }
         if (do_pv) {

@@ -297,7 +297,8 @@ ProgramDescriptor recipe_compute_program(
              {"recipe_k_primary_rows", 0},
              {"recipe_k_joint_rows", 0},
              {"recipe_qk_w", recipe_subblock_width(k_tiles)},
-             {"recipe_pv_w", recipe_subblock_width(vd)}},
+             {"recipe_pv_w", recipe_subblock_width(vd)},
+             {"recipe_pv_fold", policy.pv_fold_tiles}},
         .defines =
             {{"EXP_APPROX_MODE", "1"},
              {"STATS_GRANULARITY", std::to_string(recipe_granularity(q_tiles, fp32 ? 4 : 8))},
