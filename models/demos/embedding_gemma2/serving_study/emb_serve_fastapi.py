@@ -67,6 +67,18 @@ MAX_SEQ_LEN = 8192
 CHIPS = os.environ.get("EMB_CHIPS", "0").split(",")
 
 
+def _snapshot_dir() -> str:
+    """Local snapshot of MODEL_ID at REVISION, for the tokenizer. Loading by hub id goes through the hub API, which
+    huggingface_hub >= 1.0 refuses under HF_HUB_OFFLINE=1 even when the files are cached; a directory does not."""
+    from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
+
+    try:
+        return snapshot_download(MODEL_ID, revision=REVISION, local_files_only=True)
+    except LocalEntryNotFoundError:
+        return snapshot_download(MODEL_ID, revision=REVISION)
+
+
 # --------------------------------------------------------------------------- #
 # CPU-core affinity helpers (SMT-aware) — model-agnostic, from pplx serve.py.
 # --------------------------------------------------------------------------- #
@@ -153,6 +165,12 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores
     """
     os.environ["TT_VISIBLE_DEVICES"] = CHIPS[chip_id]
     os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    # One tt-metal log dir per worker: device open recreates the Inspector log dir under TT_METAL_LOGS_PATH, and
+    # workers doing that on one shared dir at once (the tt-media-server image sets one for all) can segfault in
+    # std::filesystem::remove_all.
+    logs = os.environ.get("TT_METAL_LOGS_PATH") or os.path.join(os.environ.get("TT_METAL_HOME", "."), "generated")
+    os.environ["TT_METAL_LOGS_PATH"] = os.path.join(logs, "emb_workers", f"chip{CHIPS[chip_id]}")
+    os.makedirs(os.environ["TT_METAL_LOGS_PATH"], exist_ok=True)
     if worker_cores:
         try:
             os.sched_setaffinity(0, set(worker_cores))
@@ -193,7 +211,7 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores
         if not args.server_tokenize:
             from transformers import AutoTokenizer
 
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
+            tokenizer = AutoTokenizer.from_pretrained(_snapshot_dir())
 
         run_rows([[2, 3, 4, 5]])  # first replay outside the request path
         ctrl_q.put((chip_id, "ready", time.perf_counter() - t_build0))
@@ -273,7 +291,7 @@ class _TokenizerPool:
     def load(self) -> None:
         from transformers import AutoTokenizer
 
-        tok = AutoTokenizer.from_pretrained(MODEL_ID, revision=REVISION)
+        tok = AutoTokenizer.from_pretrained(_snapshot_dir())
         if getattr(tok, "backend_tokenizer", None) is None:
             raise RuntimeError(
                 "server-side tokenization needs a fast tokenizer (backend encode is the thread-safe path)"

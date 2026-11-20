@@ -40,10 +40,15 @@ def resolve_snapshot(model_id_or_path: str, revision: str | None = None) -> Path
     if p.is_dir():
         return p
     from huggingface_hub import snapshot_download
+    from huggingface_hub.errors import LocalEntryNotFoundError
 
-    return Path(
-        snapshot_download(model_id_or_path, revision=revision or model_revision(), allow_patterns=SNAPSHOT_PATTERNS)
-    )
+    kwargs = dict(revision=revision or model_revision(), allow_patterns=SNAPSHOT_PATTERNS)
+    try:
+        # Cached snapshot first: huggingface_hub >= 1.0 raises OfflineModeIsEnabled under HF_HUB_OFFLINE=1 instead of
+        # falling back to the cache, so the model could not load offline (the tt-media-server image ships 1.33).
+        return Path(snapshot_download(model_id_or_path, local_files_only=True, **kwargs))
+    except LocalEntryNotFoundError:
+        return Path(snapshot_download(model_id_or_path, **kwargs))
 
 
 def load_text_config_dict(snapshot: Path) -> dict:
