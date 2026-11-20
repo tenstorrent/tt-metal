@@ -46,7 +46,10 @@ STAGE0_4X4_MAX_USERS = 96
 
 # The 4x4 stage of kimi_k3_1.json: SP on the tray half's axis-1 ring, TP on axis 0.
 MESH_4X4 = (4, 4)
-SP_AXIS_4X4, TP_AXIS_4X4 = 1, 0
+# Experiment branch: $K31_SP_AXIS_4X4=0 flips the 4x4 stage to SP on axis 0 (LINE) and TP on axis 1 (RING) for the
+# whole process (the runner's sc1_sp0); its weight cache is mesh4x4.tpaxis1, linked as 4x4.
+SP_AXIS_4X4 = int(__import__("os").environ.get("K31_SP_AXIS_4X4", "1"))
+TP_AXIS_4X4 = 1 - SP_AXIS_4X4
 CHUNK_4X4 = 2560
 NUM_STAGES_4X4 = 8
 # (first layer, layer count) of each 4x4 stage: twelve layers (one AttnRes block) each, nine on the last.
@@ -101,7 +104,7 @@ PLACEMENT = [
             trace_region_size=TRACE_REGION_SIZE,
         ),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=MESH_4X4, topology="mesh-4x4"),
-        id="4x4-sp1",
+        id=f"4x4-sp{SP_AXIS_4X4}",
     ),
 ]
 
