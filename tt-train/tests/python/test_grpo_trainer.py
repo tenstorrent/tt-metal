@@ -38,6 +38,7 @@ import os
 import queue
 import signal
 import threading
+import types
 import time
 from types import SimpleNamespace
 
@@ -55,7 +56,16 @@ from ttml.common.config import DeviceConfig, TransformerConfig
 from ttml.common.utils import build_mesh, repeat_interleave
 from ttml.models.llama import Llama, LlamaConfig, load_from_safetensors
 from ttml.modules import RunMode
-from ttml.trainers import GRPOConfig, GRPOTrainer, RolloutBatch, RolloutSampler, TrainerCallback, get_grpo_config
+from ttml.trainers import (
+    GRPOConfig,
+    GRPOTrainer,
+    MultiTurnConfig,
+    RolloutBatch,
+    RolloutSampler,
+    Tool,
+    TrainerCallback,
+    get_grpo_config,
+)
 from ttml.trainers.grpo_trainer import (
     RemoteRolloutConfig,
     grpo_ttml_model,
@@ -623,6 +633,88 @@ def test_get_grpo_config_reads_rollout_backend():
         {"training_config": {"grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttml_in_process_sync"}}}
     )
     assert cfg.rollout_backend == "ttml_in_process_sync"
+
+
+def _multi_turn_yaml(multi_turn):
+    return {
+        "training_config": {
+            "model_source": "Qwen/Qwen3-1.7B",
+            "grpo_config": {**_GRPO_CONFIG_FIELDS, "rollout_backend": "ttt_remote_sync", "multi_turn": multi_turn},
+        },
+        "remote_rollout_config": {"mesh_shape": [1, 1], "max_batch_size": 1, "max_seq_len": 128},
+    }
+
+
+def test_get_grpo_config_takes_tool_call_format_from_model_type():
+    cfg = get_grpo_config(_multi_turn_yaml({"max_turns": 4}))
+    assert cfg.multi_turn == MultiTurnConfig(max_turns=4, tool_call_format="qwen3")
+
+
+def test_get_grpo_config_keeps_explicit_tool_call_format():
+    cfg = get_grpo_config(_multi_turn_yaml({"max_turns": 4, "tool_call_format": "qwen3"}))
+    assert cfg.multi_turn.tool_call_format == "qwen3"
+
+
+@pytest.mark.parametrize("value", [None, "hermes"])
+def test_multi_turn_rejects_bad_tool_call_format(expect_error, value):
+    with expect_error(ValueError, "'tool_call_format' must be one of"):
+        get_grpo_config(_multi_turn_yaml({"max_turns": 4, "tool_call_format": value}))
+
+
+def test_get_grpo_config_needs_tool_call_format_for_other_models(expect_error):
+    yaml_config = _multi_turn_yaml({"max_turns": 4})
+    yaml_config["training_config"]["model_source"] = "unsloth/Llama-3.2-1B-Instruct"
+    with expect_error(ValueError, "no default tool_call_format for model_type 'llama'"):
+        get_grpo_config(yaml_config)
+
+
+def test_get_grpo_config_rejects_null_multi_turn(expect_error):
+    with expect_error(ValueError, "'multi_turn' must be a section"):
+        get_grpo_config(_multi_turn_yaml(None))
+
+
+def test_grpo_config_rejects_multi_turn_in_process(expect_error):
+    with expect_error(ValueError, "'multi_turn' needs a ttt_remote_"):
+        GRPOConfig(**_HOST_GRPO_CONFIG, multi_turn=MultiTurnConfig(max_turns=2, tool_call_format="qwen3"))
+
+
+class _NamedTool(Tool):
+    description = "Test tool."
+    parameters = {"type": "object", "properties": {}}
+
+    def __init__(self, name):
+        self.name = name
+
+    def call(self, arguments):
+        return ""
+
+
+@pytest.mark.parametrize(
+    "with_multi_turn, tool_names, message",
+    [
+        (False, ["calculator"], "'tools' and grpo_config.multi_turn go together"),
+        (True, [], "'tools' and grpo_config.multi_turn go together"),
+        (True, ["calculator", "calculator"], "two tools have the same name"),
+    ],
+)
+def test_grpo_trainer_checks_tools(expect_error, with_multi_turn, tool_names, message):
+    config = GRPOConfig(
+        **_GRPO_CONFIG_FIELDS,
+        rollout_backend="ttt_remote_sync",
+        remote_rollout=RemoteRolloutConfig(mesh_shape=[1, 1], max_batch_size=1, max_seq_len=128),
+        multi_turn=MultiTurnConfig(max_turns=2, tool_call_format="qwen3") if with_multi_turn else None,
+    )
+    with expect_error(ValueError, message):
+        GRPOTrainer(
+            transformer_config=types.SimpleNamespace(model_type="qwen3"),
+            device_config=types.SimpleNamespace(enable_fsdp=False),
+            model_source="Qwen/Qwen3-1.7B",
+            dataset_func=lambda: None,
+            config=config,
+            reward_funcs=[lambda **kwargs: [0.0]],
+            optimizer_dict={},
+            tools=[_NamedTool(name) for name in tool_names],
+        )
 
 
 def test_layout_microbatch_rejects_short_prompt(expect_error):

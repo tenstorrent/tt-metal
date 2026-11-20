@@ -8,8 +8,10 @@ from .grpo_trainer import (
     GRPOConfig,
     GRPOMonitor,
     GRPOTrainer,
+    MultiTurnConfig,
     RolloutBatch,
     RolloutSampler,
+    Tool,
     build_rollout_sampler,
     get_grpo_config,
 )

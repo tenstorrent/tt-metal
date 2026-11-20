@@ -224,6 +224,20 @@ def test_generate_tool_turns_stops_at_max_turns(qwen3_tokenizer):
     assert qwen3_tokenizer.decode(completions[0]).count("<tool_call>") == 2
 
 
+def test_tokenize_prompts_writes_tool_schemas(qwen3_tokenizer):
+    from datasets import Dataset
+    from ttml.trainers.grpo_trainer.rollout_batch_source import tokenize_prompts
+
+    chat = Dataset.from_list([{"prompt": [{"role": "user", "content": "What is 17*23?"}], "answer": 391}])
+    prompts, extra = tokenize_prompts(chat, qwen3_tokenizer, 1, tools=[CalculatorTool()])
+    text = qwen3_tokenizer.decode(prompts[0])
+    assert '"name": "calculator"' in text and text.endswith("<|im_start|>assistant\n")
+    assert extra == {"answer": [391]}
+    plain = Dataset.from_list([{"prompt": "plain text", "answer": 1}])
+    prompts, _ = tokenize_prompts(plain, qwen3_tokenizer, 1, tools=[CalculatorTool()])
+    assert prompts == [qwen3_tokenizer.encode("plain text", add_special_tokens=False)]
+
+
 # ---------------------------------------------------------------- device tests (one Blackhole chip)
 
 TASK = (
