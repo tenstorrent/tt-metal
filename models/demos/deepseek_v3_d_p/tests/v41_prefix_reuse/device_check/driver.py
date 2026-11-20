@@ -84,6 +84,33 @@ for _spec in filter(None, os.environ.get("PREFIX_CHECK_PROFILE_IDS", "").split("
     PROFILE_NAMES.append(_name)
 
 
+# phase W (WS8, V41_PREFILL_WARM_RAGGED A/B): conversation pairs F_i (a first turn, cold) and G_i = F_i + more (the next turn:
+# its prefix restored, the rest computed), each ending on a NEW ragged length -- 20 distinct ragged widths, none used by the
+# other phases (A 896, A2 640, B 2560, U 1280, the 129,920 chat needle 2944). The sequence runs twice (W1, W2), each after
+# "clear" (retention + store emptied), so the two reps do the same work: W1 meets every ragged width for the first time in
+# this runner, W2 repeats it (compile cost = W1 - W2; first-run determinism = W1 digest == W2 digest).
+WS8_PAIRS = [  # (full chunks of F, F's ragged length, G's ragged length, G's extra full chunks)
+    (2, 128, 2048, 1),
+    (4, 384, 256, 2),
+    (6, 768, 3968, 1),
+    (8, 1152, 512, 3),
+    (10, 1536, 3328, 2),
+    (13, 1792, 1024, 1),
+    (16, 2176, 3712, 2),
+    (19, 3072, 1664, 3),
+    (22, 3456, 2304, 1),
+    (26, 3840, 2688, 1),
+]
+WS8_NAMES = []
+for _i, (_k, _lf, _lg, _m) in enumerate(WS8_PAIRS):
+    _f = s2_plan._rng(300 + _i, _k * CHUNK + _lf)
+    _extra = (_lg - _lf) % CHUNK + _m * CHUNK
+    PROMPTS[f"F{_i}"], PROMPTS[f"G{_i}"] = _f, _f + s2_plan._rng(400 + _i, _extra)
+    WS8_NAMES += [f"F{_i}", f"G{_i}"]
+assert all(len(PROMPTS[n]) % 128 == 0 for n in WS8_NAMES), {n: len(PROMPTS[n]) for n in WS8_NAMES}
+assert len({len(PROMPTS[n]) % CHUNK for n in WS8_NAMES}) == len(WS8_NAMES), "WS8 ragged widths must be distinct"
+
+
 def log(msg: str) -> None:
     print(f"[driver] {time.strftime('%H:%M:%S')} {msg}", flush=True)
 
@@ -240,6 +267,11 @@ def main() -> None:
         res.append(run_prompt("U", "X", "cold", mark=False))
         for name in ("A", "A2", "B"):
             res.append(run_prompt("U", name, "reuse", digest=True, mark=False))
+    if "W" in PHASES:  # WS8: the same conversation sequence twice (first-seen ragged widths, then repeats)
+        for rep in (1, 2):
+            res.append(run_prompt(f"W{rep}", "X", "clear"))
+            for name in WS8_NAMES:
+                res.append(run_prompt(f"W{rep}", name, "reuse", digest=True))
     if "R2" in PHASES:  # H2 references: arm off = today's runner, the store untouched
         for name in ("A", "A", "U", "A2", "AP", "B"):
             res.append(run_prompt("R2", "X", "off"))
