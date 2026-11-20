@@ -605,15 +605,6 @@ jobs:
 
       - name: 📦 Compute CPM cache key
         id: cpm-key
-        # The key holds the build variant because configure fetches different CPM
-        # packages per variant: Tracy builds also install emsdk into .cpmcache, and
-        # skip-tt-train builds do not fetch the tt-train packages. One shared key lets
-        # the smaller variant save first, and then the larger variant downloads its
-        # extra packages on every run.
-        # hashFiles lists each file that calls CPMAddPackage at configure time
-        # (git grep --recurse-submodules -l CPMAddPackage), plus each CPM.cmake
-        # that sets a CPM version. Tracy's profiler/CMakeLists.txt is not listed:
-        # the wasm sub-build fetches its packages during Compile, after the save.
         run: |
           variant="tracy-${{ inputs.tracy && 'on' || 'off' }}-tttrain-${{ inputs.skip-tt-train && 'off' || 'on' }}"
           echo "key=cpm-z9l-${variant}-${{ hashFiles(
@@ -631,9 +622,6 @@ jobs:
         id: cpm-cache
         # Same fork guard as the ccache S3 steps: forks have no secrets, so skip S3
         # and let CMake configure fetch CPM sources from scratch.
-        # Outputs: hit=true when the download succeeds. save=true only on a real miss
-        # (HTTP 404). A connection error or other failure sets save=false, so this job
-        # does not overwrite a good cache entry that it could not read.
         if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
@@ -643,9 +631,6 @@ jobs:
           CREDS="${AWS_ACCESS_KEY_ID}:${AWS_SECRET_ACCESS_KEY}"
           URL="${AWS_ENDPOINT_URL_S3}/${CPM_S3_BUCKET}/${CPM_S3_PREFIX}/${CACHE_KEY}.tar.zst"
           echo "Restoring CPM cache from: ${URL}"
-          # No -f: curl exits 0 on any HTTP status, and we read the status code.
-          # --retry covers timeouts and HTTP 408/429/5xx. --retry-connrefused also
-          # covers "connection refused", which --retry alone does not retry.
           rc=0
           http_code=$(curl -sS --retry 5 --retry-delay 2 --retry-connrefused --max-time 120 \
                --aws-sigv4 "${SIGV4}" --user "${CREDS}" \
@@ -716,15 +701,12 @@ jobs:
           "${build_args[@]}"
 
       - name: 📦 Pack CPM cache
-        # Pack only after a real miss (HTTP 404). For fork PRs the restore step is
-        # skipped (no secrets), so 'save' is unset and this step does not run.
         if: steps.cpm-cache.outputs.save == 'true'
         run: |
           [ -d .cpmcache ] && tar -I 'zstd -T0 --long -9 -v' -cf .cpmcache.tar.zst .cpmcache || true
 
       - name: 📦 Save CPM source cache (Garage S3)
-        # Upload only after a real miss (HTTP 404). A restore error does not upload,
-        # so a job that could not reach Garage does not overwrite a good entry.
+        # Only upload on a miss, and only where we have S3 creds (same fork guard).
         if: steps.cpm-cache.outputs.save == 'true'
         env:
           CACHE_KEY: ${{ steps.cpm-key.outputs.key }}
