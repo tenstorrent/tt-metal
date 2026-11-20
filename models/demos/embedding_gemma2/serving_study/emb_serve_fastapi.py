@@ -174,6 +174,9 @@ def _bge_worker(chip_id, args, normalize, task_q, result_q, ctrl_q, worker_cores
     # Inspector off unless asked for: with it on, its real-time profiler thread hit a bus error under DP=32 load in the
     # tt-media-server image (RealtimeProfilerManager::run_receiver_loop). Serving does not need it.
     os.environ.setdefault("TT_METAL_INSPECTOR", "0")
+    # Unthrottled matmuls unless EMB_MM_THROTTLE asks otherwise: the tt-media-server image sets TT_MM_THROTTLE_PERF=5
+    # for every model in it, and every number for this server was measured at 0.
+    os.environ["TT_MM_THROTTLE_PERF"] = os.environ.get("EMB_MM_THROTTLE", "0")
     if worker_cores:
         try:
             os.sched_setaffinity(0, set(worker_cores))
@@ -941,6 +944,7 @@ def main() -> None:
     _CONFIG.warm_first = args.warm_first
     _CONFIG.debug_chip = args.debug_chip
     _pin_server_cores(server_phys)
+    logger.info(f"Workers run with TT_MM_THROTTLE_PERF={os.environ.get('EMB_MM_THROTTLE', '0')} (EMB_MM_THROTTLE).")
 
     import uvicorn
 
