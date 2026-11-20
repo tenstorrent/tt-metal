@@ -10,6 +10,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import comp_pcc
+from models.demos.blackhole.qwen36.tt.vision import vision_fast as _vf
 from models.demos.blackhole.qwen36.tt.vision.functional import qwen3_5_vision_transformer_preprocess
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.common import get_rot_transformation_mat
@@ -124,9 +125,13 @@ class VisionTransformer(LightweightModule):
         unpadded_seq_len,
         rot_mats,
         trim_before_merger=True,
+        _mark=None,
     ):
         """
         Forward pass through the Vision Transformer blocks.
+
+        _mark (QWEN36_VISION_TIMING): called with "tower" after the last block is dispatched and with "merger" after
+        the merger; None (default) = no call.
 
         trim_before_merger=False keeps the merger on the full PADDED length (rows are independent, so the valid
         rows are unchanged) so every device op depends only on the padded sequence bucket, never on the exact
@@ -148,6 +153,8 @@ class VisionTransformer(LightweightModule):
                 x,
                 rot_mats=rot_mats,
             )
+        if _mark is not None:
+            _mark("tower")
 
         # The PatchMerger consumes the block output fractured along dim=3
         # directly (its first op is a DistributedLayerNorm that all-gathers
@@ -156,6 +163,8 @@ class VisionTransformer(LightweightModule):
         if trim_before_merger:
             x = x[:, :, :unpadded_seq_len, :]
         x = self.patch_merger(x)
+        if _mark is not None:
+            _mark("merger")
         return x
 
 
@@ -229,6 +238,10 @@ class DropInVisionTransformer(torch.nn.Module):
         # may go. Not a new device program; the splice's next step (_set_vision_merge) reads these rows back to host on
         # the same queue anyway, so it would have waited for the same work.
         ttnn.event_synchronize(ttnn.record_event(mesh))
+        rec = _vf.timing_current()
+        if rec is not None:  # QWEN36_VISION_TIMING: the packed-row upload (tilize excluded; the write is synchronised above)
+            rec.add("rows_upload_ms", 1e3 * (time.perf_counter() - t0))
+            rec.add("rows_upload_bytes", int(rows.shape[0]) * int(rows.shape[1]) * 2)
         st = self.__dict__.setdefault("_upload_stats", [0, 0, 0.0])
         st[0] += 1
         st[1] += int(rows.shape[0])
@@ -268,6 +281,16 @@ class DropInVisionTransformer(torch.nn.Module):
         all_pixel_values = pixel_values
         all_grid_thw = grid_thw
         final_outputs = []
+        # QWEN36_VISION_TIMING=1 (default off: rec is None and nothing below changes): stage clock of this call, on the
+        # record of the image request being prefilled, or a record of its own (warm-up, demos, the non-spec paths).
+        rec = own_rec = None
+        if _vf.timing_enabled():
+            rec = _vf.timing_current()
+            if rec is None:
+                _mesh = self.model_args.mesh_device
+                rec = own_rec = _vf.timing_begin(sync=lambda: ttnn.synchronize_device(_mesh), standalone=True)
+        t_call = time.perf_counter()
+        mark = None if rec is None else (lambda name: rec.lap(name, sync=True, disp=True))
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
         for grid_thw in all_grid_thw:
             # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
@@ -279,6 +302,8 @@ class DropInVisionTransformer(torch.nn.Module):
             unpadded_seq_len = grid_thw.prod(dim=1).sum().item()
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
             seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+            if rec is not None:
+                rec.image(grid_thw[0].tolist(), unpadded_seq_len, seq_len)
 
             # 2. Use preprocessing function from reference/functional to get indices and embeddings
             cu_seqlens, position_embeddings = qwen3_5_vision_transformer_preprocess(
@@ -287,11 +312,17 @@ class DropInVisionTransformer(torch.nn.Module):
                 head_dim=self.model_args.head_dim,
                 spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
             )
+            if rec is not None:
+                rec.lap("host_rot")
 
             # 3. Use reference model's patch embedding
             patch_input = self.reference_model.patch_embed(pixel_values)
+            if rec is not None:
+                rec.lap("host_patch")
             pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
+            if rec is not None:
+                rec.lap("host_pos")
 
             # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
             cos_orig, sin_orig = position_embeddings
@@ -307,6 +338,8 @@ class DropInVisionTransformer(torch.nn.Module):
                 .unsqueeze(0)
                 .unsqueeze(0)
             )
+            if rec is not None:
+                rec.lap("host_rot")  # the table conversion + padding, added to the rotary stage
             # Convert to TT tensors on the mesh device
             cos = ttnn.from_torch(
                 cos_padded,
@@ -323,9 +356,16 @@ class DropInVisionTransformer(torch.nn.Module):
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.model_args.mesh_device),
             )
             rot_mats = [cos, sin]
+            if rec is not None:
+                # host bf16 + tilize + the write to every chip; bytes = both tables x the chips they are replicated to
+                n_dev = int(self.model_args.mesh_device.get_num_devices())
+                rec.lap("up_rot", sync=True, nbytes=2 * seq_len * int(cos_padded.shape[-1]) * 2 * n_dev)
 
             # 5. Prepare input tensor for the TT model using window_index
             tt_input = self.tt_model.prepare_input(patch_input, seq_len)
+            if rec is not None:
+                # row pad + host bf16 + tilize + the hidden-sharded write
+                rec.lap("up_patch", sync=True, nbytes=seq_len * int(patch_input.shape[-1]) * 2)
 
             # --- TT Model Execution ---
             tt_out = self.tt_model(
@@ -333,6 +373,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
                 trim_before_merger=not host_trim,
+                **({} if mark is None else dict(_mark=mark)),
             )
 
             # deallocate device tensors that are not needed by decode
@@ -347,14 +388,20 @@ class DropInVisionTransformer(torch.nn.Module):
                 merge_sq = self.model_args.hf_config.vision_config.spatial_merge_size**2
                 n_valid = unpadded_seq_len // merge_sq
                 mesh = self.model_args.mesh_device
+                if rec is not None:
+                    rec.start()  # the deallocations above are not part of the read-back
                 host = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh, dim=3))
                 ttnn.deallocate(tt_out)
+                if rec is not None:
+                    rec.lap("readback")
                 # .clone(): own the rows. to_torch's result (and the reshape / slice / same-dtype .to views of it) can
                 # alias a host buffer ttnn frees and reuses; the vision cache keeps these rows across requests
                 # (rc1e d30u20 11-11: cached rows later read back as another image's / garbage colours).
                 final_outputs.append(
                     host.reshape(-1, host.shape[-1])[:n_valid, :out_hidden_full].to(torch.bfloat16).clone()
                 )
+                if rec is not None:
+                    rec.lap("trim")
                 continue
 
             # --- Postprocessing ---
@@ -384,9 +431,19 @@ class DropInVisionTransformer(torch.nn.Module):
             # 3. Aggregate in batched users list
             final_outputs.append(tt_out)
 
+        if rec is not None:
+            rec.add("tower_call_ms", 1e3 * (time.perf_counter() - t_call))
+            if own_rec is not None and (return_host_rows or not host_trim):
+                _vf.timing_end(own_rec, logger.info)  # no row upload follows: the call's line is complete
+                own_rec = None
         if host_trim:
             if return_host_rows:
                 return final_outputs
+            if own_rec is not None:
+                try:
+                    return self.upload_rows(torch.cat(final_outputs, dim=0))
+                finally:
+                    _vf.timing_end(own_rec, logger.info)
             # Tilize on the HOST (no device= here): the row count depends on the request's image size, and a device
             # tilize (Tilize / TilizeWithValPadding) is a program keyed by that shape, i.e. one NEW program compiled
             # after the prefill/decode traces are captured per distinct image size.

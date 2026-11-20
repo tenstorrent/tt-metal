@@ -45,6 +45,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     verify_device_topk_m,
     spec_vfy_outs_prealloc_enabled,
 )
+from models.demos.blackhole.qwen36.tt.vision import vision_fast as _vf
 from models.tt_transformers.tt.common import Mode, get_block_size, num_blocks_in_seq
 
 
@@ -767,8 +768,13 @@ class Qwen36Model:
             # the on-device scatter (non-traced prefill_paged).
             assert vision_tokens is None, "vision merge requested but the trace-safe buffers are not allocated"
             return
+        # QWEN36_VISION_TIMING=1 (default off: rec is None): splice staging of the image request being prefilled.
+        rec = _vf.timing_current()
+        if rec is not None:
+            rec.start()
         if vision_tokens is None:
             ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
+            self._vis_time_clear(rec)
             return
         tp = self.num_devices > 1
         cs = self._vis_buf.shape[-2]  # seq dim: dim 1 (3D single) / dim 2 (4D TP)
@@ -780,6 +786,7 @@ class Qwen36Model:
         # image rows): the merge is the identity, so just clear the mask.
         if n == 0:
             ttnn.copy_host_to_device_tensor(self._vis_zero_mask_host, self._vis_mask_buf)
+            self._vis_time_clear(rec)
             return
         assert vis_row_offset + n <= int(vision_tokens.shape[0]), (
             f"vision splice out of range: row offset {vis_row_offset} + {n} image positions in this "
@@ -801,6 +808,28 @@ class Qwen36Model:
             vis_full[0, 0, pos] = seg
             mask = torch.zeros(1, 1, cs, 1, dtype=torch.bfloat16)
             mask[0, 0, pos, 0] = 1.0
+            if rec is not None:
+                # timed variant: the same four calls in the same order, with the host part (zero buffer, row placement,
+                # bf16 tilize + shard) and the device part (the two writes, synchronised) clocked separately
+                rec.lap("splice_host", image=False)
+                vis_host_t = ttnn.from_torch(
+                    vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard
+                )
+                rec.lap("splice_host", image=False)
+                ttnn.copy_host_to_device_tensor(vis_host_t, self._vis_buf)
+                rec.lap("splice_up", image=False)
+                mask_host_t = ttnn.from_torch(
+                    mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=rep
+                )
+                rec.lap("splice_host", image=False)
+                ttnn.copy_host_to_device_tensor(mask_host_t, self._vis_mask_buf)
+                # the host tensors stay referenced until the writes have landed
+                rec.lap("splice_up", sync=True, image=False, nbytes=cs * Hg * 2 + cs * 2 * self.num_devices)
+                del vis_host_t, mask_host_t
+                rec.add("splice_n", 1)
+                rec.add("splice_rows", n)
+                rec.add("splice_len", cs)
+                return
             ttnn.copy_host_to_device_tensor(
                 ttnn.from_torch(vis_full, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=None, mesh_mapper=shard),
                 self._vis_buf,
@@ -820,6 +849,13 @@ class Qwen36Model:
         ttnn.copy_host_to_device_tensor(
             ttnn.from_torch(mask, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT), self._vis_mask_buf
         )
+
+    @staticmethod
+    def _vis_time_clear(rec):
+        """QWEN36_VISION_TIMING: a zero-mask upload (text segment of an image request) on the request's record."""
+        if rec is not None:
+            rec.lap("mask_clear", sync=True, image=False)
+            rec.add("mask_clear_n", 1)
 
     def _vis_row_offset_for(self, token_ids, chunk_start):
         """Packed-vision-row offset for the prefill segment starting at absolute position

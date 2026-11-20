@@ -48,6 +48,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_prefill_overlap_enabled,
     verify_device_topk_m,
 )
+from models.demos.blackhole.qwen36.tt.vision import vision_fast as _vf
 from models.tt_transformers.tt.generator import Generator
 
 # Sampler top-k limit (models/common/sampling TTSampling.max_top_k default; ttnn.sampling walks k <= 32 candidates).
@@ -543,6 +544,10 @@ class Qwen36ForCausalLM(Generator, SupportsMultiModal):
         stats = self._vision_lru_stats
         stats[0] += len(rows) - len(miss)
         stats[1] += len(miss)
+        rec = _vf.timing_current()
+        if rec is not None:  # QWEN36_VISION_TIMING
+            rec.add("cache_hits", len(rows) - len(miss))
+            rec.add("cache_misses", len(miss))
         for k, key in enumerate(keys):
             if rows[k] is not None:
                 cache.move_to_end(key)
@@ -1573,37 +1578,65 @@ class Qwen36MTPContractForCausalLM(Qwen36ForCausalLM):
                     f"multimodal prefill row {i} is a non-final chunk: the MTP spec path cannot split a multimodal prompt "
                     "(the scheduler must not chunk it)"
                 )
-            mm_vision = self._mm_vision_for(model, kwargs, i, tokens[i, :L]) if has_mm and starts is not None else None
-            if mm_vision is not None:
-                # QWEN36_MM_PREFIX_CACHE: prefix-cached like a text prompt (start_pos 0 included: it saves the snapshots
-                # the next turn resumes from); the engine encodes the images its resume reaches.
-                out = eng.prefill(
-                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], vision_tokens=mm_vision
-                )
-                rows.append(out.float().reshape(-1))
-                continue
-            vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
-            if vision_tokens is not None and hasattr(model, "vision_rows_host"):
-                # rows to host right after the tower, before any trace replay (see Qwen36Model.vision_rows_host)
-                vision_tokens = model.vision_rows_host(vision_tokens)
-            if nonfinal[i]:
-                assert starts is not None, "non-final prefill chunk without start_pos"
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
-                rows.append(out.float().reshape(-1))  # zero row: the plugin ignores a non-final chunk's output
-                continue
-            if vision_tokens is not None:
-                # No prefix-cache resume: recompute from 0 (a preempted / resumed request may carry start_pos > 0).
-                out = eng.prefill(
-                    slots[i], tokens[i, :L], table[i : i + 1], start_pos=None, vision_tokens=vision_tokens
-                )
-            elif starts is None:
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1])
-            else:  # start_pos = num_computed_tokens (cached prefix, or a preemption resume)
-                out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i])
-            rows.append(out.float().reshape(-1))
+            # QWEN36_VISION_TIMING=1 (default off: rec is None): one [vision_timing] line per image request.
+            rec = self._vision_timing_begin(kwargs, i, L, starts, N) if has_mm else None
+            try:
+                rows.append(self._prefill_row(eng, model, kwargs, i, L, slots, tokens, table, starts, nonfinal, has_mm))
+            except BaseException:
+                _vf.timing_abort(rec)
+                raise
+            _vf.timing_end(rec, logger.info)
         # Zero rope deltas, as the non-spec class: the plugin unpacks (logits, rope_deltas) for an M-RoPE model, and the
         # per-request delta is model-side (build_request_rope sets rope.rope_delta during the prefill).
         return torch.stack(rows).reshape(N, 1, -1), torch.zeros(N, dtype=torch.long)
+
+    def _vision_timing_begin(self, kwargs, i, L, starts, N):
+        """QWEN36_VISION_TIMING=1: open the stage record of image request ``i`` of this prefill step (None when off).
+        Counts and sizes only; no image content. The device queue is drained before the clock starts."""
+        if not _vf.timing_enabled():
+            return None
+        mesh = self.mesh_device
+        rec = _vf.timing_begin(sync=lambda: ttnn.synchronize_device(mesh))
+        grids = kwargs.get("image_grid_thw")
+        g = grids[i] if grids is not None and i < len(grids) and grids[i] is not None else None
+        if g is None:
+            n_images = 0
+        elif isinstance(g, (list, tuple)):
+            n_images = len(g)
+        else:
+            n_images = int(torch.as_tensor(g).reshape(-1, 3).shape[0])
+        rec.note("images", n_images)
+        rec.note("video", int(self._has_visual(kwargs, "pixel_values_videos", i)))
+        rec.note("tokens", int(L))
+        rec.note("start", -1 if starts is None else int(starts[i]))
+        rec.note("step_rows", int(N))
+        rec.note("step_row", int(i))
+        return rec
+
+    def _prefill_row(self, eng, model, kwargs, i, L, slots, tokens, table, starts, nonfinal, has_mm):
+        """Prefill request ``i`` of the step (the body of prefill_forward's loop); returns its float logits row."""
+        mm_vision = self._mm_vision_for(model, kwargs, i, tokens[i, :L]) if has_mm and starts is not None else None
+        if mm_vision is not None:
+            # QWEN36_MM_PREFIX_CACHE: prefix-cached like a text prompt (start_pos 0 included: it saves the snapshots
+            # the next turn resumes from); the engine encodes the images its resume reaches.
+            out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], vision_tokens=mm_vision)
+            return out.float().reshape(-1)
+        vision_tokens = self._compute_vision_tokens(model, kwargs, i) if has_mm else None
+        if vision_tokens is not None and hasattr(model, "vision_rows_host"):
+            # rows to host right after the tower, before any trace replay (see Qwen36Model.vision_rows_host)
+            vision_tokens = model.vision_rows_host(vision_tokens)
+        if nonfinal[i]:
+            assert starts is not None, "non-final prefill chunk without start_pos"
+            out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i], final=False)
+            return out.float().reshape(-1)  # zero row: the plugin ignores a non-final chunk's output
+        if vision_tokens is not None:
+            # No prefix-cache resume: recompute from 0 (a preempted / resumed request may carry start_pos > 0).
+            out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=None, vision_tokens=vision_tokens)
+        elif starts is None:
+            out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1])
+        else:  # start_pos = num_computed_tokens (cached prefix, or a preemption resume)
+            out = eng.prefill(slots[i], tokens[i, :L], table[i : i + 1], start_pos=starts[i])
+        return out.float().reshape(-1)
 
     def decode_forward_begin(self, *args, **kwargs):
         """First half of a split fused step (phase 3 stage P3a; needs the capability supports_spec_device_mask). The arguments are those
