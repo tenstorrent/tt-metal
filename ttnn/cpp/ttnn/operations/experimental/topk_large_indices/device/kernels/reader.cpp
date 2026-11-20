@@ -282,11 +282,12 @@ FORCE_INLINE void two_level_stage2(const Noc& noc, const MaxAccessor& block_max,
     }
 }
 
-// A two-level program's schedule on this core. Its whole rows (see topk_two_level::row_owner) run as soon as their
-// maxima are complete; until then the core claims phase-1 units, so the cores without a ready row keep the DRAM
-// streaming. With the caller's maxima there is no phase 1 and every row is ready at once. After the end header a
-// core of a split pair gathers its half of the pair's split row, a chunk as soon as its page of the table is there: the
-// first core's from its own writer, the second core's from the first core's writer.
+// A two-level program's schedule on this core. Its rows (see topk_two_level::row_owner) run as soon as their maxima are
+// complete; until then the core claims phase-1 units, so the cores without a ready row keep the DRAM streaming. With
+// the caller's maxima there is no phase 1 and every row is ready at once. A core of a split pair gathers its half of
+// the pair's split row, a chunk as soon as its page of the table is there: the first core's from its own writer, the
+// second core's from the first core's writer; with tl_early_halves as soon as the halves can run, else after the end
+// header.
 template <typename InputAccessor, typename MaxAccessor>
 FORCE_INLINE void two_level_run(
     const Noc& noc,
@@ -309,15 +310,13 @@ FORCE_INLINE void two_level_run(
     // The first core of a split pair also owns the split row's stage 2, as its last local row.
     const bool split_owner = has_split && !second_half;
     const uint32_t local_rows = local_whole_rows + (split_owner ? 1 : 0);
-    const auto* ready =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_ready_sem")));
+    auto* flags = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+        CircularBuffer(get_named_compile_time_arg_val("tl_cb_ready_flags")).get_write_ptr());
     const uint64_t counter = get_noc_addr(
         get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
         get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
         get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")),
         noc.get_noc_id());
-    // A non-posted atomic increment returns the counter's old value to an L1 word of the issuing core. The claims
-    // return to a word of their own: the default one is shared with the writer's atomics.
     const uint32_t claim_word = get_semaphore(get_named_compile_time_arg_val("tl_claim_sem"));
     const auto* claimed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(claim_word);
     // With tl_early_halves a split row's halves of stage 3 run as soon as they can, rather than after the end: the
@@ -332,12 +331,25 @@ FORCE_INLINE void two_level_run(
         get_semaphore(get_named_compile_time_arg_val("tl_rows_sem")),
         noc.get_noc_id());
     const uint32_t row_cap = split_rows_first(early_halves, search_len) ? num_cores * row_cap_fifths / 5 : num_cores;
-    // A non-posted atomic add returns the counter's old value to return_word.
-    const auto atomic_add = [&](uint64_t target, uint32_t increment, uint32_t return_word) {
+    // A non-posted atomic add returns the counter's old value to the return address of its command buffer. That value
+    // is not reliable: the atomic barrier can complete before it lands, it goes to whatever return address the buffer
+    // holds when it does, and under load a core can get another claim's value. The increments themselves and NoC reads
+    // are reliable, so correctness rests on those:
+    // - A claim waits for claim_word to change (a core's claims return increasing values, and the word starts at
+    //   0xFFFFFFFF), for at most claim_timeout. A wrong or missing value is a unit done twice, which its done word
+    //   absorbs, or a unit nobody does, which its row's owner repairs (see below).
+    // - The other atomics (the cleared count and the row counter) use the register-write buffer, unused by this kernel
+    //   otherwise, with rows_word as its return address, so their values never land in claim_word. The row counter's
+    //   value is only the cap's estimate.
+    static_assert(noc_mode == DM_DEDICATED_NOC);
+    constexpr uint32_t claim_timeout = 200000;  // wall-clock ticks, about 150 us
+    constexpr uint32_t repair_after = 4000000;  // wall-clock ticks idle (about 3 ms) once every unit is claimed
+    uint32_t last_claimed = 0xFFFFFFFFu;
+    const auto claim = [&](uint32_t increment, uint32_t return_word) {
         noc_fast_atomic_increment<noc_mode, true>(
             noc.get_noc_id(),
             write_at_cmd_buf,
-            target,
+            counter,
             NOC_UNICAST_WRITE_VC,
             increment,
             31 /*wrap*/,
@@ -345,8 +357,86 @@ FORCE_INLINE void two_level_run(
             false /*posted*/,
             return_word);
         noc.async_atomic_barrier();
+        if (return_word != claim_word) {
+            return true;
+        }
+        const uint32_t start = get_timestamp_32b();
+        do {
+            invalidate_l1_cache();
+            if (*claimed != last_claimed) {
+                last_claimed = *claimed;
+                return true;
+            }
+        } while (get_timestamp_32b() - start < claim_timeout);
+        return false;
     };
-    const auto claim = [&](uint32_t increment, uint32_t return_word) { atomic_add(counter, increment, return_word); };
+    const uint32_t rows_word = get_semaphore(get_named_compile_time_arg_val("tl_rows_return_sem"));
+    const auto* rows_returned = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(rows_word);
+    const uint32_t local_coordinate =
+        static_cast<uint32_t>(NOC_XY_ADDR(my_x[noc.get_noc_id()], my_y[noc.get_noc_id()], 0) >> NOC_ADDR_COORD_SHIFT) &
+        NOC_COORDINATE_MASK;
+    const auto aux_add = [&](uint64_t target, uint32_t increment) {
+        noc_fast_atomic_increment<noc_mode, true>(
+            noc.get_noc_id(),
+            write_reg_cmd_buf,
+            target,
+            NOC_UNICAST_WRITE_VC,
+            increment,
+            31 /*wrap*/,
+            false /*linked*/,
+            false /*posted*/,
+            rows_word);
+        noc.async_atomic_barrier();
+        invalidate_l1_cache();
+        return *rows_returned;
+    };
+    const auto rows_add = [&](uint32_t increment) { return aux_add(rows_counter, increment); };
+    const bool capped = !has_block_max && row_cap < num_cores;
+    if constexpr (!has_block_max) {
+        // The atomic sets the return address's low word; the rest points it at this core.
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_MID, 0);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_RET_ADDR_COORDINATE, local_coordinate);
+        // Clear this run's done words, then count this core on the coordinator; no writer sends a done word before
+        // every core is counted.
+        for (uint32_t word = 0; word < ready_flags_bytes / sizeof(uint32_t); ++word) {
+            flags[word] = 0;
+        }
+        wait_l1_store(reinterpret_cast<uint32_t>(&flags[ready_flags_bytes / sizeof(uint32_t) - 1]));
+        aux_add(
+            get_noc_addr(
+                get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_x),
+                get_common_arg_val<uint32_t>(topk_common_args::reader_coordinator_noc_y),
+                get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
+                noc.get_noc_id()),
+            1);
+    }
+    // A local row is ready when its first per_row done words are nonzero; complete_parts[r] counts those seen so far.
+    uint8_t complete_parts[max_local_rows] = {};
+    const auto row_ready = [&](uint32_t local_row) {
+        uint32_t part = complete_parts[local_row];
+        while (part < units.per_row && flags[local_row * max_row_units + part] != 0) {
+            ++part;
+        }
+        complete_parts[local_row] = part;
+        return part == units.per_row;
+    };
+    const auto local_row_index = [&](uint32_t local_row) {
+        return split_owner && local_row == local_whole_rows ? split_row : core_index + local_row * num_cores;
+    };
+    // The coordinator's counter, read over the NoC: the number of units claimed so far, or more.
+    const auto read_counter = [&]() {
+        auto* scratch = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+            get_semaphore(get_named_compile_time_arg_val("tl_scratch_sem")));
+        noc_async_read(counter, reinterpret_cast<uint32_t>(scratch), sizeof(uint32_t), noc.get_noc_id());
+        noc_async_read_barrier(noc.get_noc_id());
+        invalidate_l1_cache();
+        return *scratch;
+    };
+    // The idle time since this core last had work, for the repair.
+    bool idle = false;
+    uint32_t idle_since = 0;
+    bool repairing = false;
+    uint32_t repair_next = 0;
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
     const auto* half_pages =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_named_compile_time_arg_val("tl_half_sem")));
@@ -359,7 +449,17 @@ FORCE_INLINE void two_level_run(
     while (true) {
         if (half_pending && !split_owner) {
             invalidate_l1_cache();
-            if (*half_pages >= 1) {
+            bool counted = false;
+            bool allowed = *half_pages >= 1;
+            if (allowed && units_left && capped) {
+                counted = true;
+                if (rows_add(1) >= row_cap) {
+                    rows_add(0xFFFFFFFFu);
+                    counted = false;
+                    allowed = false;
+                }
+            }
+            if (allowed) {
                 two_level_push_stage1(two_level_announce(header_half, split_row));
                 two_level_gather(
                     noc,
@@ -369,21 +469,27 @@ FORCE_INLINE void two_level_run(
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(remote_table),
                     half_chunks,
                     true);
+                if (counted) {
+                    rows_add(0xFFFFFFFFu);
+                }
                 half_pending = false;
+                idle = false;
                 continue;
             }
         }
         // The first of this core's rows whose maxima are complete. Without tl_early_halves the split row is the last:
-        // its units are the last claimed, so it waits for the claims to run out.
+        // its table stays in the table CB until its half gathers after the end, so it waits for the claims to run out
+        // and for the whole rows.
         uint32_t local_row = local_rows;
         if (rows_done < local_rows) {
             invalidate_l1_cache();
             for (uint32_t candidate = 0; candidate < local_rows; ++candidate) {
                 const bool split = split_owner && candidate == local_whole_rows;
-                if ((done_rows >> candidate & 1) || (split && units_left && !early_halves)) {
+                if ((done_rows >> candidate & 1) ||
+                    (split && !early_halves && (units_left || rows_done < local_whole_rows))) {
                     continue;
                 }
-                if (has_block_max || ready_count(*ready, candidate) >= units.per_row) {
+                if (has_block_max || row_ready(candidate)) {
                     local_row = candidate;
                     break;
                 }
@@ -391,19 +497,17 @@ FORCE_INLINE void two_level_run(
         }
         // Over the cap, the core claims a unit instead.
         bool counted = false;
-        if (local_row < local_rows && units_left && row_cap < num_cores) {
-            atomic_add(rows_counter, 1, claim_word);
-            invalidate_l1_cache();
+        if (local_row < local_rows && units_left && capped) {
             counted = true;
-            if (*claimed >= row_cap) {
-                atomic_add(rows_counter, 0xFFFFFFFFu, claim_word);
+            if (rows_add(1) >= row_cap) {
+                rows_add(0xFFFFFFFFu);
                 counted = false;
                 local_row = local_rows;
             }
         }
         const bool is_split_row = split_owner && local_row == local_whole_rows;
         if (local_row < local_rows) {
-            const uint32_t row = is_split_row ? split_row : core_index + local_row * num_cores;
+            const uint32_t row = local_row_index(local_row);
             two_level_push_stage1(two_level_announce(is_split_row ? header_split : header_row, row));
             two_level_stage2(noc, block_max, search_len, row);
             if (is_split_row && early_halves) {
@@ -432,30 +536,62 @@ FORCE_INLINE void two_level_run(
                 table_cb.pop_front(table_pages);
             }
             if (counted) {
-                atomic_add(rows_counter, 0xFFFFFFFFu, claim_word);
+                rows_add(0xFFFFFFFFu);
             }
             done_rows |= 1u << local_row;
             ++rows_done;
+            idle = false;
             continue;
         }
+        // The next phase-1 unit: a claimed one, or with `repairing` one of this core's rows' missing ones.
+        uint32_t unit = units.total;
         if (units_left) {
-            claim(1, claim_word);
-            invalidate_l1_cache();
-            const uint32_t unit = *claimed;
-            if (unit < units.total) {
-                two_level_unit(noc, input, search_len, units, unit);
+            if (claim(1, claim_word) && last_claimed < units.total) {
+                unit = last_claimed;
             } else {
-                units_left = false;
+                // Past the last unit, or no value came (its unit is then missing): the counter itself says whether
+                // units remain.
+                units_left = read_counter() < units.total;
             }
+        } else if (repairing) {
+            // The repair walks this core's done words once, from repair_next: each missing unit is done once.
+            for (; repair_next < local_rows * max_row_units && unit == units.total; ++repair_next) {
+                const uint32_t local_row = repair_next / max_row_units;
+                const uint32_t part = repair_next % max_row_units;
+                if (part < units.per_row && !(done_rows >> local_row & 1) && flags[repair_next] == 0) {
+                    unit = units.unit_of(local_row_index(local_row), part);
+                }
+            }
+            repairing = unit < units.total;
+        }
+        if (unit < units.total) {
+            two_level_unit(noc, input, search_len, units, unit);
+            idle = false;
             continue;
         }
         if (rows_done == local_rows && !half_pending) {
             break;
         }
+        // Nothing to do: this core waits for its rows' units. If it has waited repair_after since every unit was
+        // claimed, one went missing (see the claims above), and the core does its rows' missing units itself.
+        if constexpr (!has_block_max) {
+            const uint32_t now = get_timestamp_32b();
+            if (!idle) {
+                idle = true;
+                idle_since = now;
+            } else if (!units_left && now - idle_since > repair_after) {
+                repairing = read_counter() >= units.total;
+                repair_next = 0;
+                idle = false;
+            }
+        }
     }
     if constexpr (!has_block_max) {
-        // Point this command buffer's atomic returns back at the default word, for the kernels that run after.
+        // Point the atomic buffer's returns back at the default word, and the register-write buffer's target back at
+        // this core, as the kernels that run after expect.
         claim(0, MEM_NOC_ATOMIC_RET_VAL_ADDR);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_MID, 0);
+        NOC_CMD_BUF_WRITE_REG(noc.get_noc_id(), write_reg_cmd_buf, NOC_TARG_ADDR_COORDINATE, local_coordinate);
     }
     two_level_push_stage1(two_level_announce(header_end, 0));
     if (has_split && !early_halves) {

@@ -612,8 +612,9 @@ FORCE_INLINE void two_level_unit() {
     reduce_uninit();
 }
 
-// Runs the phase-1 units the reader sends until it announces one of this core's rows (returns header_row) or the
-// end (header_end). Phase 1 runs on the ordinary schedule, so a split in progress is ended first.
+// Runs the phase-1 units the reader sends until it announces anything else, which it returns: one of this core's rows
+// (header_row, or header_split for a split row's stage 2), its half of a split row (header_half), or the end
+// (header_end). Phase 1 runs on the ordinary schedule, so a split in progress is ended first.
 FORCE_INLINE uint32_t two_level_next_row(uint32_t input_cb, uint32_t total_units, bool& split_on) {
     using namespace topk_two_level;
     constexpr uint32_t cb_stage1 = get_named_compile_time_arg_val("tl_cb_stage1");
@@ -750,9 +751,9 @@ void kernel_main() {
 
     const uint32_t num_whole_rows = has_split ? num_rows - 1 : num_rows;
     uint32_t first_row = 0;
-    // A split-row half runs on the split body like a whole row, as the last item of the loop below, when it starts on
-    // a 32-chunk block or (two-level) its stamps are offset to the row's; the body keeps one call site. Its survivor
-    // stays in DEST for the split-row path.
+    // A split-row half runs on the split body like a whole row, when it starts on a 32-chunk block or (two-level) its
+    // stamps are offset to the row's; the body keeps one call site. As the loop's last item its survivor stays in DEST
+    // for the split-row path; a two-level early half (tl_early_halves) runs mid-loop and packs its survivor out.
     bool half_done = false;
     // A two-level split row's halves run on the split body as 16-chunk rows from chunk 0, stamped with the row's chunk
     // ids (the split body decodes stamps per 32-chunk block and needs a row to start on one).

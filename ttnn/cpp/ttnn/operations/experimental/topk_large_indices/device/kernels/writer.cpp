@@ -110,10 +110,16 @@ FORCE_INLINE void write_row_indices(
 // Phase 1 of a two-level program (see topk_large_indices_two_level.hpp), one unit: the max reduce leaves each tile's 32
 // row maxima in column 0 (rows 0-15 in face 0, 16-31 in face 2). The unit's 32 tiles were tilized as one 32-row
 // block, so row r of tile t holds block r * 32 + t of the unit; its 1024 maxima go to the maxima tensor in block
-// order. Once they are written, the row's owner counts the unit.
+// order. Once they are written, the unit's done word on the row's owner goes up. `cleared`: whether every core has
+// cleared its done words for this run, which the first unit waits for.
 template <typename MaxOutT>
 FORCE_INLINE void two_level_unit(
-    const Noc& noc, const MaxOutT& max_out, uint32_t search_len, const topk_two_level::Units& units, uint32_t unit) {
+    const Noc& noc,
+    const MaxOutT& max_out,
+    uint32_t search_len,
+    const topk_two_level::Units& units,
+    uint32_t unit,
+    bool& cleared) {
     using namespace topk_two_level;
     constexpr uint32_t stage1_batch = get_named_compile_time_arg_val("tl_stage1_batch");
     constexpr uint32_t unit_blocks = stage1_batch * (tile_keys / block_keys);
@@ -146,19 +152,34 @@ FORCE_INLINE void two_level_unit(
         {},
         {.page_id = row, .offset_bytes = first_block * sizeof(uint16_t)});
     noc.async_write_barrier();
+    const uint32_t num_cores = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores);
     const RowOwner owner = row_owner(
-        row,
-        units.num_rows,
-        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows),
-        get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_num_cores));
+        row, units.num_rows, get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_split_rows), num_cores);
+    if (!cleared) {
+        // The coordinator counts the cores that have cleared; the staging word is free once the maxima are written.
+        const uint32_t coordinator = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords);
+        const uint64_t cleared_count = get_noc_addr(
+            coordinator & 0xFFFFu,
+            coordinator >> 16,
+            get_semaphore(get_named_compile_time_arg_val("tl_cleared_sem")),
+            noc.get_noc_id());
+        const auto* landed = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(staging);
+        do {
+            noc_async_read(cleared_count, staging, sizeof(uint32_t), noc.get_noc_id());
+            noc_async_read_barrier(noc.get_noc_id());
+            invalidate_l1_cache();
+        } while (*landed < num_cores);
+        cleared = true;
+    }
     const uint32_t coords = get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_core_coords + owner.core);
     noc_semaphore_inc(
         get_noc_addr(
             coords & 0xFFFFu,
             coords >> 16,
-            get_semaphore(get_named_compile_time_arg_val("tl_ready_sem")),
+            CircularBuffer(get_named_compile_time_arg_val("tl_cb_ready_flags")).get_write_ptr() +
+                ready_flag_offset(owner.local_row, units.part(unit)),
             noc.get_noc_id()),
-        ready_increment(owner.local_row),
+        1,
         noc.get_noc_id());
 }
 
@@ -394,7 +415,8 @@ void kernel_main() {
             for (uint32_t word = 0; word < flag_words(search_len); ++word) {
                 packed[word] = 0;
             }
-            // The reader announces each item: a phase-1 unit, one of this core's rows, or the end.
+            // The reader announces each item: a phase-1 unit, one of this core's rows, its half of a split row, or the
+            // end.
             const auto units = Units::of(
                 search_len,
                 get_named_compile_time_arg_val("tl_stage1_batch"),
@@ -407,6 +429,7 @@ void kernel_main() {
                 max_out_args,
                 get_common_arg_val<uint32_t>(topk_common_args::two_level_max_address),
                 get_common_arg_val<uint32_t>(topk_common_args::writer_two_level_max_row_bytes));
+            bool cleared = false;
             while (true) {
                 mailbox_cb.wait_front(1);
                 const auto* header = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mailbox_cb.get_read_ptr());
@@ -490,7 +513,7 @@ void kernel_main() {
                         continue;
                     }
                 } else {
-                    two_level_unit(noc, max_out, search_len, units, code);
+                    two_level_unit(noc, max_out, search_len, units, code, cleared);
                     continue;
                 }
                 // The row's block table: the table CB cycles a whole table at a time, so it starts at the CB's base,

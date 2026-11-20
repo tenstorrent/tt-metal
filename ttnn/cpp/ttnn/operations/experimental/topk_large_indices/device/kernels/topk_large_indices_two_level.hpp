@@ -82,6 +82,16 @@ struct Units {
         return (unit - wave * wave_rows * per_row) / rows;
     }
 
+    // The unit of `row` whose part is `part`: the inverse of row() and part().
+    constexpr uint32_t unit_of(uint32_t row, uint32_t part) const {
+        const uint32_t o = !split_first                   ? row
+                           : row >= num_rows - split_rows ? row - (num_rows - split_rows)
+                                                          : row + split_rows;
+        const uint32_t wave = o / wave_rows;
+        const uint32_t rows = num_rows - wave * wave_rows < wave_rows ? num_rows - wave * wave_rows : wave_rows;
+        return wave * wave_rows * per_row + part * rows + (o - wave * wave_rows);
+    }
+
     static constexpr Units of(
         uint32_t search_len,
         uint32_t batch_tiles,
@@ -108,11 +118,17 @@ constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
 // r % num_cores as its local row r / num_cores (a whole number of rounds when there are split rows; without, the
 // last round may be partial). The last split_rows rows are halved across core pairs (as the single-level assignment
 // pairs them): split row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3
-// and merges in the second half that core 2u + 1 sorts. A core's row semaphore counts the finished phase-1 units of
-// each local row in its own byte (a row has at most 64 units); a row is ready when its count reaches per_row.
+// and merges in the second half that core 2u + 1 sorts.
+//
+// A row is ready when each of its units has a nonzero done word in its owner's ready-flags CB: a word per unit, at
+// local_row * max_row_units + part. A unit done twice only makes its word 2, so the readiness does not rest on each
+// unit being claimed exactly once (see the reader's claims).
 constexpr uint32_t max_local_rows = 4;
-constexpr uint32_t ready_increment(uint32_t local_row) { return 1u << (8 * local_row); }
-constexpr uint32_t ready_count(uint32_t word, uint32_t local_row) { return (word >> (8 * local_row)) & 0xFFu; }
+constexpr uint32_t max_row_units = 64;
+constexpr uint32_t ready_flags_bytes = max_local_rows * max_row_units * sizeof(uint32_t);
+constexpr uint32_t ready_flag_offset(uint32_t local_row, uint32_t part) {
+    return (local_row * max_row_units + part) * sizeof(uint32_t);
+}
 struct RowOwner {
     uint32_t core;
     uint32_t local_row;
@@ -130,7 +146,7 @@ constexpr uint32_t table_page_bytes = table_page_entries * sizeof(uint32_t);
 constexpr uint32_t table_pages = selected_blocks / table_page_entries;
 
 // What the reader sends the compute (a header page in the stage-1 CB, then 32 tile pages) and the writer (its
-// mailbox) next: a phase-1 unit's number, one of this core's rows, or the end.
+// mailbox) next: a phase-1 unit's number, one of this core's rows, its half of a split row, or the end.
 constexpr uint32_t header_half = 0xFFFFFFFCu;   // this core's half of its split row's stage 3 (tl_early_halves)
 constexpr uint32_t header_split = 0xFFFFFFFDu;  // a split row's stage 2; its halves of stage 3 follow the end, or with
                                                 // tl_early_halves run as header_half items as soon as they can
