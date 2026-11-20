@@ -1000,7 +1000,9 @@ constexpr int topk_ls_ph3_replay_start = 25;
 // load16 group, and each ends in the transposed layout the next expects, so the per-phase
 // store16/load16 round trip is an identity for in-format data and ph0's trailing SFPTRANSP
 // cancels ph1's leading one (all lanes enabled: unstable mode throughout, stable mode by the
-// trailing SFPENCC of every comparator).
+// trailing SFPENCC of every comparator). One exception: a float-mode store16 flushes fp32
+// denormals to zero, so keeping them in LREGs across phases can change their tie order
+// against zeros (the values themselves are unchanged).
 // One straight-line function per phase range, picked once per pass (see
 // bitonic_topk_pick_ph0_to_3_group): the group loop is RISC-issue-bound, and runtime
 // phase-range branches inside it cost more than the store/load round trips they replace
