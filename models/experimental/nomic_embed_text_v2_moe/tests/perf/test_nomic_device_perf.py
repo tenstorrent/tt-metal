@@ -16,9 +16,8 @@ the same debug resources.
 import pytest
 from loguru import logger
 
-import ttnn
-
 from models.common.utility_functions import run_for_blackhole
+from models.demos.vision.classification.vit.common.tests.vit_helper_funcs import card_type
 from models.experimental.nomic_embed_text_v2_moe.tests.perf.perf_common import HEADLINE_SHAPE
 from models.perf.device_perf_utils import check_device_perf, prep_device_perf_report, run_device_perf
 
@@ -47,7 +46,9 @@ MARGIN = 0.03
 @pytest.mark.models_device_performance_bare_metal
 def test_device_perf_nomic_embed_text_v2_moe():
     # The measured test skips on a p100 (TtModelConfig.from_device) and leaves no profiler log to read.
-    if ttnn.cluster.get_cluster_type() == ttnn.cluster.ClusterType.P100:
+    # Not ttnn.cluster.get_cluster_type(): it keeps the cluster open here, and the profiled run then
+    # waits on the device until the timeout.
+    if (card_type() or "").startswith("p100"):
         pytest.skip("the model needs 8 DRAM banks; a p100 has 7")
     batch, seqlen = HEADLINE_SHAPE
     subdir = "nomic_embed_text_v2_moe"
