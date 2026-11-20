@@ -1061,6 +1061,10 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
         E.generic_op([first_input, first_output], spec, run_args)
     with expect_error(RuntimeError, message):
         E.prepare_generic_op([first_input, first_output], spec, run_args)
+    # With the whole tensors in io_tensors the program runs on both devices, so one device's view misses the other.
+    whole_spec, whole_run_args = exp_program(first_input, output_tensor)
+    with expect_error(RuntimeError, message):
+        E.generic_op([input_tensor, output_tensor], whole_spec, whole_run_args)
     mesh_spec = E.MeshProgramSpec(programs=[(one_device(0), spec)])
     mesh_run_args = E.MeshProgramRunArgs(programs=[(one_device(0), run_args)])
     with expect_error(RuntimeError, message):
@@ -1089,10 +1093,11 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
             E.MeshProgramRunArgs(programs=[(one_device(1), other_run_args), (one_device(0), first_run_args)]),
         )
 
-    # A call that generic_op rejects for another reason keeps generic_op's own message: a tensor that io_tensors does
-    # not list, a tensor under a name the spec does not declare, and run args for a range the spec has no program on.
+    # A call that generic_op rejects for another reason keeps generic_op's own message: a view of a tensor that
+    # io_tensors does not list (which misses a device of the program too), a tensor under a name the spec does not
+    # declare, and run args for a range the spec has no program on.
     unlisted = ttnn.allocate_tensor_on_device(input_tensor.spec, mesh_device)
-    spec, run_args = exp_program(unlisted, output_tensor)
+    spec, run_args = exp_program(ttnn.get_device_tensors(unlisted)[1], output_tensor)
     with expect_error(RuntimeError, "tensor of tensor parameter 'input' is not in io_tensors"):
         E.generic_op([input_tensor, output_tensor], spec, run_args)
     spec, run_args = exp_program(first_input, first_output)
