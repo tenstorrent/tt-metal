@@ -646,6 +646,7 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
             trace.kv_cache(layer, 0, prompt_len), kv["kvpe"][slot], KimiK3Config.KV_LORA_RANK, pe_interleave=False
         )
         index = pcc(trace.rows("indexer", f"indexer_k_layer_{layer}", 0, prompt_len), kv["index"][slot])
+        logger.info(f"K31 {rung} layer {layer} caches: lora={lora:.6f} rope={rope:.6f} index key={index:.6f}")
         if min(lora, rope) < KV_CACHE_PCC:
             kv_failures.append(f"slot {slot} (layer {layer}): lora={lora:.6f} rope={rope:.6f}")
         if index < KV_CACHE_PCC:
@@ -657,9 +658,24 @@ def _k31_rung(rung, trace, mesh_device, hf_config, params, runtime) -> list[str]
     topk_failures = []
     for layer, per_row in sorted(recall.items()):
         full, gated = per_row[:topk_k], per_row[topk_k:]
+        # Recall along the prompt: the gated rows' mean on each window (the hidden-state PCC's windows).
+        window_recall = [
+            per_row[max(lo, topk_k) : lo + chunk].nanmean().item() for lo in range(0, per_row.shape[0], chunk)
+        ]
+        logger.info(
+            f"K31 {rung} layer {layer} top-k recall on {chunk}-row windows: "
+            + " ".join(f"{v:.4f}" for v in window_recall)
+        )
+        logger.info(
+            f"K31 {rung} layer {layer} top-k recall: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})"
+        )
         if gated.mean() < K31_TOPK_RECALL[golden_path] or full.min() < 1:
             topk_failures.append(f"layer {layer}: {gated.mean():.6f} (rows < {topk_k}: min {full.min():.4f})")
 
+    # (one window per chunk: the chunk is the 8x4 layout's 5120 rows)
+    for layer in sorted({l for l, _ in scores}):
+        windows = [scores[(layer, c)] for c in sorted(c for l, c in scores if l == layer)]
+        logger.info(f"K31 {rung} layer {layer} on {chunk}-row windows: " + " ".join(f"{v:.7f}" for v in windows))
     worst = min(scores, key=lambda k: scores[k] - k31_layer_pcc(k[0]))
     logger.info(
         f"K31 {rung} worst layer vs its bar: {worst[0]} chunk {worst[1]}: {scores[worst]:.7f} (bar {k31_layer_pcc(worst[0])})"
