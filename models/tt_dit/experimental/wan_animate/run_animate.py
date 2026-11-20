@@ -118,7 +118,7 @@ def main() -> int:
     if args.mode == "replace" and not args.relighting_lora:
         print("warning: replace mode without --relighting-lora (lighting will not match the scene)", flush=True)
 
-    cmd = [sys.executable, "-m", "pytest", TEST, "-k", args.mesh, "-s", "-x"]
+    cmd = [sys.executable, "-m", "pytest", TEST, "-k", args.mesh, "-s", "-x", "--timeout=0"]
     print("+", " ".join(cmd), flush=True)
     return subprocess.run(cmd, cwd=REPO, env=env).returncode
 

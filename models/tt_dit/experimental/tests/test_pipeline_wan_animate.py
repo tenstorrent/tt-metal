@@ -32,9 +32,9 @@ from loguru import logger
 
 import ttnn
 
-from ...utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
-from ..pipelines.pipeline_wan_animate import DEFAULT_CHECKPOINT, DEFAULT_PROMPT, WanAnimatePipeline
-from ..wan_animate.video_io import load_preprocessed, write_mp4
+from models.tt_dit.utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+from models.tt_dit.experimental.pipelines.pipeline_wan_animate import DEFAULT_CHECKPOINT, DEFAULT_PROMPT, WanAnimatePipeline
+from models.tt_dit.experimental.wan_animate.video_io import load_preprocessed, write_mp4
 
 
 def _env(name, default=None, cast=str):

@@ -247,8 +247,17 @@ When a fix touches shared code (`attention_wan.py`, `transformer_wan.py`), rerun
 | Date | Machine (BH/WH, fabric) | Stage | Result (PCC / timing) | Commit | Notes |
 |---|---|---|---|---|---|
 | 2026-11-16 | dev container, CPU | 3.0 | 21 passed | (initial) | Written without hardware; nothing on device yet |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.1 | PCC 99.9941 % (regression, unchanged) | - | Wan 2.2 block unaffected by the attention_wan.py edits |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.2 | 99.9997 % (tiny and full) | - | |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.3 | 99.9990 % (tiny); real weights pass | - | |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.4 | sdpa 99.9990 / delta 99.974 %; matmul 99.9989 / 99.973 % | tiny config 4 -> 8 heads | per-head norm kernel needs more than 1 head per device; the 4-head tiny config had 1 at TP=4 |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.5 | 99.9987 / delta 99.9736 % | - | both modes pass at 480p_segment |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.6 | tiny 99.9975, full small 99.9973, full 480p 99.9978 % | - | |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.7 | 99.9968 % | - | |
+| 2026-11-20 | cirrascale-13, BH Galaxy, linear | 3.8 | all 9 real-weights tests pass; adapter delta 97.3 % | delta threshold 0.97 for real weights | the real adapter's delta is ~1 % of the residual; bf16 rounding of the sum alone caps its PCC at 98.5 % (measured on CPU); output PCC 99.9997 % |
 
 End-to-end runs:
 
 | Date | Mode | Size | Frames | init_s | generate_s | denoise_s / segment | Verdict | Output path |
 |---|---|---|---|---|---|---|---|---|
+| 2026-11-20 | replace | 832x464 | 60 | 28.4 | 102.5 | 25.6 | upstream replace example (boy -> robed man): scene, pose and framing preserved, character relit; vae_encode 36.4 s, vae_decode 28.3 s | ~/jgeilich/animate/out/example_replace_480p.mp4 on cirrascale-13 |

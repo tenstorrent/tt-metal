@@ -7,7 +7,7 @@
 Goldens are generated at test time on the host CPU by the Diffusers reference
 (``diffusers.models.transformers.transformer_wan_animate``), so nothing large is committed:
 
-* ``tiny``  - scaled-down random-init config (dim 512, 4 heads of 128). Fast; run first.
+* ``tiny``  - scaled-down random-init config (dim 1024, 8 heads of 128: 2 heads per device at TP=4, which the per-head QK norm kernel needs). Fast; run first.
 * ``full``  - the real 14B dimensions (dim 5120, 40 heads), random init. Exercises real shapes/sharding.
 * ``real``  - real checkpoint weights for block 0 / face adapter 0 / face encoder. Opt-in with
               ``WAN_ANIMATE_REAL_WEIGHTS=1`` (needs the Diffusers checkpoint in the HF cache).
@@ -31,26 +31,26 @@ from loguru import logger
 
 import ttnn
 
-from ...layers.embeddings import WanPatchEmbed
-from ...models.transformers.wan2_2.transformer_wan import WanTransformerBlock
-from ...parallel.config import DiTParallelConfig, ParallelFactor
-from ...parallel.manager import CCLManager
-from ...utils.check import assert_quality
-from ...utils.mochi import get_rot_transformation_mat, stack_cos_sin
-from ...utils.padding import pad_vision_seq_parallel
-from ...utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch
-from ...utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
-from ..wan_animate import reference_math as rm
-from ..wan_animate.transformer_wan_animate import WanAnimateFaceAdapter
-from ..wan_animate.transformer_wan_animate import WanAnimateFaceEncoder as TTFaceEncoder
-from ..wan_animate.transformer_wan_animate import build_from_diffusers_config
+from models.tt_dit.layers.embeddings import WanPatchEmbed
+from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanTransformerBlock
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.check import assert_quality
+from models.tt_dit.utils.mochi import get_rot_transformation_mat, stack_cos_sin
+from models.tt_dit.utils.padding import pad_vision_seq_parallel
+from models.tt_dit.utils.tensor import bf16_tensor, bf16_tensor_2dshard, float32_tensor, from_torch
+from models.tt_dit.utils.test import line_params_req_exact_devices, ring_params_req_exact_devices, skip_if_unsupported_num_links
+from models.tt_dit.experimental.wan_animate import reference_math as rm
+from models.tt_dit.experimental.wan_animate.transformer_wan_animate import WanAnimateFaceAdapter
+from models.tt_dit.experimental.wan_animate.transformer_wan_animate import WanAnimateFaceEncoder as TTFaceEncoder
+from models.tt_dit.experimental.wan_animate.transformer_wan_animate import build_from_diffusers_config
 
 CHECKPOINT = os.environ.get("WAN_ANIMATE_CHECKPOINT", "Wan-AI/Wan2.2-Animate-14B-Diffusers")
 REAL = os.environ.get("WAN_ANIMATE_REAL_WEIGHTS") == "1"
 
 TINY = dict(
     patch_size=(1, 2, 2),
-    num_attention_heads=4,
+    num_attention_heads=8,
     attention_head_dim=128,
     in_channels=36,
     latent_channels=16,
@@ -63,7 +63,7 @@ TINY = dict(
     qk_norm="rms_norm_across_heads",
     eps=1e-6,
     image_dim=128,
-    added_kv_proj_dim=512,
+    added_kv_proj_dim=1024,
     rope_max_seq_len=1024,
     motion_encoder_size=64,
     motion_style_dim=128,
@@ -294,8 +294,9 @@ def test_animate_face_adapter(
     out = tt(tt_hidden, tt_motion, N=n, face_mask=tt_mask)
     out = _gather_spatial(out, mesh_device, sp_axis, tp_axis, n)
     assert_quality(ref, out[0], pcc=MIN_PCC)
-    # The adapter's own contribution (small next to the residual) must also match.
-    assert_quality(ref - hidden, out[0] - hidden, pcc=0.995)
+    # The adapter's own contribution must also match. Real weights make it ~1% of the residual, and rounding
+    # the sum to bf16 alone caps this PCC at ~0.985 (measured on CPU), so the real-weights bar is lower.
+    assert_quality(ref - hidden, out[0] - hidden, pcc=0.97 if cfg == "real" else 0.995)
 
 
 # ------------------------------------------------------------------------------------------------

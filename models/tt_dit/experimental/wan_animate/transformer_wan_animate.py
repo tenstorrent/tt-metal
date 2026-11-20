@@ -33,17 +33,17 @@ from loguru import logger
 
 import ttnn
 
-from ...layers.embeddings import WanPatchEmbed
-from ...layers.linear import Linear
-from ...layers.module import Module, ModuleList
-from ...layers.normalization import DistributedLayerNorm, LayerNorm
-from ...models.transformers.wan2_2.attention_wan import WanAttention
-from ...models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
-from ...parallel.config import DiTParallelConfig
-from ...parallel.manager import CCLManager
-from ...utils.substate import pop_substate
-from ...utils.tensor import bf16_tensor, from_torch
-from . import reference_math as rm
+from models.tt_dit.layers.embeddings import WanPatchEmbed
+from models.tt_dit.layers.linear import Linear
+from models.tt_dit.layers.module import Module, ModuleList
+from models.tt_dit.layers.normalization import DistributedLayerNorm, LayerNorm
+from models.tt_dit.models.transformers.wan2_2.attention_wan import WanAttention
+from models.tt_dit.models.transformers.wan2_2.transformer_wan import WanTransformer3DModel
+from models.tt_dit.parallel.config import DiTParallelConfig
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.utils.substate import pop_substate
+from models.tt_dit.utils.tensor import bf16_tensor, from_torch
+from models.tt_dit.experimental.wan_animate import reference_math as rm
 
 
 class WanAnimateFaceAdapter(Module):

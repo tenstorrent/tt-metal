@@ -40,16 +40,16 @@ from PIL import Image
 
 import ttnn
 
-from ...models.vae.vae_wan2_1 import WanEncoder, WanVAEDecoderAdapter
-from ...parallel.manager import CCLManager
-from ...pipelines.wan.pipeline_wan import WanPipelineConfig
-from ...pipelines.wan.text_encoder import TextEncoder
-from ...solvers import solver_for_scheduler
-from ...utils import cache, tensor
-from ...utils.conv3d import aligned_channels, conv3d_blocking_hash, conv_pad_height, conv_pad_width
-from ...utils.tensor import bf16_tensor_2dshard, fast_device_to_host, float32_tensor, unflatten
-from ..wan_animate import reference_math as rm
-from ..wan_animate.transformer_wan_animate import WanAnimateTransformer3DModel, build_from_diffusers_config
+from models.tt_dit.models.vae.vae_wan2_1 import WanEncoder, WanVAEDecoderAdapter
+from models.tt_dit.parallel.manager import CCLManager
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipelineConfig
+from models.tt_dit.pipelines.wan.text_encoder import TextEncoder
+from models.tt_dit.solvers import solver_for_scheduler
+from models.tt_dit.utils import cache, tensor
+from models.tt_dit.utils.conv3d import aligned_channels, conv3d_blocking_hash, conv_pad_height, conv_pad_width
+from models.tt_dit.utils.tensor import bf16_tensor_2dshard, fast_device_to_host, float32_tensor, unflatten
+from models.tt_dit.experimental.wan_animate import reference_math as rm
+from models.tt_dit.experimental.wan_animate.transformer_wan_animate import WanAnimateTransformer3DModel, build_from_diffusers_config
 
 DEFAULT_CHECKPOINT = "Wan-AI/Wan2.2-Animate-14B-Diffusers"
 # Upstream default prompt (wan/configs/wan_animate_14B.py): "the person in the video is moving".
