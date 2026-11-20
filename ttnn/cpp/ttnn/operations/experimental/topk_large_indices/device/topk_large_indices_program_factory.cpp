@@ -183,8 +183,7 @@ void set_two_level_common_args(
                                                    : shared.two_level_maxima->mesh_buffer().address();
     const uint32_t row_bytes = blocks * input.element_size();
     auto& reader_args = tt::tt_metal::GetCommonRuntimeArgs(program, shared.reader_kernel_id);
-    reader_args[topk_common_args::two_level_cutover] =
-        attrs.two_level_cutover.value_or(two_level_default_cutover(num_cores));
+    reader_args[topk_common_args::two_level_cutover] = attrs.two_level_cutover.value_or(two_level_default_cutover);
     reader_args[topk_common_args::block_max_address] = maxima_address;
     reader_args[topk_common_args::two_level_max_row_bytes] = row_bytes;
     reader_args[topk_common_args::two_level_num_input_rows] = num_rows;
@@ -221,12 +220,6 @@ bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_
 }
 
 static_assert(two_level_max_rows_per_core == topk_two_level::max_local_rows);
-
-uint32_t two_level_default_cutover(uint32_t num_cores) {
-    // Where the two modes cost the same for 160 rows on p150b: about 200K keys on 108 cores and 150K on 99, whose
-    // single-level rows split less evenly.
-    return num_cores >= 108 ? 196'608 : 147'456;
-}
 
 ComputeBodyMode compute_body_mode(uint32_t k, uint32_t input_last_dim) {
     const uint32_t llk_k = to_uint32(snap_to_llk_target_k(k));

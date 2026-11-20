@@ -77,7 +77,7 @@ Tensor topk_large_indices(
     // Two-level selection for long rows: 32 picks the top 2048 of the 32-key block maxima first, then the exact
     // top k among the keys of those blocks. Requires k = 2048 and a last dimension in [65536, 2097152] that is
     // a multiple of 32. two_level_cutover is the search length from which the program runs two-level (default:
-    // measured per core count). block_max_tensor supplies the block maxima (skips stage 1); block_max_output and
+    // 98304). block_max_tensor supplies the block maxima (skips stage 1); block_max_output and
     // mode_output are test outputs.
     std::optional<uint32_t> block_select = std::nullopt,
     std::optional<uint32_t> two_level_cutover = std::nullopt,

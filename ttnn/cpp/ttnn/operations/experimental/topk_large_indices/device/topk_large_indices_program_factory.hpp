@@ -101,7 +101,8 @@ constexpr uint32_t two_level_max_width = 2'097'152;
 // Row r runs on core r % num_cores, which tracks the readiness of up to this many rows.
 constexpr uint32_t two_level_max_rows_per_core = 4;
 bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
-// The search length from which a two-level program runs two-level, measured per core count.
-uint32_t two_level_default_cutover(uint32_t num_cores);
+// The search length from which a two-level program runs two-level by default: where two-level gets faster for 160
+// rows on p150b, on 108 and on 99 cores.
+constexpr uint32_t two_level_default_cutover = 98'304;
 
 }  // namespace ttnn::operations::experimental::topk_large_indices::program

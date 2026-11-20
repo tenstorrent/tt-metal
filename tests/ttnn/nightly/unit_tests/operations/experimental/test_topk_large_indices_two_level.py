@@ -629,8 +629,8 @@ def test_two_level_winning_block_count_at_the_limit(device, winning_blocks):
     _check_rows(torch_input, _indices(out, rows), width, range(rows))
 
 
-# The default cutover per top-k grid (two_level_default_cutover): 12 columns are 108 cores, 11 are 99.
-DEFAULT_CUTOVER = {12: 196_608, 11: 147_456}
+# The default cutover (two_level_default_cutover), the same on both top-k grids.
+DEFAULT_CUTOVER = 98_304
 
 
 @pytest.mark.parametrize("columns", [12, 11])
@@ -639,7 +639,7 @@ def test_two_level_default_cutover(device, columns, offset):
     """The default cutover on both top-k grids: rows run two-level from exactly the cutover, and a scalar and a
     metadata bound choose the same mode and the same ordered indices."""
     rows, width = 160, 262_144
-    n = DEFAULT_CUTOVER[columns] + offset
+    n = DEFAULT_CUTOVER + offset
     torch_input = generate("ties64", rows, width, 14, n=n)
     tt_input = _dev(torch_input.reshape(1, 1, rows, width), device)
     results = []
