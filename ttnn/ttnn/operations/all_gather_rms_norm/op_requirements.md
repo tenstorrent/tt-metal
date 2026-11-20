@@ -91,6 +91,24 @@ case1 16.32 µs (baseline 21.29 / 16.33): neither changes regime. Root cause of 
 the op's cached global semaphores were allocated under the first call's L1 shards and pinned the CB region for every
 later call; they are now re-created higher once free L1 opens above them.
 
+
+
+### [x] Refinement 1b — L1 fit for wide rows and L1-sharded I/O: port the base op's owner combine (k > 8) and compact gamma pages (debug: fix gate violations)
+
+**Goal**: fix the hard violation from Refinement 1 so the completion gate's three bullets hold.
+
+**Verifier notes** (mechanical, from the harness completion gate):
+
+```
+Bullet 3 FAIL: REGRESSION — prior-passing golden cells no longer pass (responsible cells 26955/30746). A prior-passing cell that failed, hung, or never ran (suite hung before reaching it) is a regression.
+```
+
+**Done when**: the gate passes — zero hangs in SUPPORTED, acceptance + refinement tests pass, golden majority with no regression.
+**Outcome**: cause = L1 tensors of failed cells kept alive by exception-traceback cycles until a rare full GC (budget
+133–363 KB, profiler size_t wrap when the GC fired mid-capture); fix = one gc.collect() after dispatch when new
+unowned L1 blocks exist, + collect-and-retry on the OOM path. Full golden: 29118 pass, 1284 fail (all bf16 LN
+acc16 precision, Refinement 2), 0 hangs, 0 OOM, 0 regressions vs Phase 0. Perf unchanged.
+
 ### [ ] Refinement 2 — layer_norm precision with 16-bit DEST (fp32_dest_acc_en=False)
 
 **Goal**: move the bfloat16 `layer_norm` cells with `fp32_dest_acc_en=False` out of `numerical-precision` (143 sampled

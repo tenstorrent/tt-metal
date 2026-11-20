@@ -82,3 +82,28 @@
 - Tests added: `test_all_gather_rms_norm_owner.py` (13: forced k = 12 / 16 / 20 / 40 incl. zero-filled gather rows, two
   gather tiles, multi-row owners, rms / LN FPU / LN SFPU, 16-bit DEST, non-aligned dense assembly);
   `test_all_gather_rms_norm_debug_l1.py` (debug, kept: L1 block view across calls, owner metrics).
+
+## Refinement 1b — L1 fit for wide rows and L1-sharded I/O (debug: fix gate violations)
+- Date: 2026-11-20
+- What was done: the gate's regression (92 prior-passing cells OOM, 3 `L1ProfilingError`) was order dependent: each
+  cell passed alone. Root cause, measured with the harness plugins on the real 700-cell order: L1 tensors of FAILED
+  cells stay alive in reference cycles (pytest's exception traceback → the test frames → input / output shards) until a
+  full (gen-2) GC, which a 200k-item pytest process runs rarely. Dead shards accumulated to ~1.3 MB per bank and
+  fragmented L1, so `cb_l1_budget` (free L1 below the lowest allocated buffer) dropped to 133–363 KB. Refinement 1 made
+  more sharded cells run to the precision check (leaking input + output shards) instead of raising OOM early, which is
+  why Phase 0 did not hit it. When such a GC finally fires inside a later DRAM cell's graph capture, the profiler's
+  `size_t` L1 base wraps (`peak_total = 2^64 − 61184`) — the 3 profiler errors.
+  Fix (host side, op file): after each dispatch (this call's CBs already placed) `_collect_dead_l1` runs one
+  `gc.collect()` when L1 holds blocks no call argument / cached semaphore owns AND that were not already seen to survive
+  a collection (live foreign tensors therefore do not re-trigger it); on the OOM path it collects with `force` and
+  retries the split once. The OOM message now lists the allocated L1 blocks.
+- Accuracy achieved: unchanged (no kernel change).
+- Golden test progress (FULL suite, eval_test_runner, same order/plugins as the gate): 29118 passed / 1284 failed /
+  0 hangs / 0 OOM / 0 `L1ProfilingError` (previous attempt 27115 / 1867 incl. 799 OOM; Phase 0 23269 / 5289).
+  Regressions vs Phase 0: 0. All 1284 failures are `numerical-precision`, bf16 layer_norm with fp32_dest_acc_en=False
+  (Refinement 2's family). 40 of them (1x1x17x1280 / 1x1x640x1792 HEIGHT_SHARDED, failed in Phase 0) had passed in the
+  previous attempt only because leaked L1 forced a wider member split (k = 16 instead of 8 → narrower members →
+  fewer tiles accumulated in 16-bit DEST): evidence for Refinement 2 that narrower members lower the 16-bit error.
+- Perf (eval protocol, 5 experiments, fastest chip): case0 21.31 µs, case1 16.32 µs (unchanged).
+- Issues encountered: none beyond the above; unit dir 58/58.
+- Tests added: none (repro = the golden order with `EVAL_CAPTURE_L1=1 -p eval.metrics_plugin`).
