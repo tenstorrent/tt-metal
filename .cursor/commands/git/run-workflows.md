@@ -11,11 +11,24 @@ Analyze branch changes to determine affected build products, trace which tests/s
 2. **Decide whether to use sanity-tests.yaml**
 
    `sanity-tests.yaml` encapsulates these workflows:
-   - `ttnn-post-commit.yaml`
+   - `ttnn-sanity-tests-impl.yaml`
    - `t3000-sanity-tests-impl.yaml`
-   - `ops-post-commit.yaml`
+   - `fabric-sanity-tests-impl.yaml`
+   - `umd-sanity-tests-impl.yaml`
+   - `ttsim-sanity-tests-impl.yaml`
+   - `runtime-sanity-tests-impl.yaml`
+   - `blackhole-multi-card-sanity-tests-impl.yaml`
+   - `models-sanity-tests-impl.yaml`
+   - `llk-smoke-impl.yaml` (opt-in, see below)
+   - `llk-ttsim-pr-gate-impl.yaml` (opt-in, see below)
 
-   **Run `sanity-tests.yaml` instead of the above individual workflows when:**
+   The two LLK workflows only run when `run-llk-sanity-tests=true` is passed; it defaults to false.
+
+   All of these are internal `workflow_call`-only workflows, so `gh workflow run` cannot start them on their own.
+   `sanity-tests.yaml` is the wrapper that runs them together; some are also reachable through other wrappers
+   (for example `runtime-sanity-tests.yaml`, `tt-metal-l2-nightly.yaml`, `pr-gate.yaml`).
+
+   **Run `sanity-tests.yaml` when:**
    - `conftest.py` changed (affects all pytest-based tests)
    - Multiple workflow files changed (3+)
    - Core test infrastructure changed (`tests/scripts/run_tests.py`, test utilities)
@@ -27,11 +40,17 @@ Analyze branch changes to determine affected build products, trace which tests/s
    gh workflow run sanity-tests.yaml --ref $(git branch --show-current)
    ```
 
+   Add `-f run-llk-sanity-tests=true` when the change touches LLK (`tt_metal/tt-llk/` or the LLK APIs):
+
+   ```bash
+   gh workflow run sanity-tests.yaml --ref $(git branch --show-current) -f run-llk-sanity-tests=true
+   ```
+
    **Important:** Still continue analysis for workflows NOT covered by sanity tests, such as:
    - Galaxy tests (`galaxy-*.yaml`)
    - T3000 e2e/integration/unit tests (`t3000-tests.yaml`)
-   - Blackhole tests (`blackhole-*.yaml`)
-   - Nightly tests (`*-nightly-*.yaml`)
+   - Blackhole e2e tests (`blackhole-e2e-tests.yaml`)
+   - Nightly tests (`*nightly*.yaml`)
    - Code analysis (`code-analysis.yaml`)
 
 3. **Determine affected build products** (only if changes are targeted)
@@ -78,7 +97,7 @@ Build Product (e.g., libtt_metal.so, _ttnn.so Python extension)
     ↓
 Test/Script that uses it (e.g., tests/tt_metal/test_device.py, test_*.cpp)
     ↓
-Workflow that runs those tests (e.g., cpp-post-commit.yaml, build-and-unit-tests.yaml)
+Workflow that runs those tests (e.g., t3000-sanity-tests-impl.yaml, tt-metal-l2-nightly.yaml)
 ```
 
 ### Key places to search for tracing:
@@ -107,11 +126,11 @@ grep -rl "pytest tests/ttnn" .github/workflows/
 grep -rl "test_device" .github/workflows/
 
 # Trigger workflow
-gh workflow run build-and-unit-tests.yaml --ref $(git branch --show-current)
+gh workflow run tt-metal-l2-nightly.yaml --ref $(git branch --show-current)
 
 # Get latest run URL
 sleep 5  # Wait for run to register
-gh run list --workflow=build-and-unit-tests.yaml --branch=$(git branch --show-current) --limit=1 --json url -q '.[0].url'
+gh run list --workflow=tt-metal-l2-nightly.yaml --branch=$(git branch --show-current) --limit=1 --json url -q '.[0].url'
 
 # Post PR comment
 gh pr comment --body "## 🚀 Triggered Workflows

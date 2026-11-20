@@ -717,6 +717,40 @@ def test_sparse_matmul_volume_must_match_batch_length(device, expect_error):
         )
 
 
+@pytest.mark.parametrize("wrong_shape", [(1, 1, 1, 32), (32, 1, 1, 1)], ids=["flat_row", "column"])
+def test_sparse_matmul_rejects_same_volume_wrong_sparsity_shape(device, expect_error, wrong_shape):
+    """The kernel reads one ROW_MAJOR page of num_experts entries per outer batch, so a sparsity tensor with the
+    right volume but another shape must be rejected. Expected layout here is [1, 4, 1, 8]."""
+    in0, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)
+    _, _, _, num_experts, tile_h, tile_w = dims
+
+    def run(sparsity_t):
+        return ttnn.sparse_matmul(
+            in0,
+            in1,
+            sparsity=sparsity_t,
+            nnz=nnz,
+            is_input_a_sparse=False,
+            is_input_b_sparse=True,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            output_tile=ttnn.Tile([tile_h, tile_w]),
+            program_config=pc,
+        )
+
+    # Control: the expected [1, 4, 1, 8] layout is accepted.
+    run(sparsity)
+
+    wrong_sparsity = ttnn.from_torch(
+        torch.ones(wrong_shape, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    with expect_error(RuntimeError, "sparsity must hold one ROW_MAJOR page"):
+        run(wrong_sparsity)
+
+
 def test_sparse_matmul_inputA_wrong_layout(device, expect_error):
     """Input tensor A must be TILE layout, ROW_MAJOR must be rejected."""
     _, in1, sparsity, nnz, pc, dims = _make_sparse_inputs(device)

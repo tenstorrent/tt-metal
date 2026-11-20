@@ -93,7 +93,9 @@ bank_noc_xy_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used)
 bank_noc_xy_t l1_bank_to_noc_xy[NUM_NOCS][NUM_L1_BANKS] __attribute__((used));
 int32_t bank_to_dram_offset[NUM_DRAM_BANKS] __attribute__((used));
 int32_t bank_to_l1_offset[NUM_L1_BANKS] __attribute__((used));
+#ifdef ARCH_BLACKHOLE
 uint32_t tensor_prefetcher_signal_noc_xy[NUM_DRAM_BANKS] __attribute__((used));
+#endif
 uint8_t prev_noc_mode = DM_DEDICATED_NOC;
 
 // These arrays are used to store the worker logical to virtual coordinate mapping
@@ -370,6 +372,11 @@ void device_setup() {
     cfg_regs[RISCV_IC_INVALIDATE_InvalidateAll_ADDR32] =
         RISCV_IC_BRISC_MASK | RISCV_IC_TRISC_ALL_MASK | RISCV_IC_NCRISC_MASK;
 
+#ifdef RISC_PREFETCH_CTRL_VALUE
+    // The I$ prefetchers reset to off. This is a global config register, so one write at boot covers every launch.
+    cfg_regs[RISC_PREFETCH_CTRL_Enable_Trisc_ADDR32] = RISC_PREFETCH_CTRL_VALUE;
+#endif
+
     // Clear destination registers
     core.ex_zeroacc(instrn_buf[0]);
 
@@ -488,7 +495,9 @@ int main() {
     do_crt1((uint32_t*)MEM_BRISC_INIT_LOCAL_L1_BASE_SCRATCH);
 
     noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
+#ifdef ARCH_BLACKHOLE
     tensor_prefetcher_signal_table_init(MEM_BANK_TO_NOC_SCRATCH);
+#endif
     noc_worker_logical_to_virtual_map_init(MEM_LOGICAL_TO_VIRTUAL_SCRATCH);
 
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
@@ -533,6 +542,7 @@ int main() {
             ((go_message_signal = (go_message = current_go_message(mailboxes))->signal) != RUN_MSG_GO) &&
             !(mailboxes->launch[mailboxes->launch_msg_rd_ptr].kernel_config.preload & DISPATCH_ENABLE_FLAG_PRELOAD)) {
             invalidate_l1_cache();
+            __builtin_riscv_pause();  // waiting; see trisc.cc
             // While the go signal for kernel execution is not sent, check if the worker was signalled
             // to reset its launch message read pointer.
             if (go_message_signal == RUN_MSG_RESET_READ_PTR_FROM_HOST) {
