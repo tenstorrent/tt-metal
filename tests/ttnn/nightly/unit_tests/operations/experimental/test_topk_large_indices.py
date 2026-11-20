@@ -266,11 +266,12 @@ TOPK_LARGE_INDICES_PRODUCTION_PERF_CONFIGS = [
     ("prefill", 640, 51200, None, 1536, False, 896_000),
     # bounded_cache rows are split across a core pair; joining the two halves fused (#63408) takes ~1.1 us
     # off both bounded_cache cases (p150b, median of 15: 111.5 -> 110.4 us and 112.9 -> 111.7 us).
-    ("bounded_cache", 2, 102400, 56320, 1536, False, 110_400),
+    # The topk_xl SFPU cleanup brought them to ~109.0 us and ~110.1 us.
+    ("bounded_cache", 2, 102400, 56320, 1536, False, 110_000),
     # Same shape and work as bounded_cache, with the length arriving in a tensor. The split point is then
     # derived on device; deriving it from the physical width instead halves 50 chunks at 25 while the device
     # has 28, leaving the halves at 25 and 3 and the duration far outside this band.
-    ("bounded_cache_metadata", 2, 102400, 56320, 1536, True, 111_700),
+    ("bounded_cache_metadata", 2, 102400, 56320, 1536, True, 111_100),
 ]
 
 
