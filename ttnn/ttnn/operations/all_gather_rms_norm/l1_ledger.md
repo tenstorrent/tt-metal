@@ -37,6 +37,7 @@ Port cores additionally hold `cb_x` (allocated, unused — the address-identity 
 | CB | Capacity (pages) | Live set | Axis accounting | Page format | Producer | Consumer | Lifetime | Shares with / why not |
 |----|------------------|----------|-----------------|-------------|----------|----------|----------|-----------------------|
 | `cb_port_stage` | `2 · port_batch_chunks · chunk_pages` | `port_batch_chunks · chunk_pages` + one batch in flight | {row: streams, member W: streams, slice: streams, wave: streams, link/dir: one port = one (d, l)} | input dtype (raw bytes; never through DEST) | port_reader | port_sender | per batch | double buffer of the example (reader fills b+1 while the sender drains b) |
+| `cb_port_hdr` (short-run transport only, Refinement 6) | `hdr_ring` = 16 slots × 128 B (2 KB; `HDR_RING_AUTO`, ≥ the batch) | the packet headers built ahead and not yet flushed (≤ `hdr_ring`) | {packet: streams (slot = packet mod hdr_ring), all data axes n/a} | raw L1 (fabric packet headers, page = one header slot) | port_sender | port_sender (the router reads each slot by NoC at its send) | call | not a stream between kernels: the sender's own ring. Cannot share `cb_port_stage` (a header must stay put until its packet's flush, and stage slots are popped to the reader at the same flush) nor the 4 pool headers (the per-RISC packet-header pool holds a few headers, the ring needs one per in-flight packet). Declared only in the short-run regime; `fits()` reserves its bytes on the port cores for every split |
 
 ## Symbol table
 
@@ -49,7 +50,7 @@ Port cores additionally hold `cb_x` (allocated, unused — the address-identity 
 | `max_foreign_in`, `max_foreign_out` | ≤ `ceil(32 / W_local) + 1` | `plan_assembly()` (dense only) |
 | `n_shift_mats` | ≤ 4 per member | distinct (shift, valid width) pairs of the member's slices |
 | `chunk_pages` | `max_payload // T_in` (bf16 7, fp32 3, bf8b 13 at 14,336 B) | fabric config |
-| `port_batch_chunks` | 4 | constant (example-measured) |
+| `port_batch_chunks` | 2 (Refinement 3); 1 in the short-run transport regime (Refinement 6) | `PORT_BATCH_CHUNKS` / `SHORT_RUN_BATCH`, halved under port L1 pressure |
 | `out_unit_tiles` | ≤ 16 (`OUT_UNIT_CAP`, base op) | constant cap |
 | `cb_l1_budget(device)` | free L1 between the allocator base and the lowest L1 buffer | base op's function |
 

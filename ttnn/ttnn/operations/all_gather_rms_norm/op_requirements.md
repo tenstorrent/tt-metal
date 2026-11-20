@@ -233,7 +233,7 @@ fixed per-phase cost (centering, D1 reduce, squares, D2 reduce, finalize ≈ 1 �
 the landing (1 of 4 tiles, non-contiguous remote columns, ≤ ~0.2 µs); next would be fusing the moments phases (one chain
 producing c' and c'² with L1-accumulated packs feeding a single reduce) and fewer pack-format switches in the finalize.
 
-### [ ] Refinement 6 — TRANSPORT: indexer layer_norm case packetization and fixed exchange cost
+### [x] Refinement 6 — TRANSPORT: indexer layer_norm case packetization and fixed exchange cost
 
 **Type**: perf
 
@@ -249,3 +249,14 @@ change.
 
 **Done when**: measured fastest-chip win on case1 beyond noise, slowest chip not higher, golden green, no regression
 on the guard set (incl. case0).
+**Outcome**: case1 fastest **12.07 → 11.42 µs**, slowest 12.82 → 12.23 (`eval.ccl_perf compare`: win, −0.65 / −0.58,
+noise 0.05); case0 guard 20.58 / 21.27 (was 20.65: unchanged, the gate keeps its original path). Kept: a host-gated
+short-run transport regime (on when scatter packing at least halves the busiest port's packets — of the golden shapes
+only 640×32) = scatter pack + sender batch 1 + a header ring built ahead inside the fence / stage / credit waits +
+stateful router sends; each knob alone was flat or worse (pack 12.09, ring +1.1, batch 1 +0.9), together −0.65.
+Measured and rejected: slice-major / k = G / taller row-groups for contiguous runs (+8 to +37 µs: the narrow LN chain is
+per-row and combine bound), 1 link (+3.2), wave size and relay lag (`INC_EVERY` 1–16, lag 0: +0.2 to +2.9), stage depth
+(flat). Bottleneck now: the per-hop delivery — an entry is counted downstream ≈ 2.5 µs after its issue, unchanged with
+contiguous single-core landings, and the relay pays it twice (last landing 7.3 µs) — then the LN tail (≈ 4.6 µs). Next:
+replace the worker relay by a fabric line multicast of the own half to p+1 and p+2 (same mirror address), which needs a
+2-hop ready and per-source arrival counters — a transport scheme change, not done here.

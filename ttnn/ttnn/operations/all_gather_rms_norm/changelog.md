@@ -223,3 +223,35 @@
   before the landing not built (1 of 4 tiles, non-contiguous remote columns, per-phase fixed cost dominates).
 - Tests added: none (the precision baseline, unit and golden suites cover the touched paths; perf via perf_agrms.py /
   zones_agrms.py).
+
+## Refinement 6 — TRANSPORT: indexer layer_norm case packetization and fixed exchange cost
+- Date: 2026-11-20
+- What was done: (perf, `LOOSE_CASES[1]` 640×32 bf16 LN, k = 1, 20 row-groups × 1 row, 1-tile runs) a host-gated
+  **short-run transport regime** (`short_run_transport()`: on when scatter packing at least halves the busiest port's
+  packets; every other shape keeps the original path byte for byte except a constant entry-end increment header):
+  (1) scatter packing (`PORT_PACK`, built in Refinement 3, now auto), (2) sender flush + stage-slot release per packet
+  (`SHORT_RUN_BATCH = 1`), (3) a packet-header ring on the port cores (`cb_port_hdr`, 16 × 128 B): every header is
+  built ahead of its send while the sender waits for the ready fence, a stage slot or a router credit; slots take the
+  routed template by a RISC copy at their first build (`HDR_COPY`; DMA measured −0.2 worse), (4) stateful router
+  sends with cached credits (`PORT_STATEFUL`). The sender now walks all entries with one `PacketWalk`. Every knob is
+  an env-overridable live tunable (-1 = auto). Reused: the port packer, the reader's stream mode, the fence and the
+  entry schedule. Added: `cb_port_hdr`, `PacketWalk`, `entry_packets()` / `short_run_transport()` (host mirror of the
+  packer). Probe-only: `AGRMS_FORCE_K`, `AGRMS_GROUP_ROWS`, `AGRMS_ABL` bit 4 (one contiguous write per packet),
+  `dprint_agrms.py` (DEVICE_PRINT launcher; profiler + DEVICE_PRINT segfault on the mesh).
+- Measured (eval `ccl_perf`, 5 experiments, fastest / slowest chip): case1 12.07 / 12.82 → **11.42 / 12.23 µs**
+  (compare: win); case0 guard 20.58 / 21.27 (unchanged). Breakdown and every variant: op_design.md "Refinement 6
+  measurements" (pack alone 12.09, ring without pack +1.1, pack + ring + stateful 11.77, + batch 1 11.42; no header
+  builds in the fence +0.64; 1 link +3.2; waves / relay lag / stage depth flat or worse; k = 4 or taller row-groups
+  +8 to +37 µs).
+- Accuracy achieved: unchanged (pure data movement: the same tiles land at the same addresses) — unit directory 70/70
+  incl. the precision baseline (bf16_ln 640×32 rel RMS 0.00185).
+- Golden test progress: every cluster_axis = 1 cell of 1×1×640×32 (the only golden shape in the new regime): 420 passed
+  / 84 xfailed / 0 failed (2088 topology / INVALID skips); one LN cell of each of the 39 shapes: 39/39 passed (plan
+  print confirmed only 640×32 enters the regime); random 700-cell sample of narrow / decode / focus shapes: 110 passed /
+  34 xfailed / 0 failed; test_regression + test_ring_mock 160/160; both loose cases pass their golden check.
+- Issues encountered: the incoming entries are counted ≈ 2.5 µs after the upstream issued them regardless of packet
+  count or landing pattern (per-hop fabric latency, measured with wall-clock DEVICE_PRINT on the port pairs) — the
+  relay pays it twice and it is now the transport's floor here; the next lever is a fabric line multicast instead of
+  the worker relay (scheme change). Computing the 2D route per ring slot cost +3.1 µs (fixed by copying one routed
+  template).
+- Tests added: none (the 640×32 unit and golden cells cover the new regime; perf / debug launchers only).

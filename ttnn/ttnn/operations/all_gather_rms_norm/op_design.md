@@ -287,8 +287,8 @@ drain_arrivals();                   // reader: wait total incoming, decrement se
 | Landing notification through the port reader's event loop | OVERLAP | adds a local hop and depends on the reader not being starved | fused inc straight to the member's `sem_landed` on the entry's last packet to that member (more router stalls, one fewer hop) |
 | Own-loaded wait-all | OVERLAP | a port waits for every own member before its first own read; harmless while the fence is longer than the own load | per-wave own-loaded counters |
 | Grid synchronization (k from the base rule) | OVERLAP | combine round per row-group (~0.5–1.5 µs, base op catalog) sits on the tail; for k = 4 every member waits on the slowest landing | k = 1 with 4× the member block (no combine) on the focus case |
-| Narrow-slice packetization (`sw` small, k = 1 member holding all slices) | TRANSPORT | runs are 1 tile per (row, slice) → 1-tile packets, packet-rate-bound (12.8 GB/s per link, rule 1) | slice-major cb_x layout (`[q][t][j]`) with per-slice chain calls; or k = G members (one slice each) so a member's block is one run; or `scatter_write` (unmeasured) |
-| Links at small payloads | TRANSPORT | the example: 2 links do not help ≤ 8 KiB per link; the indexer case is 41 KB per slice | `num_links = 1` vs 2 on the 640×32 case (the caller's choice; report both) |
+| Narrow-slice packetization (`sw` small, k = 1 member holding all slices) | TRANSPORT | runs are 1 tile per (row, slice) → 1-tile packets; measured (Refinement 6): the port's per-packet RISC work (~0.2 µs per packet: run walk, header build, router issue) and the per-batch slot release pace the own entries the relays wait on — not the link, not the receiver's scattered writes | **built: short-run transport regime** (host gate `short_run_transport()`: scatter packing at least halves the busiest port's packets) = scatter pack + batch 1 + header ring built ahead in the fence / stage / credit waits + stateful sends; slice-major layout / k = G / taller row-groups rejected (see Refinement 6 measurements) |
+| Links at small payloads | TRANSPORT | the example: 2 links do not help ≤ 8 KiB per link; the indexer case is 41 KB per slice | measured (Refinement 6, probe cap): 1 link +3.2 µs on 640×32 (twice the 1-tile packets per port), +2.0 with packing — 2 links kept; `num_links` stays the caller's |
 | Batch depth (`port_batch_chunks = 4`) | TRANSPORT | entries here are shorter than the example's shards | 2 and 8 |
 | Ports read outgoing chunks from compute L1 | TRANSPORT | L1→L1 reads from up to 20 cores per entry vs the example's bank-run DRAM reads | read the own slice from DRAM directly (+S DRAM, no own-loaded handshake) |
 | Per-core runtime args (dispatch) | — | ~3 µs flat per call for per-core args (prompt); harmless while device time ≫ 3 µs, flagged DISPATCH-BOUND otherwise | common args + core index derivation; CoreRangeSet merged into rectangles |
@@ -309,6 +309,25 @@ one fused increment per member per entry multiplies the receiving router's write
 ≈ 0.6–0.9), fence end → last landing ≈ 14 µs (link), last landing → end ≈ 5.3 µs (moments 1.1, exchange 0.5, combine
 0.2–0.3, normalize 2.5 — compute-bound: two HiFi4 FPU multiplies per tile, unchanged with the stores stubbed or the
 srcA format switches removed — store 0.4).
+
+**Refinement 6 measurements (indexer LN case `LOOSE_CASES[1]`, 640×32, eval `ccl_perf`, fastest / slowest chip;
+baseline 12.07 / 12.82 µs):** breakdown before: open 0.3, fence ≈ 1.0, send window 4.5 µs per port for 15 one-tile
+packets (own w0 8, own w1 2, relay w0 4, relay w1 1) — with reads and relay waits stubbed still 3.5 µs; per packet
+≈ 35 cycles run walk, 70 header build (260 for a scatter header), 100 router issue, 33 credit wait; last landing
+7.8 µs, LN tail → 12.1. Incoming entries are seen ≈ 2.5–3 µs after the upstream issued them and ≈ 0.35–0.65 µs
+apart, unchanged when every packet of an entry lands as one contiguous write on one core (`AGRMS_ABL` bit 4): the
+receiver's scattered writes are not the bound. Levers: scatter pack alone 12.09 (flat: fewer packets, dearer
+headers); header ring (headers built ahead into `cb_port_hdr`) without pack +1.1 (a slot's routed template copy is
+≈ 375 cycles; computing the 2D route per slot +3.1); stateful sends alone 12.03; pack + stateful 11.89; pack + ring +
+stateful 11.77 (DMA slot templates 11.98); **+ batch 1 11.42 / 12.23 (kept, the short-run regime)**; without header
+builds in the fence wait 12.07; stage ring 4 / 8 / 14 slots, `INC_EVERY` 1 / 2 / 4 / 16 (+1.9 / +1.9 / +0.2 / +0.5),
+relay lag 0 at waves 8 / 4 (+1.4 / +2.9): flat or worse. Split-side alternatives (contiguous multi-tile runs): k = 4
+(one slice per member) at 1 / 2 / 4 rows per group 20.2 / 29.0 / 49.5, k = 1 at 4 rows 20.6 — the narrow LN chain is
+per-row and combine bound, so contiguity cannot be bought with the split. After: send window 3.2 µs, last landing
+7.33 µs, end 12.0 (zones). Remaining: the per-hop delivery (≈ 2.5 µs from issue to the downstream's arrival count, the
+relay pays it twice) and the LN tail (≈ 4.6 µs). Next: relay → fabric line multicast of the own half to p+1 and p+2
+(same mirror address; removes the worker relay turnaround and the second issue, at the cost of a 2-hop ready and
+per-source arrival counters) — a scheme change, not done here.
 
 ## Dataflow Strategy
 

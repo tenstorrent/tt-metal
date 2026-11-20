@@ -248,7 +248,7 @@ void kernel_main() {
                 if (*ready >= 1) {
                     break;
                 }
-                build_ahead();
+                build_ahead();  // (none here measured +0.64 us on the indexer case)
             }
             noc_semaphore_inc(get_noc_addr(ready_addr), 0u - 1u);
             noc_async_atomic_barrier();
