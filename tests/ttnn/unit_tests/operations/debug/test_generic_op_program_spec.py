@@ -1035,7 +1035,7 @@ def test_a_tensor_argument_view_must_hold_its_program_devices(mesh_device, expec
     first_output, second_output = ttnn.get_device_tensors(output_tensor)
 
     # The program runs on the first device, and the run args name the second device's view of the input.
-    message = "tensor parameter 'input' is bound to a view of a tensor on devices"
+    message = "tensor parameter 'input' is bound to a view that holds devices"
     spec, run_args = exp_program(second_input, first_output)
     with expect_error(RuntimeError, message):
         E.generic_op([first_input, first_output], spec, run_args)
