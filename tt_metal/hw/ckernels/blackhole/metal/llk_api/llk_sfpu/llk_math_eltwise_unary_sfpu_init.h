@@ -13,8 +13,6 @@
 namespace ckernel {
 // Kernel-invariant SFPU init (SFPU config register; ADDR_MOD_7 is set by hw_configure). Retained for the
 // standalone tt-llk SFPU test harness, which bypasses the metal "full init" entry points and runs this itself.
-// The metal compute path no longer hoists this: each per-op init below is self-contained (#50381), running the
-// invariant per-op rather than once-per-kernel.
 inline void llk_math_sfpu_init_once() {
     SAN_HOOK(unsupported());
     _llk_math_eltwise_unary_sfpu_init_once_();
@@ -116,10 +114,9 @@ inline void unused_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <SfpuType sfpu_op, bool is_fp32_dest_acc_en>
 inline void llk_math_eltwise_unary_sfpu_init() {
     SAN_HOOK(unsupported());
-    // Per-op common SFPU init (config reg), formerly hoisted once-per-kernel via
-    // llk_math_sfpu_init_once(). Consolidated back per-op (#50381) so each init is fully self-contained and
-    // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
-    // programs only the op's residual state (counter reset).
+    // Per-op common SFPU init (config reg): each init is self-contained and never depends
+    // on a separate once-init having run first. The co-located sfpu::<op>_init() below then
+    // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
     _llk_math_eltwise_unary_sfpu_init_once_();
     if constexpr (sfpu_op == SfpuType::abs) {
         sfpu::abs_init();
@@ -253,10 +250,9 @@ inline void llk_math_eltwise_unary_sfpu_init() {
 }
 
 // Callback init entry point (SFPU_UNARY_INIT_FN / _FN_ARGS / two-arg SFPU_UNARY_INIT). The per-op common init
-// (config reg + counter reset) runs first, then the op-specific init_func. Consolidated per-op
-// (#50381) rather than hoisted: re-asserting the shared SFPU config/addrmod state on every init -- on both the
-// MATH and PACK threads -- keeps the exp(PACK)/fp32-reciprocal(MATH) shared macro/replay programming from
-// interleaving destructively, which was the #50381 fp32 SDPA accuracy regression.
+// (config reg + counter reset) runs first, then the op-specific init_func. Re-asserting the shared SFPU
+// config/addrmod state on every init -- on both the MATH and PACK threads -- keeps the
+// exp(PACK)/fp32-reciprocal(MATH) shared macro/replay programming from interleaving destructively.
 template <SfpuType sfpu_op, class F, class... ARGS>
 inline void llk_math_eltwise_unary_sfpu_init(F&& init_func, ARGS&&... args) {
     SAN_HOOK(unsupported());
