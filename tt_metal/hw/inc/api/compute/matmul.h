@@ -849,8 +849,9 @@ ALWI void matmul_block_llk_runtime(
     const std::uint32_t kt_dim) {
 #if defined(UCK_CHLKC_MATH) || defined(UCK_CHLKC_UNPACK)
     if (const bool reorder = matmul_api_operands_reorder(in0_cb_id, in1_cb_id);
-        __builtin_constant_p(reorder) && !reorder) {
-        // direction 0 whatever the block, as the init of these cbs folds it
+        DST_SYNC_MODE == DstSync::SyncFull && __builtin_constant_p(reorder) && !reorder) {
+        // direction 0 whatever the block, as the init of these cbs folds it; at half sync the row form never meets
+        // direction 3, and the fold's code slowed bmm fp32 x bf16 LoFi blocks (+0.4..0.7 %)
         matmul_block_llk<
             0,
             unpack_ttsync,
