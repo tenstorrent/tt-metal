@@ -128,15 +128,17 @@ void kernel_main() {
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr);
     volatile tt_l1_ptr uint32_t* pages_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
         get_remote_receiver_cb_interface(remote_cb_id).aligned_pages_acked_ptr - L1_ALIGNMENT);
-    for (uint32_t spin = 0; spin < prefetcher_validator::kExtraPollCycles; ++spin) {
-        invalidate_l1_cache();
-        const uint32_t sent = *pages_sent_ptr;
-        const uint32_t acked = *pages_acked_ptr;
-        if (sent != acked) {
-            DPRINT("VALIDATOR_OVERFLOW: sender pushed an extra page; pages_sent={} pages_acked={}\n", sent, acked);
-            while (true) {
-                ;
-            }
+    uint32_t sent = 0;
+    uint32_t acked = 0;
+    if (prefetcher_validator::extra_entry_within_poll_window([&] {
+            invalidate_l1_cache();
+            sent = *pages_sent_ptr;
+            acked = *pages_acked_ptr;
+            return sent != acked;
+        })) {
+        DPRINT("VALIDATOR_OVERFLOW: sender pushed an extra page; pages_sent={} pages_acked={}\n", sent, acked);
+        while (true) {
+            ;
         }
     }
 
