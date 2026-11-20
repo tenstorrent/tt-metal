@@ -178,10 +178,8 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         StateDiscard<std::uint32_t>(tile_size),
         StateDiscard<std::uint32_t>(face_r_dim),
         StateDiscard<std::uint32_t>(num_faces)));
-    // Old-argument call on purpose, kept so the src{a,b} reconfig pair moves to TensorShape together
-    // (tt-llk#1033): srca is renamed by macro to a face_r_dim/num_faces shim in the experimental
-    // hybrid_llk_shims.hpp. The impl programs only face_r_dim and the total face count, so the 1x2 grid picked
-    // for num_faces == 2 gives the same registers as the real CB shape.
+    // Old-argument call on purpose: the experimental hybrid_llk_shims.hpp renames srca to a
+    // face_r_dim/num_faces shim, so the src{a,b} pair moves to TensorShape together.
     _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, dim_stride_target, skip_int8>(
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
