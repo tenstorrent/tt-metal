@@ -757,6 +757,7 @@ def vit_layer(hidden_states, parameters, config, attention_mask=None):
         attn_mask=attention_mask,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         compute_kernel_config=pconfigs["compute_kernel_config"],
+        precision=ttnn.SDPAPrecision.ACCURATE,
     )
     ttnn.deallocate(query)
     ttnn.deallocate(key)
