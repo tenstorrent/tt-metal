@@ -72,8 +72,8 @@ def test_ttrun_dead_rank():
 
 
 def test_ttrun_hang_timeout():
-    """A rank spins forever. With PRRTE's --timeout passed through --mpi-args, tt-run ends the job (exit 241) and
-    leaves nothing — the launcher wall clock reaches PRRTE through tt-run (P5)."""
+    """A rank spins forever. With --timeout 20 in --mpi-args, tt-run sends SIGTERM to every rank at 20 s (graceful; PRRTE's
+    own --timeout stays as a backstop after the stop grace), the job ends with 241 and leaves nothing (P5)."""
     r = run_case(
         "ttrun_hang_timeout",
         {**NP, "PROBE_SCENARIO": "victim_hang"},
@@ -84,6 +84,7 @@ def test_ttrun_hang_timeout():
     nonzero(r)
     assert r.exit == 241, f"expected PRRTE's timeout code 241, got {r.exit} — the wall clock was not what ended it: {r}"
     assert 20 <= r.wall_s < 40, f"the job did not end at the ~20 s --timeout but at {r.wall_s:.0f} s: {r}"
+    assert "the job reached its --timeout of 20 s: sent SIGTERM to all ranks" in r.log, r.log[-2000:]
     clean(r)
 
 

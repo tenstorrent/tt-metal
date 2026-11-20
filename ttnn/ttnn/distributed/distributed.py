@@ -700,7 +700,7 @@ def close_mesh_device(mesh_device):
             code = exc.code if isinstance(exc.code, int) else 1
         else:
             code = 130 if isinstance(exc, KeyboardInterrupt) else 1
-        text = str(exc).splitlines()[0][:200] if str(exc) else ""
+        text = " ".join(str(exc).split("backtrace:")[0].split())[:400]  # one line: tt-run reads the stop per line
         ttnn._ttnn.multi_device.request_job_stop(
             code, f"Python exception {type(exc).__name__}{': ' + text if text else ''} (closing the mesh)"
         )

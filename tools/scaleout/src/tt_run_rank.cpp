@@ -46,9 +46,15 @@ void forward(int signal_number) {
     }
 }
 
+// The same bound as the ranks' exit wait (DistributedContext): TT_METAL_STOP_TIMEOUT_S, else tt-run's stop grace
+// (TT_RUN_STOP_GRACE_S, 60 s by default) plus 10 s.
 double stop_timeout_s() {
     const char* v = std::getenv("TT_METAL_STOP_TIMEOUT_S");
-    return (v != nullptr && *v != '\0') ? std::atof(v) : 30.0;
+    if (v != nullptr && *v != '\0') {
+        return std::atof(v);
+    }
+    const char* grace = std::getenv("TT_RUN_STOP_GRACE_S");
+    return ((grace != nullptr && *grace != '\0') ? std::atof(grace) : 60.0) + 10.0;
 }
 
 }  // namespace

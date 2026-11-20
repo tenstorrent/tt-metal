@@ -123,7 +123,8 @@ def test_fabric_mismatch():
 
 
 def test_prte_timeout():
-    """A send nobody receives under PRRTE --timeout 60: the wall clock ends the job with 241 and nothing left.
+    """A send nobody receives under --timeout 60: at 60 s tt-run sends SIGTERM to every rank (the timeout is graceful;
+    PRRTE's own kill stays only as a backstop after the stop grace), both ranks close, and tt-run returns 241.
 
     The timeout is longer than the ttnn import on a loaded runner, and the row checks that both ranks were past
     open when the clock fired, so it is the deadlock that was ended and not the start-up."""
@@ -141,7 +142,9 @@ def test_prte_timeout():
         assert f"[probe r={rank} " in r.log and any(
             f"[probe r={rank} " in line and "] coll_" in line for line in r.log.splitlines()
         ), f"rank {rank} had not reached the collective when the wall clock fired: {r}"
-    closed(r)  # PRRTE's --timeout sends SIGTERM first: both ranks leave the collective and close their mesh
+    closed(r)  # the --timeout is graceful: both ranks leave the collective on SIGTERM and close their mesh
+    assert "the job reached its --timeout of 60 s: sent SIGTERM to all ranks" in r.log, r.log[-3000:]
+    assert "outcome=stopped exit=241" in r.log and "job forced down" not in r.log, r.log[-3000:]
     clean(r)
 
 
@@ -188,14 +191,19 @@ def test_raise_after_open():
 
 
 def test_bad_shape():
-    """Rank 1 asks for a mesh the descriptor cannot hold: a TT_FATAL (a C++ exception) inside open on rank 1, raised
-    in Python as RuntimeError; the job is stopped from rank 1 with code 1."""
+    """Rank 1 asks for a mesh the descriptor cannot hold: the shape check in open is a TT_FATAL (a C++ exception,
+    raised in Python as RuntimeError, its message several lines long) on every rank. The job is stopped with code 1,
+    and tt-run reads the one-line [tt-stop] line and names the rank, not prterun's banner."""
     r = run_case("bad_shape_rank1", {"PROBE_MESH_SHAPE_VICTIM": "9x9"}, DEADLINE_END)
     ended(r)
-    assert re.search(
-        r"\[tt-stop\] rank \d+ on \S+ \(pid \d+\): (uncaught )?Python exception RuntimeError", r.log
-    ), r.log[-3000:]
-    assert r.exit == 1 and "job forced down" not in r.log, str(r)
+    m = re.search(
+        r"\[tt-stop\] rank (\d+) on \S+ \(pid \d+\): (?:uncaught )?Python exception RuntimeError: TT_FATAL.*"
+        r"ranks disagree on the requested mesh shape.*; stopping the job \(exit 1\)",
+        r.log,
+    )
+    assert m, f"no one-line [tt-stop] line for the TT_FATAL\n{r.log[-3000:]}"
+    assert r.exit == 1 and f"origin=rank {m.group(1)} on" in r.log and "outcome=failed exit=1" in r.log, str(r)
+    assert "the launcher then killed the other ranks" not in r.log and "job forced down" not in r.log, r.log[-3000:]
     clean(r)
 
 
@@ -737,6 +745,20 @@ def test_thread_exception_stops_the_job():
     ended(r)
     stopped_by(r, 1, "uncaught Python exception in thread worker RuntimeError: worker failed", 1)
     closed(r)
+    clean(r)
+
+
+def test_clean_exit_waits_for_a_slow_rank():
+    """Rank 1 has finished and exits 0 while rank 0 is still working 15 s longer (longer than tt-run's old 10 s
+    settle). A rank that exits 0 starts nothing: no stop, no warning, nothing killed; the job waits for rank 0 and
+    exits 0."""
+    r = run_case("slow_exit", {"PROBE_SCENARIO": "slow_exit", "PROBE_VICTIM": "0", "PROBE_SLOW_S": "15"}, DEADLINE_END)
+    ended(r)
+    assert r.exit == 0 and "outcome=clean exit=0" in r.log, str(r)
+    assert r.wall_s >= 15, f"the job ended before the slow rank finished: {r}"
+    for bad in ("[tt-stop]", "sent SIGTERM", "job forced down", "a leak", "still running"):
+        assert bad not in r.log, f"{bad!r} on a clean job\n{r.log[-3000:]}"
+    assert any("[probe r=0 " in line and "main_exit" in line for line in r.log.splitlines()), r.log[-3000:]
     clean(r)
 
 

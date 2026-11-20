@@ -1231,9 +1231,9 @@ void py_module(nb::module_& mod) {
         auto stop_job = [](int code, const std::string& reason) { stop_job_from_python(code, reason); };
         auto describe = [](nb::handle etype, nb::handle value) {
             std::string name = nb::cast<std::string>(nb::str(etype.attr("__name__")));
-            std::string text = nb::cast<std::string>(nb::str(value));
-            if (text.size() > 200) {
-                text = text.substr(0, 200) + "...";
+            std::string text = nb::cast<std::string>(nb::str(value));  // one line: request_job_stop flattens it
+            if (text.size() > 600) {
+                text = text.substr(0, 600);
             }
             return text.empty() ? name : name + ": " + text;
         };

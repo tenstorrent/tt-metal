@@ -14,6 +14,7 @@ Env (all optional):
                    segv: SIGSEGV to this rank (a crash; tt-run-rank stops the job in its place)
                    thread_raise: an uncaught exception in a worker thread, the main thread goes on to the collective
                    ignore_sigterm: this rank ignores SIGTERM from here on (a rank stuck in a device wait)
+                   slow_exit: this rank works PROBE_SLOW_S more after the final barrier, the others exit 0 first
                    sigint: SIGINT to this rank alone (KeyboardInterrupt), the peers untouched (P23)
                    exit1: sys.exit(1), no exception: click's exit, a script's error return (P26)
                    exit0: sys.exit(0) while the peers still work: a logic bug's early return (P27)
@@ -282,5 +283,11 @@ finally:
 if fabric_on:
     ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 timed("barrier_close", ttnn.distributed_context_barrier)
+if SCENARIO == "slow_exit" and is_victim():
+    # A rank that is still busy after the others have finished and exited 0 (a slow driver teardown, a log flush):
+    # nothing may stop or kill the job meanwhile.
+    slow = float(env("PROBE_SLOW_S", "15"))
+    mark(f"slow_exit: still working {slow} s after the others finished")
+    time.sleep(slow)
 mark("main_exit")
 sys.exit(0)

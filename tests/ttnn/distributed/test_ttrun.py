@@ -1519,6 +1519,39 @@ class TestJobOwnership:
         'while [ ! -e "$REC/ranks_gone" ]; do sleep 0.1; done; exit 143'
     )
 
+    @pytest.mark.parametrize("ranks_exit", [True, False], ids=["graceful", "forced_after_grace"])
+    def test_run_launcher_stops_the_job_gracefully_at_its_timeout(self, ranks_exit, tmp_path, monkeypatch):
+        import tempfile
+
+        from ttnn.distributed import ttrun as m
+
+        # --timeout 1: at 1 s tt-run sends SIGTERM to every rank through job control (never the launcher). If the
+        # ranks exit, the job ends "stopped" with 241; if not, tt-run forces after the stop grace, with the warning.
+        rec = tmp_path / "rec"
+        rec.mkdir()
+        helper = tmp_path / "tt-run-signal"
+        helper.write_text(
+            f'#!/bin/bash\necho "$@" >> "{rec}/helper.args"\n' + (f'touch "{rec}/ranks_gone"\n' if ranks_exit else "")
+        )
+        helper.chmod(0o755)
+        monkeypatch.setenv("REC", str(rec))
+        monkeypatch.setenv("TMPDIR", str(tmp_path))
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
+        monkeypatch.setenv("TT_RUN_SIGNAL_HELPER", str(helper))
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
+        monkeypatch.setenv("IGNORE_TERM", "0")
+        text, rc = self._logged_rc(
+            lambda: m.run_launcher(["bash", "-c", self._FAKE_PRTERUN, "--timeout", "1"], cwd=Path.cwd())
+        )
+        assert rc == 241, text
+        assert "the job reached its --timeout of 1 s: sent SIGTERM to all ranks" in text, text
+        assert "--signal 15" in (rec / "helper.args").read_text()
+        if ranks_exit:
+            assert "job stopped at its --timeout of 1 s" in text and "job end: outcome=stopped exit=241" in text, text
+            assert not (rec / "launcher.signals").exists(), "a graceful timeout must not signal the launcher"
+        else:
+            assert "job forced down" in text and "tt-smi -r" in text and "job end: outcome=forced exit=241" in text
+
     @pytest.mark.parametrize(
         "case",
         ["graceful", "no_helper", "grace_expired", "second_signal", "launcher_ignores_force"],
@@ -1600,34 +1633,48 @@ class TestJobOwnership:
         if case == "launcher_ignores_force":
             assert "did not exit" in text and "SIGKILL" in text, text
 
-    def test_run_launcher_ends_leftovers_and_fails_the_job(self):
+    def test_run_launcher_ends_leftovers_and_fails_the_job(self, monkeypatch):
         import time
 
         from ttnn.distributed.ttrun import run_launcher
 
         # like PRRTE's ranks: a child that stays in the launcher's session (only the process group differs) and
-        # OUTLASTS the settle window -> a genuine leak -> ended and the job failed. Bound allows the full settle
-        # (SURVIVOR_SETTLE_S) plus the SIGTERM/SIGKILL grace.
+        # OUTLASTS the stop grace -> warned about, then SIGTERM, then (here unneeded) SIGKILL; a leak, the job fails.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "2")
         t0 = time.time()
         text, rc = self._logged_rc(
             lambda: run_launcher(["bash", "-c", "sleep 30 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
         )
         assert rc != 0
         assert time.time() - t0 < 20
+        assert "still running" in text and "waiting up to 2 s (TT_RUN_STOP_GRACE_S)" in text, text
         assert "a leak" in text and "job end: outcome=failed" in text, text
 
-    def test_run_launcher_does_not_fail_when_a_rank_exits_just_after_the_launcher(self):
+    @pytest.mark.parametrize("exits_after", [1, 12])
+    def test_run_launcher_waits_for_a_rank_still_exiting_after_the_launcher(self, exits_after):
         import time
 
         from ttnn.distributed.ttrun import run_launcher
 
-        # The SC4 case: a child still in the launcher's session but already on its way out when the launcher
-        # returns is a graceful finish, not a leak. tt-run's settle lets it leave, and the clean code is forwarded.
+        # The SC4 case: every rank finished, but one is still in its exit path (driver teardown) when the launcher
+        # returns. A clean finish is never killed: tt-run waits for it up to the stop grace (60 s by default; 12 s is
+        # longer than the 10 s tt-run used to allow) and the clean code is forwarded.
         t0 = time.time()
-        text, rc = self._logged_rc(lambda: run_launcher(["bash", "-c", "sleep 1 & disown; exit 0"], cwd=Path.cwd()))
-        assert rc == 0
-        assert time.time() - t0 < 10
-        assert "job end: outcome=clean exit=0" in text, text
+        text, rc = self._logged_rc(
+            lambda: run_launcher(["bash", "-c", f"sleep {exits_after} & disown; exit 0"], cwd=Path.cwd())
+        )
+        assert rc == 0, text
+        assert exits_after <= time.time() - t0 < exits_after + 8
+        assert "job end: outcome=clean exit=0" in text and "a leak" not in text, text
+
+    def test_timeout_is_made_graceful_with_prrte_as_the_backstop(self, monkeypatch):
+        from ttnn.distributed.ttrun import job_timeout_s, with_timeout_backstop
+
+        assert job_timeout_s(["mpirun", "--timeout", "20", "x"]) == 20.0
+        assert job_timeout_s(["mpirun", "--timeout=7", "x"]) == 7.0
+        assert job_timeout_s(["mpirun", "x"]) is None
+        assert with_timeout_backstop(["mpirun", "--timeout", "20", "x"], 110) == ["mpirun", "--timeout", "110", "x"]
+        assert with_timeout_backstop(["mpirun", "--timeout=7", "x"], 97) == ["mpirun", "--timeout=97", "x"]
 
     @staticmethod
     def _logged(fn):

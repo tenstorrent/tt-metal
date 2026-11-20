@@ -53,19 +53,25 @@ void (*g_force_abort)(int) = nullptr;
 std::atomic<bool> g_peer_failed{false};
 constexpr double kPeerFailedFenceS = 5.0;
 
-constexpr double kDefaultStopTimeoutS = 30.0;
+constexpr double kDefaultStopGraceS = 60.0;  // tt-run's TT_RUN_STOP_GRACE_S default
+constexpr double kGraceMarginS = 10.0;
 constexpr double kWatchdogMarginS = 10.0;
 
-// TT_METAL_STOP_TIMEOUT_S: the bound on a stopping rank's wait for the other ranks at its exit; the watchdog ends the
-// job (MPI_Abort) if the rank is still running kWatchdogMarginS after that. 0 turns both bounds off.
-double stop_timeout_s() {
-    const char* v = std::getenv("TT_METAL_STOP_TIMEOUT_S");
+double env_seconds(const char* name, double fallback) {
+    const char* v = std::getenv(name);
     if (v == nullptr || *v == '\0') {
-        return kDefaultStopTimeoutS;
+        return fallback;
     }
     char* end = nullptr;
     const double s = std::strtod(v, &end);
-    return (end != v && s >= 0.0) ? s : kDefaultStopTimeoutS;
+    return (end != v && s >= 0.0) ? s : fallback;
+}
+
+// The bound on a stopping rank's wait for the other ranks at its exit: TT_METAL_STOP_TIMEOUT_S, else tt-run's stop grace
+// (TT_RUN_STOP_GRACE_S, forwarded to every rank, 60 s by default) plus a margin, so under tt-run its own force after
+// the grace comes first. The watchdog ends the job (MPI_Abort) kWatchdogMarginS after that. 0 turns both off.
+double stop_timeout_s() {
+    return env_seconds("TT_METAL_STOP_TIMEOUT_S", env_seconds("TT_RUN_STOP_GRACE_S", kDefaultStopGraceS) + kGraceMarginS);
 }
 
 std::string rank_label() {
@@ -78,6 +84,27 @@ std::string rank_label() {
     std::ostringstream s;
     s << "rank " << (r != nullptr ? r : "?") << " on " << host << " (pid " << ::getpid() << ")";
     return s.str();
+}
+
+// The [tt-stop] line is one line (tt-run reads it per line): a TT_FATAL's message spans several and ends in a
+// backtrace, so the reason is cut at the backtrace, its line breaks become spaces, and it is capped.
+std::string one_line(const std::string& reason) {
+    std::string out = reason.substr(0, reason.find("backtrace:"));
+    for (char& c : out) {
+        if (c == '\n' || c == '\r' || c == '\t') {
+            c = ' ';
+        }
+    }
+    while (!out.empty() && out.back() == ' ') {
+        out.pop_back();
+    }
+    std::string squeezed;
+    for (const char c : out) {
+        if (!(c == ' ' && !squeezed.empty() && squeezed.back() == ' ')) {
+            squeezed += c;
+        }
+    }
+    return squeezed.size() > 400 ? squeezed.substr(0, 400) + "..." : squeezed;
 }
 
 pid_t parent_of(pid_t pid) {
@@ -274,7 +301,7 @@ bool DistributedContext::request_job_stop(int exit_code, const std::string& reas
         stderr,
         "[tt-stop] %s: %s; stopping the job (exit %d)\n",
         rank_label().c_str(),
-        reason.c_str(),
+        one_line(reason).c_str(),
         g_exit_code.load());
     std::string why;
     const bool sent = send_job_sigterm(why);

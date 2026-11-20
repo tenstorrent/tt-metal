@@ -37,19 +37,22 @@ TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 
-# The overall job wall clock (teardown plan P5) is PRRTE's own --timeout, reached only through --mpi-args
-# ("--timeout N [--report-state-on-timeout]"); tt-run adds no clock of its own, so a long-running job is never cut
-# off. PRRTE's --timeout is a single timer on the whole job, not on any one MPI call: when it expires it ends every
-# rank on every host and the launcher returns this code. tt-run passes it through verbatim and, below, reports that
-# exit as the launcher's own timeout rather than a tt-run failure. A specific collective that hangs is bounded in
-# the DistributedContext instead (the per-call operation timeout, plan P16).
+# The overall job wall clock (teardown plan P5) is the --timeout given through --mpi-args ("--timeout N"); tt-run adds
+# no clock of its own, so a long-running job is never cut off. tt-run makes it graceful: at N seconds every rank gets
+# SIGTERM (as for Ctrl-C), and only after the stop grace is the job forced. PRRTE's own --timeout, which kills every
+# rank at once, stays on the line as a backstop at N + the grace + TIMEOUT_BACKSTOP_S. Either way tt-run returns
+# PRTE_TIMEOUT_EXIT_CODE. A specific collective that hangs is bounded in the DistributedContext instead (the per-call
+# operation timeout, plan P16).
 PRTE_TIMEOUT_EXIT_CODE = 241
+TIMEOUT_BACKSTOP_S = 30.0
 
 # A stop at tt-run (SIGINT/SIGTERM) reaches every rank on every host as SIGTERM through PRRTE job control
 # (PMIX_JOB_CTRL_SIGNAL): each host's daemon kill()s its own ranks, prterun does not abort the job and starts no
 # SIGKILL clock. A signal sent to prterun itself is its kill path instead: SIGCONT, SIGTERM, then SIGKILL 250 ms
-# later (hardcoded in PRRTE's odls; no MCA parameter) — that is tt-run's force. The ranks get STOP_GRACE_S
-# (TT_RUN_STOP_GRACE_S) to exit after the SIGTERM before tt-run forces; a second signal forces at once.
+# later (hardcoded in PRRTE's odls; no MCA parameter) — that is tt-run's force. STOP_GRACE_S (TT_RUN_STOP_GRACE_S) is
+# the one grace of every graceful shutdown: the ranks' time to exit after a stop (tt-run's, a rank's, the --timeout)
+# and the time a process still exiting after the launcher returned is waited for. Past it tt-run forces, with a
+# warning; a second signal at tt-run forces at once. The ranks read it too (it is forwarded as a TT_ variable).
 STOP_GRACE_S = 60.0
 
 # How long the launcher may ignore the force (SIGTERM to prterun) before tt-run SIGKILLs it. Only ever armed by a
@@ -84,6 +87,33 @@ def find_signal_helper() -> Tuple[Optional[str], str]:
     if installed:
         return installed, ""
     return None, "tt-run-signal is not built (tools/scaleout, needs the ULFM Open MPI install)"
+
+
+def job_timeout_s(cmd: List[str]) -> Optional[float]:
+    """The --timeout (seconds) on a launch line, or None."""
+    for i, a in enumerate(cmd):
+        value = (
+            a.split("=", 1)[1]
+            if a.startswith("--timeout=")
+            else (cmd[i + 1] if a == "--timeout" and i + 1 < len(cmd) else None)
+        )
+        if value is not None:
+            try:
+                return float(value)
+            except ValueError:
+                return None
+    return None
+
+
+def with_timeout_backstop(cmd: List[str], backstop_s: float) -> List[str]:
+    """The launch line with PRRTE's --timeout moved to the backstop (tt-run stops the job gracefully first)."""
+    out = list(cmd)
+    for i, a in enumerate(out):
+        if a.startswith("--timeout="):
+            out[i] = f"--timeout={int(backstop_s)}"
+        elif a == "--timeout" and i + 1 < len(out):
+            out[i + 1] = str(int(backstop_s))
+    return out
 
 
 def find_rank_wrapper() -> Optional[str]:
@@ -184,11 +214,12 @@ _MPI_ABORT_BANNER = "MPI_ABORT was invoked"
 # the next launch's pre-launch sweep.
 SHM_MIN_STALE_AGE_S = 30.0
 
-# How long a process still in the launcher's session, when the launcher has just exited, is given to leave on its
+# A process still in the launcher's session when the launcher has just exited is given the stop grace to leave on its
 # own before tt-run acts on it. A rank (or a UMD helper child it spawned) can still be in its exit path after the
 # launcher returns — a graceful finish, not a leftover — and on real hardware a rank in uninterruptible sleep (D)
-# releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS this is ended.
-SURVIVOR_SETTLE_S = 10.0
+# releasing /dev/tenstorrent can take several seconds. Only a process that OUTLASTS the grace gets SIGTERM, then
+# SIGKILL SURVIVOR_TERM_GRACE_S later.
+SURVIVOR_TERM_GRACE_S = 10.0
 
 
 def remove_stale_launcher_leftovers() -> int:
@@ -289,6 +320,10 @@ class LaunchedJob:
         self._force_t0: Optional[float] = None
         self.rank_stop: Optional[re.Match] = None  # the rank that stopped the job (its [tt-stop] line)
         self.stopped_by_rank = False  # a rank stopped the job before tt-run was stopped: its code is the job's
+        self.job_timeout = job_timeout_s(cmd)  # the --timeout given in --mpi-args, made graceful here
+        self.timed_out = False  # the --timeout was reached and tt-run stopped the job
+        if self.job_timeout is not None:
+            self.cmd = with_timeout_backstop(cmd, self.job_timeout + _stop_grace_s() + TIMEOUT_BACKSTOP_S)
 
     def __enter__(self) -> "LaunchedJob":
         remove_stale_launcher_leftovers()  # before launch: clear a prior killed job's /dev/shm + session-dir leak
@@ -480,6 +515,18 @@ class LaunchedJob:
                     first = handled == 1  # the job was already stopping because a rank stopped it
                     why = f"{name} received while the job was stopping" if first else f"second {name}"
                     self._force(why, now - self.stop_t0)
+            if self.job_timeout is not None and self.stop_t0 is None and now - self.t0 >= self.job_timeout:
+                self.timed_out = True
+                self.stop_t0 = now
+                why = self._stop_ranks()
+                if not why:
+                    self.stop_sent = True
+                    logger.warning(
+                        f"{TT_RUN_PREFIX} the job reached its --timeout of {self.job_timeout:g} s: sent SIGTERM to "
+                        f"all ranks; waiting up to {_stop_grace_s():g} s for them to exit, then forcing"
+                    )
+                else:
+                    self._force(f"--timeout of {self.job_timeout:g} s reached, could not reach prterun: {why}", 0)
             if self.stop_sent and not self.forced_why and now - self.stop_t0 >= _stop_grace_s():
                 self._force(f"ranks did not exit within {_stop_grace_s():g} s", now - self.stop_t0)
             if self.forced_why:
@@ -523,7 +570,7 @@ class LaunchedJob:
                 continue
         return out
 
-    def _end_survivors(self, grace_s: float = 2.0, settle_s: float = SURVIVOR_SETTLE_S) -> None:
+    def _end_survivors(self, grace_s: float = SURVIVOR_TERM_GRACE_S, settle_s: Optional[float] = None) -> None:
         """Teardown step: the launcher has exited; anything still in its session on this host is either a rank
         finishing a hair late or a genuine leak. Give survivors a bounded settle to leave on their own — a
         graceful exit is the norm and is NOT a leak — and act only on what OUTLASTS it: forward the stop
@@ -536,7 +583,14 @@ class LaunchedJob:
         are reached only by their own prted's disconnect teardown (best effort). Tier A (an ssh reaper keyed on
         TT_RUN_JOB_ID) would extend this guarantee across hosts.
         """
+        if settle_s is None:
+            settle_s = _stop_grace_s()
         survivors = self._survivors()
+        if survivors:
+            logger.warning(
+                f"{TT_RUN_PREFIX} {len(survivors)} process(es) of the job still running on {socket.gethostname()} "
+                f"after the launcher returned; waiting up to {settle_s:g} s (TT_RUN_STOP_GRACE_S) for them to exit"
+            )
         deadline = time.time() + settle_s
         while survivors and time.time() < deadline:  # let a rank still in its exit path leave on its own
             time.sleep(0.1)
@@ -608,7 +662,15 @@ def run_launcher(cmd: List[str], cwd: Path) -> int:
     # say it once, and end with one summary line every run has.
     elapsed, origin = time.time() - job.t0, ""
     launcher_stderr = job.launcher_stderr()  # drained first: a rank's [tt-stop] line may be the last thing it wrote
-    if job.stopped_by_rank:  # a rank stopped the job: its code, and it is named
+    if job.timed_out:  # tt-run stopped the job at its --timeout
+        rc, cause = PRTE_TIMEOUT_EXIT_CODE, "--timeout"
+        outcome = "forced" if job.forced_why else "stopped"
+        if not job.forced_why:
+            logger.warning(
+                f"{TT_RUN_PREFIX} job stopped at its --timeout of {job.job_timeout:g} s: every rank was sent SIGTERM "
+                f"and exited. tt-run returns {rc}."
+            )
+    elif job.stopped_by_rank:  # a rank stopped the job: its code, and it is named
         r, host, pid, reason, code = job.rank_stop.groups()
         rc, origin, cause = int(code), f"rank {r} on {host}", "rank failure"
         if job.forced_why:
