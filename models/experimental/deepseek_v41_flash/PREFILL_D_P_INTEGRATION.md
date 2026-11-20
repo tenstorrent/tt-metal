@@ -44,15 +44,21 @@ indexer on every column needs).
 
 ### 2.2 Layer kinds
 
-From the checkpoint config (`reference/ds41_ref.py:Config`):
+From the checkpoint config (`reference/ds41_ref.py:Config`, `bringup/spec.yaml` `block_types`):
 
-* `swa` layers: sliding-window attention only (window 128).
-* `engram` layers (1, 14): n-gram rows from a hashed table, added to the residual (host hash + mmap lookup).
-* `enc_source` / `enc_reuse` (layers 2-19): ratio-2 compressed attention; sources write compressed KV and index
-  keys, reuse layers read their group's source.
-* `dec_candidate` (layer 20): ratio-1 KV source and the candidate source of the two-level select.
-* `dec_reindex` (24, 28, 32, 36): index sources restricted to layer 20's candidates.
-* `dec_reuse`: the rest of 21-39.
+| Block type | Layers | Role |
+| --- | --- | --- |
+| `swa` / `swa_engram` | 0 / 1 | window-only attention (ratio 0); layer 1 adds engram rows |
+| `enc_source` / `enc_source_engram` | 2, 8 / 14 | ratio-2 KV + index source (14 adds engram) |
+| `enc_reuse` | 3-7, 9-13, 15-19 | read their group's compressed KV and top-k |
+| `dec_candidate` | 20 | ratio-1 KV source + candidate pool (2048 blocks of 8) |
+| `dec_reindex` | 24, 28, 32, 36 | own top-512 inside layer 20's candidates |
+| `dec_reuse` | the rest of 21-39 | reuse the decoder sources' KV / top-k |
+
+Each block runs the reference step graph (`block_steps`): engram, attention mHC + collapse + norm, `q_a` / `kv`,
+compressor (sources), indexer (index sources), attention, residual, FFN mHC + collapse + norm, router, experts,
+shared expert, `moe_add`, residual. Between layers the hidden state is a `DevH` (4 streams + the pending `pre` mix);
+with `OWN_ROWS=on` each chip holds 160 whole token rows (5120 / (SP x TP)).
 
 The residual is the mHC 4-stream hyper-connection (`tt/mhc.py`, `ttnn.bringup.mhc_post`).
 
@@ -67,9 +73,14 @@ The residual is the mHC 4-stream hyper-connection (`tt/mhc.py`, `ttnn.bringup.mh
      decode's 192-byte rows; `bf16`: plain rows) into the served caches;
    * the indexer scores every visible entry, `topk_large_indices` keeps 512; layer 20 also keeps 2048 candidate
      blocks of 8 for the re-index layers;
-   * `sparse_sdpa` attends the window and the selected entries; history from other SP rows arrives through
-     `history_gather` / `window_send` fabric ops, not the host;
-   * MoE: router + shared expert + bfp4 routed experts in one `moe_block` call, combine over fabric;
+   * one `sparse_sdpa` over `[128 carry | chunk window | gathered compressed rows]` with a 640-entry index list
+     (128 window + 512 top-k) and per-head attention sinks; the window path uses stock
+     `ttnn.transformer.sparse_sdpa` unless a low-bit window format routes it to `ttnn.bringup.sparse_sdpa`. History
+     from other SP rows arrives through `high_bw_all_gather` (`history_gather`) into a persistent buffer, not the host;
+   * MoE: sqrtsoftplus grouped top-6 of 384 experts (`moe_grouped_topk`), then the shared expert and bfp4 routed
+     experts in one fused `ttnn.bringup.moe_block` call (dispatch groups = mesh columns), combine over fabric;
+   * TP partial sums are exact fp32 (`fabric_reduce_scatter` / all-gather + add); the mHC mix uses
+     `mhc_pre_xing` (Sinkhorn) and the fused `mhc_post`;
    * then the layer's ack (`sink.layers_completed` after a device sync, or a D2H socket op with no host sync).
 4. No host round trip inside a layer (the bring-up gate checks `host_transfers_per_layer == 0`).
 
