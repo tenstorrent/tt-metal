@@ -9,6 +9,8 @@ chip in two pairs, and the UMD index follows the sorted BDFs of a fake sysfs."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import subprocess
 import sys
 import tempfile
@@ -23,7 +25,7 @@ sys.path.insert(0, str(SUITE_DIR))
 import tiers  # noqa: E402
 from diag import busbar, links  # noqa: E402
 from diag.aer import aer_check, aer_new  # noqa: E402
-from diag.model import FAIL, PASS, SKIP, Phase  # noqa: E402
+from diag.model import FAIL, PASS, SKIP, Check, Phase  # noqa: E402
 
 
 def _steps(mode, **kw):
@@ -167,15 +169,55 @@ class TestLinks(unittest.TestCase):
     def test_sweep_only_after_a_fault(self):
         for fault, want in ((False, 0), (True, 1)):
             resets = []
-            _, pt = self._run_links(fault, lambda: resets.append(1) or True)
+            _, pt = self._run_links(fault, lambda: resets.append(1) or "")
             self.assertEqual(len(resets), want)
             self.assertEqual(pt.call_count, 1 + want)
 
     def test_no_sweep_when_no_reset_ran(self):
-        phase, pt = self._run_links(True, lambda: False)
+        phase, pt = self._run_links(True, lambda: "no reset (--skip-reset)")
         self.assertEqual(pt.call_count, 1)
         sweep = [c for c in phase.checks if c.name == "galaxy_sweep"]
         self.assertEqual([(c.status, c.details) for c in sweep], [(SKIP, "no reset (--skip-reset)")])
+
+    def _sweep_reset(self, **kw):
+        """run_diag's reset callback for the sweep, with a glx_reset that fails or not."""
+        import diag_runner
+
+        got = {}
+
+        def fake_reset(tt_smi_path, plan, phase, dry_run):
+            phase.add(Check(name="post_test_reset_ok", status=FAIL if kw.pop("fail", False) else PASS, details=""))
+
+        def fake_links(phase, out, fault, reset, dry_run):
+            got["why"] = reset()
+
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            diag_runner, "run_links", fake_links
+        ), mock.patch.object(diag_runner, "run_busbar", return_value=True), mock.patch.object(
+            diag_runner, "run_post_test_reset", fake_reset
+        ), contextlib.redirect_stdout(
+            io.StringIO()
+        ):
+            d = Path(tmp)
+            diag_runner.run_diag(
+                "galaxy",
+                mode="smoke",
+                dry_run=True,
+                skip_tests=True,
+                skip_triage=True,
+                skip_eth_status=True,
+                skip_qsfp_tests=True,
+                skip_sys_triage=True,
+                output=d / "report.json",
+                snapshot_out=d / "snapshot.json",
+                skip_reset=kw.get("skip_reset", False),
+            )
+        return got["why"]
+
+    def test_sweep_reset_says_why_it_skips(self):
+        self.assertEqual(self._sweep_reset(), "")
+        self.assertEqual(self._sweep_reset(skip_reset=True), "no reset (--skip-reset)")
+        self.assertEqual(self._sweep_reset(fail=True), "reset failed")
 
 
 class TestTierAndAer(unittest.TestCase):
