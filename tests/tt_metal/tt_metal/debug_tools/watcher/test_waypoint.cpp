@@ -183,7 +183,7 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
         }
         ASSERT_LT(elapsed, timeout_ms) << "Timed out waiting for watcher to log " << waypoint << " waypoints";
         if (MetalContext::instance().rtoptions().get_simulator_enabled()) {
-            // A simulator only advances while the host clocks it, and this loop reads no device memory. Clock it
+            // A functional simulator only advances while the host clocks it, and this loop reads no device memory. Clock it
             // here, or the workload takes minutes to reach the waypoint.
             const auto& cluster = MetalContext::instance().get_cluster();
             const auto device_id = mesh_device->get_device_ids()[0];
