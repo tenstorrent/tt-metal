@@ -98,9 +98,8 @@ ALWI void eq_int_tile_dispatch(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 }  // namespace detail
 #endif
 
-// Quasar: Int32 only (the wrappers static_assert UInt32/UInt16 away). With the kernel-wide UnpackToDestEn the
-// operands reached DEST by unpack-to-dest (two's complement); without it only FPU-promoted Int8 (sign-magnitude)
-// can be in DEST, so that one route selector picks SIGN_MAGNITUDE_FORMAT.
+// Quasar, Int32 only: unpack-to-dest operands are two's complement; otherwise only FPU-promoted Int8
+// (sign-magnitude) can be in DEST.
 template <DataFormat data_format>
 ALWI void eq_int_tile(uint32_t idst0, uint32_t idst1, uint32_t odst) {
 #if defined(ARCH_QUASAR)

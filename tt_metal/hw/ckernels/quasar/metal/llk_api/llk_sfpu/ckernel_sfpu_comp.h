@@ -215,10 +215,8 @@ inline void calculate_zero_comp() {
     }
 }
 
-// Native Int32 in Dest is two's complement (unpack-to-dest copies the L1 bits), so the Int32 compares
-// below load vInt through the I32 sfpmem mode and compare in two's complement. A mixed-sign pair is
-// decided by the signs alone, so the x - s difference never has to survive an overflow. Equality is
-// two orderings: sfpi lowers vInt == through the sign-magnitude compare type, where INT_MIN reads as -0.
+// Int32 in Dest is two's complement: mixed signs decide by sign alone (no x - s overflow), and equality is
+// two orderings because sfpi's vInt == compares sign-magnitude, where INT_MIN reads as -0.
 
 // (x OP s) ? 1 : 0 for a scalar s, OP one of unary_eq/ne/gt/ge/lt/le; x and s two's complement.
 template <SfpuType COMP_MODE>
