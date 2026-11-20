@@ -9,6 +9,7 @@ import diffusers
 import diffusers.models.transformers.transformer_flux2
 import pytest
 import torch
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 from tracy import signpost
 
@@ -111,6 +112,7 @@ def test_transformer(
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
         model_name,
         subfolder="transformer",
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
         torch_dtype=torch.bfloat16,
         low_cpu_mem_usage=True,
         num_layers=num_layers,
@@ -305,7 +307,10 @@ def test_transformer_profile(
 
     model_name = ensure_cached("black-forest-labs/FLUX.2-dev")
     torch_model = diffusers.Flux2Transformer2DModel.from_pretrained(
-        model_name, subfolder="transformer", torch_dtype=torch.bfloat16
+        model_name,
+        subfolder="transformer",
+        local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
+        torch_dtype=torch.bfloat16,
     )
     torch_model.eval()
     logger.info(f"single transformer blocks: {len(torch_model.single_transformer_blocks)}")

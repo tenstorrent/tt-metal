@@ -16,6 +16,7 @@ import tqdm
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl_flux2 import AutoencoderKLFlux2
 from diffusers.schedulers import FlowMatchEulerDiscreteScheduler
+from huggingface_hub import constants as hf_constants
 from loguru import logger
 from PIL import Image
 
@@ -200,6 +201,7 @@ class Flux2Pipeline:
         self._torch_transformer = diffusers.Flux2Transformer2DModel.from_pretrained(
             checkpoint_name,
             subfolder="transformer",
+            local_files_only=hf_constants.HF_HUB_OFFLINE,  # diffusers ignores HF_HUB_OFFLINE for sharded checkpoints
             torch_dtype=torch.bfloat16,  # bfloat16 is the native datatype of the model
         )
         self._torch_transformer.eval()

@@ -1123,9 +1123,7 @@
 - name: TT-DiT Flux.2-dev e2e tests
   cmd: |
     unset TT_METAL_WATCHER  # blocked by #50886
-    export HF_HUB_OFFLINE=1
-    export HF_HOME=/mnt/weka/model-weights/video/huggingface
-    export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
+    unset HF_HUB_OFFLINE
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/black-forest-labs/FLUX.2-dev
     # Stop at the first failed command: the devices are not reset between commands (#57706).
