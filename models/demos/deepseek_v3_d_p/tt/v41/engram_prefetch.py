@@ -14,7 +14,8 @@ history: it runs on a scratch ``NgramHashState`` seeded with a copy of the histo
 (``max_ngram_size - 1`` positions before the chunk), so a wrong guess about the next chunk can never change a later hash.
 ``_submit`` is ``EngramHost.rows_async``'s gather loop (identical in tt-blaze's plain and split engram_host builds).
 
-V41_PREFILL_HOST_IDS_VERIFY=1 also gathers every hit again synchronously and requires the rows to be equal (testing only).
+V41_PREFILL_HOST_IDS_VERIFY=1 also gathers every hit again in the background and compares the rows off the critical path (next
+call); a difference is logged and counted in ``verify_fail`` (testing only; the extra gathers load the row servers).
 """
 
 from __future__ import annotations
@@ -44,7 +45,8 @@ class EngramPrefetch:
         )
         self._scratch = scratch
         self._pending = None
-        self.stats = {"prefetched": 0, "hits": 0, "misses": 0, "unused": 0, "verified": 0}
+        self.stats = {"prefetched": 0, "hits": 0, "misses": 0, "unused": 0, "verified": 0, "verify_fail": 0}
+        self._verify = []  # (prefetched futures, reference futures) awaiting comparison
 
     def __getattr__(self, name):
         return getattr(self._e, name)
@@ -110,6 +112,7 @@ class EngramPrefetch:
         """``EngramHost.rows_async``: the real hash first (it advances the slot's history, as always), then the early gather if
         it gathered exactly these rows, else a gather now."""
         e = self._e
+        self._check_verify()
         p, self._pending = self._pending, None
         h = e.hash_ids(slot, token_ids, start_pos)  # [L, n_layers, 24]
         idx = {lid: h[:, i, :].numpy().astype(np.int64) for i, lid in enumerate(e.layer_ids)}
@@ -122,11 +125,7 @@ class EngramPrefetch:
         ):
             self.stats["hits"] += 1
             if VERIFY:
-                for lid, fut in p["futures"].items():
-                    ref = self._submit({lid: idx[lid]}, token_ids, layers=(lid,))[lid].result()
-                    got = fut.result()
-                    assert torch.equal(ref, got), f"V41_PREFILL_HOST_IDS_VERIFY: layer {lid} prefetched rows differ"
-                self.stats["verified"] += 1
+                self._verify.append((p["futures"], self._submit(idx, token_ids)))
             return p["futures"]
         if p is not None:
             self.stats["misses"] += 1
@@ -141,11 +140,26 @@ class EngramPrefetch:
             self.stats["unused"] += 1
         return self._e.rows_for(slot, token_ids, start_pos, layers=layers)
 
+    def _check_verify(self, wait: bool = False) -> None:
+        keep = []
+        for got, ref in self._verify:
+            if not wait and not all(f.done() for f in list(got.values()) + list(ref.values())):
+                keep.append((got, ref))
+                continue
+            ok = all(torch.equal(got[lid].result(), ref[lid].result()) for lid in got)
+            self.stats["verified"] += 1
+            if not ok:
+                self.stats["verify_fail"] += 1
+                logger.error(
+                    "[v41 runtime] V41_PREFILL_HOST_IDS_VERIFY: prefetched Engram rows differ from a fresh gather"
+                )
+        self._verify = keep
+
     def summary(self) -> str:
         s = self.stats
         return (
             f"engram prefetch: {s['prefetched']} started, {s['hits']} used, {s['misses']} not matching, {s['unused']} unused"
-            + (f", {s['verified']} verified" if VERIFY else "")
+            + (f", {s['verified']} verified, {s['verify_fail']} differ" if VERIFY else "")
         )
 
 
