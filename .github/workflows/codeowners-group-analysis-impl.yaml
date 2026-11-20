@@ -1,20 +1,5 @@
 name: "[internal] CodeOwners Group Analysis impl"
 
-# Does the work for codeowners-group-analysis.yaml. Three ways in:
-#   - a PR comment (`/codeowners ...`, `/ping ...`)
-#   - a manual run (workflow_dispatch)
-#   - the "Ping pending code owners" checkbox, handed over by the
-#     codeowners-group-analysis.yaml launchpad through workflow_run
-#
-# Tokens:
-#   - github.token writes to the repo (reactions, comments). Comments made with it
-#     trigger no workflows, so the bot cannot set off itself or notify-slack.
-#   - OSPO Vault token (github/token/org-bot-token) reads the org: membership,
-#     team members, users, and the bulk PR reads. It lasts at most 15 minutes, so
-#     it is fetched first and fetched again before the Slack stage. Every token is
-#     revoked before the job ends.
-#   - CODEOWNERS_PING_BOT secret and CODEOWNERS_PING_CHANNEL variable for Slack.
-
 on:
   workflow_dispatch:
     inputs:
@@ -51,10 +36,7 @@ on:
 permissions: {}
 
 jobs:
-  # Checks a checkbox request from the launchpad without touching Vault. The
-  # launchpad runs the PR's own copy of its workflow file, so nothing it hands
-  # over is trusted: the PR is looked up from the run's head repo and branch, the
-  # requester is the run's actor, and the box is re-read from the PR description.
+  # The launchpad artifact is untrusted (fork PRs can change the launchpad).
   checkbox-gate:
     if: >-
       github.event_name == 'workflow_run' &&
@@ -98,8 +80,6 @@ jobs:
             exit 0
           fi
 
-          # The PR whose head is the launchpad run's head. Fork PRs carry no
-          # workflow_run.pull_requests, so look it up by head owner and branch.
           PRS=$(curl -sS --fail --max-time 30 --get \
                   -H "Authorization: Bearer $GH_TOKEN" \
                   -H "Accept: application/vnd.github+json" \
@@ -140,8 +120,6 @@ jobs:
           fi
 
           if [ "$RUN_CONCLUSION" != "success" ]; then
-            # One PR is expected here; with several, the request cannot be tied
-            # to one of them.
             if [ "$PR_COUNT" -eq 1 ]; then
               post_error "$(echo "$PRS" | jq -r '.[0].number')" "the checkbox launchpad run failed."
             fi
@@ -163,8 +141,6 @@ jobs:
           fi
           PR_BODY=$(echo "$PRS" | jq -r --argjson n "$REQUESTED_PR" '.[] | select(.number == $n) | .body // ""')
 
-          # Same rule as the launchpad: a real top-level task-list line, outside
-          # code blocks and HTML comments, with at most three leading spaces.
           TICKED_LINE='^ {0,3}[-*] \[[xX]\] Ping pending code owners[[:space:]]*$'
           markdown_text() {
             printf '%s\n' "$1" | tr -d '\r' | awk '
@@ -198,9 +174,6 @@ jobs:
 
   codeowners:
     needs: [checkbox-gate]
-    # Cheap prefilter so no runner starts for unrelated comments; the parse step
-    # re-checks the command line by line. Bots are skipped, including this
-    # workflow's own tip and acknowledgement comments.
     if: >-
       !cancelled() && (
         github.event_name == 'workflow_dispatch' ||
@@ -211,8 +184,6 @@ jobs:
         (github.event_name == 'workflow_run' && needs.checkbox-gate.outputs.should-run == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Checkbox pings for the same PR are handled one at a time, so the cooldown
-    # check always sees the previous ping. Other runs keep a unique group.
     concurrency:
       group: >-
         codeowners-${{ github.event_name == 'workflow_run'
@@ -249,7 +220,6 @@ jobs:
           INPUT_AUTHOR_NOTES: ${{ inputs.author-notes }}
           PING_COOLDOWN_SECONDS: 60
         run: |
-          # Multi-line safe step output.
           set_output() {
             local delim
             delim="EOF_$(openssl rand -hex 8)"
@@ -275,8 +245,7 @@ jobs:
               "https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/$pr/comments"
             rm -f "$body_file"
           }
-          # Only 204 means member. 404 is a definite no; anything else (302 when
-          # the token cannot see members, rate limit, 5xx) is not a verdict.
+          # 204 = member, 404 = not; anything else is an error.
           membership_code() {
             curl -s -o /dev/null -w "%{http_code}" \
               -H "Authorization: Bearer ${ORG_TOKEN}" \
@@ -449,8 +418,6 @@ jobs:
               post_pr_comment "$PR_NUMBER" "$(printf '❌ **Access Denied**: Only members of the `tenstorrent` organization can ping code owners from the PR description.\n\nIf you believe this is an error, please contact a repository maintainer.')" > /dev/null
               exit 0
             elif [ "$MEMBERSHIP_HTTP_CODE" != "204" ]; then
-              # Rate limit, auth or server error: not a verdict on membership, so
-              # fail visibly instead of telling a member they were denied.
               echo "::error::Membership check for $SENDER failed (HTTP $MEMBERSHIP_HTTP_CODE); re-tick the box or use /codeowners ping."
               echo "should-run=false" >> "$GITHUB_OUTPUT"
               post_pr_comment "$PR_NUMBER" "$(printf '❌ **CodeOwners ping not sent:** the membership check failed (HTTP %s).\n\nUntick and tick the box again, or comment `/codeowners ping`.' "$MEMBERSHIP_HTTP_CODE")" > /dev/null
@@ -458,14 +425,7 @@ jobs:
             fi
             echo "✅ User $SENDER is a member of tenstorrent organization"
 
-            # Cooldown, so tapping the box repeatedly doesn't spam owners. Each
-            # accepted ping leaves a 🚀 reaction from github-actions[bot] on the PR
-            # description; its created_at is the time of the last ping. POST
-            # returns 201 for a new reaction and 200 with the existing one, so the
-            # marker is read and stamped in one call. Stamped before the ping, not
-            # after, so a tap seconds later is already inside the cooldown. If the
-            # ping then fails, the cost is a 60s wait; `/codeowners ping` has no
-            # cooldown and can be used immediately.
+            # Cooldown: the 🚀 reaction on the description marks the last ping (POST returns 200 if it exists).
             REACTIONS_API="https://api.github.com/repos/${GITHUB_REPOSITORY}/issues/$PR_NUMBER/reactions"
             stamp() {
               local out
@@ -495,8 +455,6 @@ jobs:
               echo "Old cooldown marker delete: HTTP $DELETE_HTTP_CODE"
               stamp
             fi
-            # Only 201 is a fresh marker. 200 means the old reaction still exists
-            # (its DELETE failed), so its created_at was not moved forward.
             if [ "$STAMP_HTTP_CODE" != "201" ]; then
               echo "::warning::Could not record a fresh cooldown marker (HTTP $STAMP_HTTP_CODE); this ping is not rate-limited."
             fi
@@ -648,7 +606,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # Always the default branch here (or the dispatched branch), never PR code.
       - name: Checkout CODEOWNERS and scripts
         if: steps.find-pr.outputs.pr-exists == 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 cachew: keep
@@ -967,8 +924,7 @@ jobs:
               result = analyze_codeowners(changed_files_path, codeowners_path)
 
               # Output in GitHub Actions format if GITHUB_OUTPUT is available
-              # The lists can exceed the 128 KB limit of a single env var, so the
-              # comment step reads them from files.
+              # Files, not env: the lists can exceed the 128 KB env var limit.
               runner_temp = os.environ.get("RUNNER_TEMP")
               if runner_temp:
                   for name, key in [("teams", "teams"), ("individuals", "individuals"), ("files_without_owners", "files_without_owners")]:
@@ -1034,7 +990,6 @@ jobs:
           SEND_SLACK: ${{ steps.req.outputs.send-slack-notification }}
           AUTHOR_NOTES: ${{ steps.req.outputs.author-notes }}
         run: |
-          # Empty when the analysis step failed or was skipped.
           TEAMS=$(cat "$RUNNER_TEMP/codeowners_teams.txt" 2>/dev/null || true)
           INDIVIDUALS=$(cat "$RUNNER_TEMP/codeowners_individuals.txt" 2>/dev/null || true)
           FILES_WITHOUT_OWNERS=$(cat "$RUNNER_TEMP/codeowners_files_without_owners.txt" 2>/dev/null || true)
@@ -1355,7 +1310,6 @@ jobs:
           fi
 
             # Output comment for next step (use temp file for large comments)
-            # Passed as a file: a large comment would exceed the env var limit.
             DELIM="EOF_$(openssl rand -hex 8)"
             printf '%b\n' "$COMMENT" > "$RUNNER_TEMP/codeowners_comment.md"
 
@@ -1423,9 +1377,7 @@ jobs:
           TOTAL_COMMENTS=$(echo "$ALL_COMMENTS" | jq '. | length')
           echo "Found $TOTAL_COMMENTS total comments across $((PAGE)) pages"
 
-          # Find existing comment from this workflow (contains our marker), posted
-          # by this workflow's identity or by the PAT user it used before, so no
-          # one else can plant the marker. Get the most recent one by created_at.
+          # Most recent comment with our marker, posted by us or the old PAT user.
           EXISTING_COMMENT_ID=$(echo "$ALL_COMMENTS" | jq -r '[.[] | select((.user.login == "github-actions[bot]" or .user.login == "tenstorrent-github-bot") and (.body | contains("CodeOwners-Workflow-Bot")))] | sort_by(.created_at) | reverse | .[0].id')
 
           # Use jq to properly escape the comment for JSON (use temp file for large comments)
@@ -1497,10 +1449,9 @@ jobs:
             echo "Acknowledgment comment posted for updated summary"
           fi
 
-      # The first token may be close to its 15-minute limit by now.
+      # Vault tokens last at most 15 minutes.
       - name: Get org token for notifications
         id: vault2
-        # Only the Slack stage needs it; without a ping the steps below have no effect.
         if: steps.find-pr.outputs.pr-exists == 'true' && steps.req.outputs.send-slack-notification == 'true'
         uses: tenstorrent/.github/actions/vault-secrets@fe8df371bc63659c93009dfbde88e570ab501465 # main
         with:
@@ -2645,8 +2596,6 @@ jobs:
             rm -f "$WARNING_JSON_FILE"
           fi
 
-      # The analysis steps run with continue-on-error so a failure there still
-      # posts a summary, as when they were separate jobs. Fail the run afterwards.
       - name: Check analysis steps
         if: steps.find-pr.outputs.pr-exists == 'true'
         env:
@@ -2679,8 +2628,6 @@ jobs:
             MSG="❌ **CodeOwners:** the summary was posted, but the Slack ping failed: could not get the org token from Vault. ([run]($RUN_URL))"
           fi
           echo "::error::$MSG"
-          # The comment prefilter is a substring match; stay quiet on comments that
-          # were not commands.
           if [ "$GITHUB_EVENT_NAME" = "issue_comment" ] && \
              ! printf '%s\n' "$COMMENT_BODY" | grep -qE '^/(codeowners?|ping)(\s|$)'; then
             exit 0

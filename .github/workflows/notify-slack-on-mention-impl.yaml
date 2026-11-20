@@ -1,18 +1,5 @@
 name: "[internal] Notify Slack on Comment or Mention impl"
 
-# Relays @mentions written by someone outside the org, or by a bot, to Slack.
-# Three ways in:
-#   - an issue opened or edited, or an issue/PR conversation comment
-#   - a PR description or PR review comment, handed over by the
-#     notify-slack-on-mention.yaml launchpad through workflow_run
-#
-# Tokens:
-#   - github.token for the gate's reads and the public user lookups.
-#   - OSPO Vault token (github/token/org-bot-token) for the private org
-#     membership check. Revoked before the job ends.
-#   - CODEOWNERS_PING_BOT secret and NOTIFY_SLACK_ON_MENTION_CHANNEL variable
-#     for Slack.
-
 on:
   issue_comment:
     types: [created]
@@ -25,10 +12,7 @@ on:
 permissions: {}
 
 jobs:
-  # Works out who wrote what and which mentions are new, without touching Vault.
-  # The launchpad runs the PR's own copy of its workflow file, so nothing it
-  # hands over is trusted: the PR is looked up from the run's head repo and
-  # branch, the sender is the run's actor, and the text is re-read from the API.
+  # The launchpad artifact is untrusted (fork PRs can change the launchpad).
   gate:
     if: >-
       (github.event_name != 'workflow_run' &&
@@ -106,8 +90,6 @@ jobs:
               exit 0
             fi
 
-            # The PR must be an open PR whose head is the launchpad run's head.
-            # Fork PRs carry no workflow_run.pull_requests, so look it up by head.
             PRS=$(api_get --get \
                     --data-urlencode "head=$HEAD_OWNER:$HEAD_BRANCH" \
                     --data-urlencode "state=open" \
@@ -153,8 +135,6 @@ jobs:
                 ;;
             esac
 
-            # Only the handed-over mentions that are really in the text now. For an
-            # edit, the launchpad already dropped the ones that were there before.
             MENTIONED=$(comm -12 <(echo "$BODY" | extract_mentions) \
                                  <(jq -r '.mentions // [] | .[] | strings' "$REQUEST_FILE" | sort -u))
           else
@@ -188,8 +168,7 @@ jobs:
 
           # Org members can reach each other on Slack directly, so only mentions written by someone outside
           # the org, or by a bot, are relayed. The person classified is the sender, who wrote the comment or
-          # made the edit. This workflow's own comments trigger nothing, but other github.token comments
-          # would show up as github-actions[bot] and are not relayed.
+          # made the edit.
           if [ "$SENDER" = "github-actions[bot]" ]; then
             echo "Skipping: comment by github-actions[bot]"
             exit 0
@@ -199,7 +178,7 @@ jobs:
             SENDER_IS_BOT=true
           elif [ "$SENDER" = "$AUTHOR" ] && { [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; }; then
             # author_association settles a public member without an API call, but only when the sender
-            # is that author. Private members read as CONTRIBUTOR and are checked by the next job.
+            # is that author.
             echo "Skipping: $SENDER is an org $ASSOCIATION"
             exit 0
           fi
@@ -250,8 +229,7 @@ jobs:
           SENDER: ${{ needs.gate.outputs.sender }}
         run: |
           # A private member reads as CONTRIBUTOR, and an editor who is not the author has no
-          # association at all, so ask the org. Only 204 means member and 404 means outsider;
-          # anything else (302 when the token cannot see members, rate limit, 5xx) is not a verdict.
+          # association at all, so ask the org. 204 means member, 404 outsider, anything else is an error.
           MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
             -H "Authorization: Bearer ${ORG_TOKEN}" \
             "https://api.github.com/orgs/${GITHUB_REPOSITORY_OWNER}/members/$SENDER" || echo "000")

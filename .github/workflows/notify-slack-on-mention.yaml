@@ -1,10 +1,6 @@
 name: Notify Slack on Comment or Mention
 
-# Launchpad for mentions in PR descriptions and PR review comments. It runs with
-# no secrets and no write access (fork PRs included), so it only collects the
-# mentions and hands them to notify-slack-on-mention-impl.yaml through an
-# artifact. The impl treats that artifact as untrusted and re-reads the text
-# itself. Issues and issue/PR conversation comments go straight to the impl.
+# Hands PR description and review comment mentions to notify-slack-on-mention-impl.yaml.
 
 on:
   pull_request:
@@ -22,9 +18,6 @@ jobs:
       - name: Collect mentions
         id: collect
         run: |
-          # Org members can reach each other on Slack directly; a public member
-          # writing their own text is skipped here, everyone else is left to the
-          # impl, which can see private members.
           SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
           SENDER_TYPE=$(jq -r '.sender.type // ""' "$GITHUB_EVENT_PATH")
           AUTHOR=$(jq -r '(.comment.user.login // .pull_request.user.login // "")' "$GITHUB_EVENT_PATH")

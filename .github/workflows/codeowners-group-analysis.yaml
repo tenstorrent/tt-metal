@@ -1,11 +1,6 @@
 name: CodeOwners Group Analysis
 
-# Launchpad for the "Ping pending code owners" checkbox in the PR description.
-# It runs with no secrets and no write access (fork PRs included), so it only
-# decides whether the box was just ticked and hands the request to
-# codeowners-group-analysis-impl.yaml through an artifact. The impl treats that
-# artifact as untrusted and re-checks everything. Comment commands and manual
-# runs go straight to the impl.
+# Hands checkbox ticks to codeowners-group-analysis-impl.yaml.
 
 on:
   pull_request:
@@ -15,8 +10,6 @@ permissions: {}
 
 jobs:
   checkbox:
-    # Substring prefilter; the parse step decides the unticked -> ticked
-    # transition. Untick and tick again to re-ping.
     if: >-
       contains(github.event.pull_request.body, '[x] Ping pending code owners') &&
       (github.event.action == 'opened' || github.event.changes.body != null)
