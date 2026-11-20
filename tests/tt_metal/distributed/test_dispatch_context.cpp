@@ -46,23 +46,7 @@ namespace tt::tt_metal::distributed::test {
 
 class DispatchContextFixture : public ::testing::Test {
 protected:
-    void enable_hybrid_allocator() {
-        auto& rtoptions = MetalContext::instance().rtoptions();
-        if (!previous_hybrid_.has_value()) {
-            previous_hybrid_ = rtoptions.get_allocator_mode_hybrid();
-        }
-        rtoptions.set_allocator_mode_hybrid(true);
-    }
-
-    void TearDown() override {
-        experimental::DispatchContext::get().reset();
-        if (previous_hybrid_.has_value()) {
-            MetalContext::instance().rtoptions().set_allocator_mode_hybrid(*previous_hybrid_);
-        }
-    }
-
-private:
-    std::optional<bool> previous_hybrid_;
+    void TearDown() override { experimental::DispatchContext::get().reset(); }
 };
 
 namespace {
@@ -388,18 +372,14 @@ TEST_F(DispatchContextFixture, RefusesPerCoreResidentL1OnDispatchCores) {
 }
 
 // WHAT: the mesh opened with a 16 KB KERNEL_CONFIG window, smaller than the dispatch kernels' blocks (cq_prefetch's
-//       is about 31 KB), then two manual fast-dispatch sessions, each moving a DRAM page. Opens the mesh with the
-//       HYBRID allocator, which the per-core kernel config buffer needs.
-// WHY:  the dispatch kernels then run from a kernel config buffer on the dispatch cores, which teardown must free:
-//       the second session's preflight refuses if it is still allocated there.
+//       is about 31 KB), then two manual fast-dispatch sessions, each moving a DRAM page.
+// WHY:  the dispatch kernels' L1 starts at DEFAULT_UNRESERVED whatever worker_l1_size is, so their blocks are checked
+//       against the default KERNEL_CONFIG window, not the one worker_l1_size leaves.
 // EXPECT: both sessions start and round-trip the page through fast dispatch; slow dispatch works afterwards.
-TEST_F(DispatchContextFixture, DispatchKernelsRunFromKernelConfigBufferWhenWindowIsSmall) {
+TEST_F(DispatchContextFixture, DispatchKernelsRunWhenWindowIsSmall) {
     if (auto reason = fd_preflight_skip_reason(); reason.has_value()) {
         GTEST_SKIP() << *reason;
     }
-
-    // The kernel config buffer is allocated per core.
-    enable_hybrid_allocator();
 
     const auto& hal = MetalContext::instance().hal();
     // The largest worker_l1_size leaves the window empty; keep 16 KB of it.
