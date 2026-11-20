@@ -441,7 +441,7 @@
 # host-only hash tests (named test_hash_*) and test_program_spec_bindings.py, which "ttnn misc ops group" already runs.
 - name: "ttnn quasar generic_op"
   cmd: >-
-    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py -k "not test_hash_"
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 240 -v tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py -k "not test_hash_"
   skus:
     sim_quasar:
       timeout: 5

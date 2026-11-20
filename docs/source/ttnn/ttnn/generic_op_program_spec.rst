@@ -12,9 +12,9 @@ This form is experimental while its API settles, so everything it adds lives und
 ``ProgramDescriptor`` form, ``ttnn.generic_op``, keeps working. The ``ProgramSpec`` form also runs on Quasar.
 
 Each Python class has the fields of the C++ struct with the same name, whose comments document them: TT-NN's
-``MeshProgramSpec`` and ``MeshProgramRunArgs`` are in ``ttnn/cpp/ttnn/operations/generic/generic_op.hpp``, and the
-others in ``tt_metal/api/tt-metalium/workload/``, apart from the advanced options, which stay experimental in
-``tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp``. Of the advanced options, Python
+``MeshProgramSpec`` and ``MeshProgramRunArgs`` are in generic_op.hpp_, and the others in `the workload headers`_
+(``tt_metal/api/tt-metalium/workload/``), apart from the advanced options, which stay experimental in
+advanced_options.hpp_. Of the advanced options, Python
 binds only ``DFBAdvancedOptions.alias_with``, which lets buffers of the same total size share memory; the others are
 C++ only. So far the GlobalSemaphore fields are C++ only too: ``ProgramSpec.global_semaphore_parameters``,
 ``KernelSpec.global_semaphore_bindings`` and ``ProgramRunArgs.global_semaphore_args``.
@@ -34,7 +34,7 @@ results to the output tensor. The three kernels already exist in TT-NN. With ``t
    :dedent: 4
 
 A ``WorkUnitSpec`` runs its kernels on each of its ``target_nodes``; a node is a core. A program can have several work
-units, each running its own kernels on its own cores.
+units, each running some of the program's kernels on its own cores, and a kernel can be in more than one.
 
 A kernel's ``source`` is the path of its source file: an absolute path, or one that Metal looks up in the current
 directory, then in ``TT_METAL_KERNEL_PATH``, the system kernel directory and the tt-metal root, where it finds the
@@ -68,7 +68,7 @@ example's buffers and their accessors share the names ``in`` and ``out``.
      - ``KernelSpec.compile_time_array_args``
      - ``get_arg(args::<name>)[i]``
    * - A list of values per core
-     - An ``ArrayArgDecl`` (name and length) in ``RuntimeArgSchema.runtime_array_args``, the values in
+     - An ``ArrayArgDecl`` (``name`` and ``size``) in ``RuntimeArgSchema.runtime_array_args``, the values in
        ``KernelRunArgs.runtime_array_arg_values``
      - ``get_arg(args::<name>)[i]``
    * - A list of values shared by all cores
@@ -110,8 +110,9 @@ Tensors
 *******
 
 ``io_tensors`` lists the tensors the program uses, once for each tensor parameter a tensor is bound to, with the output
-last; ``generic_op`` returns the last entry, or only the parts of it that the program writes when the tensors are not
-all on the same devices (see "Running on a mesh"). Each tensor must be on the device and match its parameter's
+last; ``generic_op`` returns the last entry, or, when the tensors are not all on the same devices, only its parts on
+the devices of the tensor that is on the fewest devices (see "Running on a mesh"). Each tensor must be on the device
+and match its parameter's
 ``TensorSpec``, unless the parameter's ``TensorSpecRelaxations`` allow a difference, such as a dynamic shape.
 
 Calls and the program cache
@@ -122,9 +123,10 @@ program only writes the new values: argument values and tensors can change from 
 ``ttnn.experimental.prepare_generic_op`` takes the same arguments, compiles the program and puts it in the cache without
 running it.
 
-The cache key is a hash of the whole ``ProgramSpec`` apart from ``ProgramSpec.name`` and ``WorkUnitSpec.name``,
-combined with the devices it runs on, so renaming or reordering kernels or buffers gives a new cache entry and a new
-compile. ``generic_op`` computes that hash on every call while the program cache is on. Unlike the
+The cache key is a hash of the whole ``ProgramSpec``, combined with the devices it runs on, apart from
+``ProgramSpec.name``, ``WorkUnitSpec.name`` and the tensor fields that a parameter's ``TensorSpecRelaxations`` allow
+to differ. So renaming or reordering kernels or buffers gives a new cache entry. ``generic_op`` computes that hash on
+every call while the program cache is on. Unlike the
 ``ProgramDescriptor`` form, the ``ProgramSpec`` form takes no ``custom_program_hash``, because a key the caller picks
 could give two different programs the same cache entry.
 
@@ -168,8 +170,8 @@ reader_unary_interleaved_start_id_metal2.cpp_).
 
 - Arguments by position become arguments by name: ``get_arg_val<uint32_t>(0)`` becomes ``get_arg(args::num_tiles)``,
   with ``num_tiles`` declared in the kernel's ``RuntimeArgSchema``, and ``get_compile_time_arg_val(0)`` becomes
-  ``get_arg(args::<name>)`` with the name in ``KernelSpec.compile_time_args``. A read by position that is left in still
-  compiles, and reads whatever value is at that position, so change every one.
+  ``get_arg(args::<name>)`` with the name in ``KernelSpec.compile_time_args``. A read by position that is left in may
+  still compile and read whatever value is at that position, so change every one.
 - Circular buffers by index become dataflow buffers by name: ``tt::CBIndex::c_0`` becomes ``dfb::in``, with ``in`` the
   accessor name of the kernel's binding to a ``DataflowBufferSpec``. Compute calls take it directly, as in
   ``copy_tile(dfb::in, 0, 0)``; a data-movement kernel wraps it as ``DataflowBuffer(dfb::in)``, and reads its page size
@@ -192,6 +194,9 @@ counting of buffer entries, and the flag leaves the counting to the kernel's own
 .. _eltwise_sfpu_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu_metal2.cpp
 .. _reader_unary_interleaved_start_id.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp
 .. _reader_unary_interleaved_start_id_metal2.cpp: https://github.com/tenstorrent/tt-metal/blob/6d8a1032acc18f6808db4e3712764afa93281d2c/ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id_metal2.cpp
+.. _generic_op.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/ttnn/cpp/ttnn/operations/generic/generic_op.hpp
+.. _the workload headers: https://github.com/tenstorrent/tt-metal/tree/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/workload
+.. _advanced_options.hpp: https://github.com/tenstorrent/tt-metal/blob/840db3161d0e2f4e3d760e75e0c895f7d5d5020a/tt_metal/api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
 
 Some features of the ``ProgramDescriptor`` form are not available in the ``ProgramSpec`` form yet, such as global
 circular buffers, fabric connections and per-core allocated tensors. From Python, global semaphores are not available
