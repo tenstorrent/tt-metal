@@ -62,6 +62,7 @@ std::optional<FabricDeviceBuild> build_fabric_routers(
     }
     build.builder->connect_routers();
     build.builder->compile_ancillary_kernels();
+    build.builder->choose_master_router();
     return build;
 }
 

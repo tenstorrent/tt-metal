@@ -23,6 +23,8 @@ Select it with ``PREFILL_MODEL=kimi_k3_1``.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Callable
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
@@ -55,6 +57,15 @@ class KimiK31Adapter(KimiK3Adapter):
     supports_packed_forward = False
     # The DSA layers' sparse-MLA CCLs need more than K3's L1_SMALL (see KimiK31Config.L1_SMALL_SIZE).
     l1_small_size = KimiK31Config.L1_SMALL_SIZE
+
+    def moe_block_checkpoint(self) -> Path:
+        """$KIMI_K31_HF_MODEL (env_var), else the prefill runner's $PREFILL_HF_MODEL, else hf_model_default."""
+        return Path(os.environ.get(self.env_var) or os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default)
+
+    def moe_block_routed_cache(self, mesh_shape: tuple, sp_axis: int = 0):
+        """None: K3.1's callers give its TtMoe cache as cache_path."""
+        return None
+
     dflash_model_default = ""
     dflash_golden_default = ""
 

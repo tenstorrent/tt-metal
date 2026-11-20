@@ -41,11 +41,11 @@
 #include "memory_tracking/memory_stats_shm.hpp"
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include "device.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "lightmetal/lightmetal_capture.hpp"

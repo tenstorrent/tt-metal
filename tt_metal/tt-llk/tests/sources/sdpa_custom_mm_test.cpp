@@ -30,7 +30,7 @@
 // with the custom_mm layout limits (llk_unpack_AB_custom_mm.h):
 //     in0 (SrcB) tile shape [M, 32], M in {1,2,4,8}   -> operandB_face_r_dim
 //     in1 (SrcA) tile shape [32, 32]
-//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 even in [2,256]
+//     rt_dim = 1, ct_dim = N/32 in [1,16], kt_dim = K/32 >= 1
 //
 // _llk_math_sdpa_custom_mm_ does exactly one accumulating MVMUL walk:
 //   - _llk_math_sdpa_custom_mm_mask_dest_ first ZEROes the ct_dim result tiles in DEST
@@ -38,7 +38,7 @@
 //     mask tile into SrcB and MOVB2D-broadcast it. SDPA_MASK_REENTRY tests this with a
 //     host-provided mask, followed by an unmasked pass. With mask_chunk=false DEST starts
 //     at zero, so the result is the plain accumulated product below.
-//   - It then runs the kt-deep MVMUL MOP (kt_dim/2 iterations, each covering 2 k-tiles),
+//   - It then runs the kt-deep MVMUL walk (one iteration per k-tile),
 //     accumulating in0[:, k] * in1[k, :] over all k into the ct_dim output tiles.
 //   - The FPU->SFPU semaphore posts (signal_granularity cadence) are pure signalling to a
 //     downstream SFPU consumer; they do NOT change the numeric result. PACK drains
@@ -141,6 +141,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_unpack_AB_custom_mm_init_<MM_TRANSPOSE, false /* clear_src */>(in0_face_r_dim, formats.unpack_A_dst, CT_DIM);
         PROFILER_SYNC();
     }
+
     {
         START_PERF_MEASURE("TILE_LOOP")
         if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE)
@@ -170,11 +171,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else
         {
+            // L1 size of one in0 k-tile: two dense [M, 16] faces in in0's format, in 16-byte words
+            const std::uint32_t in0_k_tile_size = SCALE_DATUM_SIZE(formats.unpack_B_src, 2 * in0_face_r_dim * FACE_C_DIM) >> 4;
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
             {
                 // Run: base_address_a = in1 (SrcA), base_address_b = in0 (SrcB).
                 // The re-entry variant appends a mask to in1 and uses it only on the first pass.
-                // The whole kt walk is issued by a single call (internal MOP covers kt_dim/2 iterations).
+                // Each call covers the whole kt walk, split into SrcB face walks above CUSTOM_MM_MAX_KT_PER_WALK k-tiles.
                 for (std::uint32_t pass = 0; pass < SDPA_PASSES; ++pass)
                 {
                     _llk_unpack_AB_sdpa_custom_mm_<READ_TRANSPOSED, SDPA_MASK_REENTRY>(
@@ -184,7 +187,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         SDPA_INPUT_TILE_OFFSET,                                             // tile_index_a
                         0,                                                                  // tile_index_b
                         TILE_SIZE_UNPACK_A,                                                 // tile_size_a (in1 [32,32])
-                        TILE_SIZE_UNPACK_B,                                                 // tile_size_b (in0 [M,32])
+                        in0_k_tile_size,                                                    // tile_size_b (in0 [M,32])
                         KT_DIM,
                         CT_DIM,
                         SDPA_MASK_REENTRY && pass == 0, // mask_chunk: first pass only

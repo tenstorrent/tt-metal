@@ -274,5 +274,6 @@ TT_KERNEL void reader(uint32_t wi_start, uint32_t wi_count, uint32_t sp_rank) {
         previous_work = work;
         parity ^= 1;
     };
-    for_each_work_item(wi_start, wi_count, Mt, exchange, process);
+    for_each_work_item(
+        wi_start, wi_count, Mt, exchange, process, exchange ? local_split_row / tt::constants::TILE_HEIGHT : 0);
 }

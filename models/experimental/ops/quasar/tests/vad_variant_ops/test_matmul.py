@@ -37,7 +37,7 @@ def test_matmul_transpose_b(ttnn_mesh_device, reset_seeds, a_shape, b_shape):
     mesh = ttnn_mesh_device
     a_torch, b_torch = U.torch_rand(a_shape), U.torch_rand(b_shape)
     a, b = U.to_tt(a_torch, mesh), U.to_tt(b_torch, mesh)
-    out = ttnn.matmul(a, b, transpose_b=True)
+    out = U.op("matmul")(a, b, transpose_b=True)
     U.assert_pcc(a_torch.float() @ b_torch.float().transpose(-1, -2), out, pcc=0.999, mesh_device=mesh)
 
 
@@ -60,7 +60,7 @@ def test_matmul_mha(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_mem, out_
     a_torch, b_torch = U.torch_rand(a_shape), U.torch_rand(b_shape)
     a = U.to_tt_mem(a_torch, mesh, a_mem)
     b = U.to_tt_mem(b_torch, mesh, "l1")
-    out = ttnn.matmul(
+    out = U.op("matmul")(
         a,
         b,
         core_grid=ttnn.CoreGrid(y=U.MODEL_GRID_Y, x=U.MODEL_GRID_X),
@@ -92,7 +92,7 @@ def test_matmul_bfp8_weights(ttnn_mesh_device, reset_seeds, a_shape, b_shape, a_
     a = U.to_tt_mem(a_torch, mesh, a_mem)
     # Quasar has no block-float DFB formats (its set is MX), so the model's bfloat8_b weights run as bf16 there.
     b = U.to_tt(b_torch, mesh, dtype=ttnn.bfloat16 if U.is_quasar() else ttnn.bfloat8_b)
-    out = ttnn.matmul(
+    out = U.op("matmul")(
         a,
         b,
         memory_config=U.resolve_memcfg(out_mem, mesh),

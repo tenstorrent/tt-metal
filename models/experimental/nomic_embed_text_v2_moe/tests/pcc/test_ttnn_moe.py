@@ -24,9 +24,11 @@ from models.experimental.nomic_embed_text_v2_moe.tests.pcc.module_common import 
     MOE_LAYER,
     TOKEN_SHAPES,
     assert_bias_added_once,
+    device_selection,
     from_block_layout,
     hidden_states,
     load_reference,
+    selection_of,
     to_block_layout,
 )
 from models.experimental.nomic_embed_text_v2_moe.tt.common import flatten_tokens, to_device
@@ -44,8 +46,8 @@ MAX_DISAGREEING_FRACTION = 0.01
 PREFIX = f"encoder.layers.{MOE_LAYER}.mlp."
 
 # TOKEN_SHAPES plus 4096 tokens, the most whose router selection sits in L1 beside the whole
-# chain, and 5000, past it and off the tile grid.
-MOE_SHAPES = [*TOKEN_SHAPES, (8, 512), (10, 500)]
+# chain, 5000, past it and off the tile grid, and 8192, the largest chunk a forward runs.
+MOE_SHAPES = [*TOKEN_SHAPES, (8, 512), (10, 500), (16, 512)]
 
 
 @pytest.fixture
@@ -65,8 +67,9 @@ def agreeing_tokens(config, reference, tt_moe, x: torch.Tensor, x_tt: ttnn.Tenso
     the order of the two positions does not reach the result.
     """
     batch, seqlen, _ = x.shape
-    routing = tt_moe.router(flatten_tokens(x_tt))
-    selected = ttnn.to_torch(routing.indices).long().reshape(batch * seqlen, config.moe_top_k)
+    routing, rows = tt_moe.router(flatten_tokens(x_tt))
+    ttnn.deallocate(rows)
+    _, selected = selection_of(routing, config.moe_top_k, config.num_experts)
     routing.deallocate()
 
     with torch.no_grad():
@@ -117,16 +120,16 @@ def test_renormalizing_the_routed_weights_is_measurably_wrong(device, config, re
         ref = reference(x)
     agreeing = agreeing_tokens(config, reference, tt_moe, x, x_tt)
 
-    selection = tt_moe.router(flat)
-    total = ttnn.sum(selection.values, dim=-1, keepdim=True)
-    renormalized = ttnn.divide(selection.values, total)
-    ttnn.deallocate(total)
+    routing, rows = tt_moe.router(flat)
+    ttnn.deallocate(rows)
+    values, indices = selection_of(routing, config.moe_top_k, config.num_experts)
+    routing.deallocate()
+    renormalized = device_selection(values / values.sum(dim=-1, keepdim=True), indices, config.num_experts, device)
 
     correct = from_block_layout(tt_moe(x_tt))
-    wrong = ttnn.to_torch(tt_moe.experts(flat, selection._replace(values=renormalized)))
+    wrong = ttnn.to_torch(tt_moe.experts(flat, renormalized))
     wrong = wrong.float().reshape(batch, seqlen, config.hidden_size)
-    selection.deallocate()
-    ttnn.deallocate(renormalized)
+    renormalized.deallocate()
 
     assert compute_pcc(correct[agreeing], ref[agreeing]) > MODULE_PCC
     assert compute_pcc(wrong[agreeing], ref[agreeing]) < MODULE_PCC

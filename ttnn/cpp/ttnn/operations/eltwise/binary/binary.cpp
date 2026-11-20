@@ -5,7 +5,10 @@
 
 #include "binary.hpp"
 #include <algorithm>
+#include <bit>
 #include <cmath>
+#include <limits>
+#include <enchantum/enchantum.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 
@@ -443,6 +446,7 @@
         ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,                        \
         const std::optional<CoreRangeSet>& sub_core_grids,                                                 \
         const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                                   \
+        ttnn::detail::validate_bitwise_scalar(operations::unary::UnaryOpType::OP_TYPE, lhs, rhs);          \
         /* Fast path: unary SFPU handles scalar bitwise/shift directly with no activations. */             \
         if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&           \
             rhs_activations.empty()) {                                                                     \
@@ -463,6 +467,55 @@
             /*fast_and_approximate_mode*/ false,                                                           \
             sub_core_grids,                                                                                \
             sub_device_id);                                                                                \
+    }
+
+#define TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(NAME, OP_TYPE)                                  \
+    Tensor detail::NAME##_uint32_scalar(                                                          \
+        const Tensor& lhs,                                                                        \
+        uint32_t rhs,                                                                             \
+        const std::optional<MemoryConfig>& memory_config,                                         \
+        const std::optional<Tensor>& output,                                                      \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,              \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,               \
+        ttsl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,               \
+        const std::optional<CoreRangeSet>& sub_core_grids,                                        \
+        const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id) {                          \
+        if (rhs <= static_cast<uint32_t>(std::numeric_limits<int32_t>::max())) {                  \
+            return ttnn::NAME(                                                                    \
+                lhs,                                                                              \
+                static_cast<int32_t>(rhs),                                                        \
+                memory_config,                                                                    \
+                output,                                                                           \
+                post_activations,                                                                 \
+                lhs_activations,                                                                  \
+                rhs_activations,                                                                  \
+                sub_core_grids,                                                                   \
+                sub_device_id);                                                                   \
+        }                                                                                         \
+        ttnn::detail::validate_bitwise_scalar(operations::unary::UnaryOpType::OP_TYPE, lhs, rhs); \
+        if (!sub_device_id.has_value() && post_activations.empty() && lhs_activations.empty() &&  \
+            rhs_activations.empty()) {                                                            \
+            return ttnn::unary_with_int32_param(                                                  \
+                operations::unary::UnaryOpType::OP_TYPE,                                          \
+                lhs,                                                                              \
+                std::bit_cast<int32_t>(rhs),                                                      \
+                memory_config,                                                                    \
+                output,                                                                           \
+                sub_core_grids);                                                                  \
+        }                                                                                         \
+        return ttnn::detail::invoke_binary_ng(                                                    \
+            lhs,                                                                                  \
+            rhs,                                                                                  \
+            operations::binary::BinaryOpType::OP_TYPE,                                            \
+            std::nullopt,                                                                         \
+            memory_config,                                                                        \
+            output,                                                                               \
+            post_activations,                                                                     \
+            lhs_activations,                                                                      \
+            rhs_activations,                                                                      \
+            /*fast_and_approximate_mode*/ false,                                                  \
+            sub_core_grids,                                                                       \
+            sub_device_id);                                                                       \
     }
 
 namespace ttnn::operations::binary::detail {
@@ -1112,6 +1165,34 @@ Tensor invoke_binary_ng_isclose(
     return result;
 }
 
+// The scalar of bitwise_and/or/xor must be representable in the input dtype; shift amounts are not checked here.
+static void validate_bitwise_scalar(operations::unary::UnaryOpType op_type, const Tensor& lhs, int64_t rhs) {
+    using operations::unary::UnaryOpType;
+    if (op_type != UnaryOpType::BITWISE_AND && op_type != UnaryOpType::BITWISE_OR &&
+        op_type != UnaryOpType::BITWISE_XOR) {
+        return;
+    }
+    if (lhs.dtype() == DataType::INT32) {
+        TT_FATAL(
+            rhs >= std::numeric_limits<int32_t>::min() && rhs <= std::numeric_limits<int32_t>::max(),
+            "{} on an INT32 tensor requires a scalar in [-2147483648, 2147483647], got {}.",
+            enchantum::to_string(op_type),
+            rhs);
+    } else if (lhs.dtype() == DataType::UINT32) {
+        TT_FATAL(
+            rhs >= 0 && rhs <= std::numeric_limits<uint32_t>::max(),
+            "{} on a UINT32 tensor requires a scalar in [0, 4294967295], got {}.",
+            enchantum::to_string(op_type),
+            rhs);
+    } else if (lhs.dtype() == DataType::UINT16) {
+        TT_FATAL(
+            rhs >= 0 && rhs <= std::numeric_limits<uint16_t>::max(),
+            "{} on a UINT16 tensor requires a scalar in [0, 65535], got {}.",
+            enchantum::to_string(op_type),
+            rhs);
+    }
+}
+
 }  // namespace ttnn::detail
 
 namespace ttnn::operations::binary {
@@ -1396,10 +1477,13 @@ TTNN_BINARY_OP_TENSOR_TENSOR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_SCALAR_IMPL(logical_right_shift, LOGICAL_RIGHT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_and, BITWISE_AND)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_or, BITWISE_OR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_or, BITWISE_OR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
+TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL(bitwise_xor, BITWISE_XOR)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL(bitwise_left_shift, LEFT_SHIFT)
 TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL(bitwise_right_shift, RIGHT_SHIFT)
@@ -1790,6 +1874,7 @@ TTNN_BINARY_OP_INPLACE_INVOKE_IMPL(bias_gelu_, BIAS_GELU)
 #undef TTNN_BINARY_OP_TENSOR_SCALAR_IMPL
 #undef TTNN_BINARY_OP_TENSOR_TENSOR_BITWISE_IMPL
 #undef TTNN_BINARY_OP_TENSOR_INT32_BITWISE_IMPL
+#undef TTNN_BINARY_OP_TENSOR_UINT32_BITWISE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_IMPL
 #undef TTNN_BINARY_OP_INPLACE_RELATIONAL_IMPL
 #undef TTNN_BINARY_OP_INPLACE_INVOKE_IMPL

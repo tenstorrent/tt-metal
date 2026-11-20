@@ -23,6 +23,7 @@ from typing import Optional
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext
 from models.demos.deepseek_v3_d_p.tt.kv_ack import send_layer_ack, zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
@@ -67,8 +68,12 @@ class TtKimiK3Block(LightweightModule):
         routing_use_l1_small_for_semaphores: bool = False,
         overlap_shared_expert_with_dispatch: bool = True,
         forward_chunks: int = 1,
+        use_fused_rmsnorm: Optional[bool] = None,
     ):
         super().__init__()
+        # The attention and FFN norms as one fused distributed op (USE_FUSED_PREFILL_RMSNORM), as GLM-5.3 and K2.7.
+        if use_fused_rmsnorm is None:
+            use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole()
         # Packed forward (forward_packed): `forward_chunks` chunks of `seq_len` tokens back to back. The
         # attention runs per chunk at the per-chunk size; the FFN (ffn_norm, MoE / dense FFN) runs once over
         # all forward_chunks * seq_len tokens, so the MoE is sized for them.
@@ -101,6 +106,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if kv_only:
@@ -120,6 +126,7 @@ class TtKimiK3Block(LightweightModule):
             topology=tp_topology,
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
+            use_fused=use_fused_rmsnorm,
         )
 
         if self.is_moe:
@@ -166,7 +173,11 @@ class TtKimiK3Block(LightweightModule):
                 situ_beta=getattr(model_cfg, "ACTIVATION_SITU_BETA", None),
                 situ_linear_beta=getattr(model_cfg, "ACTIVATION_SITU_LINEAR_BETA", None),
                 hidden_dim=config.intermediate_size,
+                fuse_tp_collectives=getattr(model_cfg, "FUSE_DENSE_FFN_TP_COLLECTIVES", False),
             )
+            if self.ffn.fuses_tp_collectives:
+                # Over all forward_chunks chunks' rows at once.
+                self.ffn.prepare_fused(seq_len * forward_chunks // mesh_device.shape[sp_axis])
 
     def set_trace_controller(self, controller):
         """Attach (or clear with None) a SubDeviceTraceController, so a ttnn trace captured over
@@ -415,8 +426,9 @@ class TtKimiK3Block(LightweightModule):
             return ttnn.unsqueeze(moe_out, dim=0)
 
         # Dense: gather to the full hidden dim, then TtFfn reduce-scatters internally — the same
-        # collective pair the KDA attention above already uses.
-        if self.mesh_device.shape[self.tp_axis] > 1:
+        # collective pair the KDA attention above already uses. With fuse_tp_collectives TtFfn takes the
+        # TP-sharded input and runs both collectives inside its matmuls.
+        if self.mesh_device.shape[self.tp_axis] > 1 and not self.ffn.fuses_tp_collectives:
             gathered = ttnn.all_gather(
                 ffn_norm_out, dim=-1, cluster_axis=self.tp_axis, num_links=self.num_links, topology=self.topology
             )
