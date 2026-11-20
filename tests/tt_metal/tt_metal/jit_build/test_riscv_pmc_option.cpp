@@ -14,16 +14,19 @@ namespace {
 
 constexpr const char* kEnv = "TT_METAL_PROFILE_RISCV_PMC";
 constexpr const char* kEnvDm = "TT_METAL_PROFILE_RISCV_PMC_DM";
+constexpr const char* kEnvTrace = "TT_METAL_TRACE_PROFILER";
 
 class RiscvPmcOptionTest : public ::testing::Test {
 protected:
     void SetUp() override {
         unsetenv(kEnv);
         unsetenv(kEnvDm);
+        unsetenv(kEnvTrace);
     }
     void TearDown() override {
         unsetenv(kEnv);
         unsetenv(kEnvDm);
+        unsetenv(kEnvTrace);
     }
 
     static RunTimeOptions with(const char* value) {
@@ -71,6 +74,13 @@ TEST_F(RiscvPmcOptionTest, InvalidValuesRejected) {
     EXPECT_ANY_THROW(with("0x1ffffffff"));
     EXPECT_ANY_THROW(with("0,0"));
     EXPECT_ANY_THROW(with("0x1,0x2,0x3"));
+    EXPECT_ANY_THROW(with(",0x1"));
+    EXPECT_ANY_THROW(with("0x1,"));
+}
+
+TEST_F(RiscvPmcOptionTest, TraceOnlyProfilingRejected) {
+    setenv(kEnvTrace, "1", 1);
+    EXPECT_ANY_THROW(with("0x1"));
 }
 
 TEST_F(RiscvPmcOptionTest, DataMovementSelectsParsedAndHashed) {

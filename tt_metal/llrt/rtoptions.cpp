@@ -430,6 +430,10 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         !(get_experimental_noc_debug_dump_enabled() && (get_profiler_trace_only() || get_profiler_accumulate())),
         "TT_METAL_NOC_DEBUG_DUMP cannot be combined with TT_METAL_TRACE_PROFILER or TT_METAL_PROFILER_ACCUMULATE: "
         "the debug dump only reads the profiler DRAM buffers, and those modes keep part of their data in L1.");
+    // Trace-only profiling points every Tensix RISC at the first RISC's buffer, where the counter markers collide.
+    TT_FATAL(
+        !(get_profiler_riscv_pmc_enabled() && get_profiler_trace_only()),
+        "TT_METAL_PROFILE_RISCV_PMC cannot be combined with TT_METAL_TRACE_PROFILER.");
 }
 
 const RunTimeOptions::TraceAllocationOptions& RunTimeOptions::get_trace_allocation_options() {
@@ -1252,11 +1256,14 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
             // nibble is the top one), which does not survive a signed parse.
             char* end = nullptr;
             const unsigned long ev3 = std::strtoul(value, &end, 0);
+            bool parsed = end != value;
             unsigned long ev4 = 0;
-            if (end != nullptr && *end == ',') {
-                ev4 = std::strtoul(end + 1, &end, 0);
+            if (parsed && *end == ',') {
+                const char* second = end + 1;
+                ev4 = std::strtoul(second, &end, 0);
+                parsed = end != second;
             }
-            if (end == value || (end != nullptr && *end != '\0')) {
+            if (!parsed || *end != '\0') {
                 TT_THROW(
                     "TT_METAL_PROFILE_RISCV_PMC=\"{}\" could not be parsed. Expected one or two "
                     "integers (hex accepted), e.g. 0x10110111,0xA0000000.",

@@ -292,8 +292,20 @@ def riscv_event_select(arch, kind, names, include_dir=None) -> int:
     """The mhpmevent select that arms every named event of one core kind (inverse of riscv_select_events)."""
     by_name = dict(riscv_event_tables(arch, include_dir).get(kind, []))
     select = 0
+    chosen = {}
     for name in names:
         if name not in by_name:
             raise ValueError(f"{name} is not an event of {kind} cores on {arch}")
-        select |= by_name[name]
+        event = by_name[name]
+        # A DM select arms one event set, a baby or TRISC nibble one value; OR-ing two would arm a third event.
+        if kind == "dm":
+            slot, value = "set", event & 0xFF
+        else:
+            slot = (event.bit_length() - 1) // 4 * 4
+            value = event >> slot
+        if chosen.setdefault(slot, (value, name))[0] != value:
+            raise ValueError(
+                f"{name} and {chosen[slot][1]} cannot share one {kind} select"
+            )
+        select |= event
     return select
