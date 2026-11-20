@@ -1367,9 +1367,86 @@ V41CSA.kv_only = _kv_only
 
 
 # WS3 INDEX_QTP: the sources' and their consumers' sparse cores take a TP-partitioned top-k (identity when the flag is off)
+_tt_csa_attention_sparse = TtCSA._attention_sparse
+
+
+def _attention_sparse_v41(self, q, sliding_kv, compressed_kv, topk_idx, cos, sin, carry, real_len: int, state=None):
+    """TtCSA._attention_sparse (the eager path A: the decoder's ratio-1 sources and their consumers, every warm-up chunk),
+    taking a partitioned top-k (INDEX_DEC_QTP / INDEX_QTP) as is: the window indices' TP quarter is concatenated and the
+    index rows' TP partition is skipped; the slab writes, the transposes and the un-RoPE are unchanged."""
+    batch, seq_local = q.shape[0], q.shape[2]
+    if not (
+        (INDEX_QTP or INDEX_DEC_QTP) and self.tp_factor > 1 and int(topk_idx.shape[2]) * self.tp_factor == seq_local
+    ):
+        return _tt_csa_attention_sparse(self, q, sliding_kv, compressed_kv, topk_idx, cos, sin, carry, real_len, state)
+    seq_len = seq_local * self.sp_factor
+    heads_local = self.num_heads // self.tp_factor
+    assert (
+        heads_local % ttnn.TILE_SIZE != 0
+    ), "a partitioned top-k assumes the head->seq transpose (V4.1: 16 heads a chip)"
+    if self.sp_factor > 1:
+        sliding_kv = ttnn.experimental.all_gather_async(
+            sliding_kv,
+            dim=2,
+            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_ag_semaphore_handles(cluster_axis=self.sp_axis),
+            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.sp_axis),
+            num_links=self.ccl_num_links,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            topology=self.tp_ccl_topology,
+            cluster_axis=self.sp_axis,
+        )
+    start, end = self._carry_index[self._carry_key(real_len)]
+    next_carry = ttnn.slice(sliding_kv, start, end, slice_dim=2, num_devices=seq_len // self.sliding_window)
+    self._slab_write(state, sliding_kv, 0)
+    self._slab_write(state, carry, seq_len + self._slab_cap)
+    kv_rm = state.slab_rm
+    ent = ttnn.typecast(topk_idx, ttnn.int32)
+    ent = ttnn.add(ent, seq_len)  # entries start at slab row S
+    ent = ttnn.typecast(ent, ttnn.uint32)
+    if ent.layout != ttnn.ROW_MAJOR_LAYOUT:
+        ent = ttnn.to_layout(ent, ttnn.ROW_MAJOR_LAYOUT)
+    self._window_indices(seq_local)
+    idx = ttnn.concat([self._window_idx_part[seq_local], ent], dim=3)  # [1, 1, S_l / tp, 128 + topk]
+    q = ttnn.experimental.all_to_all_async_generic(
+        q,
+        in_dim=1,
+        out_dim=2,
+        num_links=self.ccl_num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=self.tp_axis,
+    )
+    q_rm = ttnn.to_layout(q, ttnn.ROW_MAJOR_LAYOUT)
+    out = ttnn.transformer.sparse_sdpa(
+        q_rm,
+        kv_rm,
+        idx,
+        self.head_dim,
+        kv_format=ttnn.transformer.SparseKVFormat.BF16,
+        scale=self.scaling,
+        k_chunk_size=128,
+        cache_batch_idx=0,
+        attention_sink=self._sink_column(True),
+    )
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT)
+    out = ttnn.experimental.all_to_all_async_generic(
+        out,
+        in_dim=2,
+        out_dim=1,
+        num_links=self.ccl_num_links,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        cluster_axis=self.tp_axis,
+    )
+    nope_dim = self.head_dim - self.rope_head_dim
+    nope = ttnn.slice(out, [0, 0, 0, 0], [batch, heads_local, seq_local, nope_dim])
+    rope = ttnn.slice(out, [0, 0, 0, nope_dim], [batch, heads_local, seq_local, self.head_dim])
+    rope = ttnn.experimental.rotary_embedding_llama(rope, cos, ttnn.neg(sin), self.trans_mat, is_decode_mode=False)
+    return ttnn.concat([nope, rope], dim=-1), next_carry, sliding_kv
+
+
 for _cls in (V41CSA, V41CSAConsumer, V41CSAReindex):
     _cls._sparse_core = _sparse_core_v41
     _cls._window_indices = _window_indices_v41
+    _cls._attention_sparse = _attention_sparse_v41
 V41CSA._score_mask = _score_mask_v41
 V41CSA.glue_chunk = _source_glue_chunk_v41
 V41CSA.precreate_constants = _source_precreate_constants_v41
