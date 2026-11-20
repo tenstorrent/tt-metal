@@ -14,10 +14,10 @@ from typing import TYPE_CHECKING, Iterable, Sequence
 import torch
 from einops import rearrange
 from loguru import logger
-from models.common.utility_functions import is_blackhole
 from safetensors.torch import load_file
 
 import ttnn
+from models.common.utility_functions import is_blackhole
 
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
@@ -41,6 +41,7 @@ from ...utils.tensor import (
     depth_to_space_channels_last,
     fast_device_to_host,
     float_to_uint8,
+    math_fidelity_from_env,
     prepare_depth_to_space_channels,
     typed_tensor,
     typed_tensor_2dshard,
@@ -816,17 +817,6 @@ def _reshard_exact_hw(
     return x_BTHWC
 
 
-def _decoder_conv_fidelity_from_env() -> ttnn.MathFidelity | None:
-    """LTX_VAE_CONV_FIDELITY (LoFi|HiFi2|HiFi3|HiFi4); unset = default.
-
-    bf8 weights were tried too: conv3d gave garbage output (PSNR 10 dB) for ~1% speed, so they were dropped.
-    """
-    name = os.environ.get("LTX_VAE_CONV_FIDELITY", "")
-    if name and name not in ("LoFi", "HiFi2", "HiFi3", "HiFi4"):
-        raise ValueError(f"LTX_VAE_CONV_FIDELITY must be LoFi, HiFi2, HiFi3 or HiFi4 (got {name!r})")
-    return getattr(ttnn.MathFidelity, name) if name else None
-
-
 class LTXVideoDecoder(Module):
     """LTX-2 Video VAE decoder (TTNN): (B, 128, F', H', W') latent → (B, 3, F, H, W) pixels."""
 
@@ -956,7 +946,8 @@ class LTXVideoDecoder(Module):
                 raise ValueError(f"Unknown decoder block: {block_name}")
 
         # Opt-in lower fidelity for the up-block conv3d layers; conv_in/conv_out keep the defaults.
-        math_fidelity = _decoder_conv_fidelity_from_env()
+        # bf8 weights were tried too: conv3d gave garbage output (PSNR 10 dB) for ~1% speed, so they were dropped.
+        math_fidelity = math_fidelity_from_env("LTX_VAE_CONV_FIDELITY")
         if math_fidelity is not None:
             for conv in _walk_conv3d_modules(self.up_blocks):
                 conv.set_math_fidelity(math_fidelity)

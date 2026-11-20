@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import math
-import os
 
 import torch
 
@@ -19,7 +18,7 @@ from ....parallel.config import DiTParallelConfig
 from ....parallel.manager import CCLManager
 from ....utils.mochi import get_rot_transformation_mat
 from ....utils.substate import pop_substate, rename_substate
-from ....utils.tensor import bf16_tensor
+from ....utils.tensor import bf16_tensor, math_fidelity_from_env
 from .agmm_config import agmm_kwargs, agmm_pins
 from .length_classes import LENGTH_CLASSES, length_class
 
@@ -66,20 +65,6 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
         zeros = torch.zeros(*sin.shape[:-1], pad, dtype=sin.dtype)
         cos, sin = torch.cat([cos, ones], dim=-1), torch.cat([sin, zeros], dim=-1)
     return cos, sin
-
-
-SDPA_MM_FIDELITY_ENV = "MINIMAX_H3_SDPA_MM_FIDELITY"
-
-
-def sdpa_matmul_fidelity() -> ttnn.MathFidelity | None:
-    """Ring SDPA QK^T / softmax @ V fidelity from `MINIMAX_H3_SDPA_MM_FIDELITY`; unset keeps the op's HiFi2."""
-    raw = os.environ.get(SDPA_MM_FIDELITY_ENV, "").strip().lower()
-    if not raw:
-        return None
-    names = {"lofi": "LoFi", "hifi2": "HiFi2", "hifi3": "HiFi3", "hifi4": "HiFi4"}
-    if raw not in names:
-        raise ValueError(f"{SDPA_MM_FIDELITY_ENV}={raw!r}: expected one of {sorted(names)}")
-    return getattr(ttnn.MathFidelity, names[raw])
 
 
 class MiniMaxH3Attention(Module):
@@ -214,7 +199,9 @@ class MiniMaxH3Attention(Module):
         self.full_grid = full_grid
         self.sdpa_worker_grid = (full_grid.x - 1, full_grid.y)  # reserve last column for CCL
         self._sdpa_program_configs: dict[tuple[int, bool, bool], ttnn.SDPAProgramConfig] = {}
-        self.sdpa_matmul_fidelity = sdpa_matmul_fidelity()
+        # QK^T and softmax @ V fidelity; unset keeps the op's HiFi2. Only the ring joint SDPA path honours it:
+        # the exp ring path does not pass it.
+        self.sdpa_matmul_fidelity = math_fidelity_from_env("MINIMAX_H3_SDPA_MM_FIDELITY")
 
         # Dynamic-length pins per length class, resolved once: no table scan and no orientation flip per call.
         self._qkv_pins = self._out_pins = self._ring_sdpa_configs = None
