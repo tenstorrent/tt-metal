@@ -135,8 +135,9 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #if defined(ARCH_BLACKHOLE)
     // The context semaphore is read before the address writes, so the per-tile chain overlaps its latency. A size-mode
     // kernel keeps main's smaller call, and so does a kernel with a plain matmul call: its output copy runs one tile
-    // per DEST acquire, where the early poll measured slower (minimal_matmul LoFi 888 2x2 +0.23 %, 224 2x1 +0.13 %)
-    constexpr bool early_poll = !LLK_SIZE_MODE &&
+    // per DEST acquire, where the early poll measured slower (minimal_matmul LoFi 888 2x2 +0.23 %, 224 2x1 +0.13 %), and
+    // a 32-bit DEST kernel too (pow_int 32x32 int32 +0.6 %)
+    constexpr bool early_poll = !LLK_SIZE_MODE && !is_fp32_dest_acc_en &&
                                 !matmul_fe_mark::is_used_d<7, std::integral_constant<bool, is_fp32_dest_acc_en>>(0) &&
                                 !matmul_fe_mark::is_used_d<8, std::integral_constant<bool, is_fp32_dest_acc_en>>(0);
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, early_poll>(
