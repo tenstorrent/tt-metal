@@ -263,6 +263,20 @@ def test_riscv_block_rows_are_named_and_carry_cycles():
     assert all(r["cycles"] == 1000 for r in rows)
 
 
+def test_riscv_block_keeps_two_counters_armed_alike_apart():
+    stall = headers.riscv_event_select("blackhole", "baby", ["BP_PC_STALL_ANY"])
+    rows = decode_riscv_block(
+        _riscv_words(stall, stall, 1000, 600, 350, 351),
+        "blackhole",
+        "MATH",
+        "ZONE_1",
+        TOKEN,
+    )
+    by_name = {r["counter_name"]: r["count"] for r in rows}
+    assert by_name["BP_PC_STALL_ANY@pmc3"] == 350
+    assert by_name["BP_PC_STALL_ANY@pmc4"] == 351
+
+
 def test_riscv_block_without_this_launchs_token_raises():
     stale = 0xFF | (TOKEN - 1) << 8
     with pytest.raises(  # allow-pytest.raises: no expect_error in LLK suite

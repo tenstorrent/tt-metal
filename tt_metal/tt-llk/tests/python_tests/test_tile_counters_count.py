@@ -5,7 +5,13 @@
 
 import pytest
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
-from helpers.counters import NOC_BANK_PREFIX, ROUTER_BANK_PREFIX, read_tile_counters
+from helpers.counters import (
+    NOC_BANK_PREFIX,
+    ROUTER_BANK_PREFIX,
+    noc_groups_include,
+    read_tile_counters,
+    router_option_covers_every_path,
+)
 from helpers.llk_params import PerfRunType
 from helpers.perf.core import COUNT_TILE_LOOP, PerfConfig
 from helpers.test_config import BuildMode, TestConfig
@@ -25,8 +31,10 @@ def _per_bank(rows, prefix, counter=None):
 def test_tile_counters_count_the_host_polls():
     if get_chip_architecture() == ChipArchitecture.QUASAR:
         pytest.skip("the Quasar harness has no BRISC to read the tile counters")
-    if TestConfig.PERF_NOC_GROUPS is None:
-        pytest.skip("needs --perf-noc-counters")
+    if TestConfig.PERF_NOC_GROUPS is None or not noc_groups_include(
+        TestConfig.PERF_NOC_GROUPS, "SLAVE"
+    ):
+        pytest.skip("needs --perf-noc-counters with the SLAVE group")
     if TestConfig.BUILD_MODE == BuildMode.PRODUCE:
         pytest.skip(TestConfig.SKIP_JUST_FOR_COMPILE_MARKER)
 
@@ -35,6 +43,8 @@ def test_tile_counters_count_the_host_polls():
         input_output_formats([DataFormat.Float16_b])[0],
         run_types=[PerfRunType.L1_TO_L1],
     )
+    if not configuration.run_configs:
+        pytest.skip("LLK_PERF_RUN_TYPES selects none of this test's run types")
     configuration.templates, configuration.runtimes, configuration.current_run_type = (
         configuration.run_configs[0]
     )
@@ -70,7 +80,9 @@ def test_tile_counters_count_the_host_polls():
     assert polls > 100, report
     assert polls - 2 <= sum(requests.values()) <= polls - 1, report
     assert sum(words.values()) == sum(requests.values()), report
-    if TestConfig.PERF_ROUTER_OPTION is not None:
+    if TestConfig.PERF_ROUTER_OPTION is not None and router_option_covers_every_path(
+        TestConfig.PERF_ROUTER_OPTION
+    ):
         # Each poll's response leaves through the router of the NoC the request came in on.
         noc = max(requests, key=requests.get)[len(NOC_BANK_PREFIX) :]
         assert (
