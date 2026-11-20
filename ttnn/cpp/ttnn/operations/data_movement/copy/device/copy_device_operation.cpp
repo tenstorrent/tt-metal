@@ -214,7 +214,8 @@ CopyDeviceOperation::tensor_return_value_t copy(
         return create_device_tensor(
             CopyDeviceOperation::compute_output_specs(
                 CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output}),
-            input.device());
+            input.device(),
+            input.tensor_topology());
     }
     return ttnn::device_operation::launch<CopyDeviceOperation>(
         CopyParams{output_mem_config, output_dtype, backwards}, CopyInputs{input, preallocated_output});

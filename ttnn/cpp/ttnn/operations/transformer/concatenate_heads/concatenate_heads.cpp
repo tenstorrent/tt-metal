@@ -45,13 +45,22 @@ ttnn::Tensor concatenate_heads(
             : input_tensor;
 
     if (actual_input.logical_volume() == 0) [[unlikely]] {
+        TT_FATAL(
+            actual_input.dtype() == DataType::FLOAT32 || actual_input.dtype() == DataType::BFLOAT16 ||
+                actual_input.dtype() == DataType::BFLOAT8_B,
+            "Unsupported data format");
+        TT_FATAL(
+            actual_input.layout() == Layout::TILE,
+            "Input tensor layout must be TILE but got {}",
+            actual_input.layout());
         const auto& input_shape = actual_input.logical_shape();
         ttnn::Shape output_logical_shape({input_shape[0], input_shape[2], input_shape[1] * input_shape[3]});
         return create_device_tensor(
             TensorSpec(
                 output_logical_shape,
                 TensorLayout(actual_input.dtype(), PageConfig(Layout::TILE), resolved_mem_config)),
-            actual_input.device());
+            actual_input.device(),
+            actual_input.tensor_topology());
     }
 
     auto output = ttnn::prim::nlp_concat_heads(actual_input, memory_config, runtime_rows);
