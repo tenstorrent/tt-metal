@@ -178,7 +178,7 @@ def test_generate_tool_turns_five_tool_turns(qwen3_tokenizer):
     prompts = [[1, 2, 3], [4, 5], [6]]
     W = 400
 
-    completions, logprobs = generate_tool_turns(
+    completions, logprobs, loss_masks = generate_tool_turns(
         sampler,
         prompts,
         tools={"calculator": CalculatorTool()},
@@ -198,6 +198,8 @@ def test_generate_tool_turns_five_tool_turns(qwen3_tokenizer):
             expected0 += responses[k]
             expected_lp0 += [0.0] * len(responses[k])
     assert completions[0] == expected0 and logprobs[0] == expected_lp0
+    assert loss_masks[0] == [1.0 if lp else 0.0 for lp in expected_lp0]
+    assert loss_masks[1] == [1.0] * len(completions[1])
     assert completions[1] == sampler.turns[1][0]
     assert len(completions[2]) == W and completions[2][: len(sampler.turns[2][0])] == sampler.turns[2][0]
 
@@ -211,7 +213,7 @@ def test_generate_tool_turns_five_tool_turns(qwen3_tokenizer):
 
 def test_generate_tool_turns_stops_at_max_turns(qwen3_tokenizer):
     sampler = _ScriptedSampler(qwen3_tokenizer, [[CALC + "<|im_end|>"] * 3])
-    completions, _ = generate_tool_turns(
+    completions, _, _ = generate_tool_turns(
         sampler,
         [[1]],
         tools={"calculator": CalculatorTool()},
@@ -390,3 +392,5 @@ def test_calculator_tool_calls_match_gold_answer(sampler, monkeypatch):
     tool_ids = tok.encode(Qwen3ToolCallParser(tok).tool_response_text([str(g) for g in gold]), add_special_tokens=False)
     start = next(i for i in range(len(completion)) if completion[i : i + len(tool_ids)] == tool_ids)
     assert batch.logprobs[0, start : start + len(tool_ids)].tolist() == [0.0] * len(tool_ids)
+    assert batch.loss_mask[0, start : start + len(tool_ids)].tolist() == [0.0] * len(tool_ids)
+    assert batch.loss_mask[0, : len(completion)].sum() < len(completion)

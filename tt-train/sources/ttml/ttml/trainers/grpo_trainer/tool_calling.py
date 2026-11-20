@@ -126,12 +126,13 @@ def generate_tool_turns(
     max_turns: int,
     max_tool_response_chars: int,
     max_completion_length: int,
-) -> Tuple[List[List[int]], List[List[float]]]:
+) -> Tuple[List[List[int]], List[List[float]], List[List[float]]]:
     """Up to max_turns assistant turns per prompt. After each turn, run its tool calls and append the tool responses;
-    the sampler prefills only the appended tokens. Returns (completions, logprobs); tool-response tokens have
-    log-prob 0.0. A row ends when its turn has no tool call, when a turn reaches its token limit, or when the tool
-    responses do not fit max_completion_length."""
+    the sampler prefills only the appended tokens. Returns (completions, logprobs, loss_masks); tool-response tokens
+    have log-prob 0.0 and loss mask 0.0. A row ends when its turn has no tool call, when a turn reaches its token
+    limit, or when the tool responses do not fit max_completion_length."""
     completions, logprobs = sampler.generate_and_get_log_probs(prompts, [max_completion_length] * len(prompts))
+    loss_masks = [[1.0] * len(c) for c in completions]
     turns = [list(c) for c in completions]
     active = [True] * len(prompts)
     for _ in range(max_turns - 1):
@@ -152,4 +153,5 @@ def generate_tool_turns(
             if tokens:
                 completions[i] += tokens + turns[i]
                 logprobs[i] += [0.0] * len(tokens) + turn_logprobs[i]
-    return completions, logprobs
+                loss_masks[i] += [0.0] * len(tokens) + [1.0] * len(turns[i])
+    return completions, logprobs, loss_masks
