@@ -20,6 +20,7 @@
 #include <optional>
 #include <random>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -475,6 +476,10 @@ TEST(MeshBufferTest, DeallocationAfterMeshDeviceReopened) {
     auto mesh_device =
         MeshDevice::create(config, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreType::WORKER);
     auto held = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
+    // Its devices are closed, even though the chip is open again, so no device buffer can be built.
+    EXPECT_THAT(
+        [&] { (void)stale->get_device_buffer(MeshCoordinate(0, 0)); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("the MeshBuffer's devices are closed")));
     stale.reset();
     auto next = MeshBuffer::create(buffer_config, device_local_config, mesh_device.get());
     EXPECT_NE(next->address(), held->address());

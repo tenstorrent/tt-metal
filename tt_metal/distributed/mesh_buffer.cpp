@@ -434,16 +434,25 @@ void MeshBuffer::deallocate() {
         Inspector::mesh_buffer_deallocated(this);
     }
 
-    // get_device_buffer() checks state_ under this lock, so it cannot build a device buffer at an address that is being
-    // freed. The old state frees the allocation when it is destroyed, after the lock is released. A MeshBuffer that is
-    // already deallocated, as in the destructor after deallocate(), has nothing to change.
-    auto set_deallocated_state = [this]() {
-        if (std::holds_alternative<DeallocatedState>(state_)) {
-            return;
-        }
+    // get_device_buffer() checks state_ and builds device buffers under this lock, so it cannot build a device buffer
+    // at an address that is being freed. The old state frees the allocation when it is destroyed, after the lock is
+    // released. A MeshBuffer that is already deallocated, as in the destructor after deallocate(), has no state to
+    // change. With mark_device_buffers, the per-device Buffers are also marked as deallocated under this lock, before
+    // the state changes, so get_device_buffer() cannot build one that misses the marking.
+    auto set_deallocated_state = [this](bool mark_device_buffers) {
         decltype(state_) old_state = DeallocatedState{};
         {
             std::lock_guard<std::mutex> lock(lazy_device_buffer_mutex(this));
+            if (mark_device_buffers) {
+                for (auto& device_buffer : buffers_.values()) {
+                    if (device_buffer.is_local() && device_buffer.value() != nullptr) {
+                        device_buffer.value()->impl().mark_as_deallocated();
+                    }
+                }
+            }
+            if (std::holds_alternative<DeallocatedState>(state_)) {
+                return;
+            }
             if (built_device_buffers_) {
                 for (size_t i = 0; i < buffers_.shape().mesh_size(); i++) {
                     built_device_buffers_[i].store(nullptr, std::memory_order_relaxed);
@@ -493,7 +502,7 @@ void MeshBuffer::deallocate() {
             }
         }
 
-        set_deallocated_state();
+        set_deallocated_state(/*mark_device_buffers=*/false);
         return;
     }
 
@@ -507,14 +516,7 @@ void MeshBuffer::deallocate() {
     // destructor leaves its device alone. That includes each device's own allocation of a per-core MeshBuffer and the
     // Buffers an explicit deallocate() kept; a moved-from MeshBuffer has none. If only the MeshDevice is gone and the
     // devices are open, the Buffers are left as they are, and their destructors free their allocations.
-    if (devices_released) {
-        for (auto& device_buffer : buffers_.values()) {
-            if (device_buffer.is_local() && device_buffer.value() != nullptr) {
-                device_buffer.value()->impl().mark_as_deallocated();
-            }
-        }
-    }
-    set_deallocated_state();
+    set_deallocated_state(/*mark_device_buffers=*/devices_released);
 }
 
 MeshDevice* MeshBuffer::device() const {
@@ -545,6 +547,12 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
     TT_FATAL(
         !std::holds_alternative<DeallocatedState>(state_) && mesh_device != nullptr,
         "MeshBuffer::get_device_buffer({}): the MeshBuffer is deallocated or its MeshDevice is gone",
+        device_coord);
+    // Checked before the device's own is_initialized(): after the devices close, another MeshDevice may have reopened
+    // the chip, and the stale Device* would then report the new device as initialized.
+    TT_FATAL(
+        !devices_lifetime_.expired(),
+        "MeshBuffer::get_device_buffer({}): the MeshBuffer's devices are closed",
         device_coord);
     IDevice* device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(
