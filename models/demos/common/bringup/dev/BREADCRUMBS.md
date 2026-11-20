@@ -2875,3 +2875,14 @@ FAIL (glued_segment_equiv_max_abs_diff 1024, 684 slot digest mismatches): Orches
 side (a task without an `ab` switch measures the change on only). gate_on now also fails on any unit whose last verdict
 in the task's gate is FAIL (core.gate.unit_states), naming it. Selftest:
 test_resident_gate.py::test_the_ab_says_fail_when_a_gate_unit_of_the_task_failed.
+
+## F294 (owner 2026-11-20): perf walls hid per-chunk program builds
+Every wall (testing/profile.py's clean wall, the model's skip-position / packed walls) re-runs one chunk at one position
+after a warm-up at that position, with program-cache misses refused (F196): proven warm for THAT position, so a program
+keyed on a per-chunk value (the chunk start, a slot, a segment layout) is built in the warm-up and never counted. In
+serving every chunk brings new values: a rebuild on the request path. Found 2026-11-20 by PB.7C (glued fresh layouts:
+0 builds after its fix; fixed lanes 21 builds over 10 fresh chunks). Rule (skill): serving never rebuilds; a perf number
+counts only from a fresh-traffic wall with program_builds_after_warmup == 0. The clean wall now records
+chunk_wall_fresh = 0 and prints "WARM, REPEATED POSITION: a best case". The fresh walls (WALLS_FRESH=1) and the
+per-path fixes are DeepSeek-V4.1 PB.9F / PB.9X; the fast tier of every accept gate carries the 0-builds check (PB.T).
+Not done: a generic fresh-traffic driver in the framework (each model's test still draws its own positions).
