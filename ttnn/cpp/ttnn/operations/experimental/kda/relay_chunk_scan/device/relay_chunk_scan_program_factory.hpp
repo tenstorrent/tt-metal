@@ -77,6 +77,11 @@ inline RelaySlot relay_chunk_scan_relay_slot(uint32_t head, uint32_t heads, uint
     return {relay_chunk_scan_relay_cores(heads, num_links, head % num_links) + index / per_core, index % per_core};
 }
 
+// Heads whose correction cores share a grid column (kernels/correction_core.hpp).
+inline uint32_t relay_chunk_scan_heads_per_column(uint32_t grid_y, uint32_t first_row, uint32_t cores_per_head) {
+    return (grid_y - first_row) / cores_per_head;
+}
+
 // The cores of each head: the op's cores are the heads' correction cores, head by head, then two senders per link,
 // then the relay cores.
 inline uint32_t relay_chunk_scan_cores_per_head(size_t cores, uint32_t heads, uint32_t num_links) {

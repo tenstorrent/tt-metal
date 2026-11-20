@@ -133,14 +133,21 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
             grid.x,
             grid.y);
     }
-    // Each correction kernel finds its head and share from its place in the grid.
-    const uint32_t first_core = attrs.cores[0].y * grid.x + attrs.cores[0].x;
+    // Each correction kernel finds its head and share from its place in the grid (kernels/correction_core.hpp): head
+    // h's cores are a column, x = h / heads_per_column, from row first_row + (h % heads_per_column) * cores_per_head.
+    const uint32_t first_row = attrs.cores[0].y;
+    const uint32_t heads_per_column = relay_chunk_scan_heads_per_column(grid.y, first_row, cores_per_head);
+    TT_FATAL(heads_per_column > 0, "{}: a head's {} cores do not fit a grid column", operation_name, cores_per_head);
     for (uint32_t i = 0; i < heads * cores_per_head; ++i) {
-        const uint32_t index = first_core + i;
+        const uint32_t h = i / cores_per_head;
+        const CoreCoord expected(
+            h / heads_per_column, first_row + h % heads_per_column * cores_per_head + i % cores_per_head);
         TT_FATAL(
-            attrs.cores[i] == CoreCoord(index % grid.x, index / grid.x),
-            "{}: the heads' cores must be consecutive cores of the compute grid in row-major order; core {} is {}",
+            attrs.cores[i] == expected,
+            "{}: head {}'s correction cores must be the column of the compute grid at {}; core {} is {}",
             operation_name,
+            h,
+            expected,
             i,
             attrs.cores[i]);
     }

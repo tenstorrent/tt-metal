@@ -6,6 +6,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/persistent_counter.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/correction_core.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/gate_matmul_dataflow.hpp"
 #include "ttnn/cpp/ttnn/operations/experimental/kda/relay_chunk_scan/device/kernels/dataflow/relay_chronology.hpp"
 
@@ -21,11 +22,10 @@ constexpr uint32_t cb_terms = get_compile_time_arg_val(correction_ct + 3);
 constexpr uint32_t core_chunks = get_compile_time_arg_val(correction_ct + 4);
 constexpr bool streamed = get_compile_time_arg_val(correction_ct + 5);
 constexpr uint32_t landed_semaphore_id = get_compile_time_arg_val(correction_ct + 6);
-// The cores are heads x cores_per_head consecutive cores of the compute grid in row-major order, from first_core,
-// head by head.
+// The cores' layout (correction_core.hpp).
 constexpr uint32_t cores_per_head = get_compile_time_arg_val(correction_ct + 7);
-constexpr uint32_t grid_x = get_compile_time_arg_val(correction_ct + 8);
-constexpr uint32_t first_core = get_compile_time_arg_val(correction_ct + 9);
+constexpr uint32_t heads_per_column = get_compile_time_arg_val(correction_ct + 8);
+constexpr uint32_t first_row = get_compile_time_arg_val(correction_ct + 9);
 constexpr auto terms_args = TensorAccessorArgs<correction_ct + 10>();
 // The gated output norm: the mean's scaler, each chunk's gate rows (g of the head's chunks, formed by the matmul on
 // the core) and the weight.
@@ -48,9 +48,9 @@ constexpr uint32_t cores_arg = weight_arg + 1;
 // it, and moves the head's W for its own matmul and the head's other cores (the writer moves x).
 void kernel_main() {
     // Every core takes the same args (common, per device): its head and share follow from its place in the grid.
-    const uint32_t core = get_absolute_logical_y() * grid_x + get_absolute_logical_x() - first_core;
-    const uint32_t head = core / cores_per_head;
-    const uint32_t place = core % cores_per_head;
+    const auto self = kda_relay::correction_core<heads_per_column, first_row, cores_per_head>();
+    const uint32_t head = self.head;
+    const uint32_t place = self.place;
     const uint32_t first_chunk = place * core_chunks;
 
     const Chronology chronology;
