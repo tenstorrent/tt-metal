@@ -428,6 +428,8 @@ Standing owner decisions (moved here from private memory, 2026-10-30):
   per-layout / per-position program builds, caches that only repeated test traffic hits, and inputs tt-d-gen would not
   send; a result that depends on one is rejected and reported as a shortcut, never accepted or quoted as a number
   (DeepSeek-V4.1 PB.7 / PB.7B: glued numbers accepted while the host built per-layout tables and programs rebuilt).
+- Every accept / perf gate of DeepSeek-V4.1 galaxy_8x4 carries tests/test_no_rebuild.py (from MB.2 on; owner 2026-11-20:
+  'cover this with tests that ensure nothing in serving is being rebuilt'): program_builds_after_warmup_serving == 0.
 - Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
   set (chunk size, segment counts, the accepted switches, layer kinds); after warm-up nothing builds on the request
   path: positions, history lengths, slots, segment boundaries and table contents are runtime args / device data, never
