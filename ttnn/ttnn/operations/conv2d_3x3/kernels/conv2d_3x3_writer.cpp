@@ -293,11 +293,11 @@ void kernel_main() {
     const uint32_t total_k_blocks = num_m_blocks_this_core * num_k_blocks;
     uint32_t k_blocks_issued = 0;
     // Slab-direct round 0 (sd_w0): its DRAM reader (the multicast sender, or a core outside the channel) issues it
-    // under transaction id 8 at kernel entry (below), a receiver acks it before the fill; it completes (sd_w0_try) the
-    // moment it is in.
+    // under transaction id 8 at kernel entry (below), a receiver of the reader multicast reserves its slot before the
+    // fill; it completes (sd_w0_try) the moment it is in.
     constexpr uint32_t TRID_SD_WEIGHTS = 8;
     [[maybe_unused]] bool sd_w_issued_early = false;
-    [[maybe_unused]] bool sd_acked_early = false;
+    [[maybe_unused]] bool sd_r0_mcast = false;  // round 0 comes over the sender reader's NoC0 multicast
     [[maybe_unused]] uint32_t sd_w0 = 0;  // 0: round 0 not taken early, 1: pending, 2: pushed
     auto finish_weight_k_block = [&](uint32_t l1) {
 #if defined(SD_BIAS_IN_WEIGHTS) && defined(SD_BIAS_SPLIT)
@@ -1466,7 +1466,7 @@ void kernel_main() {
         } else if (weight_receiver) {
             if constexpr (tile_fill_split || slab_direct) {
                 // Round 0 of a slab-direct receiver came over the reader multicast, not this channel.
-                receive_serving(weight_mcast, k_blocks_issued - (sd_acked_early ? 1 : 0));
+                receive_serving(weight_mcast, k_blocks_issued - (sd_r0_mcast ? 1 : 0));
             } else {
                 weight_receiver->receive(k_blocks_issued);
             }
@@ -2431,26 +2431,19 @@ void kernel_main() {
     };
 
 #if defined(CONV2D_3X3_SLAB_DIRECT)
-    // Slab-direct round 0 ahead of the fill: a receiver reserves its slot (free at kernel start) and acks the sender's
-    // reader-multicast now (SD_R0_NOC0), so the multicast waits on no receiver's fill issue. Its DRAM reader issued it
-    // at kernel entry; either completes it the moment it is in (sd_w0_try).
+    // Slab-direct round 0 ahead of the fill: a receiver of the sender's reader-multicast (SD_R0_NOC0) reserves its
+    // slot, with no ack: the slot is fresh at kernel start (see the reader's file comment), so the multicast may
+    // already have landed. Its DRAM reader issued it at kernel entry; either completes it the moment it is in
+    // (sd_w0_try).
     if (num_m_blocks_this_core > 0 && !server_receiver) {
         MaybeDeviceZoneScope("writer_sd_weight_early");
 #ifdef SD_R0_NOC0
         if (!sd_w_issued_early && weight_receiver) {
             cb_reserve_back(cb_weights, weight_k_block_tiles);
-            // Generic (a template): an absent channel's type has no sender coordinates.
-            sd_acked_early = [&](auto& wm) {
-                using WM = std::decay_t<decltype(wm)>;
-                if constexpr (WM::active) {
-                    noc_semaphore_inc(get_noc_addr(wm.sender_x(), wm.sender_y(), get_semaphore(SD_R0_ACK_SEM)), 1);
-                    return true;
-                }
-                return false;
-            }(weight_mcast);
+            sd_r0_mcast = std::decay_t<decltype(weight_mcast)>::active;
         }
 #endif
-        sd_w0 = (sd_w_issued_early || sd_acked_early) ? 1 : 0;
+        sd_w0 = (sd_w_issued_early || sd_r0_mcast) ? 1 : 0;
         if constexpr (!weight_servers) {
             sd_w0_try();
         }

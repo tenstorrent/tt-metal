@@ -123,9 +123,14 @@
 // DRAM at kernel entry and bias-split, to the channel's rectangles on NoC0, polled from the fill loops (r0_try). The
 // writers' NoC1 multicast of it ran beside, and slowed, the forward fill of the cores whose slab lies mostly in higher
 // shards (stem.conv1's last grid row: the 108-core split drifts past the 110 input shards), and those cores bound the
-// op. Its own handshake (receivers ack at their kernel start, a ready flag per receiver), so the channel's later rounds
-// keep theirs. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
-// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us.
+// op. Its own ready flag per receiver, so the channel's later rounds keep their handshake. No ack: round 0's slot is
+// fresh at kernel start, and a program's go reaches a core only after every core finished the previous program and this
+// one's semaphores and runtime args were written (dispatch's wait_for_workers), so the multicast may land before a
+// receiver starts. Measured (Blackhole p150b, stem.conv1 512x1024x8 -> 64 s2, LoFi, bias + ReLU, unzoned, 3 alternating
+// pairs): 10.27 -> 9.83 us; the same round with no multicast at all (a diagnostic, stale weights) 9.80 us. The
+// receivers' kernel-start acks (up to 107 NoC1 atomics into the sender, ~10 ns apart) delayed the sender's own DRAM
+// read of the round past its writer's first landing poll: 64x128x8 -> 64 s2 3.34 -> 2.98 us without them, stem.conv1
+// flat (its critical core waits on its slab, not the round).
 //
 // Lanes C_in..C_in_p of a slab pixel are not data (DRAM page padding or tile padding) and may hold
 // NaN. The gather copies only the C_in real channels of each tap; the lanes of an im2col row are
@@ -301,11 +306,10 @@ void kernel_main() {
     constexpr uint32_t slab_rows_arg = split_flag_arg + 1;
 #ifdef SD_R0_NOC0
     // Slab-direct round 0 on NoC0 (see the file comment). Args at SD_R0_ARG: 1 on the weight multicast's sender (0
-    // elsewhere), then the receivers' ack count, the round's bytes, the rectangles, and per rectangle its NoC0
-    // multicast start x, y, end x, y and destination count (the sender excluded). r0_try: go (this core's writer set
-    // SD_R0_LOCAL_SEM to 1: the round landed and its bias is split) and every receiver's ack in SD_R0_ACK_SEM, then the
-    // round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle; SD_R0_LOCAL_SEM = 2 once the source was
-    // read.
+    // elsewhere), then the round's bytes, the rectangles, and per rectangle its NoC0 multicast start x, y, end x, y and
+    // destination count (the sender excluded). r0_try: go (this core's writer set SD_R0_LOCAL_SEM to 1: the round
+    // landed and its bias is split), then the round and, linked behind it, SD_R0_READY_SEM = 1 to every rectangle;
+    // SD_R0_LOCAL_SEM = 2 once the source was read.
     const bool r0_sender = get_arg_val<uint32_t>(SD_R0_ARG) != 0;
     uint32_t r0_state = r0_sender ? 0 : 2;
     auto r0_try = [&]() {
@@ -316,16 +320,15 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_LOCAL_SEM));
         if (r0_state == 0) {
             invalidate_l1_cache();
-            if (*r0_local != 1 || *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SD_R0_ACK_SEM)) <
-                                      get_arg_val<uint32_t>(SD_R0_ARG + 1)) {
+            if (*r0_local != 1) {
                 return;
             }
             MaybeDeviceZoneScope("reader_r0_mcast");
             const uint32_t src = get_write_ptr(SD_R0_CB_WEIGHTS);
-            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 2);
+            const uint32_t bytes = get_arg_val<uint32_t>(SD_R0_ARG + 1);
             const uint32_t ready = get_semaphore(SD_R0_READY_SEM);
             *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(ready) = 1;
-            for (uint32_t r = 0, a = SD_R0_ARG + 4; r < get_arg_val<uint32_t>(SD_R0_ARG + 3); ++r, a += 5) {
+            for (uint32_t r = 0, a = SD_R0_ARG + 3; r < get_arg_val<uint32_t>(SD_R0_ARG + 2); ++r, a += 5) {
                 const uint32_t cnt = get_arg_val<uint32_t>(a + 4);
                 if (cnt == 0) {
                     continue;

@@ -264,7 +264,8 @@ SD_STREAM_MIN_SUBBLOCK_ROWS = 3
 # multicasts the first weight round on NoC0 (kernels/conv2d_3x3_reader.cpp, SD_R0_NOC0), which the forward fill of the
 # critical cores (the writers' NoC1 reads of higher shards) does not use; its writer reads the round from DRAM first
 # thing at kernel entry. stem.conv1 @ LoFi, unzoned, 3 alternating pairs: 10.27 -> 9.83 us (the NoC1 multicast slowed
-# the last grid row's forward fill by ~0.4 us; a diagnostic with no multicast at all: 9.80 us).
+# the last grid row's forward fill by ~0.4 us; a diagnostic with no multicast at all: 9.80 us). No receiver ack (its slot
+# is fresh at kernel start): 64x128x8 -> 64 s2 3.34 -> 2.98 us, stem.conv1 flat.
 
 
 # N-slice-outer K split (R4, the default when its resident in0 fits L1): the core tilizes its whole K of in0 once,
@@ -2923,12 +2924,12 @@ def create_program_descriptor(
     ):
         slot_ack_defines = [("SERVER_SLOT_ACKS", str(len(sem_ids)))]
         sem_ids += tuple(range(len(sem_ids), len(sem_ids) + b.weight_depth - 1))
-    # Slab-direct round 0 over NoC0 (SD_R0_NOC0): the sender's ack count, every participant's ready flag, the sender's
-    # local go / source-read state.
+    # Slab-direct round 0 over NoC0 (SD_R0_NOC0): every participant's ready flag, the sender's local go / source-read
+    # state (no ack count: round 0's slot is fresh at kernel start).
     sd_r0_noc0 = slab_direct and weight_servers is None and mcast_receivers is not None
     if sd_r0_noc0:
-        assert len(sem_ids) + 3 <= MAX_SEMAPHORES, sem_ids
-    sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 3)) if sd_r0_noc0 else ()
+        assert len(sem_ids) + 2 <= MAX_SEMAPHORES, sem_ids
+    sd_r0_sems = tuple(range(len(sem_ids), len(sem_ids) + 2)) if sd_r0_noc0 else ()
     sem_ids += sd_r0_sems
     # N-slice spread column stream (see NSLICE_SPREAD): every round of a core's stream in its own slot, one flag
     # semaphore per round, no channel. Not where cores run different M-block counts (the cores outside the column
@@ -3399,17 +3400,16 @@ def create_program_descriptor(
         for c in shard_cores(input_tensor):
             v = device.worker_core_from_logical_core(c)
             kwf_shard_xy.append((v.x, v.y))
-    # SD_R0_NOC0: the sender's reader args (the reader's SD_R0_ARG; 0 on every other core): role, the receivers' ack
-    # count, the round's bytes, the rectangles, and per rectangle its NoC0 multicast start (low corner), end (high
-    # corner) and destination count (the sender excluded).
+    # SD_R0_NOC0: the sender's reader args (the reader's SD_R0_ARG; 0 on every other core): role, the round's bytes, the
+    # rectangles, and per rectangle its NoC0 multicast start (low corner), end (high corner) and destination count (the
+    # sender excluded).
     sd_r0_arg = None
     sd_r0_args = []
     if sd_r0_noc0:
         sender = core_list[0]
         rects = list(mcast_receivers.ranges())
         inside = [r.start.x <= sender.x <= r.end.x and r.start.y <= sender.y <= r.end.y for r in rects]
-        sd_r0_args = [1, mcast_receivers.num_cores() - sum(inside)]
-        sd_r0_args += [(bk + int(sd_bias_in_weights)) * bn * g.weight_tile_bytes, len(rects)]
+        sd_r0_args = [1, (bk + int(sd_bias_in_weights)) * bn * g.weight_tile_bytes, len(rects)]
         for rect, ins in zip(rects, inside):
             lo = device.worker_core_from_logical_core(rect.start)
             hi = device.worker_core_from_logical_core(rect.end)
@@ -3602,9 +3602,8 @@ def create_program_descriptor(
         if sd_r0_noc0:
             _sd_dm_defines += [
                 ("SD_R0_NOC0", "1"),
-                ("SD_R0_ACK_SEM", str(sd_r0_sems[0])),
-                ("SD_R0_READY_SEM", str(sd_r0_sems[1])),
-                ("SD_R0_LOCAL_SEM", str(sd_r0_sems[2])),
+                ("SD_R0_READY_SEM", str(sd_r0_sems[0])),
+                ("SD_R0_LOCAL_SEM", str(sd_r0_sems[1])),
                 ("SD_R0_ARG", str(sd_r0_arg)),
                 ("SD_R0_CB_WEIGHTS", str(CB_WEIGHTS)),
             ]

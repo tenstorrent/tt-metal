@@ -324,11 +324,14 @@ def test_conv2d_3x3_height_sharded_face_direct_multi_m_block(device, monkeypatch
 # Slab-direct on the whole grid: no spare core, so no weight servers, and round 0 comes over the sender reader's NoC0
 # multicast (SD_R0_NOC0) while any later round rides the writer channel. ((H, W, C_in), C_out, padding, stride, dilation,
 # forced M-block tile-rows or 0): the op's own blocking (one M-block per core, the channel's only round on NoC0), and two
-# M-blocks per core (forced; round 1 over the channel after the NoC0 round 0), streamed and not streamed.
+# M-blocks per core (forced; round 1 over the channel after the NoC0 round 0), streamed and not streamed. 64x128: one
+# tile-row per core on 64 cores, where round 0 (sent with no receiver ack) lands before the late-starting receivers reach
+# their slot reserve.
 SLAB_DIRECT_GRID_SHAPES = [
     ((256, 512, 8), 64, 1, 2, 1, 0),
     ((256, 512, 8), 64, 1, 2, 1, 5),
     ((128, 256, 8), 64, 1, 2, 1, 1),
+    ((64, 128, 8), 64, 1, 2, 1, 0),
 ]
 
 
