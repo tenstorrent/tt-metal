@@ -1224,11 +1224,11 @@ TT_FABRIC_TEST_TIMEOUT=300s run_test python3 -m pytest tests/ttnn/distributed/te
 fi # teardown-sanity-mpi
 
 ######################################
-# Teardown sanity, tt-metal (#56902): how a job of tt-metal ranks stops when one rank raises
+# Teardown sanity, tt-metal (#56902): how a job of tt-metal ranks stops (the DistributedContext job stop)
 ######################################
 if run_group "teardown-sanity-ttmetal"; then
 
-TT_FABRIC_TEST_TIMEOUT=1080s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
+TT_FABRIC_TEST_TIMEOUT=2000s run_test python3 -m pytest tests/ttnn/distributed/teardown_sanity/test_teardown_sanity.py -v -p no:cacheprovider -p no:benchmark
 
 fi # teardown-sanity-ttmetal
 
