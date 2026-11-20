@@ -554,6 +554,12 @@ Buffer* MeshBuffer::get_device_buffer(const MeshCoordinate& device_coord) const 
         !devices_lifetime_.expired(),
         "MeshBuffer::get_device_buffer({}): the MeshBuffer's devices are closed",
         device_coord);
+    // Also when only its MeshDevice is closed, such as a submesh whose parent keeps the devices open: the close
+    // released the MeshBuffer's allocation, and a new MeshDevice may since have allocated the same address.
+    TT_FATAL(
+        !mesh_device->impl().is_closed(),
+        "MeshBuffer::get_device_buffer({}): the MeshBuffer's MeshDevice is closed",
+        device_coord);
     IDevice* device = mesh_device->impl().get_device(device_coord);
     TT_FATAL(
         device->is_initialized(), "MeshBuffer::get_device_buffer({}): device {} is closed", device_coord, device->id());

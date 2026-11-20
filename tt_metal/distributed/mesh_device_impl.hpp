@@ -444,6 +444,9 @@ public:
     /// A handle that expires when this MeshDevice's devices close: every MeshDevice that holds them, such as a submesh
     /// and its parent, has released them.
     std::weak_ptr<const void> devices_lifetime() const { return scoped_devices_; }
+    /// Whether close_impl() has closed this MeshDevice, which releases its allocations. Unlike devices_lifetime(), this
+    /// is true for a closed submesh even while its parent keeps the devices open.
+    bool is_closed() const { return scoped_devices_ == nullptr; }
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
