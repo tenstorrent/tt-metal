@@ -4,15 +4,12 @@
 
 #include "generic_op_nanobind.hpp"
 
-#include <algorithm>
 #include <cstddef>
-#include <iterator>
-#include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
-#include <fmt/ranges.h>
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
@@ -23,213 +20,95 @@
 #include "ttnn-nanobind/program_spec.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <tt-metalium/program_descriptors.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
 namespace ttnn::operations::generic {
 
 namespace {
 
-using tt::tt_metal::distributed::MeshCoordinate;
 using ttnn::experimental::MeshProgramRunArgs;
 using ttnn::experimental::MeshProgramSpec;
 using ttnn::experimental::ProgramRunArgs;
 using ttnn::experimental::ProgramSpec;
+using TensorViews = std::vector<GenericProgramSpecDeviceOperation::operation_attributes_t::TensorView>;
 
-bool on_device(const Tensor& tensor) { return is_device_tensor(tensor) && tensor.is_allocated(); }
-
-// On a one-device mesh every view holds the only device, so the views need no reading there.
-bool on_one_device_mesh(const std::vector<Tensor>& io_tensors) {
-    const auto entry = std::ranges::find_if(io_tensors, on_device);
-    return entry == io_tensors.end() || entry->device()->num_devices() == 1;
+// A tensor argument that holds only some devices of its tensor, such as a per-device view, for generic_op's check that
+// it holds every device its program runs on (operation_attributes_t::tensor_views). generic_op's other checks, which
+// run first, cover every tensor argument.
+bool holds_some_devices(const Tensor& tensor) {
+    return is_device_tensor(tensor) && tensor.is_allocated() && !tensor.device_storage().is_uniform_storage();
 }
 
-// The devices that a ProgramSpec-form call runs its program on, as generic_op works them out.
-std::vector<MeshCoordinate> program_devices(const std::vector<Tensor>& io_tensors) {
-    // A local, not a temporary in the loop header: ranges() refers into the set.
-    const auto ranges = ttnn::prim::program_spec_ranges(io_tensors);
-    std::vector<MeshCoordinate> devices;
-    for (const auto& range : ranges.ranges()) {
-        std::ranges::copy(range, std::back_inserter(devices));
-    }
-    return devices;
+TensorViews::value_type view_of(const ProgramRunArgs& run_args, std::string_view name, const Tensor& tensor) {
+    const auto devices = tensor.device_storage().get_coords();
+    return {run_args, std::string(name), std::vector<ttnn::MeshCoordinate>(devices.begin(), devices.end())};
 }
 
-// A tensor parameter name for a message, with each NUL character written as \0: a NUL would end the message on its
-// way to Python, and put a raw NUL byte in logs.
-std::string printable(std::string_view name) {
-    std::string text;
-    text.reserve(name.size());
-    for (const char character : name) {
-        if (character == '\0') {
-            text += "\\0";
-        } else {
-            text += character;
+// The views in run args made in Python, read from the ttnn.Tensors they keep, with the GIL held. The visitors capture
+// one reference each, which std::function holds without allocating.
+TensorViews tensor_views(const ProgramRunArgs& run_args) {
+    struct Found {
+        const ProgramRunArgs& run_args;
+        TensorViews views;
+    } found{run_args, {}};
+    ttnn::program_spec::for_each_python_tensor_arg(run_args, [&found](std::string_view name, const Tensor& tensor) {
+        if (holds_some_devices(tensor)) {
+            found.views.push_back(view_of(found.run_args, name, tensor));
         }
-    }
-    return text;
-}
-
-// The devices that the program of one range of a MeshProgramSpec runs on: those of the range on the mesh. A range
-// inside the mesh gives its own devices; for any other range it walks the mesh, so a range far past the mesh costs no
-// more than the mesh. generic_op reports a range that reaches past the mesh or has another dimension.
-std::vector<MeshCoordinate> devices_in(const ttnn::MeshCoordinateRange& range, const ttnn::MeshShape& mesh_shape) {
-    const ttnn::MeshCoordinateRange mesh(mesh_shape);
-    std::vector<MeshCoordinate> devices;
-    if (range.dims() == mesh.dims() && mesh.contains(range)) {
-        std::ranges::copy(range, std::back_inserter(devices));
-        return devices;
-    }
-    for (const auto& device : mesh) {
-        if (device.dims() == range.dims() && range.contains(device)) {
-            devices.push_back(device);
-        }
-    }
-    return devices;
-}
-
-// Per-device views of one tensor, such as those ttnn.get_device_tensors returns, share its MeshTensor, and Metal's
-// tensor arguments keep only the MeshTensor: on each device a program runs on, it reads that device's part of the
-// tensor. So a per-device view of a tensor that io_tensors lists, bound in Python run args to a declared tensor
-// parameter, must hold every device that the run args are for, or the program would read, on a device the view lacks,
-// data the view does not hold. The check catches such a view whatever else is wrong with the call. Every other tensor
-// argument is left to generic_op, which checks it on every call and names it: a tensor that io_tensors lists, one whose
-// MeshTensor no entry shares, and one that is not allocated on a device. A tensor under a name its program does not
-// declare is never read, and one on every device of the mesh holds them all. Metal plans to take a MeshTensorView as a
-// tensor argument too (tensor_parameter.hpp), which would let it see which devices a view holds.
-bool holds_every_device(const Tensor& tensor) {
-    return !on_device(tensor) || tensor.device_storage().is_uniform_storage();
-}
-
-bool view_of_listed_tensor(const std::vector<Tensor>& io_tensors, const Tensor& tensor) {
-    const auto coords = tensor.device_storage().get_coords();
-    bool shares_a_mesh_tensor = false;
-    for (const auto& entry : io_tensors) {
-        if (!on_device(entry) || &entry.mesh_tensor() != &tensor.mesh_tensor()) {
-            continue;
-        }
-        if (std::ranges::equal(entry.device_storage().get_coords(), coords)) {
-            return false;
-        }
-        shares_a_mesh_tensor = true;
-    }
-    return shares_a_mesh_tensor;
-}
-
-bool declares(const ProgramSpec& spec, std::string_view name) {
-    return std::ranges::any_of(
-        spec.tensor_parameters, [&](const auto& parameter) { return *parameter.unique_id == name; });
-}
-
-// range is the mesh range of the run args, or none for a ProgramSpec, whose devices come from io_tensors.
-void check_tensor_holds(
-    std::string_view name,
-    const Tensor& tensor,
-    const std::vector<MeshCoordinate>& devices,
-    const ttnn::MeshCoordinateRange* range) {
-    const auto held = tensor.device_storage().get_coords();
-    const auto missing = std::ranges::find_if(
-        devices, [&](const MeshCoordinate& device) { return std::ranges::find(held, device) == held.end(); });
-    TT_FATAL(
-        missing == devices.end(),
-        "generic_op: tensor_args['{}'] holds devices {}, but these run args are for device {} ({}), which it does not "
-        "hold. On each device it runs on, a program reads that device's part of a tensor, so to read a per-device "
-        "view's data, {}; binding the whole tensor instead makes each device read its own part, not the view's",
-        printable(name),
-        fmt::format("{}", fmt::join(held, ", ")),
-        *missing,
-        range != nullptr ? fmt::format("in mesh range {}", *range) : std::string("a device of io_tensors"),
-        range != nullptr ? "bind it only in the run args of a range on the devices it holds"
-                         : "list only views of the devices it holds in io_tensors");
-}
-
-// The checks run with the GIL held, before the call releases it (the overloads are gil_held_overload_t), and read
-// the tensors that the Python run args keep without copying them. The visitors capture one reference each, which
-// std::function holds without allocating.
-void check_views(const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
-    if (on_one_device_mesh(io_tensors)) {
-        return;
-    }
-    struct Check {
-        const std::vector<Tensor>& io_tensors;
-        const ProgramSpec& spec;
-        // Worked out once per call, and only for a tensor that is not on every device.
-        std::optional<std::vector<MeshCoordinate>> devices;
-    } check{io_tensors, spec, std::nullopt};
-    ttnn::program_spec::for_each_python_tensor_arg(run_args, [&check](std::string_view name, const Tensor& tensor) {
-        if (holds_every_device(tensor) || !declares(check.spec, name) ||
-            !view_of_listed_tensor(check.io_tensors, tensor)) {
-            return;
-        }
-        if (!check.devices) {
-            check.devices = program_devices(check.io_tensors);
-        }
-        check_tensor_holds(name, tensor, *check.devices, nullptr);
     });
+    return std::move(found.views);
 }
 
-// The run args of each range are for the program on that range (generic_op pairs them with the spec's program for the
-// same range, in any order), so each is checked against its own range and the names that program declares. Run args
-// for a range with no program never run, and generic_op rejects them.
-void check_views(
-    const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
-    if (on_one_device_mesh(io_tensors)) {
-        return;
-    }
-    struct Check {
-        const std::vector<Tensor>& io_tensors;
-        const MeshProgramSpec& spec;
+TensorViews tensor_views(const MeshProgramRunArgs& run_args) {
+    struct Found {
         const MeshProgramRunArgs& run_args;
-        const ttnn::MeshShape& mesh_shape;
-        // The devices of one program's range, worked out once per range, and only for a view that needs the check.
-        std::optional<std::size_t> program_of_devices;
-        std::vector<MeshCoordinate> devices;
-    } check{io_tensors, spec, run_args, std::ranges::find_if(io_tensors, on_device)->device()->shape(), {}, {}};
+        TensorViews views;
+    } found{run_args, {}};
     ttnn::program_spec::for_each_python_tensor_arg(
-        run_args, [&check](std::size_t program, std::string_view name, const Tensor& tensor) {
-            const auto& range = check.run_args.programs[program].first;
-            const auto spec = std::ranges::find_if(
-                check.spec.programs, [&](const auto& candidate) { return candidate.first == range; });
-            if (holds_every_device(tensor) || spec == check.spec.programs.end() || !declares(spec->second, name) ||
-                !view_of_listed_tensor(check.io_tensors, tensor)) {
-                return;
+        run_args, [&found](std::size_t program, std::string_view name, const Tensor& tensor) {
+            if (holds_some_devices(tensor)) {
+                found.views.push_back(view_of(found.run_args.programs[program].second, name, tensor));
             }
-            if (check.program_of_devices != program) {
-                check.devices = devices_in(range, check.mesh_shape);
-                check.program_of_devices = program;
-            }
-            check_tensor_holds(name, tensor, check.devices, &range);
         });
+    return std::move(found.views);
 }
 
-// The Metal 2.0 forms as Python calls them: each checks the tensor views while it holds the GIL, then releases it for
-// the call itself, as bind_function does for other overloads.
+// The Metal 2.0 forms as Python calls them: each reads the views while it holds the GIL, then releases it for the call
+// itself, as bind_function does for other overloads.
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
-    check_views(io_tensors, spec, run_args);
+    auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    return ttnn::experimental::generic_op(io_tensors, spec, run_args);
+    auto attributes = ttnn::prim::program_spec_attributes(io_tensors, spec, run_args);
+    attributes.tensor_views = std::move(views);
+    return ttnn::prim::generic_op(io_tensors, attributes);
 }
 
 Tensor generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
-    check_views(io_tensors, spec, run_args);
+    auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    return ttnn::experimental::generic_op(io_tensors, spec, run_args);
+    auto attributes = ttnn::prim::mesh_program_spec_attributes(spec.programs, run_args.programs);
+    attributes.tensor_views = std::move(views);
+    return ttnn::prim::generic_op(io_tensors, attributes);
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const ProgramSpec& spec, const ProgramRunArgs& run_args) {
-    check_views(io_tensors, spec, run_args);
+    auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    ttnn::experimental::prepare_generic_op(io_tensors, spec, run_args);
+    auto attributes = ttnn::prim::program_spec_attributes(io_tensors, spec, run_args);
+    attributes.tensor_views = std::move(views);
+    ttnn::prim::prepare_generic_op(io_tensors, attributes);
 }
 
 void prepare_generic_op_from_python(
     const std::vector<Tensor>& io_tensors, const MeshProgramSpec& spec, const MeshProgramRunArgs& run_args) {
-    check_views(io_tensors, spec, run_args);
+    auto views = tensor_views(run_args);
     const nb::gil_scoped_release release;
-    ttnn::experimental::prepare_generic_op(io_tensors, spec, run_args);
+    auto attributes = ttnn::prim::mesh_program_spec_attributes(spec.programs, run_args.programs);
+    attributes.tensor_views = std::move(views);
+    ttnn::prim::prepare_generic_op(io_tensors, attributes);
 }
 
 }  // namespace
