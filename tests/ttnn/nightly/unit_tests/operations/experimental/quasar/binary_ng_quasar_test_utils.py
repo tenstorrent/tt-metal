@@ -63,6 +63,8 @@ _OPS = {
     "divide": (lambda: ttnn.experimental.quasar.divide, torch.divide),
     "maximum": (lambda: ttnn.experimental.quasar.maximum, torch.maximum),
     "minimum": (lambda: ttnn.experimental.quasar.minimum, torch.minimum),
+    # rsub(a, b) = b - a. fp32 takes the SFPU rsub_binary_tile; bf16 takes the FPU (negate a, then add).
+    "rsub": (lambda: ttnn.experimental.quasar.rsub, lambda a, b: torch.subtract(b, a)),
 }
 
 # PCC thresholds. Never weaken these.
@@ -98,7 +100,7 @@ def _act(act_type):
 # on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
 # multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
 _ULP = {
-    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 2, "maximum": 0, "minimum": 0},
+    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 2, "maximum": 0, "minimum": 0, "rsub": 0},
     ttnn.bfloat16: {"add": 1, "subtract": 1, "multiply": 1, "divide": 1, "maximum": 0, "minimum": 0},
 }
 
