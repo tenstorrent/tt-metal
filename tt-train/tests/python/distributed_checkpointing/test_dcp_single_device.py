@@ -11,6 +11,7 @@ budget that bounds the host buffers in flight, a missing data file and a restore
 live one.
 """
 
+import errno
 import os
 import threading
 import weakref
@@ -244,6 +245,30 @@ def test_a_shard_is_freed_before_its_budget_is_released(tmp_path, monkeypatch):
     dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, threads=1)  # one writer, one shard at a time
     assert views and len(alive_at_release) == len(views), "every shard written released its budget"
     assert not any(alive_at_release), f"shards still held when their budget was released: {alive_at_release}"
+
+
+@pytest.mark.timeout(120)  # a writer that kept the failed write's budget would leave save waiting for it forever
+def test_a_failed_write_stops_the_save(tmp_path, monkeypatch, expect_error):
+    """The second write fails. Save raises that error, not a later one; writes nothing after it; does not wait for the
+    budget the failed write held; and leaves no descriptor open and no directory behind. With a one-byte budget one
+    key is in flight at a time, so the producer is waiting for the failed write's budget when it fails."""
+    model, opt = _trained_pair()
+    calls = []
+    real_pwrite_all = _save.pwrite_all
+
+    def failing_second_write(fd, view, offset):
+        calls.append(offset)
+        if len(calls) == 2:
+            raise OSError(errno.ENOSPC, "injected: no space left on device")
+        real_pwrite_all(fd, view, offset)
+
+    monkeypatch.setattr(_save, "pwrite_all", failing_second_write)
+    open_fds = len(os.listdir("/proc/self/fd"))
+    with expect_error(OSError, "injected: no space left on device"):
+        dcp.save(str(tmp_path / "step_0000001"), model=model, optimizer=opt, max_inflight_bytes=1)
+    assert len(calls) == 2, f"{len(calls)} writes: nothing may be written after the failed one"
+    assert len(os.listdir("/proc/self/fd")) == open_fds, "every descriptor the save opened is closed"
+    assert os.listdir(tmp_path) == [], "no checkpoint and no staging directory left"
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):
