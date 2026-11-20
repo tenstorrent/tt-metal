@@ -98,7 +98,7 @@ bool split_whole_rows(uint32_t k, uint32_t num_rows, uint32_t input_last_dim, ui
 constexpr uint32_t two_level_block_keys = 32;
 constexpr uint32_t two_level_min_width = 65'536;
 constexpr uint32_t two_level_max_width = 2'097'152;
-// Row r runs on core r % num_cores, which tracks the readiness of up to this many rows.
+// A core tracks the readiness of up to this many rows (see topk_two_level::row_owner).
 constexpr uint32_t two_level_max_rows_per_core = 4;
 bool two_level_enabled(const operation_attributes_t& attrs, uint32_t input_last_dim);
 // The search length from which a two-level program runs two-level by default: where two-level gets faster for 160

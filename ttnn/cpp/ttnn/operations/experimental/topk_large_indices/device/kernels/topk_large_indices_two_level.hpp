@@ -120,8 +120,9 @@ constexpr bool split_rows_first(bool early_halves, uint32_t search_len) {
 // partial). The last split_rows rows are halved across core pairs (as the single-level assignment pairs them): split
 // row whole_rows + u belongs to core 2u, which runs its stage 2 and the first half of its stage 3 and merges in the
 // second half that core 2u + 1 sorts. A round's first split_rows positions are the cores 2u, then come the cores
-// 2u + 1, then the cores without a split row: the phase-1 units run in row order, so the cores 2u get their whole
-// rows early and are free when their split rows' maxima complete, while a row's DRAM bank still follows its index.
+// 2u + 1, then the cores without a split row: the whole rows' units run in row order, so the cores 2u get their whole
+// rows first, which frees them earlier for their split rows when those come last (see split_rows_first). A row's DRAM
+// bank still follows its index.
 constexpr uint32_t whole_row_core(uint32_t position, uint32_t split_rows) {
     if (position < split_rows) {
         return 2 * position;
