@@ -848,8 +848,9 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_ENABLE_FABRIC_VC2: this->enable_fabric_vc2 = true; break;
 
         // TT_METAL_ENABLE_FABRIC_HOST_RDMA
-        // Adds a host_rdma sender channel to every fabric router's VC0, which the host writes packets into directly
-        // (host-initiated RDMA). Not supported with express routing or the Tensix mux/UDM extensions.
+        // Adds a host_rdma sender channel to every fabric router's VC0: a worker channel for the host_rdma request
+        // service kernel (host-initiated RDMA), which the fabric's worker connection APIs do not hand out. Not
+        // supported with express routing or the Tensix mux/UDM extensions.
         // Default: false
         // Usage: export TT_METAL_ENABLE_FABRIC_HOST_RDMA=1
         case EnvVarID::TT_METAL_ENABLE_FABRIC_HOST_RDMA: this->enable_fabric_host_rdma = is_env_enabled(value); break;

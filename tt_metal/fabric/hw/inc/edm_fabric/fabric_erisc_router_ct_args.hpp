@@ -348,10 +348,19 @@ constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_connection_info_add
     local_sender_channel_7_connection_info_addr,
     local_sender_channel_8_connection_info_addr,
     local_sender_channel_9_connection_info_addr};
-// Each VC's worker channel's connection semaphore (0 where the VC has no worker: VC1 never does), at a compile-time
-// address: the router reads it every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
-constexpr std::array<size_t, MAX_NUM_VCS> worker_connection_semaphore_addrs = {
-    NAMED_CT_ARG("VC0_WORKER_CONNECTION_SEMAPHORE_ADDR"), 0, NAMED_CT_ARG("VC2_WORKER_CONNECTION_SEMAPHORE_ADDR")};
+// Each worker channel's connection semaphore (0 for any other channel), at a compile-time address: the router reads it
+// every pass. A forwarding channel's semaphore is used only at init, from its runtime arg.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> worker_connection_semaphore_addrs = {
+    NAMED_CT_ARG("SENDER_CH_0_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_1_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_2_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_3_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_4_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_5_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_6_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_7_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_8_WORKER_CONNECTION_SEMAPHORE_ADDR"),
+    NAMED_CT_ARG("SENDER_CH_9_WORKER_CONNECTION_SEMAPHORE_ADDR")};
 
 // ============================================================================
 // Status pointers
@@ -371,8 +380,9 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // ============================================================================
 // Channel servicing flags
 // ============================================================================
-// Whether a sender channel position takes a worker: the first sender channel of each VC whose routing mode has a worker
-// (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp), whether or not trimming services it.
+// Whether a sender channel position takes a worker (SENDER_CH_<i>_IS_WORKER_CHANNEL; erisc_datamover_builder.cpp),
+// whether or not trimming services it: the first sender channel of each VC whose routing mode has a worker, and VC0's
+// host_rdma channel where the fabric builds one.
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_WORKER_CHANNEL")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_WORKER_CHANNEL")),
@@ -384,22 +394,6 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_worker = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_WORKER_CHANNEL")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_WORKER_CHANNEL")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_WORKER_CHANNEL")),
-};
-// Whether a sender channel position is the host_rdma channel, which the host writes packets into directly and credits
-// itself from what the router writes back to host memory (SENDER_CH_<i>_IS_HOST_RDMA_CHANNEL;
-// erisc_datamover_builder.cpp). At most one, VC0's last sender channel, where the fabric builds it
-// (TT_METAL_ENABLE_FABRIC_HOST_RDMA).
-constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_host_rdma = {
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_3_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_4_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_5_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_6_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_HOST_RDMA_CHANNEL")),
-    static_cast<bool>(NAMED_CT_ARG("SENDER_CH_9_IS_HOST_RDMA_CHANNEL")),
 };
 constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),

@@ -406,9 +406,13 @@ IntermeshVCConfig FabricBuilderContext::compute_intermesh_vc_config() const {
         config.requires_vc2 = is_blackhole && !is_udm_mode && !is_mux_extension;
     }
 
-    // The host_rdma channel: one more VC0 sender on every router. The Tensix extensions own VC0's producers (the mux is
-    // the router's only producer there), so the channel is not built with them.
+    // The host_rdma channel: one more VC0 sender on every router, on Blackhole only (any other architecture builds its
+    // routers as without it). The Tensix extensions own VC0's producers (the mux is the router's only producer there),
+    // so the channel is not built with them.
     if (fabric_context_.get_rtoptions().get_enable_fabric_host_rdma()) {
+        TT_FATAL(
+            fabric_context_.get_hal().get_arch() == tt::ARCH::BLACKHOLE,
+            "TT_METAL_ENABLE_FABRIC_HOST_RDMA is supported on Blackhole only");
         const auto tensix_config = fabric_context_.get_fabric_tensix_config();
         TT_FATAL(
             tensix_config == FabricTensixConfig::DISABLED,

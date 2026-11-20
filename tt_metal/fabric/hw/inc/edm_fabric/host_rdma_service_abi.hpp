@@ -9,8 +9,8 @@
 //
 // The host posts write requests into a channel's queue in the service core's L1. The kernel services them: it splits
 // each into packets, reads each packet's payload from the request's source on its chip, forms the packet's header,
-// and injects the packet into the channel's router (its host_rdma sender channel). The router credits the kernel in
-// L1 (`Channel::credits`).
+// and injects the packet into the channel's router (its host_rdma sender channel, a worker channel the fabric's worker
+// connection APIs do not hand out). The router credits the kernel in L1 (`Channel::credits`), as it does any worker.
 
 #include <cstddef>
 #include <cstdint>
@@ -55,11 +55,11 @@ struct Header {
 };
 static_assert(sizeof(Header) == 64);
 
-// One channel: a router's host_rdma sender channel, which the kernel drives as a fabric connection (a
+// One channel: a router's host_rdma sender channel, which the kernel drives as a fabric worker connection (a
 // WorkerToFabricEdmSender over the fields below), and its request queue. The host fills it with `active` 0, then sets
-// `active`. The kernel opens the connection when it sees `active`, taking up the producer cursor the channel's last
-// producer left in the router, and closes it (leaving its cursor there) when `active` clears or the kernel stops. The
-// host clears `active` only once `consumed` has caught up with `produced`.
+// `active`. The kernel opens the connection when it sees `active` and closes it (open() and close(), as any worker)
+// when `active` clears or the kernel stops. The host clears `active` only once `consumed` has caught up with
+// `produced`.
 struct Channel {
     // router: slots of its host_rdma channel freed (absolute; the router writes it): the connection's credit word.
     // First, so it is 16 B aligned: the router writes it from a 16 B aligned word, and a NoC write keeps its source's
@@ -78,11 +78,11 @@ struct Channel {
     uint32_t slot_bytes;                 // the slot stride
     uint32_t free_slots_stream;          // the channel's free-slots stream
     uint32_t connection_semaphore_addr;  // the channel's connection semaphore
-    uint32_t connection_info_addr;       // its HostRdmaChannelInfo, laid out as a worker's location info
+    uint32_t connection_info_addr;       // its worker location info (EDMChannelWorkerLocationInfo)
     uint32_t producer_cursor_addr;       // its SenderChannelProducerCursor
     uint32_t pad1[3];
-    // kernel: the connection's own words: where opening reads the producer cursor (16 B aligned), and its teardown
-    // word.
+    // kernel: the connection's own words: where opening reads the producer cursor (16 B aligned), and the word the
+    // router acks the connection's teardown in.
     uint32_t cursor_scratch[4];
     uint32_t teardown;
     uint32_t pad2[7];
