@@ -212,6 +212,10 @@ std::mutex& lazy_device_buffer_mutex(const MeshBuffer* mesh_buffer) {
 
 }  // namespace
 
+std::weak_ptr<const void> MeshBuffer::devices_lifetime_of(MeshDevice& mesh_device) {
+    return mesh_device.impl().devices_lifetime();
+}
+
 uint32_t ShardedBufferConfig::compute_datum_size_bytes() const {
     return global_size / (global_buffer_shape.height() * global_buffer_shape.width());
 }
@@ -385,6 +389,7 @@ MeshBuffer::MeshBuffer(MeshBuffer&& other) noexcept :
     config_((Inspector::mesh_buffer_deallocated(&other), other.config_)),
     device_local_config_(std::move(other.device_local_config_)),
     mesh_device_(std::move(other.mesh_device_)),
+    devices_lifetime_(std::move(other.devices_lifetime_)),
     address_(other.address_),
     device_local_size_(other.device_local_size_),
     buffers_(std::move(other.buffers_)),
@@ -405,6 +410,7 @@ MeshBuffer& MeshBuffer::operator=(MeshBuffer&& other) noexcept {
         config_ = other.config_;
         device_local_config_ = std::move(other.device_local_config_);
         mesh_device_ = std::move(other.mesh_device_);
+        devices_lifetime_ = std::move(other.devices_lifetime_);
         address_ = other.address_;
         device_local_size_ = other.device_local_size_;
         buffers_ = std::move(other.buffers_);
@@ -448,13 +454,15 @@ void MeshBuffer::deallocate() {
     };
 
     auto mesh_device = mesh_device_.lock();
-    // A closed MeshDevice can outlive its close when something still references it, such as a tensor that a Python
-    // reference cycle keeps alive. Its devices are released by then, and their memory may belong to devices another
-    // MeshDevice has since opened on the same chips, so it is treated like one that is gone.
-    // Not is_initialized(): it is also false for a MeshDevice that was never initialized but whose devices are open,
-    // such as the parent create_unit_meshes() builds, and while the MeshDevice is open it queries every device and
-    // throws if they disagree, which must not happen in a destructor.
-    if (mesh_device && !mesh_device->impl().devices_released()) {
+    // The devices can close before this MeshBuffer is freed: a closed MeshDevice can outlive its close when something
+    // still references it, such as a tensor that a Python reference cycle keeps alive, and another MeshDevice may since
+    // have reopened the same chips. Their memory may then belong to the new devices, so nothing may be freed on them.
+    // Whether the devices are open comes from devices_lifetime_, not MeshDevice::is_initialized(): that is also false
+    // for a MeshDevice that was never initialized but whose devices are open, such as the parent create_unit_meshes()
+    // builds, and while the MeshDevice is open it queries every device and throws if they disagree, which must not
+    // happen in a destructor.
+    const bool devices_released = devices_lifetime_.expired();
+    if (mesh_device && !devices_released) {
         // Check HYBRID mode via rtoptions rather than mesh_device->allocator_impl() because:
         // 1. allocator_impl() crashes on remote-only MeshDevices (sub_device_manager_tracker_ is null).
         // 2. During teardown, device state may be partially destroyed, causing segfaults.
@@ -489,17 +497,21 @@ void MeshBuffer::deallocate() {
         return;
     }
 
-    // Free nothing on the devices: every Buffer, including each device's own allocation of a per-core MeshBuffer, is
-    // only marked as deallocated, which its destructor then skips.
+    // Here the MeshDevice is gone or its devices are released. Either way, the allocator that held its lockstep
+    // allocation is gone, so the backing Buffer is only marked as deallocated.
     if (std::holds_alternative<OwnedBufferState>(state_)) {
         auto& owned_state = std::get<OwnedBufferState>(state_);
         owned_state.backing_buffer->impl().mark_as_deallocated();
     }
-    // Also the Buffers that an explicit deallocate() keeps, such as a create_on_single_device() allocation. After a
-    // move, the values are empty, so a moved-from MeshBuffer has none.
-    for (auto& device_buffer : buffers_.values()) {
-        if (device_buffer.is_local() && device_buffer.value() != nullptr) {
-            device_buffer.value()->impl().mark_as_deallocated();
+    // If the devices are released, free nothing on them: mark every per-device Buffer as deallocated, so that its
+    // destructor leaves its device alone. That includes each device's own allocation of a per-core MeshBuffer and the
+    // Buffers an explicit deallocate() kept; a moved-from MeshBuffer has none. If only the MeshDevice is gone and the
+    // devices are open, the Buffers are left as they are, and their destructors free their allocations.
+    if (devices_released) {
+        for (auto& device_buffer : buffers_.values()) {
+            if (device_buffer.is_local() && device_buffer.value() != nullptr) {
+                device_buffer.value()->impl().mark_as_deallocated();
+            }
         }
     }
     set_deallocated_state();

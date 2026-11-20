@@ -154,9 +154,6 @@ private:
     // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
     bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
-    // The devices outlive this MeshDevice's close while another MeshDevice shares them, such as the parent of a
-    // submesh, and close only when the last MeshDevice that holds them releases them.
-    std::weak_ptr<ScopedDevices> scoped_devices_weak_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
     // The view's local devices, which the view fixes when it is constructed. Held here because the
@@ -444,9 +441,9 @@ public:
     bool close() override;
     bool close_impl(MeshDevice* pimpl_wrapper);
     static uint64_t close_count();  // MeshDevice closes so far.
-    /// Whether this MeshDevice's devices are closed: every MeshDevice that holds them, such as a submesh and its
-    /// parent, has released them.
-    bool devices_released() const { return scoped_devices_weak_.expired(); }
+    /// A handle that expires when this MeshDevice's devices close: every MeshDevice that holds them, such as a submesh
+    /// and its parent, has released them.
+    std::weak_ptr<const void> devices_lifetime() const { return scoped_devices_; }
     void enable_program_cache() override;
     void clear_program_cache() override;
     void disable_and_clear_program_cache() override;
