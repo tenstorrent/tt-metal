@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -20,7 +21,9 @@ from pathlib import Path
 
 from .busbar import GALAXY_DIR, SETUP_S, Step, run_step
 from .common import log
+from .galaxy import UBB_ETH_PORT_OF
 from .model import FAIL, PASS, SKIP, Check, Phase
+from .naming import chip
 
 PAIR_S, SWEEP_S, OP_TIMEOUT_S = 10, 300, 30
 DISCOVER = """import json, tt_umd as u
@@ -79,6 +82,36 @@ def _short(bdf: str) -> str:
     return bdf.replace("0000:", "")
 
 
+def _end(disc: dict, dev: int, channel: int) -> dict:
+    """One end of a link: the chip's BDF, tray and ASIC, the Ethernet channel and its port (type and number)."""
+    port = UBB_ETH_PORT_OF.get((chip(disc["bdfs"][dev])["asic"], channel))
+    return {**chip(disc["bdfs"][dev]), "channel": channel, "port": f"{port[0]} P{port[1]}" if port else None}
+
+
+def link_ends(disc: dict, a: int, b: int, channels: list[int]) -> list[dict]:
+    """The links of pair (a, b) by their *channels* on chip a, each end named by tray, port, ASIC and BDF."""
+    return [{"a": _end(disc, a, ch), "b": _end(disc, b, disc["links"][a][ch][1])} for ch in channels]
+
+
+BDF = re.compile(r"\b(?:0000:)?[0-9a-f]{2}:00\.0\b")
+
+
+def name_chips(report: dict) -> None:
+    """Add to every check of the *report*: ``bdf``, ``tray`` and ``asic`` (parallel lists, one entry per Galaxy chip the check
+    names in its name, details or data; empty when it names none) and ``link_ends`` (the ends of the links its data names).
+    """
+    for phase in report["phases"].values():
+        for c in phase["checks"]:
+            text = " ".join((c["name"], c["details"], json.dumps(c["data"], default=str)))
+            chips = {}
+            for m in BDF.findall(text):
+                bdf = m if m.startswith("0000:") else f"0000:{m}"
+                if (n := chip(bdf))["tray"] is not None:
+                    chips.setdefault(bdf, n)
+            c["bdf"], c["tray"], c["asic"] = ([n[k] for n in chips.values()] for k in ("bdf", "tray", "asic"))
+            c["link_ends"] = c["data"].get("link_ends", [])
+
+
 def pair_test(
     phase: Phase, out: Path, name: str, seconds: int, disc: dict, dry_run: bool = False, sys_root: str = "/sys"
 ) -> bool:
@@ -94,10 +127,12 @@ def pair_test(
     for r in rounds:
         jobs = []
         for a, b, ch in r:
-            ba, bb = disc["bdfs"][a], disc["bdfs"][b]
+            ba, bb, ends = disc["bdfs"][a], disc["bdfs"][b], link_ends(disc, a, b, ch)
             lab, idx = f"{_short(ba)}-{_short(bb)}", umd_index([ba, bb], sys_root)
             if idx is None:
-                failed.append({"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened"})
+                failed.append(
+                    {"pair": lab, "channels": ch, "why": "a chip has no tt-kmd node: not opened", "ends": ends}
+                )
                 continue
             env = {
                 **os.environ,
@@ -123,12 +158,13 @@ def pair_test(
                     (
                         lab,
                         ch,
+                        ends,
                         subprocess.Popen(
                             argv, cwd=GALAXY_DIR, env=env, stdout=f, stderr=subprocess.STDOUT, start_new_session=True
                         ),
                     )
                 )
-        for lab, ch, p in jobs:
+        for lab, ch, ends, p in jobs:
             try:
                 rc = p.wait(timeout=seconds + SETUP_S)
             except subprocess.TimeoutExpired:
@@ -136,9 +172,11 @@ def pair_test(
                 p.wait()
                 rc = None
             if rc:
-                failed.append({"pair": lab, "channels": ch, "why": "data mismatch" if rc == 4 else f"rc {rc}"})
+                failed.append(
+                    {"pair": lab, "channels": ch, "why": "data mismatch" if rc == 4 else f"rc {rc}", "ends": ends}
+                )
             elif rc is None:
-                failed.append({"pair": lab, "channels": ch, "why": "hung"})
+                failed.append({"pair": lab, "channels": ch, "why": "hung", "ends": ends})
     what = "; ".join(f"{f['pair']} (channels {','.join(map(str, f['channels']))}): {f['why']}" for f in failed)
     phase.add(
         Check(
@@ -146,7 +184,13 @@ def pair_test(
             status=FAIL if failed else PASS,
             ip="eth",
             details=what[:400] or f"{n} linked pairs, {len(rounds)} rounds",
-            data={"pairs": n, "rounds": len(rounds), "failed": failed, "dir": str(d)},
+            data={
+                "pairs": n,
+                "rounds": len(rounds),
+                "failed": failed,
+                "link_ends": [e for f in failed for e in f["ends"]],
+                "dir": str(d),
+            },
         )
     )
     return bool(failed)
