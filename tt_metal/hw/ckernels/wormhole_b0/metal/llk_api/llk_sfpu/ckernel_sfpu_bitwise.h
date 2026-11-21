@@ -30,11 +30,32 @@ inline Vec compute_unary_bitwise(Vec v, Vec scalar) {
     }
 }
 
-inline void bitwise_and_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+// The store in calculate_sfpu_unary_bitwise advances the destination by one SFPU row
+// (dest.incr = 2, what dst_reg++ does) through ADDR_MOD_6, so each row saves a TTINCRWC.
+// The unary SFPU init runs this per-op init rather than the ADDR_MOD_6 whitelist in
+// eltwise_unary_sfpu_configure_addrmod, so the address mod is programmed here (as square_init
+// and unary_max_min_init do).
+// A throttled matmul (MM_THROTTLE > 0) programs ADDR_MOD_6 for its own MOP, and the fused-activation
+// matmul / conv kernels run matmul_block and the activation back to back without re-running either
+// init, so in a kernel built with MM_THROTTLE neither bitwise_init nor the kernel touches ADDR_MOD_6.
+#if defined(MM_THROTTLE) && MM_THROTTLE > 0
+constexpr bool BITWISE_STORE_INCR = false;
+#else
+constexpr bool BITWISE_STORE_INCR = true;
+#endif
 
-inline void bitwise_or_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void bitwise_init() {
+    if constexpr (BITWISE_STORE_INCR) {
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 2}}.set(ADDR_MOD_6);
+    }
+    math::reset_counters(p_setrwc::SET_ABD_F);
+}
 
-inline void bitwise_xor_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
+inline void bitwise_and_init() { bitwise_init(); }
+
+inline void bitwise_or_init() { bitwise_init(); }
+
+inline void bitwise_xor_init() { bitwise_init(); }
 
 template <
     bool APPROXIMATION_MODE,
@@ -52,8 +73,15 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vUInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>();
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = compute_unary_bitwise<BITWISE_OP>(v, scalar);
-            sfpi::dst_reg++;
+            // ADDR_MOD_6 (bitwise_init) advances the destination on the store, in place of a
+            // separate dst_reg++. Wormhole's SFPU load and store pick ADDR_MOD_4..7 with a
+            // two-bit field, so ADDR_MOD_6 is selected as 2, as in square and unary max/min.
+            if constexpr (BITWISE_STORE_INCR) {
+                sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>(ADDR_MOD_2) = compute_unary_bitwise<BITWISE_OP>(v, scalar);
+            } else {
+                sfpi::dst_reg[0].mode<sfpi::DataLayout::U16>() = compute_unary_bitwise<BITWISE_OP>(v, scalar);
+                sfpi::dst_reg++;
+            }
         }
     } else {
         // I32 layout loads vInt, so `scalar` must be vInt to match `v`.
@@ -61,8 +89,13 @@ inline void calculate_sfpu_unary_bitwise(const uint value) {
 #pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             sfpi::vInt v = sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>();
-            sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = compute_unary_bitwise<BITWISE_OP>(v, scalar);
-            sfpi::dst_reg++;
+            // See the UInt16 branch: the store advances the destination through ADDR_MOD_6.
+            if constexpr (BITWISE_STORE_INCR) {
+                sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>(ADDR_MOD_2) = compute_unary_bitwise<BITWISE_OP>(v, scalar);
+            } else {
+                sfpi::dst_reg[0].mode<sfpi::DataLayout::I32>() = compute_unary_bitwise<BITWISE_OP>(v, scalar);
+                sfpi::dst_reg++;
+            }
         }
     }
 }
