@@ -18,7 +18,7 @@ on:
       k3_mla_perf:
         type: boolean
         default: false
-        description: "K3 > k3_mla_perf"
+        description: "K3 > k3_mla_perf (every K3 perf leg: KDA, MLA, AttnRes, sparse MLA, MoE block)"
       k3_accuracy_suite:
         type: boolean
         default: false

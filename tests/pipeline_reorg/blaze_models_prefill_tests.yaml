@@ -461,7 +461,8 @@
     mpirun --bind-to none --pernode --tag-output bash -lc '
       set -e
       export OMP_NUM_THREADS=$(nproc)
-      python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager" -vvv --tb=short
+      # (the block perf gate, test_moe_block_perf, runs in the MoE perf leg below, on the 14 kW pool its baselines are cut on)
+      python3 -m pytest models/demos/deepseek_v3_d_p/tests/moe_block/test_moe_block_models.py -k "kimi_k3-8x4-5120 and not weka and not eager and not test_moe_block_perf" -vvv --tb=short
     '
   test_type: kimi_k3_moe
   test_tags: [kimi_k3, moe]
@@ -469,6 +470,49 @@
   skus:
     bh_sc1:
       timeout: 52
+      tier: 2
+      release_ready: false
+  owner_id: U08RL15T4N8 # Danilo Djekic
+  team: models
+  budget_type: demo
+  sp_config: sc1
+
+
+- name: "(Kimi-K3-2.8T, Kimi-K3.1) MoE block perf 8x4 5k, 4x4 2.5k"
+  # One MoE layer on the MoE block at each model's stage: K3 on the 8x4 Galaxy at 5,120 tokens, K3.1's production 4x4
+  # stage (top tray half, SP=4 on mesh axis 1) at 2,560. Each gates host time (test_kimi_moe_perf: untraced fastest of
+  # 10, traced one replay, two-sided bands) and the block's per-op traced device time (test_moe_block_perf, BLOCK_US).
+  # Every check runs and reports even if one before it fails; each must pass at least one test, so a case that skips
+  # (a mesh-topology mismatch) fails the leg rather than turning it green with nothing measured.
+  # test_tags carries k3_mla_perf so the dispatch's "K3 > k3_mla_perf" checkbox selects every K3 perf leg (the
+  # workflow is at GitHub's 25-input limit, so this leg has no checkbox of its own).
+  fabric_profile: torus_xy
+  cmd: |
+    export TT_METAL_SHM_TRACKING_DISABLED=1
+    export LOGURU_LEVEL=INFO
+
+    mpirun --bind-to none --pernode --tag-output bash -lc '
+      export OMP_NUM_THREADS=$(nproc)
+      T=models/demos/deepseek_v3_d_p/tests
+      rc=0
+      gated() {
+        "$@" 2>&1 | tee /tmp/k3_moe_perf.out
+        local status=${PIPESTATUS[0]}
+        grep -qE "[0-9]+ passed" /tmp/k3_moe_perf.out || { echo "::error::k3_moe_perf: no test passed (skipped?): $*"; return 1; }
+        return $status
+      }
+      gated python3 -m pytest $T/perf/test_kimi_moe_perf.py -k "kimi_k3-8x4-5120" -vvv --tb=short || rc=1
+      gated python3 -m pytest $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3-8x4-5120 and not weka and not real" -vvv --tb=short || rc=1
+      gated $T/run_4x4_stage_tests.sh --half top -- $T/perf/test_kimi_moe_perf.py -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short || rc=1
+      gated $T/run_4x4_stage_tests.sh --half top -- $T/moe_block/test_moe_block_models.py::test_moe_block_perf -k "kimi_k3_1-4x4-sp1-2560" -vvv --tb=short || rc=1
+      exit $rc
+    '
+  test_type: k3_moe_perf
+  test_tags: [kimi_k3, kimi_k3_1, moe, k3_mla_perf]
+  test_group: module
+  skus:
+    bh_sc1_high_power:
+      timeout: 30
       tier: 2
       release_ready: false
   owner_id: U08RL15T4N8 # Danilo Djekic
