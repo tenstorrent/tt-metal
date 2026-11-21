@@ -99,6 +99,20 @@ void SparsePushPlanDeviceOperation::validate_on_program_cache_miss(
             dense_slot_rows(attrs, num_devices),
             attrs.max_rows / num_devices);
     }
+    if (attrs.dense_below_2 > 0) {
+        TT_FATAL(
+            attrs.dense_below_2 > attrs.dense_below &&
+                (attrs.chunk_start.has_value() || args.chunk_start_tensor.has_value()),
+            "sparse push plan dense_below_2 {} must be above dense_below {} and needs a chunk start",
+            attrs.dense_below_2,
+            attrs.dense_below);
+        TT_FATAL(
+            uint64_t{dense_slot_rows(attrs.stripe_chunk, attrs.dense_below_2, num_devices)} * num_devices <=
+                attrs.max_rows,
+            "sparse push plan: dense_below_2 {} needs more rows per chip than the cache's {}",
+            attrs.dense_below_2,
+            attrs.max_rows / num_devices);
+    }
     if (args.chunk_start_tensor.has_value()) {
         const auto& start = *args.chunk_start_tensor;
         TT_FATAL(
@@ -117,7 +131,13 @@ ttsl::hash::hash_t SparsePushPlanDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     // A host chunk start is a runtime arg: only whether there is one, and in which form, shapes the program.
     return tt::tt_metal::operation::hash_operation<SparsePushPlanDeviceOperation>(
-        attrs.stripe_chunk, attrs.max_rows, attrs.page_bytes, attrs.chunk_start.has_value(), attrs.dense_below, args);
+        attrs.stripe_chunk,
+        attrs.max_rows,
+        attrs.page_bytes,
+        attrs.chunk_start.has_value(),
+        attrs.dense_below,
+        attrs.dense_below_2,
+        args);
 }
 
 SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation::compute_output_specs(
@@ -125,24 +145,36 @@ SparsePushPlanDeviceOperation::spec_return_value_t SparsePushPlanDeviceOperation
     const auto layout = PlanTableLayout::make(attrs.max_rows, attrs.stripe_chunk);
     const tt::tt_metal::TensorLayout rm(
         DataType::UINT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), MemoryConfig{BufferType::DRAM});
-    return {
+    spec_return_value_t specs = {
         tt::tt_metal::TensorSpec(Shape({1, 1, layout.pages, PlanTableLayout::kPageWords}), rm),
         tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm)};
+    if (attrs.dense_below_2 > 0) {
+        specs.push_back(tt::tt_metal::TensorSpec(args.indices.logical_shape(), rm));
+    }
+    return specs;
 }
 
 SparsePushPlanDeviceOperation::topology_return_value_t SparsePushPlanDeviceOperation::compute_output_topologies(
-    const operation_attributes_t&, const tensor_args_t& args) {
+    const operation_attributes_t& attrs, const tensor_args_t& args) {
     // Each chip plans its own top-k, so the tables differ: sharded on their rows over every chip in row-major order,
     // the order high_bw_all_gather's full-mesh ring gathers them in. The compact indices are per chip, like the
     // indices they rewrite.
-    return {rows_over_every_chip(args.indices.device()->shape()), args.indices.tensor_topology()};
+    topology_return_value_t topologies = {
+        rows_over_every_chip(args.indices.device()->shape()), args.indices.tensor_topology()};
+    if (attrs.dense_below_2 > 0) {
+        topologies.push_back(args.indices.tensor_topology());
+    }
+    return topologies;
 }
 
 SparsePushPlanDeviceOperation::tensor_return_value_t SparsePushPlanDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     auto specs = compute_output_specs(attrs, args);
-    return {
-        create_device_tensor(specs[0], args.indices.device()), create_device_tensor(specs[1], args.indices.device())};
+    tensor_return_value_t outputs;
+    for (const auto& spec : specs) {
+        outputs.push_back(create_device_tensor(spec, args.indices.device()));
+    }
+    return outputs;
 }
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push
@@ -156,7 +188,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start,
     const std::optional<Tensor>& chunk_start_tensor,
-    uint32_t dense_below) {
+    uint32_t dense_below,
+    uint32_t dense_below_2) {
     using Op = ttnn::operations::experimental::sparse_kv_push::SparsePushPlanDeviceOperation;
     return ttnn::device_operation::launch<Op>(
         Op::operation_attributes_t{
@@ -164,7 +197,8 @@ std::vector<Tensor> sparse_push_plan(
             .max_rows = max_rows,
             .page_bytes = page_bytes,
             .chunk_start = chunk_start,
-            .dense_below = dense_below},
+            .dense_below = dense_below,
+            .dense_below_2 = dense_below_2},
         Op::tensor_args_t{.indices = indices, .chunk_start_tensor = chunk_start_tensor});
 }
 

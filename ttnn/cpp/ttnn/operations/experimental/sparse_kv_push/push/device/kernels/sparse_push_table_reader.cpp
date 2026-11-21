@@ -134,7 +134,8 @@ void kernel_main() {
             header[plan_table::kWordNumDevices] == num_devices && header[plan_table::kWordStripeChunk] == stripe_chunk);
         ASSERT(header[plan_table::kWordPagesPerPacket] == pages_per_packet && header[plan_table::kWordBanks] == banks);
         ASSERT(part != PushPart::kRest || header[plan_table::kWordHasSplit] != 0);
-        if (header[plan_table::kWordDense] != 0) {
+        static_assert(PUSH_DENSE_WORD == plan_table::kWordDense || PUSH_DENSE_WORD == plan_table::kWordDense2);
+        if (header[PUSH_DENSE_WORD] != 0) {
             return;  // dense mode: nothing to push, and the writer reads the same flag and skips the packets
         }
 

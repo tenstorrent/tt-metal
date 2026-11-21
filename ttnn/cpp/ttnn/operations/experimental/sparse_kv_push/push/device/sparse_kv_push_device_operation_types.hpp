@@ -23,6 +23,9 @@ struct SparseKvPushParams {
     uint32_t num_links = 2;
     CoreRangeSet core_grid;
     tt::tt_fabric::FabricConfig fabric_config = tt::tt_fabric::FabricConfig::DISABLED;
+    // Skip (push nothing) when the plan's second dense threshold (sparse_push_plan dense_below_2) is met, not its
+    // first.
+    bool second_dense = false;
 
     // Not hashed: runtime args, patched and validated on every dispatch.
     // Required; optional only because GlobalSemaphore is not default constructible and the params are reflected.

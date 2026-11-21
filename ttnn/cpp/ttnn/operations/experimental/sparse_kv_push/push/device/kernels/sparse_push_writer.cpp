@@ -99,12 +99,11 @@ void kernel_main() {
     // This chip's own plan table says whether this chunk is in dense mode. Its first header words land in the
     // packet header slots, which no packet uses yet (one aligned DRAM read).
     const auto table = TensorAccessor(table_args, table_addr, sparse_push::plan_table::kPageBytes);
-    static_assert(sparse_push::plan_table::kWordDense * sizeof(uint32_t) < sparse_push::kDramReadAlign);
+    static_assert(PUSH_DENSE_WORD * sizeof(uint32_t) < sparse_push::kDramReadAlign);
     noc_async_read(table.get_noc_addr(my_rank * table_pages), headers_l1, sparse_push::kDramReadAlign);
     noc_async_read_barrier();
     invalidate_l1_cache();
-    const bool dense =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1)[sparse_push::plan_table::kWordDense] != 0;
+    const bool dense = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(headers_l1)[PUSH_DENSE_WORD] != 0;
 
     auto run = [&](auto& mux_conn) {
         // Start fence.

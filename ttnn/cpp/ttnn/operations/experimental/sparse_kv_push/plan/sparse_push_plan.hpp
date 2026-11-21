@@ -22,7 +22,8 @@ std::vector<Tensor> sparse_push_plan(
     uint32_t page_bytes,
     std::optional<uint32_t> chunk_start = std::nullopt,
     const std::optional<Tensor>& chunk_start_tensor = std::nullopt,
-    uint32_t dense_below = 0);
+    uint32_t dense_below = 0,
+    uint32_t dense_below_2 = 0);
 
 }  // namespace ttnn::operations::experimental::sparse_kv_push
 

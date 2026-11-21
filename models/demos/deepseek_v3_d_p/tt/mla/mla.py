@@ -2742,6 +2742,14 @@ class ttMLA:
             if failed:
                 self.tt_ccl.reset_sparse_mla_overlap_semaphores()
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
+        # With shared successors (GLM), one plan serves this layer and them: built at the shared layers' threshold, it
+        # also writes this layer's indices for its own (higher) cutoff, and this layer's push skips below that cutoff.
+        # Above both thresholds the two plans would be identical.
+        shared_plan = (
+            self._push_prefetch_grids is not None
+            and 0 < self._push_dense_below < dense_below
+            and os.environ.get("SPARSE_MLA_FULL_PUSH_ONE_PLAN", "1") == "1"
+        )
         plan = self._push.plan(
             indices,
             stripe_chunk=self._push_stripe_chunk,
@@ -2749,7 +2757,8 @@ class ttMLA:
             max_rows=self._sparse_kv_gather_buffer.shape[2],
             chunk_start=kv_actual_isl or 0,
             chunk_start_tensor=metadata[1],
-            dense_below=dense_below,
+            dense_below=self._push_dense_below if shared_plan else dense_below,
+            dense_below_2=dense_below if shared_plan else 0,
         )
         compact = ttnn.experimental.sparse_kv_push(
             storage,
@@ -2762,6 +2771,7 @@ class ttMLA:
             **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
             ready_semaphore=self._push.ready_semaphore,
             done_semaphore=self._push.done_semaphore,
+            second_dense=shared_plan,
         )
         # The next (shared) layer's prefix push needs the shared layers' plan, the one that layer looks up.
         prefetch = None
@@ -2772,7 +2782,7 @@ class ttMLA:
         output_attn = self._finish_sparse_chunked_attn(
             tt_q=tt_q,
             kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
-            indices=plan.compact_indices,
+            indices=plan.compact_indices_2 if shared_plan else plan.compact_indices,
             kvpe_cache=kvpe_cache,
             seq_len_local=seq_len_local,
             prefetch=prefetch,

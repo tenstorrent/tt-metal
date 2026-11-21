@@ -105,7 +105,8 @@ tt::tt_fabric::FabricMuxConfig mux_config(
 }
 
 // Both kernels look up every destination's first hop, indexed by row-major rank.
-tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed::MeshDevice* mesh_device) {
+tt::tt_metal::KernelDescriptor::Defines kernel_defines(
+    tt::tt_metal::distributed::MeshDevice* mesh_device, bool second_dense) {
     const auto mesh_shape = mesh_device->get_view().shape();
     std::vector<uint32_t> chip_ids, mesh_ids;
     for (const auto& coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
@@ -117,6 +118,8 @@ tt::tt_metal::KernelDescriptor::Defines kernel_defines(tt::tt_metal::distributed
         {"DEST_CHIP_ID", ttnn::operations::ccl::common::stringify(chip_ids)},
         {"DEST_MESH_ID", ttnn::operations::ccl::common::stringify(mesh_ids)},
         {"FABRIC_2D", "1"},
+        // The plan header word that says this push sends nothing.
+        {"PUSH_DENSE_WORD", second_dense ? "9" : "8"},
     };
 }
 
@@ -255,7 +258,7 @@ tt::tt_metal::ProgramDescriptor SparseKvPushProgramFactory::create_descriptor(
     const auto layout =
         core_layout(params.core_grid, params.num_links, fabric_directions(mesh_device, coord, params.num_links));
     const auto mux = mux_config(mesh_device, desc, layout);
-    const auto defines = kernel_defines(mesh_device);
+    const auto defines = kernel_defines(mesh_device, params.second_dense);
     const uint32_t page_bytes = tensor_args.input_tensor.buffer()->aligned_page_size();
     const auto shape = packet_shape(mesh_device, page_bytes);
     const uint32_t packet_bytes = shape.pages_per_packet * page_bytes;

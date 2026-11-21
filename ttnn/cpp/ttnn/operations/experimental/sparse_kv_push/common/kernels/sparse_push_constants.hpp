@@ -39,6 +39,7 @@ constexpr uint32_t kWordPagesPerPacket = 5;
 constexpr uint32_t kWordBanks = 6;
 constexpr uint32_t kWordHasSplit = 7;  // built with a chunk start; without one, every row is in the prefix
 constexpr uint32_t kWordDense = 8;     // the chunk start is below dense_below: no rows to push (owner counts are 0)
+constexpr uint32_t kWordDense2 = 9;    // the chunk start is below dense_below_2 (a push with second_dense skips)
 
 // Word offsets of the sections.
 constexpr uint32_t kOwnerOff = 32;
@@ -149,6 +150,7 @@ enum Cb : uint32_t {
     kMisc = 6,         // single words shared by the workers (kMisc* below)
     kBuckets = 7,      // step 1's buckets, then step 2's copy lists
     kWordRanks = 8,    // [word]: the owner's needed rows before the word, within its range
+    kIdx2 = 9,         // with dense_below_2: this core's indices in the second dense layout
 };
 
 // kDirtyMaps: three arrays of dirty_array_words(cores) words.

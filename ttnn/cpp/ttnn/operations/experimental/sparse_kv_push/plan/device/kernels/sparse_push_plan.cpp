@@ -52,13 +52,18 @@ void kernel_main() {
     constexpr bool is_helper = get_compile_time_arg_val(11) != 0;
     constexpr uint32_t dense_below = get_compile_time_arg_val(12);      // dense mode below this chunk start (0: off)
     constexpr uint32_t dense_slot_rows = get_compile_time_arg_val(13);  // a chip's slot in the dense layout
+    // A second, higher dense threshold for a third output (0: off): see SparsePushPlanParams::dense_below_2.
+    constexpr uint32_t dense_below_2 = get_compile_time_arg_val(14);
+    constexpr uint32_t dense_slot_rows_2 = get_compile_time_arg_val(15);
+    constexpr bool has_compact2 = dense_below_2 != 0;
     constexpr uint32_t max_rows = bitmap_words * kRowsPerWord;
     constexpr uint32_t range_words = owner_stride(num_devices);  // a range's partials
-    constexpr auto indices_args = TensorAccessorArgs<14>();
+    constexpr auto indices_args = TensorAccessorArgs<16>();
     constexpr auto table_args = TensorAccessorArgs<indices_args.next_compile_time_args_offset()>();
     constexpr auto compact_args = TensorAccessorArgs<table_args.next_compile_time_args_offset()>();
+    constexpr auto compact2_args = TensorAccessorArgs<compact_args.next_compile_time_args_offset()>();
     constexpr auto split_args =
-        TensorAccessorArgs<split_source == kSplitTensor ? compact_args.next_compile_time_args_offset() : 0>();
+        TensorAccessorArgs<split_source == kSplitTensor ? compact2_args.next_compile_time_args_offset() : 0>();
     constexpr uint32_t words_per_block = stripe_chunk / sparse_push::plan_table::kRowsPerWord;
     constexpr uint32_t index_bytes = sizeof(uint32_t);  // one top-k index
     constexpr uint32_t word_bytes = sizeof(uint32_t);   // one bitmap / table / scratch word
@@ -82,6 +87,7 @@ void kernel_main() {
     const uint32_t brisc_indices = index_count / 2;  // BRISC writes back idx [0, this), NCRISC the rest
     // The chunk start: its tensor's address (kSplitTensor) or the row itself (kSplitValue).
     const uint32_t split_arg = has_split ? get_arg_val<uint32_t>(arg++) : 0;
+    const uint32_t compact2_addr = has_compact2 ? get_arg_val<uint32_t>(arg++) : 0;
     // Common runtime args: every core's (x, y), core 0 first, then the multicast rectangle of all of them.
     // NoC address of `l1` on plan core `core`.
     auto core_noc_addr = [&](uint32_t core, uint32_t l1) {
@@ -102,6 +108,7 @@ void kernel_main() {
     const auto indices = TensorAccessor(indices_args, indices_addr, topk * sizeof(uint32_t));
     const auto table = TensorAccessor(table_args, table_addr, table_page_bytes);
     const auto compact = TensorAccessor(compact_args, compact_addr, topk * sizeof(uint32_t));
+    const auto compact2 = TensorAccessor(compact2_args, compact2_addr, topk * sizeof(uint32_t));
 
     const uint32_t table_image_l1 = get_write_ptr(kTableImage);
     const uint32_t idx_l1 = get_write_ptr(kIdx);
@@ -214,23 +221,67 @@ void kernel_main() {
             i += len;
         }
     };
-    // Writes the rewritten positions [first_pos, end_pos) of idx back to the compact indices, once every worker has
-    // rewritten its share. BRISC and NCRISC each take half.
-    auto write_back = [&](uint32_t first_pos, uint32_t end_pos) {
-        for (uint32_t w = 0; w < kWorkers; ++w) {
-            wait_at_least(sem_done(w), kRewritten);
-        }
+    // Writes positions [first_pos, end_pos) of the L1 indices at src_l1 to the same positions of `out`.
+    auto write_positions = [&](uint32_t src_l1, const auto& out, uint32_t first_pos, uint32_t end_pos) {
         for_each_run([&](uint32_t index_row, uint32_t col, uint32_t pos, uint32_t len) {
             // The part of this run inside [first_pos, end_pos).
             const uint32_t from = std::max(pos, first_pos), to = std::min(pos + len, end_pos);
             if (from < to) {
                 noc_async_write(
-                    idx_l1 + from * index_bytes,
-                    compact.get_noc_addr(index_row) + (col + from - pos) * index_bytes,
+                    src_l1 + from * index_bytes,
+                    out.get_noc_addr(index_row) + (col + from - pos) * index_bytes,
                     (to - from) * index_bytes);
             }
         });
+    };
+    // With dense_below_2 and the chunk start below it: the third output is this worker's share of the indices in the
+    // second dense layout, rewritten from the originals before the in-place rewrite below. Otherwise it gets the same
+    // indices as the second output (write_back).
+    const uint32_t idx2_l1 = has_compact2 ? get_write_ptr(kIdx2) : 0;
+    auto dense2 = [&]() { return has_compact2 && misc[kMiscSplit] < dense_below_2; };
+    auto dense2_rewrite_and_write = [&](uint32_t worker) {
+        if constexpr (has_compact2) {
+            auto* idx2 = reinterpret_cast<uint32_t*>(idx2_l1);
+            const uint32_t begin = share_begin(index_count, worker), end = share_begin(index_count, worker + 1);
+            for (uint32_t i = begin; i < end; ++i) {
+                const uint32_t row = idx[i];
+                if (row >= max_rows) {
+                    idx2[i] = kSentinel;
+                    continue;
+                }
+                const uint32_t block = row / stripe_chunk;
+                idx2[i] = (block % num_devices) * dense_slot_rows_2 + (block / num_devices) * stripe_chunk +
+                          row % stripe_chunk;
+            }
+            write_positions(idx2_l1, compact2, begin, end);
+        }
+    };
+    // Writes the rewritten positions [first_pos, end_pos) of idx back to the compact indices (and to the third output
+    // when it takes the same ones), once every worker has rewritten its share. BRISC and NCRISC each take half.
+    auto write_back = [&](uint32_t first_pos, uint32_t end_pos) {
+        for (uint32_t w = 0; w < kWorkers; ++w) {
+            wait_at_least(sem_done(w), kRewritten);
+        }
+        write_positions(idx_l1, compact, first_pos, end_pos);
+        if (has_compact2 && !dense2()) {
+            write_positions(idx_l1, compact2, first_pos, end_pos);
+        }
         noc_async_write_barrier();
+    };
+
+    // Dense mode: every index becomes its row in the dense gather's layout, plain arithmetic, so no step before the
+    // rewrite is needed.
+    auto dense_rewrite = [&](uint32_t worker) {
+        rewrite<num_devices, max_rows, stripe_chunk, range_blocks, pages_per_packet, banks, dense_slot_rows>(
+            idx,
+            share_begin(index_count, worker),
+            share_begin(index_count, worker + 1),
+            bitmap,
+            word_ranks,
+            partials,
+            misc + kMiscBase,
+            true);
+        post(sem_done(worker), kRewritten);
     };
 
     // NCRISC (worker 1): follows BRISC's steps, does its half, and the second half of the NoC pushes and
@@ -240,6 +291,19 @@ void kernel_main() {
 
         // 1. Scatter, map the dirty chunks and push the second half of the dirty copies.
         wait_for_step(kStepScatter);
+        if constexpr (dense_below != 0 || has_compact2) {
+            invalidate_l1_cache();
+        }
+        if (dense2()) {
+            dense2_rewrite_and_write(worker);
+        }
+        if constexpr (dense_below != 0) {
+            if (is_dense<dense_below>(misc)) {  // dense mode: only the arithmetic rewrite (see run_driver)
+                dense_rewrite(worker);
+                write_back(brisc_indices, index_count);
+                return;
+            }
+        }
         scatter_and_map(worker);
         push(brisc_reducers, cores);
         post(sem_done(worker), kPushed);  // report only: BRISC waits for it
@@ -335,6 +399,29 @@ void kernel_main() {
             }
         };
 
+        // Core 0: the header and per-owner counts (filled in table_image), written to the table. In dense mode the
+        // dense gather fills the buffer and the push finds no rows: every owner count is 0.
+        auto write_header = [&](bool dense, uint32_t active_blocks, uint32_t split_block) {
+            using namespace sparse_push::plan_table;
+            if (dense) {
+                for (uint32_t owner = 0; owner < num_devices; ++owner) {
+                    table_image[kOwnerOff + owner] = 0;
+                    table_image[kOwnerPrefixOff + owner] = 0;
+                }
+            }
+            table_image[kWordMagic] = kMagic;
+            table_image[kWordNumDevices] = num_devices;
+            table_image[kWordStripeChunk] = stripe_chunk;
+            table_image[kWordActiveBlocks] = active_blocks;
+            table_image[kWordSplitBlock] = split_block;
+            table_image[kWordPagesPerPacket] = pages_per_packet;
+            table_image[kWordBanks] = banks;
+            table_image[kWordHasSplit] = has_split ? 1 : 0;
+            table_image[kWordDense] = dense ? 1 : 0;
+            table_image[kWordDense2] = (dense || dense2()) ? 1 : 0;
+            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts
+        };
+
         // 0. Load.
         for_each_run([&](uint32_t index_row, uint32_t col, uint32_t pos, uint32_t len) {
             noc_async_read(
@@ -346,6 +433,24 @@ void kernel_main() {
         } else if constexpr (split_source == kSplitValue) {
             misc[kMiscSplit] = split_arg;
         }
+        if constexpr (dense_below != 0) {
+            // Dense mode skips every step before the rewrite: the indices and the chunk start are all it reads.
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            if (is_dense<dense_below>(misc)) {
+                post(sem_step, kStepScatter);
+                if (dense2()) {
+                    dense2_rewrite_and_write(worker);
+                }
+                dense_rewrite(worker);
+                wait_workers(kRewritten);
+                if (core_idx == 0) {
+                    write_header(/*dense=*/true, /*active_blocks=*/0, misc[kMiscSplit] / stripe_chunk);
+                }
+                write_back(0, brisc_indices);
+                return;
+            }
+        }
         zero(table_image_l1 + bitmap_off * word_bytes, bitmap_words * word_bytes);
         zero(dirty_chunks_l1, l1_transfer_bytes(total_chunks));  // one byte per chunk
         zero(column_l1, array_words * word_bytes);
@@ -354,6 +459,9 @@ void kernel_main() {
 
         // 1. Scatter, map the dirty chunks and push the dirty copies to their reducers.
         post(sem_step, kStepScatter);
+        if (dense2()) {
+            dense2_rewrite_and_write(worker);
+        }
         scatter_and_map(worker);
         uint32_t my_row_end = 0;  // largest row this core needs + 1
         for (uint32_t w = 0; w < kWorkers; ++w) {
@@ -427,14 +535,8 @@ void kernel_main() {
         if (core_idx == 0) {
             const uint32_t* totals = misc + kMiscTotals;
             const uint32_t split_block = has_split ? misc[kMiscSplit] / stripe_chunk : active_blocks;
-            const bool dense = is_dense<dense_below>(misc);
             using namespace sparse_push::plan_table;
             for (uint32_t owner = 0; owner < num_devices; ++owner) {
-                if (dense) {  // the dense gather fills the buffer; the push finds no rows and sends nothing
-                    table_image[kOwnerOff + owner] = 0;
-                    table_image[kOwnerPrefixOff + owner] = 0;
-                    continue;
-                }
                 table_image[kOwnerOff + owner] = totals[owner];
                 // Rows of the owner before the split = its rank at its first block at or after the split block.
                 const uint32_t first_from_split =
@@ -445,16 +547,7 @@ void kernel_main() {
                               word_ranks[first_from_split * words_per_block]
                         : totals[owner];
             }
-            table_image[kWordMagic] = kMagic;
-            table_image[kWordNumDevices] = num_devices;
-            table_image[kWordStripeChunk] = stripe_chunk;
-            table_image[kWordActiveBlocks] = active_blocks;
-            table_image[kWordSplitBlock] = split_block;
-            table_image[kWordPagesPerPacket] = pages_per_packet;
-            table_image[kWordBanks] = banks;
-            table_image[kWordHasSplit] = has_split ? 1 : 0;
-            table_image[kWordDense] = dense ? 1 : 0;
-            write_span(0, bitmap_off * word_bytes);  // header and per-owner counts
+            write_header(/*dense=*/false, active_blocks, split_block);
         }
         write_back(0, brisc_indices);
     };

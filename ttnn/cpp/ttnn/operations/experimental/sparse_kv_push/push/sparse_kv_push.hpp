@@ -32,7 +32,9 @@ Tensor sparse_kv_push(
     const std::optional<Tensor>& batch_index_tensor = std::nullopt,
     uint32_t batch_slot_num_layers = 1,
     uint32_t batch_slot_layer_idx = 0,
-    const std::optional<CoreRangeSet>& core_grid = std::nullopt);
+    const std::optional<CoreRangeSet>& core_grid = std::nullopt,
+    // Skip when the plan's second dense threshold (sparse_push_plan dense_below_2) is met instead of its first.
+    bool second_dense = false);
 
 // Whether the push and its plan can serve a cache of max_rows rows in blocks of stripe_chunk rows on this mesh with
 // num_links links: a 2D fabric (FABRIC_2D or a torus on either or both axes) on a 2D mesh of 2 to 32 chips that every

@@ -232,6 +232,7 @@ ttsl::hash::hash_t program_hash(const SparseKvPushParams& params, const SparseKv
         params.num_links,
         params.core_grid,
         params.fabric_config,
+        params.second_dense,
         mesh_device->shape(),
         tensor_args.input_tensor.tensor_spec(),
         tensor_args.output_tensor.tensor_spec(),
@@ -315,7 +316,8 @@ Tensor sparse_kv_push(
     const std::optional<Tensor>& batch_index_tensor,
     uint32_t batch_slot_num_layers,
     uint32_t batch_slot_layer_idx,
-    const std::optional<CoreRangeSet>& core_grid) {
+    const std::optional<CoreRangeSet>& core_grid,
+    bool second_dense) {
     using namespace ttnn::operations::experimental::sparse_kv_push;
     auto* mesh_device = input_tensor.device();
     TT_FATAL(mesh_device != nullptr, "sparse_kv_push input must be on device");
@@ -329,6 +331,7 @@ Tensor sparse_kv_push(
             .num_links = num_links,
             .core_grid = grid,
             .fabric_config = tt::tt_fabric::GetFabricConfig(),
+            .second_dense = second_dense,
             .ready_semaphore = ready_semaphore,
             .done_semaphore = done_semaphore,
             .batch_index = batch_index,

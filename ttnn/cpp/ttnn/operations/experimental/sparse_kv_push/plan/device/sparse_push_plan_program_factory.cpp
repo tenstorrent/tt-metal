@@ -26,6 +26,7 @@ constexpr tt::tt_metal::KernelHandle kHelperKernel = 1;  // NCRISC, the same ker
 constexpr uint32_t kCtRole = 11;
 // Per-core runtime args of the data movement kernels.
 constexpr uint32_t kArgIndices = 0, kArgTable = 1, kArgCompact = 2, kArgSplit = 6;
+// The second compact output's address follows the split arg (or takes its place without one).
 
 ::sparse_push_plan::SplitSource split_source(const SparsePushPlanParams& attrs, const SparsePushPlanInputs& args) {
     if (args.chunk_start_tensor.has_value()) {
@@ -61,6 +62,7 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     auto* idx_buf = indices.buffer();
     auto* table_buf = outputs[0].buffer();
     auto* compact_buf = outputs[1].buffer();
+    auto* compact2_buf = attrs.dense_below_2 > 0 ? outputs[2].buffer() : nullptr;
     const auto layout = PlanTableLayout::make(attrs.max_rows, attrs.stripe_chunk);
     const uint32_t rows = indices.padded_shape()[2];
     using namespace ::sparse_push_plan;
@@ -106,6 +108,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
     };
     add_cb(kTableImage, tt::round_up(layout.image_words * sizeof(uint32_t), kCbAlignBytes));
     add_cb(kIdx, per_core * sizeof(uint32_t));
+    if (attrs.dense_below_2 > 0) {
+        add_cb(kIdx2, per_core * sizeof(uint32_t));
+    }
     add_cb(kDirtyChunks, tt::round_up(chunks, kCbAlignBytes));  // one byte per chunk
     add_cb(kDirtyMaps, kNumDirtyMaps * array_words * sizeof(uint32_t));
     // Every core's copy of every reduce chunk this core owns, worst case.
@@ -138,10 +143,13 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         0u,  // kCtRole: the driver (BRISC); the helper (NCRISC) gets 1
         attrs.dense_below,
         attrs.dense_below > 0 ? dense_slot_rows(attrs, num_devices) : 0u,
+        attrs.dense_below_2,
+        attrs.dense_below_2 > 0 ? dense_slot_rows(attrs.stripe_chunk, attrs.dense_below_2, num_devices) : 0u,
     };
     tt::tt_metal::TensorAccessorArgs(idx_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(table_buf).append_to(ct);
     tt::tt_metal::TensorAccessorArgs(compact_buf).append_to(ct);
+    tt::tt_metal::TensorAccessorArgs(compact2_buf != nullptr ? compact2_buf : compact_buf).append_to(ct);
     auto* start_buf = args.chunk_start_tensor.has_value() ? args.chunk_start_tensor->buffer() : nullptr;
     if (start_buf != nullptr) {
         tt::tt_metal::TensorAccessorArgs(start_buf).append_to(ct);
@@ -184,6 +192,9 @@ tt::tt_metal::ProgramDescriptor SparsePushPlanProgramFactory::create_descriptor(
         } else if (attrs.chunk_start.has_value()) {
             rt.push_back(*attrs.chunk_start);
         }
+        if (compact2_buf != nullptr) {
+            rt.push_back(compact2_buf);
+        }
         kernel.emplace_runtime_args(core_list[i], rt);
     }
     kernel.common_runtime_args = {common.begin(), common.end()};
@@ -217,6 +228,9 @@ void SparsePushPlanProgramFactory::override_runtime_arguments(
             rt[kArgCompact] = outputs[1].buffer()->address();
             if (source != ::sparse_push_plan::kNoSplit) {
                 rt[kArgSplit] = split;
+            }
+            if (attrs.dense_below_2 > 0) {
+                rt[source != ::sparse_push_plan::kNoSplit ? kArgSplit + 1 : kArgSplit] = outputs[2].buffer()->address();
             }
         }
     }
