@@ -160,35 +160,6 @@ std::optional<size_t> yaml_index(const YAML::Node& sequence, const YAML::Node& n
     return it == sequence.end() ? std::nullopt : std::optional<size_t>(std::distance(sequence.begin(), it));
 }
 
-// Fatal unless maps `chip` and `package` hold the same keys with equal values. A key in `narrowed` may differ in
-// value: it is in both or in neither, as the same kind of node (scalar, sequence or map).
-void check_keys_equal(
-    const YAML::Node& chip,
-    const YAML::Node& package,
-    std::initializer_list<std::string_view> narrowed,
-    tt::ChipId id,
-    const std::string& chip_path,
-    const std::string& package_path,
-    const std::string& prefix) {
-    const auto same_kind = [](const YAML::Node& a, const YAML::Node& b) {
-        return a.IsDefined() == b.IsDefined() && (!a.IsDefined() || a.Type() == b.Type());
-    };
-    for (const YAML::Node& keys_of : {chip, package}) {
-        for (const auto& entry : keys_of) {
-            const std::string& key = entry.first.Scalar();
-            TT_FATAL(
-                std::find(narrowed.begin(), narrowed.end(), key) != narrowed.end()
-                    ? same_kind(chip[key], package[key])
-                    : yaml_equal(chip[key], package[key]),
-                "Chip {} descriptor {} differs from the package descriptor {} in key {}",
-                id,
-                chip_path,
-                package_path,
-                prefix + key);
-        }
-    }
-}
-
 // Fatal unless every chip's descriptor (paths[id] for each of `chips`) is the package's with only `eth`,
 // `keraunos.cores` and `dram_views` narrowed to entries the package has, each listed once, and no Ethernet core or
 // programmable DRAM view is in two chips' descriptors. With that, no chip resets or loads a core of another, and
@@ -209,8 +180,32 @@ void check_chip_soc_descs(
             path,
             package_path,
             "(the document is not a map)");
-        check_keys_equal(chip, package, {"eth", "keraunos", "dram_views"}, id, path, package_path, "");
-        check_keys_equal(chip["keraunos"], package["keraunos"], {"cores"}, id, path, package_path, "keraunos.");
+        // Fatal unless maps `ours` and `theirs` hold the same keys with equal values. A key in `narrowed` may differ in
+        // value: it is in both or in neither, as the same kind of node (scalar, sequence or map).
+        const auto check_keys_equal = [&](const YAML::Node& ours,
+                                          const YAML::Node& theirs,
+                                          std::initializer_list<std::string_view> narrowed,
+                                          const std::string& prefix) {
+            const auto same_kind = [](const YAML::Node& a, const YAML::Node& b) {
+                return a.IsDefined() == b.IsDefined() && (!a.IsDefined() || a.Type() == b.Type());
+            };
+            for (const YAML::Node& keys_of : {ours, theirs}) {
+                for (const auto& entry : keys_of) {
+                    const std::string& key = entry.first.Scalar();
+                    TT_FATAL(
+                        std::find(narrowed.begin(), narrowed.end(), key) != narrowed.end()
+                            ? same_kind(ours[key], theirs[key])
+                            : yaml_equal(ours[key], theirs[key]),
+                        "Chip {} descriptor {} differs from the package descriptor {} in key {}",
+                        id,
+                        path,
+                        package_path,
+                        prefix + key);
+                }
+            }
+        };
+        check_keys_equal(chip, package, {"eth", "keraunos", "dram_views"}, "");
+        check_keys_equal(chip["keraunos"], package["keraunos"], {"cores"}, "keraunos.");
         std::set<Entry> listed;
         // The package's index of `node`; fatal when the package lacks it or the chip lists it twice.
         const auto package_entry = [&](std::string_view kind, const YAML::Node& node, const YAML::Node& package_list) {
