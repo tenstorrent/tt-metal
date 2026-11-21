@@ -1179,3 +1179,11 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   resumed 4x2k @139264 <= 160 ms. The ack cost goes to PB.9H (host).
 - 06:45 heartbeat: 8192 ladder accept gate re-running its no-rebuild unit (others kept); watch armed.
 - 06:50 8192 ladder's accept gate: test_no_rebuild ASSERTED (glued4x2k 16 builds incl. resumed rows; glued5x1600 FAIL this time too): no glued path is build-free; only the single-request ladder counts. Note OV-72: packed no-rebuild records PASS/FAIL, asserts only with NO_REBUILD_PACKED_STRICT=1 (set in PB.9G / PB.T / PB.9H gates); single request always asserts. Resumed for one agent attempt.
+- 06:55 8192 ladder (PB.9C) committed 8d18418226c, BUT its no-rebuild unit's PASS was FALSE: 18 s in the held resident
+  process right after a fresh-process FAIL on the same code (lanes 153 -> 0 builds): fixed-seed draws found the earlier
+  run's programs cached. The report keeps the honest cold result (glued 4x2k and fixed lanes FAIL; glued 5x1.6k FAIL on
+  the gate's cold run). Framework F297 (ab33918a350): tests declaring BATCH_COLD run in a fresh process, first in their
+  batch; selftest test_cold_runs.py. Earlier no-rebuild PASSes in held processes (the mhc changes' gates, PB.MB / PB.MB5,
+  model_bringup's MB.2) are suspect until re-run cold. Queued (patch, applied when the orchestrator stops after the 5120
+  ladder): PB.NR, tests only: BATCH_COLD on test_no_rebuild, record/strict mode per packed path; then the 5120 ladder's
+  no-rebuild unit is re-run cold. Paused after the 5120 ladder.
