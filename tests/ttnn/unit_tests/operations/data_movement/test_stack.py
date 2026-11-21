@@ -2,10 +2,20 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import re
+
 import pytest
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_equal, assert_with_pcc
+from tests.ttnn.unit_tests.operations.data_movement.docstring_support import (
+    UnreadableDocstring,
+    check_readable,
+    docstring_dtype_layout_params,
+    docstring_interleaved_buffer_type_params,
+    interleaved_memory_config,
+)
+from tests.ttnn.unit_tests.operations.data_movement.data_movement_test_utils import assert_exact, full_range_input
 
 RM = ttnn.ROW_MAJOR_LAYOUT
 TILE = ttnn.TILE_LAYOUT
@@ -285,3 +295,76 @@ def test_stack_trailing_axis_uint16_row_major(device, memory_config):
     ttnn_result = ttnn.stack(ttnn_tensors, dim=-1)
 
     _check_result(torch_result, ttnn_result, RM)
+
+
+def _docstring_outer_dim_only_dtypes():
+    """Dtypes the ttnn.stack docstring says need the new dimension before the last two dimensions of the output."""
+    pattern = r"``(\w+)``\s+tensors\s+need\s+the\s+new\s+dimension\s+to\s+come\s+before\s+the\s+last\s+two"
+    names = re.findall(pattern, ttnn.stack.__doc__)
+    dtypes = {getattr(ttnn.DataType, name, None) for name in names}
+    if not names or not all(isinstance(dtype, ttnn.DataType) for dtype in dtypes):
+        return UnreadableDocstring(f"could not read the dtypes that need an outer new dimension from: {names}")
+    return dtypes
+
+
+def _docstring_output_buffer_types():
+    """Buffer types on the docstring's Output Memory Support item."""
+    return [param.values[0] for param in docstring_interleaved_buffer_type_params(ttnn.stack, label="Output")]
+
+
+# (input shape, number of inputs, dim). On rank-3 inputs: new outer dims 0 and 1, the new second-to-last dim and the
+# new last dim, which non-block-float inputs stack through a concat at 0 and a permute. Then a rank-1 input stacked
+# on each of its two new dims, and a single input stacked on a new last dim.
+_DOCSTRING_STACK_CASES = [
+    ((2, 40, 72), 3, 0),
+    ((2, 40, 72), 3, 1),
+    ((2, 40, 72), 3, -2),
+    ((2, 40, 72), 3, -1),
+    ((100,), 3, 0),
+    ((100,), 3, -1),
+    ((2, 40, 72), 1, -1),
+]
+
+
+@pytest.mark.parametrize("buffer_type", docstring_interleaved_buffer_type_params(ttnn.stack, label="Input"))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.stack))
+def test_stack_docstring_supported_inputs(dtype, layout, buffer_type, device):
+    """Runs every dtype, layout and interleaved input buffer type the ttnn.stack docstring lists, stacking on new
+    outer, second-to-last and last dims, and compares the output exactly with torch.stack."""
+    check_readable(dtype, layout, buffer_type)
+    outer_dim_only_dtypes = _docstring_outer_dim_only_dtypes()
+    output_buffer_types = _docstring_output_buffer_types()
+    check_readable(outer_dim_only_dtypes, *output_buffer_types)
+    memory_config = interleaved_memory_config(buffer_type)
+    for shape, count, dim in _DOCSTRING_STACK_CASES:
+        rank = len(shape)
+        new_dim = dim % (rank + 1)
+        if dtype in outer_dim_only_dtypes and new_dim > rank - 2:
+            continue
+        # A new last dim, or a new second-to-last dim of TILE inputs, runs compute kernels that hold BFLOAT16 zeros by
+        # value. There BFLOAT16 inputs leave out NaN, as the docstring requires, and zeros are compared by value.
+        compute_bfloat16 = dtype == ttnn.bfloat16 and (
+            new_dim == rank or (layout == ttnn.TILE_LAYOUT and new_dim == rank - 1)
+        )
+        # preserve_nan_values keeps full_range_input's NaN in the inputs: a BFLOAT16 input built on device can lose it.
+        inputs = [
+            ttnn.from_torch(
+                full_range_input(shape, dtype, seed=seed, nan=not compute_bfloat16),
+                dtype=dtype,
+                layout=layout,
+                device=device,
+                memory_config=memory_config,
+                preserve_nan_values=True,
+            )
+            for seed in range(count)
+        ]
+        expected = torch.stack([ttnn.to_torch(tensor) for tensor in inputs], dim)
+
+        output = ttnn.stack(inputs, dim)
+
+        case = f"{count} inputs of shape {shape}, dim {dim}"
+        assert output.dtype == dtype, case
+        assert output.layout == layout, case
+        assert output.memory_config().memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED, case
+        assert output.memory_config().buffer_type in output_buffer_types, case
+        assert_exact(expected, ttnn.to_torch(output), signed_zeros=not compute_bfloat16)
