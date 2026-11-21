@@ -425,7 +425,7 @@ void kernel_main() {
     constexpr uint32_t intra_kernel_right_inc_cb_id = get_compile_time_arg_val(52);
     constexpr uint32_t intra_kernel_down_left_wrap_inc_cb_id = get_compile_time_arg_val(53);
     constexpr uint32_t indexes_32_bit = get_compile_time_arg_val(54);
-    constexpr uint32_t reader_tensor_args_index = 55;
+    constexpr uint32_t reader_tensor_args_index = 56;  // arg 55 is reader_pool_2d.cpp's chunk width
 
     constexpr uint32_t in_w_padded = in_w + pad_w + ceil_pad_w;
     constexpr bool last_tile_is_partial = in_c % TILE_WIDTH != 0;
