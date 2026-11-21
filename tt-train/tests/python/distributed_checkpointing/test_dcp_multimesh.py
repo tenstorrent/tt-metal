@@ -16,7 +16,8 @@ the same as a single-rank run's. Launch on one Blackhole host:
 ``--bare`` keeps the ranks on shared memory, as ``dcp_harness.tt_run_command`` explains.
 
 Both ranks must see the same checkpoint directory: ``DCP_SHARED_TMP`` names it, the system temporary directory
-otherwise. Without ``tt-run`` the module skips.
+otherwise. Without ``tt-run`` the module skips; ``test_dcp_cross_world`` runs it whole under tt-run, which is how CI
+runs it.
 """
 
 import os

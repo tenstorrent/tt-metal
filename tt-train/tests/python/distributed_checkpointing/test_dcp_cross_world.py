@@ -9,16 +9,20 @@ through ``dcp_driver.py`` (this directory) in a child process. The save child tr
 130, so the padded vocab differs between TP sizes), saves it and writes a reference of every tensor in canonical
 layout plus the logits on a fixed batch; the load child builds the destination world, loads, and compares. This
 module holds no device fixture of its own: the children need the chips.
+
+The two tt-run modules (``test_dcp_multirank``, ``test_dcp_multimesh``) skip under plain pytest; this module runs each
+of them whole on two ranks of this host, so CI runs every one of their tests.
 """
 
 import os
+import re
 import socket
 import sys
 
 import numpy as np
 import pytest
 from dcp_driver import LOGITS_TOLERANCE, RESUME, compare
-from dcp_harness import DRIVER, TT_RUN, run_checked, run_world, tt_run_command
+from dcp_harness import DRIVER, HERE, TT_RUN, output_lines, run_checked, run_world, tt_run_command
 
 # Each child is one process opening a mesh, training or loading a tiny Llama: in CI the whole module takes about
 # 3.5 minutes and its slowest case (two children) 78 s, while on a host reading its files over NFS one child has taken
@@ -205,29 +209,57 @@ def test_a_scrambled_fused_weight_fails_the_logits_check(tmp_path, release_metal
 
 
 DUAL_RANK_MGD = "tests/ttnn/distributed/config/bh_1x4_dual_rank_mesh_graph_descriptor.textproto"
+TWO_MESH_MGD = os.path.join(HERE, "bh_two_1x2_meshes_one_host.textproto")
+# A tt-run module runs its two-rank tests in one world; on a QuietBox 2 each module takes under three minutes.
+MODULE_TIMEOUT_S = 600
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+# The summary pytest -q prints on one rank, as tt-run's --tag-output prefixes it.
+RANK_SUMMARY = re.compile(r"^\[\d+,(\d+)\]<stdout>:\s*(.*\b\d+ (passed|failed|skipped|errors?)\b.*)$")
 
 
-def test_two_ranks_on_one_mesh_load_on_one_process(tmp_path, release_metal_env, skip_if_host_too_small):
-    """Two ranks co-owning one [1, 4] mesh split most keys' chunks between their files (the other two-rank cases
-    give each rank a whole mesh, so each key is written by one rank). The test_dcp_multirank module's source test
-    saves such a checkpoint under tt-run; one process with one device loads it, and every parameter must equal the
-    global array rebuilt from the two ranks' own shards."""
-    skip_if_host_too_small((4,), "the dual-rank save")
+def _run_module_on_two_ranks(module: str, mgd: str, env: dict) -> None:
+    """Run the tt-run test module ``module`` whole on two ranks of this host, and require every one of its tests to
+    pass on both ranks: none may fail or skip."""
     if TT_RUN is None:
         pytest.skip("tt-run is not installed")
-    mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
     if not os.path.isfile(mgd):
         pytest.skip(f"no descriptor {mgd}")
-    release_metal_env()
-    env = dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path))
+    env = dict(env)
     env.pop("TT_MESH_GRAPH_DESC_PATH", None)
-    module = os.path.join(os.path.dirname(os.path.abspath(__file__)), "test_dcp_multirank.py")
-    save = [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", module, "-k", "for_the_one_process_load"]
-    proc = run_world(tt_run_command(mgd, socket.gethostname(), save), env, CHILD_TIMEOUT_S)
-    tail = "\n".join((proc.stdout + proc.stderr).splitlines()[-40:])
-    assert proc.returncode == 0 and os.path.isfile(tmp_path / "shards_1.npz"), f"the dual-rank save failed:\n{tail}"
+    command = [sys.executable, "-m", "pytest", "-q", "--color=no", "-p", "no:cacheprovider", os.path.join(HERE, module)]
+    proc = run_world(tt_run_command(mgd, socket.gethostname(), command), env, MODULE_TIMEOUT_S)
+    lines = [ANSI.sub("", line) for line in output_lines(proc)]
+    summaries = {m.group(1): m.group(2) for m in map(RANK_SUMMARY.match, lines) if m}
+    tail = "\n".join(lines[-60:])
+    assert proc.returncode == 0 and set(summaries) == {"0", "1"}, f"{module}: exit {proc.returncode}:\n{tail}"
+    for rank, summary in sorted(summaries.items()):
+        print(f"{module} rank {rank}: {summary}")
+        assert re.search(r"\d+ passed", summary) and not re.search(
+            r"failed|error|skipped", summary
+        ), f"{module} rank {rank}: {summary}\n{tail}"
+
+
+@pytest.mark.timeout(MODULE_TIMEOUT_S + 2 * CHILD_TIMEOUT_S + 60)
+def test_two_ranks_on_one_mesh_load_on_one_process(tmp_path, release_metal_env, skip_if_host_too_small):
+    """The test_dcp_multirank module, whole: two ranks co-owning one [1, 4] mesh, every test passing on both. Its
+    source test saves a checkpoint whose keys' chunks split between the ranks' files (the other two-rank cases give
+    each rank a whole mesh, so each key is written by one rank); one process with one device then loads it, and every
+    parameter must equal the global array rebuilt from the two ranks' own shards."""
+    skip_if_host_too_small((4,), "the dual-rank module")
+    release_metal_env()
+    mgd = os.path.join(os.environ.get("TT_METAL_HOME", os.getcwd()), DUAL_RANK_MGD)
+    _run_module_on_two_ranks("test_dcp_multirank.py", mgd, dict(os.environ, DCP_CROSS_WORLD_DIR=str(tmp_path)))
+    assert os.path.isfile(tmp_path / "shards_1.npz"), "the source test wrote no shards"
     out = _run(["load-tp-block", "--dir", str(tmp_path), "--mesh", "1x1", "--axes", "dp,tp"], "load")
     assert "RESULT: OK" in out, out.splitlines()[-5:]
+
+
+@pytest.mark.timeout(MODULE_TIMEOUT_S + 60)
+def test_the_two_mesh_module_passes_on_two_ranks(release_metal_env, skip_if_host_too_small):
+    """The test_dcp_multimesh module, whole: two ranks with one [1, 2] mesh each, every test passing on both."""
+    skip_if_host_too_small((4,), "the two-mesh module")
+    release_metal_env()
+    _run_module_on_two_ranks("test_dcp_multimesh.py", TWO_MESH_MGD, dict(os.environ))
 
 
 def test_non_finite_values_fail_the_comparison_on_either_side():

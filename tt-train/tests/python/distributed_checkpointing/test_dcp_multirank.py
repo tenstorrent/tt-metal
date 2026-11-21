@@ -14,7 +14,8 @@ Launch on one Blackhole host with two chips per rank (the ttnn dual-rank descrip
 Every rank writes only the shards of the two coordinates it holds; rank 0 merges the parts into one index; a load
 on the same world restores every rank's shards bit for bit and each rank's own generators. Both ranks must see the
 same checkpoint directory: ``DCP_SHARED_TMP`` names it (a shared filesystem when the ranks run on two hosts), the
-system temporary directory otherwise. Without ``tt-run`` the module skips.
+system temporary directory otherwise. Without ``tt-run`` the module skips; ``test_dcp_cross_world`` runs it whole
+under tt-run, which is how CI runs it.
 """
 
 import os
@@ -356,7 +357,7 @@ def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypa
 def test_a_checkpoint_for_the_one_process_load(two_ranks):
     """The save half of a cross-world case: two ranks co-owning the [1, 4] mesh write a TPBlock checkpoint, so most
     keys' chunks come from both ranks' files, and dump their own shards next to it. ``test_dcp_cross_world`` runs this
-    test alone, with ``DCP_CROSS_WORLD_DIR`` set, then loads the checkpoint on one process."""
+    module with ``DCP_CROSS_WORLD_DIR`` set, then loads the checkpoint on one process."""
     out = os.environ.get("DCP_CROSS_WORLD_DIR")
     if not out:
         pytest.skip("run by test_dcp_cross_world with DCP_CROSS_WORLD_DIR set")
