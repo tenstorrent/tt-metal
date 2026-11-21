@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
-#include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_derived_slots.hpp"
+#include "ttnn/operations/transformer/sdpa/device/kernels/recipe_ring_cbs.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -231,39 +231,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t DHt = DH / tt::constants::TILE_WIDTH;
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
 
-    /*
-    For non-causal case we must provide a padded mask if the K sequence length has been padded
-    Note that we dont have this issue in non-causal case if Q is padded, since those pad tokens
-    don't affect attention of unpadded tokens.
-    In causal case, the causal mask takes care of masking K pad tokens.
-    */
-
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Trace-safe logical_n: args.logical_n is the worst-case placeholder (padded_N) and the kernels read
-    // the live value. The placeholder already worst-cases every size derivation below EXCEPT three, which
-    // a chunk-aligned placeholder resolves the wrong way — the two mask derivations (resolve to "no mask")
-    // and the state-FIFO spare (resolves to "no one-chunk iter", the ANTI-worst case). CB geometry is
-    // fixed at program creation, so all three are forced whenever the tensor is present.
+    // Trace-safe logical_n: args.logical_n is the worst-case placeholder (padded_N) and the kernels read the live value
+    // from the tensor. Key tails are masked per chunk in the pack thread from the live length, so no CB geometry
+    // depends on it.
     const bool has_logical_n_tensor = tensor_args.has_logical_n_tensor();
-
-    // Lightweight mask: only needed when any K/joint dimension has padding that doesn't fill a chunk.
-    const bool local_n_has_padding = (local_padded_Nt % Sk_chunk_t) != 0;
-    const bool global_n_has_padding =
-        has_logical_n_tensor || (args.logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool joint_has_padding = L > 0 && (L % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding || joint_has_padding;
-
-    // Partial tile support when padding boundary falls inside a tile. The kernels stamp the live column
-    // into the forced tile and gate the stamp off when that column is 0 (see partial_tile_present).
-    const uint32_t global_n_partial_col = args.logical_n % tt::constants::TILE_HEIGHT;
-    const uint32_t joint_l_partial_col = L % tt::constants::TILE_HEIGHT;
-    const bool has_global_n_partial_tile = ttnn::operations::transformer::sdpa::ring_joint::partial_tile_present(
-        global_n_partial_col, has_logical_n_tensor);
-    const uint32_t partial_mask_tiles = (has_global_n_partial_tile ? 1 : 0) + (joint_l_partial_col != 0 ? 1 : 0);
-    // Single CB holds: 1 neginf tile + up to 2 partial mask tiles
-    const uint32_t total_lightweight_mask_tiles = 1 + partial_mask_tiles;
 
     const uint32_t num_local_q_chunks = tt::div_up(local_padded_N, q_chunk_size);
     const uint32_t num_joint_q_chunks = tt::div_up(L, q_chunk_size);
@@ -271,37 +245,29 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t num_local_k_chunks = tt::div_up(local_padded_N, k_chunk_size);
     const uint32_t num_joint_k_chunks = tt::div_up(L, k_chunk_size);
 
-    log_debug(tt::LogOp, "B: {}", B);
-    log_debug(tt::LogOp, "NH: {}", NH);
-    log_debug(tt::LogOp, "L: {}", L);
-    log_debug(tt::LogOp, "DH: {}", DH);
-
-    // Log padded dimensions
-    log_debug(tt::LogOp, "local_padded_N: {}", local_padded_N);
-    log_debug(tt::LogOp, "padded_N: {}", padded_N);
-    log_debug(tt::LogOp, "L: {}", L);
-
-    // Log tile dimensions
-    log_debug(tt::LogOp, "DHt: {}", DHt);
-    log_debug(tt::LogOp, "local_padded_Nt: {}", local_padded_Nt);
-    log_debug(tt::LogOp, "padded_Nt: {}", padded_Nt);
-    log_debug(tt::LogOp, "Lt: {}", Lt);
-
-    // Log chunking parameters
-    log_debug(tt::LogOp, "Sq_chunk_t: {}", Sq_chunk_t);
-    log_debug(tt::LogOp, "Sk_chunk_t: {}", Sk_chunk_t);
-    log_debug(tt::LogOp, "num_local_q_chunks: {}", num_local_q_chunks);
-    log_debug(tt::LogOp, "num_joint_q_chunks: {}", num_joint_q_chunks);
-    log_debug(tt::LogOp, "q_chunk_size: {}", q_chunk_size);
-    log_debug(tt::LogOp, "k_chunk_size: {}", k_chunk_size);
-    log_debug(tt::LogOp, "num_q_chunks: {}", num_q_chunks);
-    log_debug(tt::LogOp, "num_local_k_chunks: {}", num_local_k_chunks);
-    log_debug(tt::LogOp, "num_joint_k_chunks: {}", num_joint_k_chunks);
+    log_debug(
+        tt::LogOp,
+        "ExpRingJointSDPA: B={} NH={} DH={} local_padded_N={} padded_N={} L={} Q/K chunk tiles {}/{} Q chunks {}+{} K "
+        "chunks {}+{}",
+        B,
+        NH,
+        DH,
+        local_padded_N,
+        padded_N,
+        L,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        num_local_q_chunks,
+        num_joint_q_chunks,
+        num_local_k_chunks,
+        num_joint_k_chunks);
 
     MeshDevice* device = input_tensor_q.device();
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(mesh_device->arch(), args.compute_kernel_config);
+    // The precision recipe owns the numerics (device/recipe/sdpa_precision_policy.hpp).
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    const recipes::PrecisionPolicy policy = recipes::resolve_recipe_policy(
+        input_tensor_q, gathered_input_tensor_k, args.precision, scale, args.program_config);
 
     // Grid layout:
     //   user_grid:        Full grid from program_config (or device default). Contains SDPA workers + fabric MUX.
@@ -312,12 +278,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const auto device_grid = mesh_device->compute_with_storage_grid_size();
     CoreCoord user_grid =
         args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size : device_grid;
-    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
-    // Bottom-row experiment: SDPA keeps every column but gives up the two bottom rows (row y-1
-    // hosts the MUX kernels, row y-2 idles so the SDPA row count stays even for the direction
-    // split). Default: SDPA keeps every row but gives up the last column to the MUX kernels.
-    CoreCoord sdpa_grid =
-        mux_on_bottom_row ? CoreCoord{user_grid.x, user_grid.y - 2} : CoreCoord{user_grid.x - 1, user_grid.y};
+    CoreCoord sdpa_grid = exp_ring_sdpa_grid(user_grid);
 
     TT_FATAL(
         user_grid.x <= device_grid.x && user_grid.y <= device_grid.y,
@@ -336,19 +297,13 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         sdpa_grid.y % 2 == 0,
         "SDPA grid rows ({}) must be even so the backward/forward MUX client halves match.",
         sdpa_grid.y);
-    // The row-half split determines the per-link worker count; derive it from the grid so the
-    // bottom-row experiment (fewer rows) keeps the direction and termination groups uniform.
+    // The row-half split determines the per-link worker count.
     const uint32_t num_workers_per_link = sdpa_grid.y / 2;
     TT_FATAL(
-        num_workers_per_link == args.num_workers_per_link || mux_on_bottom_row,
+        num_workers_per_link == args.num_workers_per_link,
         "num_workers_per_link ({}) must equal sdpa_grid.y / 2 ({}).",
         args.num_workers_per_link,
         num_workers_per_link);
-
-    bool exp_approx_mode =
-        args.program_config.has_value()
-            ? (args.program_config->exp_approx_mode.has_value() ? args.program_config->exp_approx_mode.value() : true)
-            : true;
 
     auto sdpa_grid_range = CoreRange({0, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
     uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
@@ -363,12 +318,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
      * batch x head x segment) runs as pass p = s / rows on row y = s % rows, and core (x, y) owns
      * that segment's Q chunk x. segs_per_head == 1 is the original one-row-per-head layout.
      *
-     * Per pass the pipeline is exactly the single-head pipeline: each core holds one Q chunk per
-     * pass (all resident, read once) and one flash-attention accumulator state per pass (kept in
-     * the L1 state FIFO, see cb_prev_out). A split head's K/V shard is streamed — and all-gather
-     * forwarded — once per segment: the duplicate fabric writes carry identical bytes to identical
-     * addresses, and each row's chunk-ready signals come from the same row on the previous device,
-     * so every row's pipeline stays self-contained exactly as in the one-row-per-head layout.
+     * The kernels walk the passes pass-outer, ring-inner: each pass is exactly the single-head
+     * pipeline, with one resident Q chunk and one recurrent state, so a core's L1 does not grow with
+     * its pass count. A split head's K/V shard is streamed — and all-gather forwarded — once per
+     * segment: the duplicate fabric writes carry identical bytes to identical addresses, and each
+     * row's chunk-ready signals come from the same row on the previous device, so every row's
+     * pipeline stays self-contained exactly as in the one-row-per-head layout.
      *
      * Splitting heads balances the grid when B*NH does not divide the row count: e.g. 14 heads on
      * 10 rows is 2 passes of 10-tile chunks (20 Q tile-rows on the bottleneck cores, 6 rows idle
@@ -390,140 +345,17 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t segs_per_head = num_q_chunks / sdpa_grid.x;
     const uint32_t total_segments = B * NH * segs_per_head;
     const uint32_t num_passes = tt::div_up(total_segments, rows);
-
-    // L1-bound: the CB budget must hold num_passes resident Q chunks + state-FIFO entries. The
-    // caller's program config is responsible for picking (q_chunk, k_chunk, segs) that fit; an
-    // oversized combination fails CB allocation at program build.
-    constexpr uint32_t kMaxPasses = 3;
-    TT_FATAL(
-        num_passes <= kMaxPasses,
-        "Exp ring joint SDPA supports at most {} head-segments per core row. "
-        "Got B*NH={} x segs_per_head={} with {} rows (P={}).",
-        kMaxPasses,
-        B * NH,
-        segs_per_head,
-        rows,
-        num_passes);
-
     log_debug(tt::LogOp, "num_passes (heads per row): {}", num_passes);
 
-    // Depth of the L1 state FIFO (c_6 max / c_11 sum / c_7 partial-out), in entries.
-    //
-    // A pass pops its own entry at its FIRST K chunk (the merge consumes `prev`) and pushes the
-    // updated entry at its LAST K chunk, so num_passes entries are enough as long as a pass has at
-    // least two K chunks: the pop has already freed the slot the push needs. A pass with exactly one
-    // K chunk is the only case that reserves `cur` before popping `prev` (sdpa_inner_loop_step
-    // reserves the new entry up front), which would deadlock at full depth — so give that case one
-    // spare entry. The last active ring iteration is the only one that can be partial, and it
-    // normalizes into cb_out instead of pushing to the FIFO, so it never needs the spare.
-    // A pass that processes exactly ONE K/V chunk runs the state-FIFO entry (read + POST-step pop
-    // of this pass's previous state) and the FIFO exit (PRE-step reserve + push of its new state)
-    // around the SAME sdpa_inner_loop_step call — so the exit's reserve precedes the pop it needs.
-    // Rows whose pass count fills the FIFO deadlock on that reserve. Give the FIFO one spare entry
-    // whenever any ring iteration can process a single chunk: a one-chunk shard, or the
-    // beyond-logical_n whole-chunk skip shaving a shard down to one chunk (a pad tail that
-    // covers at least one full K chunk — first hit by the fl2va 1024x768 canvas at 4x32).
-    bool some_iter_processes_one_chunk = has_logical_n_tensor || (num_local_k_chunks <= 1);
-    for (uint32_t rid = 0; rid < args.ring_size && !some_iter_processes_one_chunk; ++rid) {
-        uint32_t iter_chunks = 0;
-        for (uint32_t kc = 0; kc < num_local_k_chunks; ++kc) {
-            // Mirrors the kernels' kv_chunk_is_beyond_logical_n skip (joint chunks never skip).
-            if (local_padded_Nt * rid + kc * Sk_chunk_t < logical_nt) {
-                iter_chunks++;
-            }
-        }
-        if (rid == args.ring_size - 1) {
-            iter_chunks += num_joint_k_chunks;
-        }
-        some_iter_processes_one_chunk = (iter_chunks == 1);
-    }
-    const uint32_t state_fifo_entries = num_passes + (some_iter_processes_one_chunk ? 1 : 0);
-    log_debug(tt::LogOp, "state_fifo_entries: {}", state_fifo_entries);
-
-    // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    // Q holds one chunk per pass; all of them stay resident for the whole op (read once).
-    uint32_t q_tiles = num_passes * Sq_chunk_t * DHt;
-    uint32_t k_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t v_tiles = Sk_chunk_t * DHt * 2;  // double buffer
-    uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
-    uint32_t out_im_tiles = Sq_chunk_t * DHt;
-    uint32_t out0_t = Sq_chunk_t * DHt;  // finalized below once out_out_subblock_h is known
-    uint32_t scale_tiles = 1;
-    uint32_t statistics_tiles = Sq_chunk_t;  // Single column of values in each iteration
-
-    // log all values
-    log_debug(tt::LogOp, "q_tiles: {}", q_tiles);
-    log_debug(tt::LogOp, "k_tiles: {}", k_tiles);
-    log_debug(tt::LogOp, "v_tiles: {}", v_tiles);
-    log_debug(tt::LogOp, "qk_tiles: {}", qk_tiles);
-    log_debug(tt::LogOp, "statistics_tiles: {}", statistics_tiles);
-
-    // Host code is responsible for determining matmul configuration
-    const uint32_t dst_size = ttnn::get_dest_reg_count(args.compute_kernel_config);
-    auto [qk_out_subblock_h, qk_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, Sk_chunk_t, dst_size);
-
-    TT_FATAL(
-        Sq_chunk_t % qk_out_subblock_h == 0,
-        "Sq_chunk_t ({}) must be divisible by qk_out_subblock_h ({})",
-        Sq_chunk_t,
-        qk_out_subblock_h);
-    const uint32_t qk_in0_num_subblocks = Sq_chunk_t / qk_out_subblock_h;
-
-    // Streaming compute v2: eliminates row buffers via cb_push_back_hold_wr_ptr.
-    // Ring joint has no causal/mask/sink/sliding/chunked flags — gating is simpler.
-    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
-    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
-    const bool use_streaming_compute = !fp32_dest_acc_en && qk_out_subblock_h <= 2 &&
-                                       Sk_chunk_t % (dst_size / qk_out_subblock_h) == 0 && qk_in0_num_subblocks > 1;
-
-    auto [out_out_subblock_h, out_out_subblock_w] =
-        detail::determine_largest_subblock_size(Sq_chunk_t, DHt, dst_size, use_streaming_compute ? 2 : UINT32_MAX);
-
-    // Streaming: shrink cb_out to a 2-slot ping-pong (see sdpa_subblock_utils.hpp). Safe here
-    // because every pass runs with q_per_core == 1 (one Q chunk per pass, head-serial), so
-    // Phase-2's save_to_staging branch (pack at offset qktv_h*vDHt into a 2*qktv_h*vDHt buffer)
-    // never fires — cross-ring-iteration state lives in the L1 state FIFO instead.
-    if (use_streaming_compute) {
-        out0_t = detail::streaming_cb_out_tiles(out_out_subblock_h, out_out_subblock_w, dst_size, Sq_chunk_t, DHt);
-        TT_FATAL(
-            Sq_chunk_t % out_out_subblock_h == 0,
-            "Streaming cb_out drain requires Sq_chunk_t ({}) divisible by out_out_subblock_h ({})",
-            Sq_chunk_t,
-            out_out_subblock_h);
-    }
-    log_debug(tt::LogOp, "out0_t: {}", out0_t);
-    log_debug(tt::LogOp, "use_streaming_compute: {}", use_streaming_compute);
-
-    // log all values
-    log_debug(tt::LogOp, "dst_size: {}", dst_size);
-    log_debug(tt::LogOp, "qk_out_subblock_w: {}", qk_out_subblock_w);
-    log_debug(tt::LogOp, "qk_out_subblock_h: {}", qk_out_subblock_h);
-    log_debug(tt::LogOp, "qk_in0_num_subblocks: {}", qk_in0_num_subblocks);
-    log_debug(tt::LogOp, "out_out_subblock_w: {}", out_out_subblock_w);
-    log_debug(tt::LogOp, "out_out_subblock_h: {}", out_out_subblock_h);
-
-    // Determine granularity for statistics computation
-    // Each granularity must evenly divide its tile count to avoid dropping tiles
-    const uint32_t stats_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size);
-    const uint32_t sub_exp_granularity = detail::find_valid_granularity(Sk_chunk_t, dst_size);
-    const uint32_t dht_granularity = detail::find_valid_granularity(DHt, dst_size);
-    const uint32_t reduce_granularity = detail::find_valid_granularity(Sq_chunk_t, dst_size / 2);
-
-    // Log these
-    log_debug(tt::LogOp, "stats_granularity: {}", stats_granularity);
-    log_debug(tt::LogOp, "sub_exp_granularity: {}", sub_exp_granularity);
-    log_debug(tt::LogOp, "dht_granularity: {}", dht_granularity);
-    log_debug(tt::LogOp, "reduce_granularity: {}", reduce_granularity);
-
-    // Reduce ops need to multiply by a scalar. We always want to multiply by 1.0f
-    class bfloat16 bfloat_identity_scalar(1.0f);
-    uint32_t packed_identity_scalar = pack_two_bfloat16_into_uint32({bfloat_identity_scalar, bfloat_identity_scalar});
+    // The reader pushes Q in the row groups compute starts its QK on: one row for the FP32 recipes and for a paired
+    // recipe's odd chunk (it ends with a one-row group), else two.
+    const uint32_t q_push_rows = policy.fp32_destination || Sq_chunk_t % 2 != 0 ? 1 : 2;
+    // The writer drains the output in the rows compute packs: pairs of rows when the Q chunk is a whole number of them,
+    // so a pair never straddles the output CB's wrap.
+    const uint32_t writer_out_row_group_h = Sq_chunk_t % 2 == 0 ? 2 : 1;
 
     const float scale_value = scale.value_or(1.0f);
     const uint32_t scale_packed = std::bit_cast<uint32_t>(scale_value);
-
-    // log scale
     log_debug(tt::LogOp, "scale: {}", scale_value);
 
     std::vector<uint32_t> reader_compile_time_args = {
@@ -543,7 +375,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         num_joint_k_chunks,
         num_q_chunks,
         args.ring_size,
-        qk_out_subblock_h};
+        q_push_rows};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
@@ -628,7 +460,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_compile_time_args.push_back(receiver_semaphore_id);
     reader_compile_time_args.push_back(valid_semaphore_id);
     reader_compile_time_args.push_back(0);  // mcast_enabled placeholder (patched after chain construction)
-    reader_compile_time_args.push_back(0);  // stream_q placeholder (patched after CB sizing)
     reader_compile_time_args.push_back(receiver_semaphore_b_id);
     reader_compile_time_args.push_back(sender_semaphore_v_id);
     reader_compile_time_args.push_back(buddy_gate_semaphore_id);
@@ -638,6 +469,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(has_logical_n_tensor ? tensor_args.logical_n_tensor->buffer() : nullptr)
         .append_to(reader_compile_time_args);
 
+    // Both writer kernels (plain and MUX client) take these compile-time args; the MUX and all-gather args follow
+    // once the MUX config is known.
     std::vector<uint32_t> writer_compile_time_args = {
         B,
         NH,
@@ -645,7 +478,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_Nt,
-        args.logical_n,
+        static_cast<uint32_t>(args.logical_n),
         logical_nt,
         Lt,
         L,
@@ -653,12 +486,8 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        packed_identity_scalar,
-        scale_packed,
         args.ring_size,
-        global_n_partial_col,
-        joint_l_partial_col,
-        static_cast<std::uint32_t>(out_out_subblock_h),
+        writer_out_row_group_h,
         static_cast<std::uint32_t>(has_logical_n_tensor),
     };
 
@@ -670,403 +499,133 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
 
-    // Streaming-only compute kernel: NH and the classic matmul block params (in0_block_w,
-    // num_subblocks, num_blocks) are not consumed — only the subblock shapes are.
     std::vector<uint32_t> compute_compile_time_args = {
         DHt,
         Sq_chunk_t,
         Sk_chunk_t,
         local_padded_N,
         local_padded_Nt,
-        args.logical_n,
+        static_cast<uint32_t>(args.logical_n),
         logical_nt,
-        Lt,
         L,
         num_local_k_chunks,
         num_joint_k_chunks,
         args.ring_size,
-        qk_out_subblock_w,
-        qk_out_subblock_h,
-        out_out_subblock_w,
-        out_out_subblock_h,
         scale_packed,
-        static_cast<std::uint32_t>(use_streaming_compute),
-        global_n_partial_col,
-        joint_l_partial_col,
-        0,  // stream_q placeholder (patched after CB sizing)
-        // Single-pass programs keep the original persist-in-scratch accumulator path: the L1
-        // state FIFO only earns its per-iteration entry/exit cost (redirected packs + a dual
-        // max write) when several head-passes share a core. The 1-pass shapes are gated by
-        // utilization-band perf tests calibrated on the scratch path.
-        (num_passes > 1) ? 1u : 0u,  // use_l1_state_fifo
         // Trace-safe logical_n: compute reads the live values from the reader's derived CB.
         static_cast<uint32_t>(has_logical_n_tensor),
     };
 
-    std::map<std::string, std::string> defines;
-    defines["STATS_GRANULARITY"] = std::to_string(stats_granularity);
-    defines["SUB_EXP_GRANULARITY"] = std::to_string(sub_exp_granularity);
-    defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
-    defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
-    defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
-    if (args.program_config.has_value() && args.program_config->min_blocked_pack_tiles.has_value()) {
-        defines["SDPA_MIN_BLOCKED_PACK_TILES"] = std::to_string(*args.program_config->min_blocked_pack_tiles);
-    }
-
     // NOTE: KernelDescriptor construction is deferred until after chain construction
     // so that the mcast_enabled compile-time arg can be determined first.
 
-    // Create circular buffers
-
-    tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
-    tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
-    tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
-    // Lightweight mask: both streaming and non-streaming paths use Float16_b
-    // to support L1-accumulation and avoid Bfp4_b precision loss.
-    tt::DataFormat mask_df = tt::DataFormat::Float16_b;
-    tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
-    tt::DataFormat scalar_df = tt::DataFormat::Float16_b;
-    tt::DataFormat im_df = tt::DataFormat::Float16_b;  // need to disable fp32 cbs (Issue #13364) fp32_dest_acc_en ?
-                                                       // tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
-    tt::DataFormat stats_df = im_df;
-
-    uint32_t q_tile_size = tt::tile_size(q_df);
-    uint32_t k_tile_size = tt::tile_size(k_df);
-    uint32_t v_tile_size = tt::tile_size(v_df);
-    uint32_t mask_tile_size = tt::tile_size(mask_df);
-    uint32_t out_tile_size = tt::tile_size(out_df);
-    uint32_t scalar_tile_size = tt::tile_size(scalar_df);
-    uint32_t im_tile_size = tt::tile_size(im_df);
-    uint32_t stats_tile_size = tt::tile_size(stats_df);
-
-    log_debug(tt::LogOp, "q_data_format: {}", q_df);
-    log_debug(tt::LogOp, "k_data_format: {}", k_df);
-    log_debug(tt::LogOp, "v_data_format: {}", v_df);
-    log_debug(tt::LogOp, "mask_data_format: {}", mask_df);
-    log_debug(tt::LogOp, "out_data_format: {}", out_df);
-    log_debug(tt::LogOp, "scalar_data_format: {}", scalar_df);
-    log_debug(tt::LogOp, "intermediate_data_format: {}", im_df);
-    log_debug(tt::LogOp, "statistics_data_format: {}", stats_df);
-
+    // Circular buffers: the recipe compute layout (recipe_compute_program, CBs 0-16 and 29-31;
+    // kernels/recipe_ring_cbs.hpp) with the MUX writer's second handles on K and V, then the reader's derived-length
+    // mailbox. Every CB spans the SDPA grid.
+    const tt::DataFormat q_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
+    const tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
+    const tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
+    const uint32_t q_tile_size = tt::tile_size(q_df);
+    const uint32_t k_tile_size = tt::tile_size(k_df);
+    const uint32_t v_tile_size = tt::tile_size(v_df);
     const auto sdpa_grid_set = CoreRangeSet(sdpa_grid_range);
-
-    // Q input. NOTE: sized for resident Q here; the streamed-Q fallback below (search stream_q)
-    // patches desc.cbs[0].total_size down to one chunk when the resident total does not fit L1.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = q_tiles * q_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_0),
-            .data_format = q_df,
-            .page_size = q_tile_size,
-        }}},
-    });
-    // K and V input CBs with overlapping handles (c_1+c_14 for K, c_2+c_15 for V) so both
-    // compute and MUX writer can pop independently from the same L1 address space.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = k_tiles * k_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors =
-            {{CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_1),
-                  .data_format = k_df,
-                  .page_size = k_tile_size,
-              },
-              CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_14),
-                  .data_format = k_df,
-                  .page_size = k_tile_size,
-              }}},
-    });
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = v_tiles * v_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors =
-            {{CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_2),
-                  .data_format = v_df,
-                  .page_size = v_tile_size,
-              },
-              CBFormatDescriptor{
-                  .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_15),
-                  .data_format = v_df,
-                  .page_size = v_tile_size,
-              }}},
-    });
-
-    // Lightweight mask: single CB holds 1 neginf tile + up to 2 partial mask tiles
-    if (needs_lightweight_mask) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = total_lightweight_mask_tiles * mask_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_3),
-                .data_format = mask_df,
-                .page_size = mask_tile_size,
-            }}},
-        });
+    const auto v_storage = recipes::recipe_kv_storage(gathered_input_tensor_v.dtype());
+    tt::tt_metal::ProgramDescriptor recipe_program = recipes::recipe_compute_program(
+        policy,
+        sdpa_grid_set,
+        1,
+        Sq_chunk_t,
+        Sk_chunk_t,
+        DHt,
+        scale,
+        0,
+        v_storage != policy.selection.kv_storage ? std::optional<recipes::KVStorage>(v_storage) : std::nullopt,
+        q_df);
+    auto& compute_recipe_kernel = recipe_program.kernels.front();
+    desc.cbs = std::move(recipe_program.cbs);
+    for (auto& cb : desc.cbs) {
+        auto& format = cb.format_descriptors.front();
+        if (format.buffer_index == recipe_ring_cb::q) {
+            // One Q chunk: a pass's chunk stays resident across its ring iterations and compute pops it before the
+            // reader fetches the next pass's.
+            cb.total_size = Sq_chunk_t * DHt * q_tile_size;
+        } else if (format.buffer_index == recipe_ring_cb::k || format.buffer_index == recipe_ring_cb::v) {
+            // K and V double-buffered (L1 fallback below: one entry each), with a second handle each so the MUX writer
+            // pops independently of compute.
+            const bool is_k = format.buffer_index == recipe_ring_cb::k;
+            cb.total_size = Sk_chunk_t * DHt * 2 * (is_k ? k_tile_size : v_tile_size);
+            auto alias = format;
+            alias.buffer_index = static_cast<uint8_t>(is_k ? recipe_ring_cb::k_writer : recipe_ring_cb::v_writer);
+            cb.format_descriptors.push_back(alias);
+        } else if (format.buffer_index == recipe_ring_cb::out) {
+            // The output tensor is BF16 whatever Q's type.
+            const uint32_t tiles = cb.total_size / format.page_size;
+            format.data_format = tt::DataFormat::Float16_b;
+            format.page_size = tt::tile_size(tt::DataFormat::Float16_b);
+            cb.total_size = tiles * format.page_size;
+        }
     }
-
-    // scale input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_4),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
-
-    // identity scale input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_5),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
-
-    // Running-max half of the L1 state FIFO (num_passes + 1 entries; see cb_prev_out below).
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = state_fifo_entries * statistics_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_6),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // Partial-output half of the L1 state FIFO.
-    //
-    // Head-serial passes keep one flash-attention accumulator state (max + sum + partial out) per
-    // pass live across all ring iterations. The three state CBs (c_6 max, c_11 sum, c_7 out) are
-    // used as FIFOs: a pass pops its own state at its first K chunk and pushes the updated state at
-    // its last K chunk, so the fixed cyclic pass order keeps each pass's state at the front when it
-    // runs. See state_fifo_entries above for the depth derivation. Sizing stays an exact multiple of
-    // the per-entry tile count so no entry straddles the ring-buffer wrap — intra-entry reads index
-    // tiles relative to the CB front.
-    //
-    // Format is im_df (not out_df): these tiles are accumulator intermediates shared with the
-    // c_25/c_26 scratch halves, not DRAM-formatted output.
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = state_fifo_entries * out_im_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_7),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // column identity input
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = scale_tiles * scalar_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_8),
-            .data_format = scalar_df,
-            .page_size = scalar_tile_size,
-        }}},
-    });
-
-    // cb_qk_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = qk_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_24),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_out_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_25),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_out_accumulate_im
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out_im_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_26),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // cb_cur_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_27),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_max
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_28),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_cur_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_29),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_prev_sum
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_30),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // cb_exp_max_diff
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * stats_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_31),
-            .data_format = stats_df,
-            .page_size = stats_tile_size,
-        }}},
-    });
-
-    // Output
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = out0_t * out_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_16),
-            .data_format = out_df,
-            .page_size = out_tile_size,
-        }}},
-    });
-
-    // stats output
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = statistics_tiles * im_tile_size,
-        .core_ranges = sdpa_grid_set,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_17),
-            .data_format = im_df,
-            .page_size = im_tile_size,
-        }}},
-    });
-
-    // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
-    // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = 1 * im_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_9),
-                .data_format = im_df,
-                .page_size = im_tile_size,
-            }}},
-        });
-    }
-
-    // Compute RISCs cannot NoC-read DRAM, so the reader publishes derived values here (slots per
-    // ring_joint_derived_slots.hpp) and compute reads them with read_tile_value. Must be UInt32:
-    // read_tile_value's indexing follows the CB format, and a float format misreads these raw words.
     if (has_logical_n_tensor) {
+        // Compute RISCs cannot NoC-read DRAM, so the reader publishes the live length here (slots per
+        // ring_joint_derived_slots.hpp) and compute reads it with read_tile_value. UInt32: read_tile_value's indexing
+        // follows the CB format.
         constexpr uint32_t kDerivedPageBytes = 64;
-        static_assert(
-            ttnn::operations::transformer::sdpa::ring_joint::kDerivedSlotCount * sizeof(uint32_t) <= kDerivedPageBytes,
-            "derived slots must fit the page");
         desc.cbs.push_back(CBDescriptor{
             .total_size = kDerivedPageBytes,
             .core_ranges = sdpa_grid_set,
             .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_13),
+                .buffer_index = static_cast<uint8_t>(recipe_ring_cb::derived),
                 .data_format = tt::DataFormat::UInt32,
                 .page_size = kDerivedPageBytes,
             }}},
         });
     }
 
-    // c_10 (cb_sum_out) belongs to the multi-Q DRAM round-trip, which head-serial passes never
-    // take (every pass runs with q_per_core == 1); it is NOT allocated — the kernel's cb_sum_out
-    // index is only touched in the staging branch, which is dead at q_per_core == 1.
-    // c_11 (cb_sum_in) is the running-sum half of the L1 state FIFO — see cb_prev_out (c_7).
-    if (use_streaming_compute) {
-        desc.cbs.push_back(CBDescriptor{
-            .total_size = state_fifo_entries * statistics_tiles * stats_tile_size,
-            .core_ranges = sdpa_grid_set,
-            .format_descriptors = {{CBFormatDescriptor{
-                .buffer_index = static_cast<uint8_t>(tt::CBIndex::c_11),
-                .data_format = stats_df,
-                .page_size = stats_tile_size,
-            }}},
-        });
+    uint32_t kv_cb_entries = 2;
+    // Fit L1 below the lowest live L1 buffer (global semaphores and persistent buffers occupy the top of L1 in a
+    // pipeline): first stage the output one row group at a time, then keep one K and one V entry (the reader then
+    // fetches a chunk only once compute has released the previous one; the FP32 recipes' QK and state CBs are twice
+    // the BF16 ones), then give up the fused chunks' CBs (every K chunk then runs on the reduce path, slower than
+    // either).
+    const uint64_t l1_available = recipes::recipe_free_l1(*device);
+    uint64_t cb_bytes = recipes::recipe_cb_bytes(desc);
+    for (const uint32_t out_rows : {2u, 1u}) {
+        if (cb_bytes <= l1_available || out_rows < std::min(Sq_chunk_t, 2u)) {
+            break;
+        }
+        for (auto& cb : desc.cbs) {
+            if (cb.format_descriptors.front().buffer_index == recipe_ring_cb::out) {
+                cb.total_size =
+                    std::min<uint32_t>(cb.total_size, out_rows * DHt * cb.format_descriptors.front().page_size);
+            }
+        }
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "ExpRingJointSDPA recipe: output staged in {} row(s) to fit L1", out_rows);
     }
-
-    // Streamed-Q fallback: if the CBs do not fit L1 with all num_passes Q chunks resident, keep
-    // only one chunk resident; the reader then re-reads each pass's Q every ring iteration and
-    // compute pops it at the end of the pass. Buys back (num_passes - 1) * Sq_chunk_t * DHt tiles,
-    // which at H3 15s (q=320, k=384, P=2) is the difference between fitting and not.
-    // See exp_more_heads_per_row.md §9.
-    // CBs must end below the lowest live L1 buffer (validate_circular_buffer_region enforces
-    // exactly this). In the pipeline, global semaphores and persistent buffers occupy the top of
-    // L1, so budgeting against the raw L1 size over-promises and the program clashes at allocate.
-    const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
-    const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
-                                                               : mesh_device->l1_size_per_core();
-    const uint32_t usable_l1 =
-        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    uint64_t total_cb_bytes = 0;
-    for (const auto& cb : desc.cbs) {
-        total_cb_bytes += cb.total_size;
+    if (cb_bytes > l1_available) {
+        for (auto& cb : desc.cbs) {
+            const auto index = cb.format_descriptors.front().buffer_index;
+            if (index == recipe_ring_cb::k || index == recipe_ring_cb::v) {
+                cb.total_size /= 2;
+            }
+        }
+        kv_cb_entries = 1;
+        cb_bytes = recipes::recipe_cb_bytes(desc);
+        log_debug(tt::LogOp, "ExpRingJointSDPA recipe: single K and V entries to fit L1");
     }
-    const bool stream_q = (num_passes > 1) && (total_cb_bytes > usable_l1);
-    if (stream_q) {
-        total_cb_bytes -= desc.cbs[0].total_size;
-        desc.cbs[0].total_size = Sq_chunk_t * DHt * q_tile_size;  // c_0 is the first CB pushed
-        total_cb_bytes += desc.cbs[0].total_size;
+    if (cb_bytes > l1_available) {
+        cb_bytes -= recipes::recipe_drop_fused(desc.cbs, compute_recipe_kernel.named_compile_time_args, Sq_chunk_t);
+        log_debug(tt::LogOp, "ExpRingJointSDPA recipe: unfused chunks to fit L1");
     }
     TT_FATAL(
-        total_cb_bytes <= usable_l1,
-        "Exp ring joint SDPA CBs need {} B but only {} B of L1 are usable at this chunk shape "
-        "(q_chunk={}, k_chunk={}, passes={}); reduce k_chunk_size.",
-        total_cb_bytes,
-        usable_l1,
+        cb_bytes <= l1_available,
+        "Exp ring joint SDPA recipe needs {} B of L1 per core at Q{}/K{}, but only {} B are available; use a smaller Q "
+        "or K chunk",
+        cb_bytes,
         q_chunk_size,
         k_chunk_size,
-        num_passes);
-    log_debug(tt::LogOp, "stream_q: {}", stream_q);
-    reader_compile_time_args[sem_args_offset + 4] = stream_q ? 1 : 0;
-    compute_compile_time_args[20] = stream_q ? 1 : 0;
+        l1_available);
+    const bool recipe_fused = recipes::named_arg(compute_recipe_kernel.named_compile_time_args, "recipe_fused") != 0;
 
     auto* const q_buf = input_tensor_q.buffer();
     auto* const k_buf = input_tensor_k.buffer();
@@ -1460,22 +1019,12 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     const uint32_t num_mux_clients_per_group = fwd_rows_dir0;
 
     // ---- Fabric MUX config (needed for writer kernel CT args below) ----
-    // Default: MUX cores are placed at the last x coordinate of the user grid.
+    // MUX cores are placed at the last x coordinate of the user grid.
     //   Backward MUX: first y (0) and last y (sdpa_grid.y - 1). Forward MUX: middle y - 1 and middle y.
-    // Bottom-row experiment: MUX cores sit on the last ROW of the user grid, transposing the same
-    //   arrangement — backward at the first and last x, forward at the middle pair.
-    const uint32_t mid = mux_on_bottom_row ? sdpa_grid.x / 2 : sdpa_grid.y / 2;
-    const uint32_t fabric_mux_col = user_grid.x - 1;  // Last column of user_grid (default placement)
-    const uint32_t fabric_mux_row = user_grid.y - 1;  // Last row of user_grid (bottom-row placement)
-    const bool mux_top_cluster = exp_sdpa_mux_top_cluster();
-    const std::vector<CoreCoord> mux_backward_logical_cores =
-        mux_on_bottom_row ? std::vector<CoreCoord>{{0, fabric_mux_row}, {sdpa_grid.x - 1, fabric_mux_row}}
-        : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, 1}}
-                          : std::vector<CoreCoord>{{fabric_mux_col, 0}, {fabric_mux_col, sdpa_grid.y - 1}};
-    const std::vector<CoreCoord> mux_forward_logical_cores =
-        mux_on_bottom_row ? std::vector<CoreCoord>{{mid - 1, fabric_mux_row}, {mid, fabric_mux_row}}
-        : mux_top_cluster ? std::vector<CoreCoord>{{fabric_mux_col, 2}, {fabric_mux_col, 3}}
-                          : std::vector<CoreCoord>{{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
+    const uint32_t mid = sdpa_grid.y / 2;
+    const uint32_t fabric_mux_col = user_grid.x - 1;
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{fabric_mux_col, 0}, {fabric_mux_col, sdpa_grid.y - 1}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{fabric_mux_col, mid - 1}, {fabric_mux_col, mid}};
 
     const uint32_t num_mux_full_size_channels = num_mux_clients_per_group;
     const uint32_t num_mux_header_only_channels = 0;
@@ -1511,9 +1060,6 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
         mux_kernel_config.place_in_program_local_l1(desc, mux_core_range_set);
     }
 
-    // Convert std::map<string,string> defines to KernelDescriptor::Defines vector form.
-    KernelDescriptor::Defines kernel_defines(defines.begin(), defines.end());
-
     // Build kernel descriptors locally so we can append per-core runtime args
     // before pushing them into desc.kernels at the end. KernelDescriptor creation
     // is deferred (just like the original CreateKernel calls were) until after chain
@@ -1524,8 +1070,21 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     reader_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
     reader_kernel.compile_time_args = reader_compile_time_args;
-    reader_kernel.defines = kernel_defines;
+    reader_kernel.named_compile_time_args = {{"kv_cb_entries", kv_cb_entries}};
     reader_kernel.config = ReaderConfigDescriptor{};
+
+    // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns); both writer kernels
+    // take the same compile-time args (the plain writer ignores the MUX and all-gather ones).
+    fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_compile_time_args);
+    const uint32_t ag_page_size = input_tensor_k.mesh_buffer().page_size();
+    const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
+    constexpr uint32_t max_scatter_addresses = 4;
+    const uint32_t ag_packet_size_in_pages =
+        std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);
+    writer_compile_time_args.push_back(ag_packet_size_in_pages);
+    writer_compile_time_args.push_back(ag_page_size);
+    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_compile_time_args);
 
     // Non-fabric writer: columns 0..(sdpa_grid.x-3)
     // sdpa_grid.x-2 and sdpa_grid.x-1 are fabric MUX client columns
@@ -1536,51 +1095,34 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
     writer_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     writer_kernel.core_ranges = CoreRangeSet(sdpa_writer_range);
     writer_kernel.compile_time_args = writer_compile_time_args;
-    writer_kernel.defines = kernel_defines;
+    writer_kernel.named_compile_time_args = {{"use_mux", 0}};
     writer_kernel.config = WriterConfigDescriptor{};
 
     // Fabric writer: columns sdpa_grid.x-2 and sdpa_grid.x-1 (backward and forward MUX clients)
     CoreRange mux_writer_range({sdpa_grid.x - 2, 0}, {sdpa_grid.x - 1, sdpa_grid.y - 1});
-    auto writer_fabric_compile_time_args = writer_compile_time_args;
-    fabric_mux_connection_ct_args(num_mux_clients_per_group, mux_kernel_config, writer_fabric_compile_time_args);
-
-    // All-gather CT args for the fabric writer (integrated K/V all-gather on MUX client columns)
-    const uint32_t ag_page_size = input_tensor_k.mesh_buffer().page_size();
-    const size_t ag_packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
-    constexpr uint32_t max_scatter_addresses = 4;
-    const uint32_t ag_packet_size_in_pages =
-        std::min(static_cast<uint32_t>(ag_packet_size_bytes / ag_page_size), max_scatter_addresses);
-
-    writer_fabric_compile_time_args.push_back(ag_packet_size_in_pages);
-    writer_fabric_compile_time_args.push_back(ag_page_size);
-    TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(writer_fabric_compile_time_args);
-    TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(writer_fabric_compile_time_args);
-
-    auto writer_fabric_defines = defines;
-    writer_fabric_defines["USE_MUX"] = "1";
-    KernelDescriptor::Defines writer_fabric_kernel_defines(writer_fabric_defines.begin(), writer_fabric_defines.end());
-    KernelDescriptor writer_fabric_kernel{};
-    writer_fabric_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp";
-    writer_fabric_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
+    KernelDescriptor writer_fabric_kernel = writer_kernel;
     writer_fabric_kernel.core_ranges = CoreRangeSet(mux_writer_range);
-    writer_fabric_kernel.compile_time_args = writer_fabric_compile_time_args;
-    writer_fabric_kernel.defines = writer_fabric_kernel_defines;
-    writer_fabric_kernel.config = WriterConfigDescriptor{};
+    writer_fabric_kernel.named_compile_time_args = {{"use_mux", 1}};
 
+    // The recipe compute: its named arguments (after any L1 fallback above), compute config (fidelity, FP32 DEST and
+    // unpack-to-dest modes) and defines. Exp ring masks only key padding (recipe_ring_mask 0) and keeps each pass's
+    // state resident (no checkpoints).
+    auto recipe_args = recipes::recipe_named_args(compute_recipe_kernel.named_compile_time_args);
+    recipes::set_named_arg(recipe_args, "recipe_ring", 1);
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp";
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = CoreRangeSet(sdpa_grid_range);
     compute_kernel.compile_time_args = compute_compile_time_args;
-    compute_kernel.defines = kernel_defines;
-    compute_kernel.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
-        .dst_full_sync_en = dst_full_sync_en,
-        .math_approx_mode = math_approx_mode,
-    };
+    compute_kernel.named_compile_time_args = recipe_args;
+    compute_kernel.defines = compute_recipe_kernel.defines;
+    compute_kernel.config = compute_recipe_kernel.config;
+    // Math builds at -O2 (exp_ring_joint_sdpa.cpp); with fused chunks or ACCURATE, unpack and pack too (their code at
+    // -O3 overflows the kernel config buffer, as on the ring).
+    if (recipe_fused || policy.selection.recipe == recipes::Recipe::D) {
+        compute_kernel.opt_level = recipes::recipe_opt_level(tt::tt_metal::KernelBuildOptLevel::O2);
+    }
 
     // Live-length tensor address for all three kernels -- each derives chunk-skip counts from it and
     // the credit/gate protocol requires they agree. Buffer* (not ->address()) so a cache hit re-patches it.
@@ -1682,7 +1224,7 @@ tt::tt_metal::ProgramDescriptor build_exp_ring_joint_sdpa_program_descriptor(
 
         // Determine if this core's writer has a valid MUX connection (for reader-side forwarding).
         // Split-head dedup follower rows forward nothing, so their clients do not connect and
-        // their readers do not feed c_14/c_15 at all.
+        // their readers do not feed the MUX writer's K/V handles at all.
         const bool row_forwards = row_dedup_role.at(core.y) != 2;
         const bool is_mux_writer = (core.x >= sdpa_grid.x - 2);
         bool is_mux_writer_valid = false;
@@ -1945,8 +1487,7 @@ void ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     auto* mesh_device = tensor_args.input_q.device();
     const CoreCoord user_grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                                 : mesh_device->compute_with_storage_grid_size();
-    const CoreCoord sdpa_grid = exp_sdpa_mux_on_bottom_row() ? CoreCoord{user_grid.x, user_grid.y - 2}
-                                                             : CoreCoord{user_grid.x - 1, user_grid.y};
+    const CoreCoord sdpa_grid = exp_ring_sdpa_grid(user_grid);
     const uint32_t num_sdpa_cores = sdpa_grid.x * sdpa_grid.y;
     const uint32_t expected_reader_args = dyn::reader_arg_count(args.num_links);
 

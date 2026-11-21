@@ -464,7 +464,7 @@ ttsl::hash::hash_t exp_ring_joint_hash(
         /*ring_size=*/kRingSize,
         /*output_memory_config=*/ttnn::DRAM_MEMORY_CONFIG,
         /*program_config=*/std::nullopt,
-        /*compute_kernel_config=*/DeviceComputeKernelConfig{},
+        /*precision=*/ttnn::operations::transformer::SDPAPrecision::STANDARD,
         /*dim=*/2,
         /*num_links=*/1,
         topology,

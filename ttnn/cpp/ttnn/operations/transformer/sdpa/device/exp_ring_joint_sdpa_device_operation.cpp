@@ -16,6 +16,7 @@
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation_types.hpp"
 #include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
+#include "ttnn/operations/transformer/sdpa/device/recipe/sdpa_recipe_program.hpp"
 #include "ttnn/tensor/types.hpp"
 
 using namespace tt::tt_metal;
@@ -42,19 +43,35 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
     }
 
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
+    // Blackhole only: the exp ring recipe kernels are not built or validated for Wormhole (decision of 2026-10-09).
+    TT_FATAL(
+        input_tensor_q.device()->arch() == tt::ARCH::BLACKHOLE,
+        "Exp ring joint SDPA runs on Blackhole only; on Wormhole use ring_joint_scaled_dot_product_attention");
 
     // Validate joint strategy is 'rear'
     TT_FATAL(args.joint_strategy == "rear", "Joint strategy must be 'rear'. Got: {}", args.joint_strategy);
 
-    // Validate all tensors have the same dtype
-    const auto dtype = input_tensor_q.dtype();
+    // Q (and joint Q) share one dtype, K/V (spatial, gathered and joint) another: the recipe reads Q in its stored
+    // format and K/V in the recipe's K/V format (e.g. FAST with BF16 Q and BFP8 K/V). The joint K/V share the spatial
+    // K/V circular buffers.
+    const auto q_dtype = input_tensor_q.dtype();
+    const auto kv_dtype = gathered_input_tensor_k.dtype();
     for (const auto& tensor : sdpa_input_tensors) {
+        const bool is_q = &tensor == &sdpa_input_tensors[0] || (has_joint && &tensor == &sdpa_input_tensors[3]);
+        const auto dtype = is_q ? q_dtype : kv_dtype;
         TT_FATAL(
             tensor.dtype() == dtype,
-            "All tensors must have the same dtype. Expected {}, got {}",
+            "Exp ring joint SDPA requires Q and joint Q to share one dtype and K, V, joint K and joint V another. "
+            "Expected {}, got {}",
             dtype,
             tensor.dtype());
     }
+    TT_FATAL(
+        tensor_args.input_k.dtype() == kv_dtype && tensor_args.input_v.dtype() == kv_dtype,
+        "Exp ring joint SDPA requires the local K/V shards in the gathered K/V dtype {}, got K {} / V {}",
+        kv_dtype,
+        tensor_args.input_k.dtype(),
+        tensor_args.input_v.dtype());
 
     // Get shapes
     const auto& q_shape = input_tensor_q.logical_shape();
@@ -203,6 +220,13 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         k_chunk_size,
         tt::constants::TILE_WIDTH);
 
+    // The precision recipe: a supported scale and dtypes, and a supported chunk geometry (Q chunks of at most 1024
+    // rows). The joint K/V share the spatial K/V circular buffers; all inputs share one dtype (checked above).
+    namespace recipes = ttnn::operations::transformer::sdpa::detail;
+    recipes::resolve_recipe_policy(
+        input_tensor_q, gathered_input_tensor_k, args.precision, args.scale, args.program_config);
+    recipes::validate_recipe_geometry(recipes::RecipeOp::ExpRing, q_chunk_size, k_chunk_size, DH);
+
     TT_FATAL(
         N_local % tt::constants::TILE_HEIGHT == 0,
         "Local sequence length must be divisible by TILE_HEIGHT. Got N_local: {}, TILE_HEIGHT: {}",
@@ -254,29 +278,18 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         user_grid.y,
         device_grid.x,
         device_grid.y);
-    // Mirrors the factory's grid derivation, including the bottom-row MUX experiment.
-    // Lower-bound the grid BEFORE the derivation: last-column mode subtracts the reserved MUX
-    // column from x and bottom-row mode subtracts two rows from y, so an undersized
-    // program-config grid would otherwise underflow unsigned here (and the num_q_chunks modulo
-    // below would divide by zero) instead of failing with a clear error.
-    const bool mux_on_bottom_row = exp_sdpa_mux_on_bottom_row();
-    if (mux_on_bottom_row) {
-        TT_FATAL(
-            user_grid.y >= 3,
-            "Program config grid ({}x{}) too short for bottom-row MUX placement: needs at least 3 "
-            "rows (2 reserved for the MUX row and its spacer).",
-            user_grid.x,
-            user_grid.y);
-    } else {
-        TT_FATAL(
-            user_grid.x >= 2 && user_grid.y >= 1,
-            "Program config grid ({}x{}) too small: needs at least 1 row and 2 columns (the last column "
-            "is reserved for the fabric MUX kernels).",
-            user_grid.x,
-            user_grid.y);
-    }
-    const uint32_t sdpa_grid_x = mux_on_bottom_row ? user_grid.x : user_grid.x - 1;
-    const uint32_t sdpa_grid_y = mux_on_bottom_row ? user_grid.y - 2 : user_grid.y;
+    // Mirrors the factory's grid derivation (exp_ring_sdpa_grid). Lower-bound the grid first: the reserved MUX column
+    // is subtracted from x, so an undersized program-config grid would otherwise underflow unsigned here (and the
+    // num_q_chunks modulo below would divide by zero) instead of failing with a clear error.
+    TT_FATAL(
+        user_grid.x >= 2 && user_grid.y >= 1,
+        "Program config grid ({}x{}) too small: needs at least 1 row and 2 columns (the last column "
+        "is reserved for the fabric MUX kernels).",
+        user_grid.x,
+        user_grid.y);
+    const CoreCoord sdpa_grid = exp_ring_sdpa_grid(user_grid);
+    const uint32_t sdpa_grid_x = sdpa_grid.x;
+    const uint32_t sdpa_grid_y = sdpa_grid.y;
     const uint32_t num_sdpa_cores = sdpa_grid_x * sdpa_grid_y;
 
     // Joint sequence must divide evenly (or be zero); last local Q chunk may be padded.
@@ -325,25 +338,9 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         sdpa_grid_y,
         total_segments);
 
-    // Segments per row: each core row hosts up to kMaxPasses head-segments, walked as serial
-    // passes. Keep in lockstep with kMaxPasses in exp_ring_joint_sdpa_program_factory.cpp
-    // (L1-bound).
-    constexpr uint32_t kMaxPasses = 3;
+    // Segments per row: each core row walks its head-segments as serial passes, pass-outer (one resident Q chunk and
+    // state per pass), so the pass count is not L1-bound.
     const uint32_t num_passes = (total_segments + sdpa_grid_y - 1) / sdpa_grid_y;
-    TT_FATAL(
-        num_passes <= kMaxPasses,
-        "Number of head-segments (B={} × NQH={} × segs_per_head={} = {}) needs {} serial passes on "
-        "{} SDPA grid rows (device grid {}×{}), but at most {} are supported. Reduce batch size or "
-        "head count (e.g. via tensor parallelism), or use a larger q_chunk_size.",
-        B,
-        NQH,
-        segs_per_head,
-        total_segments,
-        num_passes,
-        sdpa_grid_y,
-        device_grid.x,
-        device_grid.y,
-        kMaxPasses);
 
     // Final sanity: total Q chunks must fit the cores across all passes.
     TT_FATAL(
@@ -356,6 +353,37 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
         total_q_chunks,
         num_sdpa_cores,
         num_passes);
+}
+
+// A cache hit has the same attributes and tensor specs as the miss that built the program (both are hashed), so only
+// what the hash leaves out is checked: the tensors are allocated on device (their buffers are re-bound) and the
+// hash-excluded global semaphores cover the links.
+void ExpRingJointSDPADeviceOperation::validate_on_program_cache_hit(
+    const ExpRingJointSDPAParams& args, const ExpRingJointSDPAInputs& tensor_args) {
+    const auto on_device = [](const Tensor& tensor) {
+        TT_FATAL(
+            tensor.storage_type() == StorageType::DEVICE && tensor.is_allocated(),
+            "Exp ring joint SDPA operands must be allocated on device");
+    };
+    for (const Tensor* tensor :
+         {&tensor_args.input_q,
+          &tensor_args.input_k,
+          &tensor_args.input_v,
+          &tensor_args.gathered_k,
+          &tensor_args.gathered_v}) {
+        on_device(*tensor);
+    }
+    for (const auto& tensor :
+         {tensor_args.joint_q, tensor_args.joint_k, tensor_args.joint_v, tensor_args.logical_n_tensor}) {
+        if (tensor.has_value()) {
+            on_device(*tensor);
+        }
+    }
+    TT_FATAL(
+        args.semaphore.size() >= args.num_links,
+        "Exp ring joint SDPA needs one global semaphore per link ({}), got {}",
+        args.num_links,
+        args.semaphore.size());
 }
 
 ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs(
@@ -371,8 +399,8 @@ ExpRingJointSDPAResultSpec ExpRingJointSDPADeviceOperation::compute_output_specs
         joint_output_shape = tensor_args.joint_q.value().logical_shape();
         joint_padded_seq = tensor_args.joint_q.value().padded_shape()[2];
     }
-    // 2× the sequence length: first half stores running max, second half stores running sum.
-    // Used as DRAM scratch for multi-Q-chunk deferred norm round-trips between ring iterations.
+    // The third output keeps its legacy shape (2x the sequence length, once the legacy kernels' max / sum scratch) so
+    // the op's outputs are unchanged; the recipe kernels do not write it.
     stats_shape[2] = (input.padded_shape()[2] + joint_padded_seq) * 2;
 
     return {
@@ -422,7 +450,8 @@ tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> ExpRingJointSDPADevi
 
     CoreCoord grid = args.program_config.has_value() ? args.program_config->compute_with_storage_grid_size
                                                      : output_tensor.device()->compute_with_storage_grid_size();
-    MathFidelity fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
+    MathFidelity fidelity = ttnn::operations::transformer::sdpa::detail::recipe_math_fidelity(
+        args.precision, tensor_args.gathered_k.dtype());
 
     const uint32_t B = q_shape[0];
     const uint32_t NQH = q_shape[1];
@@ -468,14 +497,11 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     const ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
-    const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     const uint32_t num_workers_per_link,
     const uint32_t num_buffers_per_channel,
-    const std::optional<ttnn::Tensor>& logical_n_tensor) {
+    const std::optional<ttnn::Tensor>& logical_n_tensor,
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
-
-    auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor_q.device()->arch(), compute_kernel_config, MathFidelity::HiFi2, true, false, false);
 
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -499,7 +525,7 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         num_devices,
         tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
         std::move(program_config),
-        kernel_config_val,
+        precision.value_or(ttnn::operations::transformer::SDPAPrecision::STANDARD),
         gather_dim,
         num_links,
         topology,

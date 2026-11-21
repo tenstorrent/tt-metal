@@ -25,6 +25,7 @@ struct ExpRingJointSDPADeviceOperation {
     using tensor_return_value_t = ExpRingJointSDPAResult;
     using program_factory_t = std::variant<ExpRingJointSDPAMeshWorkloadFactory>;
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
+    static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
@@ -51,10 +52,11 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     uint32_t num_workers_per_link = 1,
     uint32_t num_buffers_per_channel = 8,
     // When set, logical_n above is the worst-case placeholder and the live value is read on-device.
-    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt);
+    const std::optional<ttnn::Tensor>& logical_n_tensor = std::nullopt,
+    // The precision recipe; STANDARD when unset (ttnn.SDPAPrecision; ACCURATE for FP32 accumulation).
+    std::optional<ttnn::operations::transformer::SDPAPrecision> precision = std::nullopt);
 
 }  // namespace ttnn::prim

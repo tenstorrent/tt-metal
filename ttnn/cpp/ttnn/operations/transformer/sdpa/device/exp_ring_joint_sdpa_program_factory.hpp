@@ -5,7 +5,6 @@
 #pragma once
 
 #include <cstdint>
-#include <cstdlib>
 #include <optional>
 
 #include <tt-metalium/constants.hpp>
@@ -24,43 +23,9 @@
 
 namespace ttnn::prim {
 
-// EXPERIMENT (TT_EXP_SDPA_MUX_BOTTOM_ROW): place the fabric MUX kernels on the BOTTOM ROW of the
-// user grid instead of the reserved right column. The SDPA grid then becomes user_grid.x wide by
-// user_grid.y - 2 tall (the row count is kept even so the backward/forward direction split and the
-// termination groups stay uniform, requiring no kernel changes; the row between the workers and
-// the MUX row is idle). Probes whether MUX-kernel placement relative to the eth cores affects the
-// fabric all-gather rate. NOTE: the env var is not part of the program-cache key — use one setting
-// per process. Shared by the factory build, the cache-hit patch, and validation so all three
-// derive the same grid.
-inline bool exp_sdpa_mux_on_bottom_row() {
-    static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_BOTTOM_ROW") != nullptr;
-    return enabled;
-}
+// The SDPA worker grid: the program config's grid less its last column, which hosts the fabric MUX kernels.
+inline CoreCoord exp_ring_sdpa_grid(CoreCoord user_grid) { return CoreCoord{user_grid.x - 1, user_grid.y}; }
 
-// EXPERIMENT (TT_EXP_SDPA_MUX_TOP_CLUSTER): keep the reserved-column MUX placement (and therefore
-// the exact same SDPA schedule) but cluster the four MUX kernels at the TOP of the column — rows
-// 0..3, which sit 1..4 NoC hops from the eth row (all Blackhole eth cores are at physical row 1) —
-// instead of the spread rows 0 / mid-1 / mid / last, whose farthest core is ~10 hops away.
-// Isolates the MUX->eth distance effect at a fixed schedule.
-inline bool exp_sdpa_mux_top_cluster() {
-    static const bool enabled = std::getenv("TT_EXP_SDPA_MUX_TOP_CLUSTER") != nullptr;
-    return enabled;
-}
-
-// Single source of truth for the DYNAMIC (hash-excluded) global-semaphore address runtime args.
-//
-// The per-link GlobalSemaphore addresses are excluded from the program-cache key
-// (ExpRingJointSDPAParams::attribute_values omits `semaphore`), so two calls that differ only in
-// which GlobalSemaphores they pass still cache-hit. That makes the addresses dynamic: the factory
-// bakes them for the cache-miss build, and
-// ExpRingJointSDPAMeshWorkloadFactory::override_runtime_arguments() re-applies them on every
-// dispatch — otherwise a cache hit with a different semaphore set would silently reuse the address
-// frozen at the first miss (the frozen-runtime-arg bug).
-//
-// The kernel indices, per-core arg slots and total arg counts below are the shared reference for
-// BOTH the factory's cache-miss bake (build_exp_ring_joint_sdpa_program_descriptor) and the
-// cache-hit patch. The patch asserts arg COUNTS, so adding or removing an arg fails loudly; a
-// reorder that keeps the count is not detected, so update these slots in lockstep with the bake.
 namespace exp_ring_joint_sdpa_dynamic {
 // Kernel indices — must match the desc.kernels push order (reader, writer, writer_fabric, compute[, mux]).
 inline constexpr uint32_t kReaderKernelIdx = 0;

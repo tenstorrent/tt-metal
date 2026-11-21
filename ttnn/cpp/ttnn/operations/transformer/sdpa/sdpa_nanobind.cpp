@@ -247,7 +247,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     uint32_t num_workers_per_link,
-    uint32_t num_buffers_per_channel) {
+    uint32_t num_buffers_per_channel,
+    std::optional<SDPAPrecision> precision) {
     return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
         input_tensor_q,
         input_tensor_k,
@@ -270,7 +271,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_p
         scale,
         compute_kernel_config,
         num_workers_per_link,
-        num_buffers_per_channel);
+        num_buffers_per_channel,
+        precision);
 }
 
 }  // namespace
@@ -1111,20 +1113,23 @@ void bind_sdpa(nb::module_& mod) {
                 trace can replay at different lengths (rewrite the tensor between replays).
             program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
             scale (float, optional): Scale factor for QK^T. Defaults to None.
-            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Deprecated and ignored (the numerics
+                come from precision).
             dim (int): Dimension along which to perform the ring all-gather operation.
             multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): Global semaphores for multi-device synchronization.
-            num_links (int): Number of communication links to use for ring all-gather.
+            num_links (int): Number of communication links to use for ring all-gather. Must be 2.
             cluster_axis (int): Axis of the mesh device along which to perform the all-gather.
             mesh_device (ttnn.MeshDevice): Multi-device mesh for distributed computation.
-            topology (ttnn.ccl.Topology): Communication topology (Ring or Linear).
+            topology (ttnn.ccl.Topology): Communication topology. Must be Ring.
             subdevice_id (Optional[tt.tt_metal.SubDeviceId]): Sub-device identifier. Defaults to None.
+            precision (ttnn.SDPAPrecision, optional): The numerics recipe: STANDARD (default), BALANCED, ACCURATE
+                (FP32 accumulation) or FAST. Blackhole only.
 
         Returns:
             (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
               - The attention output for the original Q/K/V shape [b x nh x N/num_devices x dh].
               - The attention output for the joint Q/K/V shape    [b x nh x L x dh].
-              - The final log-sum-exp of the operation.           [b x nh x (N/num_devices + L) x 1]
+              - An internal scratch tensor (not written).         [b x nh x 2 (N/num_devices + L) x 1]
         )doc";
 
     ttnn::bind_function<"exp_ring_joint_scaled_dot_product_attention", "ttnn.transformer.">(
@@ -1153,7 +1158,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("num_workers_per_link") = 1,
-        nb::arg("num_buffers_per_channel") = 8);
+        nb::arg("num_buffers_per_channel") = 8,
+        nb::arg("precision") = nb::none());
 
     const auto* const mla_doc =
         R"doc(
