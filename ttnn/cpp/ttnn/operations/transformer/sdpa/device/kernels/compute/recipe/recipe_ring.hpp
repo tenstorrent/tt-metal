@@ -19,6 +19,19 @@ ALWI void recipe_ring_pop_chunk() {
     CircularBuffer(recipe_ring_cb::v).pop_front(v_chunk_tiles);
 }
 
+// A Q chunk's state before its first K chunk: the canonical banks. Out of line and field by field: inline, the compiler
+// turns the constant stores into a memcpy from a constant, which links memcpy (~450 B) into the ring kernels.
+__attribute__((noinline)) void recipe_ring_reset_state(RecipeAccumulatorState& state) {
+    using namespace recipe_ring_cb;
+    state.prev.sum = sum_a;
+    state.prev.max = max_a;
+    state.prev.out = out_a;
+    state.cur.sum = sum_b;
+    state.cur.max = max_b;
+    state.cur.out = out_b;
+    state.processed_chunks = 0;
+}
+
 // One Q chunk's state for one ring iteration: the state banks (resident: `state` carries over from the Q chunk's
 // previous iteration; staged: the banks reset, restored from the writer unless this is the Q chunk's first iteration),
 // then `chunks` K chunks through `step(state, chunk, last_k)`, then a save (staged, unless the Q chunk normalized).
@@ -36,9 +49,7 @@ ALWI void recipe_ring_q_block(
     const Step& step) {
     using namespace recipe_ring_cb;
     if (staged) {
-        state.prev = {sum_a, max_a, out_a};
-        state.cur = {sum_b, max_b, out_b};
-        state.processed_chunks = 0;
+        recipe_ring_reset_state(state);
     }
     if (staged && !first_iteration) {
         if constexpr (recipe::ring_stream_state) {

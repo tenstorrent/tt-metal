@@ -180,26 +180,23 @@ __attribute__((optimize("Os"))) void kernel_main() {
 
     // Joint Q chunks stay compile-time; the live local counts come from the common word.
     constexpr uint32_t num_joint_q_chunks_ct = num_q_chunks_ct - num_local_q_chunks_ct;
-    const ring_joint::LocalNGeometry local_n =
-        dynamic_local_n ? ring_joint::derive_local_n_geometry(
-                              get_common_arg_val<uint32_t>(ring_joint::kDynamicLocalNComputeCommonArg),
-                              Sq_chunk_t,
-                              Sk_chunk_t,
-                              kv_stripe_split,
-                              ring_size,
-                              num_joint_q_chunks_ct)
-                        : ring_joint::LocalNGeometry{
-                              q_local_padded_Nt_ct,
-                              kv_local_padded_Nt_ct,
-                              num_local_q_chunks_ct,
-                              num_local_k_chunks_ct,
-                              num_q_chunks_ct,
-                              kv_region_Nt_ct,
-                              chunk_size_t_ct};
-    const uint32_t q_local_padded_Nt = local_n.q_local_padded_Nt;
-    const uint32_t kv_local_padded_Nt = local_n.kv_local_padded_Nt;
-    const uint32_t num_local_k_chunks = local_n.num_local_k_chunks;
-    const uint32_t num_q_chunks = local_n.num_q_chunks;
+    // Scalars, not a LocalNGeometry object: a constant aggregate compiles to a memcpy (and memcpy's code) here.
+    ring_joint::LocalNGeometry live;
+    if constexpr (dynamic_local_n) {
+        live = ring_joint::derive_local_n_geometry(
+            get_common_arg_val<uint32_t>(ring_joint::kDynamicLocalNComputeCommonArg),
+            Sq_chunk_t,
+            Sk_chunk_t,
+            kv_stripe_split,
+            ring_size,
+            num_joint_q_chunks_ct);
+    }
+    const uint32_t q_local_padded_Nt = dynamic_local_n ? live.q_local_padded_Nt : q_local_padded_Nt_ct;
+    const uint32_t kv_local_padded_Nt = dynamic_local_n ? live.kv_local_padded_Nt : kv_local_padded_Nt_ct;
+    const uint32_t num_local_k_chunks = dynamic_local_n ? live.num_local_k_chunks : num_local_k_chunks_ct;
+    const uint32_t num_q_chunks = dynamic_local_n ? live.num_q_chunks : num_q_chunks_ct;
+    const uint32_t kv_region_Nt = dynamic_local_n ? live.kv_region_Nt : kv_region_Nt_ct;
+    const uint32_t q_chunk_group_tile_count = dynamic_local_n ? live.q_chunk_group_tile_count : chunk_size_t_ct;
 
     constexpr bool has_joint_k = num_joint_k_chunks > 0;
     constexpr bool has_gathered_joint_k = joint_is_sharded && has_joint_k;
@@ -218,7 +215,9 @@ __attribute__((optimize("Os"))) void kernel_main() {
     const uint32_t forward_writes_expected = get_arg_val<uint32_t>(argidx++);
     const uint32_t backward_writes_expected = get_arg_val<uint32_t>(argidx++);
     uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
-    KVPadRotationContext rotation{};
+    // The Q slab's KV-pad rotation segments, read straight into the pack thread's mask frame (a struct copy here costs
+    // a memcpy call and its code).
+    KVPadRotationContext& rotation = recipe_ring_frame.rotation;
     rotation.q_pre_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
     rotation.q_pre_wrap_tile_count = get_arg_val<uint32_t>(argidx++);
     rotation.q_post_wrap_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -276,11 +275,10 @@ __attribute__((optimize("Os"))) void kernel_main() {
     const uint32_t ring_index = ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
         fused_op_indexer.seq.ring_index, mesh_rows, mesh_cols, snake_orientation);
     // Sequence-frame masks: the chunk groups' geometry, the logical length and the Q slab's rotation segments.
-    recipe_ring_frame.group_tiles = local_n.q_chunk_group_tile_count;
-    recipe_ring_frame.region_tiles = local_n.kv_region_Nt;
+    recipe_ring_frame.group_tiles = q_chunk_group_tile_count;
+    recipe_ring_frame.region_tiles = kv_region_Nt;
     recipe_ring_frame.local_tiles = kv_local_padded_Nt;
     recipe_ring_frame.logical_tiles = logical_nt;
-    recipe_ring_frame.rotation = rotation;
     // Chunked prefill's first absolute Q tile of this device's slab (the Q slab rank is the tensor rank over the
     // KV/Q split); KV-pad rotation maps the slab's tiles through its wrap segments instead.
     const uint32_t chunked_q_tile0 =
@@ -329,8 +327,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
                 logical_nt,
                 causal_end_nt,
                 kv_local_padded_Nt,
-                local_n.q_chunk_group_tile_count,
-                local_n.kv_region_Nt);
+                q_chunk_group_tile_count,
+                kv_region_Nt);
         } else {
             return chunked_kv_chunk_is_live<
                 kv_pad_rotation_enabled,
@@ -346,7 +344,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
     // (no window), and a source's smallest key is its first sent chunk's first, so the smallest such key over the
     // finished ring iterations tells which Q chunks have every row seeded (the same for every Q chunk of the core).
     seed_key_min = UINT32_MAX;
-    RecipeAccumulatorState resident{{sum_a, max_a, out_a}, {sum_b, max_b, out_b}};
+    RecipeAccumulatorState resident;
+    recipe_ring_reset_state(resident);
     const bool staged = q_per_core > 1;
     bool seen_active_iter = false;
     const uint32_t sdpa_ring_iterations = ring_joint::ring_pass_count(ring_size, has_sliding_window);
@@ -420,7 +419,7 @@ __attribute__((optimize("Os"))) void kernel_main() {
         // This iteration's smallest key (sequence frame, without a window): its local tile 0. If the reader skips that
         // chunk, the key lies past every Q row of the device (the logical / causal skips), so it seeds nothing.
         if constexpr (recipe::ring_mask == 2 && !has_sliding_window) {
-            iter_key_min = ring_id * local_n.kv_region_Nt;
+            iter_key_min = ring_id * kv_region_Nt;
         }
         uint32_t chunks_popped = 0;  // every K/V pair this iteration pops, for the phase alignment below
         for (uint32_t q_flat = global_q_start; q_flat < global_q_end; ++q_flat) {
@@ -505,8 +504,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
                                                            : chunked_kv_global_tile_for_local(
                                                                  ref.source_ring_id,
                                                                  local,
-                                                                 local_n.q_chunk_group_tile_count,
-                                                                 local_n.kv_region_Nt);
+                                                                 q_chunk_group_tile_count,
+                                                                 kv_region_Nt);
                                     if (k <= q && (q - k) * tt::constants::TILE_HEIGHT < sliding_window_size) {
                                         seeded_rows |= 1u << r;
                                         break;
@@ -576,8 +575,8 @@ __attribute__((optimize("Os"))) void kernel_main() {
                                 positional = chunked_kv_global_tile_for_local(
                                                  ring_id,
                                                  last_local,
-                                                 local_n.q_chunk_group_tile_count,
-                                                 local_n.kv_region_Nt) >= q_tile0;
+                                                 q_chunk_group_tile_count,
+                                                 kv_region_Nt) >= q_tile0;
                             }
                         }
                     }
