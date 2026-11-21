@@ -175,19 +175,11 @@ class TT_CCL:
         # keyed by shape signature. See get_indexer_ring_k_buffer.
         self.indexer_ring_k_buffers: dict[tuple, "ttnn.Tensor"] = {}
 
-        # Shared across sequential norm layers. Consecutive calls must not share a semaphore or a stats
-        # scratch, to absorb inter-device skew at collective completion: a chip that finishes first may
-        # already be signalling into the next call's resources.
-        # Stats scratch is shape-specific: two per geometry, alternated per geometry, so consecutive calls of
-        # one geometry use different scratch and calls of different geometries never share it.
-        # The semaphore is not: the op waits for ring_size - 1 increments per row and resets it to 0 at the end,
-        # whatever the shape. So there are two per (cluster_axis, num_links), alternated on every call
-        # whatever its geometry, and consecutive calls never share one. Each is an L1 buffer cut from the top
-        # of L1 on every worker core, and one pair per geometry pushed K3's lowest L1 buffer into ring_mla's
-        # static CBs (DSpark SC4, 8x[4,4]).
+        # Shared across sequential norm layers. Semaphore and stats scratch must
+        # alternate together to absorb inter-device skew at collective completion.
+        # Sequential layers with the same geometry share two semaphore/stats pairs.
         # Keep resources alive until mesh teardown: traces may still reference them.
         self.fused_rmsnorm_resources: dict[tuple, dict] = {}
-        self.fused_rmsnorm_semaphores: dict[tuple, dict] = {}
 
         # One model-wide sparse-MLA overlap manager and external high-BW-gather semaphore pair.
         # Full-indexer layers execute serially, so they reuse the same resources. The pair belongs
@@ -223,11 +215,7 @@ class TT_CCL:
                 memo[0], memo[1], memo[2] = x.spec, resources, weight
         index = resources["next"]
         resources["next"] = 1 - index
-        stats = resources["pairs"][index][1]
-        pool = resources["semaphores"]
-        sem_index = pool["next"]
-        pool["next"] = 1 - sem_index
-        return pool["semaphores"][sem_index], stats
+        return resources["pairs"][index]
 
     def preallocate_fused_rmsnorm_resources(self, shape, dtype, weight, cluster_axis, num_links):
         """Create get_fused_rmsnorm_resources' entry for a TILE input of this shape, at model construction."""
@@ -249,30 +237,16 @@ class TT_CCL:
         )
         resources = self.fused_rmsnorm_resources.get(key)
         if resources is None:
-            pool_key = (cluster_axis, num_links)
-            pool = self.fused_rmsnorm_semaphores.get(pool_key)
-            if pool is None:
-                pool = {
-                    "semaphores": [
-                        [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)] for _ in range(2)
-                    ],
-                    "next": 0,
-                }
-                self.fused_rmsnorm_semaphores[pool_key] = pool
-            # (semaphores, stats) per slot, for callers that inspect the entry; get_fused_rmsnorm_resources
-            # alternates the stats per geometry and the semaphores per pool.
-            pairs = [
-                (
-                    pool["semaphores"][i],
-                    ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
-                        x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
-                    ),
+            pairs = []
+            for _ in range(2):
+                semaphores = [ttnn.create_global_semaphore(self.mesh_device, self.sub_device_crs, 0)]
+                stats = ttnn.experimental.dit_fused_distributed_rmsnorm_create_stats_buffer(
+                    x, cluster_axis, self.mesh_device, num_links=num_links, weight=weight
                 )
-                for i in range(2)
-            ]
+                pairs.append((semaphores, stats))
             # All chips must initialize their semaphores before any peer sends.
             ttnn.synchronize_device(self.mesh_device)
-            resources = {"pairs": pairs, "semaphores": pool, "next": 0}
+            resources = {"pairs": pairs, "next": 0}
             self.fused_rmsnorm_resources[key] = resources
         return resources
 
