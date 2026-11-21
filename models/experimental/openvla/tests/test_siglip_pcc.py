@@ -53,6 +53,39 @@ def test_siglip_patch_embeddings(device, image_size_h, image_size_w, image_chann
     assert_with_pcc(torch_output, output[0], 0.9998)
 
 
+@pytest.mark.parametrize("image_size_h", [224])
+@pytest.mark.parametrize("image_size_w", [224])
+@pytest.mark.parametrize("image_channels", [3])
+def test_siglip_patch_embeddings_with_pos_embed(device, image_size_h, image_size_w, image_channels):
+    """Verify SigLIP patch embeddings with positional embeddings match timm VisionTransformer."""
+    torch.manual_seed(0)
+
+    model = load_siglip_torch_model()
+
+    torch_pixel_values = torch_random((1, image_channels, image_size_h, image_size_w), -1, 1, dtype=torch.float32)
+    with torch.no_grad():
+        torch_patches = model.patch_embed(torch_pixel_values)
+        torch_output = model._pos_embed(torch_patches)
+
+    parameters = preprocess_model_parameters(
+        initialize_model=lambda: model.to(torch.bfloat16),
+        device=device,
+        custom_preprocessor=ttnn_siglip.custom_preprocessor_siglip,
+    )
+
+    pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
+    pixel_values = torch.nn.functional.pad(pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
+    pixel_values = ttnn.from_torch(pixel_values, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    output = ttnn_siglip.siglip_patch_embeddings(
+        pixel_values,
+        parameters=parameters.patch_embed.patch_embeddings,
+        pos_embed=parameters.pos_embed,
+    )
+    output = ttnn.to_torch(output)
+
+    assert_with_pcc(torch_output, output, 0.9995)
+
+
 class Attention(torch.nn.Module):
     def __init__(
         self,
