@@ -9,6 +9,7 @@
 
 namespace ttnn {
 
+[[deprecated("moreh_linear is deprecated and will be removed after 2026-12-16. Use ttnn::linear instead.")]]
 Tensor moreh_linear(
     const Tensor& input,
     const Tensor& weight,

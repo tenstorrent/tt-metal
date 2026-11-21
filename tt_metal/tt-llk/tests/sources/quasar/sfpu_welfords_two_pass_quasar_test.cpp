@@ -25,10 +25,10 @@ constexpr std::uint32_t TWO_PASS_SWEEPS = TWO_PASS_MODE == 0 ? 2 : 1;
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
-#include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -48,17 +48,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_per_block = two_pass_tiles_per_block(TILE_CNT);
     const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Unp0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_UNP0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_A[0]), formats.unpack_A_src);
 
     _llk_unpack_configure_unary_<UNPACKER_ENGINE_SEL>(static_cast<DataFormat>(formats.unpack_A_dst));
-    _llk_unpack_unary_operand_init_<UNPACKER_ENGINE_SEL, false /*transpose*/, is_fp32_dest_acc_en>(
-        ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Unp0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
+    _llk_unpack_dest_init_();
+    _llk_unpack_unary_operand_to_dest_init_(ckernel::trisc::BFD_ID_UNP0);
     for (std::uint32_t sweep = 0; sweep < TWO_PASS_SWEEPS; ++sweep)
     {
         for (std::uint32_t block = 0; block < num_blocks; ++block)
         {
-            _llk_unpack_unary_operand_<UNPACKER_ENGINE_SEL>(block * tiles_per_block /*l1_tile_idx*/, ckernel::DEFAULT_TENSOR_SHAPE);
+            _llk_unpack_unary_operand_to_dest_block_(block * tiles_per_block /*l1_tile_idx*/, 0 /*dst_tile_idx*/, tiles_per_block);
             _llk_unpack_dest_dvalid_section_done_<dest_sync>();
         }
     }
@@ -373,7 +373,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #ifdef LLK_TRISC_PACK
 
 #include "cfg_defines.h"
-#include "llk_bfd_alloc.h"
+#include "ckernel_buf_desc.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
 #include "params.h"
@@ -396,11 +396,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const std::uint32_t tiles_per_block = two_pass_tiles_per_block(TILE_CNT);
     const std::uint32_t num_blocks      = TILE_CNT / tiles_per_block;
 
-    ckernel::trisc::bfd_alloc_and_program<ckernel::trisc::BfdResource::Pack0>(
+    ckernel::trisc::program_bfd<ckernel::trisc::BFD_ID_PACK0>(
         ckernel::tensor_shape_from_num_faces(TEST_FACE_R_DIM, num_faces), L1_ADDRESS(buffer_Res[0]), formats.pack_dst);
 
     _llk_pack_hw_configure_<p_pacr::PACK0, is_fp32_dest_acc_en>(static_cast<DataFormat>(formats.pack_src), ckernel::ReluConfig::none());
-    _llk_pack_init_(ckernel::trisc::bfd_current<ckernel::trisc::BfdResource::Pack0>(), ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
+    _llk_pack_init_(ckernel::trisc::BFD_ID_PACK0, ckernel::DEFAULT_TENSOR_SHAPE, tiles_per_block);
     for (std::uint32_t sweep = 0; sweep < TWO_PASS_SWEEPS; ++sweep)
     {
         for (std::uint32_t block = 0; block < num_blocks; ++block)

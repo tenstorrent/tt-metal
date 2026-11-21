@@ -52,7 +52,7 @@ void kernel_main() {
     const uint32_t remaining_iterations = (num_tiles + tile_start) % tile_freq;
 
     // out = ((input - batch_mean) / sqrt(batch_var + eps)) * optional(weight) + optional(bias).
-    const auto batchnorm_bcast_tiles = [&](uint32_t freq, uint32_t tile_start) __attribute__((always_inline)) {
+    const auto batchnorm_bcast_tiles = [&](uint32_t freq, uint32_t start) __attribute__((always_inline)) {
         using namespace compute_kernel_lib;
 
         eltwise_chain(
@@ -63,7 +63,7 @@ void kernel_main() {
             Rsqrt<>{},
             PackTile<output(dfb::den)>{dfb_den_obj});
 
-        const uint32_t inner_count = freq - tile_start;
+        const uint32_t inner_count = freq - start;
 
 // The writer-facing output DFB is only bound when the accumulation format is wider than the output
 // dtype; on the other path the writer drains the compute output directly, so the same kernel-side

@@ -341,5 +341,20 @@ def test_ring_distributed_sdpa_prefix_and_paged_kv(device, s, prefix_len, page_b
     )
 
 
+@pytest.mark.parametrize("grid", [(0, 1), (1, 0)])
+def test_ring_distributed_sdpa_zero_grid(device, expect_error, grid):
+    # The factory splits the Q chunks over grid.x * grid.y cores.
+    program_config = ttnn.SDPAProgramConfig(compute_with_storage_grid_size=grid, q_chunk_size=32, k_chunk_size=32)
+    q = ttnn.from_torch(fa_rand(1, 8, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    k, v = (
+        ttnn.from_torch(fa_rand(1, 1, 128, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        for _ in range(2)
+    )
+    with expect_error(RuntimeError, "compute_with_storage_grid_size must be non-zero"):
+        ttnn.transformer.ring_distributed_scaled_dot_product_attention(
+            q, k, v, ring_size=2, ring_id=0, program_config=program_config
+        )
+
+
 if __name__ == "__main__":
     print("Minimal ring-distributed SDPA test file ready!")

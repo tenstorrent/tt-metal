@@ -10,13 +10,11 @@ last piece is RoPE: each SP row must rotate its OWN slice of positions [r*s_loca
 take the model's own (format-exact) prefill cos/sin and re-shard it across the rows instead of slicing
 it uniformly.
 
-Dense-only schedule (layers 0-2 are dense in M3) so this isolates the SP residual/attention/rope/output
+Dense-only schedule (dense attention + dense MLP layers) so this isolates the SP residual/attention/rope/output
 flow from the EP-MoE reshard (covered separately). Validates against the same composed torch ref the
 TP=1 assembly test uses, reassembled across rows(seq) × cols(vocab).
 """
 
-import json
-import os
 from types import SimpleNamespace
 
 import pytest
@@ -30,15 +28,27 @@ from models.demos.minimax_m3.tt.ccl import CCLManager
 from models.demos.minimax_m3.tt.model import Model
 from models.demos.minimax_m3.tt.residual import use_sharded_residual
 from models.demos.minimax_m3.utils.general_utils import get_default_num_links
+from models.demos.minimax_m3.utils.model_variant import load_config, with_layer_schedule
 from models.demos.minimax_m3.utils.weight_conversion import convert_hf_qkv_to_meta_format_partial
 
 from ..test_factory import parametrize_mesh_with_fabric
 
-# E=128 experts, TOPK=4 per token = real M3 (num_local_experts / num_experts_per_tok); EP=32 on the 8x4
-# mesh -> 4 experts/chip. Intermediate widths and V stay reduced (host-weight budget).
-HIDDEN, NQ, NKV, HEAD_DIM, ROTARY_DIM, THETA, EPS = 6144, 64, 4, 128, 64, 5_000_000.0, 1e-6
-INTER, SHARED_INTER, E, TOPK, SCALE, LIMIT, ALPHA, V = 512, 512, 128, 4, 2.0, 7.0, 1.702, 2048
-SCHEDULE = [0, 0]  # dense layers only (M3 layers 0-2 are dense); isolates SP flow from MoE reshard
+# Dims, RoPE, routing and activation from the selected variant's config (M3_MODEL_VARIANT / HF_MODEL); every
+# test sets its own layer schedule. E / TOPK are the real num_local_experts / num_experts_per_tok (EP=32 on the
+# 8x4 mesh -> 4 experts/chip). Intermediate widths and V stay reduced (host-weight budget).
+_CFG = load_config()
+HIDDEN, NQ, NKV, HEAD_DIM = (
+    _CFG["hidden_size"],
+    _CFG["num_attention_heads"],
+    _CFG["num_key_value_heads"],
+    _CFG["head_dim"],
+)
+ROTARY_DIM, THETA, EPS = _CFG["rotary_dim"], float(_CFG["rope_theta"]), _CFG["rms_norm_eps"]
+E, TOPK, SCALE = _CFG["num_local_experts"], _CFG["num_experts_per_tok"], _CFG["routed_scaling_factor"]
+LIMIT, ALPHA = _CFG["swiglu_limit"], _CFG["swiglu_alpha"]
+MSA_BLOCK = _CFG["sparse_attention_config"]["sparse_block_size"]
+INTER, SHARED_INTER, V = 512, 512, 2048
+SCHEDULE = [0, 0]  # dense MLP + dense attention layers only; isolates SP flow from MoE reshard
 
 
 def _gemma_norm(x, w):
@@ -77,7 +87,7 @@ def _attn(x, w, cos, sin, mask_mode="causal"):
         # MSA degenerate ref (nblocks == topk): the indexer selects all CAUSAL blocks (future blocks are
         # -1 sentinels, masked by sparse_sdpa_msa), and there's no intra-block mask, so the effective mask
         # is causal ROUNDED UP to the query's 128-block boundary.
-        blk = 128
+        blk = MSA_BLOCK
         key_end = ((torch.arange(S) // blk) + 1) * blk  # exclusive key bound per query = end of its block
         j = torch.arange(S)
         s = s + torch.where(j[None, :] < key_end[:, None], 0.0, float("-inf"))
@@ -164,15 +174,8 @@ def test_model_sp_dense_vs_ref(mesh_device, device_params, seq_len, reset_seeds)
     ref_logits = _gemma_norm(h, final_norm_w) @ lm_head_w.t()  # [1, S, V]
 
     # --- TT model from the same weights ---
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    with open(cfg_path) as f:
-        c = json.load(f)
-    c.update(
-        num_hidden_layers=len(SCHEDULE),
-        intermediate_size=INTER,
-        vocab_size=V,
-        moe_layer_freq=list(SCHEDULE),
-    )
+    c = with_layer_schedule(load_config(), SCHEDULE, [0] * len(SCHEDULE))
+    c.update(intermediate_size=INTER, vocab_size=V)
     hf_config = SimpleNamespace(**c)
 
     state = {
@@ -310,17 +313,8 @@ def test_model_sp_moe_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         h = _layer(h, w, cos_ref, sin_ref, is_dense=(val == 0))
     ref_logits = _gemma_norm(h, final_norm_w) @ lm_head_w.t()
 
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    with open(cfg_path) as f:
-        c = json.load(f)
-    c.update(
-        num_hidden_layers=len(schedule),
-        num_local_experts=E,
-        num_experts_per_tok=TOPK,
-        intermediate_size=INTER,
-        vocab_size=V,
-        moe_layer_freq=list(schedule),
-    )
+    c = with_layer_schedule(load_config(), schedule, [0] * len(schedule))  # dense attention on both layers
+    c.update(intermediate_size=INTER, vocab_size=V)
     hf_config = SimpleNamespace(**c)
 
     state = {
@@ -452,17 +446,8 @@ def test_model_sp_tokens_vs_ref(mesh_device, device_params, seq_len, reset_seeds
         h = _layer(h, w, cos_ref, sin_ref, is_dense=(val == 0))
     ref_logits = _gemma_norm(h, final_norm_w) @ lm_head_w.t()
 
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    with open(cfg_path) as f:
-        c = json.load(f)
-    c.update(
-        num_hidden_layers=len(schedule),
-        num_local_experts=E,
-        num_experts_per_tok=TOPK,
-        intermediate_size=INTER,
-        vocab_size=V,
-        moe_layer_freq=list(schedule),
-    )
+    c = with_layer_schedule(load_config(), schedule, [0] * len(schedule))  # dense attention on both layers
+    c.update(intermediate_size=INTER, vocab_size=V)
     hf_config = SimpleNamespace(**c)
 
     state = {"model.embed_tokens.weight": embed_w, "model.norm.weight": final_norm_w, "lm_head.weight": lm_head_w}
@@ -552,13 +537,14 @@ def test_model_sp_msa_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
     blocks are -1 sentinels, masked) and MSA degenerates to BLOCK-CAUSAL attention (causal rounded up to
     the 128-block boundary) — exactly refable, a real numerical check on the in-model MSA data flow (exact
     causal sparsity at real sizes is covered op-level by test_msa_sp_chunked at 5120/40-blocks).
-    Layer 3 = MSA attention (sparse_attention_freq[3]=1 from config.json) + MoE MLP (moe_layer_freq[3]=1).
+    Layer 3 = MSA attention + MoE MLP, layers 0-2 dense attention + dense MLP (an explicit schedule).
     """
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
     sp, tp, sp_axis = rows, cols, 0
     s_local = seq_len // sp
-    NIDX, INDEX_DIM = 4, 128  # sparse_num_index_heads, sparse_index_dim
+    sparse = _CFG["sparse_attention_config"]
+    NIDX, INDEX_DIM = sparse["sparse_num_index_heads"], sparse["sparse_index_dim"]
     schedule = [0, 0, 0, 1]  # moe_layer_freq: layers 0-2 dense MLP, layer 3 MoE; layer 3 is also the MSA layer
 
     torch.manual_seed(0)
@@ -587,19 +573,8 @@ def test_model_sp_msa_vs_ref(mesh_device, device_params, seq_len, reset_seeds):
         h = _layer(h, w, cos_ref, sin_ref, is_dense=(val == 0), mask_mode=("block" if i == 3 else "causal"))
     ref_logits = _gemma_norm(h, final_norm_w) @ lm_head_w.t()
 
-    cfg_path = os.path.join(os.path.dirname(__file__), "..", "..", "configs", "MiniMax-M3", "config.json")
-    with open(cfg_path) as f:
-        c = json.load(f)
-    # num_hidden_layers=4 keeps layer 3 (sparse_attention_freq[3]=1, moe_layer_freq[3]=1) — DO NOT touch
-    # sparse_attention_config, so layer 3 stays MSA.
-    c.update(
-        num_hidden_layers=4,
-        num_local_experts=E,
-        num_experts_per_tok=TOPK,
-        intermediate_size=INTER,
-        vocab_size=V,
-        moe_layer_freq=list(schedule),
-    )
+    c = with_layer_schedule(load_config(), schedule, schedule)  # layer 3 is the MSA + MoE layer
+    c.update(intermediate_size=INTER, vocab_size=V)
     hf_config = SimpleNamespace(**c)
 
     state = {

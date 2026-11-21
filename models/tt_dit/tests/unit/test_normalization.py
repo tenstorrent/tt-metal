@@ -16,6 +16,7 @@ from ...layers.normalization import (
     GroupNorm,
     LayerNorm,
     RMSNorm,
+    dram_group_norm_core_grid,
 )
 from ...parallel.manager import CCLManager
 from ...utils.check import assert_quality
@@ -389,6 +390,8 @@ def test_distributed_layernorm(
         (32, (1, 256, 512, 512)),
         (32, (1, 256, 1024, 1024)),
         (8, (1, 64, 1024, 1024)),
+        (32, (1, 512, 169, 96)),  # Ht = 507: the 8x8 grid is not valid, a smaller one is picked
+        (32, (2, 256, 35, 96)),  # 2 batches, Ht = 210: the virtual rows must split evenly per batch
     ],
 )
 def test_group_norm(
@@ -437,6 +440,67 @@ def test_group_norm(
     tt_torch = tt_torch.permute(0, 3, 1, 2)
 
     assert_quality(torch_output, tt_torch, pcc=0.999_300)
+
+
+# Ideogram 4 VAE decoder norms at TP4 (8 groups per device): Ht = ceil(H * W / 32) per stage.
+@pytest.mark.parametrize(
+    ("max_grid", "num_channels", "ht", "expected"),
+    [
+        ((8, 8), 128, 512, (8, 8)),  # 1024x1024 mid block: 8x8 stays when valid
+        ((8, 8), 128, 507, (4, 3)),  # 1248x832 mid block: 8x8 would need 16 | 507
+        ((8, 8), 128, 2028, (8, 6)),  # 1248x832 up_blocks[1]
+        ((8, 8), 64, 8112, (8, 6)),  # 1248x832 up_blocks[2]
+        ((8, 8), 128, 450, (8, 5)),  # 1280x720 mid block
+        ((8, 8), 128, 486, (8, 3)),  # 1152x864 mid block
+        ((12, 10), 128, 450, (12, 10)),  # 1280x720 mid block on the full Blackhole grid
+        ((12, 10), 128, 512, (8, 8)),  # 12 columns give 3 rows per y, which never divides 2^k
+    ],
+)
+def test_dram_group_norm_core_grid(
+    max_grid: tuple[int, int], num_channels: int, ht: int, expected: tuple[int, int]
+) -> None:
+    num_groups = 8
+    bound = ttnn.CoreGrid(x=max_grid[0], y=max_grid[1])
+    nvc = ttnn.operations.normalization.dram_group_norm_virtual_columns(bound, num_channels, num_groups)
+
+    grid = dram_group_norm_core_grid(
+        bound, num_channels=num_channels, num_groups=num_groups, num_virtual_cols=nvc, nhw=ht * ttnn.TILE_SIZE
+    )
+
+    assert (grid.x, grid.y) == expected
+    assert ttnn.operations.normalization.dram_group_norm_virtual_columns(grid, num_channels, num_groups) == nvc
+
+
+# 256 channels, 8 groups: 8 virtual columns, so only 8-wide grids and one virtual row per grid row.
+@pytest.mark.parametrize(
+    ("ht", "num_batches", "expected"),
+    [
+        (210, 1, (8, 7)),
+        (210, 2, (8, 6)),  # 7 virtual rows would split the 2 batches unevenly
+        (420, 4, (8, 4)),
+        (420, 1, (8, 7)),
+    ],
+)
+def test_dram_group_norm_core_grid_batches(ht: int, num_batches: int, expected: tuple[int, int]) -> None:
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=8, y=8),
+        num_channels=256,
+        num_groups=8,
+        num_virtual_cols=8,
+        nhw=ht * ttnn.TILE_SIZE,
+        num_batches=num_batches,
+    )
+
+    assert (grid.x, grid.y) == expected
+
+
+def test_dram_group_norm_core_grid_none() -> None:
+    # The weight layout needs 8 virtual columns, but no grid at most 4 wide has them.
+    grid = dram_group_norm_core_grid(
+        ttnn.CoreGrid(x=4, y=8), num_channels=256, num_groups=8, num_virtual_cols=8, nhw=512 * ttnn.TILE_SIZE
+    )
+
+    assert grid is None
 
 
 @pytest.mark.parametrize(
@@ -732,3 +796,40 @@ def test_distributed_group_norm_program_cache_hit(
         for i, (torch_input, tt_out) in enumerate(zip(torch_inputs, outputs)):
             logger.info(f"launch {i} vs torch:")
             assert_quality(torch_model(torch_input), tt_out, pcc=0.999_300)
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    ("leading", "embedding_dim"),
+    [((1,), 5120), ((1, 16), 128), ((1, 2), 128), ((2, 16), 128)],
+    ids=["hidden", "q_heads", "k_heads", "batched"],
+)
+def test_rmsnorm_row_capacity(
+    mesh_device: ttnn.MeshDevice, leading: tuple[int, ...], embedding_dim: int, expect_error
+) -> None:
+    """`row_capacity` runs one program for every row count up to it and tracks the default program's result."""
+    torch.manual_seed(0)
+    row_capacity = 640
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
+    )
+
+    torch_model = TorchRMSNorm(embedding_dim, norm_eps=1e-6, bias=False).to(dtype=torch.bfloat16)
+    tt_model = RMSNorm(embedding_dim, norm_eps=1e-6, bias=False, mesh_device=mesh_device)
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    added = 0
+    for rows in (320, 32, row_capacity):
+        x = torch.randn(*leading, rows, embedding_dim, dtype=torch.bfloat16) * 2 + 4
+        tt_x = bf16_tensor(x, device=mesh_device)
+        default = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config))
+        entries = mesh_device.num_program_cache_entries()
+        actual = ttnn.to_torch(tt_model(tt_x, compute_kernel_config=compute_kernel_config, row_capacity=row_capacity))
+        added += mesh_device.num_program_cache_entries() - entries
+        assert actual.shape == default.shape
+        assert_quality(default, actual, pcc=0.99999)
+        with torch.no_grad():
+            assert_quality(torch_model(x), actual, pcc=0.9995)
+    assert added == 1, f"{added} row-capacity norm programs"
+    with expect_error(ValueError, "program_config"):
+        tt_model(tt_x, program_config=ttnn.LayerNormDefaultProgramConfig(), row_capacity=row_capacity)
