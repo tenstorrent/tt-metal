@@ -133,6 +133,26 @@ def test_select_block_width_tiles_worked_table(shape):
     assert wt % got == 0  # no ragged column block (Quasar tilize MOP width = init width)
 
 
+def test_sharded_input_refused_by_name(device):
+    """R6: placement axes come from eval.memory.memory_axes; a sharded input is refused before any kernel.
+
+    The generic runner builds interleaved tensors only, so the op carries this test itself.
+    """
+    from eval.memory import memory_axes
+
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(shard_grid, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    x = torch.randn(1, 1, 64, 64, dtype=torch.bfloat16)
+    t = _put(x, TILE, device, mem)
+    assert memory_axes(t) == {"memory_config": "L1", "sharding": "height"}
+    with pytest.raises(NotImplementedError, match="sharding"):
+        to_layout(t, RM)
+
+
 def test_split_covers_every_unit_once(device):
     """The 2-D split hands out every (band, column block) unit exactly once, in contiguous ranges."""
     grid = device.compute_with_storage_grid_size()
