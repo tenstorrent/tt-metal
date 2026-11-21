@@ -322,20 +322,8 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     assert 0 <= a < b <= R and (b - a) % 32 == 0, (lo, hi, a, b, R)
     from .page_copy import dyn
 
-    if dyn("hist"):  # PB.7C: page copies at fixed shapes (a whole history in PACK_BUCKET pieces; no slice a position)
-        from .page_copy import pages_of
-
-        step = PACK_BUCKET if a == 0 else b - a
-        for a0 in range(a, b, step):
-            n = min(step, b - a0)
-            rows = pages_of(slab.tensor, slab.batch * R + a0, n, [1, 1, n, int(slab.tensor.shape[-1])])
-            tl = to_tile(rows, memory_config=DRAM)
-            if tl is not rows:
-                dealloc(rows)
-            ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, compact=False, max_grid=max_grid())
-            dealloc(tl)
-        loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
-        return loc.tensor
+    if dyn("hist"):  # PB.7C / MB.2: fixed row counts (no program a history length): see _pack_fixed
+        return _pack_fixed(ckv_cache, loc, a, b)
     rows = slab.slice_rows(a, b)  # [1, 1, b - a, 512] bf16 ROW_MAJOR DRAM
     tl = to_tile(rows, memory_config=DRAM)
     if tl is not rows:
@@ -348,9 +336,45 @@ def _pack(ckv_cache, lo: int, hi: int, loc: HistoryBuffer | None = None) -> ttnn
     return loc.tensor
 
 
+def _pack_fixed(ckv_cache, loc: HistoryBuffer, a: int, b: int) -> ttnn.Tensor:
+    """POS_DYNAMIC=on (MB.2): ``_pack``'s rows [a, b) packed in pieces of ONE row count a kind (a page copy of the
+    slab's rows, a tilize, ckv_bfp4 with row0 a value slot): a whole history (a == 0) in PACK_BUCKET pieces, the last
+    one ending at b or moved down to end at R (min(R, PACK_BUCKET) rows each); a tail in one piece of
+    ceil32(2 hs) + 32 rows (covers any [a, b) of a tail of up to 2 hs rows) moved down to end at R when it would pass
+    it. The records are a function of each row alone, so the extra rows get the same records a later pack writes."""
+    from .page_copy import pages_of
+
+    slab = ckv_cache.slab
+    R = slab.rows
+    if a == 0:
+        n = min(R, PACK_BUCKET)
+        firsts = [min(a0, R - n) for a0 in range(0, b, n)]
+    else:
+        hs = ckv_cache.stripe // ckv_cache.ratio
+        n = min(R, -(-2 * hs // 32) * 32 + 32)
+        assert b - a <= n, ("MB.2: a tail longer than 2 hs rows", a, b, hs)
+        firsts = [min(a, R - n)]
+    for a0 in firsts:
+        rows = pages_of(slab.tensor, slab.batch * R + a0, n, [1, 1, n, slab.width])
+        tl = to_tile(rows, memory_config=DRAM)
+        if tl is not rows:
+            dealloc(rows)
+        ttnn.bringup.ckv_bfp4(tl, loc.tensor, a0, prepared=True, compact=False, max_grid=max_grid())
+        dealloc(tl)
+    loc.tensor.update_tensor_topology(slab.tensor.tensor_topology())
+    return loc.tensor
+
+
 def _tail(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, owners: int, axis) -> None:
     """P.75: every owner's local rows [h, local_rows) -> rows [q R + h, q R + local_rows) of ``buf`` (its rows below h
-    prefetched): a slice of the slab, one gather into the small buffer of that size, one slice_write."""
+    prefetched): a slice of the slab, one gather into the small buffer of that size, one slice_write.
+    POS_DYNAMIC=on (MB.2): always the largest tail (2 hs rows: h moved down to local_rows - 2 hs; rows the prefetch
+    gathered already, the same bytes again), as page copies: one shape for every chunk."""
+    from .page_copy import dyn
+
+    tails = tuple(getattr(ckv_cache, "_history_tails", ()) or ())
+    if dyn("hist") and tails and local_rows - h < max(tails) <= local_rows:
+        h = local_rows - max(tails)
     m = local_rows - h
     small = _buffer(buf.mesh, ("tail", owners * m) + (("bfp4",) if buf.bfp4 else ()))
     assert small is not None and buf.view is not None, ("P.75: no tail buffer", owners, m)
@@ -370,7 +394,7 @@ def _tail_part(ckv_cache, buf: HistoryBuffer, h: int, local_rows: int, loc: Hist
 
     if buf.bfp4:  # P.77: the chunk's own rows packed on their chip first, their records gathered
         rec = _pack(ckv_cache, h, local_rows, loc)
-        if dyn("hist"):  # PB.7C: a page copy (the slice is keyed on h)
+        if dyn("hist"):  # PB.7C / MB.2: a page copy (the slice is keyed on h)
             part = pages_of(rec, h, local_rows - h, [1, 1, local_rows - h, REC])
         else:
             part = ttnn.slice(

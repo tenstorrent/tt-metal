@@ -210,11 +210,12 @@ void kernel_main() {
 """
 
 
-# PB.7C (PACKED_GLUED_DYNAMIC=on): the same transport with the block pattern as per-run VALUES (each block's code:
-# CODE_ZERO, CODE_LOCAL or its owner's chip-linear index): every chip derives its home kinds, relay masks and port roles
-# from the codes and its own place (tree(): X toward the owner's column, then Y; wraps as the fabric's tables), so ONE
-# program a geometry serves every pattern (no program a segment end). Every chip runs a port core for each of its
-# fabric neighbours (a port without a block this call opens and closes its connection only).
+# POS_DYNAMIC=on (MB.2; the batching branch's PB.7C, PACKED_GLUED_DYNAMIC): the same transport with the block pattern
+# as per-run VALUES (each block's code: CODE_ZERO, CODE_LOCAL or its owner's chip-linear index): every chip derives its
+# home kinds, relay masks and port roles from the codes and its own place (tree(): X toward the owner's column, then Y;
+# wraps as the fabric's tables), so ONE program a geometry serves every pattern (no program a last chunk's cap). Every
+# chip runs a port core for each of its fabric neighbours (a port without a block this call opens and closes its
+# connection only).
 _TREE_CODE = r"""
 constexpr uint32_t CODE_ZERO = 0xFFFFFFFFu;
 constexpr uint32_t CODE_LOCAL = 0xFFFFFFFEu;
@@ -736,7 +737,7 @@ class SnapshotSend:
         assert len(blocks) == BLOCKS, blocks
         from .page_copy import dyn
 
-        if dyn("snap"):  # PB.7C: one program for every pattern
+        if dyn("snap"):  # PB.7C (glued layouts) / MB.2 (a last chunk's cap): one program for every pattern
             assert int(ring.shape[-1]) == 512 and ring.dtype == ttnn.bfloat16, (ring.shape, ring.dtype)
             assert int(slab.shape[-1]) == 512 and int(slab.shape[-2]) == BLOCKS * BROWS, slab.shape
             return self._call_dyn(ring, slab, page0, blocks)

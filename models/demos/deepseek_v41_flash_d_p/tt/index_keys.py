@@ -112,12 +112,21 @@ DECODE_WIDE_ROWS = 16384
 
 def _decode(cache, buf: KeyBuffer, lo: int, hi: int) -> None:
     s = cache.served
+    from .page_copy import dyn
+
     grid = max_grid()
+    # MB.2 ("decode": POS_DYNAMIC=on): every range on the whole grid (cores past the band count idle): ONE program, not
+    # one a band count. PB.MB: not PB.6L's small rectangle below DECODE_WIDE_ROWS either: that grid choice depends on
+    # the history length, so the wide grid's program was first prepared on a long fresh history after warm-up
+    # (test_no_rebuild 8192, resumed at 525k: 1 build, DS41-350)
+    whole = dyn("decode")
     wide = settings.get("PACKED_LONG_HIDE") == "on" and hi - lo >= DECODE_WIDE_ROWS
-    if settings.get("PACKED_HOST_FAST") == "on" and not wide:  # (every box's grid holds 4 x 4; None: uncapped)
+    if settings.get("PACKED_HOST_FAST") == "on" and not wide and not whole:  # (every box's grid holds 4 x 4)
         gx, gy = (grid.x, grid.y) if grid is not None else DECODE_GRID
         grid = ttnn.CoreCoord(min(gx, DECODE_GRID[0]), min(gy, DECODE_GRID[1]))
-    ttnn.bringup.unpack_fp8_rows(s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid)
+    ttnn.bringup.unpack_fp8_rows(
+        s.tensor, buf.tensor, row_lo=lo, row_hi=hi, batch=s.batch, max_grid=grid, whole_grid=whole
+    )
 
 
 def prefetch(cache, start: int) -> bool:

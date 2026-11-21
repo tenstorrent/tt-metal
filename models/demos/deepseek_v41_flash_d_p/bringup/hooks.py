@@ -1404,7 +1404,8 @@ def batch_call_settings(env=None) -> tuple:
     # tt/packed_onecall.py) likewise; PACKED_MOE (PB.4, tt/packed_device.MoEPadSpan) likewise; PACKED_GATHER_HIDE
     # (PB.3H, tt/gather_hide.py) likewise; PACKED_HOST_FAST (PB.3K) likewise; PACKED_LANE_BALANCE (PB.3M) likewise;
     # PACKED_LONG_HIDE (PB.6L) likewise; PACKED_GLUED (PB.7) likewise; PACKED_GLUED_ONECALL (PB.7B) likewise;
-    # PACKED_GLUED_DYNAMIC (PB.7C) likewise
+    # PACKED_GLUED_DYNAMIC (PB.7C) likewise; POS_DYNAMIC (MB.2) likewise: both paths exist in one load (page copies vs
+    # slices; batch_call_apply refreshes it in a load-time snapshot)
     return (
         "PREFILL_END",
         "ENGRAM_DEVICE",
@@ -1419,6 +1420,7 @@ def batch_call_settings(env=None) -> tuple:
         "PACKED_GLUED",
         "PACKED_GLUED_ONECALL",
         "PACKED_GLUED_DYNAMIC",
+        "POS_DYNAMIC",
     ) + (() if skip == "replay128" else ("DECODER_SKIP",))
 
 
@@ -1428,6 +1430,8 @@ def batch_call_apply(model) -> None:
     A test that switches it itself (use_decoder_skip) still does, from the value it finds."""
     from models.demos.deepseek_v41_flash_d_p.tt.settings import settings as _settings
 
+    if _settings.snap is not None:  # MB.2: a call-time switch the load's snapshot froze (DS41-314: only this one)
+        _settings.snap["POS_DYNAMIC"] = _settings._read("POS_DYNAMIC")
     want = _settings.get("DECODER_SKIP")
     have = getattr(model, "skip_mode", None)
     if have is None or want == have or "replay128" in (want, have) or getattr(model, "tail_of", None) is not None:

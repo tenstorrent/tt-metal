@@ -1070,3 +1070,9 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   segment count (PB.9X's report gives the per-segment ms to size it); (2) scope PB.7's order-free reduces
   (DS41-339/341, ~1.5 ms) to glued chunks only. Note: with lane-shaped chunks now on glued, (2) becomes "skip the
   order-free reduces when a glued chunk is lane-aligned".
+- 00:05 UTC 2026-11-21 launched: tmux orch_pb, `orchestrator resume --until PB.T --attempts 20` (SKIP=check-models-do-not-import-tests);
+  PB.MB agent started. PB.MB's brief applies the diff path-limited (`git diff bcab6af973b dnijemcevic/model_bringup -- <model
+  paths> | git apply --3way`): a whole-tree merge would refuse on the live ledger files. Watch + 30-min heartbeat armed;
+  stop hook present. Resident runner was stopped (model_bringup's model gone), box free.
+- 00:15 heartbeat: PB.MB attempt 1 active (transcript fresh), diff applied, conflicts being resolved; watch armed.
+- 00:45 heartbeat: PB.MB attempt 1 active, running device tests through the resident runner (busy since 00:40); watch armed.

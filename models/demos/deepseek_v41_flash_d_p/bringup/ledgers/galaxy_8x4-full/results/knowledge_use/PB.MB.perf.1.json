@@ -1,0 +1,92 @@
+{
+ "used": [
+  {
+   "id": "DS41-314",
+   "how": "kept MB.2's batch_call_apply refresh of POS_DYNAMIC only in the load's settings snapshot (not a full refresh of every call-time switch)",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "DS41-347",
+   "how": "(MB.1's DS41-321, renumbered) the list of single-request rebuild sites decided which page_copy.dyn parts POS_DYNAMIC turns on (rows, pick, pages, snap, hist, slab, replay, decode)",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-346",
+   "how": "fixed-lane chunks kept out of POS_DYNAMIC's parts (page_copy.KIND 'lanes'): their rebuilds are PB.9X's scope",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-350",
+   "how": "new: index_keys._decode's history-length grid choice was a post-warm-up build at 8192; one whole-grid program under dyn('decode')",
+   "traced": null,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "two branches that each number new known_issues from the same NEXT ID collide on a merge (model_bringup DS41-321..323 vs batching DS41-321..346): renumbered the incoming ones",
+  "PB.MB's gate lists test_determinism without BRINGUP_CHUNK=8192: it loads the 5120 40-layer model and F283 refuses the 8192 oracles in the same gate process; they pass on the next --check (determinism kept). OV-61 says test_determinism is not in the PB gates"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "done",
+   "evidence": "no padding added; MB.2's fixed-row-count history pack (tail moved down to ceil32(2 hs)+32 rows) re-moves at most that many already-gathered rows to keep one program; kept as MB.2 shipped it (owner: take the fix as is), noted as a follow-up (runtime row counts in ckv_bfp4 / slice_write)"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; one DECIDED line in BREADCRUMBS (index_keys decode grid under POS_DYNAMIC)"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "no load-time env added to any test; test_no_rebuild declares BATCH_ITEM_VARS=(BRINGUP_CHUNK,) and the same max_seq as test_skip_positions' fresh load (deploy seq in whole chunks); both share the executed-layers load"
+  }
+ ],
+ "cited_only": [
+  "DS41-321"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.MB",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T00:59:43",
+  "head": "c52b768a672",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/hooks.py",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.MB_fresh_walls.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.MB.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/repo_map.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/fresh_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/fresh_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/attention.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/compressor.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/history_gather.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/index_keys.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/model.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/page_copy.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/rope.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/served.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/snapshot_send.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/README.md",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/fp8_rows.py",
+   "ttnn/ttnn/bringup/fp8_rows_ttnn/tests/unit/test_unpack_fp8_rows.py"
+  ]
+ }
+}

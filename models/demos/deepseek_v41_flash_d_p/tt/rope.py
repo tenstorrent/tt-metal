@@ -416,7 +416,7 @@ class RopeTable:
 
         if (
             dyn("rows") and not isinstance(start, (GluedStarts, LaneStarts)) and length % (32 * sp) == 0
-        ):  # PB.7C: one start is one glued piece (the slice's start would key a program on the position)
+        ):  # PB.7C / MB.2: one start is one glued piece (the slice's start would key a program on the position)
             start = GluedStarts(((int(start), int(length)),))
         glued = isinstance(start, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(start, LaneStarts)  # PB.3A: each lane its own start (tt/packed_onecall.py)

@@ -1580,6 +1580,22 @@ TABLE = {
         "(worker_grid), the bring-up forks (max_grid, incl. the MoE block) and the forks given a sub_core_grids "
         "(mm_cores). 110 = the behaviour before",
     ),
+    "POS_DYNAMIC": Setting(
+        "on",
+        ("on", "off"),
+        "MB.2 (OWNER 2026-11-20, rule 20: serving never rebuilds): read per call (a call-time switch, hooks."
+        "batch_call_settings). on = every per-chunk value of the single-request path is a runtime value: the RoPE / "
+        "compressed-RoPE rows (one start = one glued piece: PB.7C's GluedRows), DeviceScalars, the served slab's history "
+        "rows, the history tail and the server-order row are prepared page copies (tt/page_copy.py: page offsets and "
+        "counts are value slots, one program a geometry; page_copy.dyn: the same parts PACKED_GLUED_DYNAMIC turns on for "
+        "glued chunks, PB.MB), the "
+        "window snapshot's block pattern is a value (one program for every last-chunk cap), the replay rotation is two "
+        "page copies, the history pack and tail move fixed row counts, unpack_fp8_rows runs on the whole of its grid; the "
+        "engine's ids are put into natural order ON THE DEVICE (tt/page_copy.IdsReorder: no second upload; the host "
+        "keeps its readback for the engram hash); adapter.compile warms the finite set of shapes (a cold chunk, a "
+        "continued one, a pulled-back partial last chunk with a replay). Bit-identical to off. off = the slices (one "
+        "program a position / slot / history length) and the host ids re-upload",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8

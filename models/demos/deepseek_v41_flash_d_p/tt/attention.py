@@ -482,7 +482,7 @@ class WindowTables:
             return hit[1]
         from .page_copy import dyn, pages_of
 
-        if dyn("pages"):  # PB.7C: row k's page copied (no program a position)
+        if dyn("pages"):  # PB.7C / MB.2: row k's page copied (k a runtime value: no program a position)
             idx = pages_of(self.srv, k, 1, [1, 1, 1, self.geo.w])
         else:
             idx = ttnn.slice(

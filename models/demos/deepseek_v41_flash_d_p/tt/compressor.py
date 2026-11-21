@@ -149,7 +149,7 @@ class CompressRope:
 
         if (
             dyn("rows") and not isinstance(g0, (GluedStarts, LaneStarts)) and n % (32 * sp) == 0
-        ):  # PB.7C: one start is one glued piece (the slice's start would key a program on the position)
+        ):  # PB.7C / MB.2: one start is one glued piece (the slice's start would key a program on the position)
             g0 = GluedStarts(((int(g0), int(n)),))
         glued = isinstance(g0, GluedStarts)  # PB.7B: the glued chunk's pieces (tt/packed_glued.py)
         packed = isinstance(g0, LaneStarts)  # PB.3A: each lane its own first group (tt/packed_onecall.py)
@@ -1288,11 +1288,18 @@ class TtCompressor:
         if src is not g and rm is not src:
             dealloc(src)
         n, w, off = rm.shape[-2], rm.shape[-1], (lo - start) // r
-        head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
-        rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
-        for x in (head, tail):
-            dealloc(x)
+        from .page_copy import dyn, page_copy
+
+        if dyn("replay"):  # MB.2: the rotation as two page copies (the replay offset a runtime value)
+            rot = ttnn.allocate_tensor_on_device(ttnn.Shape([1, 1, n, w]), rm.dtype, rm.layout, rm.device(), DRAM)
+            page_copy(rm, rot, off, 0, n - off)
+            page_copy(rm, rot, 0, n - off, off)
+        else:
+            head = ttnn.slice(rm, [0, 0, off, 0], [1, 1, n, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            tail = ttnn.slice(rm, [0, 0, 0, 0], [1, 1, off, w], memory_config=DRAM, sub_core_grids=sub_cores(rm))
+            rot = ttnn.concat([head, tail], dim=2, memory_config=DRAM, sub_core_grids=sub_cores(head))
+            for x in (head, tail):
+                dealloc(x)
         if rm is not g:
             dealloc(rm)
         if g is not t and g is not pre:

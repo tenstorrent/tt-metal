@@ -144,6 +144,13 @@ class CacheSlab:
         ``out``: written into that tensor and returned, HOST_ALLOC=on, P.15)."""
         b = self.batch
         sc = sub_cores(self.tensor)
+        from .page_copy import dyn, page_copy, pages_of
+
+        if dyn("slab"):  # MB.2: the (slot, layer) batch's rows as pages (batch and rows runtime values)
+            if out is not None:
+                page_copy(self.tensor, out, b * self.rows + lo, 0, hi - lo)
+                return out
+            return pages_of(self.tensor, b * self.rows + lo, hi - lo, [1, 1, hi - lo, self.width])
         if out is not None and sc is None:
             ttnn.slice(self.tensor, [b, 0, lo, 0], [b + 1, 1, hi, self.width], memory_config=DRAM, output_tensor=out)
             return out
@@ -206,7 +213,7 @@ class DeviceScalars:
     def _pick(self, k: int) -> ttnn.Tensor:
         from .page_copy import dyn, pages_of
 
-        if dyn("pick"):  # PB.7C: the value's page copied (no program a position)
+        if dyn("pick"):  # PB.7C / MB.2: the value's page copied (k a runtime value: no program a position)
             return pages_of(self.t, k, 1, [1, 1])
         return ttnn.slice(self.t, [k, 0], [k + 1, 1], memory_config=DRAM, sub_core_grids=sub_cores(self.t))
 
