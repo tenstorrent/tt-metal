@@ -100,6 +100,7 @@ auto capture_op_trace(Op op, MeshDevice* device, Args&&... args) {
  * @tparam TraceID The type of the trace id returned by trace capture APIs.
  * @param trace_id ID of the captured trace.
  * @param device A pointer to the Device object
+ * @param cq_id Command queue used to execute the trace
  * @return Trace runtime in nanoseconds.
  */
 template <typename TraceID>

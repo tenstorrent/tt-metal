@@ -52,9 +52,9 @@ public:
     AdjacencyGraph() = default;
 
     /**
-     * @brief Construct adjacency graph from a MeshGraph
+     * @brief Construct adjacency graph from an adjacency map
      *
-     * @param mesh_graph The mesh graph to construct the adjacency graph from
+     * @param adjacency_map The adjacency map to construct the adjacency graph from
      */
     explicit AdjacencyGraph(const AdjacencyMap& adjacency_map);
 
@@ -97,6 +97,7 @@ public:
      * Useful for debugging mapping failures.
      *
      * @param graph_name Name to identify this graph in the output
+     * @param quiet_mode When true, suppresses logging output (defaults to false)
      */
     void print_adjacency_map(const std::string& graph_name = "Graph", bool quiet_mode = false) const;
 
@@ -1612,6 +1613,7 @@ struct MappingValidator {
      * @param constraint_data Indexed constraint data (for computing constraint stats)
      * @param state Search state (for statistics and error messages)
      * @param validation_mode Connection validation mode
+     * @param quiet_mode When true, suppresses logging output (defaults to false)
      * @return MappingResult with success status, mappings (always saved even if invalid), warnings, and statistics
      */
     static MappingResult<TargetNode, GlobalNode> build_result(

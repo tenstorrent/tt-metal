@@ -202,6 +202,7 @@ private:
      * @param host_buffer Existing host memory to map (must not be null)
      * @param buffer_size Size of buffer to map
      * @param map_to_noc Whether to map the buffer to the NOC
+     * @param access Device access mode
      */
     PinnedMemory(
         distributed::MeshDevice& mesh_device,

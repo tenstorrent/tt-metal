@@ -87,6 +87,8 @@ Core
    :nosignatures:
    :template: function.rst
 
+   ttnn.allocate_tensor_on_device
+   ttnn.allocate_tensor_on_host
    ttnn.as_tensor
    ttnn.copy_device_to_host_tensor
    ttnn.copy_host_to_device_tensor
@@ -470,6 +472,8 @@ Data Movement
    ttnn.tilize
    ttnn.tilize_with_val_padding
    ttnn.tilize_with_zero_padding
+   ttnn.tosa_gather
+   ttnn.tosa_scatter
    ttnn.transpose
    ttnn.unsqueeze
    ttnn.unsqueeze_to_4D
@@ -533,6 +537,7 @@ Transformer
    ttnn.transformer.paged_flash_multi_latent_attention_decode
    ttnn.transformer.paged_scaled_dot_product_attention_decode
    ttnn.transformer.ring_distributed_scaled_dot_product_attention
+   ttnn.transformer.exp_ring_joint_scaled_dot_product_attention
    ttnn.transformer.ring_joint_scaled_dot_product_attention
    ttnn.transformer.ring_mla
    ttnn.transformer.scaled_dot_product_attention
