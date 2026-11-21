@@ -58,6 +58,8 @@ class TransformerBlock(Module):
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = head_dim
+        # The fused to_out addcmul below always adds the attention residual.
+        assert add_attention_to_output, "add_attention_to_output=False is not supported by this block"
         self.add_attention_to_output = add_attention_to_output
 
         self.context_pre_only = context_pre_only
