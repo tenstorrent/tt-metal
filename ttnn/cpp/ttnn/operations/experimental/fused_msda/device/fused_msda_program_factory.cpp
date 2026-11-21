@@ -22,6 +22,7 @@
 #include "fused_msda_device_operation.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_tiled_geometry.hpp"
 #include "ttnn/operations/experimental/fused_msda/device/kernels/msda_work_list.hpp"
+#include "ttnn/operations/experimental/fused_msda/device/kernels/msda_value_layout.hpp"
 
 namespace ttnn::operations::experimental::fused_msda {
 
@@ -156,6 +157,9 @@ AxisConstants axis_constants(uint32_t extent, bool align_corners, bool grid_spac
 constexpr uint32_t kGeomCbPages = 4;    // reader -> compute operand tiles
 constexpr uint32_t kCornerCbPages = 3;  // compute -> reader corner words
 constexpr uint32_t kScalarCbPages = 8;  // two points of four corners each
+// The geometry reserves a point's four scalar pages in one reservation, which
+// must not wrap the CB.
+static_assert(kScalarCbPages >= 8 && kScalarCbPages % 4 == 0);
 constexpr uint32_t kInputCbGroups = 8;  // ditto, in corner groups of n_d_tiles
 // The tiled geometry's depths are in msda_tiled_geometry.hpp, which the
 // kernels read too.
@@ -612,11 +616,21 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
     // derive_shapes on a DRAM value it has yet to stage in L1. The writer's
     // per-head output offsets need only the NoC write alignment, which
     // writer_msda.cpp static_asserts.
-    if (s.num_heads > 1 && s.value_packed) {
+    if (s.num_heads > 1 && s.value_layout == ValueLayout::Packed) {
         TT_FATAL(
             value_stick_aligned == value_stick_raw,
             "fused_msda: packed value (B, S, H*D) reads head h at byte offset h * {} B, which must be a multiple "
             "of value's {} B buffer alignment; pass value as (B, S, H, D) or place it in L1",
+            value_stick_raw,
+            buffer_alignment(value.buffer()->buffer_type()));
+    }
+    if (s.value_layout == ValueLayout::HeadMajor) {
+        // Keys sit back to back inside a page, so a key's read starts at a
+        // multiple of the raw stick: that has to be a legal NoC source address.
+        TT_FATAL(
+            value_stick_aligned == value_stick_raw,
+            "fused_msda: head-major value stores keys back to back, so each key's D*2 = {} B must be a multiple of "
+            "value's {} B buffer alignment; place value in L1, or pass it as (B, S, H, D)",
             value_stick_raw,
             buffer_alignment(value.buffer()->buffer_type()));
     }
@@ -654,6 +668,8 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
             .id = gather_done_sem, .core_type = tt::CoreType::WORKER, .core_ranges = all_cores, .initial_value = 0});
     }
 
+    const auto value_layout = static_cast<uint32_t>(s.value_layout);
+
     // ---- reader ----
     // Compile-time arg order is fixed by fused_msda_reader_common.hpp; both
     // readers read the same indices.
@@ -677,9 +693,10 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         static_cast<uint32_t>(s.locations_packed),
         static_cast<uint32_t>(s.weights_packed),
         static_cast<uint32_t>(attrs.reference_mode == MSDAReferenceMode::Level ? 0 : 1),
-        static_cast<uint32_t>(s.value_packed),
+        value_layout,
         // Must match the tensor's DRAM page size, not the D-wide scratch stick.
-        // Packed value is one (B, S) stick of H*D; canonical is one (B, S, H) stick of D.
+        // Packed value is one (B, S) stick of H*D; canonical is one (B, S, H) stick of D; head-major is
+        // 32 keys of one head.
         static_cast<uint32_t>(value.buffer()->page_size()),
         static_cast<uint32_t>(attrs.from_offsets),
         geom_x_cb,
@@ -807,7 +824,7 @@ ProgramDescriptor FusedMSDAOperation::ProgramFactory::create_descriptor(
         s.num_levels * s.num_points,
         s.num_heads,
         s.num_keys,
-        static_cast<uint32_t>(s.value_packed),
+        value_layout,
         value_stick_aligned,
         static_cast<uint32_t>(value.buffer()->page_size()),
     };

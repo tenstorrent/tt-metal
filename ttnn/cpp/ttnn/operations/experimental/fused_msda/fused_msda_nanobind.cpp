@@ -38,6 +38,39 @@ ttnn::experimental::MSDAReferenceMode parse_reference_mode(const std::string& mo
         mode);
 }
 
+ttnn::experimental::MSDAValueLayout parse_value_layout(const std::string& layout) {
+    if (layout == "auto") {
+        return ttnn::experimental::MSDAValueLayout::Auto;
+    }
+    if (layout == "head_major") {
+        return ttnn::experimental::MSDAValueLayout::HeadMajor;
+    }
+    TT_THROW(
+        "fused_msda: value_layout must be \"auto\" ((B, S, H, D) or packed (B, S, H*D), by rank) or \"head_major\" "
+        "((B, H, ceil(S/32), 32*D)), got \"{}\"",
+        layout);
+}
+
+ttnn::Tensor fused_msda_py(
+    const ttnn::Tensor& value,
+    const ttnn::Tensor& sampling_locations,
+    const ttnn::Tensor& attention_weights,
+    const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
+    bool align_corners,
+    bool locations_in_grid_space,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::string& value_layout) {
+    return ttnn::experimental::fused_msda(
+        value,
+        sampling_locations,
+        attention_weights,
+        spatial_shapes,
+        align_corners,
+        locations_in_grid_space,
+        memory_config,
+        parse_value_layout(value_layout));
+}
+
 ttnn::Tensor fused_msda_from_offsets_py(
     const ttnn::Tensor& value,
     const ttnn::Tensor& reference_points,
@@ -48,7 +81,8 @@ ttnn::Tensor fused_msda_from_offsets_py(
     bool align_corners,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<std::vector<uint32_t>>& num_valid_queries,
-    const std::optional<ttnn::Tensor>& num_valid_queries_tensor) {
+    const std::optional<ttnn::Tensor>& num_valid_queries_tensor,
+    const std::string& value_layout) {
     return ttnn::experimental::fused_msda_from_offsets(
         value,
         reference_points,
@@ -59,7 +93,8 @@ ttnn::Tensor fused_msda_from_offsets_py(
         align_corners,
         memory_config,
         num_valid_queries,
-        num_valid_queries_tensor);
+        num_valid_queries_tensor,
+        parse_value_layout(value_layout));
 }
 
 bool can_use_fused_msda_from_offsets_l1_value_py(
@@ -70,7 +105,8 @@ bool can_use_fused_msda_from_offsets_l1_value_py(
     const std::vector<std::array<uint32_t, 2>>& spatial_shapes,
     const std::string& reference_mode,
     bool align_corners,
-    bool device_valid_counts) {
+    bool device_valid_counts,
+    const std::string& value_layout) {
     return ttnn::experimental::can_use_fused_msda_from_offsets_l1_value(
         value,
         reference_points,
@@ -79,7 +115,8 @@ bool can_use_fused_msda_from_offsets_l1_value_py(
         spatial_shapes,
         parse_reference_mode(reference_mode),
         align_corners,
-        device_valid_counts);
+        device_valid_counts,
+        parse_value_layout(value_layout));
 }
 
 }  // namespace
@@ -98,11 +135,14 @@ void bind_fused_msda(nb::module_& mod) {
 
         Args:
             * :attr:`value`: (B, S, H, D) ROW_MAJOR bfloat16, S = sum_l H_l * W_l,
-              or packed (B, S, H*D). The packed form is what a Linear over
-              embed_dims emits and costs one DRAM page per (b, s) instead of one
-              per (b, s, h) — prefer it. With H > 1 it needs D*2 to be a multiple
-              of the buffer's alignment (on Blackhole, D % 32 == 16 in DRAM is
-              rejected, e.g. D = 16 or 48; use (B, S, H, D) or L1 there).
+              packed (B, S, H*D), or head-major (B, H, ceil(S/32), 32*D) with
+              value_layout="head_major". Packed is what a Linear over embed_dims
+              emits and costs one page per (b, s) instead of one per (b, s, h).
+              Head-major, built by ttnn.experimental.untilize_and_split_heads, is fastest for
+              D % 32 == 0: a horizontal corner pair is one read instead of two.
+              Packed with H > 1 needs D*2 to be a multiple of the buffer's
+              alignment (on Blackhole, D % 32 == 16 in DRAM is rejected, e.g.
+              D = 16 or 48; use (B, S, H, D) or L1 there).
             * :attr:`sampling_locations`: (B, Q, H, L, P, 2) ROW_MAJOR bfloat16, or the
               packed form (B, Q, H, L*P*2). The packed form costs one DRAM page per
               (b, q, h) instead of one per sample point and avoids 8x page padding —
@@ -117,6 +157,9 @@ void bind_fused_msda(nb::module_& mod) {
             * :attr:`locations_in_grid_space`: False (default) treats locations as normalized
               [0, 1] coordinates; True treats them as normalized [-1, 1] coordinates
             * :attr:`memory_config`: output memory config
+            * :attr:`value_layout`: "auto" (default) tells (B, S, H, D) and packed
+              (B, S, H*D) apart by rank; "head_major" declares (B, H, ceil(S/32), 32*D).
+              Declared rather than inferred: that shape can coincide with a canonical one.
 
         Returns:
             (B, Q, H*D) ROW_MAJOR bfloat16.
@@ -124,13 +167,14 @@ void bind_fused_msda(nb::module_& mod) {
         Out-of-bounds sampling corners contribute zero (padding_mode="zeros").
         Constraints: all tensors bfloat16 / ROW_MAJOR / INTERLEAVED, D a positive
         multiple of 16, 1 <= L <= 8, and each level's H_l and W_l <= 256. Q need
-        not be a multiple of 32.
+        not be a multiple of 32. value must be unpadded (padded_shape == shape).
+        Head-major value also needs D * 2 to be a multiple of its buffer's alignment.
         )doc";
 
     ttnn::bind_function<"fused_msda", "ttnn.experimental.">(
         mod,
         v1_doc,
-        &ttnn::experimental::fused_msda,
+        &fused_msda_py,
         nb::arg("value"),
         nb::arg("sampling_locations"),
         nb::arg("attention_weights"),
@@ -138,7 +182,8 @@ void bind_fused_msda(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("align_corners") = false,
         nb::arg("locations_in_grid_space") = false,
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("value_layout") = "auto");
 
     const auto* v2_doc =
         R"doc(
@@ -154,7 +199,7 @@ void bind_fused_msda(nb::module_& mod) {
         offset unit is one feature-map pixel under either mapping.
 
         Args:
-            * :attr:`value`: (B, S, H, D) or packed (B, S, H*D) ROW_MAJOR bfloat16
+            * :attr:`value`: (B, S, H, D) or packed (B, S, H*D) ROW_MAJOR bfloat16, or head-major as in fused_msda
             * :attr:`reference_points`: (B, Q, R, 2) ROW_MAJOR bfloat16 or float32, normalized
               (x, y) in [0, 1]. float32 keeps the sampling position sub-pixel on wide maps.
               The 4-D box form is rejected, not reinterpreted.
@@ -186,6 +231,7 @@ void bind_fused_msda(nb::module_& mod) {
               above Q is treated as Q and all-zero counts compute nothing. It compiles
               a program separate from the list form's. Pass at most one of
               num_valid_queries and num_valid_queries_tensor.
+            * :attr:`value_layout`: as in fused_msda
 
         Returns:
             (B, Q, H*D) ROW_MAJOR bfloat16, equivalent to calling fused_msda on the
@@ -211,21 +257,30 @@ void bind_fused_msda(nb::module_& mod) {
         nb::arg("align_corners") = false,
         nb::arg("memory_config") = nb::none(),
         nb::arg("num_valid_queries") = nb::none(),
-        nb::arg("num_valid_queries_tensor") = nb::none());
+        nb::arg("num_valid_queries_tensor") = nb::none(),
+        nb::arg("value_layout") = "auto");
 
     const auto* l1_value_fit_doc =
         R"doc(
         Return whether fused_msda_from_offsets can safely stage value and output
         in interleaved L1 under the device's current allocator state.
 
-        The check counts value staged as ROW_MAJOR (not counted again when it is
-        already ROW_MAJOR in L1) and the bfloat16 output, each rounded up to the
-        allocator's per-bank granule, plus the operation's circular buffers, under
-        the 95% program-L1 margin. Set device_valid_counts when the op will get
-        num_valid_queries_tensor, whose staging adds circular buffers. value may
-        still be TILE or in DRAM. The answer
-        reflects the allocator's current state; call it right before the op and do
-        not cache it.
+        The check counts value as it will be staged in L1 (not counted again when
+        it is already ROW_MAJOR in L1) and the bfloat16 output, each rounded up to
+        the allocator's per-bank granule, plus the operation's circular buffers,
+        under the 95% program-L1 margin. value may still be TILE or in DRAM.
+
+        Args beyond fused_msda_from_offsets':
+            * :attr:`device_valid_counts`: True when the op will get
+              num_valid_queries_tensor, whose staging adds circular buffers.
+            * :attr:`value_layout`: the layout the op will read. "auto" charges value
+              staged ROW_MAJOR in its own shape. "head_major" takes value either
+              already head-major or packed (B, S, H*D) that the caller will convert
+              with untilize_and_split_heads, and charges the head-major tensor,
+              which pads S to a multiple of 32 per head.
+
+        The answer reflects the allocator's current state; call it right before the
+        op and do not cache it.
         )doc";
 
     ttnn::bind_function<"can_use_fused_msda_from_offsets_l1_value", "ttnn.experimental.">(
@@ -240,7 +295,8 @@ void bind_fused_msda(nb::module_& mod) {
         nb::kw_only(),
         nb::arg("reference_mode") = "level",
         nb::arg("align_corners") = false,
-        nb::arg("device_valid_counts") = false);
+        nb::arg("device_valid_counts") = false,
+        nb::arg("value_layout") = "auto");
 }
 
 }  // namespace ttnn::operations::experimental::fused_msda::detail
