@@ -575,20 +575,23 @@ TEST(FabricGraphChannels, ExpressAndVc2Maxima) {
     EXPECT_EQ(index_of(cg, "m0.c9.E.p0", 2, "worker"), 0u);
 }
 
-TEST(FabricGraphChannels, LegacyStockSenderCounts) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
-    EXPECT_EQ(cg.sender_counts[*cg.logical.find_router("m0.c0.S.p0")][0], 2u);  // corner: worker + E
-    legacy_stock_sender_counts(cg, k2D);
-    for (const auto& counts : cg.sender_counts) {
-        EXPECT_EQ(counts, (std::vector<uint32_t>{4}));  // stock: every 2D router is 4 wide
-    }
+// A router is as wide as its highest slot in use: an absent producer below it leaves a hole, one above it nothing.
+TEST(FabricGraphChannels, SenderCountsComeFromChannels) {
+    const auto cg = lower_to_channels(
+        lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
+    const auto counts = [&](const std::string& id) { return cg.sender_counts[*cg.logical.find_router(id)]; };
+    EXPECT_EQ(counts("m0.c5.S.p0"), (std::vector<uint32_t>{4}));  // interior: worker + E, W, N
+    EXPECT_EQ(counts("m0.c0.S.p0"), (std::vector<uint32_t>{2}));  // corner: worker + E
+    // top edge, no N port: S ends at W's slot; E keeps S's slot 3, with a hole at N's slot 2
+    EXPECT_EQ(counts("m0.c1.S.p0"), (std::vector<uint32_t>{3}));
+    EXPECT_EQ(counts("m0.c1.E.p0"), (std::vector<uint32_t>{4}));
+    EXPECT_EQ(index_of(cg, "m0.c1.E.p0", 0, "S"), 3u);
 
-    auto zb = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
-    legacy_stock_sender_counts(zb, kInterMesh);
-    const auto counts = [&](const std::string& id) { return zb.sender_counts[*zb.logical.find_router(id)]; };
-    EXPECT_EQ(counts("m0.c5.Z.p0"), (std::vector<uint32_t>{5, 4}));  // boundary, nothing on its VC1
-    EXPECT_EQ(counts("m0.c5.E.p0"), (std::vector<uint32_t>{4, 4}));  // boundary chip: + from Z on VC1
-    EXPECT_EQ(counts("m0.c1.E.p0"), (std::vector<uint32_t>{4, 3}));  // no Z port
+    const auto zb = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
+    const auto zb_counts = [&](const std::string& id) { return zb.sender_counts[*zb.logical.find_router(id)]; };
+    EXPECT_EQ(zb_counts("m0.c5.Z.p0"), (std::vector<uint32_t>{4, 1}));  // boundary: nothing on its VC1 but the floor
+    EXPECT_EQ(zb_counts("m0.c5.E.p0"), (std::vector<uint32_t>{3, 4}));  // bottom row, no S port; + from Z on VC1
+    EXPECT_EQ(zb_counts("m0.c1.E.p0"), (std::vector<uint32_t>{4, 3}));  // no Z port
 }
 
 // ---------------------------------------------------------------- physical
@@ -698,45 +701,32 @@ ChannelIndex channel_of(const ChannelGraph& cg, const std::string& router, uint3
     return kNone;
 }
 
-const LegacySlot* legacy_slot(const ChannelGraph& cg, const std::string& router, uint32_t vc, uint32_t index) {
-    const auto r = *cg.logical.find_router(router);
-    for (const auto& slot : cg.legacy_slots) {
-        if (slot.router == r && slot.vc == vc && slot.index == index) {
-            return &slot;
-        }
-    }
-    return nullptr;
-}
-
 const RingQueries kNoRingQueries = [](const FabricNodeId&) { return ProtectedRingQueries{}; };
 
-// 2x16 torus: X wraps, Y (2 rows) doesn't. A row-0 E router has no N producer; stock keeps its slot.
+// 2x16 torus: X wraps, Y (2 rows) doesn't. A row-0 E router has no N producer, so no channel in N's slot.
 TEST(FabricGraphRouterInputs, TorusRingEntries) {
     const WiringOptions torus{.topology = Topology::Torus};
     auto cg = lower_to_channels(
-        lower(metal_path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/bh_galaxy_2x16_torus_xy_mesh_graph_descriptor.textproto"), torus).graph,
+        lower(
+            metal_path("tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+                       "bh_galaxy_2x16_torus_xy_mesh_graph_descriptor.textproto"),
+            torus)
+            .graph,
         Topology::Torus);
-    legacy_stock_sender_counts(cg, torus);
     mark_ring_entries(cg, torus, kNoRingQueries);
     EXPECT_TRUE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "worker")]);
     EXPECT_FALSE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "W")]);  // straight along the ring
     EXPECT_TRUE(cg.enters_ring[channel_of(cg, "m0.c3.E.p0", 0, "S")]);   // turns onto it
     EXPECT_EQ(channel_of(cg, "m0.c3.E.p0", 0, "N"), kNone);
-    const auto* n_slot = legacy_slot(cg, "m0.c3.E.p0", 0, 2);  // E-facing: [worker, W, N, S]
-    ASSERT_NE(n_slot, nullptr);
-    EXPECT_TRUE(n_slot->enters_ring);  // flagged as stock flags it
-    EXPECT_EQ(legacy_slot(cg, "m0.c3.E.p0", 0, 1), nullptr);
+    // E-facing: [worker, W, N, S]. S keeps slot 3, so the router stays 4 wide around N's empty slot.
+    EXPECT_EQ(cg.sender_counts[*cg.logical.find_router("m0.c3.E.p0")][0], 4u);
 }
 
 TEST(FabricGraphRouterInputs, MeshHasNoRingEntries) {
-    auto cg = lower_to_channels(lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
-    legacy_stock_sender_counts(cg, k2D);
+    auto cg = lower_to_channels(
+        lower(metal_mgd("single_bh_galaxy_mesh_graph_descriptor.textproto"), k2D).graph, Topology::Mesh);
     mark_ring_entries(cg, k2D, kNoRingQueries);
     EXPECT_TRUE(std::none_of(cg.enters_ring.begin(), cg.enters_ring.end(), [](bool b) { return b; }));
-    // corner chip 0: S router has worker + E; stock is 4 wide, so slots 2 and 3 are legacy
-    EXPECT_NE(legacy_slot(cg, "m0.c0.S.p0", 0, 2), nullptr);
-    EXPECT_NE(legacy_slot(cg, "m0.c0.S.p0", 0, 3), nullptr);
-    EXPECT_EQ(legacy_slot(cg, "m0.c0.S.p0", 0, 0), nullptr);
 }
 
 // fake live eth channels: direction d, plane p on chip c is channel 4 * d + p
@@ -770,7 +760,6 @@ TEST(FabricGraphRouterInputs, EthChannelBinding) {
 // The layout a router hands its link peer is the peer router's, across an intermesh boundary too.
 TEST(FabricGraphRouterInputs, PeerLayoutAcrossIntermesh) {
     auto cg = lower_to_channels(lower_mesh_graph(dual_2x4(/*z=*/true), kInterMesh).graph, Topology::Mesh);
-    legacy_stock_sender_counts(cg, kInterMesh);
     const auto pg = lower_to_physical(std::move(cg), fake_allocator({{18, 16, 16, 16, 16}, {16, 16, 16, 16}}, {16, 12}));
     const auto& g = pg.logical;
     const auto z = *g.find_router("m0.c5.Z.p0");

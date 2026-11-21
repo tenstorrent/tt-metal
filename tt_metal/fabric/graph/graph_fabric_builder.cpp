@@ -44,7 +44,7 @@ RouterVcShape GraphFabricBuilder::shape_of(RouterIndex router) const {
     return shape;
 }
 
-// layouts and per-slot sender flags, legacy slots included
+// layouts and per-slot sender flags; a slot no channel takes is not serviced
 RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
     const auto& g = graph_.logical;
     const auto& counts = graph_.sender_counts[router];
@@ -61,13 +61,6 @@ RouterGraphInputs GraphFabricBuilder::inputs_of(RouterIndex router) const {
         const uint32_t i = base[g.channels[c].vc] + graph_.index_in_vc[c];
         in.injection[i] = graph_.enters_ring[c];
         in.serviced[i] = true;
-    }
-    for (const auto& slot : graph_.legacy_slots) {
-        if (slot.router == router) {
-            const uint32_t i = base[slot.vc] + slot.index;
-            in.injection[i] = slot.enters_ring;
-            in.serviced[i] = true;
-        }
     }
     return in;
 }
