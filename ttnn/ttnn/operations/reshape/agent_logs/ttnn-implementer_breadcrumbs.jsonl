@@ -1,0 +1,3 @@
+{"event":"test_run","test":"test_reshape.py","result":"pass","detail":"13/13 after uintptr_t fix (Quasar DM pointers are 64-bit)","ts":"2026-11-21T06:29:32+00:00"}
+{"event":"test_run","test":"test_reshape_regimes.py","result":"pass","detail":"29/29; ttnn.add replaced by to_layout as the preceding program (add is Metal 1, refused on Quasar)","ts":"2026-11-21T06:29:33+00:00"}
+{"event":"test_run","test":"golden suite","result":"pass","detail":"124 passed, 520 xfail, 0 failed, 0 hangs","ts":"2026-11-21T06:29:33+00:00"}
