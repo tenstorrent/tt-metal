@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "metal/ops/common/rmsnorm_common.hpp"
 #include "metal/ttnn_all_includes.hpp"
 
 namespace ttml::metal::ops::rmsnorm_bw::device {
@@ -13,6 +14,8 @@ namespace ttml::metal::ops::rmsnorm_bw::device {
 struct RMSNormBackwardParams {
     // Without it no dL_dgamma_components are computed or written, e.g. for a frozen gamma.
     bool compute_dgamma = true;
+    // Caps the column slices a tile-row is split into; 1 keeps whole rows, e.g. to test the paths that stream a row.
+    uint32_t max_row_slices = rmsnorm::kMaxRowSlices;
 };
 
 // Tensors required for backward
