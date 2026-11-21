@@ -80,6 +80,9 @@
 #ifdef KH_REUSE
 #include "conv2d_3x3_khr_band_order.hpp"
 #endif
+#ifdef CONV2D_3X3_ROWSTREAM
+#include "conv2d_3x3_rowstream.hpp"
+#endif
 #ifdef CONV2D_3X3_TAP_SHIFT
 #include "conv2d_3x3_tap_shift.hpp"
 #endif
@@ -1567,7 +1570,67 @@ void kernel_main() {
     const uint32_t fold_ext = get_arg_val<uint32_t>(4);
     PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
 #endif
-    for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+#ifdef CONV2D_3X3_ROWSTREAM
+    // Row-streamed whole-K walk (conv2d_3x3_rowstream.hpp): the core's valid tile-rows (arg 3) flat in batches of
+    // ROWSTREAM_ROWS; replaces the M-block loop below.
+    constexpr bool rowstream = true;
+    if (num_m_blocks_this_core > 0) {
+        static_assert(kb_tap_direct && !tile_input && !k_split && !face_direct && center_mode == 0 && !strided_window);
+        constexpr uint32_t rs_rows = ROWSTREAM_ROWS;
+        constexpr uint32_t rs_k = num_k_blocks * block_k_tiles;
+        const uint32_t rs_total_rows = get_arg_val<uint32_t>(3);
+        // One tap-direct unit per K-block of a tile-row, in the reader's order; a short batch pads in0 to rs_rows.
+        auto rs_tilize = [&](uint32_t n) {
+            if constexpr (apply_relu) {
+                pack_relu_config(ReluConfig::none());
+            }
+            {
+                MaybeDeviceZoneScope("compute_tilize");
+                fifo_tilize<
+                    im2col_tilize_width_tiles,
+                    block_k_tiles / im2col_tilize_width_tiles,
+                    false,
+                    cb_im2col_rm,
+                    cb_im2col_tiles,
+                    cb_src_table,
+                    tap_direct_windows>(im2col_rm_dfb, im2col_tiles_dfb, src_table_dfb, n * num_k_blocks);
+            }
+            if (n < rs_rows) {
+                im2col_tiles_dfb.reserve_back((rs_rows - n) * rs_k);
+                im2col_tiles_dfb.push_back((rs_rows - n) * rs_k);
+            }
+        };
+        // Before the first matmul: every weight round and the bias (they stay fronted to the end).
+        auto rs_ready = [&]() {
+            {
+                MaybeDeviceZoneScope("compute_weight_wait");
+                weights.wait_front(num_k_blocks * block_k_tiles * block_n_tiles);
+            }
+            wr_rounds_waited = num_k_blocks;
+            if constexpr (has_bias) {
+                MaybeDeviceZoneScope("compute_bias_wait");
+                bias.wait_front(out_n_tiles);
+            }
+        };
+        MaybeDeviceZoneScope("compute_rowstream");
+        using RsIn0 = conv2d_3x3::rowstream::BlockIn0<cb_im2col_tiles, rs_k, rs_rows>;
+        conv2d_3x3::rowstream::walk<
+            has_bias,
+            apply_relu,
+            cb_weights,
+            cb_matmul_partials,
+            cb_output_tiles,
+            cb_bias,
+            in1_num_subblocks,
+            out_subblock_h,
+            out_subblock_w,
+            rs_k,
+            rs_rows>(rs_total_rows, RsIn0{}, rs_tilize, rs_ready);
+    }
+#else
+    constexpr bool rowstream = false;
+#endif
+    for (uint32_t m_block_idx = 0; m_block_idx < (rowstream ? 0 : num_m_blocks_this_core); ++m_block_idx) {
         if constexpr (ragged) {
             const uint32_t left = ragged_actual - m_block_idx * block_m_tiles;
             ragged_groups = left < block_m_tiles ? (left + out_subblock_h - 1) / out_subblock_h : in0_num_subblocks;

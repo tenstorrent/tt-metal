@@ -922,7 +922,88 @@ void kernel_main() {
 #else
     constexpr bool kh_reuse = false;
 #endif
-    for (uint32_t m_block_idx = 0; m_block_idx < (kh_reuse ? 0 : num_m_blocks_this_core); ++m_block_idx) {
+    // Row-streamed whole-K walk (the descriptor's rowstream_plan, conv2d_3x3_rowstream.hpp): the core's valid output
+    // tile-rows flat, no M-blocks. Per tile-row, every K-block's unit (compute's batches of rs_rows tile-rows: the
+    // FIFO's groups end with them, so a batch's last entries go out without waiting for the next tile-row's pixels).
+    // Before a tile-row's first entry the ring may reuse every slot below the lowest pixel of the first tile-row with
+    // an entry compute may not have popped yet (the FIFO holds tap_direct_fifo_units entries, so every older one is
+    // popped); then the reader waits for every pixel the tile-row reads (whole chunks: split fill, the writer's back
+    // claims while it waits) and keeps the staging full. The plan (rowstream_plan) sizes the ring so that wait never
+    // needs a pixel past `allowed`.
+#ifdef CONV2D_3X3_ROWSTREAM
+    constexpr bool rowstream = true;
+    if (num_m_blocks_this_core > 0) {
+        static_assert(rm_ring && kb_tap_direct, "the row-streamed walk runs on the ROW_MAJOR ring");
+        MaybeDeviceZoneScope("reader_rowstream");
+        constexpr uint32_t rs_rows = ROWSTREAM_ROWS;
+        // A lower bound of the lowest pixel tile-row o.. reads (kernel row 0, tap 0, clamped at 0), non-decreasing in
+        // o; an upper bound of one past the highest pixel tile-row [o, o + 32) reads, at most num_in_px (descriptor:
+        // _rs_row_*).
+        auto rs_row_lo = [](uint32_t o) -> int32_t {
+            const int32_t ho = static_cast<int32_t>(o / output_width);
+            const int32_t wo = static_cast<int32_t>(o % output_width);
+            const int32_t v = (ho * stride - pad_top) * input_width + wo * stride - pad_left;
+            return v > 0 ? v : 0;
+        };
+        auto rs_row_hi = [](uint32_t o, uint32_t o_end) -> int32_t {
+            if (o >= o_end) {
+                return 0;
+            }
+            const uint32_t last = (o + TILE_DIM < o_end ? o + TILE_DIM : o_end) - 1;
+            const int32_t ho = static_cast<int32_t>(last / output_width);
+            const int32_t wo = static_cast<int32_t>(last % output_width);
+            int32_t x =
+                (ho * stride + 2 * dilation - pad_top) * input_width + wo * stride - pad_left + 2 * dilation + 1;
+            x = x > 0 ? x : 0;
+            return x < num_in_px ? x : num_in_px;
+        };
+        const uint32_t o_first = m_tile_start * TILE_DIM;
+        const uint32_t o_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
+        const uint32_t o_end = o_end_tiles < num_out_px ? o_end_tiles : num_out_px;
+        const conv2d_3x3::SlabFootprint core_fp =
+            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
+                o_first, o_end);
+        rm.template init<input_width, num_in_px, dilation>(
+            slab_l1, get_write_ptr(cb_rm_stage), rs_row_lo(o_first), core_fp);
+        fifo.fixed_state = 0;
+        reads.begin(TRID_GATHER);
+        uint32_t unit = 0;  // units written so far
+        int32_t base = 0;
+        for (uint32_t row0 = 0; row0 < actual_m_tiles; row0 += rs_rows) {
+            const uint32_t n = actual_m_tiles - row0 < rs_rows ? actual_m_tiles - row0 : rs_rows;
+            uint32_t left = n * num_k_blocks;
+            for (uint32_t tile_row = row0; tile_row < row0 + n; ++tile_row) {
+                const uint32_t o = o_first + tile_row * TILE_DIM;
+                for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx, --left, ++unit) {
+                    fifo.reserve(tap_direct_group, left, rm_idle);
+                    if (k_block_idx == 0) {
+                        const uint32_t reserved = unit + (fifo.tbl_reserved - fifo.tbl_written);
+                        if (reserved > tap_direct_fifo_units) {
+                            const uint32_t popped_rows = (reserved - tap_direct_fifo_units) / num_k_blocks;
+                            rm.release(rs_row_lo(o_first + popped_rows * TILE_DIM));
+                        }
+                        const int32_t x = rs_row_hi(o, o_end);
+                        if (x > rm.landed_all()) {
+                            rm.need_whole(reads, input, x);
+                        }
+                        while (rm.keep_busy(reads, input)) {
+                        }
+                        reads.begin(TRID_GATHER);
+                        fifo.fixed_state = 0;
+                        base = rm.base_for(rs_row_lo(o));
+                    }
+                    const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+                    const int32_t kh = k_tile0 / tensor_kkh_tiles;
+                    const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+                    fifo.unit(reads, slab_l1, slab_noc, zero_src_l1, zero_src_noc, o, o_end, kh, col_lo / c_in_p, base);
+                }
+            }
+        }
+    }
+#else
+    constexpr bool rowstream = false;
+#endif
+    for (uint32_t m_block_idx = 0; m_block_idx < (kh_reuse || rowstream ? 0 : num_m_blocks_this_core); ++m_block_idx) {
         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
         const uint32_t block_valid_tiles =
             (actual_m_tiles - block_tiles_done) < block_m_tiles ? (actual_m_tiles - block_tiles_done) : block_m_tiles;

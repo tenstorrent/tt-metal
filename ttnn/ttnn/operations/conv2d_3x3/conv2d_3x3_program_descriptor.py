@@ -369,6 +369,23 @@ OUT_DEPTH_ROW_GROUPS = 2
 # 1297.0 -> 1290.6 / 1290.1 (4 of 7). Trading bm for a whole-block CB instead regressed 1026x2048 32->128 (1772 -> 1949)
 # and 514x1024 64->256 (1270 -> 1294): with the output stream continuous, the store-bound convs' NoC hot spots (grid row
 # y3 on p150b) starve the cores they hold back.
+# Row-streamed whole-K walk on the ROW_MAJOR ring (rowstream_plan, conv2d_3x3_rowstream.hpp): the core's output
+# tile-rows run flat in batches of ROWSTREAM_ROWS (no M-blocks, so only valid tile-rows are tilized and multiplied);
+# per batch compute tilizes every tap of the batch (tile-row major, one unit per kernel row) and accumulates all of K in
+# DEST against the resident weights, packs the output once and pushes each row group as it completes. No fp32
+# partials, no per-K-block packs or inits. With a bias, each batch packs its fp32 sums and the row-broadcast add packs
+# the output. ROWSTREAM_TABLE_ROWS: tile-rows of tap-direct entries the reader may run ahead of compute's tilize
+# (bounded by the ring: rowstream_plan grows the ring from the freed L1 when it can). ROWSTREAM_OUT_ROWS: output CB
+# depth in row groups. The writer stores windows of row groups covering RM_MAX_DRAM_BANKS_STORE banks.
+# Not where kh reuse applies: its K-blocked walk with 3x fewer tilized tiles is faster there (130x256 128->512 with the
+# ragged tail 330 us vs 356 us row-streamed). Not where the output stream outruns DRAM (output_stream_bound): the row
+# stream drains the output at the compute rate on every core at once, where the K-blocked walk stores in bursts, and
+# past the DRAM rate the cores' stores starve each other even with the routed store (Blackhole p150b, bf16 HiFi4, 110
+# cores, C_in 32 at 528 GB/s: 1026x2048 32->128 1779 -> 2620 us, 514x1024 32->128 544 -> 638).
+ROWSTREAM_ROWS = 4
+ROWSTREAM_TABLE_ROWS = 8
+ROWSTREAM_OUT_ROWS = 8
+RM_MAX_DRAM_BANKS_STORE = 8
 # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
 # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
 INPUT_TILE_DEPTH_BATCHES = 2
@@ -1679,6 +1696,123 @@ def kh_reuse_blocking(g: Conv3x3Geometry, b: Conv3x3Blocking, l1_budget):
             khr_table=fit["table"],
             out_depth_row_groups=fit["out_depth"],
         )
+    return None
+
+
+def _rs_row_lo(g: Conv3x3Geometry, o):
+    """A lower bound of the lowest input pixel output tile-row o.. reads (kernel row 0, tap 0, clamped at 0): mirror of
+    the reader's rs_row_lo. Non-decreasing in o."""
+    ho, wo = divmod(o, g.output_width)
+    return max(0, (ho * g.stride - g.pad_top) * g.input_width + wo * g.stride - g.pad_left)
+
+
+def _rs_row_hi(g: Conv3x3Geometry, o, o_end):
+    """An upper bound of one past the highest input pixel output tile-row [o, min(o + 32, o_end)) reads, at most
+    num_in_px (0: an empty tile-row): mirror of the reader's rs_row_hi."""
+    if o >= o_end:
+        return 0
+    ho, wo = divmod(min(o + TILE, o_end) - 1, g.output_width)
+    x = (ho * g.stride + 2 * g.dilation - g.pad_top) * g.input_width + wo * g.stride - g.pad_left + 2 * g.dilation + 1
+    return min(max(x, 0), g.num_in_px)
+
+
+@functools.lru_cache(maxsize=1024)
+def rowstream_ring_px(g: Conv3x3Geometry, core_m_tiles, lag_rows):
+    """Ring pixels the row-streamed reader needs (mirror of its release / need sequence over the core's valid tile-rows):
+    before it writes tile-row t's entries it waits for every pixel below rs_row_hi(t), and compute has popped every
+    entry of the tile-rows before t - lag_rows (lag_rows rows of entries in the unit FIFO), so the ring may reuse every
+    slot below rs_row_lo(t - lag_rows) + ring_px."""
+    worst = 0
+    for start, actual in core_m_ranges(g, core_m_tiles):
+        o_end = min((start + actual) * TILE, g.num_out_px)
+        for t in range(actual):
+            hi = _rs_row_hi(g, (start + t) * TILE, o_end)
+            if hi:
+                worst = max(worst, hi - _rs_row_lo(g, (start + max(t - lag_rows, 0)) * TILE))
+    return worst
+
+
+def rowstream_plan(g: Conv3x3Geometry, b: Conv3x3Blocking, has_bias, budget, math_fidelity):
+    """The row-streamed walk's plan for blocking b (see ROWSTREAM_ROWS), or None where it does not apply: the ROW_MAJOR
+    ring with resident weights (interleaved, no K split, tap-direct, no center slots, not the C_out fold or kh reuse). Takes
+    the L1 of the fp32 partials ([bm, bn]) and the [bm, bk] in0 back, and spends it on in0 ([rows, K]), the batch's fp32
+    sums, the unit FIFO (lag rows), the ring (grown to what the lag needs) and a deeper output CB. Largest batch first,
+    then the longest lag that fits."""
+    if b.khr_ring_rows:
+        return None
+    if not (
+        b.rm_ring_px
+        and b.weights_resident
+        and not b.nslice
+        and not g.fold
+        and not g.k_split
+        and not g.sharded_output
+        and not g.tile_input
+        and b.center_mode == CENTER_NONE
+        and b.out_subblock_h == 1
+    ):
+        return None
+    if output_stream_bound(g, b, math_fidelity):
+        return None
+    bm, bk0, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
+    sb_h, sb_w = b.out_subblock_h, b.out_subblock_w
+    # The walk accumulates all of K in DEST, so the unit's K extent (bk) changes nothing in the arithmetic: one kernel row
+    # per unit where it fits (a third of the units, same K order), else the blocking's.
+    krow = bk0 != g.tensor_kkh_tiles and _tap_major(g, g.tensor_kkh_tiles)
+    bks = [g.tensor_kkh_tiles] if krow else []
+    for bk in bks + [bk0]:
+        nkb = g.tensor_k_tiles // bk
+        K = nkb * bk
+        pixel_bytes = g.c_in_p * BF16_BYTES
+        base_parts = (
+            bm * bk0 * g.in0_tile_bytes
+            + bm * bn * TILE_BYTES_FP32
+            + b.out_depth_row_groups * sb_h * bn * g.out_tile_bytes
+            + _tap_direct_fifo_units(g, bm, bk0, False) * 16
+        )
+        # cb_im2col_rm (the gathered tap blocks, one tap each) keeps its block count, at least two units' worth.
+        depth = max(IM2COL_RM_DEPTH_ROWS, _div_up(b.im2col_rm_depth_rows * bk0, bk))
+        fixed = b.footprint_bytes - base_parts + (depth * bk - b.im2col_rm_depth_rows * bk0) * TILE_BYTES_BF16
+
+        def total(rows, lag, ring_px, out_rg):
+            return (
+                fixed
+                + (ring_px - b.rm_ring_px) * pixel_bytes
+                + rows * K * g.in0_tile_bytes
+                + (rows * bn * TILE_BYTES_FP32 if has_bias else TILE_BYTES_FP32)
+                + out_rg * sb_h * bn * g.out_tile_bytes
+                + lag * nkb * 16
+            )
+
+        # The writer stores windows of store_groups row groups (conv2d_3x3_writer.cpp), at best enough to cover every DRAM
+        # bank; the output CB holds at least two windows. Largest window first, then the largest batch, then the lag.
+        best_groups = _div_up(RM_MAX_DRAM_BANKS_STORE, sb_h * bn)
+        for store_groups in range(best_groups, 0, -1):
+            min_out = max(OUT_DEPTH_ROW_GROUPS, 2 * store_groups)
+            for rows in range(ROWSTREAM_ROWS // sb_h * sb_h, 0, -sb_h):
+                for lag in range(max(ROWSTREAM_TABLE_ROWS, 1), 0, -1):
+                    ring = max(b.rm_ring_px, rowstream_ring_px(g, b.core_m_tiles, lag))
+                    if total(rows, lag, ring, min_out) > budget:
+                        continue
+                    out_rg = max(
+                        d
+                        for d in range(min_out, max(ROWSTREAM_OUT_ROWS, min_out) + 1)
+                        if total(rows, lag, ring, d) <= budget
+                    )
+                    return dict(
+                        bk=bk,
+                        nkb=nkb,
+                        depth=depth,
+                        store_groups=store_groups,
+                        rows=rows,
+                        lag=lag,
+                        table_units=lag * nkb,
+                        ring_px=ring,
+                        out_rg=out_rg,
+                        in0_tiles=rows * K,
+                        partials_tiles=rows * bn if has_bias else 1,
+                        footprint=total(rows, lag, ring, out_rg),
+                    )
     return None
 
 
@@ -3124,6 +3258,29 @@ def create_program_descriptor(
     )
     kwf_args = (g, b, has_bias, l1_cb_budget_bytes(resident), compute_kernel_config.math_fidelity)
     kwf = kw_fold_mode(*kwf_args)
+    # Row-streamed whole-K walk (see ROWSTREAM_ROWS): its ring, output depth and unit K extent replace the blocking's
+    # (the reader's too).
+    rs = (
+        None
+        if kwf
+        else rowstream_plan(
+            g,
+            b,
+            has_bias,
+            l1_cb_budget_bytes(resident),
+            compute_kernel_config.math_fidelity,
+        )
+    )
+    if rs:
+        b = replace(
+            b,
+            rm_ring_px=rs["ring_px"],
+            out_depth_row_groups=rs["out_rg"],
+            block_k_tiles=rs["bk"],
+            num_k_blocks=rs["nkb"],
+            weight_depth=rs["nkb"],
+            im2col_rm_depth_rows=rs["depth"],
+        )
     # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
     reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
     if kwf:
@@ -3289,7 +3446,13 @@ def create_program_descriptor(
                 else (
                     b.khr_ring_rows * 3 * bk
                     if khr
-                    else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
+                    else (
+                        rs["in0_tiles"]
+                        if rs
+                        else (
+                            s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks)
+                        )
+                    )
                 )
             ),
             cores,
@@ -3302,7 +3465,13 @@ def create_program_descriptor(
             cores,
         ),
         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
-        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice or g.fold else bm * bn, cores),
+        _cb(
+            CB_MATMUL_PARTIALS,
+            ttnn.float32,
+            TILE_BYTES_FP32,
+            rs["partials_tiles"] if rs else (1 if b.nslice or g.fold else bm * bn),
+            cores,
+        ),
     ]
     if g.remote_output:
         # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
@@ -3359,6 +3528,8 @@ def create_program_descriptor(
     tap_direct_fifo_units = 0 if kwf else _tap_direct_fifo_units(g, bm, bk, b.nslice)
     if khr:
         tap_direct_fifo_units = b.khr_table
+    if rs:
+        tap_direct_fifo_units = rs["table_units"]
     tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
     if tap_direct_fifo_units:
         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
@@ -3948,9 +4119,11 @@ def create_program_descriptor(
     # Ragged tail (kernels: RAGGED_ARG): on the K-blocked walk with the writer's interleaved store, a core's last M-block
     # tilizes (tap-direct), multiplies, bias-adds and packs only its valid tile-rows rounded up to whole subblocks, and
     # the writer drains only those row groups; kh reuse's band order ends at the core's valid tile-rows. RAGGED_ARG is
-    # the compute runtime arg holding the core's valid tile-rows (after the TILE ring's per-M-block args).
+    # the compute runtime arg holding the core's valid tile-rows (after the TILE ring's per-M-block args). The row
+    # stream runs only valid tile-rows by construction (its own arg 3).
     ragged = (
-        not kwf
+        not rs
+        and not kwf
         and not g.k_split
         and not b.nslice
         and not slab_direct
@@ -4206,6 +4379,10 @@ def create_program_descriptor(
             assert ragged_arg in (None, arg), (ragged_arg, arg)
             ragged_arg = arg
             compute_args.append(actual_m_tiles)
+        if rs:
+            # The row stream runs the core's valid tile-rows flat (arg 3).
+            assert len(compute_args) == 3
+            compute_args.append(actual_m_tiles)
         compute_rt[core.x][core.y] = compute_args
         writer_cores, writer_rt = writer_groups.setdefault(
             (_slice_channels(g, col), bool(split_cores)), ([], ttnn.RuntimeArgs())
@@ -4452,6 +4629,17 @@ def create_program_descriptor(
         if khr
         else []
     )
+    _rs_defines = (
+        [
+            ("CONV2D_3X3_ROWSTREAM", "1"),
+            ("ROWSTREAM_ROWS", str(rs["rows"])),
+            ("ROWSTREAM_STORE_GROUPS", str(rs["store_groups"])),
+        ]
+        if rs
+        else []
+    )
+    if rs:
+        assert b.rm_ring_px and tap_direct_fifo_units > 0 and not khr
     _rm_ring_defines = _khr_defines + (
         [
             ("RM_RING_PX", str(b.rm_ring_px)),
@@ -4492,7 +4680,8 @@ def create_program_descriptor(
             + _brf_defines
             + _rm_ring_defines
             + _store_defines
-            + _fold_defines,
+            + _fold_defines
+            + _rs_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -4515,6 +4704,7 @@ def create_program_descriptor(
             + _store_defines
             + _fold_defines
             + _ragged_defines
+            + _rs_defines
             + (_rm_ring_defines if rm_split else [])
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
             + (
@@ -4547,7 +4737,8 @@ def create_program_descriptor(
         + _wr_defines
         + _fold_defines
         + _khr_defines
-        + _ragged_defines,
+        + _ragged_defines
+        + _rs_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

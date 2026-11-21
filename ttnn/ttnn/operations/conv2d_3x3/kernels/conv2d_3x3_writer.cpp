@@ -2581,7 +2581,66 @@ void kernel_main() {
         }
     }
 #else
-    for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
+#ifdef CONV2D_3X3_ROWSTREAM
+    // Row-streamed walk (conv2d_3x3_rowstream.hpp): every weight round up front (resident), then compute pushes the
+    // core's valid output tile-rows one row group at a time, at an even rate on every core at once, so cores write the
+    // same tile-rows at the same time: a window of ROWSTREAM_STORE_GROUPS row groups whose tiles cover every DRAM bank
+    // keeps all banks busy (a tile-row's bn pages land in bn consecutive banks, and every core's tile-row t in the same
+    // ones). The split fill's writer part runs while compute works towards the next window.
+    constexpr bool rowstream = true;
+    if (num_m_blocks_this_core > 0) {
+        static_assert(
+            !slab_split && !nslice_outer && !row_split && !remote_output && !output_sharded && !k_split &&
+            out_subblock_h == 1);
+        while (k_blocks_issued < num_k_blocks) {
+            issue_weight_k_block();
+        }
+        MaybeDeviceZoneScope("writer_store");
+        const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+        const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+        constexpr uint32_t store_groups = ROWSTREAM_STORE_GROUPS;
+        const uint32_t out_limit = get_local_cb_interface(cb_output_tiles).fifo_limit;
+        const uint32_t out_size = get_local_cb_interface(cb_output_tiles).fifo_size;
+        for (uint32_t row = 0; row < actual_m_tiles; row += store_groups) {
+            const uint32_t groups = actual_m_tiles - row < store_groups ? actual_m_tiles - row : store_groups;
+#ifdef RM_SPLIT
+            while (!cb_pages_available_at_front(cb_output_tiles, groups * row_group_tiles)) {
+                rm_w.serve(rm_w_reads, rm_w_input);
+            }
+#endif
+            cb_wait_front(cb_output_tiles, groups * row_group_tiles);
+            uint32_t l1 = get_read_ptr(cb_output_tiles);
+            for (uint32_t r = 0; r < groups; ++r) {
+                // A window of row groups may straddle the CB end.
+                if (l1 >= out_limit) {
+                    l1 -= out_size;
+                }
+                const uint32_t row_page = (m_tile_start + row + r) * tensor_n_tiles + n_tile_start;
+                for (uint32_t n = 0; n < block_n_tiles; ++n) {
+#ifdef STORE_ROUTE
+                    out_store.write_page(row_page + n, output, l1 + n * out_tile_bytes);
+#else
+                    noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
+#endif
+                }
+                l1 += block_n_tiles * out_tile_bytes;
+            }
+#ifdef STORE_ROUTE
+            out_store.flushed();
+#else
+            noc_async_writes_flushed();
+#endif
+            // One pop per row group: a pop wraps the read pointer only when it lands exactly on the CB end, and the CB
+            // holds whole row groups, but a window of them may straddle the end.
+            for (uint32_t g = 0; g < groups; ++g) {
+                cb_pop_front(cb_output_tiles, row_group_tiles);
+            }
+        }
+    }
+#else
+    constexpr bool rowstream = false;
+#endif
+    for (uint32_t m_block_idx = 0; m_block_idx < (rowstream ? 0 : num_m_blocks_this_core); ++m_block_idx) {
         if constexpr (slab_split) {
 #ifdef CONV2D_3X3_SLAB_DIRECT
             // Slab-direct: compute multiplies as soon as the slab and the weights are in. The forward slab reads go
