@@ -19,6 +19,8 @@ A is its own bf16 weight; B shares W's tensor (and so its dtype, fidelity and we
 
 from __future__ import annotations
 
+import os
+
 import torch
 import torch.nn.functional as F
 
@@ -29,12 +31,19 @@ from ....layers.module import Module, Parameter
 from ....utils.matmul import _resolve_fused_mmrs_config
 
 _TILE = 32
+# MINIMAX_H3_LORA_SIDE_PROBE="qkv_tiles,ff1_tiles,fidelity" (perf probe, default unset): per-device rank-column tiles of
+# the q/k/v and ff1 inputs, and the A matmuls' fidelity (hifi2 / lofi).
+_PROBE = (
+    os.environ.get("MINIMAX_H3_LORA_SIDE_PROBE", "").split(",") if os.environ.get("MINIMAX_H3_LORA_SIDE_PROBE") else []
+)
 
 
-def col_suffix_cols(k_local: int, rank_total: int, tp: int) -> int:
+def col_suffix_cols(k_local: int, rank_total: int, tp: int, site: str = "") -> int:
     """Per-device width of the rank columns appended to a column-parallel input: the fewest tiles holding
     `rank_total / tp`, padded until the per-device K tile count is a multiple of 3 (every swept blocking then keeps a
     K block near its own; 42 -> 45 tiles for the H3 shapes)."""
+    if _PROBE and site in ("qkv", "ff1"):
+        return int(_PROBE[0 if site == "qkv" else 1]) * _TILE
     k_tiles = k_local // _TILE
     tiles = -(-rank_total // (tp * _TILE))
     while (k_tiles + tiles) % 3:
@@ -130,7 +139,7 @@ class LowRankDown(Module):
         self.weight = Parameter(total_shape=[in_features, width], mesh_axes=[mesh_axis, None], device=mesh_device)
         self.compute_config = ttnn.init_device_compute_kernel_config(
             mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.LoFi if _PROBE[2:] == ["lofi"] else ttnn.MathFidelity.HiFi2,
             math_approx_mode=False,
             fp32_dest_acc_en=True,
             packer_l1_acc=True,

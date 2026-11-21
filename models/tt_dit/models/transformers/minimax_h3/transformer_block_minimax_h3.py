@@ -189,7 +189,7 @@ class MiniMaxH3TransformerBlock(Module):
         self._ff1_side_cols = 0
         if lora_rank is not None:
             # Same layers with the side-branch input widths (see `lora_side`).
-            self._ff1_side_cols = col_suffix_cols(self.hidden_local, lora_rank, self.tp_factor)
+            self._ff1_side_cols = col_suffix_cols(self.hidden_local, lora_rank, self.tp_factor, "ff1")
             linear_kwargs = dict(
                 mesh_device=mesh_device, mesh_axis=self.tp_mesh_axis, fsdp_mesh_axis=None, ccl_manager=ccl_manager
             )
