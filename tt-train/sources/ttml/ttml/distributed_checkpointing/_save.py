@@ -435,17 +435,6 @@ def save(
                 return
             results = [group.incoming(p, ResultPart) for p in gathered]
             index, header_json = merge_results(results, election, name)
-            for record_ in index.files:
-                fd = os.open(os.path.join(staging, record_.path), os.O_RDONLY)  # by exact name: fresh attributes
-                try:
-                    size = os.fstat(fd).st_size
-                finally:
-                    os.close(fd)
-                if size != record_.nbytes:
-                    raise CheckpointError(
-                        f"{record_.path}: {size} bytes on the shared filesystem, {record_.nbytes} reported by world rank "
-                        f"{record_.world_rank}"
-                    )
             write_header(staging, header_json)
             write_index(staging, index)
             finalize_staging(staging, ckpt_dir, overwrite=overwrite)

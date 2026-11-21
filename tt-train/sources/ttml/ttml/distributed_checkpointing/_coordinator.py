@@ -33,7 +33,7 @@ so a box held by several ranks (a replica across hosts, or the same key on sever
 them, chosen to even out the bytes each rank and device writes; rank 0 broadcasts the election; every rank writes the boxes
 it owns into its own files; the result parts (files, chunk records, checksums, this rank's generators) are gathered;
 rank 0 merges them into ``index.json`` and ``header.json``, checking that the ranks report one chunk per elected box,
-checks every data file's size through the shared filesystem, and finalizes the directory. Its phases: collecting the
+and finalizes the directory. Its phases: collecting the
 live tensors, checking the target directory, merging the plan parts, writing the shards, merging the index and
 finalizing.
 
