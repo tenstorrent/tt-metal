@@ -73,6 +73,12 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
 
             uint32_t size = sizes[idx];
             uint32_t addr = this->entries_[alloc_index][idx].addr;
+            TT_FATAL(
+                size <= this->end_addrs_[idx] - this->base_addrs_[idx],
+                "Program size ({}) too large for kernel config buffer ({}) at buffer index {}",
+                size,
+                this->end_addrs_[idx] - this->base_addrs_[idx],
+                idx);
 
             this->reservation_[idx].size = size;
             if (size == 0) {
@@ -83,7 +89,6 @@ std::pair<ConfigBufferSync, std::vector<ConfigBufferEntry>&> WorkerConfigBufferM
                 this->reservation_[idx].addr = this->base_addrs_[idx];
                 break;
             }
-            TT_ASSERT(size <= this->end_addrs_[idx] - this->base_addrs_[idx]);
 
             // alloc_index may be ahead or behind free_index
             // so compare to either end of buffer or next to be freed addr. if alloc_index is inside free_index, we

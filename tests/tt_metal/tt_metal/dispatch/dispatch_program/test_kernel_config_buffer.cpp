@@ -17,6 +17,8 @@
 #include "tt_metal/impl/dispatch/util/size_literals.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
+#include "tt_metal/impl/buffers/circular_buffer.hpp"
+#include "tt_metal/impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::kernel_size_tests {
 
@@ -101,6 +103,29 @@ protected:
         create_devices(DEFAULT_TRACE_REGION_SIZE, MIN_WORKER_L1_SIZE);
         compute_memory_layout();
         log_l1_memory_layout();
+    }
+};
+
+// Slow dispatch with a ring buffer smaller than the test kernels.
+class KernelSizeTestSlowDispatch : public KernelSizeTestDefaultBuffer {
+    static constexpr uint32_t RINGBUFFER_SIZE = 32 * 1024;
+
+protected:
+    void SetUp() override {
+        if (getenv("TT_METAL_SLOW_DISPATCH_MODE") == nullptr) {
+            GTEST_SKIP() << "Kernel config past the ring buffer is a slow dispatch feature";
+        }
+        arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
+        skip_if_unsupported_arch();
+
+        create_devices(DEFAULT_TRACE_REGION_SIZE, max_worker_l1_size_ - RINGBUFFER_SIZE);
+        compute_memory_layout();
+        log_l1_memory_layout();
+    }
+
+    uint32_t tensix_config_size(Program& program) const {
+        return program.impl()
+            .get_program_config_sizes()[hal_.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX)];
     }
 };
 
@@ -275,6 +300,114 @@ TEST_F(KernelSizeTestBigBuffer, BigKernelExecutionCorrectness) {
 
     log_info(LogTest, "Result: {} (expected: {})", result[0], NUM_ADDS);
     EXPECT_EQ(result[0], NUM_ADDS) << "Kernel should have performed " << NUM_ADDS << " additions";
+}
+
+// Test 5: A 200KB kernel runs past a 32KB ring buffer, with its CB placed above the kernel config
+TEST_F(KernelSizeTestSlowDispatch, KernelConfigPastRingbufferRuns) {
+    constexpr uint32_t NUM_ADDS = 50000;
+    constexpr uint32_t CB_SIZE = 2048;
+    auto& device = devices_[0];
+
+    const uint32_t result_page_size = hal_.get_alignment(HalMemType::L1);
+    auto result_buffer = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = result_page_size},
+        distributed::DeviceLocalBufferConfig{.page_size = result_page_size, .buffer_type = BufferType::L1},
+        device.get());
+    const CoreCoord core = device->allocator()->get_logical_core_from_bank_id(0);
+    CoreRangeSet cr_set({CoreRange(core, core)});
+
+    distributed::MeshWorkload workload;
+    Program program;
+    auto kernel = CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/dataflow/unit_tests/command_queue/large_kernel_add_test.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .defines = {{"NUM_ADDS", std::to_string(NUM_ADDS)}}});
+    SetRuntimeArgs(program, kernel, cr_set, {static_cast<uint32_t>(result_buffer->address())});
+    const CBHandle cb = CreateCircularBuffer(
+        program, cr_set, CircularBufferConfig(CB_SIZE, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, CB_SIZE));
+
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
+    distributed::Finish(device->mesh_command_queue());
+
+    auto& placed = workload.get_programs().at(device_range_);
+    const uint32_t config_size = tensix_config_size(placed);
+    const uint32_t cb_address = placed.impl().get_circular_buffer(cb)->address();
+    log_info(
+        LogTest,
+        "Config size {} B, CB at 0x{:x}, ring buffer ends at 0x{:x}",
+        config_size,
+        cb_address,
+        unreserved_base_);
+    EXPECT_GT(config_size, actual_kernel_config_size_);
+    EXPECT_GE(cb_address, kernel_config_base_ + config_size);
+
+    std::vector<uint32_t> result;
+    slow_dispatch::ReadFromL1(*device, core, result_buffer->address(), sizeof(uint32_t), result);
+    EXPECT_EQ(result[0], NUM_ADDS);
+}
+
+// Test 6: A kernel config past the ring buffer that reaches an L1 buffer is rejected
+TEST_F(KernelSizeTestSlowDispatch, KernelConfigClashingWithL1BufferFails) {
+    ScopedNullifyKernels nullify_kernels;
+    constexpr uint32_t FREE_ABOVE_RINGBUFFER = 16 * 1024;
+    constexpr uint32_t KERNEL_BYTES = 64 * 1024;
+    auto& device = devices_[0];
+
+    const uint32_t bank_bytes = device->allocator()->get_bank_size(BufferType::L1) - FREE_ABOVE_RINGBUFFER;
+    auto filler = distributed::MeshBuffer::create(
+        distributed::ReplicatedBufferConfig{.size = bank_bytes * device->allocator()->get_num_banks(BufferType::L1)},
+        distributed::DeviceLocalBufferConfig{.page_size = bank_bytes, .buffer_type = BufferType::L1},
+        device.get());
+    ASSERT_LT(filler->address(), kernel_config_base_ + KERNEL_BYTES);
+
+    CoreRangeSet cr_set({CoreRange({0, 0}, {0, 0})});
+    distributed::MeshWorkload workload;
+    Program program;
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .defines = {{"KERNEL_BYTES", std::to_string(KERNEL_BYTES)}}});
+
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false), std::runtime_error);
+}
+
+// Test 7: A program that fits the ring buffer keeps its CBs at the allocator base
+TEST_F(KernelSizeTestSlowDispatch, KernelConfigInsideRingbufferKeepsLayout) {
+    ScopedNullifyKernels nullify_kernels;
+    constexpr uint32_t CB_SIZE = 2048;
+    auto& device = devices_[0];
+
+    CoreRangeSet cr_set({CoreRange({0, 0}, {0, 0})});
+    distributed::MeshWorkload workload;
+    Program program;
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/perf_microbenchmark/dispatch/kernels/pgm_dispatch_perf.cpp",
+        cr_set,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .defines = {{"KERNEL_BYTES", "1024"}}});
+    const CBHandle cb = CreateCircularBuffer(
+        program, cr_set, CircularBufferConfig(CB_SIZE, {{0, tt::DataFormat::Float16_b}}).set_page_size(0, CB_SIZE));
+
+    workload.add_program(device_range_, std::move(program));
+    EXPECT_NO_THROW(distributed::EnqueueMeshWorkload(device->mesh_command_queue(), workload, false));
+    distributed::Finish(device->mesh_command_queue());
+
+    auto& placed = workload.get_programs().at(device_range_);
+    EXPECT_LE(tensix_config_size(placed), actual_kernel_config_size_);
+    EXPECT_EQ(placed.impl().get_circular_buffer(cb)->address(), unreserved_base_);
 }
 
 }  // namespace tt::tt_metal::kernel_size_tests
