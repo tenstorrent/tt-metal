@@ -67,16 +67,18 @@ STATE_PREFIXES = (
 )
 
 
-# proj_out at 4096x4096 (rows per device: no text / 1024 / 2048 text bucket): N block 8 = the core's whole 8 N tiles
+# proj_out at 4096x4096 (rows per device: no text / 1024 / 2048 text bucket): N block 8 = the core's whole 8 N tiles,
+# a 1x4 subblock and a 3-block L1 window (the K order is unchanged: bit-identical to 2x2 with the default window)
 PROJ_OUT_4096_CONFIG = FusedMMRSConfig(
     compute_with_storage_grid_size=ttnn.CoreCoord(12, 8),
     M_block_size=6,
     K_block_size=8,
     N_block_size=8,
-    subblock_h=2,
-    subblock_w=2,
+    subblock_h=1,
+    subblock_w=4,
     num_buffers_per_channel=None,
     chunk_width_in_mm_blocks=1,
+    mm_window_blocks=3,
 )
 register_fused_mmrs_configs(
     {ttnn.CoreCoord(12, 10): {(m, 3072, 3072): PROJ_OUT_4096_CONFIG for m in (8192, 8320, 8960)}}
