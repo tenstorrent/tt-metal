@@ -282,9 +282,13 @@ def test_one_process_keeps_its_parts_as_objects(tmp_path, monkeypatch):
             cls, "to_bytes", lambda self: pytest.fail(f"the group of one encoded a {type(self).__name__}")
         )
     path = str(tmp_path / "step_0000001")
-    dcp.save(path, model=model, optimizer=opt)
+    stats = dcp.save(path, model=model, optimizer=opt).stats
     monkeypatch.undo()
     assert dcp.load(path, model=model, optimizer=opt).missing == []
+    # Each step records its own time, the planning and the merge included.
+    steps = ("collect_s", "election_s", "plan_s", "readback_s", "write_s", "finalize_s")
+    assert all(0 <= stats[s] <= stats["total_s"] for s in steps), stats
+    assert sum(stats[s] for s in steps if s != "readback_s") <= stats["total_s"], stats
 
 
 def test_missing_file_or_bad_spec_is_refused_first(tmp_path, monkeypatch, expect_error):

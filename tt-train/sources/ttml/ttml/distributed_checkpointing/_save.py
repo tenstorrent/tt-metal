@@ -385,14 +385,16 @@ def save(
             return group.outgoing(merge_plan_parts(parts), "the owner election")
 
         election = group.incoming(group.broadcast(group.phase("merging the plan parts", merge_parts)), Election)
-        stats["plan_s"] = time.perf_counter() - t1
+        stats["election_s"] = time.perf_counter() - t1  # the plan parts gathered, merged and the election broadcast
 
         def write() -> tuple[SavePlan, Any]:
+            t_plan = time.perf_counter()
             plan = create_save_plan(
                 [lt.info for lt in live],
                 file_for_coord=lambda c: data_file_name(world_rank, record.mesh_id, c),
                 owner_of=election.owner_of(rank),
             )
+            stats["plan_s"] = time.perf_counter() - t_plan
             crcs = _write_plan(staging, plan, by_key, threads, max_inflight_bytes, stats)
             files = [
                 FileRecord(f.path, len(f.header) + f.data_bytes, world_rank, record.mesh_id, f.coord)
@@ -414,6 +416,7 @@ def save(
             return plan, group.outgoing(result, "this rank's result part")
 
         plan, result = group.phase("writing the shards", write)
+        t3 = time.perf_counter()
         gathered = group.gather(result)
 
         def finalize() -> None:
@@ -437,6 +440,7 @@ def save(
             finalize_staging(staging, ckpt_dir, overwrite=overwrite)
 
         group.phase("merging the index and finalizing", finalize)
+        stats["finalize_s"] = time.perf_counter() - t3  # the result parts gathered and merged, the directory finalized
     except CheckpointFatalError:
         raise  # the staging directory is left in place; nothing else can be agreed on
     except BaseException:
