@@ -34,7 +34,7 @@ void bind_relay_chunk_scan(nb::module_& mod) {
         every other rank waits for its arrival, which separates consecutive calls across the SP line.
 
         ``cores`` lists the same number of correction cores per head, head by head, then two sender cores per link,
-        then the relay cores (each runs the hop of up to two heads of one link: heads ``h`` and ``h + num_links``). The
+        then the relay cores (each runs the hop of up to two heads of one link, far apart in its order). The
         ``landing`` buffer and the global ``semaphores`` outlive the call: a peer writes them before this rank's
         call starts.
 
@@ -62,8 +62,8 @@ void bind_relay_chunk_scan(nb::module_& mod) {
                 per slot the final state the last rank writes on the first rank.
             gate_workspace (ttnn.Tensor): L1 tensor height-sharded over the correction cores, the same bytes on each:
                 the output gate's working buffers, for the call only. The relay takes K blocks as large as it holds.
-            semaphores (list[ttnn.GlobalSemaphore]): Five zeroed counters on every core of the program: the
-                entry-state, final-state and final-carry arrivals, then the output gate's x and W block counts.
+            semaphores (list[ttnn.GlobalSemaphore]): Four zeroed counters on every core of the program: the
+                entry-state and final-state (or carry) arrivals, then the output gate's x and W block counts.
 
         Keyword Args:
             local_rows (int): Positive, 32-aligned token rows per SP device.

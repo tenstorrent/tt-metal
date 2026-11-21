@@ -68,14 +68,14 @@ class OutputNorm:
     gate_math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.HiFi2
 
 
-# The relay's persistent counters (relay_semaphores in relay_chunk_scan_device_operation_types.hpp): its entry-state,
-# final-state and final-carry arrivals, then the output gate's x and W block counts.
-_RELAY_SEMAPHORES = 5
+# The relay's persistent counters (relay_semaphores in relay_chunk_scan_device_operation_types.hpp): its entry-state
+# and final-state (or carry) arrivals, then the output gate's x and W block counts.
+_RELAY_SEMAPHORES = 4
 
 # A sender core's count semaphores, one per head it serves (relay_chunk_scan_max_heads_per_link).
 _MAX_HEADS_PER_LINK = 14
 
-# Heads per relay core (relay_chunk_scan_heads_per_relay_core): a link's heads h and h + num_links, in its order.
+# Heads per relay core (relay_chunk_scan_heads_per_relay_core), as far apart in their link's order as its relay cores allow.
 _HEADS_PER_RELAY_CORE = 2
 
 # The output gate's working L1 per correction core (the K blocks of x and W in flight, a pair's partial sums): with Kimi-K3's 5
@@ -164,18 +164,19 @@ class RelayChunkScan:
         self.num_links = num_links
         self.local_rows = local_rows
         # Each head's correction cores, then two senders per link (the relay's and the final carry's second), then the
-        # relay cores (each runs the hop of two heads of a link). The senders take the grid's first cores, nearest the
-        # Ethernet cores they hand the relay's packets to. Head h's correction cores are a column from the next row
-        # (kernels/correction_core.hpp): x = h // heads_per_column, as the summary places a head's value blocks, so the
-        # terms it writes stay in the column. The relay cores take the last free cores. Up to max_cores correction
-        # cores: with the relay cores, theirs are the matmuls that count toward the Blackhole di/dt bound.
+        # relay cores (each runs the hop of two heads of a link). The senders and then the relay cores take the grid's
+        # first cores, nearest the Ethernet cores: the fabric's writes into the relay cores and the senders' reads of
+        # them then stay clear of the correction cores' multicasts. Head h's correction cores are a column from the next
+        # row (kernels/correction_core.hpp): x = h // heads_per_column, as the summary places a head's value blocks, so
+        # the terms it writes stay in the column. Up to max_cores correction cores: with the relay cores, theirs are the
+        # matmuls that count toward the Blackhole di/dt bound.
         grid = mesh_device.compute_with_storage_grid_size()
         cores = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x)]
         senders = 2 * num_links
         relay_count = sum(
             -(-len(range(link, batch_heads, num_links)) // _HEADS_PER_RELAY_CORE) for link in range(num_links)
         )
-        first_row = math.ceil(senders / grid.x)
+        first_row = math.ceil((senders + relay_count) / grid.x)
         # Cores per head: the most that divide the head's chunks evenly (so each core's chunk rows are one shard), fit
         # the budget and the grid's columns, and leave the relay cores room.
         num_chunks = local_rows // ttnn.TILE_SIZE
@@ -185,12 +186,7 @@ class RelayChunkScan:
 
         def fits(d):
             per_column = (grid.y - first_row) // d
-            return (
-                batch_heads * d <= budget
-                and per_column > 0
-                and -(-batch_heads // per_column) <= grid.x
-                and len(cores) - senders - batch_heads * d >= relay_count
-            )
+            return batch_heads * d <= budget and per_column > 0 and -(-batch_heads // per_column) <= grid.x
 
         self.cores_per_head = cores_per_head = max(
             (d for d in range(1, num_chunks + 1) if num_chunks % d == 0 and fits(d)), default=0
@@ -206,8 +202,7 @@ class RelayChunkScan:
             for h in range(batch_heads)
             for q in range(cores_per_head)
         ]
-        taken = set((c.x, c.y) for c in correction + cores[:senders])
-        relay = [core for core in cores if (core.x, core.y) not in taken][-relay_count:]
+        relay = cores[senders : senders + relay_count]
         self.cores = correction + cores[:senders] + relay
 
         def core_set(selected):
