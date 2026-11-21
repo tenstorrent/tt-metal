@@ -27,7 +27,7 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
                 beta2: Optional[float] = 0.999,
                 eps: Optional[float] = 1e-8,
                 weight_decay: Optional[float] = 1e-2,
-                step: Optional[int] = 0,
+                step: Optional[int] = 1,
                 amsgrad: Optional[bool] = false,
                 max_exp_avg_sq_in: Optional[ttnn.Tensor],
                 param_out: Optional[ttnn.Tensor],
@@ -53,7 +53,7 @@ void bind_moreh_adamw_operation(nb::module_& mod) {
         nb::arg("beta2") = 0.999f,
         nb::arg("eps") = 1e-8f,
         nb::arg("weight_decay") = 1e-2f,
-        nb::arg("step") = 0,
+        nb::arg("step") = 1,
         nb::arg("amsgrad") = false,
         nb::kw_only(),
 
