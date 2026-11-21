@@ -128,3 +128,50 @@ def test_outside_phase0_is_refused(device):
         pad(x, ((0, 0), (0, 0), (1, 0), (0, 0)), 0.0)  # padding before
     with pytest.raises(NotImplementedError):
         pad(x, ((0, 0), (0, 0), (0, 1), (0, 0)), 1.0)  # value 1.0
+
+
+# Entries wider than one NoC packet (NOC_PACKET_BYTES): drained by the explicit-sync writer. With implicit sync these
+# underflowed the ring's tile counter once a transaction window held two or more entries (4 rows/core here).
+WIDE_CASES = [
+    ((1, 1, 128, 4097), ((0, 0), (0, 1), (0, 2), (0, 3))),  # bf16 entry 8208 B: just past the packet
+    ((1, 1, 128, 4096), ((0, 0), (0, 0), (0, 0), (0, 0))),  # bf16 entry 8192 B: implicit, the boundary itself
+]
+
+
+@pytest.mark.parametrize("threads", [PAD_THREADS, (1, 2), (2, 2)], ids=lambda t: "R%dW%d" % t)
+@pytest.mark.parametrize("block_rows", [None, 1])
+@pytest.mark.parametrize("case", WIDE_CASES, ids=_case_id)
+def test_rows_wider_than_a_packet(device, case, block_rows, threads):
+    shape, padding = case
+    t, x = _input(device, shape)
+    got = ttnn.to_torch(_run(x, padding, 1.0, block_rows_override=block_rows, threads=threads))
+    _assert_exact(got, _reference(t, padding, 1.0))
+
+
+def test_rows_wider_than_a_packet_refuse_more_readers(device):
+    """An explicit consumer rotates per pop (a whole reader op), so the wide-row path needs W >= R."""
+    _, x = _input(device, WIDE_CASES[0][0])
+    with pytest.raises(ValueError):
+        _run(x, WIDE_CASES[0][1], 1.0, threads=(2, 1))
+
+
+def test_sharded_input_is_refused_by_name(device):
+    """R6: the placement axes come from eval.memory.memory_axes and are gated like any other axis, so a sharded
+    input is refused with the pipeline's refusal (a NotImplementedError naming the axis) before any kernel work."""
+    torch.manual_seed(0)
+    t = torch.randn((1, 1, 32, 64), dtype=torch.bfloat16)
+    shard = ttnn.ShardSpec(
+        ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))]),
+        [32, 64],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    mc = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard)
+    x = ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=mc)
+    from eval.memory import memory_axes
+    from ttnn.operations.pad.pad import SUPPORTED
+
+    assert memory_axes(x)["sharding"] == "height"
+    assert "height" not in SUPPORTED["sharding"]
+    # validate() stops at the first unsupported axis: memory_config=L1 until L1 is supported, sharding after.
+    with pytest.raises(NotImplementedError, match="sharding|memory_config"):
+        pad(x, ((0, 0), (0, 0), (0, 0), (0, 32)), 0.0)

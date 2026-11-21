@@ -40,6 +40,12 @@ BUFFER_DEPTH = 2  # blocks in flight in the rows_streamed regime
 RING_ENTRY_CAP = 255  # implicit-sync txn descriptor: num_entries / num_txn_ids <= 255 (dataflow_buffer.cpp)
 DFB_RING_MAX_BYTES = 1_048_560  # one ring at most 1 MiB - 16 B (target page)
 L1_RESERVE_BYTES = 0
+# Quasar's NoC overlay cuts every transfer into packets of at most this many bytes (NOC_OVERLAY_MAX_BYTES_IN_PACKET,
+# tt_metal/hw/inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h:74), and the DM0 interrupt handler's per-transaction-id
+# window threshold counts packets. An implicit-sync write of a wider entry is credited more than once: with two or more
+# entries per window the ring's tile counter underflows (simulator abort, e.g. fp32 (2,1,64,4096) C-pad; boundary
+# measured at entry_bytes 8192 pass / 8208 fail). Wider entries are drained by an explicit-sync writer instead.
+NOC_PACKET_BYTES = 8 * 1024
 
 DFB_OUT_ROWS = "out_rows"
 DFB_PAD_ROW = "pad_row"
@@ -80,10 +86,13 @@ def elem_bytes_of(dtype) -> int:
     raise NotImplementedError(f"pad: no element size for {dtype}")
 
 
-def validate_thread_plan(threads):
+def validate_thread_plan(threads, explicit_out_rows: bool):
     r, w = threads
     if not (r >= 1 and w >= 1 and r + w <= FREE_DM_HARTS and max(r, w) % min(r, w) == 0):
         raise ValueError(f"pad: thread plan (R, W) = {threads}: need R + W <= {FREE_DM_HARTS}, max % min == 0")
+    if explicit_out_rows and r > w:
+        # An explicit consumer rotates its tile counters per pop, i.e. per whole reader op: it needs W >= R.
+        raise ValueError(f"pad: thread plan (R, W) = {threads}: rows wider than {NOC_PACKET_BYTES} B need W >= R")
 
 
 def split_rows(num_rows: int, grid_size):
@@ -171,7 +180,6 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
     Probes (tests): `threads` = (R, W), `block_rows_override` forces rows_streamed with that block,
     `pad_rows_per_barrier` overrides the writer's pad-row batch (default: the core's whole pad assignment).
     """
-    validate_thread_plan(threads)
     R, W = threads
     T = max(R, W)
     (N, C, H, Wd), ((bn, an), (bc, ac), (bh, ah), (bw, aw)) = shape4, pairs4
@@ -181,13 +189,15 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
     entry_bytes = align_up(out_row_bytes, ttnn.get_l1_alignment())
     # The implicit write sends a whole entry: it must stay inside its page's aligned slot.
     assert entry_bytes <= out.buffer_aligned_page_size(), (entry_bytes, out.buffer_aligned_page_size())
+    explicit_out_rows = entry_bytes > NOC_PACKET_BYTES  # one implicit write per entry must be one packet
+    validate_thread_plan(threads, explicit_out_rows)
 
     D = N * C * H
     P = N_o * C_o * H_o - D
     grid = inp.device().compute_with_storage_grid_size()
     data_split = split_rows(D, grid)
     pad_split = split_rows(P, grid)
-    max_core_data_rows = max(c for _, c in data_split.values())
+    max_core_data_rows = max((c for _, c in data_split.values()), default=0)
     block_rows, ring_blocks = choose_blocking(max_core_data_rows, threads, entry_bytes,
                                               block_rows_override=block_rows_override)
 
@@ -231,7 +241,7 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
         disable_dfb_implicit_sync_for=[DFB_OUT_ROWS, DFB_PAD_ROW])
     writer_hw = E.create_writer_datamovement_config()
     writer_hw.config_2xx = E.DataMovementHardwareConfig.DataMovement2XXConfig(
-        disable_dfb_implicit_sync_for=[DFB_PAD_ROW])
+        disable_dfb_implicit_sync_for=[DFB_PAD_ROW] + ([DFB_OUT_ROWS] if explicit_out_rows else []))
 
     reader = E.KernelSpec(
         unique_id="reader",
@@ -250,7 +260,7 @@ def create_program_artifacts(inp, out, shape4, pairs4, value, *, threads=PAD_THR
         num_threads=W,
         dfb_bindings=[E.consumer_of(DFB_OUT_ROWS, "out_rows"), E.consumer_of(DFB_PAD_ROW, "pad_row")],
         tensor_bindings=[E.TensorBinding(tensor_parameter_name=TP_OUTPUT, accessor_name="output")],
-        compile_time_args=plan,
+        compile_time_args={**plan, "explicit_out_rows": int(explicit_out_rows)},
         runtime_arg_schema=E.KernelSpec.RuntimeArgSchema(runtime_arg_names=writer_rt),
     )
     spec = E.ProgramSpec(

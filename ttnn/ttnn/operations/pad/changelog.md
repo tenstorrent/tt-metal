@@ -1,6 +1,34 @@
-# pad changelog
+# Changelog: pad
 
-## Phase 0 (ttnn-implementer, 2026-11-21) — quasar on ttsim
+## Phase 0 — Core Implementation
+- **Date**: 2026-11-21
+- **What was done**: Initial implementation via incremental pipeline (planner → implementer → verifier), for Quasar
+  on the ttsim simulator: one `ttnn.ProgramSpec`, one `generic_op` dispatch, reader + writer DM kernels, no compute
+  kernel; data rows and pad rows split as two lists over the full grid; thread plan (R, C, W) = (1, 0, 1).
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], layout=[ROW_MAJOR], memory_config=[DRAM], sharding=[interleaved],
+  pad_value=[0.0], padding_side=[after], alignment=[tile_aligned, w_non_aligned, h_non_aligned], rank=[4]
+  (= the specification's PHASE0)
+- **Accuracy achieved**: exact on 4 shapes (`test_pad_precision_baseline.py`): PCC 1.0, max_abs_err 0.0,
+  rel_rms_err 0.0, 0 ULP, got/true ratio 1.0 everywhere.
+- **Golden suite at Phase 0**: 14 / 14 supported cells pass, 4 / 4 rejections pass, 242 `xfail_expected`, 0 in every
+  loud category (`verifier_report.json`). With SUPPORTED temporarily set to TARGET: 260 / 261 (all 256 cells), the
+  evidence for Refinement 1.
+- **Issues encountered** (verifier):
+  - **Fixed — tile-counter underflow on rows wider than one NoC packet.** Quasar's overlay packetizes at 8 KiB and
+    the DM0 interrupt handler's txn-window threshold counts packets, so an implicit-sync write of an entry
+    > 8192 B was credited more than once; with >= 2 entries per window the simulator aborted
+    (`tile_counter_write_local: ack: tile counter underflowed`). Reachable inside Phase 0 SUPPORTED (bf16
+    rank 4, `W_o > 4096`, >= 4 rows/core). The writer now drains `dfb_out_rows` with explicit sync when
+    `entry_bytes > NOC_PACKET_BYTES` (host CT flag `explicit_out_rows`; plans with R > W refused there); implicit
+    otherwise, unchanged.
+  - Removed the unbound placeholder `kernels/pad_compute.cpp`.
+  - `max_core_data_rows` robust to an empty data split.
+- **Tests added**: `test_pad_plan.py` (implementer: coverage at value 1.0 under four plans, rows_streamed regime,
+  pad barriers, device session, rejections; verifier: wide rows on both sides of the packet boundary, R6
+  sharded-input refusal), `test_pad_precision_baseline.py` (exactness + R4 output placement).
+
+### Implementer notes (Phase 0)
+
 
 Built as op_design.md specifies: one `ttnn.ProgramSpec`, one `ttnn.generic_op` dispatch, a reader and a writer
 DM kernel, no compute kernel (`kernels/pad_compute.cpp` is a documented, unbound placeholder).

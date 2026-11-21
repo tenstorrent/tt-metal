@@ -80,3 +80,26 @@ Totals per tier:
 - `dfb_pad_row` holds `T` entries; `W` of them are pushed (one per writer thread). With R > W the counters of
   readers `p >= W` stay empty, which the ring allows.
 - Data-movement budget unchanged: input 1 crossing, output 1 crossing, 0 B cross-core.
+
+## Verifier notes (phase 0 verification, 2026-11-21)
+
+- **Consumer protocol of `dfb_out_rows` now depends on `entry_bytes`.** Quasar's NoC overlay cuts a transfer into
+  packets of at most `NOC_PACKET_BYTES = 8192` B (`NOC_OVERLAY_MAX_BYTES_IN_PACKET`,
+  `tt_metal/hw/inc/internal/tt-2xx/quasar/noc_cmd_buf_common.h:74`). The DM0 interrupt handler's per-txn-id window
+  threshold counts packets. So an implicit write of a wider entry is credited more than once. With ≥ 2 entries per
+  window the tile counter underflows: the simulator aborts with `tile_counter_write_local: ack: tile counter
+  underflowed`. Measured boundary: 8192 B entries pass, 8208 B fail. First seen on fp32 `(2,1,64,4096)` C-pad; also
+  bf16 rank-4 rows with `W_o > 4096` and ≥ 4 rows per core, which Phase 0's SUPPORTED claims. Fix, as the
+  design's documented fallback:
+  - `entry_bytes ≤ NOC_PACKET_BYTES` keeps the implicit consumer.
+  - Wider entries get an explicit consumer: per reader op, `wait_front`, one tagged write of `out_row_bytes` per row,
+    one barrier, `pop_front`. The ring is listed in the writer's `disable_dfb_implicit_sync_for`.
+  - The thread plan on that path needs `W ≥ R`, because an explicit consumer rotates counters per pop.
+- Capacities, live sets, lifetimes and the inventory are unchanged. On the explicit path a data write moves
+  `out_row_bytes` (not `entry_bytes`). The output DRAM total is therefore exactly `O·W_o·e` there, and the
+  data-movement budget is otherwise unchanged.
+- A new mechanism cap belongs in op_design.md's table:
+  - *Mechanism:* implicit-sync consumer write, one packet per entry.
+  - *Cap:* `entry_bytes ≤ 8192`.
+  - *Clamp:* explicit consumer above the cap.
+  - *Unclamped:* tile-counter underflow.

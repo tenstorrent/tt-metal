@@ -4,8 +4,13 @@
 // pad writer.
 //   dfb_pad_row   explicit sync (listed in this kernel's disable_dfb_implicit_sync_for); template writes are
 //                 tagged with the user id trid 0, barrier on the same id.
-//   dfb_out_rows  implicit sync: one tagged write per entry from the ring's cursor, the DM0 interrupt handler
-//                 acks the entry; no wait / pop.
+//   dfb_out_rows  implicit sync (explicit_out_rows = 0): one tagged write per entry from the ring's cursor, the
+//                 DM0 interrupt handler acks the entry; no wait / pop.
+//                 explicit sync (explicit_out_rows = 1, entries wider than one NoC packet; the host then lists the
+//                 ring in this kernel's disable_dfb_implicit_sync_for): per reader op, wait_front, one tagged write
+//                 per row (trid 0, out_row_bytes), one write barrier, pop_front. Quasar's overlay cuts a transfer
+//                 into packets of at most 8 KiB and the interrupt handler's window threshold counts packets, so an
+//                 implicit write of a wider entry is credited more than once (tile counter underflow).
 //
 // Block operations (op_design.md, Block schedule):
 //   store_pad_rows    iff the core has pad rows: wait the template, walk the output rows from
@@ -37,6 +42,9 @@
 void kernel_main() {
     constexpr uint32_t R = get_arg(args::reader_threads);
     constexpr uint32_t W = get_arg(args::writer_threads);
+    constexpr bool explicit_out_rows = get_arg(args::explicit_out_rows) != 0;
+    // Explicit consumption rotates tile counters per pop: it follows whole reader ops, so it needs W >= R.
+    static_assert(!explicit_out_rows || W >= R, "explicit dfb_out_rows needs writer_threads >= reader_threads");
 
     const uint32_t data_start = get_arg(args::data_start);
     const uint32_t data_count = get_arg(args::data_count);
@@ -102,15 +110,25 @@ void kernel_main() {
     }
 
     // store_data_block: data row i of the input lands on output row ((n+bn)*C_o + (c+bc))*H_o + (h+bh).
-    // Counters advance by the dealing stride; one division per op.
+    // Counters advance by the dealing stride; one division per op. With explicit_out_rows a call is one reader op.
+    const uint32_t stride_bytes = dfb_out_rows.get_entry_size() * dfb_out_rows.get_consumer_stride_tiles();
     auto write_rows = [&](uint32_t first_row, uint32_t count, uint32_t step) {
         const uint32_t first = data_start + first_row;
         uint32_t h = first % H;
         uint32_t c = (first / H) % C;
         uint32_t n = first / (H * C);
+        if constexpr (explicit_out_rows) {
+            dfb_out_rows.wait_front(count);
+        }
         for (uint32_t i = 0; i < count; ++i) {
             const uint32_t out_row = ((n + bn) * C_o + (c + bc)) * H_o + (h + bh);
-            noc.async_write<NocOptions::TXN_ID>(dfb_out_rows, acc_out, {}, {.page_id = out_row});
+            if constexpr (explicit_out_rows) {
+                noc.async_write<NocOptions::TXN_ID>(
+                    dfb_out_rows, acc_out, out_row_bytes, {.offset_bytes = i * stride_bytes}, {.page_id = out_row},
+                    user_txn);
+            } else {
+                noc.async_write<NocOptions::TXN_ID>(dfb_out_rows, acc_out, {}, {.page_id = out_row});
+            }
             h += step;
             while (h >= H) {
                 h -= H;
@@ -119,6 +137,10 @@ void kernel_main() {
                     ++n;
                 }
             }
+        }
+        if constexpr (explicit_out_rows) {
+            noc.async_write_barrier<NocOptions::TXN_ID>(user_txn);
+            dfb_out_rows.pop_front(count);
         }
     };
     if constexpr (W >= R) {
@@ -134,6 +156,7 @@ void kernel_main() {
         write_rows(w, data_count / W + (w < data_count % W ? 1u : 0u), W);
     }
 
-    // release_trid: firmware waits for the implicit writes to land when the kernel returns.
+    // release_trid: firmware waits for the implicit writes to land when the kernel returns (with
+    // explicit_out_rows every transfer already carried trid 0; the reset is then harmless).
     noc_async_write_set_trid(0, noc.get_noc_id());
 }
