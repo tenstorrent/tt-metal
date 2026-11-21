@@ -25,10 +25,12 @@ class CCLManager:
         mesh_device,
         num_links=1,
         topology=None,
+        axis_topologies=None,
     ):
         self.mesh_device = mesh_device
         self.num_links = num_links
         self.topology = topology
+        self.axis_topologies = axis_topologies or {}
 
         # Cache for ping pong buffers: key = (shape_tuple, dim, mesh_axis), value = [buffer1, buffer2]
         self._ping_pong_buffer_cache = {}
@@ -889,8 +891,11 @@ class CCLManager:
         )
 
     def axis_topology(self, mesh_axis: int | None):
-        """The topology of a CCL along `mesh_axis`: a 2-chip axis has no wrap-around link, so it is a line even on a
-        Ring mesh. Only 2-chip axes: a longer slice of a Ring axis still gets Ring."""
+        """The topology of a CCL along `mesh_axis`: the caller's `axis_topologies` entry (an axis whose ends the fabric
+        does not wire, e.g. the line axis of a 4x4 half), else a 2-chip axis has no wrap-around link, so it is a line
+        even on a Ring mesh. Only 2-chip axes: a longer slice of a Ring axis still gets Ring."""
+        if mesh_axis in self.axis_topologies:
+            return self.axis_topologies[mesh_axis]
         if self.topology == ttnn.Topology.Ring and mesh_axis is not None and self.mesh_device.shape[mesh_axis] == 2:
             return ttnn.Topology.Linear
         return self.topology

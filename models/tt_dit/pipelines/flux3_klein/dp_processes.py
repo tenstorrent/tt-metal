@@ -24,6 +24,8 @@ GROUP_SHAPE = (4, 2)
 # Each group shape's (sp_axis, tp_axis): the sequence runs on the group's ring axis. (2, 8) keeps the Galaxy's 8-chip
 # ring (SP8 x TP2); (4, 4) is a 4x4 half (SP4 x TP4, the TP axis a line).
 GROUP_AXES = {(4, 2): (0, 1), (2, 8): (1, 0), (4, 4): (0, 1)}
+# Each group shape's longer axes that close no ring (the LINE dims of its mesh graph descriptor): their CCLs run as lines.
+GROUP_LINE_AXES = {(4, 2): (), (2, 8): (), (4, 4): (1,)}
 # By process mesh shape: one (4, 2) group, two of them or one (4, 4) group, one (2, 8) group.
 MESH_GRAPH_DESCRIPTORS = {
     shape: Path(__file__).with_name(f"dp_group_{shape[0]}x{shape[1]}_mesh_graph_descriptor.textproto")
@@ -112,7 +114,15 @@ def serve(
     try:
         submeshes = mesh.create_submeshes(ttnn.MeshShape(*group_shape)) if len(conns) > 1 else [mesh]
         for submesh in submeshes:
-            pipelines.append(Flux3KleinPipeline.create(submesh, sp_axis=sp_axis, tp_axis=tp_axis, **pipeline_kwargs))
+            pipelines.append(
+                Flux3KleinPipeline.create(
+                    submesh,
+                    sp_axis=sp_axis,
+                    tp_axis=tp_axis,
+                    axis_topologies={axis: ttnn.Topology.Linear for axis in GROUP_LINE_AXES[group_shape]},
+                    **pipeline_kwargs,
+                )
+            )
             if warmup is True:
                 pipelines[-1].warmup()
             elif warmup:
