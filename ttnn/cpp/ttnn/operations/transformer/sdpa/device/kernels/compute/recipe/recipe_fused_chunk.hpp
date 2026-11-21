@@ -12,6 +12,7 @@
 //     groups), normalization and sdpa_inner_loop_step are out of line and -Os.
 //   - fused_os (recipe_step.inc): the ring, key-range and Wormhole kernels' unpack copy of this chunk is -Os (unpack
 //     only issues and waits here, and its image is the one nearest the limit).
+//   - fused_os on PACK too for wide-head and sequence-frame rings (recipe_step.inc).
 //   - The ring and exp ring recipe factories build fused kernels at -O2 (ring_joint_sdpa_recipe.cpp /
 //     exp_ring_joint_sdpa_recipe.cpp build math at -O2 everywhere).
 //   - The ring and exp ring reader/writer dataflow kernels are -Os.

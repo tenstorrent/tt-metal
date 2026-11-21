@@ -924,11 +924,16 @@ static SDPA_RECIPE_COLD bool sdpa_inner_loop_step(
     // chunks on the reduce path.
     if constexpr (recipe::fused_active && !recipe::wormhole) {
         if (!is_first_iter && !recipe_chunk_masked() && !recipe_ring_chunk_reduce()) {
-            // MLA-width rings (a narrower V than Q/K, D >= 512) also size-optimize the PACK copy: their pack image
-            // put the program 704 B over the kernel config buffer (ring_mla mla_100k, Q160/K320, BH).
-            constexpr bool mla_width_ring = recipe::ring && vDHt < DHt && DHt >= 16;
+            // Wide-head (D >= 512) and sequence-frame (chunked prefill, sliding, KV-pad rotation) rings size-optimize
+            // the PACK copy too. BH kernel config buffer: mla_100k (Q160/K320) was 704 B over; with the per-row redo
+            // the D512 ring of test_ring_mla_segmented_accumulation_matches_unsegmented had 48 B left and minimax3's
+            // chunked reuse-KV ring (Q320/K512, rotation, streamed checkpoints) was 432 B over. -Os takes 3.1-3.3 KB
+            // off their PACK images and left the device time unchanged (BH Galaxy: minimax3 final chunk 2.261 vs
+            // 2.263 ms, kimi50k ring_mla chunk 10 8.10 vs 8.11, GPT-OSS sliding kernel span 47.0 vs 46.8 us; M3b:
+            // ring_mla d320/448 hot copy, same time).
+            constexpr bool os_pack_ring = recipe::ring && (DHt >= 16 || recipe::ring_mask == 2);
             if constexpr ((recipe::unpack_thread && (recipe::ring || recipe::krange)) ||
-                          (recipe::pack_thread && mla_width_ring)) {
+                          (recipe::pack_thread && os_pack_ring)) {
                 fused_os::sdpa_fused_chunk<
                     Sq_chunk_t,
                     Sk_chunk_t,
