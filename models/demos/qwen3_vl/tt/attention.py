@@ -370,6 +370,7 @@ class Attention(LightweightModule):
         x: (seq_len, 1, batch, dim)
         current_pos: (batch_size), current token position in the sequence for each user
         """
+        global global_padded_head_warning_shown
         assert self.use_kv_cache, "Decode without kv cache is not supported"
 
         ###

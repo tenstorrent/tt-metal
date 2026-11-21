@@ -818,7 +818,7 @@ def main():
         embeddings_dataset = load_dataset("Matthijs/cmu-arctic-xvectors", split="validation")
         speaker_embeddings = torch.tensor(embeddings_dataset[7306]["xvector"]).unsqueeze(0)
     except NotImplementedError:
-        import pyarrow as pa, glob, os, numpy as np
+        import pyarrow as pa, glob, numpy as np
 
         cache_root = os.path.expanduser("~/.cache/huggingface/datasets/Matthijs___cmu-arctic-xvectors")
         arrow_files = glob.glob(os.path.join(cache_root, "**", "*validation*.arrow"), recursive=True)
