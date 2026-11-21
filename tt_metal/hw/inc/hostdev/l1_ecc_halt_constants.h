@@ -16,6 +16,7 @@ enum EccCtrl : uint32_t {
     ECC_CTRL_VIEW_MASK = 0xFu,         // [3:0]: ECC_STATUS view select
     ECC_CTRL_COUNTS_CLR = 1u << 4,     // [4]: also clears the last error's valid bit
     ECC_CTRL_IRQ_CLR = 1u << 5,        // [5]
+    ECC_CTRL_L1_SBE_IRQ_EN = 1u << 8,  // [8]
     ECC_CTRL_L1_DBE_IRQ_EN = 1u << 9,  // [9]
 };
 
@@ -34,10 +35,18 @@ enum class EccView : uint32_t {
     LAST_L1_ERROR_BANKS_16_31 = 6,
 };
 
+// ECC_CTRL's interrupt enables while armed. The hardware interrupts only on an error in a word other than the last
+// error's, so the SBE interrupt is enabled and every SBE clears the last error: a later DBE in the same word is then
+// new and interrupts.
+constexpr uint32_t l1_ecc_ctrl_irq_enables = ECC_CTRL_L1_SBE_IRQ_EN | ECC_CTRL_L1_DBE_IRQ_EN;
+// ECC_CTRL after arming and after a false error.
+constexpr uint32_t l1_ecc_ctrl_armed = static_cast<uint32_t>(EccView::L1_COUNTS) | l1_ecc_ctrl_irq_enables;
+
 // ECC_STATUS fields. Masks are in place; a field's value is (status & MASK) >> SHIFT.
 enum EccStatus : uint32_t {
     // Views 1 and 2: L1 counts.
-    ECC_DBE_COUNT_MASK = 0x3Fu,  // [5:0]
+    ECC_DBE_COUNT_MASK = 0x3Fu,       // [5:0]
+    ECC_DBE_OVERFLOW_MASK = 1u << 6,  // [6]: the DBE count wrapped
     ECC_SBE_COUNT_SHIFT = 7,
     ECC_SBE_COUNT_MASK = 0xFFu << 7,  // [14:7]
     // Views 3 and 6: last L1 error.
