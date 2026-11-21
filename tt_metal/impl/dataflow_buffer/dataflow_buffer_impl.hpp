@@ -94,6 +94,10 @@ struct DataflowBufferImpl {
 
     // Flag to track if TC/remapper allocation has been finalized
     bool configs_finalized = false;
+    // Chosen at finalize from the tensors the DM kernels bind.
+    uint8_t producer_runs_per_block = 0;  // NoC transactions per block on each side; 0 until chosen
+    uint8_t consumer_runs_per_block = 0;
+    uint8_t block_banks = 1;  // amount of DRAM banks (1 = page order)
     // Flag to track if this DFB uses remapper (set during finalization)
     bool use_remapper = false;
     // Signals who programs the remapper pairs on device

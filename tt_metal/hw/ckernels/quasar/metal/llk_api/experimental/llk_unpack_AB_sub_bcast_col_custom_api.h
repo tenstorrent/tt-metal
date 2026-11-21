@@ -74,10 +74,13 @@ inline void llk_unpack_AB_sub_bcast_col_custom(
 
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
-    const std::uint32_t l1_tile_idx_a =
-        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a;
-    const std::uint32_t l1_tile_idx_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
+    ASSERT(ct_dim == 1 || !dfb_block_is_permuted(local_dfb_interface_a));
+    const std::uint32_t l1_tile_idx_a = dfb_ring_entry(
+        local_dfb_interface_a,
+        local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx + tile_index_a);
+    const std::uint32_t l1_tile_idx_b = dfb_ring_entry(
+        local_dfb_interface_b,
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b);
 
     _llk_unpack_AB_sub_bcast_col_custom_(
         ckernel::trisc::BFD_ID_UNP0, ckernel::trisc::BFD_ID_UNP1, l1_tile_idx_a, l1_tile_idx_b, ct_dim, tensor_shape);

@@ -32,6 +32,7 @@
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
 #include "impl/dataflow_buffer/dataflow_buffer.hpp"
+#include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/program/program_impl.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -98,13 +99,21 @@ class DFBImplicitSyncParamFixture_2_0 : public UnitMeshFixture, public ::testing
 // Default dtype UINT32 keeps the legacy two-argument call sites (entry_size, total_entries)
 // byte-identical: Shape{num_pages, page_size_bytes/4} == the old Shape{total_entries, entry_size/4}.
 inline TensorSpec make_flat_dram_tensor_spec(
-    uint32_t page_size_bytes, uint32_t num_pages, DataType dtype = DataType::UINT32) {
+    uint32_t page_size_bytes,
+    uint32_t num_pages,
+    DataType dtype = DataType::UINT32,
+    BufferType buffer_type = BufferType::DRAM,
+    std::optional<CoreCoord> shard_core = std::nullopt) {
     auto page_config = PageConfig(Layout::ROW_MAJOR);
-    auto memory_config = MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-    auto tensor_layout = TensorLayout(dtype, page_config, memory_config);
     // Page size in elements
     const uint32_t elem_size = dtype == DataType::UINT32 ? 4u : 2u;  // UINT32 or BFLOAT16
     const uint32_t elements_per_page = page_size_bytes / elem_size;
+    // With shard_core set, the whole tensor is one height shard on that core.
+    auto memory_config =
+        shard_core
+            ? MemoryConfig{TensorMemoryLayout::HEIGHT_SHARDED, buffer_type, ShardSpec(CoreRangeSet(CoreRange(*shard_core, *shard_core)), {num_pages, elements_per_page})}
+            : MemoryConfig{TensorMemoryLayout::INTERLEAVED, buffer_type};
+    auto tensor_layout = TensorLayout(dtype, page_config, memory_config);
     return TensorSpec(Shape{num_pages, elements_per_page}, tensor_layout);
 }
 
@@ -231,6 +240,19 @@ struct M2SingleDFBParams {
     DFBAccessPattern pap = DFBAccessPattern::STRIDED;
     DFBAccessPattern cap = DFBAccessPattern::STRIDED;
     bool implicit_sync = false;
+    // Implicit sync for the DM consumer, when it differs from the producer's.
+    std::optional<bool> consumer_implicit_sync = std::nullopt;
+    // Where the in and out tensors live, and whether each is one shard on tensor_shard_core.
+    BufferType tensor_buffer_type = BufferType::DRAM;
+    bool tensor_sharded = false;
+    CoreCoord tensor_shard_core = CoreCoord(0, 0);
+    // The out tensor's own buffer type and sharding, when they differ from the in tensor's.
+    std::optional<BufferType> out_tensor_buffer_type = std::nullopt;
+    std::optional<bool> out_tensor_sharded = std::nullopt;
+    // When set, the test checks the NoC transactions per block the host chose for each DM side.
+    std::optional<uint8_t> expected_runs_per_block = std::nullopt;
+    // The consumer's own value, when it differs from the producer's.
+    std::optional<uint8_t> expected_consumer_runs_per_block = std::nullopt;
     uint32_t entry_size = 1024;
     uint32_t num_entries = 16;
     std::optional<uint32_t> num_entries_in_buffer = std::nullopt;  // override for ring pressure
@@ -366,7 +388,18 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     const TensorParamName IN_TENSOR{"in_tensor"};
     const TensorParamName OUT_TENSOR{"out_tensor"};
 
-    const auto tensor_spec = make_flat_dram_tensor_spec(p.entry_size, entries_per_core, DataType::UINT32);
+    const auto tensor_spec = make_flat_dram_tensor_spec(
+        p.entry_size,
+        entries_per_core,
+        DataType::UINT32,
+        p.tensor_buffer_type,
+        p.tensor_sharded ? std::optional<CoreCoord>(p.tensor_shard_core) : std::nullopt);
+    const auto out_tensor_spec = make_flat_dram_tensor_spec(
+        p.entry_size,
+        entries_per_core,
+        DataType::UINT32,
+        p.out_tensor_buffer_type.value_or(p.tensor_buffer_type),
+        p.out_tensor_sharded.value_or(p.tensor_sharded) ? std::optional<CoreCoord>(p.tensor_shard_core) : std::nullopt);
     // Only allocate (and bind) a DRAM tensor on the side that has a DM kernel.
     // Tensix producer reads from host-prefilled L1; Tensix consumer doesn't write DRAM.
     std::optional<MeshTensor> in_tensor;
@@ -375,7 +408,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         in_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
     }
     if (p.consumer_type == M2PorCType::DM) {
-        out_tensor = MeshTensor::allocate_on_device(mesh_device, tensor_spec);
+        out_tensor = MeshTensor::allocate_on_device(mesh_device, out_tensor_spec);
     }
 
     DataflowBufferSpec dfb_spec{
@@ -431,6 +464,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     }
 
     // Consumer kernel
+    const bool consumer_implicit = p.consumer_implicit_sync.value_or(p.implicit_sync);
     KernelSpec consumer;
     if (p.consumer_type == M2PorCType::DM) {
         consumer = make_dm_kernel(
@@ -447,12 +481,12 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             consumer.compile_time_args = {
                 {"num_entries_per_consumer", num_entries_per_consumer},
                 {"block_size", p.block_size},
-                {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+                {"implicit_sync", consumer_implicit ? 1u : 0u}};
         } else {
             consumer.compile_time_args = {
                 {"num_entries_per_consumer", num_entries_per_consumer},
                 {"blocked_consumer", is_all ? 1u : 0u},
-                {"implicit_sync", p.implicit_sync ? 1u : 0u}};
+                {"implicit_sync", consumer_implicit ? 1u : 0u}};
         }
         consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
     } else {  // Tensix consumer
@@ -484,7 +518,7 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
             maybe_disable_implicit_sync(producer, p.implicit_sync, DFB);
         }
         if (p.consumer_type == M2PorCType::DM) {
-            maybe_disable_implicit_sync(consumer, p.implicit_sync, DFB);
+            maybe_disable_implicit_sync(consumer, consumer_implicit, DFB);
         }
     } else {
         // WH/BH: config_1xx pins (WH/BH has no implicit sync, so no disable knob needed).
@@ -584,6 +618,19 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
         m2_writeshard_barrier_uint32(mesh_device, *in_tensor, input);
     }
 
+    // The host chooses each DM side's transactions per block, and the ring layout, from the tensors
+    // the DM kernels bind. Check its choice where the test says what to expect.
+    program.impl().finalize_dataflow_buffer_configs();
+    const auto dfb_impl = program.impl().get_dataflow_buffer(program.impl().get_dfb_handle(DFB.get()));
+    if (p.expected_runs_per_block && p.producer_type == M2PorCType::DM) {
+        EXPECT_EQ(dfb_impl->producer_runs_per_block, *p.expected_runs_per_block);
+    }
+    const auto expected_consumer_runs =
+        p.expected_consumer_runs_per_block ? p.expected_consumer_runs_per_block : p.expected_runs_per_block;
+    if (expected_consumer_runs && p.consumer_type == M2PorCType::DM) {
+        EXPECT_EQ(dfb_impl->consumer_runs_per_block, *expected_consumer_runs);
+    }
+
     // For Tensix producer: host-prefill the DFB L1 ring with the input data so the
     // producer kernel (which only posts credits) has something for the consumer to read.
     //
@@ -598,12 +645,17 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     //            linear copy only works for a single producer; with P>1 it drains a P-way
     //            transpose of the input.
     //   BLOCKED: linear page order as well, so the ALL transpose is skipped for a BLOCKED producer.
+    //            In a bank-major ring each page then goes to the slot the ring keeps for it.
     if (p.producer_type == M2PorCType::TENSIX) {
         const uint32_t dfb_l1_addr =
             static_cast<uint32_t>(mesh_device.allocator()->get_base_allocator_addr(HalMemType::L1));
         const uint32_t wpe = p.entry_size / sizeof(uint32_t);
         const uint32_t ring_words = p.num_entries * wpe;
         std::vector<uint32_t> slice(ring_words, 0u);
+        // A bank-major ring keeps each block grouped by DRAM bank, so put each page in the slot the ring
+        // uses for it.
+        const uint32_t ring_banks = dfb_impl->block_banks;
+        const uint32_t block = std::max<uint32_t>(p.block_size, 1u);
         for (uint32_t prod = 0; prod < p.num_producers; ++prod) {
             for (uint32_t e = 0; e < num_entries_per_producer; ++e) {
                 const uint32_t page_id = e * p.num_producers + prod;
@@ -617,8 +669,11 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                 if (dst_slot >= p.num_entries) {
                     break;
                 }
+                const uint32_t ring_slot = ::dfb::bank_major_entry(block, ring_banks, dst_slot);
                 std::copy(
-                    input.begin() + page_id * wpe, input.begin() + (page_id + 1) * wpe, slice.begin() + dst_slot * wpe);
+                    input.begin() + page_id * wpe,
+                    input.begin() + (page_id + 1) * wpe,
+                    slice.begin() + ring_slot * wpe);
             }
         }
         slow_dispatch::WriteToL1(mesh_device, CoreCoord(0, 0), dfb_l1_addr, slice);
@@ -753,8 +808,9 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
     // already relies on, read off that kernel's page_id:
     //   STRIDED: the k-th entry handed to consumer c is input page k*num_consumers + c
     //            (dfb_consumer_2_0.cpp writes it to exactly that page and we expect identity).
-    //            The same holds with a BLOCKED producer: the ring is filled in page order and
-    //            the STRIDED consumer still takes every num_consumers-th tile.
+    //            The same holds with a BLOCKED producer: even in a bank-major ring the consumer
+    //            kernel looks up tile j by page order, so the STRIDED consumer still takes every
+    //            num_consumers-th tile.
     //   ALL:     every consumer sees the whole stream in order, so the k-th entry is input
     //            page k (blocked_consumer writes page_id = tile_id, again with identity
     //            expected). ALL is the *simpler* case, not a harder one.
@@ -789,9 +845,16 @@ inline void run_single_dfb_program_2_0(distributed::MeshDevice& mesh_device, con
                     page_id = k * p.num_consumers + c;
                 }
                 ASSERT_LT(page_id, entries_per_core);
+                std::string held = "no input page";
+                for (uint32_t q = 0; q < entries_per_core; ++q) {
+                    if (fnv1a_page_digest(input, q, wpe) == digests[c * num_entries_per_consumer + k]) {
+                        held = "input page " + std::to_string(q);
+                        break;
+                    }
+                }
                 EXPECT_EQ(digests[c * num_entries_per_consumer + k], fnv1a_page_digest(input, page_id, wpe))
                     << "M2 DM→Tensix digest mismatch: consumer " << c << " drain index " << k
-                    << " should have been input page " << page_id;
+                    << " should have been input page " << page_id << " (slot held " << held << ")";
             }
         }
     }
@@ -938,11 +1001,18 @@ inline void run_a1_blocked_pipeline(
 // Thread p copies input tiles p, p+P, ... into whole output blocks, so output block g is the
 // (g / P)-th block packed by thread g % P. Every ALL consumer writes back the whole ring.
 inline void run_tensix_blocked_out_pipeline(
-    distributed::MeshDevice& mesh_device, uint32_t P, uint32_t C, uint32_t block_size, uint32_t num_entries) {
+    distributed::MeshDevice& mesh_device,
+    uint32_t P,
+    uint32_t C,
+    uint32_t block_size,
+    uint32_t num_entries,
+    bool implicit = false) {
     if (mesh_device.arch() != ARCH::QUASAR) {
         GTEST_SKIP() << "M2 path is Quasar-only (Gen2Config)";
     }
     TT_FATAL(num_entries % (P * block_size) == 0, "num_entries must be a whole number of blocks per producer");
+    TT_FATAL(
+        !implicit || num_entries % (C * block_size) == 0, "num_entries must be a whole number of blocks per consumer");
     constexpr uint32_t entry_size = 2 * 32 * 32;  // bf16 tile = 2048 B
     const NodeCoord node{0, 0};
 
@@ -997,22 +1067,34 @@ inline void run_tensix_blocked_out_pipeline(
     };
     compute.compile_time_args = {{"per_core_tile_cnt", num_entries / P}};
 
-    // C DM ALL consumers: each drains every entry and writes every page.
+    // C DM consumers. With explicit sync (ALL) each drains every entry and writes every page. With
+    // implicit sync (BLOCKED) consumer c writes blocks c, c+C, ... in page order; the output is the same.
     auto consumer = make_dm_kernel(
-        CONSUMER, "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp", static_cast<uint8_t>(C));
+        CONSUMER,
+        implicit ? "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_blocked_consumer.cpp"
+                 : "tests/tt_metal/tt_metal/test_kernels/dataflow/dfb_consumer_2_0.cpp",
+        static_cast<uint8_t>(C));
     consumer.dfb_bindings = {
         {.dfb_spec_name = DFB_OUT,
          .accessor_name = "in",
          .endpoint_type = DFBEndpointType::CONSUMER,
-         .access_pattern = DFBAccessPattern::ALL}};
+         .access_pattern = implicit ? DFBAccessPattern::BLOCKED : DFBAccessPattern::ALL,
+         .block_size = implicit ? block_size : 0u}};
     consumer.tensor_bindings = {{.tensor_parameter_name = OUT_TENSOR, .accessor_name = "dst_tensor"}};
-    // blocked_consumer is the ALL-pattern flag, not BLOCKED.
-    consumer.compile_time_args = {
-        {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 1u}, {"implicit_sync", 0u}};
+    if (implicit) {
+        consumer.compile_time_args = {
+            {"num_entries_per_consumer", num_entries / C}, {"block_size", block_size}, {"implicit_sync", 1u}};
+    } else {
+        // blocked_consumer is the ALL-pattern flag, not BLOCKED.
+        consumer.compile_time_args = {
+            {"num_entries_per_consumer", num_entries}, {"blocked_consumer", 1u}, {"implicit_sync", 0u}};
+    }
     consumer.runtime_arg_schema = {.runtime_arg_names = {"chunk_offset", "entries_per_core"}};
 
     disable_implicit_sync_for(producer, DFB_IN);
-    disable_implicit_sync_for(consumer, DFB_OUT);
+    if (!implicit) {
+        disable_implicit_sync_for(consumer, DFB_OUT);
+    }
 
     WorkUnitSpec wu{.name = "wu", .kernels = {PRODUCER, CONSUMER, COMPUTE}, .target_nodes = node};
     ProgramSpec spec{

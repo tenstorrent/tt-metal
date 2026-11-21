@@ -231,6 +231,115 @@ DFB_BLOCKED_TEST(DMTest1xDFB3Bx3B_blk4_impl, DM, DM, 3, 3, 4, 24, true)
 // Other block sizes.
 DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk2_impl, DM, DM, 1, 1, 2, 16, true)
 DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk8_impl, DM, DM, 1, 1, 8, 16, true)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk3_impl, DM, DM, 1, 1, 3, 12, true)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk16_impl, DM, DM, 1, 1, 16, 32, true)
+DFB_BLOCKED_TEST(DMTest1xDFB1Bx1B_blk13_impl, DM, DM, 1, 1, 13, 26, true)
+
+#define DFB_LAYOUT_TEST(name, consumer, sharded, shard_core, block, entries, runs) \
+    TEST_F(UnitMeshFixture, name) {                                                \
+        M2SingleDFBParams params{                                                  \
+            .producer_type = M2PorCType::DM,                                       \
+            .consumer_type = M2PorCType::consumer,                                 \
+            .num_producers = 1,                                                    \
+            .num_consumers = 1,                                                    \
+            .pap = DFBAccessPattern::BLOCKED,                                      \
+            .cap = DFBAccessPattern::BLOCKED,                                      \
+            .implicit_sync = true,                                                 \
+            .tensor_buffer_type = BufferType::L1,                                  \
+            .tensor_sharded = sharded,                                             \
+            .tensor_shard_core = shard_core,                                       \
+            .expected_runs_per_block = runs,                                       \
+            .num_entries = entries,                                                \
+            .block_size = block,                                                   \
+        };                                                                         \
+        run_single_dfb_program_2_0(this->device(), params);                        \
+    }
+DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk2_impl_sharded, DM, true, CoreCoord(0, 0), 2, 16, 1)
+DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk4_impl_sharded, DM, true, CoreCoord(0, 0), 4, 16, 1)
+DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk8_impl_sharded, DM, true, CoreCoord(0, 0), 8, 16, 1)
+DFB_LAYOUT_TEST(DMTensixTest1xDFB1Bx1B_blk2_impl_sharded, TENSIX, true, CoreCoord(1, 0), 2, 16, 1)
+DFB_LAYOUT_TEST(DMTensixTest1xDFB1Bx1B_blk4_impl_sharded, TENSIX, true, CoreCoord(1, 0), 4, 16, 1)
+DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk2_impl_l1, DM, false, CoreCoord(0, 0), 2, 16, 2)
+DFB_LAYOUT_TEST(DMTest1xDFB1Bx1B_blk4_impl_l1, DM, false, CoreCoord(0, 0), 4, 16, 4)
+#undef DFB_LAYOUT_TEST
+
+// Mixed rings: the DRAM-interleaved producer makes the ring bank-major. A consumer that cannot take a
+// bank-major block in one transaction moves one transaction per page.
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx1B_blk4_impl_dram_to_sharded) {
+    const uint32_t banks = static_cast<uint32_t>(this->device().num_dram_channels());
+    // A block of 4 is still in page order with 4 or more DRAM banks (or just one), so the sharded consumer
+    // takes it in one transaction; otherwise it takes one page at a time.
+    const uint8_t consumer_runs = (banks > 1 && 4 > banks) ? 4 : 1;
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = DFBAccessPattern::BLOCKED,
+        .cap = DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .tensor_buffer_type = BufferType::DRAM,
+        .out_tensor_buffer_type = BufferType::L1,
+        .out_tensor_sharded = true,
+        .expected_runs_per_block = static_cast<uint8_t>(std::min<uint32_t>(4u, banks)),
+        .expected_consumer_runs_per_block = consumer_runs,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx1B_blk4_impl_dram_to_l1) {
+    const uint32_t banks = static_cast<uint32_t>(this->device().num_dram_channels());
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = DFBAccessPattern::BLOCKED,
+        .cap = DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .tensor_buffer_type = BufferType::DRAM,
+        .out_tensor_buffer_type = BufferType::L1,
+        .expected_runs_per_block = static_cast<uint8_t>(std::min<uint32_t>(4u, banks)),
+        .expected_consumer_runs_per_block = 4,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+
+// Mixed sync: only the producer is implicit. With fewer DRAM banks than the block the ring is
+// bank-major, and the explicit consumers step through it one entry at a time.
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx1B_blk4_implP) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 1,
+        .pap = DFBAccessPattern::BLOCKED,
+        .cap = DFBAccessPattern::BLOCKED,
+        .implicit_sync = true,
+        .consumer_implicit_sync = false,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
+TEST_F(UnitMeshFixture, DMTest1xDFB1Bx2S_blk4_implP) {
+    M2SingleDFBParams params{
+        .producer_type = M2PorCType::DM,
+        .consumer_type = M2PorCType::DM,
+        .num_producers = 1,
+        .num_consumers = 2,
+        .pap = DFBAccessPattern::BLOCKED,
+        .cap = DFBAccessPattern::STRIDED,
+        .implicit_sync = true,
+        .consumer_implicit_sync = false,
+        .num_entries = 16,
+        .block_size = 4,
+    };
+    run_single_dfb_program_2_0(this->device(), params);
+}
 
 // Same, with producer count != consumer count.
 DFB_BLOCKED_TEST(DMTest1xDFB1Bx2B_blk4_impl, DM, DM, 1, 2, 4, 16, true)
@@ -285,6 +394,7 @@ DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx4B_blk4, TENSIX, DM, 4, 4, 4, 32, false)
 // Same, with implicit sync on the DM consumer (the Tensix producer is always explicit).
 DFB_BLOCKED_TEST(TensixDMTest1xDFB2Bx2B_blk4_impl, TENSIX, DM, 2, 2, 4, 16, true)
 DFB_BLOCKED_TEST(TensixDMTest1xDFB4Bx4B_blk4_impl, TENSIX, DM, 4, 4, 4, 32, true)
+DFB_BLOCKED_TEST(TensixDMTest1xDFB1Bx1B_blk3_impl, TENSIX, DM, 1, 1, 3, 12, true)
 
 // 2048-byte entries.
 TEST_F(UnitMeshFixture, TensixDMTest1xDFB1Bx1B_blk4_entry2048) {
@@ -320,6 +430,9 @@ DFB_BLOCKED_TEST(DMTensixTest1xDFB2Bx2B_blk4, DM, TENSIX, 2, 2, 4, 16, false)
 DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx4B_blk4, DM, TENSIX, 1, 4, 4, 16, false)
 DFB_BLOCKED_TEST(DMTensixTest1xDFB2Bx1B_blk4, DM, TENSIX, 2, 1, 4, 16, false)
 DFB_BLOCKED_TEST(DMTensixTest1xDFB4Bx4B_blk4, DM, TENSIX, 4, 4, 4, 32, false)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx1B_blk4_impl, DM, TENSIX, 1, 1, 4, 16, true)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx1B_blk3_impl, DM, TENSIX, 1, 1, 3, 12, true)
+DFB_BLOCKED_TEST(DMTensixTest1xDFB1Bx1B_blk16_impl, DM, TENSIX, 1, 1, 16, 32, true)
 
 // BLOCKED -> ALL, Tensix -> DM, explicit sync: every consumer sees every block.
 #define DFB_TRISC_BLOCKED_ALL_TEST(suffix, num_p, num_c, blk, entries) \

@@ -177,7 +177,45 @@ constexpr uint8_t DFB_HART_FLAG_BROADCAST_TC = (1u << 5);
 constexpr uint8_t DFB_HART_FLAG_REMAPPER_SELF_PROG = (1u << 4);
 constexpr uint8_t DFB_HART_FLAG_TRISC_MASK = 0x0Fu;  // bits 3:0 = tensix_trisc_mask (which TRISC(s) run DFB ops)
 
-// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 32B header, followed by
+// A bank-major block keeps its pages grouped by DRAM bank, run r holds pages r, r+N, r+2N, ... of the block.
+// These map a page-order entry to where the block stores it; the identity when the block has no more pages than banks.
+namespace dfb {
+
+// Number of NoC transactions a block of `block_size` entries needs, one per bank it touches.
+constexpr uint32_t bank_major_num_runs(uint32_t block_size, uint32_t num_banks) {
+    return block_size < num_banks ? block_size : num_banks;
+}
+
+// First entry of run r inside the block.
+constexpr uint32_t bank_major_run_offset(uint32_t block_size, uint32_t num_banks, uint32_t r) {
+    const uint32_t q = block_size / num_banks;
+    const uint32_t rem = block_size % num_banks;
+    return r * q + (r < rem ? r : rem);
+}
+
+// Entries in run r.
+constexpr uint32_t bank_major_run_length(uint32_t block_size, uint32_t num_banks, uint32_t r) {
+    const uint32_t q = block_size / num_banks;
+    const uint32_t rem = block_size % num_banks;
+    return q + (r < rem ? 1u : 0u);
+}
+
+// Entry (inside the block) that holds page-order entry j of the block.
+constexpr uint32_t bank_major_entry_in_block(uint32_t block_size, uint32_t num_banks, uint32_t j) {
+    const uint32_t r = j % num_banks;
+    const uint32_t m = j / num_banks;
+    return bank_major_run_offset(block_size, num_banks, r) + m;
+}
+
+// The cursors count ring entries in page order; this is where a bank-major ring really keeps entry `entry`.
+constexpr uint32_t bank_major_entry(uint32_t block_size, uint32_t num_banks, uint32_t entry) {
+    const uint32_t block_start = entry - (entry % block_size);
+    return block_start + bank_major_entry_in_block(block_size, num_banks, entry - block_start);
+}
+
+}  // namespace dfb
+
+// Layout: dfb_blob_tc_pair_t[num_tcs] immediately after the 36B header, followed by
 // uint8_t packed_tile_counter[num_tcs] padded to the next 4B boundary.
 // This keeps base_addr and limit for the same slot adjacent (8B apart, same cache line).
 // Total TC section = num_tcs*9B rounded up to 4B.
@@ -188,14 +226,14 @@ struct dfb_blob_tc_pair_t {
 static_assert(sizeof(dfb_blob_tc_pair_t) == 8, "dfb_blob_tc_pair_t must be 8B");
 
 // Per-(hart, DFB) init entry in this hart's sequential blob.
-// Fixed 32B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
+// Fixed 36B header, followed by dfb_blob_tc_pair_t[num_tcs] (8B each), then
 // uint8_t packed_tile_counter[num_tcs] padded to 4B.
-// Total entry size = 32 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
+// Total entry size = 36 + ceil9(num_tcs) where ceil9(n) = (n*9 + 3) & ~3.
 struct dfb_hart_init_entry_t {
     uint8_t logical_dfb_id;
     uint8_t num_tcs;
     uint8_t flags;        // DFB_HART_FLAG_* bits above; bits3:0 = tensix_trisc_mask
-    uint8_t split_tc;     // byte 3: 1 = each transaction is split across all tile counters
+    uint8_t split_tc;     // byte 3: 1 = each op (a whole block) is split across all tile counters
                           // (a share of the credits to each)
     uint32_t entry_size;  // raw bytes; device applies >> cb_addr_shift
     // Host precomputes the ready-to-copy stride_size per hart type:
@@ -219,8 +257,12 @@ struct dfb_hart_init_entry_t {
                                             // BLOCKED, otherwise block size.
     uint16_t entries_to_jump;               // bytes 30-31; how many tiles the counter's cursor jumps on each
                                             // rotation of tile counters.
+    uint8_t first_entry_in_block;           // byte 32; where in its block this hart's first slot is
+    uint8_t runs_per_block;                 // byte 33; NoC transactions per block on this side
+    uint8_t block_banks;                    // byte 34; amount of DRAM banks (1 = page order)
+    uint8_t _pad;                           // byte 35
 } __attribute__((packed));
-static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
 static_assert(offsetof(dfb_hart_init_entry_t, capacity) == 26, "capacity must occupy former pad bytes 26-27");
 static_assert(offsetof(dfb_hart_init_entry_t, num_entries) == 24, "num_entries must stay at bytes 24-25");
 
@@ -408,7 +450,7 @@ inline uint32_t dm0_isr_blob_byte_size(uint32_t producer_txn_id_mask, uint32_t c
 static_assert(sizeof(dfb_global_header_t) == 96, "dfb_global_header_t size changed — check field alignment");
 static_assert(sizeof(dfb_dm1_remapper_core_header_t) == 4, "dfb_dm1_remapper_core_header_t must be 4 bytes");
 static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
-static_assert(sizeof(dfb_hart_init_entry_t) == 32, "dfb_hart_init_entry_t must be 32B");
+static_assert(sizeof(dfb_hart_init_entry_t) == 36, "dfb_hart_init_entry_t must be 36B");
 
 namespace dfb {
 

@@ -71,6 +71,9 @@ inline uint32_t DataflowBuffer::get_local_num_entries() const { return get_total
 
 inline uint32_t DataflowBuffer::get_local_size_bytes() const { return get_total_size_bytes(); }
 
+// No bank-major blocks on tt-1xx, return its page-order address.
+inline uint32_t DataflowBuffer::entry_addr(uint32_t addr) const { return addr; }
+
 inline uint32_t DataflowBuffer::get_ring_span_bytes() const { return get_total_size_bytes(); }
 
 inline uint32_t DataflowBuffer::get_ring_span_num_entries() const { return get_total_num_entries(); }

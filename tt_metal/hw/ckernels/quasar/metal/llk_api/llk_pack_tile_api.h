@@ -56,14 +56,14 @@ inline std::uint32_t get_output_tile_index(std::uint8_t output_id, std::uint32_t
 
     if constexpr (out_of_order_output) {
         // Consecutive tiles of a batch are stride_size_tiles entries apart, so step a full stride per tile (#56194).
-        l1_tile_index = wr_entry_idx + output_tile_index * stride_size_tiles;
+        l1_tile_index = dfb_ring_entry(local_dfb_interface, wr_entry_idx + output_tile_index * stride_size_tiles);
     } else {
         if constexpr (untilize) {
             // TODO: uplift this option from BBE
         } else {
             // In-order packing: use wr_entry_ptr as the incrementing tile offset, stepping a full stride
             // per tile (#56194).
-            l1_tile_index = wr_entry_idx + local_dfb_interface.wr_entry_ptr;
+            l1_tile_index = dfb_ring_entry(local_dfb_interface, wr_entry_idx + local_dfb_interface.wr_entry_ptr);
             local_dfb_interface.wr_entry_ptr += stride_size_tiles;
         }
     }

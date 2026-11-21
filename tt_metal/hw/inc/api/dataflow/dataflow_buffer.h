@@ -235,7 +235,8 @@ public:
     uint16_t get_consumer_share() const;
     // Spacing between the entries of one op (1 = contiguous). Only a STRIDED side facing BLOCKED
     // consumers/producers has a stride > 1. copy_tile / pack_tile apply it to their tile index
-    // themselves (llk_unpack_A / llk_pack); raw L1 reads and DM NoC transfers multiply by it.
+    // themselves (llk_unpack_A / llk_pack); DM NoC transfers (offset_bytes) multiply by it, and so do
+    // raw L1 reads except on a bank-major ring (see get_read_ptr).
     uint16_t get_producer_stride_tiles() const;
     uint16_t get_consumer_stride_tiles() const;
 
@@ -404,8 +405,10 @@ public:
     // transfers (pass the DFB).
     // On Quasar DM, this returns the uncached alias temporarily until we figure out a long term
     // cache strategy.
-    uint32_t get_write_ptr() const { return get_write_ptr_impl() + L1_UNCACHED_OFFSET; }
-    uint32_t get_read_ptr() const { return get_read_ptr_impl() + L1_UNCACHED_OFFSET; }
+    // On a bank-major BLOCKED ring on Quasar only the cursor's entry is at this address;
+    // reach the other entries of an op through get_tile_address (TRISC) or noc offset_bytes (DM).
+    uint32_t get_write_ptr() const { return entry_addr(get_write_ptr_impl()) + L1_UNCACHED_OFFSET; }
+    uint32_t get_read_ptr() const { return entry_addr(get_read_ptr_impl()) + L1_UNCACHED_OFFSET; }
 
 #ifdef COMPILE_FOR_TRISC
     // Returns the LLKOperand pointing to the front (reading address) of the DFB
@@ -454,15 +457,15 @@ public:
     // CPU accesses through the lock reach TL1 directly.
     [[nodiscard]] auto scoped_write_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<true>(num_entries);
-        return make_dfb_scoped_lock<true>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
+        return make_dfb_scoped_lock<true>(entry_addr(region.start) + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
             lock_release_impl<true>(region, num_entries);
         });
     }
     [[nodiscard]] auto scoped_read_lock(uint16_t num_entries = 1) {
         const ScopedLockRegion region = lock_acquire_impl<false>(num_entries);
-        return make_dfb_scoped_lock<false>(region.start + L1_UNCACHED_OFFSET, [this, region, num_entries]() {
-            lock_release_impl<false>(region, num_entries);
-        });
+        return make_dfb_scoped_lock<false>(
+            entry_addr(region.start) + L1_UNCACHED_OFFSET,
+            [this, region, num_entries]() { lock_release_impl<false>(region, num_entries); });
     }
 
 private:
@@ -482,6 +485,11 @@ private:
     // NOC APIs do not accept uncached addresses, but this is private so not exposed to kernels.
     uint32_t get_noc_write_addr() const { return get_write_ptr_impl(); }
     uint32_t get_noc_read_addr() const { return get_read_ptr_impl(); }
+    // L1 address of the entry at page-order address `addr`.
+    uint32_t entry_addr(uint32_t addr) const;
+    // L1 address of the entry `byte_offset` bytes past the write / read cursor.
+    uint32_t write_cursor_addr(uint32_t byte_offset) const { return entry_addr(get_noc_write_addr() + byte_offset); }
+    uint32_t read_cursor_addr(uint32_t byte_offset) const { return entry_addr(get_noc_read_addr() + byte_offset); }
 
 #ifndef COMPILE_FOR_TRISC
     friend struct noc_traits_t<DFB_CLASS>;
@@ -599,7 +607,7 @@ struct noc_traits_t<DataflowBuffer> {
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 source");
         // Use cached addresses for NOC APIs
-        return src.get_noc_read_addr() + args.offset_bytes;
+        return src.read_cursor_addr(args.offset_bytes);
     }
     template <Noc::AddressType address_type>
     static auto dst_addr(const DFB_CLASS& dst, const Noc& noc, const dst_args_type& args) {
@@ -607,24 +615,20 @@ struct noc_traits_t<DataflowBuffer> {
             address_type == Noc::AddressType::LOCAL_L1,
             "DataflowBuffer without mcast range can only be used as L1 destination");
         // Use cached addresses for NOC APIs
-        return dst.get_noc_write_addr() + args.offset_bytes;
+        return dst.write_cursor_addr(args.offset_bytes);
     }
     template <Noc::AddressType address_type>
     static auto dst_addr_mcast(const DFB_CLASS& dst, const Noc& noc, const dst_args_mcast_type& args) {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
         // Use cached addresses for NOC APIs
-        return multicast_addr(noc, args, dst.get_noc_write_addr());
+        return multicast_addr(noc, args, dst.write_cursor_addr(args.offset_bytes));
     }
-    // The rectangle's multicast address for local_addr, offset_bytes past it; shared with the read-pointer view.
+    // The rectangle's multicast address for local_addr, the entry offset_bytes past the cursor; shared with the
+    // read-pointer view.
     static uint64_t multicast_addr(const Noc& noc, const dst_args_mcast_type& args, uint32_t local_addr) {
         return ::get_noc_multicast_addr(
-            args.noc_x_start,
-            args.noc_y_start,
-            args.noc_x_end,
-            args.noc_y_end,
-            local_addr + args.offset_bytes,
-            noc.get_noc_id());
+            args.noc_x_start, args.noc_y_start, args.noc_x_end, args.noc_y_end, local_addr, noc.get_noc_id());
     }
     // The nodes the DFB exists on, which Noc::async_write_multicast checks the rectangle against with Watcher.
     static DebugMulticastNodeSet multicast_node_set([[maybe_unused]] const DFB_CLASS& dst) {
@@ -658,7 +662,7 @@ struct noc_traits_t<DataflowBufferReadView<DFB>> {
         static_assert(
             address_type == Noc::AddressType::NOC, "DataflowBuffer with mcast range cannot be used as L1 destination");
         // Use cached addresses for NOC APIs
-        return noc_traits_t<DFB>::multicast_addr(noc, args, dst.dfb.get_noc_read_addr());
+        return noc_traits_t<DFB>::multicast_addr(noc, args, dst.dfb.read_cursor_addr(args.offset_bytes));
     }
     // The address is the DFB's, so it is checked against the DFB's nodes.
     static DebugMulticastNodeSet multicast_node_set(const DataflowBufferReadView<DFB>& dst) {

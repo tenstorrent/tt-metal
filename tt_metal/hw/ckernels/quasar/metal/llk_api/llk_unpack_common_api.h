@@ -42,7 +42,7 @@ inline void llk_unpack_program_bfd(const std::uint32_t operand_id) {
     // llk_pack_program_bfd). Tied to the DFB<->buffer-descriptor decouple work.
     ckernel::trisc::program_bfd<E, MODE>(
         get_operand_tensor_shape(operand_id),
-        get_local_dfb_interface(operand_id).tc_slots[0].base_addr,
+        dfb_ring_base_addr(get_local_dfb_interface(operand_id)),
         static_cast<std::uint32_t>(unpack_src_format[operand_id]));
 }
 

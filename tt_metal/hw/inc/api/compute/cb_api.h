@@ -140,16 +140,12 @@ ALWI void cb_push_back(uint32_t cbid, uint32_t ntiles) {
 // Shared by get_tile_address and read_tile_value; only valid on the UNPACK thread.
 ALWI uint32_t get_tile_l1_byte_address(uint32_t operand_id, uint32_t tile_index) {
 #ifdef ARCH_QUASAR
-    LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
-    const auto& slot = local_dfb.tc_slots[local_dfb.tc_idx];
-    uint32_t base_address = slot.base_addr + dfb_slot_cursor_offset_units(local_dfb, slot, slot.cursor_entry_idx);
-    // Per-tile spacing is stride_size, not entry_size (matches pop_front/push_back).
-    uint32_t offset_address = static_cast<uint32_t>(local_dfb.stride_size) * tile_index;
+    return dfb_window_tile_addr_units(get_local_dfb_interface(operand_id), tile_index) << 4;  // Convert to byte address
 #else
     uint32_t base_address = get_local_cb_interface(operand_id).fifo_rd_ptr;
     uint32_t offset_address = get_local_cb_interface(operand_id).fifo_page_size * tile_index;
-#endif
     return (base_address + offset_address) << 4;  // Convert to byte address
+#endif
 }
 #endif
 

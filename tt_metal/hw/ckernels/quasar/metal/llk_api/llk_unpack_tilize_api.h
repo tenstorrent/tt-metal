@@ -79,6 +79,7 @@ inline void llk_unpack_tilize_block(
     const ckernel::TensorShape tensor_shape = get_operand_tensor_shape(operand_id);
 
     const LocalDFBInterface& local_dfb = get_local_dfb_interface(operand_id);
+    ASSERT(!dfb_block_is_permuted(local_dfb));
     const std::uint32_t rd_entry_idx = local_dfb.tc_slots[local_dfb.tc_idx].cursor_entry_idx;
 
     // Compute how many l1_index units fit in one DFB entry.
@@ -218,6 +219,7 @@ inline void llk_unpack_tilizeA_B(
     const LocalDFBInterface& local_dfb_interface_a = get_local_dfb_interface(operandA_id);
     const LocalDFBInterface& local_dfb_interface_b = get_local_dfb_interface(operandB_id);
 
+    ASSERT(!dfb_block_is_permuted(local_dfb_interface_a));
     const std::uint32_t rd_entry_idx_a = local_dfb_interface_a.tc_slots[local_dfb_interface_a.tc_idx].cursor_entry_idx;
     // Compute how many l1_index units fit in one DFB entry.
     // _llk_unpack_reduce_col_tilizeA_strided_ internally scales
@@ -229,8 +231,9 @@ inline void llk_unpack_tilizeA_B(
         entry_size_16B / (face_row_16B * tensor_shape_A.num_faces_c_dim);
     const std::uint32_t l1_index_a = rd_entry_idx_a * l1_index_per_entry + tile_index_a;
 
-    const std::uint32_t l1_index_b =
-        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b;
+    const std::uint32_t l1_index_b = dfb_ring_entry(
+        local_dfb_interface_b,
+        local_dfb_interface_b.tc_slots[local_dfb_interface_b.tc_idx].cursor_entry_idx + tile_index_b);
 
     WAYPOINT("UPTW");
 
