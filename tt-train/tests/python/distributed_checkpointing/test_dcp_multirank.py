@@ -261,6 +261,35 @@ def test_ranks_reading_different_checkpoints_at_one_path_are_refused(two_ranks, 
     ttnn.distributed_context_barrier()
 
 
+def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_ranks, monkeypatch, expect_error):
+    """Rank 1 fails placing its first tensor, after rank 0 placed all of its own. Rank 0's error says how many tensors
+    it placed and that its model and optimizer are partly restored; rank 1's, which placed none, does not."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    train_step(model, opt, DIM)
+    path = os.path.join(root, "placed_on_rank0")
+    dcp.save(path, model=model, optimizer=opt)
+    fresh, fresh_params, fresh_opt = fresh_tp(DIM)
+    if rank == 1:
+
+        def fail(live, *args):
+            raise RuntimeError("simulated device out of memory")
+
+        monkeypatch.setattr(_load, "_place", fail)
+    pattern = (
+        r"^reading and placing the shards failed on rank\(s\) \[1\] of 2: rank 1: RuntimeError: simulated device out of "
+        r"memory"
+    )
+    if rank == 0:
+        pattern += (
+            r"; rank 0 had placed (\d+) of \1 tensors, so the model and optimizer are partly restored: load again"
+        )
+    with expect_error(dcp.CheckpointError, pattern) as raised:
+        dcp.load(path, model=fresh, optimizer=fresh_opt)
+    assert rank == 0 or "partly restored" not in str(raised.value), "rank 1 placed nothing"
+    ttnn.distributed_context_barrier()
+
+
 def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypatch, expect_error):
     """The one-rank failures save and load must turn into the same error on every rank: a header that is not JSON
     on rank 1, a data file rank 1 cannot create (the staging directory is then removed), and ranks that load with

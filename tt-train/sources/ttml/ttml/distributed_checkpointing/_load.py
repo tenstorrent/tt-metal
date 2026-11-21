@@ -246,12 +246,13 @@ def _read_and_place(
     by_key: dict[str, LiveTensor],
     threads: int | None,
     local: set[tuple[int, ...]],
-) -> tuple[int, int, float, float, list[str]]:
-    """Read every planned key into host arrays and place the shards of the coordinates in ``local`` on the device;
-    returns the bytes read, the number of reads, the seconds spent waiting for reads and placing, and the keys placed.
-    A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is partly restored."""
+    placed: list[str],
+) -> tuple[int, int, float, float]:
+    """Read every planned key into host arrays and place the shards of the coordinates in ``local`` on the device,
+    appending each key placed to ``placed``; returns the bytes read, the number of reads and the seconds spent waiting
+    for reads and placing. A failure once a tensor was placed raises a ``CheckpointError`` that says the live state is
+    partly restored."""
     fds, data_start, paths = files.fds, files.data_start, files.paths
-    placed: list[str] = []
     device = mesh_device()
     bytes_read = 0
     reads = 0
@@ -302,7 +303,7 @@ def _read_and_place(
             read_s += t_read_done - t_key
             place_s += time.perf_counter() - t_read_done
             reads += len(futures)
-    return bytes_read, reads, read_s, place_s, placed
+    return bytes_read, reads, read_s, place_s
 
 
 def load(
@@ -450,9 +451,20 @@ def load(
         stats: dict[str, float] = {"plan_s": time.perf_counter() - t0}
 
         t1 = time.perf_counter()
-        bytes_read, reads, read_s, place_s, placed = group.phase(
-            "reading and placing the shards", lambda: _read_and_place(plan, files, by_key, threads, local)
-        )
+        placed: list[str] = []
+        try:
+            bytes_read, reads, read_s, place_s = group.phase(
+                "reading and placing the shards", lambda: _read_and_place(plan, files, by_key, threads, local, placed)
+            )
+        except CheckpointError as err:
+            if placed and err.__cause__ is None:
+                # Another rank's failure stopped the load after this rank placed tensors; a failure of this rank's
+                # own (the cause) already says how many it placed.
+                raise type(err)(
+                    f"{err}; rank {group.rank} had placed {len(placed)} of {len(plan.keys)} tensors, so the model and "
+                    f"optimizer are partly restored: load again or discard them"
+                ) from err
+            raise
         stats["read_and_place_s"] = time.perf_counter() - t1
         stats["read_s"] = read_s
         stats["place_s"] = place_s
