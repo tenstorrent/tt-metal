@@ -71,6 +71,12 @@ class TtLfm25VlModel(Transformer):
             if not layer.is_attention_layer:
                 layer.conv.reset_conv_state(batch_indices)
 
+    def set_prefill_valid_lens(self, valid_lens):
+        """Tell every ShortConv layer the real prompt length of each slot about to be prefilled."""
+        for layer in self.layers:
+            if not layer.is_attention_layer:
+                layer.conv.set_prefill_valid_len(valid_lens)
+
     def encode_vision_embeddings_from_pixels(
         self,
         pixel_values: torch.Tensor,
@@ -262,6 +268,13 @@ class Lfm25VlMultimodalGenerator(Generator):
         **kwargs,
     ):
         kwargs = self._prepare_multimodal_prefill_kwargs(**kwargs)
+        if prompt_lens is not None:
+            slots = list(empty_slots) if empty_slots is not None else list(range(len(prompt_lens)))
+            for model_id, model in enumerate(self.model):
+                per_model = model.args.max_batch_size
+                model.set_prefill_valid_lens(
+                    {s % per_model: int(n) for s, n in zip(slots, prompt_lens) if s // per_model == model_id}
+                )
         return super().prefill_forward_text(
             tokens,
             page_table=page_table,

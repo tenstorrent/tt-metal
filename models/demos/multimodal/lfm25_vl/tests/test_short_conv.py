@@ -92,3 +92,73 @@ def test_short_conv_inference(seq_len, mode, batch_size, mesh_device, reset_seed
     logger.info(comp_allclose(reference_output, tt_output_torch))
     logger.info(f"PCC: {pcc_message}")
     assert passing, f"ShortConv output does not meet PCC requirement {pcc_required}: {pcc_message}."
+
+
+@torch.no_grad()
+@pytest.mark.parametrize(
+    "mesh_device",
+    [
+        {
+            "N150": (1, 1),
+            "N300": (1, 2),
+            "P150": (1, 1),
+        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("prompt_len, padded_len", ((100, 128), (33, 128), (128, 128)))
+def test_short_conv_decode_state_after_padded_prefill(prompt_len, padded_len, mesh_device, reset_seeds, ensure_gc):
+    """The decode conv state must be the last real prompt rows, not the padding rows after them."""
+    dtype = ttnn.bfloat16
+    decode_steps = 3
+
+    model_args = ModelArgs(mesh_device, max_batch_size=1, max_seq_len=128, cache_hf=True)
+    model_args.n_layers = max(model_args.layer_types.index("conv") + 1, 1)
+    state_dict = model_args.load_state_dict()
+    conv_layer_idx = model_args._first_layer_of_type("conv")
+    prefix = model_args.get_state_dict_prefix("ShortConv", conv_layer_idx)
+    prefix = prefix if prefix.endswith(".") else f"{prefix}."
+
+    x = torch.randn(1, prompt_len + decode_steps, model_args.dim, dtype=torch.float32)
+    reference_output = short_conv(
+        x,
+        state_dict[f"{prefix}in_proj.weight"],
+        state_dict[f"{prefix}out_proj.weight"],
+        state_dict[f"{prefix}conv.weight"],
+        in_proj_b=state_dict.get(f"{prefix}in_proj.bias"),
+        out_proj_b=state_dict.get(f"{prefix}out_proj.bias"),
+        conv_b=state_dict.get(f"{prefix}conv.bias"),
+    )
+
+    tt_model = TtLfm2ShortConv(
+        mesh_device=mesh_device,
+        args=model_args,
+        state_dict=state_dict,
+        state_dict_prefix=prefix,
+        weight_cache_path=model_args.weight_cache_path(dtype),
+        layer_num=conv_layer_idx,
+        dtype=dtype,
+    )
+
+    def to_device(t):
+        return ttnn.from_torch(
+            t,
+            device=mesh_device,
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    # The prefill input is padded to the bucket length with unrelated rows, as it is after real tokens.
+    padding = torch.randn(1, padded_len - prompt_len, model_args.dim)
+    prefill_in = torch.cat([x[:, :prompt_len], padding], dim=1)
+    tt_model.set_prefill_valid_len({0: prompt_len})
+    tt_model(to_device(prefill_in.reshape(1, 1, padded_len, model_args.dim)), mode=Mode.PREFILL, user_id=0)
+
+    for step in range(decode_steps):
+        tt_out = tt_model(to_device(x[:, prompt_len + step].reshape(1, 1, 1, model_args.dim)), mode=Mode.DECODE)
+        tt_out = ttnn.to_torch(tt_out, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=-1))
+        tt_out = tt_out.reshape(1, model_args.dim)
+        passing, pcc_message = comp_pcc(reference_output[:, prompt_len + step], tt_out, 0.98)
+        assert passing, f"decode step {step} after a padded prefill: {pcc_message}"
