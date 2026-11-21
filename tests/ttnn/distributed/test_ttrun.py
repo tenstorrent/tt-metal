@@ -2043,10 +2043,11 @@ class TestJobOwnership:
         assert "OMPI_MCA_btl_tcp_if_include" not in launch_env(["mpirun", "--mca", "btl_tcp_if_exclude", "lo", "p"])
 
     def test_launch_presets_the_variables_mpi_init_would_add(self):
-        from ttnn.distributed.ttrun import with_mpi_init_preset_env
+        from ttnn.distributed.ttrun import MPI_INIT_PRESET_ENV, launch_env, with_mpi_init_preset_env
 
-        # tt-metal #64717: MPI_Init adding these to the environment races Tracy's getenv. Every rank, local and remote,
-        # gets them already set through -x on the launch line, and a value the user set is left alone.
+        # tt-metal #64717: MPI_Init adding these to the environment races Tracy's getenv. Every rank gets them already
+        # set, through -x on the launch line and in the launcher's own environment (CI crashed in a Phase 1 rank with
+        # the -x copy alone), and a value the user set is left alone.
         line = with_mpi_init_preset_env(["mpirun", "--tag-output", "-np", "1", "prog"])
         assert line[:7] == [
             "mpirun",
@@ -2062,6 +2063,8 @@ class TestJobOwnership:
         assert with_mpi_init_preset_env(mine).count("-x") == 3 and "HFI_NO_BACKTRACE=0" in with_mpi_init_preset_env(
             mine
         )
+        env = launch_env(["mpirun", "prog"])
+        assert all(env[k] == v for k, v in MPI_INIT_PRESET_ENV.items())
 
     def test_timeout_is_taken_off_the_launch_line(self, monkeypatch):
         from ttnn.distributed.ttrun import LaunchedJob, split_launcher_timeout

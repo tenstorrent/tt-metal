@@ -282,9 +282,11 @@ def with_mpi_init_preset_env(cmd: List[str]) -> List[str]:
 
 
 def launch_env(cmd: List[str]) -> Dict[str, str]:
-    """The environment for the launcher: os.environ, minus an OMPI_MCA_ TCP-interface variable that contradicts the one
-    the launch line sets (the command line wins). Says so when it drops one."""
+    """The environment for the launcher: os.environ with MPI_INIT_PRESET_ENV preset, minus an OMPI_MCA_ TCP-interface
+    variable that contradicts the one the launch line sets (the command line wins). Says so when it drops one."""
     env = dict(os.environ)
+    for key, value in MPI_INIT_PRESET_ENV.items():  # with -x on the line: both are needed (tt-metal #64717)
+        env.setdefault(key, value)
     for on_line, opposite in _TCP_IF_PAIR:
         var = f"OMPI_MCA_{opposite}"
         if has_mca_param(cmd, on_line) and var in env:
