@@ -495,6 +495,59 @@ void kernel_main() {
 #endif  // SKIP_COMPUTE
 
                             if (last_out) {
+#ifdef FUSE_BIAS_SFPU_DIRECT
+                                // The subblock's bias tiles (row 0 of each) into DEST after its products; the
+                                // pack thread adds them on the SFPU, applies the activation and packs the final
+                                // tiles to the output, while the math thread moves on to the next subblock.
+                                {
+                                    if (in0_subblock == 0 && in1_subblock == 0 &&
+                                        (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1)) {
+                                        bias_dfb.wait_front(bias_ntiles);
+                                    }
+                                    reconfig_data_format_srca(in1_dfb_id, bias_dfb_id);
+                                    copy_init(bias_dfb_id);
+                                    for (uint32_t k = 0; k < out_subblock_w; k++) {
+                                        const uint32_t bias_tile_idx =
+                                            (is_last_in1_subblock_padded && k >= last_subblock_w_valid)
+                                                ? 0u
+                                                : in1_index_subblock_offset + k;
+                                        copy_tile(bias_dfb_id, bias_tile_idx, out_subblock_num_tiles + k);
+                                    }
+                                    reconfig_data_format_srca(bias_dfb_id, in1_dfb_id);
+                                    matmul_block_init(
+                                        in0_dfb_id,
+                                        in1_dfb_id,
+                                        in1_transpose_tile,
+                                        out_subblock_w,
+                                        out_subblock_h,
+                                        in0_block_w);
+                                    tile_regs_commit();
+                                    untilize_mode_out_dfb.reserve_back(out_subblock_num_tiles);
+                                    pack_sfpu_begin();
+                                    sfpu_add_bcast_row_init_pack();
+                                    for (uint32_t t = 0; t < out_subblock_num_tiles; t++) {
+                                        sfpu_add_bcast_row_pack(t, out_subblock_num_tiles + t % out_subblock_w);
+                                    }
+#ifdef SFPU_ACTIVATION
+                                    ActivationInitHelper<activation_type, activation_param0, activation_param1>::init();
+                                    for (uint32_t t = 0; t < out_subblock_num_tiles; t++) {
+                                        ActivationApplyHelper<
+                                            activation_type,
+                                            activation_param0,
+                                            activation_param1,
+                                            activation_param2>::apply(t);
+                                    }
+#endif
+                                    pack_sfpu_end();
+                                    PACK((pack_reconfig_data_format(untilize_mode_out_dfb_id)));
+                                    for (uint32_t t = 0; t < out_subblock_num_tiles; t++) {
+                                        pack_tile(t, untilize_mode_out_dfb_id);
+                                    }
+                                    tile_regs_release();
+                                    untilize_mode_out_dfb.push_back(out_subblock_num_tiles);
+                                }
+                            } else if (false) {
+#endif
                                 tile_regs_commit();
                                 mm_out_dfb.reserve_back(out_subblock_num_tiles);
 
@@ -623,10 +676,14 @@ void kernel_main() {
                 // Reader only pushes bias once when num_blocks_w_dim == 1;
                 // the tiles stay in the buffer for reuse across bh/batch iterations.
                 // With BIAS_PER_GROUP (sparse matmul, per-group bias) every batch gets its own tiles.
+#ifndef FUSE_BIAS_SFPU_DIRECT  // the direct path waited for the bias in the matmul loop
                 if (bias_per_group || (b == 0 && bh == 0) || num_blocks_w_dim > 1) {
                     bias_dfb.wait_front(bias_ntiles);
                 }
-#ifdef FUSE_BIAS_SFPU
+#endif
+#if defined(FUSE_BIAS_SFPU_DIRECT)
+                // The bias and activation were applied in the matmul loop, packed straight to the output.
+#elif defined(FUSE_BIAS_SFPU)
                 // FP32 bias on FP32 partials: an FPU add reads both through SrcA/SrcB as TF32, which drops the
                 // bias's low 13 mantissa bits, a per-column error that does not average out. Both buffers
                 // unpack to DEST unchanged instead, and the SFPU adds the bias's row 0 to every row in FP32.
