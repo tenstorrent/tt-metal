@@ -51,14 +51,10 @@ constexpr uint64_t kHsioLocalBase = 0x20000000;
 constexpr uint64_t kHsioTileStride = 0x4000000;
 constexpr uint64_t kHsioCceSramOffset = 0x2800000;
 
-// CCE-local PF_CTRL_TILE_ID, a strap: bit 0 is the CCE, bits 3:1 the HSIO tile.
-constexpr uintptr_t kPfCtrlTileIdAddr = 0x03200008;
-
 // What halt() posts to the router postcode word (fabric_postcode_ptr in tunneling.h, which includes this header).
 enum class HaltCode : uint32_t {
     RemoteRegMisaligned = 0xCCEEF001,    // detail: the address
     RemoteRegValueTooWide = 0xCCEEF002,  // detail: the value's upper 32 bits
-    NotOnCce0 = 0xCCEEF003,              // detail: PF_CTRL_TILE_ID
     BadLinkKind = 0xCCEEF004,            // detail: EthLink::kind
     NocPeerOnOwnTile = 0xCCEEF005,       // detail: EthLink::peer_tile
     BadTxq = 0xCCEEF006,                 // detail: the TX queue number
@@ -72,19 +68,6 @@ enum class HaltCode : uint32_t {
     POSTCODE(code);
     ASSERT(false);
     while (true) {
-    }
-}
-
-FORCE_INLINE uint32_t pf_ctrl_tile_id() { return *reinterpret_cast<const volatile uint32_t*>(kPfCtrlTileIdAddr); }
-
-// HSIO tile of this CCE, from PF_CTRL_TILE_ID (an MMIO read).
-FORCE_INLINE uint32_t hsio_tile() { return (pf_ctrl_tile_id() >> 1) & 0x7; }
-
-// Halts unless this hart is on CCE0, the only CCE sram_local_addr() handles. Reads an MMIO register: call once.
-inline void check_on_cce0() {
-    const uint32_t tile_id = pf_ctrl_tile_id();
-    if ((tile_id & 0x1) != 0) {
-        halt(HaltCode::NotOnCce0, tile_id);
     }
 }
 

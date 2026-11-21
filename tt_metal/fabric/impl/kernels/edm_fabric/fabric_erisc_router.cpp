@@ -202,7 +202,7 @@ FORCE_INLINE void run_loop(Downstreams& downstreams) {
 void kernel_main() {
     using namespace fabric_router;
 #if defined(ARCH_QUASAR)
-    internal_::cce_eth::check_on_cce0();
+    static_assert(experimental::keraunos::my_eth_cce() == 0, "The router's Ethernet send handles CCE0 only (eth_cce_send.h)");
 #endif
     init_router();
 

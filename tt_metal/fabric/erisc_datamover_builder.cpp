@@ -824,20 +824,6 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
         config.topology == tt::tt_fabric::Topology::Ring || config.topology == tt::tt_fabric::Topology::Torus) {
     // The config's channel counts stay the fabric's maxima: they size the kernel's channel tables and the
     // stream-register map, which every router shares. The channel buffers are this router's own (below).
-    if (fabric_context.get_cluster().arch() == tt::ARCH::QUASAR) {
-        const auto physical_chip_id =
-            fabric_context.get_control_plane().get_physical_chip_id_from_fabric_node_id(local_fabric_node_id);
-        const auto& keraunos_core =
-            fabric_context.get_cluster().get_soc_desc(physical_chip_id).get_keraunos_core_for_channel(my_eth_channel);
-        // The router's Ethernet send and memory map handle CCE0 only (eth_cce_send.h).
-        TT_FATAL(
-            keraunos_core.eth_cce == 0,
-            "Fabric router on chip {} Ethernet channel {} (HSIO tile {}) would run on CCE{}; only CCE0 is supported",
-            physical_chip_id,
-            my_eth_channel,
-            keraunos_core.hsio,
-            keraunos_core.eth_cce);
-    }
     // Validate injection flags vector size matches the number of sender channels
     TT_FATAL(
         sender_channel_is_traffic_injection_channel_array.size() == config.num_used_sender_channels,
