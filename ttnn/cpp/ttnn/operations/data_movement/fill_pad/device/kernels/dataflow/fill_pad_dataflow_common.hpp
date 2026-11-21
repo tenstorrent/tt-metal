@@ -52,3 +52,26 @@ void push_bottom_mask_tile(CB_T& cb_bot_mask, MASK_T one_val) {
     generate_mask_tile<MASK_T, TILE, H_mod32, TILE>(reinterpret_cast<MASK_T*>(cb_bot_mask.get_write_ptr()), one_val);
     cb_bot_mask.push_back(1);
 }
+
+/**
+ * push_bottom_mask_tile with H_mod32 known only at runtime, so one program serves every
+ * logical height that pads to the same tile count.
+ */
+template <typename MASK_T, uint32_t TILE, typename CB_T>
+void push_bottom_mask_tile_runtime(CB_T& cb_bot_mask, MASK_T one_val, uint32_t H_mod32) {
+    constexpr uint32_t FACE = TILE / 2u;
+    cb_bot_mask.reserve_back(1);
+    MASK_T* p = reinterpret_cast<MASK_T*>(cb_bot_mask.get_write_ptr());
+    for (uint32_t fr = 0; fr < 2; fr++) {
+        for (uint32_t fc = 0; fc < 2; fc++) {
+            const uint32_t face_base = (fr * 2u + fc) * FACE * FACE;
+            for (uint32_t r = 0; r < FACE; r++) {
+                const MASK_T value = (fr * FACE + r >= H_mod32) ? one_val : static_cast<MASK_T>(0);
+                for (uint32_t c = 0; c < FACE; c++) {
+                    p[face_base + r * FACE + c] = value;
+                }
+            }
+        }
+    }
+    cb_bot_mask.push_back(1);
+}
