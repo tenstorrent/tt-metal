@@ -64,14 +64,14 @@ inline void _llk_math_eltwise_unary_datacopy_(
         if constexpr (src_b_bcast_type != BroadcastType::NONE)
         {
             TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::get_dest_buffer_base());
+
+            // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
+            // zero-substitution flag via the math state tracker.
+            math::_configure_preserve_zero_flag_state_();
         }
 
         // Switch from the default SrcA format bank to the override bank so manual SrcA_val writes control MOVB2D behavior.
         cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG_SrcA_override_RMW>(1);
-
-        // The 32b hi16/lo16 MOVB2D below must not flush datums with a zero low byte; own the Src
-        // zero-substitution flag via the math state tracker.
-        math::_configure_preserve_zero_flag_state_();
 
         if constexpr (src_b_bcast_type == BroadcastType::ROW)
         {
@@ -349,6 +349,29 @@ inline void eltwise_unary_configure_addrmod(const std::uint32_t dst_format)
     }
 }
 
+// An A2D datacopy without broadcast runs as ELWADD (not MOVA2D) when dest is 32-bit or the integer FPU path is on
+// (except UInt16, which stays on MOVA2D), or for UInt8 datums.
+template <bool is_fp32_dest_acc_en, bool is_int_fpu_en = false>
+constexpr bool _datacopy_a2d_uses_elwadd_(const std::uint32_t dst_format)
+{
+    return ((is_fp32_dest_acc_en || is_int_fpu_en) && dst_format != to_underlying(DataFormat::UInt16)) || dst_format == to_underlying(DataFormat::UInt8);
+}
+
+// Src zero-substitution flag for an A2D datacopy, chosen once: clear when it runs as ELWADD, else the copy policy
+// for its source format (keep, or flush for fp8). copy_init calls this so its flag write is not undone by the init.
+template <bool is_fp32_dest_acc_en, bool is_int_fpu_en = false>
+inline void _configure_datacopy_a2d_zero_flag_state_(const std::uint32_t dst_format)
+{
+    if (_datacopy_a2d_uses_elwadd_<is_fp32_dest_acc_en, is_int_fpu_en>(dst_format))
+    {
+        math::_configure_elw_zero_flag_state_();
+    }
+    else
+    {
+        math::_configure_copy_zero_flag_state_(dst_format);
+    }
+}
+
 /**
  * @brief Program the datacopy MOP, selecting the move instruction (MOVA2D/MOVB2D/ELWADD) per direction, format, and broadcast.
  *
@@ -378,9 +401,10 @@ inline void eltwise_unary_configure_mop(
         std::uint32_t innerloop = (rows_per_inst == p_mova2d::MOV_1_ROW) ? total_rows : (total_rows >> 3);
         std::uint32_t outerloop = num_faces;
 
-        if (((is_fp32_dest_acc_en || is_int_fpu_en) && !(dst_format == to_underlying(DataFormat::UInt16))) || (dst_format == to_underlying(DataFormat::UInt8)))
+        if (_datacopy_a2d_uses_elwadd_<is_fp32_dest_acc_en, is_int_fpu_en>(dst_format))
         {
             // use elwadd to handle unpacking data into src A as fp16, but dest is in fp32 mode OR to handle uint8 datums
+            math::_configure_elw_zero_flag_state_();
             ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0));
             tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AB));
             tmp.program();
@@ -446,6 +470,7 @@ inline void eltwise_unary_configure_mop(
             }
             else
             {
+                math::_configure_elw_zero_flag_state_();
                 ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
                 tmp.set_end_op(TT_OP_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, 0));
                 tmp.program();
@@ -462,6 +487,7 @@ inline void eltwise_unary_configure_mop(
             }
             else // ELWADD is used for non UInt16 case, since it moves 8 rows per cycle
             {
+                math::_configure_elw_zero_flag_state_();
                 ckernel_template tmp(outerloop, innerloop, TT_OP_ELWADD(0, 0, broadcast_type, addr_mod, 0));
                 tmp.set_end_op(TT_OP_SETRWC(0, p_setrwc::CR_B, 0, 0, 0, p_setrwc::SET_B));
                 tmp.program();
