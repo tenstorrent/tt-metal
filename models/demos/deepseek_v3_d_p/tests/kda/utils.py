@@ -67,19 +67,21 @@ def is_4x4_subtorus() -> bool:
     return set(topologies) == {("4", "4", "RING", "RING")}
 
 
-# Kernel-config ring per Tensix (the L1 below the allocator): the HAL default holds about one large KDA program (the
-# chunk preparation alone is ~64 KB), so each such program waits for the one before it to drain before its binaries
-# can load. Twice that lets the next program load while the current one runs, hiding those launch gaps (Kimi-K3
-# SP8xTP4 traced layer ~1.04 -> ~1.015 ms); the allocator gives up the same 64 KB of worker L1.
-KDA_KERNEL_CONFIG_BYTES = 133 * 1024
+# Kernel-config ring per Tensix (the L1 below the allocator) for the whole layer: the HAL default holds about one large
+# KDA program (the chunk preparation alone is ~64 KB), so each such program waits for the one before it to drain before
+# its binaries can load. Twice that lets the next program load while the current one runs, hiding those launch gaps
+# (Kimi-K3 SP8xTP4 traced layer ~1.04 -> ~1.015 ms); the allocator gives up the same 64 KB of worker L1, which the
+# layer has to spare but the components' tests, holding their inputs in L1, may not.
+KDA_LAYER_KERNEL_CONFIG_BYTES = 133 * 1024
 
 
-def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
+def kda_device_params(mesh_shape: tuple[int, int], *, kernel_config_bytes: int | None = None, **overrides) -> dict:
     """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
 
     8x4 takes K3's TorusXY, a 4x4 prefill stage (a Galaxy tray half) its TorusX, a ring of chips the torus over its
     one axis (TorusY for Nx1, TorusX for 1xN), and 2x2, 2x4 and 4x2 an unwrapped Fabric2D.
-    The 4x4 subtorus takes TorusXY.
+    The 4x4 subtorus takes TorusXY. kernel_config_bytes sizes the kernel-config ring (KDA_LAYER_KERNEL_CONFIG_BYTES),
+    else the HAL default.
     """
     rows, columns = mesh_shape
     if (rows, columns) == (8, 4):
@@ -92,9 +94,8 @@ def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
         profile = torus_x_device_params
     else:
         profile = fabric2d_device_params
-    overrides.setdefault(
-        "worker_l1_size", ttnn._ttnn.device.get_max_worker_l1_unreserved_size() - KDA_KERNEL_CONFIG_BYTES
-    )
+    if kernel_config_bytes is not None:
+        overrides["worker_l1_size"] = ttnn._ttnn.device.get_max_worker_l1_unreserved_size() - kernel_config_bytes
     return profile(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, **overrides)
 
 

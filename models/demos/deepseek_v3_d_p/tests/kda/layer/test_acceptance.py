@@ -23,6 +23,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     assert_matches_reference,
     check_kimi_k3_accuracy,
     collect_mesh_accuracy_and_determinism_results,
+    KDA_LAYER_KERNEL_CONFIG_BYTES,
     kda_device_params,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
@@ -75,7 +76,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 1),
             1,
-            kda_device_params((8, 1)),
+            kda_device_params((8, 1), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             PREFILL_CHUNK_TOKENS,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
@@ -84,7 +85,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (4, 1),
             1,
-            kda_device_params((4, 1)),
+            kda_device_params((4, 1), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             4 * PREFILL_CHUNK_TOKENS_PER_CHIP,
             _GALAXY_HEADS_PER_CHIP,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
@@ -93,7 +94,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kda_device_params((8, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -103,7 +104,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kda_device_params((8, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             2 * PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
@@ -113,7 +114,7 @@ _INTERVAL_OUTPUT_NRMSE = {("SP8xTP1", "one-token"): 0.035, ("SP4xTP1", "one-toke
         pytest.param(
             (4, 4),
             0,
-            kda_device_params((4, 4)),
+            kda_device_params((4, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             PREFILL_CHUNK_TOKENS,
             None,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
@@ -240,13 +241,13 @@ _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convol
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params,sequence",
     [
-        pytest.param((1, 8), 1, kda_device_params((1, 8)), 128, id="SP1xTP8"),
-        pytest.param((2, 4), 1, kda_device_params((2, 4)), 128, id="SP2xTP4"),
-        pytest.param((2, 4), 0, kda_device_params((2, 4)), 128, id="SP4xTP2"),
+        pytest.param((1, 8), 1, kda_device_params((1, 8), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES), 128, id="SP1xTP8"),
+        pytest.param((2, 4), 1, kda_device_params((2, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES), 128, id="SP2xTP4"),
+        pytest.param((2, 4), 0, kda_device_params((2, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES), 128, id="SP4xTP2"),
         pytest.param(
             (8, 4),
             1,
-            kda_device_params((8, 4)),
+            kda_device_params((8, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
@@ -254,7 +255,7 @@ _REAL_WEIGHTS_NRMSE = LayerNrmseThresholds(output=0.022, recurrent=0.017, convol
         pytest.param(
             (4, 4),
             0,
-            kda_device_params((4, 4)),
+            kda_device_params((4, 4), kernel_config_bytes=KDA_LAYER_KERNEL_CONFIG_BYTES),
             512,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="SP4xTP4-torus-x-4x4",
