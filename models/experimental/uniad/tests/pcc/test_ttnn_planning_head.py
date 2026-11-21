@@ -60,7 +60,8 @@ def create_uniad_model_parameters(model, device=None):
 
 
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4 * 8192}], indirect=True)
-def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator):
+@pytest.mark.parametrize("command_id", [0, 1, 2], ids=["right", "left", "forward"])
+def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator, command_id):
     reference_model = PlanningHeadSingleMode(bev_h=50, bev_w=50, embed_dims=256, planning_steps=6, planning_eval=True)
 
     reference_model = load_torch_model(
@@ -71,7 +72,7 @@ def test_TtPlanningHeadSingleMode(device, reset_seeds, model_location_generator)
     bev_pos = torch.rand(1, 256, 50, 50)
     sdc_traj_query = torch.rand(3, 1, 6, 256)
     sdc_track_query = torch.rand(1, 256)
-    command = [torch.tensor([0])]
+    command = [torch.tensor([command_id])]
 
     torch_output = reference_model(bev_embed, occ_mask, bev_pos, sdc_traj_query, sdc_track_query, command)
 
