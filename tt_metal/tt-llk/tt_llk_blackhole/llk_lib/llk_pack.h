@@ -428,20 +428,21 @@ inline void pack_init_apply(
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: Unused on Blackhole: the BFP exponent section is sized from face_r_dim * num_faces.
  */
 template <bool is_fp32_dest_acc_en>
 inline void _llk_pack_reconfig_data_format_(
     const std::uint32_t pack_src_format,
     const std::uint32_t pack_dst_format,
     const std::uint32_t tile_size,
-    const std::uint32_t tile_c_dim = TILE_C_DIM,
-    const std::uint32_t num_faces  = 4,
-    const bool partial_face        = false)
+    const std::uint32_t face_r_dim           = FACE_R_DIM,
+    const std::uint32_t tile_c_dim           = TILE_C_DIM,
+    const std::uint32_t num_faces            = 4,
+    [[maybe_unused]] const bool partial_face = false)
 {
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
 
-    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, tile_c_dim, num_faces, partial_face);
+    reconfig_packer_data_format<is_fp32_dest_acc_en>(pack_src_format, pack_dst_format, tile_size, face_r_dim, tile_c_dim, num_faces);
 }
 
 /**
@@ -461,7 +462,7 @@ inline void _llk_pack_reconfig_data_format_(
  * @param face_r_dim: Number of rows per face.
  * @param tile_c_dim: Tile column dimension (datums).
  * @param num_faces: Faces per tile, valid values = <1, 2, 4>
- * @param partial_face: True if packing a partial (sub-face-row) face.
+ * @param partial_face: Unused on Blackhole: the BFP exponent section is sized from face_r_dim * num_faces.
  * @param relu_config: Packed relu mode and threshold configuration (0 disables relu).
  * @note For 8-bit unpack-source datums, do not use PackMode::Tilize: the Blackhole row-unswizzling workaround is skipped (and is unnecessary, as 8-bit formats
  * are unaffected by the issue).
