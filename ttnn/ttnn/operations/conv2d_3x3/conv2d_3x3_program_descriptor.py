@@ -125,22 +125,21 @@ def _brf_staging(g, slack_bytes):
 # 1408 -> 806 (perf_experiments/rm_ring_bank_run).
 RM_RING_NSTG = 2
 RM_RING_CHUNK_BYTES = 8192
-# Split startup fill (RM_SPLIT, kernels/conv2d_3x3_rm_ring.hpp): before a core's first M-block can finish, the ring
-# takes its whole first window (~2 image rows), on every core at once: DRAM-bound, and on NoC0 the far grid rows got
-# their share up to ~3x later than the near ones. With resident weights the writer (BRISC, NoC1) has nothing to store
-# yet, so the reader and the writer split that window: the reader claims its chunks from the front, the writer from the
-# back, until they meet. The writer stages through the last RM_SPLIT_W_NSTG of CB_RM_STAGE's RM_RING_NSTG chunks (no
-# new L1; the reader takes them back after the window) and fills nothing after it: its NoC1 reads beside the NoC1
-# output store slowed the store-bound far columns (1026x2048 32->128 +13%). Measured (Blackhole p150b, 110 cores,
-# bit-identical, us): 1026x2048 128->3 2401 -> 2184, 514x1024 128->3 798 -> 595 (perf_experiments/ring_fill_noc_split).
+# Split fill (RM_SPLIT, kernels/conv2d_3x3_rm_ring.hpp): the reader (NCRISC, NoC0) and the writer (BRISC, NoC1) split
+# the ring's fill for the whole stream. The reader cuts it into epochs (each time `allowed` lets the fill go further) and
+# claims each epoch's chunks from the front, the writer from the back, until they meet, so each core's fill follows
+# whichever RISC and NoC deliver faster at its grid position (on NoC0 alone the far grid rows took up to ~1.9x longer).
+# The writer claims only while the reader waits for a band, i.e. where the fill is on compute's path: its NoC1 reads
+# beside the NoC1 output store slow the store-bound convs (1026x2048 32->128 +13% when it claims whenever it waits for
+# output). It stages through the last RM_SPLIT_W_NSTG of CB_RM_STAGE's RM_RING_NSTG chunks for the whole stream (no new
+# L1; a chunk of its own measured no faster: equal on 1026x2048 128->3, slower on 514x1024 128->3). Measured (Blackhole
+# p150b, 110 cores, bit-identical, the reader alone after the first window -> this, us): 1026x2048 128->3 2032 -> 1804,
+# 514x1024 128->3 587 -> 532, 514x1024 64->128 755 -> 727, 258x512 128->256 746 -> 733
+# (perf_experiments/ring_fill_steady_split).
 RM_SPLIT_W_NSTG = 1
-# Smallest first window (ring pixels x pixel bytes) the split takes. Below it the reader alone fills the window about as
-# fast, and the split only lines up every core's first output stores: 130x256 128->512 (213 KB) +1.5%, 514x1024 32->128
-# (233 KB) +1.2%, 514x1024 64->128 (385 KB) +1.3% (Blackhole p150b, 3-5 runs each); the windows of 541 KB and up gain.
-RM_SPLIT_MIN_WINDOW_BYTES = 512 * 1024
-# Its handshake words (semaphores): the window's first pixel, end pixel (published last) and the ring origin (reader),
-# the reader's and the writer's claim counts, the writer's done flag.
-RM_SPLIT_SEMS = 6
+# Its handshake words (semaphores): the epoch sequence, the epoch's first and end pixel, the ring origin, the reader's
+# and the writer's claim words, the writer's done epoch, the reader's band-wait flag.
+RM_SPLIT_SEMS = 8
 
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
@@ -2514,6 +2513,19 @@ FIDELITY_PHASES = {
 }
 
 
+# Aggregate DRAM bandwidth the output-stream test compares against (Blackhole p150b, 8 banks: bank-run reads and the
+# output store each reach ~410-480 GB/s across the grid).
+DRAM_BYTES_PER_NS = 450.0
+
+
+def output_stream_bound(g, b, math_fidelity):
+    """Whether the work cores produce output faster than DRAM takes it: one output tile per 9 * C_in / 32 tile-MACs at
+    the fidelity's rate, on every core at once. Then the output store, not the matmul, paces the walk (bf16 HiFi4 on 110
+    cores: 528 GB/s at C_in 32, 264 GB/s at C_in 64)."""
+    ns_per_tile = 9 * g.c_in_tiles * FIDELITY_PHASES[math_fidelity] * LOFI_NS_PER_TILE_MAC
+    return b.num_m_groups * b.n_groups * g.out_tile_bytes / ns_per_tile > DRAM_BYTES_PER_NS
+
+
 def kw_fold_mode(g, b, has_bias, l1_budget, math_fidelity):
     return kw_fold_plan(g, b, has_bias, l1_budget, math_fidelity) is not None
 
@@ -3815,13 +3827,17 @@ def create_program_descriptor(
             args[writer_split_arg] = int(split_core)
         return args
 
-    # Split startup fill (RM_SPLIT): on the ring with resident weights (streamed, the writer's block-0 weight rounds wait
-    # on compute, which would wait on the writer's chunks).
+    # Split fill (RM_SPLIT): on the ring with resident weights (streamed, the writer's weight rounds wait on compute,
+    # which would wait on the writer's chunks). Not on kh reuse: its band-first stream (RmBandRing) is not a monotone
+    # pixel stream, which the split's epochs are. Not where the output stream outruns DRAM (output_stream_bound): the
+    # fill is off the critical path there, and the staging chunk the writer holds slows the reader (514x1024 32->128
+    # 545 -> 555 us, 1026x2048 32->128 1752 -> 1770 beside the routed store).
     rm_split = (
         bool(b.rm_ring_px)
         and b.weights_resident
         and b.rm_stage_n > RM_SPLIT_W_NSTG
-        and b.rm_ring_px * g.c_in_p * 2 >= RM_SPLIT_MIN_WINDOW_BYTES
+        and not khr
+        and not output_stream_bound(g, b, compute_kernel_config.math_fidelity)
     )
     rm_split_sems = ()
     if rm_split:
@@ -4338,16 +4354,18 @@ def create_program_descriptor(
         else []
     )
     if rm_split:
-        # The writer stages through the last RM_SPLIT_W_NSTG chunks while it fills (the reader takes them back after).
+        # The writer stages through the last RM_SPLIT_W_NSTG chunks, the reader through the others.
         _rm_ring_defines += [
             ("RM_SPLIT", "1"),
             ("RM_W_NSTG", str(RM_SPLIT_W_NSTG)),
-            ("RM_SEM_LO", str(rm_split_sems[0])),
-            ("RM_SEM_HI", str(rm_split_sems[1])),
-            ("RM_SEM_ORIGIN", str(rm_split_sems[2])),
-            ("RM_SEM_R_CLAIM", str(rm_split_sems[3])),
-            ("RM_SEM_W_CLAIM", str(rm_split_sems[4])),
-            ("RM_SEM_W_DONE", str(rm_split_sems[5])),
+            ("RM_SEM_SEQ", str(rm_split_sems[0])),
+            ("RM_SEM_LO", str(rm_split_sems[1])),
+            ("RM_SEM_HI", str(rm_split_sems[2])),
+            ("RM_SEM_ORIGIN", str(rm_split_sems[3])),
+            ("RM_SEM_R_CLAIM", str(rm_split_sems[4])),
+            ("RM_SEM_W_CLAIM", str(rm_split_sems[5])),
+            ("RM_SEM_W_DONE", str(rm_split_sems[6])),
+            ("RM_SEM_HUNGRY", str(rm_split_sems[7])),
         ]
     readers = [
         ttnn.KernelDescriptor(

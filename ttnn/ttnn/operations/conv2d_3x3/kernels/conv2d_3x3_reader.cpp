@@ -181,11 +181,13 @@ constexpr uint32_t cb_rm_stage = 0;
 #endif
 constexpr uint32_t TRID_RM_COPY = 1;
 constexpr uint32_t TRID_RM_STAGE = 8;
-// Split startup fill (RM_SPLIT, conv2d_3x3_rm_ring.hpp): the writer fills the back of the ring's first window through
-// the last RM_W_NSTG staging chunks.
+// Split fill (RM_SPLIT, conv2d_3x3_rm_ring.hpp): the writer fills the back of every epoch of the stream through the
+// last RM_W_NSTG staging chunks; the reader cycles through the others.
 #ifdef RM_SPLIT
+constexpr bool rm_split = true;
 constexpr uint32_t rm_split_w_nstg = RM_W_NSTG;
 #else
+constexpr bool rm_split = false;
 constexpr uint32_t rm_split_w_nstg = 0;
 #endif
 
@@ -761,14 +763,22 @@ void kernel_main() {
         rm_ring_px,
         pixel_bytes,
         NUM_DRAM_BANKS,
-        rm_ring_nstg,
+        rm_ring_nstg - rm_split_w_nstg,
         rm_ring_chunk,
         TRID_RM_COPY,
         TRID_RM_STAGE,
-        rm_split_w_nstg> rm;
+        rm_split> rm;
 #ifdef RM_SPLIT
-    rm.sw = conv2d_3x3::RmSplitWords::
-        from_semaphores<RM_SEM_LO, RM_SEM_HI, RM_SEM_ORIGIN, RM_SEM_R_CLAIM, RM_SEM_W_CLAIM, RM_SEM_W_DONE>();
+    static_assert(rm_split_w_nstg < rm_ring_nstg, "the reader keeps a staging chunk");
+    rm.sw = conv2d_3x3::RmSplitWords::from_semaphores<
+        RM_SEM_SEQ,
+        RM_SEM_LO,
+        RM_SEM_HI,
+        RM_SEM_ORIGIN,
+        RM_SEM_R_CLAIM,
+        RM_SEM_W_CLAIM,
+        RM_SEM_W_DONE,
+        RM_SEM_HUNGRY>();
 #endif
 #ifdef RM_RING_STAGE_BYTES
     static_assert(rm_ring_nstg * decltype(rm)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
@@ -2041,6 +2051,8 @@ void kernel_main() {
                 reads.begin(TRID_GATHER);
                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
                     if constexpr (rm_ring) {
+                        // Split fill: hand the writer the next epoch as soon as it claimed the rest of this one.
+                        rm.poll();
                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
                     } else {
                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row);

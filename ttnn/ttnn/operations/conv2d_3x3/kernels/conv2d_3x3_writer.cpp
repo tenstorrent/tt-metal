@@ -2474,11 +2474,10 @@ void kernel_main() {
     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
 #endif
 #ifdef RM_SPLIT
-    // ---- Split startup fill, writer part (conv2d_3x3_rm_ring.hpp RmRingWriterPart): the back chunks of the ring's
-    // first window, through the last RM_W_NSTG of CB_RM_STAGE's RM_RING_NSTG staging chunks (the reader takes them
-    // back once this part is done), served while it waits for the first output tiles (resident weights: its weight
-    // rounds never wait on compute). Copies under transaction id 1, staging reads 8 .. (the weights' 2 / 3 and the
-    // bias' 7 stay apart).
+    // ---- Split fill, writer part (conv2d_3x3_rm_ring.hpp RmRingWriterPart): the back chunks of every epoch of the
+    // ring's stream, through the last RM_W_NSTG of CB_RM_STAGE's RM_RING_NSTG staging chunks, served while it waits
+    // for output tiles (resident weights: its weight rounds never wait on compute). Copies under transaction id 1,
+    // staging reads 8 .. (the weights' 2 / 3 and the bias' 7 stay apart).
     static_assert(!tile_input && !output_sharded && !slab_split && !row_split && !nslice_outer && !k_split);
     conv2d_3x3::RmRingWriterPart<RM_RING_PX, input_page_bytes, NUM_DRAM_BANKS, RM_W_NSTG, RM_RING_CHUNK_PX, 1, 8> rm_w;
     static_assert(RM_W_NSTG < RM_RING_NSTG, "the reader keeps a staging chunk");
@@ -2486,8 +2485,15 @@ void kernel_main() {
     rm_w.init(
         get_write_ptr(cb_halo_slab),
         get_write_ptr(CB_RM_STAGE) + (RM_RING_NSTG - RM_W_NSTG) * decltype(rm_w)::chunk_bytes,
-        conv2d_3x3::RmSplitWords::
-            from_semaphores<RM_SEM_LO, RM_SEM_HI, RM_SEM_ORIGIN, RM_SEM_R_CLAIM, RM_SEM_W_CLAIM, RM_SEM_W_DONE>());
+        conv2d_3x3::RmSplitWords::from_semaphores<
+            RM_SEM_SEQ,
+            RM_SEM_LO,
+            RM_SEM_HI,
+            RM_SEM_ORIGIN,
+            RM_SEM_R_CLAIM,
+            RM_SEM_W_CLAIM,
+            RM_SEM_W_DONE,
+            RM_SEM_HUNGRY>());
     const auto rm_w_input = TensorAccessor(input_args, input_addr, input_page_bytes);
     conv2d_3x3::TaggedReads<false> rm_w_reads;
 #endif
@@ -2552,8 +2558,8 @@ void kernel_main() {
             uint32_t l1 = get_read_ptr(cb_output_tiles);
             for (uint32_t j = 0; j < cnt; ++j, l1 += out_tile_bytes) {
 #ifdef RM_SPLIT
-                // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
-                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, j + 1)) {
+                // The split fill's writer part while compute works towards the output.
+                while (!cb_pages_available_at_front(cb_output_tiles, j + 1)) {
                     rm_w.serve(rm_w_reads, rm_w_input);
                 }
 #endif
@@ -2730,8 +2736,8 @@ void kernel_main() {
             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
 #ifdef RM_SPLIT
-                // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
-                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
+                // The split fill's writer part while compute works towards the output.
+                while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
                     rm_w.serve(rm_w_reads, rm_w_input);
                 }
 #endif
