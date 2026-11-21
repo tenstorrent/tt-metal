@@ -49,6 +49,7 @@ CKPT = os.environ.get("HF_MODEL", "/ttwork/qwen3_asr_text_decoder")
 AUDIO_TOKEN_ID = 151676
 _LOCK = threading.Lock()
 
+
 app = FastAPI()
 STATE = {}
 
@@ -253,6 +254,33 @@ def health():
     return {"status": "ok" if STATE else "loading"}
 
 
+def _is_unspaced_script_char(ch):
+    """True for characters of scripts written without inter-word spaces (CJK ideographs, kana, CJK and fullwidth punctuation, Thai)."""
+    cp = ord(ch)
+    return (
+        0x3000 <= cp <= 0x30FF
+        or 0x3400 <= cp <= 0x4DBF
+        or 0x4E00 <= cp <= 0x9FFF
+        or 0xF900 <= cp <= 0xFAFF
+        or 0xFF00 <= cp <= 0xFFEF
+        or 0x0E00 <= cp <= 0x0E7F
+        or 0x20000 <= cp <= 0x2FA1F
+    )
+
+
+def _join_segment_texts(parts):
+    """Join long-form segment transcripts, adding a space only where both sides of the cut use spaces."""
+    out = ""
+    for text in parts:
+        text = text.strip()
+        if not text:
+            continue
+        if out and not (_is_unspaced_script_char(out[-1]) or _is_unspaced_script_char(text[0])):
+            out += " "
+        out += text
+    return out
+
+
 def _transcribe_blocking(raw, force):
     """Decode the upload and run the (device-serialized) transcription. Blocking.
 
@@ -292,7 +320,7 @@ def _transcribe_blocking(raw, force):
                 if tx and not _hallucinated(tx):
                     parts.append(tx)
                     langs.append(lg)
-            text = " ".join(parts)
+            text = _join_segment_texts(parts)
         dt = time.time() - t0
     return text, langs, nseg, dt, dur
 
