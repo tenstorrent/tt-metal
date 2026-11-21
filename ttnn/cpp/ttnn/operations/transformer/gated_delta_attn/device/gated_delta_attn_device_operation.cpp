@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include <tt-metalium/constants.hpp>
 
 using namespace tt::tt_metal;
@@ -22,6 +23,11 @@ static void validate_tensor(const Tensor& t, const std::string& name) {
 
 void GatedDeltaAttnSeqDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    // The kernel and every DFB are Float32, and the unpack modes in the program factory assume a 32-bit Dest.
+    const bool fp32_dest_acc_en =
+        std::get<2>(ttnn::get_compute_kernel_config_args(in.L_unit.device()->arch(), attrs.compute_kernel_config));
+    TT_FATAL(fp32_dest_acc_en, "gated_delta_attn_seq requires compute_kernel_config.fp32_dest_acc_en = true");
+
     validate_tensor(in.L_unit, "L_unit");
     validate_tensor(in.v_beta_sc, "v_beta_sc");
     validate_tensor(in.k_bd_sc, "k_bd_sc");

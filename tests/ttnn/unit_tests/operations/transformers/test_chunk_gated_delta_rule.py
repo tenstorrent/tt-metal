@@ -268,6 +268,55 @@ def test_gated_delta_attn_seq_vs_golden(device, num_chunks, with_initial_state):
         assert ok_s, f"run {run}: final_state vs golden: {pcc_s}"
 
 
+@pytest.mark.parametrize("num_chunks", [1, 4], ids=lambda n: f"NC{n}")
+def test_gated_delta_attn_seq_honors_math_fidelity(device, num_chunks):
+    """compute_kernel_config.math_fidelity reaches the kernel: HiFi4 must be measurably closer to the
+    float64 golden than HiFi2. PCC cannot see this (the HiFi2 error is mostly a uniform shrink of the
+    state), so compare relative L2 error instead."""
+    golden = ttnn.get_golden_function(ttnn.transformer.gated_delta_attn_seq)
+    inputs, initial_state = _gated_delta_attn_seq_inputs(1, num_chunks, True, seed=7)
+    ref_out, ref_state = golden(
+        **{name: t.double() for name, t in inputs.items()}, initial_state=initial_state.double()
+    )
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    def rel_err(got, want):
+        return ((ttnn.to_torch(got).double() - want).norm() / want.norm()).item()
+
+    errors = {}
+    for fidelity in (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi4):
+        config = ttnn.init_device_compute_kernel_config(device.arch(), math_fidelity=fidelity, fp32_dest_acc_en=True)
+        out_tt, state_tt = ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state),
+            compute_kernel_config=config,
+        )
+        errors[fidelity] = (rel_err(out_tt, ref_out), rel_err(state_tt, ref_state))
+    print(f"relative L2 error (output, state): {errors}")
+
+    hifi2, hifi4 = errors[ttnn.MathFidelity.HiFi2], errors[ttnn.MathFidelity.HiFi4]
+    assert hifi4[0] < 0.5 * hifi2[0], f"output: HiFi4 {hifi4[0]} not below HiFi2 {hifi2[0]}"
+    assert hifi4[1] < 0.5 * hifi2[1], f"final_state: HiFi4 {hifi4[1]} not below HiFi2 {hifi2[1]}"
+
+
+def test_gated_delta_attn_seq_requires_fp32_dest(device, expect_error):
+    """The kernel and its buffers are Float32, so a 16-bit Dest is rejected rather than run."""
+    inputs, initial_state = _gated_delta_attn_seq_inputs(1, 1, True, seed=7)
+
+    def dev(t):
+        return ttnn.from_torch(t, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
+
+    config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
+    with expect_error(RuntimeError, "requires compute_kernel_config.fp32_dest_acc_en = true"):
+        ttnn.transformer.gated_delta_attn_seq(
+            **{name: dev(t) for name, t in inputs.items()},
+            initial_state=dev(initial_state),
+            compute_kernel_config=config,
+        )
+
+
 def _const_tiles(device, chunk_size=CHUNK):
     """The op's constant tiles (mirrors qwen36 fused_chunk.build_fused_const_tiles).
 
