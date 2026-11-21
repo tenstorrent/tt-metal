@@ -24,44 +24,46 @@ ALWI bool should_use_blocked_pack_width(uint32_t pack_width) { return pack_width
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sdpa_streaming_common.hpp"
 
 // SPARSE_DENSE_HIFI (TT_SPARSE_RING_DENSE_HIFI): the dense Q blocks' Q.K^T, P.V and row-sum matmuls run at this
-// fidelity, the others at the usual one. Bit s of sparse_dense_slots: resident slot s holds a dense Q block (set per
-// pass by sdpa_ring_resident). A fidelity switch needs the full init, so each matmul's setup key carries the bit.
-#ifdef SPARSE_DENSE_HIFI
+// fidelity, the others at the usual one. Math thread only: the unpack side of a matmul does not depend on the
+// fidelity, so unpack and pack compile exactly as without the switch. Bit s of sparse_dense_slots: resident slot s
+// holds a dense Q block (set per pass by sdpa_ring_resident). A dense block's setup runs the usual init, then turns
+// its replay image into the high-fidelity one (dense_mm_patch: ADDR_MOD_5 steps the fidelity phase, the image's last
+// MVMUL keeps srcA / srcB); dense_mm replays it once per phase. Full 32x32 tiles, no throttle. Each matmul's setup
+// key carries the bit, so the image is rebuilt whenever the fidelity changes.
+#if defined(SPARSE_DENSE_HIFI) && defined(TRISC_MATH)
+static_assert(MM_THROTTLE == 0, "SPARSE_DENSE_HIFI: the replay patch assumes the unthrottled no-mop matmul");
 constexpr MathFidelity kDenseFidelity = static_cast<MathFidelity>(SPARSE_DENSE_HIFI);
 static uint32_t sparse_dense_slots = 0;
 ALWI bool slot_hifi(uint32_t slot) { return ((sparse_dense_slots >> slot) & 1u) != 0; }
-static __attribute__((noinline)) void dense_mm_init(
-    uint32_t in0_cb, uint32_t in1_cb, bool transpose, uint32_t ct_dim, uint32_t rt_dim, uint32_t kt_dim) {
-    mm_no_mop_init_short_fidelity<kDenseFidelity>(in0_cb, in1_cb, transpose, ct_dim, rt_dim, kt_dim);
+static __attribute__((noinline)) void dense_mm_patch() {
+    addr_mod_t{
+        .srca = {.incr = 0, .clr = 1, .cr = 1},
+        .srcb = {.incr = 0, .clr = 1, .cr = 1},
+        .dest = {.incr = 0, .clr = 1, .cr = 1},
+        .fidelity = {.incr = 1, .clr = 0},
+    }
+        .set(ADDR_MOD_5);
+    ckernel::load_replay_buf(
+        ckernel::math::replay_buf_offset + 15, 1, [] { TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_5, 0); });
 }
-static __attribute__((noinline)) void dense_mm(
-    uint32_t in0_cb,
-    uint32_t in1_cb,
-    uint32_t in0_index,
-    uint32_t in1_index,
-    uint32_t idst,
-    bool transpose,
-    uint32_t ct_dim,
-    uint32_t rt_dim,
-    uint32_t kt_dim) {
-    matmul_block_no_mop_fidelity<kDenseFidelity>(
-        in0_cb, in1_cb, in0_index, in1_index, idst, transpose, ct_dim, rt_dim, kt_dim);
+static __attribute__((noinline)) void dense_mm(uint32_t idst, uint32_t ct_dim, uint32_t rt_dim) {
+    _llk_math_matmul_no_mop_<kDenseFidelity, 0>(idst, ct_dim, rt_dim);
 }
 #define RES_MM_INIT(hifi, init_call, ...) \
     do {                                  \
+        init_call(__VA_ARGS__);           \
         if (hifi) {                       \
-            dense_mm_init(__VA_ARGS__);   \
-        } else {                          \
-            init_call(__VA_ARGS__);       \
+            dense_mm_patch();             \
         }                                 \
     } while (0)
-#define RES_MM(hifi, ...)                          \
-    do {                                           \
-        if (hifi) {                                \
-            dense_mm(__VA_ARGS__);                 \
-        } else {                                   \
-            sdpa_matmul_block_no_mop(__VA_ARGS__); \
-        }                                          \
+// The unpack call of sdpa_matmul_block_no_mop is a no-op on the math thread: only its math call is replaced.
+#define RES_MM(hifi, in0, in1, i0, i1, idst, tr, ct, rt, kt)                  \
+    do {                                                                      \
+        if (hifi) {                                                           \
+            dense_mm(idst, ct, rt);                                           \
+        } else {                                                              \
+            sdpa_matmul_block_no_mop(in0, in1, i0, i1, idst, tr, ct, rt, kt); \
+        }                                                                     \
     } while (0)
 #define RES_HIFI_KEY(hifi) ((hifi) ? 0x10000u : 0u)
 #else
@@ -1146,7 +1148,7 @@ void sdpa_ring_resident(
 
     const uint32_t n_res = global_q_end - global_q_start;
     ASSERT(n_res <= resident_slots);
-#ifdef SPARSE_DENSE_HIFI
+#if defined(SPARSE_DENSE_HIFI) && defined(TRISC_MATH)
     // Common args: n_dense, n_full, then the dense positions within a unit (the reader's dense list).
     sparse_dense_slots = 0;
     for (uint32_t i = 0; i < n_res; ++i) {
