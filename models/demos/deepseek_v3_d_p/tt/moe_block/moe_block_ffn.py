@@ -103,7 +103,9 @@ class MoEBlockFfnOptions:
         cache fails closed) - an accuracy experiment's opt-in (kimi_k3/test_moe_teacher_feed.py).
     head_weights, head_fidelity: the MoE head's weights (the shared expert and a latent MoE's latent down projection:
         MoEDtypes.shared_weights, bfloat8_b) and its matmul fidelity (MoEDtypes.shared_fidelity, HiFi2); None:
-        production's - accuracy experiments' opt-ins, as routed_weights."""
+        production's - accuracy experiments' opt-ins, as routed_weights.
+    tail_weights: moe_tail's W_up (a latent MoE's latent up projection) dtype (prepare_moe_tail_weights: bfloat8_b or
+        bfloat16); None: production's bfloat8_b - an accuracy experiment's opt-in."""
 
     combine_snap: Optional[float] = None
     combine_landing: Optional[str] = None
@@ -111,6 +113,7 @@ class MoEBlockFfnOptions:
     routed_weights: Optional[ttnn.DataType] = None
     head_weights: Optional[ttnn.DataType] = None
     head_fidelity: Optional[ttnn.MathFidelity] = None
+    tail_weights: Optional[ttnn.DataType] = None
 
     @property
     def routed_dtype(self) -> ttnn.DataType:
@@ -572,7 +575,11 @@ class TtMoEBlockFfn:
                 )
             if w_up is None and "latent_up" in w:
                 w_up = ttnn.experimental.moe_block.prepare_moe_tail_weights(
-                    host("latent_up"), host("latent_norm"), resources=res, row_blocks=block.row_blocks
+                    host("latent_up"),
+                    host("latent_norm"),
+                    resources=res,
+                    row_blocks=block.row_blocks,
+                    **({} if self.options.tail_weights is None else dict(dtype=self.options.tail_weights)),
                 )
             del w
         self._heads[head_key], self._w_up = head, w_up
