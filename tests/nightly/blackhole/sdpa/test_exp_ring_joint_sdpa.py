@@ -101,7 +101,8 @@ def detect_devices_without_opening():
     """Count available TT devices without opening them."""
     import glob
 
-    return len(glob.glob("/dev/tenstorrent/*"))
+    # Device nodes only (/dev/tenstorrent can also hold non-numeric entries such as by-id/).
+    return len([p for p in glob.glob("/dev/tenstorrent/*") if os.path.basename(p).isdigit()])
 
 
 def calculate_mesh_config(num_devices):
@@ -151,9 +152,13 @@ def generate_test_configs():
     total_seq = N_local * sp_size  # already aligned to 32*sp_size
     total_heads = HEADS_PER_DEVICE * tp_size
 
-    config = (BATCH_SIZE, total_heads, total_seq, HEAD_DIM, Q_CHUNK_SIZE, K_CHUNK_SIZE)
-    config_id = f"{arch_type}-seq{total_seq}-h{total_heads}-q{Q_CHUNK_SIZE}-k{K_CHUNK_SIZE}"
-    return [config], [config_id]
+    configs = [(BATCH_SIZE, total_heads, total_seq, HEAD_DIM, Q_CHUNK_SIZE, K_CHUNK_SIZE)]
+    config_ids = [f"{arch_type}-seq{total_seq}-h{total_heads}-q{Q_CHUNK_SIZE}-k{K_CHUNK_SIZE}"]
+    if is_galaxy:
+        # One ring of GALAXY_SP_SIZE devices (a 1 x sp submesh, TP=1): the same per-device problem as galaxy_4x8.
+        configs.append((BATCH_SIZE, HEADS_PER_DEVICE, total_seq, HEAD_DIM, Q_CHUNK_SIZE, K_CHUNK_SIZE))
+        config_ids.append(f"galaxy_1x{sp_size}-seq{total_seq}-h{HEADS_PER_DEVICE}-q{Q_CHUNK_SIZE}-k{K_CHUNK_SIZE}")
+    return configs, config_ids
 
 
 # ============================================================================
@@ -205,6 +210,9 @@ def run_exp_ring_joint_sdpa_nightly(
         pytest.skip(f"Only testing with ≥4 devices in ring, got sp_size={sp_size}")
 
     is_galaxy = arch_type.startswith("galaxy")
+    if is_galaxy:
+        # TP from the head count (generate_test_configs): galaxy_4x8 runs TP=4 rings of 8, galaxy_1x8 one ring.
+        tp_size = nh // HEADS_PER_DEVICE
 
     fabric_config = ttnn.FabricConfig.FABRIC_1D_RING
     topology = Topology.Ring
@@ -221,7 +229,13 @@ def run_exp_ring_joint_sdpa_nightly(
             ttnn.FabricManagerMode.DEFAULT,
             router_config=create_fabric_router_config(max_payload_size),
         )
-        mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+        if is_galaxy and tp_size != GALAXY_TP_SIZE:
+            # One ring of the Galaxy: a submesh of the whole mesh (the fabric routers of a smaller opened mesh are not
+            # all built).
+            full_mesh_device = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(GALAXY_TP_SIZE, sp_size))
+            mesh_device = full_mesh_device.create_submesh(mesh_shape)
+        else:
+            full_mesh_device = mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
 
     sp_axis = 1  # column axis for sequence parallel (ring axis)
     tp_axis = 0  # row axis for tensor parallel
@@ -372,15 +386,6 @@ def run_exp_ring_joint_sdpa_nightly(
             compute_with_storage_grid_size=sdpa_compute_grid,
             q_chunk_size=q_chunk_size,
             k_chunk_size=k_chunk_size,
-            exp_approx_mode=False,
-        )
-
-        compute_kernel_config = ttnn.init_device_compute_kernel_config(
-            mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
-            math_approx_mode=False,
-            fp32_dest_acc_en=False,
-            packer_l1_acc=False,
         )
 
         # Mesh composer dims for converting output back to torch
@@ -435,7 +440,6 @@ def run_exp_ring_joint_sdpa_nightly(
                 joint_strategy="rear",
                 logical_n=total_seq,
                 program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=ccl_semaphores_list[i],
                 num_links=num_links,
@@ -579,7 +583,7 @@ def run_exp_ring_joint_sdpa_nightly(
 
     finally:
         if owns_mesh_device:
-            ttnn.close_mesh_device(mesh_device)
+            ttnn.close_mesh_device(full_mesh_device)
             ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
 
 
