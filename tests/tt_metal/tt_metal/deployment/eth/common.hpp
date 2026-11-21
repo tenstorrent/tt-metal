@@ -11,7 +11,7 @@
 #include "distributed/mesh_device_impl.hpp"
 #include "tt_metal/tt_metal/deployment/deployment_common.hpp"
 #include "impl/program/program_impl.hpp"
-#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "command_queue_fixture.hpp"

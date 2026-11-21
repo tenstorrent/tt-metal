@@ -5,9 +5,9 @@
 #include "dummy_mesh_command_queue.hpp"
 #include <distributed/mesh_device_impl.hpp>
 #include "tt_metal/impl/threading/thread_pool.hpp"
-#include <mesh_device.hpp>
-#include <mesh_event.hpp>
-#include <mesh_workload.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 
 namespace tt::tt_metal::distributed {
 

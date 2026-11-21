@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include <circular_buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
@@ -13,14 +13,14 @@
 #include "device/device_manager.hpp"
 #include "impl/dispatch/host_device_transfer.hpp"
 #include "host_api/helpers.hpp"
-#include <global_circular_buffer.hpp>
-#include <global_semaphore.hpp>
+#include <tt-metalium/global_circular_buffer.hpp>
+#include <tt-metalium/global_semaphore.hpp>
 #include "impl/buffers/global_semaphore_impl.hpp"
-#include <host_api.hpp>
-#include <experimental/dispatch_context.hpp>
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/experimental/dispatch_context.hpp>
 #include <enchantum/enchantum.hpp>
 #include <memory>
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -31,20 +31,20 @@
 #include <type_traits>
 #include <variant>
 
-#include "buffer_types.hpp"
-#include "circular_buffer_config.hpp"
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "llrt/tt_cluster.hpp"
 #include <tt-umd-workload/cluster.hpp>
 #include <tt-umd/cluster_descriptor.hpp>
 #include <filesystem>
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "context/metal_context.hpp"
 #include "kernels/kernel.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include "device/device_impl.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
@@ -53,7 +53,7 @@
 #include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <program.hpp>
+#include <tt-metalium/program.hpp>
 #include "program/dispatch.hpp"
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
@@ -62,11 +62,11 @@
 #include "tracy/Tracy.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt_stl/enum.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <tt_stl/overloaded.hpp>
 #include "get_platform_architecture.hpp"
 #include "common/tt_backend_api_types.hpp"
-#include <experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "impl/buffers/circular_buffer.hpp"
 #include <tt-metalium/tensor/mesh_tensor.hpp>
 #include <internal/service/service_core_manager.hpp>

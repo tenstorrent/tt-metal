@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "api/tt-metalium/distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed::multihost {
 // ---------------------------------------------------------------------

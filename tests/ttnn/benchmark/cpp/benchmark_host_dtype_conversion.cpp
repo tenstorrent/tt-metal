@@ -6,8 +6,8 @@
 
 #include <ttnn/tensor/tensor.hpp>
 #include <ttnn/operations/core/core.hpp>
-#include "bfloat16.hpp"
-#include "constants.hpp"
+#include <tt-metalium/bfloat16.hpp>
+#include <tt-metalium/constants.hpp>
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/tensor/layout/tensor_layout.hpp"

@@ -2,11 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_event.hpp>
+#include <tt-metalium/mesh_event.hpp>
 
 #include <tt_stl/assert.hpp>
-#include "mesh_command_queue.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "mesh_event_impl.hpp"
 
 namespace tt::tt_metal::distributed {

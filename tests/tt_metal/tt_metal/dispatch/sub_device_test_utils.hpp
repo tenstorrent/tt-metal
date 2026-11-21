@@ -9,7 +9,7 @@
 #include <tt-metalium/mesh_device.hpp>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "sub_device.hpp"
+#include <tt-metalium/sub_device.hpp>
 #include "impl/sub_device/sub_device_impl.hpp"
 
 namespace tt::tt_metal {

@@ -9,15 +9,15 @@
 #include "device_impl.hpp"
 
 #include <core_descriptor.hpp>
-#include <host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <initializer_list>
-#include <sub_device.hpp>
-#include <sub_device_types.hpp>
+#include <tt-metalium/sub_device.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "impl/device/mock_allocator.hpp"
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include <tt_stl/span.hpp>
 #include <algorithm>
 #include <cstdint>
@@ -32,7 +32,7 @@
 #include <unordered_set>
 #include <vector>
 
-#include "allocator.hpp"
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
 #include "dispatch/command_queue_common.hpp"
 #include "common/core_assignment.hpp"
@@ -42,7 +42,7 @@
 #include "memory_tracking/shm_tracking_processor.hpp"
 #include <tt-metalium/graph_tracking.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/dispatch_query_manager.hpp"
 #include <tt-metalium/hal_types.hpp>
@@ -52,7 +52,7 @@
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "tracy/Tracy.hpp"
 #include "tt_metal/impl/allocator/l1_banking_allocator.hpp"

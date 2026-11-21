@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tt_metal/impl/buffers/dispatch.hpp"
-#include "tt_metal/api/tt-metalium/buffer_page_mapping.hpp"
+#include <tt-metalium/buffer_page_mapping.hpp>
 #include "gtest/gtest.h"
 #include <vector>
 

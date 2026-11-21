@@ -18,7 +18,7 @@
 #include <cstdint>
 #include "debug_tools_fixture.hpp"
 #include "impl/context/metal_context.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>

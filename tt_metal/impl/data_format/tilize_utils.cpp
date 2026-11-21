@@ -11,7 +11,7 @@
 #include <ostream>
 
 #include <tt_stl/assert.hpp>
-#include "constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt_stl/span.hpp>
 
 std::ostream& operator<<(std::ostream& os, TensorLayoutType layout) {

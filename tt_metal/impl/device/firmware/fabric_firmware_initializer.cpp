@@ -15,7 +15,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "device/device_impl.hpp"
 #include "common/executor.hpp"
 #include "impl/context/context_descriptor.hpp"
@@ -26,8 +26,8 @@
 #include "program/slow_dispatch.hpp"
 #include "tt_metal/fabric/fabric_init.hpp"
 
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/fabric_context.hpp"
 #include "fabric/fabric_builder.hpp"

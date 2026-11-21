@@ -20,7 +20,7 @@
 
 #include "mesh_device_impl.hpp"
 #include "mesh_device_view_impl.hpp"
-#include "mesh_command_queue.hpp"
+#include <tt-metalium/mesh_command_queue.hpp>
 #include "fd_mesh_command_queue.hpp"
 #include "sd_mesh_command_queue.hpp"
 #include "impl/context/metal_context.hpp"

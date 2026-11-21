@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 

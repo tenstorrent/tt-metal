@@ -45,7 +45,7 @@
 #include <yaml-cpp/yaml.h>
 
 #include "context/metal_env_impl.hpp"
-#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/channel_trimming_io.hpp"

@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device_fixture.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "dm_common.hpp"
 
 #include <tt-metalium/math.hpp>

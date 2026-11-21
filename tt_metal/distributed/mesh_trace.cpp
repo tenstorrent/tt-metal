@@ -4,8 +4,8 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "mesh_trace.hpp"
 
-#include <mesh_command_queue.hpp>
-#include <mesh_coord.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include <cstdint>
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -18,14 +18,14 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
-#include "device.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include "math.hpp"
-#include "mesh_buffer.hpp"
-#include "mesh_device.hpp"
-#include "mesh_trace_id.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_trace_id.hpp>
 #include "tt_metal/impl/trace/dispatch.hpp"
 #include "impl/allocator/allocator.hpp"
 #include <distributed/mesh_device_impl.hpp>

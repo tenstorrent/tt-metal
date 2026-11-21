@@ -17,11 +17,11 @@
 #include <utility>
 #include <vector>
 
-#include "buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 #include "common/TracyTTDeviceData.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "mesh_device.hpp"
-#include "profiler_optional_metadata.hpp"
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/profiler_optional_metadata.hpp>
 #include "impl/profiler/profiler_types.hpp"
 #include "tracy/TracyTTDevice.hpp"
 

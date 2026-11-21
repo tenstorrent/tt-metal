@@ -9,9 +9,9 @@
 
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
-#include "tt_metal/api/tt-metalium/allocator.hpp"
-#include "tt_metal/api/tt-metalium/buffer_types.hpp"
-#include "tt_metal/api/tt-metalium/device.hpp"
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer_types.hpp>
+#include <tt-metalium/device.hpp>
 #include "tt_metal/llrt/hal.hpp"
 #include "tt_metal/llrt/metal_soc_descriptor.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"

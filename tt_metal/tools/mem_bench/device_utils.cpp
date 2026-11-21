@@ -12,7 +12,7 @@
 #include "context.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include "device_utils.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
 namespace tt::tt_metal {

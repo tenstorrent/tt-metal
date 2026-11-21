@@ -7,11 +7,11 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/impl/program/sub_device_setup_batch.hpp"
 
-#include <mesh_workload.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <cstddef>
 #include <cstring>
 #include <span>
-#include <sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -33,14 +33,14 @@
 #include <random>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
-#include "circular_buffer.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
 #include "impl/buffers/circular_buffer.hpp"
-#include "circular_buffer_constants.h"
+#include <tt-metalium/circular_buffer_constants.h>
 #include "impl/dataflow_buffer/cross_node_dfb.hpp"
 #include "impl/dataflow_buffer/prefetcher_pipe.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include "device.hpp"
+#include <tt-metalium/device.hpp>
 #include "impl/device/device_impl.hpp"
 #include "dispatch/device_command.hpp"
 #include "impl/context/metal_context.hpp"
@@ -49,12 +49,12 @@
 #include "dispatch/launch_message_ring_buffer_state.hpp"
 #include "dispatch/dispatch_settings.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include "math.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "program_device_map.hpp"
-#include "tt-metalium/program.hpp"
-#include "runtime_args_data.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/runtime_args_data.hpp>
 #include "impl/buffers/semaphore.hpp"
 #include <tt_stl/span.hpp>
 #include <tt_stl/strong_type.hpp>

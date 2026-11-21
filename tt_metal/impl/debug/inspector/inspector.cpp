@@ -18,7 +18,7 @@
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp>
 #include "distributed/mesh_socket_utils.hpp"
-#include "program.hpp"
+#include <tt-metalium/program.hpp>
 #include <map>
 #include <memory>
 #include <optional>

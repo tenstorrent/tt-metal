@@ -8,7 +8,7 @@
 #include <cstdint>
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "data_collector.hpp"
 
 using namespace tt;

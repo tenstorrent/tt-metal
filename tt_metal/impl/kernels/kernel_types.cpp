@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <kernel_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <cstdint>
 #include <utility>
 

@@ -27,10 +27,10 @@
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/fabric/mesh_graph.hpp>
-#include <distributed_context.hpp>
-#include <system_mesh.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include <tt-metalium/distributed_context.hpp>
+#include <tt-metalium/system_mesh.hpp>
 #include "fabric/fabric_host_utils.hpp"
 #include "fabric/channel_trimming_export.hpp"
 #include "fabric/fabric_context.hpp"

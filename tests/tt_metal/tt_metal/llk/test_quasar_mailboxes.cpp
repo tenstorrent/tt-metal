@@ -6,7 +6,7 @@
 #include <vector>
 
 #include "gtest/gtest.h"
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "llk_device_fixture.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/device.hpp>

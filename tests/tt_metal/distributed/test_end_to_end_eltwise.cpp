@@ -15,7 +15,7 @@
 #include <gmock/gmock.h>
 #include <gmock/gmock-matchers.h>
 
-#include "host_api.hpp"
+#include <tt-metalium/host_api.hpp>
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
 

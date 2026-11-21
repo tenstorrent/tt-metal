@@ -11,11 +11,11 @@
 
 #include <tt_stl/assert.hpp>
 #include "blockfloat_common.hpp"
-#include "constants.hpp"
+#include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
-#include "tile.hpp"
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/tile.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 

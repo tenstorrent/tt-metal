@@ -7,7 +7,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 #include <algorithm>
 #include <exception>

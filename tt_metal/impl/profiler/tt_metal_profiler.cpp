@@ -2,14 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
-#include <host_api.hpp>
+#include <tt-metalium/host_api.hpp>
 #include "impl/profiler/profiler.hpp"
-#include <mesh_workload.hpp>
-#include <mesh_command_queue.hpp>
-#include <tt_metal.hpp>
+#include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <chrono>
@@ -33,26 +33,26 @@
 #include <queue>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "hostdev/profiler_common.h"
 #include "context/context_types.hpp"
 #include "context/metal_context.hpp"
 #include "context/metal_env_accessor.hpp"
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include "profiler_optional_metadata.hpp"
+#include <tt-metalium/profiler_optional_metadata.hpp>
 #include "profiler_analysis.hpp"
 #include "profiler_paths.hpp"
 #include "profiler_state.hpp"
 #include "impl/profiler/profiler_types.hpp"
 #include "profiler_state_manager.hpp"
-#include "program.hpp"
+#include <tt-metalium/program.hpp>
 #include "program/program_impl.hpp"
 #include "program/slow_dispatch.hpp"
 #include "kernels/kernel.hpp"
@@ -60,7 +60,7 @@
 #include "rtoptions.hpp"
 #include "tracy/Tracy.hpp"
 #include "tracy/TracyTTDevice.hpp"
-#include <distributed.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/types/xy_pair.hpp>
 #include <llrt/tt_cluster.hpp>

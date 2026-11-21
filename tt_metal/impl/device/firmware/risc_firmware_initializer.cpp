@@ -34,8 +34,8 @@
 #include "jit_build/jit_device_config.hpp"
 #include "llrt/llrt.hpp"
 #include "common/executor.hpp"
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/fabric/fabric_types.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "fabric/fabric_context.hpp"
 #include "hostdevcommon/common_values.hpp"
 #include <tt-metalium/math.hpp>

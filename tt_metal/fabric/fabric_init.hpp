@@ -9,8 +9,8 @@
 #include <optional>
 #include <vector>
 
-#include "device.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/fabric/builder/router_channel_layouts.hpp"
 
 namespace tt::tt_metal {

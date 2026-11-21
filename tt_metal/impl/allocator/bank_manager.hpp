@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <buffer_types.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <cstdint>
 #include <memory>
 #include <optional>

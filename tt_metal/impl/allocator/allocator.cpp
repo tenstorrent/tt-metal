@@ -16,7 +16,7 @@
 #include <mutex>
 
 #include <tt_stl/assert.hpp>
-#include "buffer_types.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include "impl/allocator/bank_manager.hpp"
 #include "impl/allocator/allocator_types.hpp"
 #include "impl/trace/trace_buffer.hpp"

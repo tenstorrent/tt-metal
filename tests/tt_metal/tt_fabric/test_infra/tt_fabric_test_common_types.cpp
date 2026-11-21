@@ -11,8 +11,8 @@
 #include "tests/tt_metal/tt_fabric/test_infra/tt_fabric_test_common_types.hpp"
 
 #include "impl/context/metal_context.hpp"
-#include <experimental/fabric/control_plane.hpp>
-#include <experimental/fabric/physical_system_descriptor.hpp>
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
 

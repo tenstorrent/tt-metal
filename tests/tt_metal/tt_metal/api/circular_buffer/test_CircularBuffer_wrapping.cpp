@@ -5,8 +5,8 @@
 #include <vector>
 #include "device_fixture.hpp"
 #include "gtest/gtest.h"
-#include "host_api.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/host_api.hpp>
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 namespace tt::tt_metal {
 

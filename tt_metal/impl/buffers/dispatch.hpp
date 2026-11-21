@@ -5,12 +5,12 @@
 #pragma once
 
 #include <stdint.h>
-#include <sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <atomic>
 #include <memory>
 #include <variant>
 
-#include "buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt_stl/span.hpp>
 #include "dispatch/system_memory_manager.hpp"

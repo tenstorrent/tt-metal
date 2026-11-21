@@ -6,7 +6,7 @@
 #include <tt_stl/reflection.hpp>
 
 #include <fmt/format.h>
-#include <mesh_coord.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "distributed/mesh_coord_utils.hpp"
 #include <tt_stl/span.hpp>
 #include <algorithm>
@@ -21,7 +21,7 @@
 #include <utility>
 #include <vector>
 
-#include "shape_base.hpp"
+#include <tt-metalium/shape_base.hpp>
 #include <tt_stl/small_vector.hpp>
 
 namespace tt::tt_metal::distributed {

@@ -14,7 +14,7 @@
 #include <tt-metalium/mesh_device.hpp>
 
 #include "mesh_dispatch_fixture.hpp"
-#include "system_mesh.hpp"
+#include <tt-metalium/system_mesh.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"

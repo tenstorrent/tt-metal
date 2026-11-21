@@ -30,7 +30,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include "llrt.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
