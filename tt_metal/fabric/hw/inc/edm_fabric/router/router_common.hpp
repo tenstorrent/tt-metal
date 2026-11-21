@@ -75,12 +75,9 @@ static_assert(stream_count_mask <= ((1u << REMOTE_DEST_WORDS_FREE_WIDTH) - 1));
 
 // The Ethernet firmware's heartbeat word. While the router runs instead of the base firmware, each loop keeps it moving
 // every HEARTBEAT_INTERVAL rounds, the count in the lower half and UMD's fabric signature in the upper half (the host's
-// contract: hostdevcommon/fabric_common.h). Without base Ethernet firmware (FABRIC_HEARTBEAT_FROM_MEM_MAP) the word is
-// in the core's own memory map.
-#if defined(FABRIC_HEARTBEAT_FROM_MEM_MAP)
-#if !defined(MEM_FABRIC_KERNEL_HEARTBEAT)
-#error "FABRIC_HEARTBEAT_FROM_MEM_MAP needs MEM_FABRIC_KERNEL_HEARTBEAT in dev_mem_map.h"
-#endif
+// contract: hostdevcommon/fabric_common.h). Without base Ethernet firmware the word is in the core's own memory map,
+// which names it (dev_mem_map.h).
+#if defined(MEM_FABRIC_KERNEL_HEARTBEAT)
 constexpr uint32_t heartbeat_addr = MEM_FABRIC_KERNEL_HEARTBEAT;
 #else
 constexpr uint32_t heartbeat_addr =
