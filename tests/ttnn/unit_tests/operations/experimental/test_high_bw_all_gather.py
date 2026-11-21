@@ -17,6 +17,7 @@ import torch
 import ttnn
 from tt_py_test_utils_common.utility_functions import run_for_blackhole
 from models.common.ci_failure import assert_perf_gate
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
 
 
@@ -1291,16 +1292,20 @@ _STAGE_4X4_PERF_NEEDS_16_CHIPS = pytest.mark.skipif(
     reason="needs a 16-chip stage mesh (TT_VISIBLE_DEVICES + a 4x4 descriptor: SUBTORUS_4X4_ENV or run_4x4_stage_tests.sh)",
 )
 
-# [RING, RING] floors per case: 95% of the lowest value seen on the CI runners (GLM components leg, two runs on two
-# runners). Lowest on CI: 55K 147.8 / 139.6 / 151.4 / 135.3 GB/s, 512K 170.0 / 167.5 / 167.9 / 166.6 (bf16 row-major,
-# fp8, bf16 tiled, bfloat8). A development Galaxy (110-A) reads up to 6% more: 55K 156.9 / 145.6 / 156.7 / 141.5,
-# 512K 175.3 / 175.6 / 176.3 / 174.6.
+# [RING, RING] floors per case, for the high-power (14 kW) Galaxies the GLM chunked perf leg runs on. Provisional: no
+# 14 kW run of this test exists yet.
+# The 55K floors are 95% of the lowest value on the 8 kW CI runners (GLM components leg), which read the 55K cases within
+# about 2% of each other. Lowest there: 147.8 / 139.6 / 151.4 / 135.3 GB/s (bf16 row-major, fp8, bf16 tiled, bfloat8).
+# The 512K cases read differently from runner to runner: bf16 row-major 170.0 / 163.9 / 150.3 on three 8 kW runners, and
+# the 8x4 whole-mesh 512K gather reads 160.3 to 171.1 (fp8) on two 14 kW runners. A development Galaxy (110-A) reads
+# 55K 156.9 / 145.6 / 156.7 / 141.5 and 512K 175.3 / 175.6 / 176.3 / 174.6. The 512K floors are 95% of 0.91 times the
+# development Galaxy's reading (0.91: the lower 14 kW runner's 8x4 whole-mesh 2M-row reading over the higher one's).
 # The same gather on a [LINE, RING] 4x4 reads 126 / 118 / 125 / 114 and 138 / 137 / 138 / 137, so each floor is above the
 # line layout's: a carve that falls back to the cylinder's cycles fails. Override every floor with
 # TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS when recalibrating.
 _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = {
     55_040: {"bf16_row_major": 140.0, "fp8_row_major": 132.0, "bf16_tiled": 143.0, "bfloat8_tiled": 128.0},
-    512 * 1024: {"bf16_row_major": 161.0, "fp8_row_major": 159.0, "bf16_tiled": 159.0, "bfloat8_tiled": 158.0},
+    512 * 1024: {"bf16_row_major": 151.0, "fp8_row_major": 151.0, "bf16_tiled": 152.0, "bfloat8_tiled": 150.0},
 }
 if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
     _RING_RING_4X4_CI_MIN_BANDWIDTH_GBPS = float(os.environ["TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS"])
@@ -1312,6 +1317,7 @@ if os.getenv("TT_METAL_HIGH_BW_ALL_GATHER_RING_RING_4X4_MIN_GBPS") is not None:
 @pytest.mark.parametrize("mesh_device", [(4, 4)], indirect=True)
 def test_high_bw_all_gather_ring_ring_4x4_perf(mesh_device):
     """Bandwidth floors of the 16-rank full-mesh gather on the [RING, RING] carve, each paired with a correctness run."""
+    require_high_power("[RING, RING] 4x4 high_bw_all_gather perf")
     assert tuple(mesh_device.shape) == (4, 4)
     _run_high_bw_all_gather_ci_perf(
         mesh_device,

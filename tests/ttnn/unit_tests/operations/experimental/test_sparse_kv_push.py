@@ -20,6 +20,7 @@ import torch
 import ttnn
 from models.common.ci_failure import assert_perf_gate
 from models.demos.deepseek_v3_d_p.tt.mla.sparse_kv_push import SparseKvPushPart as Part
+from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import require_high_power
 from tt_py_test_utils_common.realtime_profiler_utils import profile_realtime_program_merged
 
 # The ops' compact layout (pages_per_packet, banks), exported for tests to lay out reference buffers.
@@ -456,8 +457,11 @@ def _device_ns_by_step(mesh_device, run):
 
 
 # Per top-k source and step: the slowest median of 3 runs (3 processes, 7 samples each, one 110-A Galaxy) plus 10%, in us.
-# The table gather is short and noisy (CI samples 57-78 us), so its ceilings for the GLM L14 and L62 top-k sit about 15%
-# over the CI medians (67.8 and 73.5 us) instead.
+# The 8 kW CI runners (GLM components leg, two runs on two runners) read 9% to 19% under those ceilings, and the
+# 14 kW runners the GLM chunked perf leg runs on have no run of this test yet. The table gather is short and noisy (CI
+# samples 57-78 us), so its ceilings for the GLM L14 and L62 top-k sit about 15% over the CI medians (67.8 and 73.5 us)
+# instead. These ceilings do not tell the [RING, RING] carve from a [LINE, RING] one: that comparison is the
+# all-gather floors' job.
 _RING_RING_4X4_PERF_CEILING_US = {
     "random": {"plan": 317, "table gather": 76, "push all rows": 358, "push prefix": 357, "push rest": 107},
     "14": {"plan": 220, "table gather": 78, "push all rows": 455, "push prefix": 442, "push rest": 141},
@@ -519,6 +523,7 @@ _STAGE_PUSH_SOURCES = pytest.mark.parametrize("source", ["random", "14", "62"], 
 def test_sparse_kv_push_ring_ring_4x4_perf(mesh_device, monkeypatch, source):
     """Device time of the plan, its table all-gather and the push (all rows, prefix, rest) at a 4x4 stage's 1M cache with
     SP on axis 1, on the 16-chip [RING, RING] carve, each step gated by its ceiling."""
+    require_high_power("[RING, RING] 4x4 sparse KV push perf")
     _stage_push_perf(mesh_device, monkeypatch, 1, source, _RING_RING_4X4_PERF_CEILING_US[source])
 
 
