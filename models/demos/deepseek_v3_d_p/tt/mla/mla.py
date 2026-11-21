@@ -831,6 +831,14 @@ class ttMLA:
                     f"dense mode below {self._push_dense_below} gathers up to {largest_extent} rows, more than the "
                     f"{buffer_rows}-row push buffer"
                 )
+            # EXPERIMENT: a full layer's own cutoff (SPARSE_MLA_FULL_PUSH_DENSE_BELOW, default ~300k tokens, whole
+            # slabs). Below it the full layer gathers its prefix beside top-k as before; at or above it, it pushes.
+            # Its push has no prefetch, so its crossover sits far above the shared layers'.
+            full_rows = dense.shape[2] if self._push_buffer_parity[layer_idx] is None else self._push_rows
+            env_full_below = os.environ.get("SPARSE_MLA_FULL_PUSH_DENSE_BELOW")
+            full_below = int(env_full_below) if env_full_below is not None else 300_000
+            full_slabs = min(divup(full_below, slab), max(0, full_rows // slab - 1))
+            self._full_push_dense_below = full_slabs * slab
         # GLM-5.3 indexer reuse: a "shared" layer is sparse but owns no indexer weights — it reuses the
         # most recent "full" layer's top-k indices, injected at forward, and binds a weight-less
         # ReuseIndexer (never computes). Absent indexer_types (v3.1 / v3.2) every layer is
@@ -2137,9 +2145,16 @@ class ttMLA:
             and self._push is not None
             and os.environ.get("SPARSE_MLA_FULL_PUSH", _FULL_PUSH_DEFAULT) == "1"
         )
+        # A full layer on the metadata path keeps top-k beside a gather that is active only below its cutoff.
+        full_push_overlapped = (
+            full_push
+            and self._sparse_mla_overlap is not None
+            and metadata is not None
+            and self._full_push_dense_below > 0
+        )
         if indexer_indices is not None:
             indices = indexer_indices
-        elif self._sparse_mla_overlap is not None and not full_push:
+        elif self._sparse_mla_overlap is not None and (not full_push or full_push_overlapped):
             selection_state = self._indexer.score(
                 hidden_states,
                 indexer_qr,
@@ -2200,7 +2215,9 @@ class ttMLA:
             metadata=metadata,
             injected=indexer_indices is not None or full_push,
         )
-        if selection_state is not None:
+        if selection_state is not None and full_push_overlapped:
+            attn_out, indices = self._sparse_full_push_overlapped(selection_state=selection_state, **attention_kwargs)
+        elif selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
                 selection_state=selection_state,
                 **attention_kwargs,
@@ -2655,6 +2672,113 @@ class ttMLA:
         ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_INDEX_REDISTRIBUTION`")
         indices = self._indexer.finalize_distribution(local_indices, selection_state)
         return indices, kvpe_dev
+
+    def _sparse_full_push_overlapped(
+        self,
+        *,
+        selection_state,
+        tt_q,
+        tt_kvpe,
+        kvpe_cache,
+        cache_layer_idx,
+        cache_user_id,
+        seq_len_local,
+        kv_actual_isl,
+        actual_end=None,
+        metadata=None,
+        **_,
+    ):
+        """EXPERIMENT: a full layer with the push behind a cutoff (metadata path only). Top-k runs beside a gather of
+        the prefix into the layer's compact buffer that is active only for chunks starting below the cutoff; then the
+        plan (dense below the same cutoff), the push (a no-op in dense mode) and sparse SDPA over that buffer. One trace
+        serves both modes: the device picks from the chunk start."""
+        cache_batch_idx, _ = self._prepare_sparse_kv_prefix(
+            tt_kvpe=tt_kvpe,
+            kvpe_cache=kvpe_cache,
+            cache_user_id=cache_user_id,
+            cache_layer_idx=cache_layer_idx,
+            kv_actual_isl=kv_actual_isl,
+            seq_len_local=seq_len_local,
+            actual_end=actual_end,
+            metadata=metadata,
+        )
+        storage = kvpe_cache.storage
+        output = self._sparse_push_buffer(self.layer_idx)
+        dense_below = self._full_push_dense_below
+        resources = self._sparse_mla_overlap
+        loaded = False
+        failed = False
+        try:
+            with self._sub_device_manager(resources.manager_id):
+                loaded = True
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
+                local_indices = self._indexer.select_local(
+                    selection_state,
+                    subdevice_id=resources.topk_subdevice_id,
+                    sub_core_grids=resources.topk_core_grid,
+                    dram_read_noc=ttnn.NOC.NOC_0,
+                )
+                ttnn.experimental.high_bw_all_gather(
+                    storage,
+                    dim=2,
+                    output_tensor=output,
+                    cluster_axis=None,
+                    num_links=self.ccl_num_links,
+                    **self._kvpe_gather_slot_kwargs(storage, cache_batch_idx, metadata),
+                    gathered_prefix_tensor=metadata[1],
+                    gathered_slab_global=seq_len_local * self.sp_factor,
+                    gathered_active_below=dense_below,
+                    subdevice_id=resources.gather_subdevice_id,
+                    sub_core_grids=resources.gather_core_grid,
+                    ready_semaphore=resources.ready_semaphore,
+                    data_valid_semaphore=resources.data_valid_semaphore,
+                )
+        except Exception:
+            failed = True
+            raise
+        finally:
+            if loaded:
+                ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_END`")
+            if failed:
+                self.tt_ccl.reset_sparse_mla_overlap_semaphores()
+        indices = self._indexer.finalize_distribution(local_indices, selection_state)
+        plan = self._push.plan(
+            indices,
+            stripe_chunk=self._push_stripe_chunk,
+            page_bytes=self._push_page_bytes,
+            max_rows=self._sparse_kv_gather_buffer.shape[2],
+            chunk_start=kv_actual_isl or 0,
+            chunk_start_tensor=metadata[1],
+            dense_below=dense_below,
+        )
+        compact = ttnn.experimental.sparse_kv_push(
+            storage,
+            output_tensor=output,
+            table=plan.table,
+            stripe_chunk=plan.stripe_chunk,
+            max_rows=plan.max_rows,
+            part=SparseKvPushPart.ALL,
+            num_links=self.ccl_num_links,
+            **self._sparse_push_slot_kwargs(storage, cache_batch_idx, metadata),
+            ready_semaphore=self._push.ready_semaphore,
+            done_semaphore=self._push.done_semaphore,
+        )
+        # The next (shared) layer's prefix push needs the shared layers' plan, the one that layer looks up.
+        prefetch = None
+        if self._push_prefetch_grids is not None:
+            prefetch = self._next_layer_prefetch(
+                self._sparse_push_plan(indices, kv_actual_isl, metadata), kvpe_cache, cache_batch_idx, metadata
+            )
+        output_attn = self._finish_sparse_chunked_attn(
+            tt_q=tt_q,
+            kvpe_dev=MlaKvCache(format=kvpe_cache.format, storage=compact, geometry=kvpe_cache.geometry),
+            indices=plan.compact_indices,
+            kvpe_cache=kvpe_cache,
+            seq_len_local=seq_len_local,
+            prefetch=prefetch,
+            compact=True,
+        )
+        return output_attn, indices
 
     def _sparse_chunked_attn_overlapped(
         self,
