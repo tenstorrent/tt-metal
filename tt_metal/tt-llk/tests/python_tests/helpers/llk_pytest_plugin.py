@@ -42,26 +42,20 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import NoReturn, Optional
 
-from helpers.target_config import is_ttsim
+from helpers.chip_architecture import cli_flag_given
+from helpers.target_config import is_ttsim, simulator_path
 from ttsim_error import parse_ttsim_error
 
-# ttsim runs in-process (no SimulationServer). Its init must complete before the
-# skip_for_* markers in this plugin call get_chip_architecture() (which reaches
-# check_context()) at module-load time.
-# TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
-# TT_UMD_SIMULATOR_PATH is kept as an alias for the existing RTL-simulator workflow.
-# Gate on --run-simulator so the env var being set doesn't force a ttsim init on silicon runs,
+# Gate on --run-simulator so a set simulator path doesn't force a ttsim init on silicon runs,
 # and skip --compile-producer (it only compiles ELFs and never talks to a device). xdist workers
 # inherit env vars but not the controller's argv, so trust the env var when PYTEST_XDIST_WORKER
-# is set.
-_SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
-    "TT_UMD_SIMULATOR_PATH"
-)
+# is set. simulator_path() reads TT_METAL_SIMULATOR, then TT_UMD_SIMULATOR_PATH.
+_SIMULATOR_PATH = simulator_path() or None
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
 # Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
 _HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
-    "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
+    cli_flag_given("--run-simulator") and not cli_flag_given("--compile-producer")
 )
 if _SHOULD_RUN_SIMULATOR and is_ttsim(_SIMULATOR_PATH):
     from ttexalens import tt_exalens_init as _tt_exalens_init
@@ -82,7 +76,16 @@ import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 import torch
-from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+from helpers.chip_architecture import (
+    CHIP_ARCH_SOURCE_CARD,
+    CHIP_ARCH_SOURCE_ENV,
+    CHIP_ARCH_SOURCE_SIMULATOR,
+    ChipArchitecture,
+    chip_architecture_source,
+    get_chip_architecture,
+    pcie_architecture,
+    simulator_architecture,
+)
 from helpers.device import LLKAssertException
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
@@ -429,6 +432,38 @@ _RECORD_TEST_ORDER: bool = False
 _UNIFIED_ORDER_FILE: str = "DEFAULT"
 
 
+def _verify_chip_architecture() -> None:
+    """Refuse a session whose architecture is not the one the hardware in front of it reports.
+
+    The architecture is resolved at import, from ``CHIP_ARCH`` or by probing, before pytest has
+    parsed ``--run-simulator`` (a flag that comes from the ini file's ``addopts`` is invisible
+    that early). Checking it here, against the target pytest settled on, is what keeps a stale
+    ``CHIP_ARCH`` or a missed flag from compiling for one architecture and running on another.
+    """
+    if TestConfig.TEST_TARGET.run_simulator:
+        present, where = simulator_architecture(), CHIP_ARCH_SOURCE_SIMULATOR
+    else:
+        present, where = pcie_architecture(), CHIP_ARCH_SOURCE_CARD
+    if present is None or present == TestConfig.CHIP_ARCH:
+        return
+
+    source = chip_architecture_source()
+    if source == CHIP_ARCH_SOURCE_ENV:
+        remedy = f"Unset CHIP_ARCH, or set it to {present.value}."
+    elif TestConfig.TEST_TARGET.run_simulator:
+        # --run-simulator reached pytest but not the import, so the card won there.
+        remedy = (
+            f"Set CHIP_ARCH={present.value}, or pass --run-simulator on the command line "
+            "or in PYTEST_ADDOPTS, where the architecture is resolved."
+        )
+    else:
+        remedy = f"Set CHIP_ARCH={present.value}."
+    raise pytest.UsageError(
+        f"{where} is {present.value}, but this session targets "
+        f"{TestConfig.CHIP_ARCH.value}, from {source}. {remedy}"
+    )
+
+
 def pytest_configure(config):
     _ensure_suite_pythonpath(config)
 
@@ -512,6 +547,17 @@ def pytest_configure(config):
     TestConfig.create_build_directories()
 
     TestConfig.TEST_TARGET.update_from_pytest_config(config)
+
+    # Nothing to check where nothing will run: a hardware-free session picks its architecture with
+    # CHIP_ARCH, a producer only compiles, and collection touches no device. Workers inherit the
+    # architecture the controller already checked.
+    if (
+        worker_id == "master"
+        and not _HARDWARE_FREE
+        and TestConfig.BUILD_MODE is not BuildMode.PRODUCE
+        and not config.option.collectonly
+    ):
+        _verify_chip_architecture()
 
     global _RECORD_TEST_ORDER, _UNIFIED_ORDER_FILE
 
