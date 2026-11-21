@@ -489,6 +489,7 @@ class ServingPrefillAdapterTests(unittest.TestCase):
             _table=lambda table, slots: self.table,
             _sampling=sample,
             _decode_bound=True,
+            prefix_snapshots=None,
             read_decode_output=lambda output: output,
             process_decode_output_host=lambda output, **kwargs: output,
         )
