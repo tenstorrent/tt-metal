@@ -61,17 +61,29 @@ remote_sh_stdin() {
 # the destination directory, so make it first on each host, and verify the probe actually landed and is runnable
 # there — otherwise a worker that never got the probe would fail the launch, not the staging.
 # --------------------------------------------------------------------------------------------------------------
+# The probe the build made is preferred: it is built for the hosts, as every other rank of this lane is. A probe
+# compiled here may not start there (the CI runner's glibc is newer than the hosts': "GLIBC_2.38 not found"), so
+# each host also checks that its copy loads, and compiles its own from the source when it does not.
 probe="$(mktemp -d)/teardown_mpi_probe"
 probe_src="${TT_METAL_HOME:-$(pwd)}/tests/tt_metal/distributed/multiprocess/teardown_sanity/sanity_mpi_probe.cpp"
-mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
+probe_built="${TT_METAL_HOME:-$(pwd)}/build/test/tt_metal/distributed/teardown_mpi_probe"
+if [ -x "$probe_built" ]; then
+  cp "$probe_built" "$probe"
+else
+  mpicxx -O1 -o "$probe" "$probe_src" || { echo "::error::the probe did not compile ($probe_src)"; exit 1; }
+fi
+probe_loads="ldd '$probe' 2>&1 | grep -q 'not found' && exit 1 || exit 0"
 for host in $(host_names); do
   remote_sh "$host" "mkdir -p '$(dirname "$probe")'" \
     || { echo "::error::could not create the probe directory on $host"; exit 1; }
   if [ "${TEARDOWN_REMOTE:-ssh}" != srun ]; then  # under srun the temp dir is on a shared filesystem (TMPDIR)
-    scp -q "${SSH_OPTS[@]}" "$probe" "$(rtarget "$host"):$probe" 2>/dev/null || true  # a no-op on the compile host; verified next
+    scp -q "${SSH_OPTS[@]}" "$probe" "$probe_src" "$(rtarget "$host"):$(dirname "$probe")/" 2>/dev/null || true  # a no-op on the compile host; verified next
   fi
-  remote_sh "$host" "test -x '$probe'" \
-    || { echo "::error::the probe is not staged/executable on $host ($probe)"; exit 1; }
+  if ! remote_sh "$host" "$probe_loads"; then
+    remote_sh "$host" "mpicxx -O1 -o '$probe' '$(dirname "$probe")/$(basename "$probe_src")'" >/dev/null 2>&1 || true
+  fi
+  remote_sh "$host" "test -x '$probe' && { $probe_loads; }" \
+    || { echo "::error::the probe is not staged or does not load on $host ($probe): ldd says"; remote_sh "$host" "ldd '$probe'" 2>&1 | grep 'not found'; exit 1; }
 done
 
 # The pgrep/pkill pattern that matches ONLY this run's ranks: the probe path is a unique mktemp path, so a
@@ -257,7 +269,8 @@ else
   for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
   kill -9 "$ttrun_pid" 2>/dev/null || true
   wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
-  caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null || echo 0)
+  caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null)  # grep -c prints 0 itself (and exits 1) on no match
+  caught=${caught:-0}
   sleep 2; sig_alive=$(ranks_still_alive)
   grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
   if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then

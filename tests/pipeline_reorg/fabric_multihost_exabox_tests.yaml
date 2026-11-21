@@ -491,7 +491,7 @@
 # remote host. Needs more than one host, so it cannot run in the single-host
 # lane; here on SC4.
 # ============================================================================
-- name: "Teardown sanity multihost (remote death / hang, P19 P20 P22)"
+- name: "Teardown across hosts: a remote rank dies, hangs or loses its daemon; Ctrl-C reaches every rank"
   cmd: |
     set -o pipefail
     # the hosts come from the hostfile SC4 provisions for this job (/etc/ttop/hostfile, as every other entry in this
