@@ -100,3 +100,48 @@ def test_moreh_group_norm_backward_unaligned(N, C, num_groups, H, W, device):
 def test_moreh_group_norm_backward_large_algorithm(device):
     torch.manual_seed(0)
     run_test_moreh_group_norm_backward(2, [4, 1], [512, 512], 1e-5, True, True, False, False, device)
+
+
+def test_moreh_group_norm_backward_beta_grad_large_spatial(device):
+    # 1024 tiles per channel: a bf16 running sum stops growing well before that.
+    torch.manual_seed(0)
+    N, C, num_groups, H, W = 1, 2, 1, 1024, 1024
+    cpu_input = torch.randn(N, C, H, W).bfloat16()
+    cpu_output_grad = torch.rand(N, C, H, W).bfloat16()
+    x_view = cpu_input.double().view(N, num_groups, -1)
+    mean = x_view.mean(dim=-1)
+    rstd = (x_view.var(dim=-1, unbiased=False) + 1e-5).rsqrt()
+    _, _, tt_beta_grad = ttnn.moreh_group_norm_backward(
+        create_ttnn_tilized_tensor(cpu_output_grad, device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(cpu_input, device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(mean.float().view(1, 1, N, num_groups), device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(rstd.float().view(1, 1, N, num_groups), device, ttnn.bfloat16),
+        num_groups,
+        are_required_outputs=(False, False, True),
+    )
+    expected = cpu_output_grad.double().sum(dim=(0, 2, 3))
+    actual = ttnn.to_torch(tt_beta_grad).double().flatten()[:C]
+    assert torch.allclose(actual, expected, rtol=0.02, atol=0), (actual, expected)
+
+
+def test_moreh_group_norm_backward_input_grad_large_group(device):
+    # 1024 tiles per group: a bf16 Sum[dy] shifts every input_grad element by the lost mean.
+    torch.manual_seed(0)
+    N, C, num_groups, H, W = 1, 4, 1, 512, 512
+    cpu_input = torch.randn(N, C, H, W).bfloat16()
+    cpu_output_grad = (torch.rand(N, C, H, W) + 0.5).bfloat16()
+    x = cpu_input.double().requires_grad_(True)
+    torch.nn.functional.group_norm(x, num_groups, eps=1e-5).backward(cpu_output_grad.double())
+    x_view = cpu_input.double().view(N, num_groups, -1)
+    mean = x_view.mean(dim=-1)
+    rstd = (x_view.var(dim=-1, unbiased=False) + 1e-5).rsqrt()
+    tt_input_grad, _, _ = ttnn.moreh_group_norm_backward(
+        create_ttnn_tilized_tensor(cpu_output_grad, device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(cpu_input, device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(mean.float().view(1, 1, N, num_groups), device, ttnn.bfloat16),
+        create_ttnn_tilized_tensor(rstd.float().view(1, 1, N, num_groups), device, ttnn.bfloat16),
+        num_groups,
+        are_required_outputs=(True, False, False),
+    )
+    error = (ttnn.to_torch(tt_input_grad).double() - x.grad).abs().max()
+    assert error < 0.05, error

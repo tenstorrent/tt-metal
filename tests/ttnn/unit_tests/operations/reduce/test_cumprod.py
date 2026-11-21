@@ -433,7 +433,9 @@ def test_cumprod_tile_axis_fallback_permutes(torch_dtype, reverse_order, device)
 
 
 def test_cumprod_host_input_raises(expect_error):
-    """A host tensor reaches the tile-axis check before any device check: it must raise, not crash."""
+    """A host tensor reaches the tile-axis check before any device check: it must raise, not crash.
+
+    A host tensor never takes the tile-axis path, so the raise comes from permute's device check on the fallback."""
     input_tensor = ttnn.from_torch(torch.ones(64, 64), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE)
-    with expect_error(RuntimeError, "is_device_tensor"):
+    with expect_error(RuntimeError, "Tensor must already be on device"):
         ttnn.cumprod(input_tensor, dim=-1)

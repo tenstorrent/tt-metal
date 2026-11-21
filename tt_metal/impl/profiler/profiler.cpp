@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include <optional>
 #include "context/metal_env_accessor.hpp"
-#include "core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <device.hpp>
 #include <distributed.hpp>
@@ -21,7 +21,7 @@
 #include <stack>
 #include <tracy/TracyTTDevice.hpp>
 #include <tt_metal.hpp>
-#include "tt_metal_profiler.hpp"
+#include "impl/profiler/tt_metal_profiler.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <cstdlib>
@@ -37,7 +37,7 @@
 #include "dispatch/data_collection.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "profiler_analysis.hpp"
-#include "hal_types.hpp"
+#include <tt-metalium/hal_types.hpp>
 #include "hostdev/profiler_common.h"
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -48,7 +48,7 @@
 #include "profiler_state_manager.hpp"
 #include "tools/profiler/noc_event_profiler_utils.hpp"
 #include "tracy/Tracy.hpp"
-#include "profiler_types.hpp"
+#include "impl/profiler/profiler_types.hpp"
 #include "common/tt_backend_api_types.hpp"
 #include "common/filesystem_utils.hpp"
 #include "context/metal_context.hpp"
