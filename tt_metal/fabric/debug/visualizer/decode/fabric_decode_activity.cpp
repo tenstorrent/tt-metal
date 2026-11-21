@@ -103,8 +103,7 @@ std::vector<TelemetryHeartbeat> read_telemetry_heartbeats(
     const std::optional<std::string>& path,
     const manifest::Router& router,
     const manifest::Arch& arch) {
-    const RegionReads<FabricTelemetry>* reads =
-        path.has_value() ? values.find_reads<FabricTelemetry>(*path) : nullptr;
+    const RegionReads<FabricTelemetry>* reads = path.has_value() ? values.find_reads<FabricTelemetry>(*path) : nullptr;
     // A read of another layout can't be read by this build's members.
     const auto is_this_layout = [&](const RegionRead<FabricTelemetry>& read) {
         return read.elements.front().static_info.version == arch.fabric_telemetry_version;

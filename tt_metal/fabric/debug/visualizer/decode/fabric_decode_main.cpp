@@ -112,10 +112,9 @@ int run_decode(const cxxopts::ParseResult& options) {
     // Beside the capture record, under the rank's decoded file name, unless --output says otherwise.
     const tt::tt_fabric::manifest::RunInfo& run = inputs.manifest.facts.run;
     const std::filesystem::path output_path =
-        options.contains("output")
-            ? std::filesystem::path(options["output"].as<std::string>())
-            : request.capture_record_path.parent_path() /
-                  visualizer::make_decoded_file_name(run.mpi_rank, run.world_size);
+        options.contains("output") ? std::filesystem::path(options["output"].as<std::string>())
+                                   : request.capture_record_path.parent_path() /
+                                         visualizer::make_decoded_file_name(run.mpi_rank, run.world_size);
     std::cerr << "fabric_decode: decoding " << request.capture_record_path.string() << " against "
               << inputs.manifest.path.string() << "\n";
 

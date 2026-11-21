@@ -89,8 +89,7 @@ class RouterSnapshot {
 public:
     // Works out the router's read status from its full read, and finds its bytes in the .bin, its rounds' and its full
     // read's. `l1` is the manifest's Ethernet core L1, which the full read's L1 read covers. Copies no bytes.
-    RouterSnapshot(
-        const CapturedRouter& router, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1);
+    RouterSnapshot(const CapturedRouter& router, const capture::LoadedCapture& capture, const manifest::EthCoreL1& l1);
 
     // The router, its manifest entry, and its record entry, which has its rounds and where its core was found.
     const CapturedRouter& get_router() const { return router_; }

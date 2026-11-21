@@ -73,7 +73,7 @@ using InactiveRegion = std::variant<InactiveL1, InactiveRegister>;
 namespace detail {
 
 // std::variant<Wrap<T>...> over the types in a TypeList.
-// ie. if TypeList is (T1, T2, T3), and Wrap = vector, then the type is 
+// ie. if TypeList is (T1, T2, T3), and Wrap = vector, then the type is
 // std::variant<vector<T1>, vector<T2>, vector<T3>>.
 template <template <typename> class Wrap, typename List>
 struct variant_of_each;
