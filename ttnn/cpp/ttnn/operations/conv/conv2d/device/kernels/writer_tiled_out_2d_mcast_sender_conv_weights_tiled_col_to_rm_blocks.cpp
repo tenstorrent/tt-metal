@@ -169,7 +169,7 @@ void kernel_main() {
                         } else {
                             l1_write_addr_act = dfb_act_second_obj.get_write_ptr();
                         }
-                        experimental::set_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
+                        set_activation_read_state<coalesced_read_bytes>(noc, act_l1_read_addr);
                         read_activation_data<
                             sliced_inner_dim,
                             dilation_w,
