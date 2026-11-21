@@ -66,7 +66,8 @@ public:
     // Non-Quasar .so simulators and builds with ip_layout.yaml return an empty target set,
     // leaving chip discovery and TT_VISIBLE_DEVICES filtering to UMD.
     // Other builds, including Quasar .so simulators without a layout, target chip 0.
-    static std::unordered_set<ChipId> simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch);
+    static std::unordered_set<ChipId> simulator_target_devices(
+        const std::filesystem::path& simulator_dir, tt::ARCH arch);
     Cluster& operator=(const Cluster&) = delete;
     Cluster& operator=(Cluster&& other) noexcept = delete;
     Cluster(const Cluster&) = delete;
@@ -372,7 +373,7 @@ public:
     }
 
     /// Returns true if the devices run metal's fast-dispatch kernels and command queues: silicon, the simulator,
-    /// and emulated chips in fast dispatch.
+    /// and emulated chips opened in fast dispatch. Decided once, when the cluster is created.
     bool runs_dispatch_firmware() const;
 
     void register_sim_fabric_endpoint_direction(
@@ -456,6 +457,7 @@ private:
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
+    bool runs_dispatch_firmware_ = false;
 
     // There is a single device driver for all connected chips. It might contain multiple MMIO devices/cards.
     std::unique_ptr<tt::umd::Cluster> driver_;

@@ -255,6 +255,11 @@ Cluster::Cluster(llrt::RunTimeOptions& rtoptions) : rtoptions_(rtoptions) {
     log_info(tt::LogDevice, "Opening user mode device driver");
 
     this->detect_arch_and_target();
+    // Fixed for the cluster's lifetime, as on silicon: an emulated chip runs metal's dispatch firmware when the
+    // cluster opens in fast dispatch. A later change of the dispatch mode does not move it while FD queues exist.
+    this->runs_dispatch_firmware_ =
+        this->target_type_ != tt::TargetDevice::Mock &&
+        (this->target_type_ != tt::TargetDevice::Emule || this->rtoptions_.get_fast_dispatch());
 
     this->initialize_device_drivers();
 
@@ -293,12 +298,7 @@ bool Cluster::is_galaxy_cluster() const { return false; }
 
 bool Cluster::is_ubb_galaxy() const { return Cluster::is_ubb_galaxy(this->cluster_type_); }
 
-bool Cluster::runs_dispatch_firmware() const {
-    if (this->target_type_ == tt::TargetDevice::Mock) {
-        return false;
-    }
-    return this->target_type_ != tt::TargetDevice::Emule || this->rtoptions_.get_fast_dispatch();
-}
+bool Cluster::runs_dispatch_firmware() const { return this->runs_dispatch_firmware_; }
 
 tt::tt_metal::ClusterType Cluster::get_cluster_type() const { return this->cluster_type_; }
 
