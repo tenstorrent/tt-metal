@@ -37,7 +37,7 @@ from ttml.distributed_checkpointing._errors import (
     MissingKeyError,
 )
 from ttml.distributed_checkpointing._index import ChunkRecord, Entry, FileRecord, data_file_name
-from ttml.distributed_checkpointing._layouts import Identity
+from ttml.distributed_checkpointing._layouts import Identity, Pad
 from ttml.distributed_checkpointing._planner import TensorInfo, create_save_plan
 from ttml.distributed_checkpointing._state_dict import check_param_groups, is_structural_scalar, restore_scalars
 from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords
@@ -159,16 +159,57 @@ def test_each_rank_plans_only_its_owned_chunks_and_files():
     assert "model/b" not in entries(plans[other]) and "model/b" in entries(plans[bias_writer])
 
 
-def test_ranks_must_cover_and_agree_on_the_label(expect_error):
-    """The ranks must hold every coordinate of a label between them, and describe it the same way."""
+def test_ranks_must_cover_the_label(expect_error):
+    """The ranks must hold every coordinate of a label between them."""
     infos = [_info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))]
     with expect_error(CheckpointError, "no rank holds"):
         merge_plan_parts([PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2)]), infos)])
-    different = [_info("model/w", [R, S(2)], (1, 4), (1, 1, 32, 16))]
-    with expect_error(CheckpointError, "describes it differently"):
+
+
+# One change per field _same_description compares; each is made alone, the other fields left as rank 0 has them.
+DESCRIPTION_CHANGES = {
+    "role": {"role": "buffer"},
+    "dtype": {"dtype": "F32"},
+    "label": {"label": _label([R, S(2)], (1, 4))},
+    "local_shape": {"local_shape": (1, 1, 32, 32)},
+    "transform": {"transform": Pad(2, logical=30, padded=32)},
+    "param_ref": {"param_ref": "model/v"},
+    "state_path": {"state_path": ("exp_avg",)},
+    "tp_split": {"tp_split": (1, 1, 1, 1)},
+}
+
+
+@pytest.mark.parametrize("field", sorted(DESCRIPTION_CHANGES))
+def test_ranks_must_describe_a_shared_key_alike(field, expect_error):
+    """Ranks holding one key must describe it alike: a difference in any one field of the description is refused."""
+    mine = _info("model/w", [R, S(3)], (1, 4), (1, 1, 32, 16))
+    theirs = dataclasses.replace(mine, **DESCRIPTION_CHANGES[field])
+    with expect_error(CheckpointError, r"^model/w: rank 1 describes it differently from rank 0 "):
         merge_plan_parts(
-            [PlanPart(_record(0, [(0, 0), (0, 1)]), infos), PlanPart(_record(1, [(0, 2), (0, 3)]), different)]
+            [PlanPart(_record(0, [(0, 0), (0, 1)]), [mine]), PlanPart(_record(1, [(0, 2), (0, 3)]), [theirs])]
         )
+
+
+def test_many_replicated_keys_spread_over_every_device_and_are_written_where_elected():
+    """Many equal replicated keys: every (rank, device) pair writes the same number of them, and each rank's plan
+    writes exactly the boxes it was elected for, each from the elected device's chunk."""
+    coords = {0: [(0, 0), (0, 1)], 1: [(0, 2), (0, 3)]}
+    infos = [_info(f"model/r{i:02d}", [R, R], (1, 4), (1, 1, 32, 64)) for i in range(64)]
+    parts = [PlanPart(_record(r, coords[r]), infos) for r in (0, 1)]
+    election = merge_plan_parts(parts)
+    writers = {}
+    for groups in election.owners.values():
+        for owner in groups.values():
+            writers[owner] = writers.get(owner, 0) + 1
+    assert writers == {(r, c): 16 for r in coords for c in coords[r]}, writers
+    for part in parts:
+        rank = part.record.rank
+        plan = create_save_plan(
+            part.infos, file_for_coord=lambda c, r=rank: data_file_name(r, 0, c), owner_of=election.owner_of(rank)
+        )
+        planned = {(key, it.chunk.mesh_coord) for key, its in plan.items.items() for it in its}
+        elected = {(key, c) for key, groups in election.owners.items() for r, c in groups.values() if r == rank}
+        assert planned == elected, rank
 
 
 def test_a_plan_part_stores_each_label_once():
