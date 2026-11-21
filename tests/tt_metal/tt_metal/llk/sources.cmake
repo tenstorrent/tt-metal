@@ -14,6 +14,7 @@ set(UNIT_TESTS_LLK_SRC
     test_dropout_sfpu_compute.cpp
     test_fp8_typecast.cpp
     test_generic_moe_gate_compute.cpp
+    test_gguf_decode_mm.cpp
     test_golden_impls.cpp
     test_hadamard_compute.cpp
     test_mul_reduce_scalar.cpp
@@ -36,6 +37,7 @@ set(UNIT_TESTS_LLK_SRC
     test_sfpu_reduce.cpp
     test_single_core_binary_compute.cpp
     test_single_core_matmul_compute.cpp
+    test_srca_forced_exp.cpp
     test_stochastic_rounding.cpp
     test_sum_reduce_scalar.cpp
     test_single_core_matmul_int8.cpp
