@@ -68,13 +68,13 @@ class TtTrOCRDecoderLayer(nn.Module):
             )
 
             self.encoder_attn_layer_norm_weight = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.self_attn_layer_norm.weight"],
+                state_dict[f"{base_address}.encoder_attn_layer_norm.weight"],
                 self.device,
                 put_on_device=True,
             )
 
             self.encoder_attn_layer_norm_bias = torch_to_tt_tensor_rm(
-                state_dict[f"{base_address}.self_attn_layer_norm.bias"],
+                state_dict[f"{base_address}.encoder_attn_layer_norm.bias"],
                 self.device,
                 put_on_device=True,
             )
