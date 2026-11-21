@@ -11,6 +11,7 @@
 #include "ckernel_sfpu_conversions.h"
 #include "sfpu/ckernel_sfpu_converter.h"
 #include "ckernel_sfpu_polyval.h"
+#include "ckernel_sfpu_pow_df.h"
 
 using namespace sfpi;
 
@@ -42,8 +43,6 @@ namespace sfpu {
  * - vConstFloatPrgm0 = 1.4426950408889634f;
  * - vConstFloatPrgm1 = -127.0f;
  * - vConstFloatPrgm2 = std::numeric_limits<float>::quiet_NaN();
- * sfpu_unary_pow_init sets them. _sfpu_unary_power_fp32_ overwrites Prgm1 and Prgm2 on every
- * call, so sfpu_unary_pow_init must run again between an fp32 call and a call of this function.
  *
  * @see Moroz et al. 2022 - "Simple Multiple Precision Algorithms for Exponential Functions"
  *      ( https://doi.org/10.1109/MSP.2022.3157460 )
@@ -161,168 +160,16 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_21f_(sfpi::vFloat base, sfpi::vFloat 
     return y;
 }
 
-sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_(sfpi::vFloat z) {
-    // Handle underflow
-    z = sfpi::max(z, -0x7e.ffff8p0f);
-
-    sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
-
-    // Compute val = z * ln(2), then r = val - k*ln(2) in extended precision.
-    constexpr float LN2 = 0.693147180559945309f;
-    constexpr float LN2_HI = -0.6931152343750000f;
-    constexpr float LN2_LO = -3.19461832987e-05f;
-
-    sfpi::vFloat val = z * LN2;
-    sfpi::vFloat r_hi = k * LN2_HI + val;
-    sfpi::vFloat r = k * LN2_LO + r_hi;
-
-    sfpi::vFloat p = PolynomialEvaluator::eval(
-        r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
-
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
-
-    // Handle overflow
-    v_if(z >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
-    v_endif;
-
-    return result;
-}
-
-// Computes 2**(z_hi + z_lo) where the argument is supplied as an unevaluated sum
-// (double-float). This matters for pow(x,y): z = y*log2(x) can be O(100) with a
-// tiny but significant fractional tail. Rounding (z_hi + z_lo) into one fp32 before
-// the reduction discards that tail (the 20-27 ULP error). A Dekker FastTwoSum recovers
-// the exact rounding residual, which is folded back into the reduced remainder so
-// no fractional bits are lost across the k = round(z) argument reduction.
-sfpi_inline sfpi::vFloat _sfpu_pow2_f32_accurate_hilo_(sfpi::vFloat z_hi, sfpi::vFloat z_lo) {
-    // Full argument z = z_hi + z_lo. k must be the nearest integer to the TOTAL z, not
-    // just z_hi -- otherwise leftover integer bits in z_lo blow up the polynomial. We
-    // keep the tail explicitly via a Dekker FastTwoSum. FastTwoSum is exact under the
-    // precondition |z_hi| >= |z_lo| or z_hi == 0, which both pow callers satisfy:
-    // z_hi = pow*exponent(base) and z_lo carries the fractional log2 term (|z_lo| <
-    // ~0.5*|pow| plus a <=2**-12*|pow| Veltkamp remainder). When exponent(base) == 0
-    // then z_hi == 0 exactly (the sum is already exact); otherwise |exponent(base)| >= 1
-    // so |z_hi| >= |pow| > |z_lo|. s = round(z_hi+z_lo); e = the exact rounding error.
-    sfpi::vFloat s = z_hi + z_lo;
-    sfpi::vFloat e = z_lo - (s - z_hi);
-
-    s = sfpi::max(s, -0x7e.ffff8p0f);
-
-    sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(s, k_int);
-
-    // ln2 split so that f*LN2_HI is exact for the small reduced |f| <= 0.5.
-    constexpr float LN2_HI = 0.693359375f;
-    constexpr float LN2_LO = -2.12194440e-4f;
-
-    // Reduced fractional argument f = (s - k) + e. (s - k) is exact by Sterbenz since k
-    // is the nearest integer to s and |s| < 2**23; adding the two-sum residual e then
-    // restores the fractional tail that s dropped.
-    sfpi::vFloat f = (s - k) + e;
-
-    // r = f * ln2 in extended precision (2**f = e**(f*ln2)).
-    sfpi::vFloat r = f * LN2_HI + f * LN2_LO;
-
-    sfpi::vFloat p = PolynomialEvaluator::eval(
-        r, 1.0f, 1.0f, 0.5f, 1.0f / 6.0f, 1.0f / 24.0f, 1.0f / 120.0f, 1.0f / 720.0f, 1.0f / 5040.0f);
-
-    sfpi::vFloat result = sfpi::setexp(p, sfpi::exexp(p, sfpi::ExponentMode::Biased) + k_int);
-
-    v_if(s >= 128.0f) { result = std::numeric_limits<float>::infinity(); }
-    v_endif;
-
-    return result;
-}
-
-/**
- * @brief fp32 base**pow for one row: improved log2(base), then 2**(pow*log2(base)) carried as a
- * double-float through _sfpu_pow2_f32_accurate_hilo_.
- *
- * @param base The base value (sfpi::vFloat vector), can be any floating point number
- * @param pow The exponent, the same scalar in every lane
- * @tparam IS_POSITIVE_EXPONENT If true, assumes exponent >= 0 (zero base maps to 0 rather than NaN)
- *
- * @pre Unlike the bf16 body, this function does not read the init state of Prgm1/Prgm2. It needs:
- * - vConstFloatPrgm0 = 1.4426950408889634f (set by sfpu_unary_pow_init);
- * - vConstFloatPrgm1 = pow_hi and vConstFloatPrgm2 = pow_lo, the Veltkamp split of this same pow
- *   (pow_hi + pow_lo == pow exactly), which _sfpu_unary_power_fp32_ writes before its row loop.
- * With the init values -127 / NaN still in Prgm1/Prgm2 the result is wrong, so the only valid
- * caller is _sfpu_unary_power_fp32_.
- */
 template <bool IS_POSITIVE_EXPONENT>
 sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base, const sfpi::vFloat& pow) {
     sfpi::lreg_pressure _;  // Declare high register pressure
 
-    // The algorithm works in two steps:
-    // 1) Compute log2(base)
-    // 2) Compute base**pow = 2**(pow * log2(base))
-
-    // Step 1: Compute log2(base) using improved log
-    // Normalize base to calculation range
+    // Same double-float core as the binary path (ckernel_sfpu_pow_df.h).
+    sfpi::vFloat z_hi, z_lo;
+    _sfpu_pow_z_df_(sfpi::abs(base), pow, z_hi, z_lo);
+    sfpi::vFloat y = _sfpu_pow2_df_<false>(z_hi, z_lo);  // pow is finite, see _sfpu_unary_power_fp32_
+    // |base| is recomputed here rather than kept live across the core.
     sfpi::vFloat abs_base = sfpi::abs(base);
-    sfpi::vFloat m = sfpi::setexp(abs_base, 127);
-    sfpi::vInt exp = sfpi::exexp(abs_base);
-
-    // Range reduction: ensure m in [sqrt(2)/2, sqrt(2)] ≈ [0.707, 1.414]
-    constexpr float SQRT2 = 1.4142135381698608f;
-    v_if(m >= SQRT2) {
-        m = sfpi::addexp(m, -1);
-        exp = exp + 1;
-    }
-    v_endif;
-
-    // Transform to z = (m - 1) / (m + 1)
-    sfpi::vFloat m_plus_1 = m + 1.0f;  // t in [1.707, 2.414] since m in [sqrt(2)/2, sqrt(2)]
-    // 1/t: initial guess 1.003f - 0.244f*t (linear interp on [1.7,2.4]), then Newton-Raphson y = y*(2 - t*y).
-    sfpi::vFloat recip = 1.003f - 0.244f * m_plus_1;
-    recip = recip * (2.0f - m_plus_1 * recip);  // 1st NR
-    recip = recip * (2.0f - m_plus_1 * recip);  // 2nd NR
-    // 3rd NR: two NR iterations leave a ~2 ULP reciprocal residual that, after the
-    // atanh(z) log series and pow*log2 multiply, is the floor keeping 2.5 at 4 ULP.
-    // One more quadratically-convergent step drives 1/(m+1) to full fp32 precision.
-    recip = recip * (2.0f - m_plus_1 * recip);  // 3rd NR for float32
-    // z = (m-1)*recip. The subtract is kept separate rather than folded into a multiply-add:
-    // the range reduction above leaves m in [sqrt(2)/2, sqrt(2)], which is inside [0.5, 2], so
-    // Sterbenz's lemma makes m - 1 exact for every representable m and the only rounding left is
-    // the multiply. Written as m*recip - recip it is instead a subtraction of two nearly equal
-    // quantities whenever the base is near 1.0, where m*recip and recip agree to ~24 bits. SFPMAD
-    // is only partially fused -- the product keeps four bits beyond fp32, not the exact product a
-    // true FMA would give -- so those four bits are all that survives the cancellation. The error
-    // is then scaled by pow in pow*log2(base): 250 ULP at pow = 1000, 4.4% relative at 3e6.
-    sfpi::vFloat z = (m - 1.0f) * recip;
-
-    // Compute z**2 for polynomial evaluation
-    sfpi::vFloat z2 = z * z;
-    // Polynomial approximation using odd powers
-    sfpi::vFloat p = PolynomialEvaluator::eval(
-        z2, 1.0f, 0.3333333333333333f, 0.2f, 0.14285714285714285f, 0.1111111111111111f, 0.09090909090909091f);
-    sfpi::vFloat ln_m = 2.0f * (z * p);
-
-    sfpi::vFloat exp_f32 = sfpi::convert<sfpi::vFloat>(sfpi::convert<sfpi::vSMag>(exp), sfpi::RoundMode::Nearest);
-
-    // z = pow*log2(base) = pow*exp_f32 (large integer-ish part) + pow*(ln_m*ln2inv)
-    // (fractional part). Summing both into one fp32 before 2**z squeezes out the
-    // fractional mantissa bits for large |base| -- the source of the 20-27 ULP error.
-    // Carry z as an unevaluated double-float (z_hi, z_lo); the helper's Knuth two-sum
-    // preserves the fractional tail across the k=round(z) reduction.
-    const sfpi::vFloat vConst1Ln2 = sfpi::vConstFloatPrgm0;
-
-    // The residual after the two-sum is the fp32 rounding of the product pow*exp_f32
-    // itself. exp_f32 is the (large) integer exponent of base and pow can carry a full
-    // 24-bit mantissa (e.g. 1.7984), so pow*exp_f32 needs ~30 bits and drops its low
-    // bits before the two-sum can see them. Because exp_f32 is a small integer, a
-    // Veltkamp split of pow makes both partial products exact (a 12-bit half times a
-    // <=7-bit integer fits a 24-bit significand):
-    //   pow*exp_f32 = pow_hi*exp_f32 + pow_lo*exp_f32   (both exact)
-    // pow_lo*exp_f32 rides in z_lo, so no bit of the large integer term is lost.
-    // Splitting only pow (not the full Dekker two-product on log2(base)) keeps the
-    // simultaneously-live vector count within the SFPU register budget.
-    // pow is the same scalar on every row, so _sfpu_unary_power_fp32_ computes the split
-    // once per call and passes pow_hi / pow_lo in vConstFloatPrgm1 / vConstFloatPrgm2 (see @pre).
-    sfpi::vFloat z_hi = sfpi::vConstFloatPrgm1 * exp_f32;
-    sfpi::vFloat z_lo = sfpi::vConstFloatPrgm2 * exp_f32 + pow * (ln_m * vConst1Ln2);
-    sfpi::vFloat y = _sfpu_pow2_f32_accurate_hilo_(z_hi, z_lo);
 
     v_if(base < 0.0f) {  // negative base
         // Post-processing: ensure that special values (e.g. 0**0, -1**0.5, ...) are handled correctly
@@ -338,13 +185,13 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
 
         // Check for integer power, if it is not then overwrite result with NaN
         v_if(pow_rounded != pow) {  // negative base and non-integer power => set to NaN
-            y = std::numeric_limits<float>::quiet_NaN();
+            y = sfpi::vConstFloatPrgm2;
         }
         v_endif;
     }
     v_endif;
 
-    // setexp/exexp map 0 to log2 = -127, so 0**p evaluates as 2**(-127p).
+    // The pow_df reduction maps 0 to log2 = -127 (as setexp/exexp did), so 0**p evaluates as 2**(-127p).
     // Must follow the sign branch: SFPU `<` is sign-bit based, so v_if(base < 0)
     // fires on -0 and would replace the 0 result with NaN for non-integer p.
     // pow == 0 falls through the guard and keeps 1.
@@ -353,7 +200,7 @@ sfpi_inline sfpi::vFloat _sfpu_unary_power_61f_updated_(const sfpi::vFloat& base
         v_endif;
     } else {
         v_if(abs_base == 0.f) {
-            y = std::numeric_limits<float>::quiet_NaN();  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
+            y = sfpi::vConstFloatPrgm2;  // negative powers of 0 are NaN, e.g. pow(0, -1.5)
         }
         v_endif;
     }
@@ -384,38 +231,13 @@ inline void _sfpu_unary_power_bf16_(const uint32_t exponent) {
     }
 }
 
-/**
- * @brief fp32 (dest_acc) unary power over ITERATIONS rows of DEST.
- *
- * @param exponent The exponent as IEEE 754 float bits (reinterpreted as uint32_t)
- * @tparam ITERATIONS Number of DEST rows to process
- *
- * @pre sfpu_unary_pow_init has run since the last other SFPU op that writes vConstFloatPrgm0
- * (this function reads Prgm0 = 1/ln2). It does not need the init values of Prgm1/Prgm2.
- *
- * @post vConstFloatPrgm1 / vConstFloatPrgm2 hold this call's pow_hi / pow_lo, not the -127 / NaN
- * that sfpu_unary_pow_init writes there, and nothing restores them. Programmable constants
- * belong to the op whose init wrote them: every other op that reads Prgm1/Prgm2 sets them in its
- * own init, and sfpu_unary_pow_init already overwrites all three. The two readers that want the
- * pow init values, _sfpu_unary_power_bf16_ and the binary pow kernels, need sfpu_unary_pow_init or
- * their own init again after this call; compute kernels issue an op's init before its call
- * whenever a different SFPU op ran in between (the ttnn SFPU chain emits init + call per op per tile).
- */
 template <int ITERATIONS>
 inline void _sfpu_unary_power_fp32_(const uint32_t exponent) {
-    // Convert exponent to float
-    const float pow_scalar = Converter::as_float(exponent);
+    // Convert exponent to float. An infinite exponent goes in as +-FLT_MAX (its bits minus one): every base gives
+    // the same result with both, and the core then needs no per-row check for an infinite pow.
+    const bool pow_is_inf = (exponent & 0x7fffffffu) == 0x7f800000u;
+    const float pow_scalar = Converter::as_float(pow_is_inf ? exponent - 1 : exponent);
     const sfpi::vFloat pow = pow_scalar;
-
-    // Veltkamp split of the loop-invariant exponent, once per call instead of once per row.
-    // Holding pow_hi and pow_lo in LRegs across the loop exceeds the register budget, so
-    // they go to the programmable constants Prgm1/Prgm2 (see @post); the fp32 body reads
-    // neither the -127 nor the NaN that sfpu_unary_pow_init leaves there (those are for the bf16 body).
-    constexpr float VELTKAMP_SPLIT = 4097.0f;  // 2**12 + 1
-    sfpi::vFloat pc = pow * VELTKAMP_SPLIT;
-    sfpi::vFloat pow_hi = pc - (pc - pow);
-    sfpi::vConstFloatPrgm1 = pow_hi;
-    sfpi::vConstFloatPrgm2 = pow - pow_hi;
 
     if (pow_scalar >= 0.0f) {
 #pragma GCC unroll 8
@@ -535,12 +357,6 @@ inline void calculate_unary_power_iterative(const uint32_t exponent) {
     }
 }
 
-/**
- * @brief Loads the programmable constants for calculate_unary_power.
- *
- * Prgm0 = 1/ln2 is read by both bodies. Prgm1 = -127 and Prgm2 = NaN are read only by the bf16
- * body; the fp32 body (_sfpu_unary_power_fp32_) replaces them with its exponent split on every call.
- */
 inline void sfpu_unary_pow_init() {
     sfpi::vConstFloatPrgm0 = 1.4426950408889634f;
     sfpi::vConstFloatPrgm1 = -127.0f;
