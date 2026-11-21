@@ -403,6 +403,19 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
+}  // namespace sfpu
+}  // namespace ckernel
+
+#include "ckernel_sfpu_log2_bf16.h"
+
+namespace ckernel {
+namespace sfpu {
+
+// The log_base_scale_factor the generated log2 kernel is fitted for, as FP32 bits; any other log_base_scale_factor runs
+// the stock kernel.
+inline constexpr std::uint32_t log2_bf16_log_base_scale_factor_bits = 0x3fb8aa3bu;
+// Whether BF16 DEST runs the generated log2 kernel as one call over the whole tile.
+inline constexpr bool log2_bf16_whole_tile = true;
 /**
  * @tparam APPROXIMATION_MODE Ignored
  * @tparam FAST_APPROX Ignored (see calculate_log_body)
@@ -422,6 +435,12 @@ template <
     int ITERATIONS = 8,
     bool IS_BASE_TWO = false>
 inline void calculate_log(uint log_base_scale_factor) {
+    if constexpr (!is_fp32_dest_acc_en && IS_BASE_TWO == true && HAS_BASE_SCALING == true && ITERATIONS == 32) {
+        if (bf16_dest_log2() && log_base_scale_factor == ckernel::sfpu::log2_bf16_log_base_scale_factor_bits) {
+            calculate_log2_bf16<ITERATIONS>();
+            return;
+        }
+    }
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         sfpi::vFloat result = calculate_log_body<FAST_APPROX, HAS_BASE_SCALING, is_fp32_dest_acc_en, IS_BASE_TWO>(
