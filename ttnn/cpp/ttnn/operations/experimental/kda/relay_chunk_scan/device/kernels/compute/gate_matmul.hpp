@@ -6,6 +6,8 @@
 #include <cstdint>
 
 #include "api/compute/cb_api.h"
+#include "api/compute/compute_kernel_api.h"
+#include "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm_fused_activation.hpp"  // pack_sfpu_begin/end
 #include "api/compute/matmul.h"
 #include "api/compute/pack.h"
 #include "api/compute/reconfig_data_format.h"
@@ -45,7 +47,10 @@ ALWI void matmul_step(uint32_t in0, uint32_t in1, uint32_t in0_tile, uint32_t in
 // [rows x kb] of x in cb_in0 and [kb x ways columns] of W in cb_in1 (a pair's first head's columns, then its
 // second's), and each block's products accumulate in the FP32 DST (one head's columns at a time: DST holds 4 FP32
 // tiles), then onto the partial sums in the packer (L1 accumulation).
-template <ckernel::MathFidelity fidelity>
+// With `sigmoid` (one way only) the last K block forms g's final rows in DST and the pack thread applies the sigmoid
+// (FP32-accurate with `sigmoid_fp32`, else BF16-accurate) beside the next row's matmuls: the earlier blocks' partial sums
+// are unpacked to DST exactly first and the block accumulates onto them, so cb_own ends with sigmoid(g), not g.
+template <ckernel::MathFidelity fidelity, bool sigmoid = false, bool sigmoid_fp32 = true>
 ALWI void matmul(
     uint32_t cb_in0,
     uint32_t cb_in1,
@@ -69,16 +74,44 @@ ALWI void matmul(
         cb_reserve_back(cb_pair, rows * columns);
     }
     for (uint32_t b = 0; b < blocks; ++b) {
+        const bool final_rows = sigmoid && b + 1 == blocks;
+        if (final_rows && b != 0) {
+            pack_reconfig_l1_acc(0);
+        }
         cb_wait_front(cb_in0, rows * kb);
         cb_wait_front(cb_in1, kb * ways * columns);
         for (uint32_t m = 0; m < rows; ++m) {
             for (uint32_t head = 0; head < ways; ++head) {
                 tile_regs_acquire();
+                if (final_rows && b != 0) {
+                    // The row's partial sums (cb_own, reserved and accumulated in place) into DST, exactly.
+                    reconfig_data_format_srca(cb_in1, cb_own);
+                    copy_init(cb_own);
+                    for (uint32_t j = 0; j < columns; ++j) {
+                        copy_tile(cb_own, m * columns + j, j);
+                    }
+                    reconfig_data_format_srca(cb_own, cb_in1);
+                    UNPACK((llk_unpack_AB_matmul_init(cb_in0, cb_in1, 0, columns, 1, kb)));
+#ifdef ARCH_BLACKHOLE
+                    MATH((ckernel::throttled_mop_status = 2));  // matmul_step re-inits the math MOP
+#else
+                    MATH((llk_math_matmul_init<fidelity, MM_THROTTLE>(cb_in0, cb_in1, 0, columns, 1)));
+#endif
+                }
                 for (uint32_t k = 0; k < kb; ++k) {
                     matmul_step<fidelity>(cb_in0, cb_in1, m * kb + k, (ways * k + head) * columns, columns, kb);
                 }
                 tile_regs_commit();
-                tile_regs_wait();
+                if (final_rows) {
+                    pack_sfpu_begin();
+                    sigmoid_tile_init_pack();
+                    for (uint32_t j = 0; j < columns; ++j) {
+                        sigmoid_tile_pack<VectorMode::RC, false, sigmoid_fp32>(j);
+                    }
+                    pack_sfpu_end();
+                } else {
+                    tile_regs_wait();
+                }
                 const uint32_t cb_out = (head == 0) == own_first ? cb_own : cb_pair;
                 for (uint32_t j = 0; j < columns; ++j) {
                     pack_tile<true>(j, cb_out, m * columns + j);
