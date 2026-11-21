@@ -596,6 +596,7 @@ class WanPipeline(PipelineAPIMixin):
                 guidance_scale_2=2 if self._cfg_enabled else 1,
                 width=width,
                 height=height,
+                _warmup_call=True,
                 **self._warmup_kwargs(width, height),
             )
 
@@ -912,6 +913,7 @@ class WanPipeline(PipelineAPIMixin):
         cache_config: WanDBCacheConfig | DBCacheConfig | None = _UNSET,
         width: int | None = None,
         height: int | None = None,
+        _warmup_call: bool = False,
     ):
         """Generates a video from the prompt.
 
@@ -1023,7 +1025,7 @@ class WanPipeline(PipelineAPIMixin):
 
         with tqdm.tqdm(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
-                warmup_t2 = i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
+                warmup_t2 = _warmup_call and i == 1 and len(timesteps) == 2  # Ensure transformer_2 is also warmed up
 
                 # 0=> wan2.1 or high-noise stage in wan2.2 (transformer) | 1=> low-noise stage in wan2.2 (transformer_2)
                 transformer_idx = 0 if (t >= boundary_timestep) and not warmup_t2 else 1
