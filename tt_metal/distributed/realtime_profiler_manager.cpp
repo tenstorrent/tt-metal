@@ -21,10 +21,6 @@
 #include <utility>
 #include <vector>
 
-#if defined(__linux__)
-#include <sys/prctl.h>
-#endif
-
 #include <enchantum/enchantum.hpp>
 #include <fmt/core.h>
 #include <tt-logger/tt-logger.hpp>
@@ -1016,36 +1012,42 @@ uint32_t RealtimeProfilerManager::drain_device_pages(
     if (available == 0) {
         return 0;
     }
-    const uint32_t num_pages_to_read = std::min(available, kMaxSocketPagesPerRead);
-    dev_state.socket->read(page_buf.data(), num_pages_to_read);
+    // Drain this snapshot of the FIFO, a chunk at a time; pages arriving meanwhile wait for the next pass, so one busy
+    // device cannot hold the receiver.
+    uint32_t drained = 0;
+    while (drained < available) {
+        const uint32_t num_pages_to_read = std::min(available - drained, kMaxSocketPagesPerRead);
+        dev_state.socket->read(page_buf.data(), num_pages_to_read);
 
-    if (scan_sync_marker && dev_state.finish_sync_phase == DeviceState::FinishSyncPhase::AwaitingResponse) {
-        for (uint32_t page = 0; page < num_pages_to_read; ++page) {
-            const uint32_t* read_ptr = page_buf.data() + page * kPageWords;
-            if (read_ptr[3] != REALTIME_PROFILER_SYNC_MARKER_ID) {
-                continue;
+        if (scan_sync_marker && dev_state.finish_sync_phase == DeviceState::FinishSyncPhase::AwaitingResponse) {
+            for (uint32_t page = 0; page < num_pages_to_read; ++page) {
+                const uint32_t* read_ptr = page_buf.data() + page * kPageWords;
+                if (read_ptr[3] != REALTIME_PROFILER_SYNC_MARKER_ID) {
+                    continue;
+                }
+                const uint64_t device_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
+                tracy_handler_->CalibrateDevice(
+                    dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
+                tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
+                publish_device_profiler_sync_anchor(
+                    dev_state.chip_id,
+                    static_cast<double>(dev_state.sync_host_time_before),
+                    static_cast<double>(device_time),
+                    dev_state.sync_frequency,
+                    dev_state.realtime_profiler_core.str());
+                dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
+                dev_state.pending_first_unthrottled_finish_sync = false;
+                write_sync_request(dev_state, SyncRequest::Clear);
+                dev_state.finish_sync_phase = DeviceState::FinishSyncPhase::Idle;
+                finish_sync_busy_.store(has_active_finish_sync(), std::memory_order_release);
+                notify_finish_sync_waiters();
+                break;
             }
-            const uint64_t device_time = (static_cast<uint64_t>(read_ptr[0]) << 32) | read_ptr[1];
-            tracy_handler_->CalibrateDevice(
-                dev_state.chip_id, dev_state.sync_host_time_before, device_time, dev_state.sync_frequency);
-            tracy_handler_->PushSyncCheckMarker(dev_state.chip_id, device_time, dev_state.sync_frequency);
-            publish_device_profiler_sync_anchor(
-                dev_state.chip_id,
-                static_cast<double>(dev_state.sync_host_time_before),
-                static_cast<double>(device_time),
-                dev_state.sync_frequency,
-                dev_state.realtime_profiler_core.str());
-            dev_state.last_finish_sync_at = std::chrono::steady_clock::now();
-            dev_state.pending_first_unthrottled_finish_sync = false;
-            write_sync_request(dev_state, SyncRequest::Clear);
-            dev_state.finish_sync_phase = DeviceState::FinishSyncPhase::Idle;
-            finish_sync_busy_.store(has_active_finish_sync(), std::memory_order_release);
-            notify_finish_sync_waiters();
-            break;
         }
+        publish_pages(dev_state, page_buf.data(), num_pages_to_read, record_buf);
+        drained += num_pages_to_read;
     }
-    publish_pages(dev_state, page_buf.data(), num_pages_to_read, record_buf);
-    return num_pages_to_read;
+    return drained;
 }
 
 uint64_t RealtimeProfilerManager::run_receiver_loop() {
@@ -1053,19 +1055,22 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
     std::vector<uint32_t> page_buf(kMaxSocketPagesPerRead * kPageWords);
     std::vector<tt::ProgramRealtimeRecord> record_buf;
     record_buf.reserve(kMaxSocketPagesPerRead);
-    constexpr std::chrono::microseconds kReceiverMaxBackoff{100};
+    // Records buffer on the device and in the 32k-page host FIFO, and every consumer reads in batches, so the receiver
+    // drains each device once per pass and sleeps between passes instead of polling continuously (a busy thread here
+    // costs host dispatch time, more so when it shares a core with the dispatching thread). Passes run faster while a
+    // finish-path sync is in flight, which bounds how long finish() waits for it.
+    constexpr auto kReceiverPeriod = std::chrono::milliseconds(1);
+    constexpr auto kReceiverSyncPeriod = std::chrono::microseconds(100);
     constexpr auto kFifoPlotInterval = std::chrono::milliseconds(10);
-    std::chrono::microseconds backoff{1};
     uint64_t num_pages_received = 0;
     auto last_fifo_plot = std::chrono::steady_clock::now();
     while (!stop_.load(std::memory_order_acquire)) {
         if (receiver_paused_.load(std::memory_order_acquire)) {
-            std::this_thread::sleep_for(kReceiverMaxBackoff);
+            std::this_thread::sleep_for(kReceiverPeriod);
             continue;
         }
         const bool scan_sync_marker = finish_sync_busy_.load(std::memory_order_acquire);
-        const uint32_t num_pages = drain_all_devices(scan_sync_marker, page_buf, record_buf);
-        num_pages_received += num_pages;
+        num_pages_received += drain_all_devices(scan_sync_marker, page_buf, record_buf);
         const auto now = std::chrono::steady_clock::now();
         if (now - last_fifo_plot >= kFifoPlotInterval) {
             TTTracyPlotD(
@@ -1079,13 +1084,9 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
         if (scan_sync_marker || sync_requested) {
             service_finish_sync(now, sync_requested);
         }
-        if (num_pages > 0) {
-            backoff = std::chrono::microseconds{1};
-            continue;
-        }
-        std::this_thread::sleep_for(backoff);
-        backoff += std::max(backoff / 4, std::chrono::microseconds{1});
-        backoff = std::min(backoff, kReceiverMaxBackoff);
+        const bool syncing =
+            finish_sync_requested_.load(std::memory_order_acquire) || finish_sync_busy_.load(std::memory_order_acquire);
+        std::this_thread::sleep_for(syncing ? kReceiverSyncPeriod : kReceiverPeriod);
     }
     return num_pages_received;
 }
@@ -1093,6 +1094,7 @@ uint64_t RealtimeProfilerManager::run_receiver_loop() {
 uint32_t RealtimeProfilerManager::drain_all_devices(
     bool scan_sync_marker, std::vector<uint32_t>& page_buf, std::vector<tt::ProgramRealtimeRecord>& record_buf) {
     uint32_t num_pages = 0;
+    const uint64_t published_before = num_published_records_.load(std::memory_order_relaxed);
     for (auto& dev_state : devices_) {
         try {
             num_pages += drain_device_pages(dev_state, scan_sync_marker, page_buf, record_buf);
@@ -1101,7 +1103,8 @@ uint32_t RealtimeProfilerManager::drain_all_devices(
                 tt::LogMetal, "[Real-time profiler] Exception draining device {}: {}", dev_state.chip_id, e.what());
         }
     }
-    if (num_pages > 0) {
+    // A device that threw part-way may already have published chunks without counting them in num_pages.
+    if (num_pages > 0 || num_published_records_.load(std::memory_order_relaxed) != published_before) {
         ring_->writer().wake_readers();
     }
     return num_pages;
@@ -1132,9 +1135,6 @@ uint64_t RealtimeProfilerManager::drain_receiver_on_shutdown() {
 
 void RealtimeProfilerManager::run_receiver() {
     tracy::SetThreadName("RealtimeProfiler");
-#if defined(__linux__)
-    ::prctl(PR_SET_TIMERSLACK, 1UL, 0, 0, 0);
-#endif
     log_debug(tt::LogMetal, "[Real-time profiler] Receiver thread started for {} devices", devices_.size());
 
     const uint64_t num_pages_received = run_receiver_loop();
@@ -1188,7 +1188,8 @@ void RealtimeProfilerManager::run_consumer(Consumer& consumer) {
             break;
         } else {
             TTZoneScopedDN(RT_PROFILER, "Wait");
-            consumer.reader.wait(token);
+            // Normal receiver passes publish in bursts >= ~100 us apart: spinning would only burn a core.
+            consumer.reader.wait(token, /*spins=*/0);
         }
     }
     consumer.dropped = consumer.reader.dropped();
