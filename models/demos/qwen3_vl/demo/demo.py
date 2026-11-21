@@ -21,6 +21,7 @@ from models.demos.qwen3_vl.tt.common import (
     merge_vision_tokens_single_user_ttnn,
     multimodal_rope_single_user_from_hf,
     preprocess_inputs_prefill_single_user_ttnn,
+    reject_video_inputs,
     sample_host,
 )
 from models.demos.qwen3_vl.tt.generator import Generator
@@ -419,6 +420,7 @@ def test_demo(
         profiler.start(f"preprocess_prefill_inputs", iteration=batch_idx)
         text = processor.apply_chat_template(input_prompts, tokenize=False, add_generation_prompt=True)
         image_inputs, video_inputs = process_vision_info(input_prompts)
+        reject_video_inputs(video_inputs)
         inputs = processor(
             text=text,  # [INFO] Qwen3VLProcessor handles the case where text is a string or a list of strings
             images=image_inputs,

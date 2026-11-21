@@ -15,7 +15,7 @@ from transformers import AutoProcessor
 from transformers.models.qwen3_vl.modeling_qwen3_vl import Qwen3VLForConditionalGeneration
 
 import ttnn
-from models.demos.qwen3_vl.tt.common import get_hf_visual
+from models.demos.qwen3_vl.tt.common import get_hf_visual, reject_video_inputs
 from models.demos.qwen3_vl.tt.model import DropInVisionTransformer
 from models.demos.qwen3_vl.tt.model_config import VisionModelArgs
 
@@ -110,6 +110,7 @@ def test_qwen_vl_end_to_end(
     # Process inputs
     text = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
     image_inputs, video_inputs = process_vision_info(messages)
+    reject_video_inputs(video_inputs)
     inputs = processor(
         text=text,
         images=image_inputs,
