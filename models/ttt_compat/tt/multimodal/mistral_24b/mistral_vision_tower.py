@@ -117,50 +117,54 @@ class MistralVisionTower(LightweightModule):
         """
         patch_embeds = self.patch_conv(input_tensor)
         patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
-        height, width = image_sizes[0]
+        height, width = input_tensor.shape[-2], input_tensor.shape[-1]
         patch_embeds = ttnn.reshape(
             patch_embeds,
             [patch_embeds.shape[0], self.width, height // self.patch_size, width // self.patch_size],
         )
 
+        if image_sizes is None:
+            image_sizes = [(height, width)] * input_tensor.shape[0]
+        if len(image_sizes) == 0:
+            raise ValueError("image_sizes must be provided and non-empty")
+
         patch_embeds_list = [
             ttnn.slice(
                 patch_embeds,
-                [0, 0, 0, 0],
-                [1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
+                [i, 0, 0, 0],
+                [i + 1, self.width, size[0] // self.patch_size, size[1] // self.patch_size],
             )
-            for size in image_sizes
+            for i, size in enumerate(image_sizes)
         ]
 
-        reshaped_patches = []
-        for p in patch_embeds_list:
-            p = ttnn.reshape(p, (1, self.width, -1))
-            p = ttnn.transpose(p, 1, 2)
-            reshaped_patches.append(p)
-
-        patch_embeds = ttnn.concat(reshaped_patches, dim=0)
-
-        # ln_pre RMS Norm
         mode = "prefill"
-        patch_embeds = self.ln_pre(patch_embeds, mode=mode)
+        max_width = self.config.vision_image_size // self.config.vision_patch_size
+        per_image_outputs = []
 
-        # # positional embeddings
-        position_ids = position_ids_in_meshgrid_tt(
-            patch_embeds_list,
-            max_width=self.config.vision_image_size // self.config.vision_patch_size,
-            device=self.mesh_device,
-        )
+        # Process each image independently so non-causal SDPA stays isolated per image
+        # (matching Pixtral's block-diagonal image mask) and rotary embeddings stay bounded by self.num_patches.
+        for p_2d in patch_embeds_list:
+            p = ttnn.reshape(p_2d, (1, self.width, -1))
+            p = ttnn.transpose(p, 1, 2)
+            p = self.ln_pre(p, mode=mode)
 
-        torch_position_ids = ttnn.to_torch(
-            position_ids, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
-        )[: position_ids.shape[-1]]
+            position_ids = position_ids_in_meshgrid_tt(
+                [p_2d],
+                max_width=max_width,
+                device=self.mesh_device,
+            )
+            torch_position_ids = ttnn.to_torch(
+                position_ids, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+            )[: position_ids.shape[-1]]
+            ttnn.deallocate(position_ids)
 
-        position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
+            position_embeddings = self.patch_positional_embedding.get_rot_mats(torch_position_ids)
+            p = ttnn.unsqueeze(p, 0)
+            img_out = self.transformer(p, position_embeddings=position_embeddings)
+            ttnn.deallocate(position_embeddings[0])
+            ttnn.deallocate(position_embeddings[1])
+            per_image_outputs.append(img_out)
 
-        patch_embeds = ttnn.unsqueeze(patch_embeds, 0)
-        out = self.transformer(patch_embeds, position_embeddings=position_embeddings)
-        # deallocate position_embeddings
-        ttnn.deallocate(position_embeddings[0])
-        ttnn.deallocate(position_embeddings[1])
-
-        return out
+        if len(per_image_outputs) == 1:
+            return per_image_outputs[0]
+        return ttnn.concat(per_image_outputs, dim=2)
