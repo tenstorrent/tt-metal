@@ -217,11 +217,9 @@ on:
         type: string
         default: ""
         description: "Commit SHA to test (default: HEAD)"
-  push:
-    branches: ["main"]
   schedule:
-    # Scheduled (cron) runs fire the Blackhole suite (Wormhole + Sim excluded).
-    - cron: "0 */2 * * *"
+    # Scheduled (cron) runs fire all suites.
+    - cron: "0 */4 * * *"
 
 permissions:
   actions: read
@@ -234,14 +232,13 @@ permissions:
 
 run-name: >-
   Sanity tests${{ (github.event_name == 'schedule' && ' (scheduled)')
-  || (github.event_name == 'push' && ' (push)')
   || '' }}${{ inputs.with-retries && ' (with retries)' || '' }}${{
   format(' SKUs[{0}{1}{2}{3}{4}]',
-  (inputs.run-wormhole || github.event_name == 'push') && 'WH' || '',
-  (inputs.run-wormhole || github.event_name == 'push') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && 'WH' || '',
+  (inputs.run-wormhole || github.event_name == 'schedule') && (inputs.run-blackhole || github.event_name == 'schedule') && ',' || '',
   (inputs.run-blackhole || github.event_name == 'schedule') && 'BH' || '',
-  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'push' || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'push') && ',' || '',
-  (inputs.run-sim || github.event_name == 'push') && 'Sim' || '') }}
+  (inputs.run-wormhole || inputs.run-blackhole || github.event_name == 'schedule') && (inputs.run-sim || github.event_name == 'schedule') && ',' || '',
+  (inputs.run-sim || github.event_name == 'schedule') && 'Sim' || '') }}
 jobs:
   check-harbor:
     uses: ./.github/workflows/check-harbor.yaml
@@ -321,9 +318,9 @@ jobs:
       harbor-prefix: ${{ needs.check-harbor.outputs.harbor-prefix }}
       build-type: ${{ inputs.build-type || 'Release' }}
       # In-place wheel by default; nightly canary passes build-inplace-wheel:false for the real manylinux wheel.
-      # Direct push has no inputs, so treat it as in-place too.
-      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'push' || github.event_name == 'schedule'}}
-      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'push' && github.event_name != 'schedule' }}
+      # The cron trigger has no inputs, so treat it as in-place too.
+      build-inplace-wheel: ${{ inputs.build-inplace-wheel || github.event_name == 'schedule'}}
+      build-wheel: ${{ !inputs.build-inplace-wheel && github.event_name != 'schedule' }}
       tracy: true
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       skip-tt-train: false
@@ -409,17 +406,10 @@ jobs:
           run_sim='${{ inputs.run-sim }}'
 
           if [[ -z "$run_wormhole" && -z "$run_blackhole" && -z "$run_sim" ]]; then
-            if [[ "${{ github.event_name }}" == "schedule" ]]; then
-              # Scheduled (cron) runs of this workflow cover Blackhole.
-              run_wormhole=false
-              run_blackhole=true
-              run_sim=false
-            else
-              # Direct push to main covers Wormhole + sim.
-              run_wormhole=true
-              run_blackhole=false
-              run_sim=true
-            fi
+            # The cron is the only automatic trigger, so it covers every architecture.
+            run_wormhole=true
+            run_blackhole=true
+            run_sim=true
           fi
 
           if [[ "$run_wormhole" != "true" && "$run_blackhole" != "true" && "$run_sim" != "true" ]]; then
@@ -440,22 +430,12 @@ jobs:
           # a wider list than a given tests yaml needs is safe -- SKUs the yaml doesn't reference
           # simply produce no matrix rows for that impl.
           #
-          # Both lists include every wh_*/bh_* SKU in .github/sku_config.yaml except:
-          #   - Galaxy SKUs (wh_galaxy*, bh_galaxy*) -- a separate pipeline (galaxy-sanity.yaml).
-          #   - bh_sc* -- exabox multihost SKUs, used by shield/scaleout, not sanity.
-          #   - cpu_medium -- not a wh/bh hardware SKU.
-          #   - *_prio SKUs -- merge_group-only aliases; sku_config.yaml itself says not to
-          #     list these in a tests yaml's skus map.
+          # Only SKUs that at least one sanity tests yaml schedules from this pipeline are listed.
           if [[ "$run_wormhole" == "true" ]]; then
             wh_skus+=(
-              "wh_llmbox"
-              "wh_llmbox_perf"
-              "wh_n150"
-              "wh_n300"
               "wh_n150_civ2"
               "wh_n300_civ2"
               "wh_llmbox_civ2"
-              "wh_llmbox_civ2_viommu"
               "wh_n300_perf"
             )
             sanity_skus+=("${wh_skus[@]}")
@@ -464,11 +444,7 @@ jobs:
             bh_skus+=(
               "bh_p150b_civ2_viommu"
               "bh_p150b_civ2"
-              "bh_p150"
               "bh_p150_perf"
-              "bh_loudbox"
-              "bh_p300"
-              "bh_p300_viommu"
               "bh_quietbox_2"
             )
             sanity_skus+=("${bh_skus[@]}")

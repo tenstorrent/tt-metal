@@ -42,6 +42,27 @@ RecurrentChunkScanOperation::program_factory_t RecurrentChunkScanOperation::sele
     return RecurrentChunkScanProgramFactory{};
 }
 
+// A cache hit matches every attribute and tensor spec the miss validated: only the buffers can differ.
+void RecurrentChunkScanOperation::validate_on_program_cache_hit(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    const std::string_view operation_name =
+        attrs.mode == RecurrentChunkScanMode::RECURRENT ? "recurrent_chunk_scan" : "summarize_chunk_recurrence";
+    kda_factory_detail::check_allocated_on_device(
+        in.v_beta,
+        {{&in.v_beta, "v_beta"},
+         {&in.kd, "kd"},
+         {&in.q_decay, "q_decay"},
+         {&in.intra, "intra"},
+         {&in.k_dec_t, "k_dec_t"},
+         {&in.final_decay, "final_decay"},
+         {&in.t_inv, "t_inv"},
+         {in.group_entry_states ? &*in.group_entry_states : nullptr, "group_entry_states"},
+         {in.tail_entry_states ? &*in.tail_entry_states : nullptr, "tail_entry_states"},
+         {&in.actual_start, "actual_start"},
+         {in.actual_end ? &*in.actual_end : nullptr, "actual_end"}},
+        operation_name);
+}
+
 void RecurrentChunkScanOperation::validate_on_program_cache_miss(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
     using namespace kda_factory_detail;
@@ -72,7 +93,8 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         check_output_interleaved(attrs.output_mem_config, operation_name);
     }
     check_compute_config(attrs.compute_kernel_config, operation_name);
-    check_fp32_dest_acc(attrs.compute_kernel_config, operation_name);
+    check_fp32_dest_acc(
+        attrs.compute_kernel_config, operation_name, "the recurrent state is carried in FP32 through DST");
     TT_FATAL(attrs.batch_heads > 0, "{}: batch_heads must be positive", operation_name);
     TT_FATAL(attrs.num_chunks > 0, "{}: num_chunks must be positive", operation_name);
     TT_FATAL(attrs.groups_per_head > 0, "{}: groups_per_head must be positive", operation_name);
@@ -134,6 +156,19 @@ void RecurrentChunkScanOperation::validate_on_program_cache_miss(
         attrs.mode == RecurrentChunkScanMode::SUMMARY || (!attrs.tail && attrs.init),
         "{}: tail and init apply only to the summary",
         operation_name);
+    TT_FATAL(
+        !attrs.emit_outputs || (attrs.mode == RecurrentChunkScanMode::SUMMARY && attrs.groups_per_head == 1),
+        "{}: emit_outputs requires a summary with one group per head",
+        operation_name);
+    if (attrs.emit_outputs) {
+        const uint32_t block = emit_block_chunks(attrs);
+        TT_FATAL(
+            block > 0 && attrs.num_chunks % block == 0,
+            "{}: an emitted terms block of {} chunks must divide the {} chunks",
+            operation_name,
+            block,
+            attrs.num_chunks);
+    }
 }
 
 RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::compute_output_specs(
@@ -142,15 +177,31 @@ RecurrentChunkScanOperation::spec_return_value_t RecurrentChunkScanOperation::co
     const auto output_dtype = DataType::BFLOAT16;
     const auto output_layout = TensorLayout(output_dtype, PageConfig(Layout::TILE), attrs.output_mem_config);
     const auto state_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
-    // Summary structure is independent of actual_start: one [A | B] slot per segment kind.
+    // Summary structure is independent of actual_start: one [E | B] slot per segment kind.
     if (summary) {
         const uint32_t slots = attrs.tail ? 2 : 1;
-        return {TensorSpec(
+        spec_return_value_t specs = {TensorSpec(
             Shape({slots, attrs.batch_heads, attrs.key_dim, attrs.key_dim + attrs.value_dim}), output_layout)};
+        if (attrs.emit_outputs) {
+            const auto fp32_layout = TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), attrs.output_mem_config);
+            const auto emit_layout = TensorLayout(
+                DataType::FLOAT32, PageConfig(Layout::TILE), attrs.emit_mem_config.value_or(attrs.output_mem_config));
+            const uint32_t block = emit_block_chunks(attrs);
+            specs.push_back(TensorSpec(
+                Shape(
+                    {attrs.batch_heads * (attrs.num_chunks / block),
+                     2,
+                     block * tt::constants::TILE_HEIGHT,
+                     attrs.value_dim}),
+                emit_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+            specs.push_back(TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), fp32_layout));
+        }
+        return specs;
     }
     return {
         TensorSpec(
-            Shape({attrs.batch_heads, attrs.num_chunks, tt::constants::TILE_HEIGHT, attrs.value_dim}), output_layout),
+            Shape({attrs.batch_heads, attrs.num_chunks * tt::constants::TILE_HEIGHT, attrs.value_dim}), output_layout),
         TensorSpec(Shape({attrs.batch_heads, attrs.key_dim, attrs.value_dim}), state_layout)};
 }
 
@@ -184,7 +235,7 @@ RecurrentChunkScanOperation::create_op_performance_model(
         };
     } else {
         // As in the recurrence, the state update adds no FPU work beyond its matmul and multiply; publishing
-        // A = (A + B) - B is an SFPU subtraction, which this FPU model does not count.
+        // E = (A + B) - B - I takes SFPU subtractions, which this FPU model does not count.
         work = {
             .fpu_matrix_flops = instances * (8.0 * chunk * key_dim * value_dim + 4.0 * chunk * chunk * value_dim),
             .fpu_multiply_ops = instances * 2.0 * key_dim * value_dim,
@@ -221,7 +272,9 @@ std::vector<Tensor> recurrent_chunk_scan(
     uint32_t sequence_parallel_axis,
     const std::optional<Tensor>& actual_end,
     bool tail,
-    bool init) {
+    bool init,
+    bool emit_outputs,
+    const std::optional<MemoryConfig>& emit_mem_config) {
     const auto& value_shape = v_beta.logical_shape();
     const auto& key_shape = kd.logical_shape();
     const std::string_view operation_name =
@@ -237,6 +290,8 @@ std::vector<Tensor> recurrent_chunk_scan(
             .mode = mode,
             .tail = tail,
             .init = init,
+            .emit_outputs = emit_outputs,
+            .emit_mem_config = emit_mem_config,
             .sequence_parallel_axis = sequence_parallel_axis,
             .output_mem_config = output_mem_config,
             .compute_kernel_config = compute_kernel_config},

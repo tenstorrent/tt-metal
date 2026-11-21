@@ -29,6 +29,9 @@ enum DispatchWorkerType : uint32_t {
     DISPATCH_S = 8,
     FABRIC_MUX = 17,         // Downstream from MMIO to remote mux. Tunnel index is required.
     RETURN_FABRIC_MUX = 18,  // Upstream from remote to MMIO mux. Tunnel index will be determined from the device id.
+    // A Tensor prefetcher kernel that shares the dispatch engine with the CQ kernels (Quasar, 1 CQ). Which
+    // kernel a node runs is its place in the chain of these nodes (tensor_prefetcher_kernels()).
+    TENSOR_PREFETCHER = 19,
     COUNT,
 };
 

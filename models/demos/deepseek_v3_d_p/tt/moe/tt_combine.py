@@ -30,6 +30,8 @@ TtDispatchModule produces the dispatched_buffer and metadata consumed here.
 TtCombine2dModule, below, does the same job with the combine_fabric2d op.
 """
 
+from typing import Optional
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import check_axis_wired_into_ring, check_fabric2d_setup
@@ -181,11 +183,12 @@ class TtCombine2dModule(LightweightModule):
         experts_per_chip: int,
         num_experts_per_tok: int,
         seq_len_per_chip: int,
-        fwd_reduction: int,
+        fwd_vc_pages: int,
         emb_dim: int = 7 * 1024,
         cluster_axis: int = 0,
         num_links: int = 1,
         memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+        forwarding_buffer: Optional[ttnn.Tensor] = None,
     ):
         """
         Initialize the fabric2d combine module.
@@ -195,16 +198,20 @@ class TtCombine2dModule(LightweightModule):
             experts_per_chip: Number of experts hosted on each device.
             num_experts_per_tok: Number of experts each token is routed to (top-k).
             seq_len_per_chip: Number of tokens on each source device (output token dimension size).
-            fwd_reduction: Divisor on the op's forwarding region, from the model's
-                COMBINE_FWD_REDUCTION. No value can deadlock the ring, so this trades DRAM against
+            fwd_vc_pages: Pages one of the op's forwarding channels holds, from the model's
+                MOE_FWD_VC_PAGES. No depth can deadlock the ring, so this trades DRAM against
                 throughput and nothing else; where that curve bends is what differs per model, which
-                is why it is passed in rather than fixed in the op.
+                is why it is passed in rather than fixed in the op. A channel is a pipeline buffer,
+                so this is a page count and does not scale with the sequence length.
             emb_dim: Width of each token (the output's last dim). Used to check that half a token
                 fits in one fabric packet with its 64 B routing tail.
             cluster_axis: Mesh axis the ring runs along (0 = SP/dispatch axis).
             num_links: Number of fabric links per chip-to-chip connection. Each (link, direction)
                 pair is one stream, so the op runs 2 * num_links streams per chip.
             memory_config: Output memory configuration. Must be interleaved (L1 or DRAM).
+            forwarding_buffer: DRAM buffer the op relays tokens through, from
+                TT_CCL.get_combine_forwarding_buffer for these arguments. None leaves it to the op, which
+                allocates it at its first cache miss and keeps one per cached program.
 
         Note there is no dispatch_group_size: combine_fabric2d derives the ring from cluster_axis
         and the mesh shape, and no fp8_output, because the op has no fp8 stage on the way out.
@@ -217,10 +224,11 @@ class TtCombine2dModule(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.num_experts_per_tok = num_experts_per_tok
         self.seq_len_per_chip = seq_len_per_chip
-        self.fwd_reduction = fwd_reduction
+        self.fwd_vc_pages = fwd_vc_pages
         self.cluster_axis = cluster_axis
         self.num_links = num_links
         self.memory_config = memory_config
+        self.forwarding_buffer = forwarding_buffer
         # combine_fabric2d does not check that its ring is wired; the first forward does, on a device tensor.
         self._ring_checked = False
 
@@ -274,7 +282,8 @@ class TtCombine2dModule(LightweightModule):
             seq_len_per_chip=self.seq_len_per_chip,
             cluster_axis=self.cluster_axis,
             num_links=self.num_links,
-            fwd_reduction=self.fwd_reduction,
+            fwd_vc_pages=self.fwd_vc_pages,
             topology=ttnn.Topology.Ring,
             memory_config=self.memory_config,
+            forwarding_buffer=self.forwarding_buffer,
         )

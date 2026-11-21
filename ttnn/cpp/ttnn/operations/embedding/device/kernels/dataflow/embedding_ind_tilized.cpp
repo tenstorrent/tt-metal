@@ -7,7 +7,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
-#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common_metal2.hpp"
+#include "ttnn/operations/embedding/device/kernels/dataflow/embeddings_common.hpp"
 #include "experimental/kernel_args.h"
 #include "api/debug/dprint.h"
 
