@@ -23,14 +23,64 @@ trace opt-in per call, so we keep the shared decode path without the instability
 
 prefill (embeds) -> greedy decode loop (token ids) -> text.
 """
+import json
+import os
+
 import torch
 
 import ttnn
 from models.tt_transformers.tt.generator import Generator
 from models.tt_transformers.tt.model import Transformer
 
+# <|im_end|>, the end-of-turn token Qwen3-ASR normally stops on. Used when the checkpoint has
+# no readable generation_config.json.
+DEFAULT_EOS_IDS = (151645,)
+
+
+def load_eos_ids(*ckpt_dirs):
+    """Stop-token ids from the first generation_config.json found in `ckpt_dirs` (the
+    checkpoint lists both <|endoftext|> 151643 and <|im_end|> 151645). Falls back to
+    DEFAULT_EOS_IDS when no config is readable or it has no eos_token_id."""
+    for d in ckpt_dirs:
+        if not d:
+            continue
+        try:
+            with open(os.path.join(str(d), "generation_config.json")) as f:
+                eos = json.load(f).get("eos_token_id")
+        except (OSError, ValueError):
+            continue
+        if eos is None:
+            continue
+        ids = tuple(int(e) for e in (eos if isinstance(eos, (list, tuple)) else [eos]))
+        if ids:
+            return ids
+    return DEFAULT_EOS_IDS
+
+
+def decode_until_eos(first_token, step, max_new_tokens, eos_ids):
+    """Greedy loop shared by `generate`: `step(token, offset)` returns the next token id.
+    Stops after emitting any id in `eos_ids` or reaching `max_new_tokens`; the trailing stop
+    token is stripped from the result."""
+    eos_ids = frozenset(eos_ids)
+    nxt = first_token
+    out = [nxt]
+    while len(out) < max_new_tokens and nxt not in eos_ids:
+        nxt = step(nxt, len(out) - 1)
+        out.append(nxt)
+    if out and out[-1] in eos_ids:
+        out = out[:-1]
+    return out
+
 
 class Qwen3ASRDecoder(Transformer):
+    @property
+    def eos_ids(self):
+        """Stop ids from the checkpoint's generation_config.json (cached)."""
+        ids = getattr(self, "_eos_ids", None)
+        if ids is None:
+            ids = self._eos_ids = load_eos_ids(getattr(self.args, "CKPT_DIR", None), os.environ.get("HF_MODEL"))
+        return ids
+
     @property
     def generator(self):
         """Lazily wrap this model in a stock `Generator` (single replica) used to drive
@@ -103,30 +153,33 @@ class Qwen3ASRDecoder(Transformer):
         return full.float(), S
 
     @torch.no_grad()
-    def generate(self, inputs_embeds, max_new_tokens=64, eos_id=151645):
+    def generate(self, inputs_embeds, max_new_tokens=64, eos_id=None):
+        """Greedy decode. `eos_id` is an int or an iterable of stop ids; None uses the
+        checkpoint's generation_config.json eos_token_id list (151645 only if absent)."""
+        if eos_id is None:
+            eos_ids = self.eos_ids
+        elif isinstance(eos_id, int):
+            eos_ids = (eos_id,)
+        else:
+            eos_ids = tuple(eos_id)
         logits, S = self.prefill_logits(inputs_embeds)
-        nxt = int(logits.argmax())
-        out = [nxt]
-        pos = S
         gen = self.generator
+
         # Host-side argmax greedy decode via the shared Generator with enable_trace=False.
         # Host argmax is faster here than an on-device ttnn.argmax over the 151936-wide vocab
         # (the wide reduction costs more than the logits host transfer), and a non-traced decode
         # stays stable across the mixed request shapes of a long-lived server (a persistent
         # decode trace did not — see README "Known limitations").
-        while len(out) < max_new_tokens and nxt != eos_id:
+        def step(tok, offset):
             dl = gen.decode_forward(
-                torch.tensor([[nxt]], dtype=torch.long),
-                torch.tensor([pos]),
+                torch.tensor([[tok]], dtype=torch.long),
+                torch.tensor([S + offset]),
                 page_table=None,
                 kv_cache=None,
                 enable_trace=False,
                 read_from_device=True,
             )
             dl = (dl[0] if isinstance(dl, tuple) else dl).squeeze().float()
-            nxt = int(dl.argmax())
-            out.append(nxt)
-            pos += 1
-        if out and out[-1] == eos_id:
-            out = out[:-1]
-        return out
+            return int(dl.argmax())
+
+        return decode_until_eos(int(logits.argmax()), step, max_new_tokens, eos_ids)
