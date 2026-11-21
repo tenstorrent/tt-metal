@@ -13,5 +13,6 @@ if(TT_UMD_BUILD_GRENDEL_JTAG)
     set(UNIT_TESTS_GRENDEL_EMU_SOURCES
         grendel_emu_gate.cpp
         test_mimir_emu.cpp
+        test_mimir_backend.cpp
     )
 endif()
