@@ -11,7 +11,7 @@
 //
 // Run (after bringup_mmk.py has brought the loopback up in packet mode):
 //   export TT_METAL_EMU_SERVER=<host>:<port>
-//   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/tests/soc_descs/mmk.yaml
+//   export TT_METAL_EMU_SOC_DESC=$TT_METAL_HOME/tt_metal/third_party/umd/descriptors/soc_descs/mmk.yaml
 //   export TT_METAL_SLOW_DISPATCH_MODE=1 KERAUNOS_ETH_LOOPBACK=1
 //   ./build/test/tt_metal/unit_tests_context --gtest_filter='KeraunosEthSend/Ordering.Run/*'
 // Optional: KERAUNOS_E6_ITERATIONS (1000), KERAUNOS_E6_PAYLOAD_BYTES (4096), KERAUNOS_ETH_TXQ (0),
@@ -88,7 +88,7 @@ public:
     std::optional<KeraunosCore> core(uint32_t hsio) const {
         const auto& chiplet = soc_desc_of(device_).get_arch_descriptor().get_keraunos();
         for (const auto& c : chiplet.cores) {
-            if (c.hsio == hsio && c.cce == 0) {
+            if (c.hsio == hsio && c.eth_cce == 0) {
                 const CoreCoord logical =
                     soc_desc_of(device_).get_logical_ethernet_core_from_physical({c.coord.x, c.coord.y});
                 if (!device_->ethernet_cores().contains(logical)) {
