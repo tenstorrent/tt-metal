@@ -12,6 +12,14 @@ using namespace tt::constants;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+namespace {
+ttnn::Shape output_shape(
+    const EmbeddingBackwardDeviceOperation::operation_attributes_t& operation_attributes,
+    const EmbeddingBackwardDeviceOperation::tensor_args_t& tensor_args) {
+    return ttnn::Shape({1, 1, operation_attributes.num_embeddings, tensor_args.grad_tensor.logical_shape()[-1]});
+}
+}  // namespace
+
 void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& index_tensor = tensor_args.index_tensor;
@@ -72,16 +80,21 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         grad_tensor_shape[2] == index_tensor_shape[0] * index_tensor_shape[-1],
         "Number of rows in gradient tensor must be equal to number of indices in index tensor");
+
+    if (tensor_args.preallocated_output.has_value()) {
+        const auto expected_shape = output_shape(operation_attributes, tensor_args);
+        TT_FATAL(
+            tensor_args.preallocated_output->logical_shape() == expected_shape,
+            "Preallocated output shape {} must be {}",
+            tensor_args.preallocated_output->logical_shape(),
+            expected_shape);
+    }
 }
 
 EmbeddingBackwardDeviceOperation::spec_return_value_t EmbeddingBackwardDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    const auto& grad_tensor = tensor_args.grad_tensor;
-    auto embedding_dim = grad_tensor.logical_shape()[-1];
-
-    ttnn::Shape output_shape({1, 1, operation_attributes.num_embeddings, embedding_dim});
     return tt::tt_metal::TensorSpec(
-        output_shape,
+        output_shape(operation_attributes, tensor_args),
         TensorLayout(
             operation_attributes.output_dtype, PageConfig(Layout::TILE), operation_attributes.output_mem_config));
 }

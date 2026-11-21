@@ -39,11 +39,18 @@ void NlpCreateHeadsVitDeviceOperation::validate_on_program_cache_miss(
             opt_outputs.size() == 3,
             "Optional output tensors must have exactly 3 elements (Q, K, V), but got {}",
             opt_outputs.size());
+        const auto expected_specs = compute_output_specs(args, tensor_args);
         for (size_t i = 0; i < opt_outputs.size(); ++i) {
             TT_FATAL(
                 opt_outputs[i].has_value(),
                 "All 3 optional output tensors must have values, but tensor at index {} is nullopt",
                 i);
+            TT_FATAL(
+                opt_outputs[i]->logical_shape() == expected_specs[i].logical_shape(),
+                "Preallocated output {} shape {} must be {}",
+                i,
+                opt_outputs[i]->logical_shape(),
+                expected_specs[i].logical_shape());
         }
     }
 }
