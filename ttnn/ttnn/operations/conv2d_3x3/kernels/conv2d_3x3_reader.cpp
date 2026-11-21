@@ -1604,7 +1604,8 @@ void kernel_main() {
                     pc.a += brf_ch;
                     settle(pc);
                 }
-                // The staging overwrote any canonical zero rows the block FIFO kept (zero-once): forget them.
+                // The staging overwrote any canonical zero rows the block FIFO kept (zero-once): forget
+                // them.
                 for (uint32_t blk = 0; blk < sizeof(fifo.blk_zkw); ++blk) {
                     fifo.blk_zkw[blk] = 0;
                 }
