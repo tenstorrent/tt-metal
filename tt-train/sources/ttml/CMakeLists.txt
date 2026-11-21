@@ -259,6 +259,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/log_softmax/device/log_softmax_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/log_softmax/device/log_softmax_program_factory.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/log_softmax/device/row_softmax_program.cpp
+    # Collapse-resistant vocabulary-parallel cross-entropy
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vocab_parallel_cross_entropy/vocab_parallel_cross_entropy.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vocab_parallel_cross_entropy/device/vocab_parallel_cross_entropy_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/vocab_parallel_cross_entropy/device/vocab_parallel_cross_entropy_program_factory.cpp
 )
 
 list(APPEND SOURCES ${METAL_OPS_FILES})

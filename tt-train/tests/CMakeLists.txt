@@ -64,6 +64,7 @@ set(SOURCES
     ops/distributed/gumbel_sample_mesh_test.cpp
     ops/distributed/moe_ep_mesh_test.cpp
     ops/distributed/vocab_parallel_cross_entropy_loss_test.cpp
+    ops/distributed/vocab_parallel_ce_collapse_test.cpp
     ops/linear_op_test.cpp
     ops/profiler_no_op_test.cpp
     ops/program_cache_placement_test.cpp
@@ -215,6 +216,7 @@ if(TARGET benchmark::benchmark)
         benchmark/frobenius_normalize_benchmark.cpp
         benchmark/log_softmax_benchmark.cpp
         benchmark/cross_entropy_benchmark.cpp
+        benchmark/vocab_parallel_ce_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp

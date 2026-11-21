@@ -45,10 +45,13 @@ std::map<std::string, std::string> tile_defines(const tt::tt_metal::Tile& tile) 
 }
 
 bool is_backward(Kind kind) {
-    return kind == Kind::LogSoftmaxBackward || kind == Kind::CrossEntropyBackward;
+    return kind == Kind::LogSoftmaxBackward || kind == Kind::CrossEntropyBackward ||
+           kind == Kind::VocabParallelBackward;
 }
+// Kinds that read each row's target and target logit.
 bool is_cross_entropy(Kind kind) {
-    return kind == Kind::CrossEntropyForward || kind == Kind::CrossEntropyBackward;
+    return kind == Kind::CrossEntropyForward || kind == Kind::CrossEntropyBackward ||
+           kind == Kind::VocabParallelStats || kind == Kind::VocabParallelBackward;
 }
 }  // namespace
 
@@ -73,14 +76,15 @@ bool can_fuse_upstream(const ttnn::Tensor& input, const ttnn::Tensor& grad) {
 
 // Few rows: split each row's columns over several cores. Every core then holds exactly one (row, chunk)
 // unit, so the per-row exchange never waits on a core that is busy with another row.
-Layout layout_for(const ttnn::Tensor& input) {
+Layout layout_for(const ttnn::Tensor& input, Kind kind) {
     const auto& tile = input.tensor_spec().tile();
     const uint32_t width_tiles = input.padded_shape()[-1] / tile.get_width();
     const uint32_t rows = input.physical_volume() / (input.padded_shape()[-1] * tile.get_height());
     const auto grid = input.device()->compute_with_storage_grid_size();
     const uint32_t cores = grid.x * grid.y;
     uint32_t chunks = 1;
-    if (rows * 2 <= cores) {
+    // The combine's "row" is one tile per shard; nothing to split.
+    if (rows * 2 <= cores && kind != Kind::VocabParallelCombine) {
         // Partial statistics are exchanged as the lanes (columns) of one tile.
         chunks = std::min({tile.get_width(), cores / rows, std::max(1U, width_tiles / kMinChunkTiles)});
     }
@@ -89,9 +93,14 @@ Layout layout_for(const ttnn::Tensor& input) {
     return {width_tiles, rows, chunks, chunk_tiles};
 }
 
-std::optional<tt::tt_metal::WorkloadBuffer> make_scratch(const ttnn::Tensor& input) {
-    const auto layout = layout_for(input);
-    if (layout.chunks == 1) {
+bool needs_exchange(const Layout& layout, Kind kind) {
+    // The vocabulary-parallel backward takes the row state from DRAM: its cores split columns independently.
+    return layout.chunks > 1 && kind != Kind::VocabParallelBackward;
+}
+
+std::optional<tt::tt_metal::WorkloadBuffer> make_scratch(const ttnn::Tensor& input, Kind kind) {
+    const auto layout = layout_for(input, kind);
+    if (!needs_exchange(layout, kind)) {
         return std::nullopt;
     }
     // One tile-sized page per (row, chunk) unit; a packed record fills the start of it.
@@ -127,8 +136,11 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     auto* device = input.device();
     const bool backward = is_backward(options.kind);
     const bool cross_entropy = is_cross_entropy(options.kind);
-    const auto layout = layout_for(input);
+    const auto layout = layout_for(input, options.kind);
     const uint32_t width_tiles = layout.width_tiles, rows = layout.rows, chunks = layout.chunks;
+    // Cores that exchange partial statistics (the kernels' `chunks`); 1 when each core's columns stand alone.
+    const uint32_t exchange = needs_exchange(layout, options.kind) ? chunks : 1;
+    const bool vp_combine = options.kind == Kind::VocabParallelCombine;
     const auto grid = device->compute_with_storage_grid_size();
     // With chunks > 1 a unit is one (row, chunk) pair and every core takes at most one.
     auto [cores, all, group1, group2, units1, units2] = split_work_to_cores(grid, rows * chunks);
@@ -139,7 +151,9 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     // Stream rings hold two blocks of the largest block size; each core pushes blocks of 4, 2 or 1 tiles,
     // whichever divides its tile count, so every push stays aligned to the ring.
     constexpr uint32_t block = 4;
-    const bool ce_upstream = options.kind == Kind::CrossEntropyBackward && options.upstream_kind != 0;
+    const bool ce_upstream =
+        (options.kind == Kind::CrossEntropyBackward || options.kind == Kind::VocabParallelBackward) &&
+        options.upstream_kind != 0;
     const auto grad_dtype =
         options.kind == Kind::LogSoftmaxBackward || ce_upstream ? options.upstream_dtype : input.dtype();
     const auto grad_fmt = datatype_to_dataformat_converter(grad_dtype);
@@ -162,14 +176,19 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     const uint32_t record_bytes = kPartialStatistics * tile.get_height() * sizeof(float);
     add_cb(24, tt::DataFormat::Float32, fp32_bytes, (tile.get_width() * record_bytes + fp32_bytes - 1) / fp32_bytes);
     for (uint32_t cb : {8U, 9U, 23U}) add_cb(cb, tt::DataFormat::Float32, fp32_bytes, 3);
-    if (cross_entropy) {
+    if (cross_entropy || vp_combine) {
         // 25: target logits (column 0) and 26: row targets (one per physical row of a tile row) for the writer,
         // double-buffered so the reader can start the next row; 27: column-0 mask; 28: aligned scratch for the
-        // target-logit reads (one slot per physical row plus alignment slack).
+        // target-logit reads (one slot per physical row plus alignment slack), or one shard's record tile
+        // (VP_COMBINE).
         add_cb(25, tt::DataFormat::Float32, fp32_bytes, 2);
         add_cb(26, tt::DataFormat::Float32, tile.get_height() * sizeof(uint32_t), 2);
         add_cb(27, tt::DataFormat::Float32, fp32_bytes, 1);
-        add_cb(28, tt::DataFormat::Float32, (tile.get_height() + 1) * kTargetSlotBytes, 1);
+        add_cb(28, tt::DataFormat::Float32, std::max(fp32_bytes, (tile.get_height() + 1) * kTargetSlotBytes), 1);
+    }
+    if (options.kind == Kind::VocabParallelStats || vp_combine) {
+        // 31: the row records (stats: m, k, tail, x_t; combine: M, l) handed to the writer.
+        add_cb(31, tt::DataFormat::Float32, fp32_bytes, 4);
     }
     if (ce_upstream) {
         // 29: per-row upstream gradient (column 0), 30: the raw upstream tile it is taken from.
@@ -190,8 +209,17 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     if (ce_upstream) {
         defines["UPSTREAM_GRAD"] = std::to_string(options.upstream_kind);
     }
+    switch (options.kind) {
+        case Kind::VocabParallelStats: defines["VP_STATS"] = "1"; break;
+        case Kind::VocabParallelCombine: defines["VP_COMBINE"] = "1"; break;
+        case Kind::VocabParallelBackward: defines["VP_BACKWARD"] = "1"; break;
+        case Kind::LogSoftmaxForward:
+        case Kind::LogSoftmaxBackward:
+        case Kind::CrossEntropyForward:
+        case Kind::CrossEntropyBackward: break;
+    }
     // The scratch accessor is always compiled in; without a split it aliases the input and is never used.
-    auto* scratch = chunks > 1 ? buffers.scratch : buffers.input;
+    auto* scratch = exchange > 1 ? buffers.scratch : buffers.input;
     TT_FATAL(scratch != nullptr, "Row-split programs need an exchange scratch buffer");
     auto* state = buffers.state != nullptr ? buffers.state : buffers.input;
     auto* target = buffers.target != nullptr ? buffers.target : buffers.input;
@@ -202,7 +230,7 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
         width,
         input.dtype() == ttnn::DataType::FLOAT32,
         grad_dtype == ttnn::DataType::FLOAT32,
-        chunks,
+        exchange,
         arrive_sem,
         go_sem,
         options.target_page_bytes,
@@ -219,7 +247,11 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     if (ce_upstream) {
         TensorAccessorArgs(buffers.upstream).append_to(ra);
     }
-    std::vector<uint32_t> wa{width_tiles, block, input.dtype() == ttnn::DataType::FLOAT32, chunks, arrive_sem};
+    if (options.kind == Kind::VocabParallelBackward) {
+        TT_FATAL(buffers.state != nullptr, "Vocabulary-parallel backward needs the row state");
+        TensorAccessorArgs(buffers.state).append_to(ra);
+    }
+    std::vector<uint32_t> wa{width_tiles, block, input.dtype() == ttnn::DataType::FLOAT32, exchange, arrive_sem};
     TensorAccessorArgs(buffers.output).append_to(wa);
     TensorAccessorArgs(state).append_to(wa);
     TensorAccessorArgs(scratch).append_to(wa);
@@ -237,7 +269,7 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
     }
     auto compute = make_compute_kernel_descriptor(
         all,
-        {chunks, std::bit_cast<uint32_t>(options.scaler)},
+        {exchange, std::bit_cast<uint32_t>(options.scaler)},
         defines,
         kComputeKernelPath,
         /* fp32_dest_acc_en */ true,
@@ -267,8 +299,9 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
             end,
             chunk,
             core_block,
-            target};
-        if (chunks > 1 && chunk == 0) {
+            target,
+            options.first_v};
+        if (exchange > 1 && chunk == 0) {
             for (uint32_t g = 0; g < chunks; ++g) {
                 const auto member = device->worker_core_from_logical_core(unit_cores[w.index + g]);
                 reader_args.emplace_back(static_cast<uint32_t>(member.x));
@@ -289,7 +322,9 @@ tt::tt_metal::ProgramDescriptor make_descriptor(
              static_cast<uint32_t>(leader.x),
              static_cast<uint32_t>(leader.y),
              core_block});
-        compute.emplace_runtime_args(w.core, {count, begin, end});
+        // first_v as an exact FP32 integer, added to the shard's first-maximum column (stats).
+        const uint32_t first_v_bits = std::bit_cast<uint32_t>(static_cast<float>(options.first_v));
+        compute.emplace_runtime_args(w.core, {count, begin, end, first_v_bits});
     });
     // Kernel handles in the built program follow this order.
     program.kernels.push_back(std::move(reader));
