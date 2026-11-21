@@ -154,7 +154,8 @@ public:
     // Call this periodically or on-demand to sync SHM with actual allocator state
     // device: Device to query (can be nullptr to skip update)
     // pid: Process ID for per-process tracking
-    void update_from_allocator(const class Device* device, pid_t pid);
+    // force: skip the rate limit (used when the last program on the device releases its CBs)
+    void update_from_allocator(const class Device* device, pid_t pid, bool force = false);
 
     // Get per-chip statistics (for remote device tracking)
     struct ChipInfo {

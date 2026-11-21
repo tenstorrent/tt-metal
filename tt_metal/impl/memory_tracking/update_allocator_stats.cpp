@@ -14,12 +14,12 @@ namespace tt::tt_metal {
 // Implementation of SharedMemoryStatsProvider::update_from_allocator()
 // Query ONLY locally-allocated CBs (device->get_total_cb_allocated() only counts local CBs)
 // Globally-allocated CBs create L1 Buffers and are already tracked in L1 column
-void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid) {
+void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_t pid, bool force) {
     if (!region_ || !device) {
         return;
     }
 
-    // Rate limiting: max 10 updates/sec per device to reduce overhead
+    // Rate limiting: max 10 updates/sec per device unless forced (last program released)
     static std::unordered_map<uint32_t, std::chrono::steady_clock::time_point> last_updates;
     static std::mutex rate_limit_mutex;
 
@@ -28,7 +28,7 @@ void SharedMemoryStatsProvider::update_from_allocator(const Device* device, pid_
         auto now = std::chrono::steady_clock::now();
         auto& last = last_updates[static_cast<uint32_t>(device->id())];
 
-        if (now - last < std::chrono::milliseconds(100)) {
+        if (!force && now - last < std::chrono::milliseconds(100)) {
             return;  // Skip update - too soon since last update
         }
         last = now;
