@@ -73,6 +73,9 @@ enum eth_chan_directions : std::uint8_t {
     COUNT = 5,
 };
 
+// VC0 and VC1 forward to other routers on the chip, VC2 doesn't.
+static constexpr std::size_t num_forwarding_vcs = 2;
+
 // Marks a consumer absent from the current configuration: the host writes it into the named CT args,
 // and the kernel skips initialising any entry reading it. Out of the 0..31 register range, so it can
 // never collide with a real register.

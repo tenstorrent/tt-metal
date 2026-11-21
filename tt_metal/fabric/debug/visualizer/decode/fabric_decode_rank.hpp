@@ -20,6 +20,7 @@
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_inputs.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_interpret.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_router_analysis.hpp"
+#include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_slot_states.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_stream_registers.hpp"
 #include "tt_metal/fabric/debug/visualizer/decode/fabric_decode_routing.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_model.hpp"
@@ -95,6 +96,8 @@ struct DecodedRouter {
     // Each sender channel's uncredited_at_peer, indexed [vc][channel] as the manifest's senders are. Null where the
     // channel isn't fed by a sibling, or its or the sibling's register has no full read in range.
     std::vector<std::vector<std::optional<UncreditedAtPeer>>> uncredited_at_peer;
+    // Each channel's slot states, from the channel progress log. Null when the router was built with the log off.
+    std::optional<RouterSlots> slots;
 };
 
 struct DecodedRank {

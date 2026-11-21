@@ -56,6 +56,11 @@ enum class FindingCode : uint8_t {
     // A sender channel's uncredited_at_peer is negative: its free slots and its producer's edge were read while the
     // routers moved.
     UNCREDITED_AT_PEER_NEGATIVE,
+    // A channel's slot states, from the channel progress log and its count register, came to more slots than it has:
+    // on a router that's moving, the two were read apart; on a stopped one, the router's own counts disagree.
+    SLOT_COUNTS_OVER_DEPTH,
+    // The channel progress log's next slot for a channel isn't a slot of its ring buffer.
+    PROGRESS_LOG_NEXT_SLOT_OUTSIDE_RING,
     // A VC is connected to a sibling it never forwards to: expected on an E/W router that can't turn.
     CONNECTED_NOT_LIVE,
     // A VC forwards to a direction it has no sibling for: expected on a corner chip, since a correct

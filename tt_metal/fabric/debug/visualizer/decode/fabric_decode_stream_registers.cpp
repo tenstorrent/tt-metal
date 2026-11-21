@@ -62,21 +62,6 @@ std::optional<uint32_t> find_landing_channel_depth(
     return landing < senders.size() ? find_channel_depth(senders[landing].ring_buffer) : std::nullopt;
 }
 
-// Whether ERISC `erisc` of `router` takes VC `vc`'s packets at first-level ack: the builder feeds each ERISC
-// ENABLE_FIRST_LEVEL_ACK_VC<v>, which the manifest records as the acked credits of the router's sender channels on
-// that VC. Null when the router has no sender channel there.
-std::optional<bool> find_first_level_ack(const manifest::Router& router, size_t vc, size_t erisc) {
-    if (vc >= router.channels.senders.size()) {
-        return std::nullopt;
-    }
-    for (const manifest::SenderChannel& sender : router.channels.senders[vc]) {
-        if (erisc < sender.credits_by_erisc.size()) {
-            return sender.credits_by_erisc[erisc].acked.has_value();
-        }
-    }
-    return std::nullopt;
-}
-
 // Adds `facts_for_erisc(erisc)` for each stream register among `fields_by_erisc`.
 template <typename FactsForErisc>
 void add_field_stream_registers(
@@ -93,24 +78,6 @@ void add_field_stream_registers(
             }
         }
     }
-}
-
-// The full read of the count register the field `key` names, on the first ERISC of `fields_by_erisc` whose field has
-// one in `reads`. Null when none does.
-const StreamCountRead* find_field_count_read(
-    const manifest::FieldsByErisc& fields_by_erisc, std::string_view key, const StreamCountReads& reads) {
-    for (const std::vector<manifest::Field>& fields : fields_by_erisc) {
-        for (const manifest::Field& field : fields) {
-            if (field.key != key || !field.content.has_value()) {
-                continue;
-            }
-            const auto* stream = std::get_if<manifest::content::StreamReg>(&*field.content);
-            if (const auto read = stream == nullptr ? reads.end() : reads.find(stream); read != reads.end()) {
-                return &read->second;
-            }
-        }
-    }
-    return nullptr;
 }
 
 // The producer's edge on `vc` that lands on sender channel `channel` of the sibling facing `consumer_direction`. Null
@@ -130,6 +97,34 @@ const manifest::DownstreamEdge* find_edge_into_channel(
 }
 
 }  // namespace
+
+std::optional<bool> find_first_level_ack(const manifest::Router& router, size_t vc, size_t erisc) {
+    if (vc >= router.channels.senders.size()) {
+        return std::nullopt;
+    }
+    for (const manifest::SenderChannel& sender : router.channels.senders[vc]) {
+        if (erisc < sender.credits_by_erisc.size()) {
+            return sender.credits_by_erisc[erisc].acked.has_value();
+        }
+    }
+    return std::nullopt;
+}
+
+const StreamCountRead* find_field_count_read(
+    const manifest::FieldsByErisc& fields_by_erisc, std::string_view key, const StreamCountReads& reads) {
+    for (const std::vector<manifest::Field>& fields : fields_by_erisc) {
+        for (const manifest::Field& field : fields) {
+            if (field.key != key || !field.content.has_value()) {
+                continue;
+            }
+            const auto* stream = std::get_if<manifest::content::StreamReg>(&*field.content);
+            if (const auto read = stream == nullptr ? reads.end() : reads.find(stream); read != reads.end()) {
+                return &read->second;
+            }
+        }
+    }
+    return nullptr;
+}
 
 StreamRegisterFactsByRegister collect_stream_register_facts(
     const manifest::ManifestFacts& facts, const manifest::RouterRef& ref, const manifest::Router& router) {

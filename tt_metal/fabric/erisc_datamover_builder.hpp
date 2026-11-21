@@ -128,6 +128,7 @@ struct FabricRouterDiagnosticBufferMap {
     BufferRegion perf_telemetry;
     BufferRegion code_profiling;
     BufferRegion channel_trimming_capture;
+    BufferRegion channel_progress_log;
 };
 
 struct FabricEriscDatamoverConfig {
@@ -219,6 +220,9 @@ struct FabricEriscDatamoverConfig {
 
     size_t datapath_usage_l1_address = 0;
     size_t datapath_usage_buffer_size = 0;
+
+    // The channel progress log block, placed in the leftover above the channel buffers. 0 when the log is off.
+    size_t channel_progress_log_l1_address = 0;
 
     /** Returns a consolidated view of all diagnostic buffer locations in this config's L1 layout. */
     FabricRouterDiagnosticBufferMap get_telemetry_and_metadata_buffer_map() const;
