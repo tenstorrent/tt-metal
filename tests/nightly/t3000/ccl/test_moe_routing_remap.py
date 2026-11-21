@@ -310,3 +310,35 @@ def test_moe_routing_remap_gpt_oss_decode_call_on_2x4(mesh_device):
     assert len(tt_outputs) == len(reference_outputs_torch)
     for test, ref in zip(tt_outputs, reference_outputs_torch):
         assert_with_pcc(ttnn.to_torch(test), ref)
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=["mesh_device"])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
+def test_moe_routing_remap_negative_zero_weights(mesh_device, dtype):
+    """Regression test: IEEE-754 -0.0 weights must be treated as inactive (zero)."""
+    mesh_shape = tuple(mesh_device.shape)
+    non_zero_size = 8
+    expert_parallel_size = 4
+    cluster_axis = 1
+    num_cluster_experts = 32
+
+    routing_weights_torch = torch.full((1, num_cluster_experts), -0.0, dtype=torch.bfloat16)
+    for idx in [1, 5, 9, 13, 17, 21, 25, 29]:
+        routing_weights_torch[0, idx] = 0.5
+
+    reference_outputs_torch = _get_reference_outputs(
+        routing_weights_torch, non_zero_size, expert_parallel_size, cluster_axis, mesh_shape
+    )
+
+    tt_routing_weights = ttnn.from_torch(
+        routing_weights_torch,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=dtype,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    tt_output = ttnn.moe_routing_remap(tt_routing_weights, non_zero_size, expert_parallel_size, cluster_axis)
+    tt_outputs = ttnn.get_device_tensors(tt_output)
+    assert len(tt_outputs) == len(reference_outputs_torch)
+    for test, ref in zip(tt_outputs, reference_outputs_torch):
+        assert_with_pcc(ttnn.to_torch(test), ref)
