@@ -570,8 +570,9 @@ FORCE_INLINE void two_level_run(
         noc.get_noc_id());
     // The claim marks: the core that takes a unit's claim sets its bit on the coordinator, once the coordinator has
     // cleared them (counted in the cleared count). The atomic's value returns to mark_return, never read. A value
-    // delivered to two cores carries into the next unit's bit: that unit is done twice, and the next one, if lost, is
-    // left to its owner's repair.
+    // delivered to two cores clears its bit and carries up into the next clear one of the same word (none past bit
+    // 31): the cleared units are done twice, and the unit whose bit the carry sets, if lost, is left to its owner's
+    // repair. A late value of a mark can land in rows_word, which only throws off the row cap's estimate.
     const uint64_t marks = counter - get_semaphore(get_named_compile_time_arg_val("tl_unit_sem")) +
                            reinterpret_cast<uint32_t>(flags) + marks_offset;
     bool marks_cleared = false;
@@ -650,8 +651,9 @@ FORCE_INLINE void two_level_run(
     // The scan for lost units (see the claim marks): from claim_poll after a core sees the counter run out, it reads
     // the marks of two slices of slice_words words, its own and the one of the core half the grid away, so another core
     // scans the slices of a core still busy with its rows. A unit there without its mark was claimed with its value
-    // lost (or still landing), and is done here. Bits past the last unit read as units past it, which are skipped. A
-    // core with nothing else to do waits for its scan until repair_after.
+    // lost (or still landing), and is done here. Words past the last unit's are skipped, and bits past it read as units
+    // past it, also skipped. A core with nothing else to do stays for its scan; once repair_after has passed it leaves
+    // as soon as a pass finds no unit.
     uint32_t exhausted_at = 0;
     const uint32_t slice_words = div_up(div_up(units.total, 32), num_cores);
     const uint32_t scan_words = 2 * slice_words;
@@ -662,6 +664,7 @@ FORCE_INLINE void two_level_run(
     // ends on a unit): from then on this core takes no unit.
     bool closed = false;
     // Per local row, the last part this core did as lost while units remained.
+    static_assert(max_local_rows == 4);
     uint8_t early_part[max_local_rows] = {0xFF, 0xFF, 0xFF, 0xFF};
     CircularBuffer table_cb(get_named_compile_time_arg_val("tl_cb_table"));
     const auto* half_pages =
@@ -823,9 +826,9 @@ FORCE_INLINE void two_level_run(
         // Whether `unit` is a claim's value, which this core marks.
         bool claimed_unit = false;
         if (units_left) {
-            // The first missing unit of each of this core's rows: one lost_lag claims behind the last is done here (a
-            // slow one is only done twice), once, so its row is not held to the end of phase 1.
-            for (uint32_t r = 0; r < local_rows && last_claimed < units.total; ++r) {
+            // The first missing unit of one of this core's rows per pass: one lost_lag claims behind the last is done
+            // here (a slow one is only done twice), once, so its row is not held to the end of phase 1.
+            for (uint32_t r = 0; r < local_rows && last_claimed < units.total && unit >= units.total; ++r) {
                 if (!(done_rows >> r & 1) && !row_ready(r) && complete_parts[r] != early_part[r] &&
                     row_unit[r] + complete_parts[r] * unit_stride[r] + lost_lag < last_claimed) {
                     early_part[r] = complete_parts[r];
@@ -854,7 +857,7 @@ FORCE_INLINE void two_level_run(
             if (value != last_claimed) {
                 last_claimed = value;
                 unit = value;
-                claimed_unit = true;
+                claimed_unit = value < units.total;
             }
             const uint32_t waited = get_timestamp_32b() - exhausted_at;
             if (unit >= units.total && waited > claim_poll) {
@@ -863,7 +866,9 @@ FORCE_INLINE void two_level_run(
                         scan_next < slice_words ? core_index : (core_index + num_cores / 2) % num_cores;
                     scan_word = slice * slice_words + scan_next % slice_words;
                     ++scan_next;
-                    scan_bits = ~read_word(noc.get_noc_id(), marks + scan_word * sizeof(uint32_t));
+                    if (scan_word * 32 < units.total) {
+                        scan_bits = ~read_word(noc.get_noc_id(), marks + scan_word * sizeof(uint32_t));
+                    }
                 }
                 if (scan_bits != 0) {
                     unit = scan_word * 32 + __builtin_ctz(scan_bits);
