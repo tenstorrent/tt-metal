@@ -279,13 +279,15 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     uint32_t NG = 1;
     uint32_t NGX = 1, NGY = 1;  // groups across x and y (NG = NGX * NGY)
     if (from_pages) {
-        // Heavy loads whose hidden slice splits evenly over half the grid width (the 24-tile stream experts on the
-        // 12-wide grid): two groups side by side, 4 hidden tiles per core instead of 2. gpt-oss-20b QuietBox 2,
-        // untraced 8K TTFT 183.5 -> 175.1 ms; v4 8K window KL unchanged (0.182). Not for light loads (traced 1K 44.9 ->
-        // 47.4 ms, and their 4-tile down K-blocks raised short-prompt KL 0.0727 -> 0.0754) nor for the 23-tile dense
-        // experts (batch-32 1K 725 -> 738 ms).
+        // Two groups side by side on a grid at least 12 wide: 4 hidden tiles per core instead of 2. The width sets the
+        // down matmul's K blocks and so the rounding: an expert width that splits evenly over the 12-wide grid (the
+        // 24-tile stream experts) takes it for heavy loads only (untraced 8K TTFT 183.5 -> 175.1 ms, v4 8K window KL
+        // unchanged; light loads lost: traced 1K 44.9 -> 47.4 ms, short-prompt KL 0.0727 -> 0.0754); any other width
+        // (the batch-32 dense experts' 23 tiles) at every load, so a user's prefill rounds the same alone or in a batch
+        // (batch-32 gate bit-exact; batch-32 TTFT 1K 674 -> 650 ms, 8K 5472 -> 5276).
         const bool tall = M_tiles_full >= kGroupTallFromMTiles;
-        NGX = tall && N_gate_tiles_full % (grid_size.x / 2) == 0 ? 2 : 1;
+        const bool splits_evenly = N_gate_tiles_full % grid_size.x == 0;
+        NGX = grid_size.x >= 12 && (tall || !splits_evenly) ? 2 : 1;
         // Heavy loads: two groups over every grid row (12x5 each on the 10-row Blackhole grid; 12x4 left two rows
         // idle). Untraced TTFT, 12x4 -> 12x5: 4K 114.3 -> 111.4 ms, 8K 200.1 -> 192.2, 16K 391.0 -> 374.4; 2K (light
         // load, 5 x 12x2) 68.5 vs 70.7 with 12x5.
