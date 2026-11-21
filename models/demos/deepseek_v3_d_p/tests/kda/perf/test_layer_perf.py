@@ -44,11 +44,17 @@ _TIMING_SAMPLES = 5
 # Host-time targets (ms) per (layout, mode), as tests/measure measures them: untraced fastest of 10 after 10 warm-up,
 # traced one replay, both with the CPU clock held. LoudBox SP8xTP1 and QuietBox SP4xTP1 report until a CI run gives
 # their targets with the fused relay.
+# SP8xTP4 and SP4xTP4 run the SP-sharded slab layer (forward_slot: copies and SP all-gathers load the carry after the
+# input projection, head-selecting copies store it). Their targets are the in-place layer's CI targets (SP8xTP4
+# 1.205 / 1.116 ms, SP4xTP4 1.23 / 1.132 ms) scaled by the sharded/in-place ratio this gate measured on one 130 W
+# Galaxy whose in-place layer reads within 1% of those targets, main and this layer interleaved, 4 runs each over two
+# sessions (2026-11-21), medians: untraced 1.2505 / 1.208 ms (x1.035, SP8xTP4) and 1.290 / 1.2335 ms (x1.046,
+# SP4xTP4); traced 1.176 / 1.1145 ms (x1.055) and 1.173 / 1.142 ms (x1.027). SP4xTP4-subtorus was not measured.
 _TARGETS_MS = {
-    ("SP8xTP4", "untraced"): 1.205,
-    ("SP8xTP4", "traced"): 1.116,
-    ("SP4xTP4", "untraced"): 1.23,
-    ("SP4xTP4", "traced"): 1.132,
+    ("SP8xTP4", "untraced"): 1.247,
+    ("SP8xTP4", "traced"): 1.177,
+    ("SP4xTP4", "untraced"): 1.286,
+    ("SP4xTP4", "traced"): 1.163,
     ("SP4xTP4-subtorus", "untraced"): 1.184,
     ("SP4xTP4-subtorus", "traced"): 1.109,
 }
