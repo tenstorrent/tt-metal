@@ -1,0 +1,97 @@
+{
+ "used": [
+  {
+   "id": "DS41-279",
+   "how": "the ladder tests raise target.seq in memory to the walls' capacity before the load, never via env",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-325",
+   "how": "no load-time env in any ladder test; ENGRAM_TABLE stays the gate's resident value (OV-61)",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-346",
+   "how": "the no-rebuild check counts the fixed-lane path's builds on fresh chunks (PACKED_ROUTE=lanes) and records its FAIL (153 builds) instead of hiding it",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-348",
+   "how": "the packed no-rebuild draws take their own slot pool (11..19), so the on/off comparison's slots 9, 10 stay never-written",
+   "traced": true,
+   "cited": true
+  },
+  {
+   "id": "DS41-353",
+   "how": "every per-chunk helper of the ladder is a module function or an instance-attribute wrap (HostSplit), no class change of a load-time object",
+   "traced": null,
+   "cited": true
+  },
+  {
+   "id": "DS41-356",
+   "how": "test_skip_positions loads the walls' capacity (1048576) when its serving column is on, so the perf units share one load in any order (its seq symptom hit gate run 2)",
+   "traced": true,
+   "cited": true
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "how to drive tt-d-gen's D2H layer ack (D2HStreamService + LayerAckService + LayerCompletionQueue) from a model test without a hang: record_count 1, pop the ring every chunk (1024 slots full stall the reader, then the device) -> DS41-358 / tests/packed/ladder_common.D2HAcks",
+  "the host cost of one outbound_socket_service_sync on the 8x4 mesh (~0.16-0.24 ms each) -> DS41-358",
+  "that the glued one-call path refuses replay segments (resumed chunks 3.1-3.4x slower) -> DS41-357",
+  "that adapter._run leaves model.state on its slot (a harness chunk after it reads that slot) -> DS41-359"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "tests only: no padding or inflated work added; the ladder runs each path's real segment lengths"
+  },
+  {
+   "id": "OV-58",
+   "answer": "done",
+   "evidence": "worked autonomously; DECIDED lines in BREADCRUMBS PB.9C"
+  },
+  {
+   "id": "OV-61",
+   "answer": "done",
+   "evidence": "every ladder unit runs on the gate's one executed-layers load: LADDER_POS in BATCH_POS_VARS, LADDER_CASES / LADDER_SERVING in BATCH_ITEM_VARS of both walls tests; `validate` prints valid"
+  },
+  {
+   "id": "OV-67",
+   "answer": "n/a",
+   "evidence": "no model change; the packed no-rebuild draws feed only the descriptor + ids (runtime.make_packed_input, one upload, before the count) and count builds / prepares / ids uploads"
+  }
+ ],
+ "cited_only": [
+  "DS41-357",
+  "DS41-358",
+  "DS41-360"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "PB.9C",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-11-21T06:39:13",
+  "head": "7d755180024",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/PB.9C.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/PB.9C.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/packed_ladder_20261121.md",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/ladder_common.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_glued_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/packed/test_packed_walls.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/perf/test_d2h_ack_probe.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py",
+   "models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py"
+  ]
+ }
+}

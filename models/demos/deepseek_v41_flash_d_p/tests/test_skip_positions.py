@@ -49,6 +49,15 @@ Per point and kind (steady / resumed):
     <kind>_host_ms_p<p>        wall - device (slowest chip)
 and skip_positions_table: the markdown table of every point (also printed).
 
+PB.9C (OWNER 2026-11-21, the ladder's serving column; LADDER_SERVING=0 turns it off): per point also the steady chunk
+through THE SERVING ENTRY (the adapter's runtime over the same loaded model, adapter.build_runtime -> load_model; its
+KV cache of one slot at the load's max_seq): runtime.prefill_chunk(engine input, kv, slot 0, p, p + chunk) with the
+per-layer device-op ack tt-d-gen uses (outbound_socket_service_sync into a metadata-only D2HStreamService drained by a
+LayerAckService: tests/packed/ladder_common.D2HAcks), the real previous chunk first, warm_up + 5 timed runs, the median:
+serving_wall_ms_p<p>, serving_extra_ms_p<p> (- the harness steady wall). At 139264 (AgentX p50) the serving entry's
+host work item by item vs the harness's (serving_host_split_p139264: ids readback, un-shuffle, note_tokens,
+begin_chunk, reorder_ids, embed, layers' enqueue, D2H ack ops, device tail; also without any ack).
+
     PYTHONPATH=$PWD DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile \\
         models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py
 
@@ -104,6 +113,7 @@ BATCH_ITEM_VARS = (
     "WALLS_FRESH_PROBE",
     "WALLS_FRESH_PROF",
     "WALLS_FRESH_CASES",
+    "LADDER_SERVING",
 )
 BATCH_POS_VARS = ("SKIP_POS",)  # F288: the plan's model is loaded for the furthest point (core/batch.hints)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes, in the resident runner  # F279: per-run (the points measured), not the model's configuration
@@ -195,11 +205,22 @@ def test_skip_positions(mesh_device, monkeypatch):
     from models.demos.deepseek_v41_flash_d_p.tests import fresh_common
 
     fresh = fresh_common.on()
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as LC
+
+    serve = LC.serving_on() and not fresh  # PB.9C: the serving entry's wall per point (module docstring)
     if fresh:  # MB.1: the walls' one capacity (the deployment context in whole chunks: one load, one max_seq)
         want = max(-(-deploy // chunk) * chunk, int(S.data["target"]["seq"]))
+    elif serve:  # (the serving runtime's slots: the walls' one capacity, the deployment context in whole chunks, so
+        # this unit and the packed walls / no-rebuild units share one load whichever runs first: F283, DS41-356)
+        want = max(want, -(-deploy // chunk) * chunk)
     monkeypatch.setitem(S.data["target"], "seq", want)
     t0 = time.time()
+    srv = None
     if fresh:  # MB.1: the serving runtime loads it, through the model's one load path (the batch's model in a batch)
+        rt = _runtime(mesh_device, layers, chunk, want)
+        model = rt[0].model
+    elif serve:  # PB.9C: the same, one slot (the points' own states stay the harness's)
+        monkeypatch.setenv("WALLS_FRESH_SLOTS", str(1 + LC.SPLIT_RUNS))  # (slot 0 + the split's fresh slots)
         rt = _runtime(mesh_device, layers, chunk, want)
         model = rt[0].model
     else:
@@ -240,6 +261,16 @@ def test_skip_positions(mesh_device, monkeypatch):
     print("memory / position check: " + "; ".join(f"p{p}: {'fits' if r is None else r}" for p, r in fits.items()))
 
     rows = []
+    if serve:
+        runtime, adapter, hf, params = rt
+        kv = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf, params=params)
+        acks = None
+        try:
+            acks = LC.D2HAcks(mesh_device)
+        except Exception as e:  # noqa: BLE001 (recorded: the serving column then says why it is missing)
+            print(f"SERVING: D2H ack service not available: {type(e).__name__}: {e}", flush=True)
+            LC.record("serving_error", f"{type(e).__name__}: {e}"[:300])
+        srv = (runtime, kv, acks)
     try:
         for p in points:
             if fits[p] is not None:
@@ -248,7 +279,7 @@ def test_skip_positions(mesh_device, monkeypatch):
                 rows.append((p, None, None, fits[p]))
                 continue
             try:
-                res = _point(model, mesh_device, layers, p, chunk, dram)
+                res = _point(model, mesh_device, layers, p, chunk, dram, srv)
             except RuntimeError as e:  # (an allocation failure: reported with its reason, the next point still runs)
                 why = _alloc_failure(e)
                 if why is None:  # FIX.36: a hang (dispatch TIMEOUT) or any other error fails the test
@@ -261,6 +292,8 @@ def test_skip_positions(mesh_device, monkeypatch):
             metrics.record(f"fits_p{p}", 1)
             rows.append((p, res["steady"], res["resumed"], None))
     finally:
+        if srv is not None:
+            _free_serving(srv)
         if loaded != "decode":
             model.use_decoder_skip(loaded)
 
@@ -270,7 +303,26 @@ def test_skip_positions(mesh_device, monkeypatch):
     assert all(r[1] is not None for r in rows if r[0] == points[0]), "the first point did not run"
 
 
-def _point(model, mesh, layers, p: int, chunk: int, dram) -> dict:
+def _free_serving(srv) -> None:
+    import ttnn
+
+    runtime, kv, acks = srv
+    if acks is not None:
+        err = acks.close()
+        if err:
+            metrics.record("serving_error", err)
+            print(f"SERVING: D2H ack service: {err}", flush=True)
+    for key in [k for k in runtime._states if k[0] == id(kv)]:
+        try:
+            runtime._states.pop(key).free()
+        except Exception as e:  # noqa: BLE001
+            print(f"state free: {e}")
+    for t in kv.contract.by_config.values():
+        if t.is_allocated():
+            ttnn.deallocate(t)
+
+
+def _point(model, mesh, layers, p: int, chunk: int, dram, srv=None) -> dict:
     g = PositionGolden(S, p, chunk)  # (random ids, seed 0, as test_profile's BRINGUP_POS)
     ids = g.tokens()
     prev_t, cur_t = ids[p - chunk : p], ids[p : p + chunk]
@@ -354,10 +406,145 @@ def _point(model, mesh, layers, p: int, chunk: int, dram) -> dict:
                 + f"), {new / (wall / 1e3):.0f} tok/s ({new} tokens), profiled run new programs {new_programs}",
                 flush=True,
             )
+        if srv is not None and srv[2] is not None:  # PB.9C: the serving entry's wall (module docstring)
+            out["serving"] = _serving_point(model, mesh, p, chunk, ids, srv, out, run, (prev_t, cur_t))
+            out["steady"]["serving_wall"] = out["serving"]["wall"]
         if dram is not None:
             metrics.record(f"dram_after_gib_p{p}", round(dram.max() / GIB, 3))
     finally:
         state.free()
+    return out
+
+
+def _serving_point(model, mesh, p: int, chunk: int, ids, srv, out: dict, run, toks) -> dict:
+    """PB.9C: the steady chunk at ``p`` through runtime.prefill_chunk with the D2H ack a layer (slot 0 of the
+    runtime's KV cache; its real previous chunk first), warm_up + SERVING_RUNS timed, the median; at SPLIT_POS the host
+    split (serving with ack, serving without any ack, the harness's run of the same chunk)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import caches as C
+    from models.demos.deepseek_v41_flash_d_p.tests.bringup.contract import server_rules as R
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as LC
+
+    runtime, kv, acks = srv
+    sp = int(tuple(mesh.shape)[0])
+    saved = model.state  # (the adapter's _run makes its slot's state the active one: the harness never sets it)
+
+    def srun(s: int, hs=None, ack: bool = True, slot: int = 0) -> float:
+        e = s + chunk
+        inp = C.payload_tensor(mesh, R.server_payload(ids[s:e].tolist(), s, e, chunk=chunk, sp=sp))  # (engine H2D)
+        model.sync()
+        if hs is not None:
+            hs.begin()
+        t0 = time.time()
+        try:
+            if ack:
+                with acks:
+                    runtime.prefill_chunk(
+                        inp,
+                        kv,
+                        slot_id=slot,
+                        actual_start=s,
+                        actual_end=e,
+                        d2h_service=acks.d2h,
+                        metadata_msg=acks.record,
+                    )
+            else:
+                runtime.prefill_chunk(inp, kv, slot_id=slot, actual_start=s, actual_end=e)
+            t1 = time.time()
+            model.sync()
+            wall = (time.time() - t0) * 1e3
+            if hs is not None:
+                hs.add("device tail (sync after the last enqueue)", (time.time() - t1) * 1e3)
+                hs.end(wall)
+        finally:
+            model.state = saved
+            ttnn.deallocate(inp)
+        missing = acks.drain()
+        assert missing == 0, f"{missing} D2H acks not seen after the chunk ({acks.sent} sent)"
+        return wall
+
+    def one_run():
+        srun(p - chunk)  # the real previous chunk, untimed
+        return round(srun(p), 1)
+
+    sv = LC.time_kind(mesh, one_run, runs=LC.SERVING_RUNS)
+    steady = out["steady"]["wall"]
+    metrics.record(f"serving_wall_ms_p{p}", sv["wall"])
+    metrics.record(f"serving_wall_ms_runs_p{p}", sv["runs"])
+    metrics.record(f"serving_extra_ms_p{p}", round(sv["wall"] - steady, 1))
+    metrics.record("serving_acks_per_chunk", len(runtime.layer_ids))
+    print(
+        f"POINT p{p} serving entry (prefill_chunk + D2H ack a layer): wall {sv['wall']} ms (runs {sv['runs']}), "
+        f"{sv['wall'] - steady:+.1f} ms over the harness steady wall {steady}",
+        flush=True,
+    )
+    res = {**sv}
+    if p == LC.SPLIT_POS:
+        res["split"] = _single_split(model, runtime, kv, mesh, p, chunk, srun, run, ids, saved)
+        metrics.record(f"serving_host_split_p{p}", res["split"])
+        LC.print_split(f"single{chunk}", p, res["split"])
+    return res
+
+
+def _single_split(model, runtime, kv, mesh, p: int, chunk: int, srun, run, text, saved) -> dict:
+    """PB.9C: the single-request chunk's host work item by item, LC.SPLIT_RUNS chunks a side (each after its real
+    previous chunk), every item's median: the harness (begin_chunk on host ids, embed with its ids upload, the layers,
+    the device tail) vs the serving entry with the D2H ack and without any (the ids readback, the un-shuffle,
+    note_tokens, begin_chunk, reorder_ids, embed, the layers, the ack ops, the device tail)."""
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as LC
+    from models.demos.deepseek_v41_flash_d_p.tt import cores as CORES
+    from models.demos.deepseek_v41_flash_d_p.tt import model as MM
+
+    out = {}
+    for side in ("harness", "serving", "serving_noack", "harness_fresh", "serving_fresh"):
+        hs = LC.HostSplit()
+        walls = []
+        try:
+            hs.wrap(ttnn, "to_torch", "ids readback (to_torch, mesh column 0's SP rows)")
+            hs.wrap(ttnn, "from_device", "ids readback (to_torch, mesh column 0's SP rows)")
+            hs.wrap(MM, "from_torch", "ids upload (from_torch)")
+            hs.wrap(CORES, "from_torch", "ids upload (from_torch)")
+            hs.wrap(model, "begin_chunk", "begin_chunk (fields, engram tails + jobs submitted)", instance=True)
+            hs.wrap(model, "embed", "embed (enqueue)", instance=True)
+            hs.wrap(model, "layer", "layers (host enqueue, engram waits included)", instance=True)
+            if not side.startswith("harness"):
+                hs.wrap(runtime, "_host_ids", "ids un-shuffle (server order -> natural, host)", instance=True)
+                for k in range(LC.SPLIT_RUNS + 1):
+                    hs.wrap(runtime.state(kv, k), "note_tokens", "note_tokens (slot id history + engram tails)", True)
+                hs.wrap(model, "reorder_ids", "reorder_ids (natural-order ids on the device: enqueue)", instance=True)
+                hs.wrap(ttnn.experimental.deepseek_prefill, "outbound_socket_service_sync", "D2H ack ops (enqueue)")
+            for j in range(LC.SPLIT_RUNS):
+                # (_fresh: every chunk at a position not run before, p - 64 (j + 1); serving_fresh also in a slot of its
+                # own, 1 + j: the fresh-traffic host cost PB.MB's fresh walls carried)
+                q = p - 64 * (j + 1) if side.endswith("fresh") else p
+                if side.startswith("harness"):
+                    model.state = saved
+                    run(text[q - chunk : q], q - chunk)  # the real previous chunk, untimed
+                    model.sync()
+                    hs.begin()
+                    t0 = time.time()
+                    run(text[q : q + chunk], q)
+                    t1 = time.time()
+                    model.sync()
+                    w = (time.time() - t0) * 1e3
+                    walls.append(w)
+                    hs.add("device tail (sync after the last enqueue)", (time.time() - t1) * 1e3)
+                    hs.end(w)
+                else:
+                    ack = side != "serving_noack"
+                    slot = 1 + j if side.endswith("fresh") else 0
+                    srun(q - chunk, ack=ack, slot=slot)
+                    walls.append(srun(q, hs, ack=ack, slot=slot))
+        finally:
+            hs.restore()
+        out[side] = {
+            "wall": sorted(walls)[len(walls) // 2],
+            "walls": [round(w, 2) for w in walls],
+            "items": hs.items(),
+            "calls": dict(hs.calls),
+            "engram": LC._engram_ms(model),
+        }
     return out
 
 
@@ -366,7 +553,7 @@ def _table(rows, chunk: int) -> str:
         {ph for _, st, rs, _ in rows for r in (st, rs) if r for ph in r["phases"]},
         key=lambda ph: -max((r["phases"].get(ph, 0.0) for _, st, rs, _ in rows for r in (st, rs) if r), default=0),
     )
-    head = ["point", "chunk", "tokens", "wall ms (spread)", "device ms", "host ms", "tok/s"] + [
+    head = ["point", "chunk", "tokens", "wall ms (spread)", "device ms", "host ms", "tok/s", "serving wall ms"] + [
         f"{ph} ms" for ph in phases
     ]
     lines = ["| " + " | ".join(head) + " |", "|" + "---|" * len(head)]
@@ -383,6 +570,7 @@ def _table(rows, chunk: int) -> str:
                 f"{r['slowest']:.1f}",
                 f"{r['wall'] - r['slowest']:.1f}",
                 f"{r['tok_s']:.0f}",
+                f"{r['serving_wall']:.1f}" if r.get("serving_wall") is not None else "-",
             ] + [f"{r['phases'].get(ph, 0.0):.1f}" for ph in phases]
             lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines)

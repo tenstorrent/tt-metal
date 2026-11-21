@@ -46,6 +46,13 @@ NEW serving slots (the contract's caches; warm-up, timed and probe draws: warm-u
 timed run again right after (the warm-repeated number), WALLS_FRESH_PROF timed runs' repeats profiled chunk by chunk
 (device ms), WALLS_FRESH_PROBE more draws under the build probe (the ops that built); program-cache misses allowed and
 counted (program_builds_after_warmup_<side>_<case>: the fresh runs' entries).
+PB.9C (OWNER 2026-11-21, the performance LADDER): LADDER_POS=<histories> runs the ladder instead of the cases
+(tests/packed/ladder_common.py): LADDER_CASES=4x2k,5x1600 (paths glued4x2k: four 2048-token segments, one lane-shaped
+glued chunk; glued5x1600: five 1600-token segments), every segment its own serving slot at history h, steady and
+resumed, the real previous chunk first, warm_up + WALL_RUNS median, one profiled run (device ms), the serving wall
+through runtime.prefill_packed with the D2H ack a layer and segment, and at 139264 the serving entry's host split
+(glued4x2k). Metrics as test_packed_walls' ladder (ladder_<path>_*); tables: the metrics ladder_<path>_table.
+
 PB.9X: serving's glued warm-up first (tt/packed_device.warm_glued_chunks, adapter.compile's set); + fresh cases
 4x2k_p139264 (four 2048-token requests at 139264 + 64 j, |j| <= 256: one lane-shaped glued chunk; its fresh tok/s is
 glued_serving_tok_s_4x2k_p139264) and 6x1344 (six requests at AgentX histories); the lanes side's 4-lane chunks run as
@@ -77,6 +84,9 @@ CHUNK, packed, glued = _pc.CHUNK, _pc.packed, _pc.glued
 S = spec()
 BATCH_SHARED = True
 BATCH_ITEM_VARS = (
+    "LADDER_POS",
+    "LADDER_CASES",
+    "LADDER_SERVING",
     "GLUED_WALL_CASES",
     "PACKED_WALL_CAP",
     "GLUED_WALL_RUNS",
@@ -89,6 +99,7 @@ BATCH_ITEM_VARS = (
     "WALLS_FRESH_PROF",
     "WALLS_FRESH_CASES",
 )
+BATCH_POS_VARS = ("LADDER_POS",)  # F288: the ladder's histories (the load's tables reach the furthest)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes (0-20 under decode)
 P139 = 139264
 P1M = 1040384
@@ -241,6 +252,10 @@ def test_glued_walls(mesh_device, monkeypatch):
     W = _walls_mod()
     full = list(S.layers())
     layers = batch.run_layers(S, full, last_chunk=False)
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common
+
+    if ladder_common.on():  # PB.9C: the ladder at real fixed histories (module docstring)
+        return _ladder(mesh_device, layers, monkeypatch)
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = W._cap(deploy)
     want = max(cap, int(S.data["target"]["seq"]))
@@ -309,6 +324,70 @@ def test_glued_walls(mesh_device, monkeypatch):
     except OSError as e:
         print(f"walls table not written ({out}): {e}")
     print("\n" + table)
+
+
+def _ladder(mesh, layers, monkeypatch) -> None:
+    """PB.9C: the glued paths' ladders (tests/packed/ladder_common.packed_ladder) through the serving runtime's slots
+    (adapter.build_runtime through the model's one load path; its KV cache of 5 slots at the walls' capacity)."""
+    from models.demos.deepseek_v41_flash_d_p.tests import test_skip_positions as SP
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as L
+
+    L = importlib.reload(L)
+    W = _walls_mod()
+    cases = L.cases(["4x2k", "5x1600"])
+    assert set(cases) <= set(L.CASES), f"unknown ladder cases {cases} (known: {sorted(L.CASES)})"
+    route = settings.get("PACKED_ROUTE")
+    assert route == "glued", f"the glued ladder runs PACKED_ROUTE=glued (got {route})"
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))
+    cap = W._cap(deploy)
+    want = max(cap, int(S.data["target"]["seq"]))
+    monkeypatch.setitem(S.data["target"], "seq", want)
+    nslots = max(len(L.CASES[c]) for c in cases)
+    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(nslots))  # (the runtime's KV cache: one slot a segment)
+    runtime, adapter, hf, params = SP._runtime(mesh, layers, CHUNK, want)
+    model = runtime.model
+    loaded = model.skip_mode
+    if loaded != "decode":
+        model.use_decoder_skip("decode")
+    pos = L.positions()
+    text = PositionGolden(S, (nslots - 1) * SHIFT + max(pos) + 2048 + CHUNK, CHUNK).tokens()
+    kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)
+    print(f"LADDER glued: cases {cases}, histories {pos}, {nslots} slots at {want}", flush=True)
+    done = []
+    try:
+        with packed("on"), glued("on"):
+            for c in cases:
+                path = f"glued{c}"
+                lens = L.CASES[c]
+                rows = L.packed_ladder(
+                    runtime,
+                    kv,
+                    mesh,
+                    layers,
+                    path,
+                    lens,
+                    lambda segs: GluedChunk(CHUNK, tuple(segs)),
+                    text,
+                    SHIFT,
+                    cap,
+                    split=(c == "4x2k"),
+                )
+                L.ladder_table(path, f"{len(lens)} x {lens[0]}-token segments back to back (glued), each at h", rows)
+                done.append(any(r is not None for _, r, _ in rows))
+    finally:
+        for key in [k for k in runtime._states if k[0] == id(kv)]:
+            try:
+                runtime._states.pop(key).free()
+            except Exception as e:  # noqa: BLE001
+                print(f"state free: {e}")
+        import ttnn
+
+        for t in kv.contract.by_config.values():
+            if t.is_allocated():
+                ttnn.deallocate(t)
+        if loaded != "decode":
+            model.use_decoder_skip(loaded)
+    assert done and all(done), "a ladder path ran no history"
 
 
 def _warm_glued(model, mesh, layers, slots, cap: int) -> None:

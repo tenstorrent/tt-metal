@@ -26,6 +26,20 @@ prefill_chunk, a chunk; == 0 under POS_DYNAMIC=on: the ids are reordered on the 
 pulled-back chunk run again in two fresh slots with POS_DYNAMIC off and on gives bit-identical final streams
 (no_rebuild_on_off_max_abs_diff == 0).
 
+PB.9C (OWNER 2026-11-21: the no-rebuild check per path, PASS / FAIL only): at BRINGUP_CHUNK=8192 with PACKED=on it
+also checks the packed paths through ``runtime.prefill_packed``, every chunk at fresh slots (a pool of PACKED_SLOTS
+slots no single draw and no warm-up used; each draw's slots a new subset in a new order) and fresh histories (AgentX
+draws, 64-aligned), each request's real previous chunk first, kinds steady / resumed (write_start = start + 128) /
+steady:
+    glued4x2k     four 2048-token segments back to back (one lane-shaped GluedChunk), PACKED_ROUTE=glued
+    glued5x1600   five 1600-token segments (GluedChunk), PACKED_ROUTE=glued
+    lanes4x2k     the 4 x 2k chunk under PACKED_ROUTE=lanes (the fixed-lane path, off in serving since PB.9X: its FAIL is
+                  recorded, never hidden, and not asserted); run last, after the glued paths' counts
+Metrics: no_rebuild_pass_<path> (1 / 0; also single<chunk> for the single-request check above) and
+program_builds_after_warmup_<path> (program-cache entries + prepare_program calls in the path's fresh chunks),
+packed_ids_uploads_<path>, no_rebuild_rows_<path>, no_rebuild_probe_<path> (the ops that built). Asserted: the single
+path and the glued paths build nothing.
+
     PYTHONPATH=$PWD DS41_ENGRAM_TABLE=resident DS41_POS_DYNAMIC=on DS41_DECODER_SKIP=decode \\
         scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
 """
@@ -56,6 +70,15 @@ BATCH_ITEM_VARS = ("BRINGUP_CHUNK",)
 REPLAY = 128
 SLOTS = 11  # (slot 0: compile's; 1-8: the fresh draws; 9, 10: the on / off comparison, never written before it)
 KINDS = ("aligned", "steady", "resumed", "partial", "pulled", "acks_only", "steady", "partial")
+# PB.9C: the packed paths' pool (slots SLOTS .. SLOTS + PACKED_SLOTS - 1: compile's glued warm-up takes 0..5, the single
+# draws 1..8, the on / off comparison 9, 10)
+PACKED_SLOTS = 9
+PACKED_PATHS = (
+    ("glued4x2k", (2048,) * 4, "glued"),
+    ("glued5x1600", (1600,) * 5, "glued"),
+    ("lanes4x2k", (2048,) * 4, "lanes"),
+)
+PACKED_KINDS = ("steady", "resumed", "steady")
 
 
 class Uploads:
@@ -191,7 +214,8 @@ def test_no_rebuild(mesh_device, monkeypatch):
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
     cap = max(-(-deploy // chunk) * chunk, int(S.data["target"]["seq"]))  # (test_skip_positions' fresh load)
     monkeypatch.setitem(S.data["target"], "seq", cap)
-    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(SLOTS))
+    packed_check = chunk == 8192 and settings.get("PACKED") == "on"  # PB.9C (module docstring)
+    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(SLOTS + (PACKED_SLOTS if packed_check else 0)))
     t0 = time.time()
     runtime, adapter, hf, params = _runtime(mesh_device, layers, chunk, cap)
     model = runtime.model
@@ -241,12 +265,28 @@ def test_no_rebuild(mesh_device, monkeypatch):
         pb.print("no_rebuild")
         builds = built + pc.n
         F._record_gate_name("program_builds_after_warmup_serving", int(builds))
+        F._record_gate_name(f"no_rebuild_pass_single{chunk}", int(builds == 0))
+        F._record_gate_name(f"program_builds_after_warmup_single{chunk}", int(builds))
         F._record_gate_name("ids_uploads_per_chunk", round(uploads.n / max(1, n_chunks), 3))
         metrics.record("no_rebuild_cache_entries", int(built))
         metrics.record("no_rebuild_prepares", int(pc.n))
         metrics.record("no_rebuild_chunks", int(n_chunks))
         metrics.record("no_rebuild_rows", rows)
         metrics.record("no_rebuild_probe", pb.summary(20))
+
+        packed = {}
+        if packed_check:  # PB.9C: the packed paths, glued first, the lane path last (its builds after the counts)
+            for path, lens, route in PACKED_PATHS:
+                try:
+                    packed[path] = _packed_path(runtime, kv, mesh_device, text, path, lens, route, hi)
+                except Exception as e:  # noqa: BLE001 (a path that fails on fresh chunks: recorded FAIL, not hidden)
+                    if F.is_hang(e) or path.startswith("glued"):
+                        raise
+                    msg = f"{type(e).__name__}: {str(e).strip().splitlines()[0] if str(e).strip() else ''}"[:300]
+                    print(f"NO_REBUILD {path}: FAIL (error on a fresh chunk: {msg})", flush=True)
+                    F._record_gate_name(f"no_rebuild_pass_{path}", 0)
+                    metrics.record(f"no_rebuild_error_{path}", msg)
+                    packed[path] = {"builds": -1, "pass": 0, "error": msg}
 
         # bit-identity of the two paths on the pulled-back chunk: two slots nothing wrote before (the same zero history
         # below the request's chunks), its previous chunk first
@@ -286,6 +326,77 @@ def test_no_rebuild(mesh_device, monkeypatch):
         if loaded != "decode":
             model.use_decoder_skip(loaded)
     assert builds == 0, f"{builds} programs built after warm-up on fresh serving chunks: {pb.summary(8)}"
+    bad = {k: v for k, v in packed.items() if k.startswith("glued") and v["builds"] != 0}
+    assert not bad, f"packed paths built programs after warm-up on fresh chunks: {bad}"
     if pos == "on":
         assert uploads.n == 0, f"{uploads.n} ids uploads in {n_chunks} chunks (POS_DYNAMIC=on reorders on the device)"
     assert diff == 0, f"POS_DYNAMIC on vs off differ: max |diff| {diff}"
+
+
+def _packed_path(runtime, kv, mesh, text, path: str, lens, route: str, hi: int) -> dict:
+    """PB.9C: one packed path's fresh chunks through runtime.prefill_packed (module docstring) -> {"builds", "pass",
+    "rows"}; records no_rebuild_pass_<path>, program_builds_after_warmup_<path>, packed_ids_uploads_<path>."""
+    import random
+
+    import ttnn
+    from models.demos.deepseek_v41_flash_d_p.tests import fresh_common as F
+    from models.demos.deepseek_v41_flash_d_p.tests.packed.packed_common import switch
+    from models.demos.deepseek_v41_flash_d_p.tt.packed import GluedChunk, Segment
+
+    model = runtime.model
+    chunk = int(model.chunk)
+    pool = list(range(SLOTS, SLOTS + PACKED_SLOTS))
+    n = len(lens)
+    draws = []
+    for j, kind in enumerate(PACKED_KINDS):
+        d = F.Draw(525200 + 100 * j + 10 * n + (1 if route == "lanes" else 0))
+        rnd = random.Random(d.seed)
+        slots = rnd.sample(pool, n)  # (a new subset of the pool in a new order every draw)
+        hs = [d.history(lo=max(lens), hi=hi - max(lens)) for _ in range(n)]
+        draws.append((kind, slots, hs))
+    uploads = Uploads(chunk)
+    pc = F.PrepCount()
+    rows = []
+    with switch("PACKED_ROUTE", route), switch("PACKED_GLUED", "on"):
+        e0, p0, u0, nch = cache_entries(mesh), pc.n, uploads.n, 0
+        with F.BuildProbe(mesh) as pb:
+            for kind, slots, hs in draws:
+                b0, q0, v0 = cache_entries(mesh), pc.n, uploads.n
+                for prev in (True, False):
+                    segs, ids = [], []
+                    for k in range(n):
+                        s = hs[k] - (lens[k] if prev else 0)
+                        ws = s + REPLAY if (kind == "resumed" and not prev) else None
+                        segs.append(Segment(slots[k], s, s + lens[k], ws))
+                        ids.append(text[s : s + lens[k]].long())
+                    desc = GluedChunk(chunk, tuple(segs))
+                    inp = runtime.make_packed_input(desc, ids)  # (the engine's H2D: before the count)
+                    with pc, uploads:
+                        runtime.prefill_packed(inp, kv, desc)
+                    model.sync()
+                    ttnn.deallocate(inp)
+                    nch += 1
+                row = {
+                    "kind": kind,
+                    "slots": slots,
+                    "histories": hs,
+                    "builds": cache_entries(mesh) - b0,
+                    "prepared": pc.n - q0,
+                    "ids_uploads": uploads.n - v0,
+                }
+                rows.append(row)
+                print(f"NO_REBUILD {path} (PACKED_ROUTE={route}) {row}", flush=True)
+        pb.print(f"no_rebuild {path}")
+        builds = (cache_entries(mesh) - e0) + (pc.n - p0)
+    ok = int(builds == 0)
+    F._record_gate_name(f"no_rebuild_pass_{path}", ok)
+    F._record_gate_name(f"program_builds_after_warmup_{path}", int(builds))
+    metrics.record(f"packed_ids_uploads_{path}", round((uploads.n - u0) / max(1, nch), 3))
+    metrics.record(f"no_rebuild_rows_{path}", rows)
+    metrics.record(f"no_rebuild_probe_{path}", pb.summary(20))
+    print(
+        f"NO_REBUILD {path}: {'PASS' if ok else 'FAIL'} ({builds} builds after warm-up in {nch} fresh chunks; "
+        f"PACKED_ROUTE={route}); probe {pb.summary(8)}",
+        flush=True,
+    )
+    return {"builds": int(builds), "pass": ok, "rows": rows}

@@ -68,6 +68,15 @@ every timed chunk four NEW requests (each its own AgentX history draw, 64-aligne
 segment at p - 2048) untimed first as the cases do, program-cache misses allowed and counted; WALLS_FRESH_WARM warm-up
 draws, WALLS_FRESH_RUNS timed (each run again right after: the warm-repeated number), WALLS_FRESH_PROF profiled,
 WALLS_FRESH_PROBE more under the build probe (the ops that built).
+PB.9C (OWNER 2026-11-21, the performance LADDER): LADDER_POS=<histories> runs the ladder instead of the cases
+(tests/packed/ladder_common.py): LADDER_CASES=4x2k (the fixed 4 x 2048 lanes; path lanes4x2k under PACKED_ROUTE=lanes
+with PACKED_GLUED=off, as PB.9F's row; lanehdr4x2k under PACKED_ROUTE=glued, where the lane header runs glued), every
+segment its own serving slot at history h, steady and resumed, the real previous chunk first, warm_up + WALL_RUNS median,
+one profiled run (device ms), the serving wall through runtime.prefill_packed with the D2H ack a layer and segment.
+Metrics ladder_<path>_{steady,resumed}_wall_ms_p<h>, ladder_<path>_tok_s_p<h>, ladder_<path>_device_ms_p<h>,
+ladder_<path>_host_exposed_ms_p<h>, ladder_<path>_serving_wall_ms_p<h>, fits_<path>_p<h>; the table: the metric
+ladder_<path>_table.
+
 PB.9X (PACKED_ROUTE): the fresh lane cases (lanes4x2k; lanes4x1600: four ~1.6k requests, padded lanes) go through THE
 SERVING ENTRY: the adapter's runtime (adapter.build_runtime through the model's one load path), the engine-owned KV
 cache, runtime.compile (serving's warm-up, the glued layout kinds included), then runtime.prefill_packed with the
@@ -106,6 +115,9 @@ CHUNK, packed = _pc.CHUNK, _pc.packed
 S = spec()
 BATCH_SHARED = True
 BATCH_ITEM_VARS = (
+    "LADDER_POS",
+    "LADDER_CASES",
+    "LADDER_SERVING",
     "PACKED_WALL_CASES",
     "PACKED_WALL_CAP",
     "PB3H_STAMP_DUMP",
@@ -117,6 +129,7 @@ BATCH_ITEM_VARS = (
     "WALLS_FRESH_PROF",
     "WALLS_FRESH_CASES",
 )
+BATCH_POS_VARS = ("LADDER_POS",)  # F288: the ladder's histories (the load's tables reach the furthest)
 BATCH_LAYERS = "executed"  # F285: a performance measurement: the layers it executes (0-20 under decode)
 LANE_ROWS = 2048
 SHIFT = 4096  # lane k reads the text shifted by k x SHIFT
@@ -182,6 +195,10 @@ def test_packed_walls(mesh_device, monkeypatch):
 
     if fresh_common.on():  # PB.9F: the fresh walls (module docstring)
         return _fresh_walls(mesh_device, layers, monkeypatch)
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common
+
+    if ladder_common.on():  # PB.9C: the ladder at real fixed histories (module docstring)
+        return _ladder(mesh_device, layers, monkeypatch)
     cases = _cases()
     top = max(p for c in cases for p in CASES[c] if p is not None)
     deploy = int(S.get("deploy.seq") or S.get("target.seq"))
@@ -849,6 +866,64 @@ def _case(model, mesh, layers, case: str, text, dram, cap: int, proj=None) -> di
     finally:
         for st in states.values():
             st.free()
+
+
+# ---------------------------------------------------------------------------------------------- PB.9C the ladder
+def _ladder(mesh, layers, monkeypatch) -> None:
+    """PB.9C: the fixed 4 x 2048 lanes' ladder (tests/packed/ladder_common.packed_ladder) through the serving runtime's
+    slots (adapter.build_runtime through the model's one load path; its KV cache of 4 slots at the walls' capacity)."""
+    from models.demos.deepseek_v41_flash_d_p.tests import test_skip_positions as SP
+    from models.demos.deepseek_v41_flash_d_p.tests.packed import ladder_common as L
+
+    L = importlib.reload(L)
+    cases = L.cases(["4x2k"])
+    assert cases == ["4x2k"], f"test_packed_walls' ladder runs the fixed lanes' 4x2k only (got {cases})"
+    route = settings.get("PACKED_ROUTE")
+    path = "lanes4x2k" if route != "glued" else "lanehdr4x2k"
+    lens = L.CASES["4x2k"]
+    deploy = int(S.get("deploy.seq") or S.get("target.seq"))
+    cap = _cap(deploy)
+    want = max(cap, int(S.data["target"]["seq"]))
+    monkeypatch.setitem(S.data["target"], "seq", want)
+    monkeypatch.setenv("WALLS_FRESH_SLOTS", str(len(lens)))  # (the runtime's KV cache: one slot a segment)
+    runtime, adapter, hf, params = SP._runtime(mesh, layers, CHUNK, want)
+    model = runtime.model
+    loaded = model.skip_mode
+    if loaded != "decode":
+        model.use_decoder_skip("decode")
+    pos = L.positions()
+    text = PositionGolden(S, (len(lens) - 1) * SHIFT + max(pos) + max(lens) + CHUNK, CHUNK).tokens()
+    kv = adapter.allocate_kv_cache(mesh_device=mesh, hf_config=hf, params=params)
+    print(f"LADDER {path}: PACKED_ROUTE={route}, histories {pos}, {len(lens)} slots at {want}", flush=True)
+    try:
+        with packed("on"), _pc.switch("PACKED_GLUED", "on" if route == "glued" else "off"):
+            rows = L.packed_ladder(
+                runtime,
+                kv,
+                mesh,
+                layers,
+                path,
+                lens,
+                lambda segs: ChunkDescriptor.packed(CHUNK, segs),
+                text,
+                SHIFT,
+                cap,
+            )
+        L.ladder_table(path, f"four 2048-token segments, each at history h (PACKED_ROUTE={route})", rows)
+    finally:
+        for key in [k for k in runtime._states if k[0] == id(kv)]:
+            try:
+                runtime._states.pop(key).free()
+            except Exception as e:  # noqa: BLE001
+                print(f"state free: {e}")
+        for t in kv.contract.by_config.values():
+            if t.is_allocated():
+                import ttnn
+
+                ttnn.deallocate(t)
+        if loaded != "decode":
+            model.use_decoder_skip(loaded)
+    assert any(r is not None for _, r, _ in rows), "no history of the ladder ran"
 
 
 # ----------------------------------------------------------------------------------------------- PB.9F fresh walls

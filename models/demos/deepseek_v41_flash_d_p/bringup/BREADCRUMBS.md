@@ -770,3 +770,53 @@
 - Re-run: fork test `python -m models.demos.common.bringup.resident submit --spec $BRINGUP_SPEC --cmd
   "scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_mhc_post_v2.py"`;
   gate `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.8R --spec $BRINGUP_SPEC --check` (devjob).
+## PB.9C perf (attempt 1): the performance LADDER per path at real fixed histories + no-rebuild PASS/FAIL per path (tests only)
+
+- Expected saving (written before any run; perf_guide sec. 1-4): 0 ms device, 0 ms host a chunk: a measurement step,
+  no model change (tests/, the report). What it adds is attribution: the serving entry's +5-7 ms a chunk over the
+  harness wall (PB.MB follow-up) split item by item, and the D2H ack's cost the walls never paid.
+- Load reasons (one-line checks, owner's iteration rule): (1) tests/perf/test_d2h_ack_probe.py, mesh only on the
+  resident runner's held perf load (0 opens, 0 loads): "the D2H ack service + LayerAckService on this mesh, with the
+  model's sub-device manager loaded / cleared between acks: the smallest piece that shows a hang or a pin failure";
+  (2) the gate's units on its one executed-layers load (layers 0-20, BRINGUP_CHUNK=8192): "every ladder number is a
+  whole-chunk number through every executed layer at histories to 1M; no smaller piece is the ladder".
+- What (tests only, no model change):
+  - tests/packed/ladder_common.py (new): positions / cases (LADDER_POS, LADDER_CASES; LADDER_SERVING=0 drops the
+    serving column), time_kind (testing/profile.warm_up + WALL_RUNS median, misses refused), packed_ladder (steady /
+    resumed at h, every segment its own serving slot of the adapter's KV cache, the real previous chunk first, segment
+    order rotated every run, one profiled run: device ms, phases, traced gathers), D2HAcks (tt-d-gen's D2H ack:
+    metadata-only D2HStreamService + LayerAckService + a layer-completion ring popped every chunk; record_count 1 so
+    any ack count decodes), HostSplit (per-call host ms of wrapped callables, nested calls taken out, REST per chunk).
+  - test_packed_walls / test_glued_walls: ladder mode (LADDER_POS in BATCH_POS_VARS, LADDER_CASES / LADDER_SERVING in
+    BATCH_ITEM_VARS); paths lanes4x2k (PACKED_ROUTE=lanes, PACKED_GLUED=off), glued4x2k, glued5x1600; host split of
+    glued 4 x 2k at 139264 (harness / serving / serving_noack / *_freshpos).
+  - test_skip_positions: the serving column per point (runtime.prefill_chunk + D2H ack, slot 0 of a 1 + 7 slot KV
+    cache over the same load) and the single host split at 139264 (+ fresh slot / position sides); the load's max_seq
+    is the walls' capacity when the column is on (F283 / DS41-356: the units share one load in any order).
+  - test_no_rebuild: at 8192 + PACKED=on the packed paths through prefill_packed at fresh slots (pool 11..19) and
+    histories: no_rebuild_pass_<path>, program_builds_after_warmup_<path> (single8192, glued4x2k, glued5x1600,
+    lanes4x2k; lanes not asserted, its error recorded).
+  - tests/perf/test_d2h_ack_probe.py: mesh-only ack probe (315 acks, sub-device manager loaded / cleared between bursts).
+- DECIDED (OV-58): `orchestrator measure --task PB.9C` not run: it is the quick A/B profile of a model switch; this step
+  has no switch and no model change, and the gate's units already measured everything on the final test code.
+- DECIDED (OV-58): the ladder tables are metrics (ladder_<path>_table), not results/<task>_ladder_*.md files (outside
+  this step's paths); the owner's report is results/packed_ladder_20261121.md, composed from results/PB.9C.json.
+- Gate `gate PB.9C --check` (devjob pb9c_gate4, after the last test edit; hooks clean): every ladder metric > 0,
+  no_rebuild_pass_single8192 1, glued5x1600 1, program_builds_after_warmup_serving 0, ids_uploads_per_chunk 0,
+  determinism 0.0; FAIL no_rebuild_pass_glued4x2k = 0 (need == 1): 1 build + 1 prepare_program @
+  tt/packed_glued.py:805 GluedSend.__call__ on a fresh carry-source mix (DS41-360; a model gap, not fixable in a
+  tests-only step). lanes4x2k 153 builds (recorded, not gated).
+- Findings (results/packed_ladder_20261121.md): DS41-357 resumed glued chunks 3.1-3.4x steady (replay segment ->
+  path (b)); DS41-358 the D2H ack ~0.2 ms host each (glued 4 x 2k: 84 acks 16.7 ms, host-bound so exposed; single
+  8192: 21 acks 4.3 ms, half hidden); serving entry's extra at fixed histories single +2.6..+7.5 ms (ids readback 1.8,
+  un-shuffle 0.5, reorder 0.3, note_tokens 0.07, minus the harness upload 0.4, plus the exposed acks); fresh slots /
+  positions add nothing measurable at 0 builds.
+- Gotchas: DS41-359 (adapter._run leaves model.state on its slot; the skip_positions harness then read that ring);
+  DS41-356 again (skip_positions first in the perf process loaded 1032192, the walls need 1048576: refused); a test
+  file edit makes the resident runner reload the model, and three of the reloads did not get the device memory back
+  (restart = device open: 7 opens this task); writing results/<task>_*.md from a test lands outside a step's paths.
+- Rule 20, per-chunk values: none touched in the model. The tests feed only what tt-d-gen sends (engine ids + the
+  descriptor / chunk header, made before the clock); no host table.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate PB.9C --spec $BRINGUP_SPEC --check` (devjob);
+  ack probe: `resident submit --cmd "<the gate's env> scripts/run_safe_pytest.sh --run-all --no-precompile
+  models/demos/deepseek_v41_flash_d_p/tests/perf/test_d2h_ack_probe.py"`; report: compose from results/PB.9C.json.
