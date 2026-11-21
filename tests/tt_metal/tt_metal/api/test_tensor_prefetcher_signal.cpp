@@ -86,7 +86,7 @@ void run_signal_kernel(
     uint32_t signal_addr,
     uint32_t num_signals,
     const SignalSource& source) {
-    Program program;
+    Program program = CreateProgram(mesh_device);
     const KernelHandle kernel = CreateKernel(
         program,
         kSignalKernel,
