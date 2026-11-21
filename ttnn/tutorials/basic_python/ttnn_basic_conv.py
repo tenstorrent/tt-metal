@@ -49,7 +49,7 @@ def main():
             input_height=1,
             input_width=B * H * W,
             conv_config=conv_config,
-            groups=0,  # No grouped convolution
+            groups=1,  # No grouped convolution
         )
 
         # Optionally convert back to torch tensor: out_torch = ttnn.to_torch(out)
