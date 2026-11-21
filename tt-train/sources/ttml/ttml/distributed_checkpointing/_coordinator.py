@@ -61,7 +61,7 @@ from ._layouts import transform_from_json
 from ._planner import TensorInfo, _checked_groups
 from ._state_dict import is_structural_scalar
 from ._topology import Chunk, Label, crc31
-from ._train_state import RNG_FORMAT, this_world_rank
+from ._train_state import DATALOADER_RANKS, RNG_FORMAT, this_world_rank
 
 # The MPI tag of every coordinator transfer. It is reserved: the coordinator shares the world communicator with every
 # other user of ttnn's point-to-point calls (tag 0 by default; tt-train's GRPO rollout uses 22010-22013 and
@@ -394,12 +394,14 @@ class RankRecord:
 
 @dataclass
 class PlanPart:
-    """One rank's contribution to the save plan: its rank record, the tensors it holds, and a hash of its scheduler
-    and dataloader state (the checkpoint stores one copy of those, which every rank restores, so they must agree)."""
+    """One rank's contribution to the save plan: its rank record, the tensors it holds, a hash of its scheduler state
+    (the checkpoint stores one copy, which every rank restores, so the ranks must agree) and one of its dataloader
+    state (stored once when the ranks agree, per rank when they differ)."""
 
     record: RankRecord
     infos: list[TensorInfo]
-    train_state_hash: int = 0
+    scheduler_hash: int = 0
+    dataloader_hash: int = 0
 
     def to_bytes(self) -> bytes:
         # Infos name their labels by position in a table, as result parts and index.json do: many keys share one.
@@ -410,7 +412,8 @@ class PlanPart:
                 "record": self.record.to_json(),
                 "labels": [label.to_json() for label in label_ids],
                 "infos": infos,
-                "train_state_hash": self.train_state_hash,
+                "scheduler_hash": self.scheduler_hash,
+                "dataloader_hash": self.dataloader_hash,
             }
         ).encode()
 
@@ -423,7 +426,8 @@ class PlanPart:
             return PlanPart(
                 RankRecord.from_json(value["record"]),
                 [info_from_json(i, labels) for i in value["infos"]],
-                int(value["train_state_hash"]),
+                int(value["scheduler_hash"]),
+                int(value["dataloader_hash"]),
             )
 
 
@@ -432,14 +436,15 @@ Owner = tuple[int, tuple[int, ...]]  # (rank, mesh coordinate)
 
 @dataclass
 class Election:
-    """Who writes each box of every key, how many keys the checkpoint holds, and every live name any rank holds each
-    key under. Rank 0 elects it over the ranks' plan parts and broadcasts it; every rank writes the boxes it owns, and
-    rank 0 counts the result parts' chunks against it and records the names, which a rank that writes none of a key's
-    boxes reports only here."""
+    """Who writes each box of every key, how many keys the checkpoint holds, every live name any rank holds each key
+    under, and whether the dataloader states are stored per rank (the ranks' differ). Rank 0 elects it over the
+    ranks' plan parts and broadcasts it; every rank writes the boxes it owns, and rank 0 counts the result parts'
+    chunks against it and records the names, which a rank that writes none of a key's boxes reports only here."""
 
     owners: dict[str, dict[tuple[int, ...], Owner]]
     keys: int
     live_keys: dict[str, tuple[str, ...]]
+    dataloader_per_rank: bool = False
 
     def to_bytes(self) -> bytes:
         return json.dumps(
@@ -449,6 +454,7 @@ class Election:
                     k: [[list(g), o[0], list(o[1])] for g, o in groups.items()] for k, groups in self.owners.items()
                 },
                 "live_keys": {k: list(v) for k, v in self.live_keys.items()},
+                "dataloader_per_rank": self.dataloader_per_rank,
             }
         ).encode()
 
@@ -461,7 +467,7 @@ class Election:
                 for k, groups in value["owners"].items()
             }
             live_keys = {k: tuple(v) for k, v in value["live_keys"].items()}
-            return Election(owners, int(value["keys"]), live_keys)
+            return Election(owners, int(value["keys"]), live_keys, bool(value["dataloader_per_rank"]))
 
     def owner_of(self, rank: int) -> Callable[[str, list[Chunk]], Chunk | None]:
         """The ``owner_of`` callback for ``create_save_plan`` on ``rank``: the group's chunk when this rank writes
@@ -503,8 +509,9 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     """The owner election over the ranks' plan parts.
 
     A key held by several ranks must be described identically by all of them (label, per-device shape, dtype,
-    transform), and the ranks' scheduler and dataloader states must agree, since the checkpoint stores one copy that
-    every rank restores. A key's label splits it into boxes (its replica groups); each box is held by one or more
+    transform), and the ranks' scheduler states must agree, since the checkpoint stores one copy that every rank
+    restores. Their dataloader states are stored once when they agree, and per rank when they differ (data-parallel
+    loaders that keep a seed or a shard of their own). A key's label splits it into boxes (its replica groups); each box is held by one or more
     (rank, mesh coordinate) pairs, at least one of which must exist. The box's owner is the one pair that writes it.
 
     The owners even out the bytes written, since the slowest rank ends the write: a box with one holder is that
@@ -513,12 +520,13 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
     most of the bytes land. Ties go to the lower rank and coordinate, so the same parts always elect the same owners.
     """
     parts = sorted(parts, key=lambda p: p.record.rank)
-    differing = [p.record.rank for p in parts if p.train_state_hash != parts[0].train_state_hash]
+    differing = [p.record.rank for p in parts if p.scheduler_hash != parts[0].scheduler_hash]
     if differing:
         raise CheckpointError(
-            f"the scheduler or dataloader state of rank(s) {differing} differs from rank {parts[0].record.rank}'s; a "
-            f"checkpoint stores one copy of that state, which every rank restores"
+            f"the scheduler state of rank(s) {differing} differs from rank {parts[0].record.rank}'s; a checkpoint "
+            f"stores one copy of it, which every rank restores"
         )
+    dataloader_per_rank = any(p.dataloader_hash != parts[0].dataloader_hash for p in parts)
     infos: dict[str, TensorInfo] = {}
     first_rank: dict[str, int] = {}
     members: dict[str, dict[tuple[int, ...], list[Owner]]] = {}
@@ -576,7 +584,8 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
         owners[key][group_key] = chosen
         rank_bytes[chosen[0]] += nbytes
         device_bytes[chosen] += nbytes
-    return Election(owners, len(infos), {key: tuple(sorted(names)) for key, names in aliases.items()})
+    live_keys = {key: tuple(sorted(names)) for key, names in aliases.items()}
+    return Election(owners, len(infos), live_keys, dataloader_per_rank)
 
 
 # --- result parts ----------------------------------------------------------------------------------------------------
@@ -584,8 +593,9 @@ def merge_plan_parts(parts: list[PlanPart]) -> Election:
 
 @dataclass
 class ResultPart:
-    """What one rank wrote: its files, its chunk records per key, its generators and its optimizer scalars; on rank 0
-    also the user header and the scheduler and dataloader state, the one copy stored."""
+    """What one rank wrote: its files, its chunk records per key, its generators, its optimizer scalars and, when the
+    election stores dataloader states per rank, its own (``{world rank: state}``, empty without a dataloader); on rank
+    0 also the user header and the train state stored once (the scheduler, and the dataloader when the ranks agree)."""
 
     record: RankRecord
     files: list[FileRecord]
@@ -594,6 +604,7 @@ class ResultPart:
     scalars: dict = field(default_factory=dict)
     header: dict = field(default_factory=dict)
     train_state: dict = field(default_factory=dict)
+    dataloader: dict = field(default_factory=dict)
 
     def to_bytes(self) -> bytes:
         # Entries name their labels by position in a table, as in index.json.
@@ -609,6 +620,7 @@ class ResultPart:
                 "scalars": self.scalars,
                 "header": self.header,
                 "train_state": self.train_state,
+                "dataloader": self.dataloader,
             }
         ).encode()
 
@@ -631,13 +643,15 @@ class ResultPart:
                 dict(value["scalars"]),
                 dict(value["header"]),
                 dict(value["train_state"]),
+                dict(value["dataloader"]),
             )
 
 
 def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: str) -> tuple[Index, dict]:
     """Rank 0's merge: one file table, one entry per key with every rank's chunks (exactly one per elected box), the
-    world record, and the header (rank 0's user header and scheduler/dataloader state, every rank's generators). The
-    parts are left as they were: the index holds entries of its own."""
+    world record, and the header (rank 0's user header and the train state stored once, every rank's generators and,
+    when the election says so, every rank's dataloader state). The parts are left as they were: the index holds
+    entries of its own."""
     parts = sorted(parts, key=lambda p: p.record.rank)
     files: list[FileRecord] = []
     entries: dict[str, Entry] = {}
@@ -679,6 +693,8 @@ def merge_results(parts: list[ResultPart], election: Election, checkpoint_id: st
     train_state = dict(rank0.train_state)
     if rng_ranks:
         train_state["rng"] = {"format": RNG_FORMAT, "ranks": rng_ranks}
+    if election.dataloader_per_rank:
+        train_state[DATALOADER_RANKS] = {k: v for part in parts for k, v in part.dataloader.items()}
     world = {"group_size": len(parts), "ranks": [p.record.to_json() for p in parts]}
     scalars = dict(rank0.scalars)
     # A param group's member list is per rank (each rank's optimizer holds the parameters of its own mesh); the index

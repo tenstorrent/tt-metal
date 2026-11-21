@@ -391,7 +391,8 @@ def load(
     (default), a live tensor without an entry, or an entry of a requested role (model, and optimizer state when
     ``optimizer`` is passed) without a live tensor, is an error; otherwise they are listed in the result. Optimizer
     scalars (steps, learning rates) are restored through ``set_state_dict``. ``scheduler`` and ``dataloader`` are
-    restored through their ``set_state_dict`` from the state ``save`` stored. With ``rng`` so is every random generator
+    restored through their ``set_state_dict`` from the state ``save`` stored (a dataloader from this world rank's own
+    when the saving ranks' states differed). With ``rng`` so is every random generator
     ``save`` captured for this world rank (ttml, ttml.init, python, numpy, torch when imported). By default (``None``)
     the generators are restored whenever a scheduler or a dataloader is, since a resume that restores those but keeps
     the current generators takes a different step; ``rng=False`` keeps them (a deliberate reseed), ``rng=True``
@@ -449,7 +450,9 @@ def load(
         index: Index = read_index(ckpt_dir)
         header = read_checked_header(ckpt_dir)
         train_state = train_state_of(header, ckpt_dir)
-        missing_state = missing_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng)
+        missing_state = missing_train_state(
+            train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank
+        )
         if strict and missing_state:
             raise missing_train_state_error(missing_state, rng_by_default=rng_by_default)
         check_train_state(train_state, scheduler=scheduler, dataloader=dataloader, rng=rng, world_rank=world_rank)

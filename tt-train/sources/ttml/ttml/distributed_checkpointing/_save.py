@@ -295,9 +295,10 @@ def save(
 
     Under ``tt-run`` with several ranks the call is collective (the package docstring has the rules): each rank writes
     the shards of the coordinates it holds into its own files in a shared directory, and rank 0 merges the ranks' parts
-    into one index. The ranks' scheduler and dataloader states must be equal, and so must their optimizers' scalars
-    (steps, learning rates; every rank passes an optimizer or none), since the checkpoint stores one copy; their
-    generators are stored per rank. The user header stored is rank 0's. The result on each rank lists that rank's files
+    into one index. The ranks' scheduler states must be equal, and so must their optimizers' scalars (steps, learning
+    rates; every rank passes an optimizer or none), since the checkpoint stores one copy; their generators are stored
+    per rank, and their dataloader states once when equal and per rank otherwise (a data-parallel loader that keeps a
+    seed or a shard of its own). The user header stored is rank 0's. The result on each rank lists that rank's files
     and bytes; ``keys`` counts the whole checkpoint.
     """
     t0 = time.perf_counter()
@@ -327,9 +328,11 @@ def save(
         if optimizer is not None:
             state_live, scalars = collect_optimizer(optimizer, live)
             live.extend(state_live)
-        shared_state = {k: v for k, v in train_state.items() if k != "rng"}
         record = RankRecord.from_json(rank_record(rank, world_rank))
-        part = PlanPart(record, [lt.info for lt in live], state_hash(shared_state))
+        hashes = [
+            state_hash({k: v for k, v in train_state.items() if k == name}) for name in ("scheduler", "dataloader")
+        ]
+        part = PlanPart(record, [lt.info for lt in live], *hashes)
         progress = {k: v for k, v in scalars.items() if not is_structural_scalar(k)}
         payload = group.outgoing(part, "this rank's plan part")
         return target, live, scalars, progress, user_header, train_state, record, payload
@@ -413,6 +416,9 @@ def save(
             ]
             shared_state = dict(train_state)
             generators = shared_state.pop("rng", {})
+            own_loader = {}
+            if election.dataloader_per_rank and "dataloader" in shared_state:
+                own_loader = {str(world_rank): shared_state.pop("dataloader")}
             # The header and the scheduler and dataloader state stored are rank 0's (the latter two agree, by hash).
             first = group.is_coordinator
             result = ResultPart(
@@ -423,6 +429,7 @@ def save(
                 scalars,
                 user_header if first else {},
                 shared_state if first else {},
+                own_loader,
             )
             return plan, group.outgoing(result, "this rank's result part")
 

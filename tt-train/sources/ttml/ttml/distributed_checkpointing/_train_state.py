@@ -16,6 +16,12 @@ their state words; ``ttml.init``'s own numpy generator, which draws the initial 
 Restoring on a world with another number of hosts: a rank takes its own entry when the checkpoint has one,
 otherwise it keeps its current generators and warns.
 
+The dataloader state is stored once (``"dataloader"``) when every rank's is the same, and per world rank
+(``"dataloader_ranks"``) when the ranks' differ, as data-parallel loaders that keep a seed or a shard of their own do.
+A rank then restores its own; one the checkpoint holds none for (a world with more ranks than the save, or a rank
+that saved without a dataloader) is missing it, which a strict load refuses: a loader that starts over while the
+others resume would repeat data without a word.
+
 ``load`` checks what it can before it touches anything (the RNG block's format, and that this rank's entry decodes)
 and restores in an order that keeps a refusal cheap: the scheduler first (its ``set_state_dict`` leaves it unchanged
 when it refuses a state), then the dataloader, then the generators. A component that refuses its state raises a
@@ -262,6 +268,18 @@ def restore_process_rng(state: dict) -> list[str]:
     return restored
 
 
+DATALOADER_RANKS = "dataloader_ranks"  # the per-rank dataloader states: {world rank: state}
+
+
+def dataloader_state(state: dict, world_rank: int) -> tuple[bool, Any]:
+    """``(found, dataloader state)`` for this world rank: the one copy every rank shares, or its own when the states
+    were stored per rank."""
+    if "dataloader" in state:
+        return True, state["dataloader"]
+    own = state.get(DATALOADER_RANKS, {})
+    return str(int(world_rank)) in own, own.get(str(int(world_rank)))
+
+
 def capture_train_state(*, scheduler=None, dataloader=None, rng: bool = True, world_rank: int = 0) -> dict:
     """The ``train_state`` block ``save`` stores: whichever of the scheduler, the dataloader and the generators
     are asked for."""
@@ -275,10 +293,18 @@ def capture_train_state(*, scheduler=None, dataloader=None, rng: bool = True, wo
     return state
 
 
-def missing_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool = False) -> list[str]:
-    """``train_state/<component>`` for every component asked for that the checkpoint does not hold."""
+def missing_train_state(
+    state: dict, *, scheduler=None, dataloader=None, rng: bool = False, world_rank: int = 0
+) -> list[str]:
+    """``train_state/<component>`` for every component asked for that the checkpoint does not hold (a dataloader
+    stored per rank: none for this world rank)."""
+    held = {
+        "scheduler": "scheduler" in state,
+        "dataloader": dataloader_state(state, world_rank)[0],
+        "rng": "rng" in state,
+    }
     wanted = (("scheduler", scheduler is not None), ("dataloader", dataloader is not None), ("rng", rng))
-    return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and name not in state]
+    return [f"{TRAIN_STATE_KEY}/{name}" for name, asked in wanted if asked and not held[name]]
 
 
 def missing_train_state_error(missing: list[str], *, rng_by_default: bool) -> MissingKeyError:
@@ -297,8 +323,9 @@ def check_train_state(state: dict, *, scheduler=None, dataloader=None, rng: bool
     """What can be checked before ``load`` touches anything: that a scheduler or dataloader passed can take a state
     (a ``set_state_dict``), the RNG block's format, and that this rank's entry decodes. The scheduler and dataloader
     states themselves can only be judged by their own ``set_state_dict``, after the tensors are placed."""
+    held = {"scheduler": "scheduler" in state, "dataloader": dataloader_state(state, world_rank)[0]}
     for name, component in (("scheduler", scheduler), ("dataloader", dataloader)):
-        if component is not None and name in state and not callable(getattr(component, "set_state_dict", None)):
+        if component is not None and held[name] and not callable(getattr(component, "set_state_dict", None)):
             raise TypeError(f"the {name} passed ({type(component).__name__}) has no set_state_dict to restore it with")
     if rng and "rng" in state:
         _check_rng_format(state["rng"])
@@ -329,8 +356,9 @@ def restore_train_state(
     if scheduler is not None and "scheduler" in state:
         _apply("scheduler", scheduler.set_state_dict, state["scheduler"])
         restored.append("scheduler")
-    if dataloader is not None and "dataloader" in state:
-        _apply("dataloader", dataloader.set_state_dict, state["dataloader"])
+    found, loader_state = dataloader_state(state, world_rank)
+    if dataloader is not None and found:
+        _apply("dataloader", dataloader.set_state_dict, loader_state)
         restored.append("dataloader")
     if rng and "rng" in state:
         restored.extend(restore_rng(state["rng"], world_rank))

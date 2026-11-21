@@ -740,15 +740,32 @@ def test_an_oversized_payload_fails_every_rank_inside_its_phase(monkeypatch):
     assert all("more than a transfer can carry" in str(e) for e in errors.values()), "every rank names the cause"
 
 
-def test_ranks_must_agree_on_scheduler_and_loader(expect_error):
-    """Ranks with different scheduler or dataloader state are refused."""
+def test_ranks_must_agree_on_the_scheduler_and_differing_loaders_are_stored_per_rank(expect_error):
+    """The checkpoint stores one scheduler state, which every rank restores, so the ranks' must agree. Their dataloader
+    states are stored once when they agree, and per rank when they differ."""
     parts = _big_mesh_parts()
-    parts[0].train_state_hash, parts[1].train_state_hash = 11, 12
-    with expect_error(CheckpointError, r"rank\(s\) \[1\] differs from rank 0"):
+    parts[0].scheduler_hash, parts[1].scheduler_hash = 11, 12
+    with expect_error(CheckpointError, r"^the scheduler state of rank\(s\) \[1\] differs from rank 0's"):
         merge_plan_parts(parts)
-    parts[1].train_state_hash = 11
-    assert merge_plan_parts(parts).owners
-    assert PlanPart.from_bytes(parts[1].to_bytes()).train_state_hash == 11
+    parts[1].scheduler_hash = 11
+    assert not merge_plan_parts(parts).dataloader_per_rank
+    parts[1].dataloader_hash = 13
+    election = merge_plan_parts(parts)
+    assert election.dataloader_per_rank and Election.from_bytes(election.to_bytes()) == election
+    back = PlanPart.from_bytes(parts[1].to_bytes())
+    assert (back.scheduler_hash, back.dataloader_hash) == (11, 13)
+
+
+def test_differing_dataloader_states_are_stored_per_world_rank():
+    """With per-rank dataloader states, every rank's result part carries its own, keyed by its world rank, and the
+    header stores them all beside rank 0's one copy of the scheduler state."""
+    election, r0, r1 = _big_mesh_save()
+    election.dataloader_per_rank = True
+    r0.dataloader, r1.dataloader = {"0": {"position": 4}}, {"1": {"position": 5}}
+    assert ResultPart.from_bytes(r1.to_bytes()).dataloader == {"1": {"position": 5}}
+    _, header = merge_results([r0, r1], election, "step_0000003")
+    assert header["train_state"]["dataloader_ranks"] == {"0": {"position": 4}, "1": {"position": 5}}
+    assert "dataloader" not in header["train_state"] and header["train_state"]["scheduler"] == {"m_last_step": 3}
 
 
 def test_param_group_members_merge_across_ranks(expect_error):

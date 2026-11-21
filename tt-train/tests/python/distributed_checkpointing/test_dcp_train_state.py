@@ -226,6 +226,25 @@ def test_refused_state_stops_the_restore_first(expect_error):
     assert loader.position == 0, "the scheduler is restored first, so the loader has not moved"
 
 
+def test_a_dataloader_stored_per_rank_restores_each_ranks_own(expect_error):
+    """Dataloader states the saving ranks did not share are stored per world rank: each rank restores its own, and a
+    rank the checkpoint holds none for is missing it, so a strict load refuses it rather than let its loader start
+    over while the others resume."""
+    stored = {"dataloader_ranks": {"0": {"position": 4}, "1": {"position": 5}}}
+    for world_rank, position in ((0, 4), (1, 5)):
+        loader = Loader()
+        check_train_state(stored, dataloader=loader, world_rank=world_rank)
+        assert missing_train_state(stored, dataloader=loader, world_rank=world_rank) == []
+        assert restore_train_state(stored, dataloader=loader, world_rank=world_rank) == ["dataloader"]
+        assert loader.position == position
+    loader = Loader()
+    assert missing_train_state(stored, dataloader=loader, world_rank=2) == ["train_state/dataloader"]
+    assert restore_train_state(stored, dataloader=loader, world_rank=2) == [] and loader.position == 0
+    with expect_error(TypeError, r"the dataloader passed \(list_iterator\) has no set_state_dict"):
+        check_train_state(stored, dataloader=iter([]), world_rank=1)
+    check_train_state(stored, dataloader=iter([]), world_rank=2)  # nothing stored for it: nothing to restore it with
+
+
 def test_component_without_state_setter_is_refused(expect_error):
     """A component that cannot take a state is refused before anything is placed."""
     stored = {"scheduler": {"m_last_step": 3}, "dataloader": {"position": 5}}

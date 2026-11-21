@@ -290,6 +290,34 @@ def test_a_rank_that_placed_its_tensors_says_so_when_another_rank_fails(two_rank
     ttnn.distributed_context_barrier()
 
 
+def test_differing_dataloaders_are_stored_per_rank(two_ranks, expect_error):
+    """Data-parallel loaders keep a position (a seed, a shard) of their own: the ranks' differing states are stored
+    per world rank, and each rank restores its own. A rank that saved without a dataloader has no state to restore,
+    which a strict load with one refuses on every rank."""
+    rank, local, root = two_ranks
+    model, params, opt = fresh_tp(DIM)
+    loader = Loader()
+    for _ in range(3 + rank):
+        loader.advance()
+    path = os.path.join(root, "per_rank_loaders")
+    dcp.save(path, model=model, dataloader=loader)
+    stored = dcp.read_train_state(path)
+    assert stored["dataloader_ranks"] == {"0": {"position": 3}, "1": {"position": 4}} and "dataloader" not in stored
+    resumed = Loader()
+    assert "dataloader" in dcp.load(path, model=model, dataloader=resumed, rng=False).restored
+    assert resumed.position == 3 + rank, "each rank restores its own"
+
+    path = os.path.join(root, "one_loader")
+    dcp.save(path, model=model, dataloader=loader if rank == 0 else None)
+    assert dcp.read_train_state(path)["dataloader_ranks"] == {"0": {"position": 3}}
+    with expect_error(
+        dcp.MissingKeyError,
+        r"reading the index and collecting the live tensors failed on rank\(s\) \[1\] of 2: .*train_state/dataloader",
+    ):
+        dcp.load(path, model=model, dataloader=Loader(), rng=False)
+    ttnn.distributed_context_barrier()
+
+
 def test_a_failure_on_one_rank_stops_every_rank_and_names_it(two_ranks, monkeypatch, expect_error):
     """The one-rank failures save and load must turn into the same error on every rank: a header that is not JSON
     on rank 1, a data file rank 1 cannot create (the staging directory is then removed), and ranks that load with
