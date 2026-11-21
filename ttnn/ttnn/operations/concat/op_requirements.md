@@ -43,6 +43,20 @@
 
 **Done when**: every golden cell with `layout=ROW_MAJOR` inside the new SUPPORTED passes exactly; regime-pinned RM tests (dim -1 with a non-16-aligned seam, dim -2) assert the host's regime choice; the session test covers the RM path; all TILE cells still pass.
 
+### [ ] Refinement 10 — Height-sharded tensors in L1 (the YOLOv8 neck join)
+
+**Goal**: add `"height"` to SUPPORTED["sharding"]: every tensor of the list height-sharded in L1, each with a shard shape and cores of its own, in both layouts the op supports by now (TILE and, after Refinement 1, ROW_MAJOR), at the supported values of every other axis. The specification's TARGET gained this value after Phase 0 (rules R3, R5 and R6, the INVALID entry DRAM x height, the INPUTS entry `(-1, [1, 1, 64, 64], [1, 1, 64, 32])`, the DECISIONS entry of 2026-11-21). The result stays in DRAM, interleaved (R5).
+
+**Origin**: the model-level test. YOLOv8's neck (`models/experimental/ops/quasar/tests/yolo_ops/test_concat_small_grid.py::test_concat_neck_sharded_small_grid`) calls `concat([a, b], dim=-1)` on a `[1, 1, 64, 64]` and a `[1, 1, 64, 32]` bfloat16 ROW_MAJOR tensor, height-sharded in L1 over two cores (shard shapes [32, 64] and [32, 32]) and over one (shard shapes [64, 64] and [64, 32]), and gets a `[1, 1, 64, 96]` tensor in DRAM, interleaved. The Phase 0 op refuses both calls by name, and tt-metal's op serves them. This refinement comes after Refinement 1 because those calls are row-major.
+
+**Operator notes** (queued by the operator of the run, not by the verifier):
+- A sibling op gives a hint, not a proof: the generated `add`, which reads and writes pages through `TensorAccessor`, served height-sharded operands once its gate let them through, with no change to its kernels. Check whether the same holds for this op's readers in each layout before changing anything, and say in the changelog what you found.
+- Not looked at by anyone yet: tensors of one call whose shard grids differ (the runner gives each tensor the cores its own shape divides over, `eval/CONVENTIONS.md` §2.3, `eval/memory.py`; a join along `dim=-2` has tensors with different numbers of rows), a shard grid of one core, and the op in one device session with tt-metal programs before and after it on sharded tensors.
+- The op must not depend on how many cores a shard grid spans. A cell whose input shards do not fit one core's L1 is skipped by the runner.
+- Keep the data path: reading each shard on the core that holds it is a performance refinement of its own and is not asked for here.
+
+**Done when**: every golden cell with `sharding=height` inside the new SUPPORTED passes exactly; the interleaved cells are unchanged; `verify_supported` loud categories are 0; a test in the op's own test file makes the model's call (row-major, two cores and one) and asserts the values and that the result is in DRAM, interleaved.
+
 ### [ ] Refinement 2 — Leading dimensions, one and five tensors, rank 2
 
 **Goal**: add `-3` and `-4` to `SUPPORTED["dim"]`, `1` and `5` to `SUPPORTED["count"]`, and `2` to `SUPPORTED["rank"]`, for both layouts.
