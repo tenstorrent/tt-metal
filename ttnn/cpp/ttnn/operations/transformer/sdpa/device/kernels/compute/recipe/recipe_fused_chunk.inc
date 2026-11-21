@@ -265,15 +265,14 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // Check unit size (groups per check). STANDARD is math-bound, so halving the checks' fixed cost pays;
     // FAST checks every group.
     constexpr uint32_t CG = recipe::lofi ? 1 : 2;
-    auto check_groups = [&](uint32_t g0, uint32_t n) SDPA_FUSED_STEP {
+    // Saturation check of Q tile rows [row0, row_end).
+    auto check_rows = [&](uint32_t row0, uint32_t row_end) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
-        const uint32_t last = g0 + n - 1;
-        const uint32_t row_end = H * last + rows(last);
-        CircularBuffer(cb_qkt_im).wait_front(row_end * KT);  // the groups' sums were packed before their push
+        CircularBuffer(cb_qkt_im).wait_front(row_end * KT);  // the rows' sums were packed before their push
         set_srca(psum_cb);
         reduce_init<PoolType::MAX, check_dim>(psum_cb, cb_identity_scale_in, check_cb);
         tile_regs_acquire();
-        for (uint32_t t = H * g0 * sbw; t < row_end * sbw; ++t) {
+        for (uint32_t t = row0 * sbw; t < row_end * sbw; ++t) {
             reduce_tile<PoolType::MAX, check_dim>(psum_cb, cb_identity_scale_in, t, 0, 0);
         }
         tile_regs_commit();
@@ -289,6 +288,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         pack_tile(0, check_cb);
         tile_regs_release();
         CircularBuffer(check_cb).push_back(1);
+    };
+    auto check_groups = [&](uint32_t g0, uint32_t n) {
+        const uint32_t last = g0 + n - 1;
+        check_rows(H * g0, H * last + rows(last));
     };
     // The verdict of the oldest issued check: does any of its groups' partial sums reach the redo threshold.
     auto read_check = [&]() SDPA_FUSED_STEP -> bool {
@@ -318,10 +321,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     // PV of group g over K tiles [k0, k0 + k_len), L1-accumulated into O plane `plane` (0: O, vDHt: a redone
     // group's chunk PV, written by the first piece).
     bool v_ready = false;
-    auto pv_piece = [&](uint32_t g, uint32_t k0, uint32_t k_len, uint32_t plane, bool accumulate) SDPA_FUSED_STEP {
+    // `rel0`: row0's offset in its group, in units of h (O's write pointer is at the group's first row).
+    auto pv_rows = [&](uint32_t row0, uint32_t h, uint32_t rel0, uint32_t k0, uint32_t k_len, uint32_t plane,
+                       bool accumulate) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
-        const uint32_t h = rows(g);
-        const uint32_t row0 = H * g;
         if constexpr (recipe::ring_stream_state) {
             if (plane == 0) {
                 recipe_stream_wait_rows(row0 + h);
@@ -344,7 +347,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 out_cb,
                 row0 * KT + k0,
                 k0 * vDHt + v * pv_w,
-                0,
+                rel0,
                 v * pv_w + plane,
                 pv_w,
                 h,
@@ -356,14 +359,14 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
     };
 
     // l += this chunk's sums for an unchanged group.
-    auto fold_sums = [&](uint32_t g) SDPA_FUSED_STEP {
+    // `rel0`: row0's offset in its group (the sums CB's write pointer is at the group's first row).
+    auto fold_rows = [&](uint32_t row0, uint32_t h, uint32_t rel0) SDPA_FUSED_STEP {
         SDPA_FUSED_LEAVE_QK();
-        const uint32_t h = rows(g);
         set_srca(psum_cb);
         copy_init(psum_cb);
         tile_regs_acquire();
         for (uint32_t t = 0; t < h * sbw; ++t) {
-            copy_tile(psum_cb, H * g * sbw + t, t);
+            copy_tile(psum_cb, row0 * sbw + t, t);
         }
         tile_regs_commit();
         tile_regs_wait();
@@ -372,7 +375,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         PACK((llk_pack_reconfig_l1_acc(1)));
         for (uint32_t i = 0; i < h; ++i) {
             for (uint32_t j = 0; j < sbw; ++j) {
-                pack_tile<true>(i * sbw + j, cur.sum, i);
+                pack_tile<true>(i * sbw + j, cur.sum, rel0 + i);
             }
         }
         PACK((llk_pack_reconfig_l1_acc(0)));
@@ -405,14 +408,13 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
 
     // Redo group g on the reduce path (rare): scores, the real max with the theta select, P and sums,
     // its PV into plane 1, then O = O * c + PV and l = l * c + l_chunk row by row.
-    auto redo_group = [&](uint32_t g) SDPA_FUSED_REDO {
+    // `gi`: the rows' index in units of h (the helpers address rows as index * height); `rel0`: row0's offset in its
+    // group (the O and sums CBs' pointers are at the group's first row).
+    auto redo_rows = [&](uint32_t row0, uint32_t h, uint32_t gi, uint32_t rel0) SDPA_FUSED_REDO {
         SDPA_FUSED_LEAVE_QK();
-        const uint32_t h = rows(g);
-        const uint32_t row0 = H * g;
         if constexpr (recipe::ring_stream_state) {
             recipe_stream_wait_rows(row0 + h);
         }
-        const uint32_t gi = gindex(g);
         set_srca(cb_kt_in);
         recipe_mm_init(cb_q_in, cb_kt_in, true, sbw, h, DHt);
         set_pack(cb_qkt_im);
@@ -445,10 +447,10 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         srca = cb_qkt_im;
         pack_to_unpack_barrier();
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
-            pv_piece(g, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
+            pv_rows(row0, h, rel0, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), vDHt, piece > 0);
         }
         pack_to_unpack_barrier();
-        const uint32_t read_base = is_last_iter ? 0 : row0;
+        const uint32_t read_base = is_last_iter ? rel0 : row0;
         for (uint32_t r = 0; r < h; ++r) {
             // c = exp(scale * (m_old - m_new)) for this Q tile row, column-broadcast below.
             set_srca(prev.max);
@@ -486,7 +488,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
             PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
             set_pack(cur.sum);
             configure_single_tile_pack(cur.sum);
-            pack_tile<true>(0, cur.sum, r);
+            pack_tile<true>(0, cur.sum, rel0 + r);
             tile_regs_release();
             // O = O * c + PV, two head-dim tiles at a time
             for (uint32_t j = 0; j < vDHt; j += 2) {
@@ -519,7 +521,7 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
                 set_pack(out_cb);
                 configure_single_tile_pack(out_cb);
-                const uint32_t wbase = r * 2 * vDHt + j;
+                const uint32_t wbase = (rel0 + r) * 2 * vDHt + j;
                 pack_tile<true>(0, out_cb, wbase);
                 if (pair) {
                     pack_tile<true>(1, out_cb, wbase + 1);
@@ -547,15 +549,28 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         arm_exp();
     };
 
+    // Redo the rows of group pg in `row_redo` (bit r: the group's row r): all of them as the group, or a lone row as a
+    // one-row group. pv_row0 / pv_h become the rows that keep the fused result. Out of line: rare.
+    auto redo_group_rows = [&](uint32_t pg, uint32_t row_redo, uint32_t& pv_row0, uint32_t& pv_h) SDPA_FUSED_REDO {
+        // One redo site (the Wormhole builds inline it).
+        const bool whole = row_redo == (1u << pv_h) - 1;
+        const uint32_t lone = row_redo == 1u ? 0 : 1;
+        const uint32_t row0 = whole ? pv_row0 : pv_row0 + lone;
+        redo_rows(row0, whole ? pv_h : 1, whole ? gindex(pg) : row0, whole ? 0 : lone);
+        pv_row0 += whole ? 0 : 1 - lone;
+        pv_h = whole ? 0 : 1;
+    };
     // Non-last chunks fold every unchanged group's sums once at the end (one pack-format switch); the last
     // chunk folds per group, ahead of each group's normalization.
     const bool late_fold = !is_last_iter;
-    uint32_t redone = 0;
+    uint32_t redone_rows = 0;  // bit r: Q tile row r took the reduce path
     // Groups are checked in units of CG: one reduce, one verdict and one round of handshakes per unit; a unit
     // whose verdict fires is re-checked group by group, so only the groups that need it are redone. Iteration it runs
     // QK of group it, the check of the unit ending at group it - 1 and PV of group it - CG - 1, so a unit's verdicts
     // are read one iteration after its check was issued and before its first group's PV touches O.
-    uint32_t unit_redo = 0;  // the current check unit's verdicts, bit j for its group j
+    // The current check unit's verdicts, bit H * j + r for row r of its group j. Every recheck runs here, while no
+    // later check is in flight (the next unit's check is issued after this unit's first PV).
+    uint32_t unit_redo = 0;
     for (uint32_t it = 0; it < G + CG + 1; ++it) {
         const bool do_qk = it < G;
         const uint32_t cg_last = it - 1;
@@ -564,21 +579,50 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         const uint32_t pg = it - CG - 1;
         if (do_pv && pg % CG == 0) {
             const uint32_t n = G - pg < CG ? G - pg : CG;
-            unit_redo = read_check() ? 1u : 0u;
-            if (unit_redo && n > 1) {
-                // Rare: find which groups need the redo (redoing a neighbour would change its numerics).
-                unit_redo = 0;
+            unit_redo = 0;
+            if (read_check()) {
+                // Rare: find which rows need the redo (redoing a neighbour would change its numerics). A group that
+                // fires alone needs no group recheck; a two-row group rechecks each row.
+                // One check site (the Wormhole builds inline every step): probe 0 is the group (none for a lone
+                // group), the next ones its rows (two-row groups only, once the group fired).
                 for (uint32_t j = 0; j < n; ++j) {
-                    check_groups(pg + j, 1);
-                    unit_redo |= (read_check() ? 1u : 0u) << j;
+                    const uint32_t r0 = H * (pg + j);
+                    const uint32_t h = rows(pg + j);
+                    const uint32_t group_probes = n == 1 ? 0 : 1;
+                    bool fires = n == 1;
+                    uint32_t bits = 0;
+                    for (uint32_t probe = 0; probe < group_probes + (h == 2 ? 2 : 0); ++probe) {
+                        const bool group_probe = probe < group_probes;
+                        if (!group_probe && !fires) {
+                            break;
+                        }
+                        const uint32_t a = group_probe ? r0 : r0 + probe - group_probes;
+                        check_rows(a, group_probe ? r0 + h : a + 1);
+                        const bool verdict = read_check();
+                        if (group_probe) {
+                            fires = verdict;
+                        } else {
+                            bits |= (verdict ? 1u : 0u) << (a - r0);
+                        }
+                    }
+                    if (fires) {
+                        // A one-row group, or a two-row group whose rows each stay below the threshold, redoes all.
+                        unit_redo |= (h == 1 || bits == 0 ? (1u << h) - 1 : bits) << (H * j);
+                    }
                 }
             }
         }
-        if (do_pv && ((unit_redo >> (pg % CG)) & 1u)) {
-            redo_group(pg);
-            finish_group(pg);
-            redone |= 1u << pg;
-            do_pv = false;
+        // The rows of group pg that keep the fused result (the group's rows unless it needs the redo).
+        uint32_t pv_row0 = H * pg;
+        uint32_t pv_h = do_pv ? rows(pg) : 0;
+        const uint32_t row_redo = do_pv ? (unit_redo >> (H * (pg % CG))) & ((1u << pv_h) - 1) : 0;
+        if (row_redo != 0) {
+            redo_group_rows(pg, row_redo, pv_row0, pv_h);
+            redone_rows |= row_redo << (H * pg);
+            if (pv_h == 0) {
+                finish_group(pg);
+                do_pv = false;
+            }
         }
         for (uint32_t piece = 0; piece < n_pieces; ++piece) {
             if (do_qk) {
@@ -593,12 +637,12 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
                 check_groups(cg_last - cg_last % CG, cg_last % CG + 1);
             }
             if (do_pv) {
-                pv_piece(pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
+                pv_rows(pv_row0, pv_h, pv_row0 - H * pg, piece_k0(piece), piece_k0(piece + 1) - piece_k0(piece), 0, true);
             }
         }
         if (do_pv) {
             if (!late_fold) {
-                fold_sums(pg);
+                fold_rows(pv_row0, pv_h, pv_row0 - H * pg);
             }
             finish_group(pg);
         }
@@ -614,19 +658,26 @@ static SDPA_FUSED_CHUNK_ATTR void sdpa_fused_chunk(
         configure_single_tile_pack(cur.sum);
         PACK((llk_pack_reconfig_l1_acc(1)));
         for (uint32_t g = 0; g < G; ++g) {
-            if ((redone >> g) & 1u) {
+            uint32_t row0 = H * g;
+            uint32_t h = rows(g);
+            const uint32_t mask = (redone_rows >> row0) & ((1u << h) - 1);
+            if (mask == (1u << h) - 1) {
                 continue;
             }
-            const uint32_t h = rows(g);
+            if (mask != 0) {
+                // One row of a two-row group was redone: fold the other.
+                row0 += mask == 1u ? 1 : 0;
+                h = 1;
+            }
             tile_regs_acquire();
             for (uint32_t t = 0; t < h * sbw; ++t) {
-                copy_tile(psum_cb, H * g * sbw + t, t);
+                copy_tile(psum_cb, row0 * sbw + t, t);
             }
             tile_regs_commit();
             tile_regs_wait();
             for (uint32_t i = 0; i < h; ++i) {
                 for (uint32_t j = 0; j < sbw; ++j) {
-                    pack_tile<true>(i * sbw + j, cur.sum, H * g + i);
+                    pack_tile<true>(i * sbw + j, cur.sum, row0 + i);
                 }
             }
             tile_regs_release();
