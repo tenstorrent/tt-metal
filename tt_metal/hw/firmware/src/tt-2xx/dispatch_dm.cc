@@ -149,6 +149,14 @@ extern "C" uint32_t _start1() {
 #endif
 
         noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#if defined(NOC_API_V1)
+        // The V1 NoC barriers compare the NIU's counters (e.g. NIU_MST_RD_RESP_RECEIVED) with software shadow
+        // counters that restart at zero on every firmware boot. A RISC soft reset does not reset the NIU, so
+        // after a device close/reopen the two counters drift apart, breaking the barrier implementation.
+        // Re-sync the shadow counters from the hardware once per boot, here, while every DM hart is idle.
+        // The V2 path does not have shadow counters, so the re-sync is not needed on that path.
+        noc_local_state_init(noc_index);
+#endif
         DeviceProfilerInit();
         while (1) {
             WAYPOINT("GW");
