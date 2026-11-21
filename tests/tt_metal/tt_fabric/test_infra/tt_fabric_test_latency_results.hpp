@@ -7,6 +7,7 @@
 #include <cmath>
 #include <filesystem>
 #include <optional>
+#include <ostream>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -172,8 +173,6 @@ public:
 
     void setup_latency_test_mode(const TestConfig& config);
     void setup_latency_test_workers(TestConfig& config, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
-    void create_latency_kernels_for_device(
-        TestDevice& test_device, std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
 
     LatencyWorkerLocation get_latency_sender_location(std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
     LatencyWorkerLocation get_latency_receiver_location(std::unordered_map<MeshCoordinate, TestDevice>& test_devices);
@@ -185,7 +184,7 @@ public:
     void initialize_results_csv_file(bool telemetry_enabled_) override;
     void load_golden_csv() override;
     void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) override;
-    void append_to_csv(const TestConfig& config, const LatencyResult& result);
+    void append_to_csv(std::ostream& csv_stream, const LatencyResult& result);
     void compare_latency_results_with_golden();
     void generate_latency_summary();
     void setup_ci_artifacts();
