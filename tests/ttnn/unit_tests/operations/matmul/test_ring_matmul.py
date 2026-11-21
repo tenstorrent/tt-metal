@@ -38,10 +38,11 @@ GRID = [
 ]
 
 
-def run_matmul_1d_dram_sharded(device, num_iters=1):
+def run_matmul_1d_dram_sharded(device, in1_dtype, per_core_N, num_iters=1):
     """
     Minimal matmul 1D test with all configs hardcoded from debugger output.
     """
+    N = len(GRID) * per_core_N * 32
     # Core range set for in0 and output
     core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(x, y), ttnn.CoreCoord(x, y)) for x, y in GRID])
 
@@ -52,19 +53,19 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
         ttnn.ShardSpec(core_range_set, [32, 64], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    # in1 sharded in DRAM: grid={(x=0,y=0)-(x=11,y=0)}, shape={1280, 320}
+    # in1 sharded in DRAM: grid={(x=0,y=0)-(x=11,y=0)}, shape={1280, N / 12}
     in1_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(11, 0))})
     in1_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.DRAM,
-        ttnn.ShardSpec(in1_shard_grid, [1280, 320], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(in1_shard_grid, [1280, N // 12], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     # Output sharded in L1 (same grid as in0)
     output_sharded_mem_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
         ttnn.BufferType.L1,
-        ttnn.ShardSpec(core_range_set, [32, 160], ttnn.ShardOrientation.ROW_MAJOR),
+        ttnn.ShardSpec(core_range_set, [32, per_core_N * 32], ttnn.ShardOrientation.ROW_MAJOR),
     )
 
     # Program config for ring matmul
@@ -72,9 +73,9 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
         compute_with_storage_grid_size=(6, 4),
         in0_block_w=1,
         out_subblock_h=1,
-        out_subblock_w=5,
+        out_subblock_w=per_core_N if per_core_N <= 5 else 4,
         per_core_M=1,
-        per_core_N=5,
+        per_core_N=per_core_N,
         fuse_batch=True,
         fused_activation=None,
         mcast_in0=False,
@@ -95,7 +96,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
     # Create test data
     torch.manual_seed(0)
     in0_original = torch.randn([1, 1, 32, 1280], dtype=torch.bfloat16)
-    in1_original = torch.randn([1, 1, 1280, 3200], dtype=torch.bfloat16)
+    in1_original = torch.randn([1, 1, 1280, N], dtype=torch.bfloat16)
 
     # Multiple iterations to test with program cache
     for _ in range(3):
@@ -114,7 +115,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
             in1,
             device=device,
             layout=ttnn.TILE_LAYOUT,
-            dtype=ttnn.bfloat8_b,
+            dtype=in1_dtype,
             memory_config=in1_sharded_mem_config,
         )
 
@@ -155,8 +156,8 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
             ring_out,
             atol=0.1868 * 1280,
             rtol=2.125 * 1280,
-            frobenius_threshold=0.0004 * 1280,
-            pcc_threshold=0.9,
+            frobenius_threshold=0.02,
+            pcc_threshold=0.999,
         )
 
 
@@ -166,5 +167,7 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
     [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL}],
     indirect=True,
 )
-def test_multi_core_matmul_1d_wh_minimal(device, function_level_defaults):
-    run_matmul_1d_dram_sharded(device)
+# per_core_N=8 in bfloat16 is a 16 KiB in1 block row: two full 8 KiB pages and no partial one
+@pytest.mark.parametrize("in1_dtype, per_core_N", [(ttnn.bfloat8_b, 5), (ttnn.bfloat16, 8)])
+def test_multi_core_matmul_1d_wh_minimal(device, in1_dtype, per_core_N, function_level_defaults):
+    run_matmul_1d_dram_sharded(device, in1_dtype, per_core_N)
