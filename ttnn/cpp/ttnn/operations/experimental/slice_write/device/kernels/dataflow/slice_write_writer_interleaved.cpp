@@ -5,6 +5,9 @@
 #include <stdint.h>
 #include <algorithm>
 #include "api/dataflow/dataflow_api.h"
+#ifdef SHARDED_RM_SCRATCH_CB
+#include "ttnn/operations/data_movement/common/kernels/common.hpp"
+#endif
 #include <ttnn/operations/pool/device/kernels/experimental_device_api.hpp>
 
 void kernel_main() {
@@ -51,22 +54,58 @@ void kernel_main() {
 
     Noc noc;
     experimental::CB cb_out0(cb_id_out0);
+#ifdef SHARDED_RM_SCRATCH_CB
+    experimental::CB cb_scratch(SHARDED_RM_SCRATCH_CB);
+    const uint32_t dst_misalignment = dst_addr & (NOC_L1_READ_ALIGNMENT_BYTES - 1);
+    const uint32_t cb_scratch_base = cb_scratch.get_read_ptr();
+    constexpr uint32_t scratch_page_size = SHARDED_RM_SCRATCH_PAGE_SIZE;
+#endif
 
     uint32_t dst_stick_id = start_id;
     uint32_t sticks_read = 0;
     for (uint32_t iter = 0; iter < num_sticks_per_core_read and sticks_read < num_sticks_per_core; ++iter) {
         cb_out0.wait_front(num_read_per_barrier);
         uint32_t src_offset = 0;
+#ifdef SHARDED_RM_SCRATCH_CB
+        const uint32_t cb_out0_base = cb_out0.get_read_ptr();
+        uint32_t scratch_slot = 0;
+#endif
 
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
 #ifdef UNPAD_INPUT_WIDTH
-            if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0]) {
+            if ((id_per_dim[0] + padding_width_ntiles + 1) <= num_unpadded_sticks[0] && noc_write_size > 0) {
                 noc.async_write(cb_out0, s0, noc_write_size, {.offset_bytes = src_offset}, {.page_id = dst_stick_id});
             }
+#elif defined(SHARDED_RM_SCRATCH_CB)
+            if (noc_write_size > 0) {
+                if (dst_misalignment == 0) {
+                    noc.async_write(
+                        cb_out0,
+                        s0,
+                        noc_write_size,
+                        {.offset_bytes = src_offset + page_offset},
+                        {.page_id = dst_stick_id});
+                } else {
+                    const uint32_t scratch_offset = scratch_slot * scratch_page_size + dst_misalignment;
+                    tt::data_movement::common::tt_memmove<false, false, false, 0>(
+                        noc,
+                        cb_scratch_base + scratch_offset,
+                        cb_out0_base + src_offset + page_offset,
+                        noc_write_size);
+                    noc.async_write(
+                        cb_scratch, s0, noc_write_size, {.offset_bytes = scratch_offset}, {.page_id = dst_stick_id});
+                    if (scratch_slot == 1) {
+                        noc.async_write_barrier();
+                    }
+                    scratch_slot ^= 1;
+                }
+            }
 #else
-            noc.async_write(
-                cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+            if (noc_write_size > 0) {
+                noc.async_write(
+                    cb_out0, s0, noc_write_size, {.offset_bytes = src_offset + page_offset}, {.page_id = dst_stick_id});
+            }
 #endif
 #ifdef DEBUG
             DPRINT(

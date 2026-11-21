@@ -53,12 +53,14 @@ void kernel_main() {
         uint32_t src_offset = 0;
         for (uint32_t i = 0; i < num_read_per_barrier and sticks_read < num_sticks_per_core; ++i) {
             sticks_read++;
-            noc.async_write(
-                cb_in0,
-                s0,
-                noc_write_size,
-                {.offset_bytes = src_offset},
-                {.page_id = dst_stick_id, .offset_bytes = dst_byte_offset});
+            if (noc_write_size > 0) {
+                noc.async_write(
+                    cb_in0,
+                    s0,
+                    noc_write_size,
+                    {.offset_bytes = src_offset},
+                    {.page_id = dst_stick_id, .offset_bytes = dst_byte_offset});
+            }
             src_offset += stick_size_offset;
             dst_stick_id++;
             for (uint32_t j = 0; j < num_dims; j++) {
