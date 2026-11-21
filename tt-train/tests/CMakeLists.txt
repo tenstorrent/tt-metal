@@ -72,6 +72,7 @@ set(SOURCES
     ops/rmsnorm_op_test.cpp
     ops/polynorm_op_test.cpp
     ops/unary_ops_test.cpp
+    ops/log_softmax_test.cpp
     ops/embedding_op_test.cpp
     ops/softmax_test.cpp
     ops/softmax_backward_op_test.cpp
@@ -211,6 +212,7 @@ if(TARGET benchmark::benchmark)
         benchmark/from_vector_benchmark.cpp
         benchmark/adamw_benchmark.cpp
         benchmark/frobenius_normalize_benchmark.cpp
+        benchmark/log_softmax_benchmark.cpp
         benchmark/polynorm_fusion_benchmark.cpp
         benchmark/rmsnorm_benchmark.cpp
         benchmark/gram_matmul_benchmark.cpp
