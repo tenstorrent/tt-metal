@@ -898,7 +898,11 @@ void kernel_main() {
                 // and add the down bias on the way. out_interm is scratch the matmul never pushes --
                 // reload_partials reads it the same way -- so it is indexed directly rather than
                 // fronted. The block is row-major at out_row_width = EC_MAX, so tile i sits in
-                // output column `i % EC_MAX`, which is the bias column.
+                // output column `i % EC_MAX`, which is the bias column. With no CB handshake on
+                // out_interm, unpack must wait for the packer to finish writing it.
+                PACK((t6_semaphore_post<p_stall::PACK>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_wait_on_zero<p_stall::STALL_SYNC>(semaphore::PACK_DONE)));
+                UNPACK((t6_semaphore_get<>(semaphore::PACK_DONE)));
                 {
                     reconfig_data_format(cb_out_interm, cb_down_bias);
                     add_bcast_rows_init(cb_out_interm, cb_down_bias);
