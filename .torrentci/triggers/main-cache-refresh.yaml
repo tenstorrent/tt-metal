@@ -1,0 +1,17 @@
+---
+# Stopgap: rebuild asan-build on main every 2 hours so queue entries find warm
+# caches. An unchanged tip reuses its last run. Remove once queue entries reuse
+# lineage caches (TorrentCI merge-queue trust partition).
+triggers:
+  - id: main-cache-refresh
+    kind: automatic
+    # No pattern: with one, this would also fire on every push to main.
+    cron: '0 */2 * * *'
+    concurrency:
+      group: ref
+      supersede: all
+    # Lower priority than the merge-queue trigger (160).
+    priority: 200
+    targets:
+      jobs: [asan-build]
+      dashboards: []
