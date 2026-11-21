@@ -9,7 +9,7 @@ from pathlib import Path
 
 import torch
 from loguru import logger
-from transformers import AutoTokenizer
+from transformers import AutoTokenizer, GenerationConfig
 
 import ttnn
 from models.common.sampling import SamplingParams, slice_sampling_params
@@ -548,6 +548,23 @@ def layer_paged_block_size(attn, cfg, cache):
     """The block size ``attn`` addresses ``cache`` with (``paged_block_size_for_view`` on the cache's padded shape)."""
     shape = getattr(cache, "padded_shape", None) or cache.shape
     return paged_block_size_for_view(shape, int(cfg.head_dim), layer_local_kv_heads(attn, cfg))
+
+
+def default_stop_tokens(tokenizer, model_path):
+    """Token ids that end generation: every ``eos_token_id`` in the checkpoint's generation_config.json.
+
+    The chat template closes an assistant turn with ``<turn|>`` (id 106), which is not the tokenizer's
+    ``eos_token`` (``<eos>``, id 1), so stopping on ``eos_token_id`` alone never ends a chat reply.
+    """
+    stop = []
+    try:
+        eos = GenerationConfig.from_pretrained(model_path).eos_token_id
+        stop = [eos] if isinstance(eos, int) else list(eos or [])
+    except (ValueError, OSError, EnvironmentError):
+        pass
+    if tokenizer.eos_token_id is not None and tokenizer.eos_token_id not in stop:
+        stop.insert(0, tokenizer.eos_token_id)
+    return [int(t) for t in stop]
 
 
 def _load_text_tokenizer(model_path):
@@ -4111,7 +4128,7 @@ class Gemma4Generator(ChunkedPrefillPageTableGuardMixin, Generator):
         token ids themselves (the prefill unit tests on a weights-only cache: no tokenizer backend needed)."""
         tokenizer = _load_text_tokenizer(model_path) if load_tokenizer else None
         if tokenizer is not None and not hasattr(tokenizer, "stop_tokens"):
-            tokenizer.stop_tokens = [tokenizer.eos_token_id]
+            tokenizer.stop_tokens = default_stop_tokens(tokenizer, model_path)
 
         model_args, model, tt_kv_cache, state_dict = create_tt_model(
             mesh_device=mesh_device,
