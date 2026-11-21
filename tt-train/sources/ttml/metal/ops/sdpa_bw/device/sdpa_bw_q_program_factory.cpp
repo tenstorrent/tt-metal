@@ -209,8 +209,17 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // For query backward pass we split work over rows of Q
     const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     const uint32_t NC = qB * qNH;
-    const uint32_t total_rows_to_process =
-        NC * St;                   // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+
+    // Query rows to compute and the key rows they attend to. Partial ranges are supported only without a mask.
+    const SeqTileRange q_range = resolve_seq_tile_range(args.q_range, St);
+    const SeqTileRange k_range = resolve_seq_tile_range(args.k_range, St);
+    // Checked here, not in validate: the ring ops call create() directly.
+    TT_FATAL(
+        (q_range.count == St && k_range.count == St) || (args.mask_type == AttentionMaskType::None && !args.has_gate),
+        "Partial Q/K tile ranges require mask type None and no gate");
+
+    // total rows to process = batch_size * num_heads * num_query_rows_in_range
+    const uint32_t total_rows_to_process = NC * q_range.count;
     const uint32_t q_heads = qNH;  // number of heads in Query
     const uint32_t kv_heads = kNH;
     const uint32_t heads_per_group =
@@ -536,7 +545,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             num_rows_per_core_group_1,  // 0: per_core_block_cnt
             qWt,                        // 1: Q/K inner dim in tiles
             vWt,                        // 2: V/dO/O inner dim in tiles
-            St,                         // 3: num_seq_len / TILE_H
+            k_range.count,              // 3: K tiles per Q row: the K range length (St without a range)
             scaler,                     // 4: sqrt(Et) - sdpa scaler factor
             minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
@@ -560,7 +569,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                 num_rows_per_core_group_2,  // 0: per_core_block_cnt
                 qWt,                        // 1: Q/K inner dim in tiles
                 vWt,                        // 2: V/dO/O inner dim in tiles
-                St,                         // 3: num_seq_len / TILE_H
+                k_range.count,              // 3: K tiles per Q row: the K range length (St without a range)
                 scaler,                     // 4: sqrt(Et) - sdpa scaler factor
                 minus_one,                  // 5: used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // 6: used to transform mask from 0/-1 to 0/-inf
@@ -624,7 +633,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                      intermediates_buffer->address(),
                      gate_buffer != nullptr ? gate_buffer->address() : 0U,
                      num_rows,
-                     start_row});
+                     start_row,
+                     q_range.begin,
+                     q_range.count,
+                     k_range.begin,
+                     k_range.count});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
@@ -634,7 +647,9 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
                      grad_gate_buffer != nullptr ? grad_gate_buffer->address() : 0U,
                      gated_grad_output_buffer != nullptr ? gated_grad_output_buffer->address() : 0U,
                      num_rows,
-                     start_row});
+                     start_row,
+                     q_range.begin,
+                     q_range.count});
                 SetRuntimeArgs(
                     program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
             });

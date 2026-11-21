@@ -10,6 +10,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <stdexcept>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -23,6 +24,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
 #include "ttnn/operations/data_movement/repeat/repeat.hpp"
@@ -281,6 +283,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     const std::size_t q_heads = Q_split.shape()[1];
     const std::size_t kv_heads = K_split.shape()[1];
     const std::size_t S = Q_split.shape()[2];
+    const std::size_t Sk = K_split.shape()[2];     // K/V length (differs from S only in the tile-range tests)
     const std::size_t Dh_qk = Q_split.shape()[3];  // Q/K head dim (used for QK^T dot product)
     const std::size_t Dh_v = V_split.shape()[3];   // V head dim (can differ, determines output width)
 
@@ -299,7 +302,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
     };
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(Dh_qk));
-    std::vector<float> scores_row(S);
+    std::vector<float> scores_row(Sk);
 
     for (std::size_t b = 0; b < B; ++b) {
         for (std::size_t h = 0; h < q_heads; ++h) {
@@ -308,12 +311,12 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
             for (std::size_t i = 0; i < S; ++i) {
                 // scores_row[j] = (q_i · k_j) * scale + mask(i,j)
                 float rmax = -INFINITY;
-                for (std::size_t j = 0; j < S; ++j) {
+                for (std::size_t j = 0; j < Sk; ++j) {
                     float dot = 0.0f;
                     for (std::size_t t = 0; t < Dh_qk; ++t) {
                         dot += Q_split(b, h, i, t) * K_split(b, g, j, t);
                     }
-                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,S)
+                    const float m = attn_mask(0, 0, i, j);  // expected 0 or 1, mask is (1,1,S,Sk)
                     const float s = m * (dot * scale) + (m - 1.0F) * 1e9F;
                     scores_row[j] = s;
                     rmax = std::max(s, rmax);
@@ -321,7 +324,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
 
                 // softmax over j
                 float denom = 0.0F;
-                for (std::size_t j = 0; j < S; ++j) denom += std::exp(scores_row[j] - rmax);
+                for (std::size_t j = 0; j < Sk; ++j) denom += std::exp(scores_row[j] - rmax);
                 denom = std::max(denom, 1e-20F);
 
                 // Store intermediate: logsumexp = max + log(sum_exp)
@@ -330,7 +333,7 @@ std::pair<xt::xarray<float>, xt::xarray<float>> sdpa_split_heads_naive_with_inte
                 // out_i[h] = sum_j softmax_ij * V[j] - store in SPLIT format (B, H, S, Dh_v)
                 for (std::size_t t = 0; t < Dh_v; ++t) {
                     float acc = 0.0F;
-                    for (std::size_t j = 0; j < S; ++j) {
+                    for (std::size_t j = 0; j < Sk; ++j) {
                         float w = std::exp(scores_row[j] - rmax) / denom;
                         acc += w * V_split(b, g, j, t);
                     }
@@ -1396,4 +1399,203 @@ TEST_F(SDPAForwardTest, GateTest_ProgramCacheHitReadsNewGate) {
         << ")";
     EXPECT_FALSE(xt::allclose(out_b_host, out_a_host, 8e-3F, 1e-4F))
         << "Cache-hit run reproduced the first gate's output: stale gate address";
+}
+
+// =============================================================================
+// TILE RANGE TESTS - ttml_sdpa_fw with q_range / k_range (mask None)
+// Query rows in q_range attend only to key rows in k_range, so the expected result is plain attention on the
+// sliced Q, K and V. Rows outside q_range must keep what the preallocated output and intermediates held.
+// =============================================================================
+
+namespace {
+
+using ttml::metal::SeqTileRange;
+
+constexpr std::size_t kTileRows = 32U;
+constexpr uint32_t kRangeHeadDim = 64U;
+constexpr float kOutputSentinel = 7.0F;  // exact in bf16
+
+// Rows of x (B, H, S, D) covered by the tile range r.
+xt::xarray<float> slice_rows(const xt::xarray<float>& x, SeqTileRange r) {
+    return xt::view(
+        x, xt::all(), xt::all(), xt::range(r.begin * kTileRows, (r.begin + r.count) * kTileRows), xt::all());
+}
+
+// x with the rows covered by r copied from `from`, so the other rows can be compared exactly.
+xt::xarray<float> with_rows_from(xt::xarray<float> x, const xt::xarray<float>& from, SeqTileRange r) {
+    xt::view(x, xt::all(), xt::all(), xt::range(r.begin * kTileRows, (r.begin + r.count) * kTileRows), xt::all()) =
+        slice_rows(from, r);
+    return x;
+}
+
+// Shapes and ranges of one parameterized tile-range test.
+struct RangedSDPATestConfig {
+    uint32_t batch_size = 1U;
+    uint32_t sequence_length = 256U;
+    uint32_t num_query_heads = 2U;
+    uint32_t num_key_heads = 2U;
+    SeqTileRange q_range;
+    SeqTileRange k_range;
+    std::string test_name;
+};
+
+// Q (B, qNH, S, D) and K, V (B, kNH, S, D) on device, and their bf16 values on host for the reference.
+struct RangedProblem {
+    ttnn::Tensor query, key, value;
+    xt::xarray<float> query_host, key_host, value_host;
+};
+
+RangedProblem make_ranged_problem(uint32_t B, uint32_t S, uint32_t qNH, uint32_t kNH) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t seed = ttml::autograd::ctx().get_generator()();
+    auto upload = [&](std::array<std::size_t, 4> shape, uint32_t s) {
+        return ttml::core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, s), device);
+    };
+    RangedProblem p;
+    p.query = upload({B, qNH, S, kRangeHeadDim}, seed);
+    p.key = upload({B, kNH, S, kRangeHeadDim}, seed + 1U);
+    p.value = upload({B, kNH, S, kRangeHeadDim}, seed + 2U);
+    p.query_host = ttml::core::to_xtensor(p.query);
+    p.key_host = ttml::core::to_xtensor(p.key);
+    p.value_host = ttml::core::to_xtensor(p.value);
+    return p;
+}
+
+// Runs ttml_sdpa_fw on the ranges into an output prefilled with a sentinel and intermediates prefilled with -inf
+// logsumexp, then checks the rows in q_range against the reference and the other rows against the prefill.
+void check_ranged_sdpa_fw(const RangedProblem& p, SeqTileRange q_range, SeqTileRange k_range) {
+    using namespace ttml;
+    auto* device = &autograd::ctx().get_device();
+    const auto& q_shape = p.query_host.shape();
+
+    const xt::xarray<float> out_prefill = xt::full_like(p.query_host, kOutputSentinel);  // Dh_v == Dh_qk here
+    xt::xarray<float> lse_prefill = xt::zeros<float>({q_shape[0], q_shape[1], q_shape[2], kTileRows});
+    xt::view(lse_prefill, xt::all(), xt::all(), xt::all(), 0) = -std::numeric_limits<float>::infinity();
+
+    const auto result = ttnn::prim::ttml_sdpa_fw(
+        p.query,
+        p.key,
+        p.value,
+        metal::AttentionMaskType::None,
+        /*mask=*/std::nullopt,
+        /*dropout_probability=*/0.0F,
+        /*return_intermediates=*/true,
+        core::from_xtensor<float, ttnn::DataType::FLOAT32>(lse_prefill, device),
+        core::from_xtensor(out_prefill, device),
+        /*gate=*/std::nullopt,
+        q_range,
+        k_range);
+    const xt::xarray<float> out = core::to_xtensor(result[0]);
+    const xt::xarray<float> lse = core::to_xtensor(result[1]);
+
+    const xt::xarray<float> all_ones =
+        xt::ones<float>({1UL, 1UL, q_range.count * kTileRows, k_range.count * kTileRows});
+    const auto [out_ref, lse_ref] = sdpa_split_heads_naive_with_intermediates(
+        slice_rows(p.query_host, q_range),
+        slice_rows(p.key_host, k_range),
+        slice_rows(p.value_host, k_range),
+        all_ones);
+
+    EXPECT_TRUE(xt::allclose(slice_rows(out, q_range), out_ref, 2e-2F, 2e-2F))
+        << "Output rows in q_range do not match the reference (MSE: " << compute_mse(out_ref, slice_rows(out, q_range))
+        << ")";
+    EXPECT_TRUE(xt::allclose(slice_rows(lse, q_range), lse_ref, 2e-2F, 2e-2F))
+        << "Logsumexp rows in q_range do not match the reference";
+    EXPECT_TRUE(xt::all(xt::equal(with_rows_from(out, out_prefill, q_range), out_prefill)))
+        << "Output rows outside q_range were written";
+    EXPECT_TRUE(xt::all(xt::equal(with_rows_from(lse, lse_prefill, q_range), lse_prefill)))
+        << "Intermediate rows outside q_range were written";
+}
+
+}  // namespace
+
+class SDPAForwardRangeTest : public SDPAForwardTest, public ::testing::WithParamInterface<RangedSDPATestConfig> {};
+
+TEST_P(SDPAForwardRangeTest, MatchesReferenceOnSlices) {
+    const auto& config = GetParam();
+    const auto problem =
+        make_ranged_problem(config.batch_size, config.sequence_length, config.num_query_heads, config.num_key_heads);
+    check_ranged_sdpa_fw(problem, config.q_range, config.k_range);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TileRanges,
+    SDPAForwardRangeTest,
+    ::testing::Values(
+        // The two zig-zag rectangles at St = 8: all queries against the first half of the keys, and the second
+        // half of the queries against all keys.
+        RangedSDPATestConfig{.q_range = {0U, 8U}, .k_range = {0U, 4U}, .test_name = "AllQ_FirstHalfK"},
+        RangedSDPATestConfig{.q_range = {4U, 4U}, .k_range = {0U, 8U}, .test_name = "SecondHalfQ_AllK"},
+        // GQA with two batches: 4 query heads share 2 KV heads, and both ranges leave rows on either side.
+        RangedSDPATestConfig{
+            .batch_size = 2U,
+            .num_query_heads = 4U,
+            .num_key_heads = 2U,
+            .q_range = {2U, 4U},
+            .k_range = {3U, 4U},
+            .test_name = "GQA_2B_MiddleRanges"},
+        // St = 6: a K range of 3 tiles gives Sk_chunk_t = 1 and a K range of 6 tiles gives Sk_chunk_t = 2.
+        RangedSDPATestConfig{
+            .sequence_length = 192U, .q_range = {0U, 6U}, .k_range = {0U, 3U}, .test_name = "St6_SkChunk1"},
+        RangedSDPATestConfig{
+            .sequence_length = 192U, .q_range = {3U, 3U}, .k_range = {0U, 6U}, .test_name = "St6_SkChunk2"}),
+    [](const ::testing::TestParamInfo<RangedSDPATestConfig>& info) { return info.param.test_name; });
+
+TEST_F(SDPAForwardTest, RangeTest_ProgramCacheKeepsRangesApart) {
+    // The ranges are part of the program hash: a second range at the same shapes compiles its own program, and
+    // the first range then hits the cache with new input buffers. Every run is checked against its own reference.
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto first = make_ranged_problem(1U, 128U, 2U, 2U);
+    const auto second = make_ranged_problem(1U, 128U, 2U, 2U);
+    ASSERT_NE(first.query.buffer()->address(), second.query.buffer()->address())
+        << "Both problems must be alive at distinct device addresses for this test to mean anything";
+
+    check_ranged_sdpa_fw(first, {0U, 4U}, {0U, 2U});
+    const auto entries_after_first_range = device->num_program_cache_entries();
+
+    check_ranged_sdpa_fw(first, {2U, 2U}, {0U, 4U});
+    const auto entries_after_second_range = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_second_range, entries_after_first_range)
+        << "A second range at the same shapes reused the first range's program";
+
+    check_ranged_sdpa_fw(second, {0U, 4U}, {0U, 2U});
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_second_range)
+        << "The first range at the same shapes compiled a new program instead of hitting the cache";
+}
+
+TEST_F(SDPAForwardTest, RangeTest_RejectsInvalidRanges) {
+    // Partial ranges are supported only with mask None and no gate, and every range must be non-empty and inside the
+    // sequence.
+    using namespace ttml;
+    const auto p = make_ranged_problem(1U, 64U, 1U, 1U);  // St = 2
+    auto run = [&](metal::AttentionMaskType mask_type,
+                   SeqTileRange q_range,
+                   SeqTileRange k_range,
+                   const std::optional<ttnn::Tensor>& gate = std::nullopt) {
+        return ttnn::prim::ttml_sdpa_fw(
+            p.query,
+            p.key,
+            p.value,
+            mask_type,
+            /*mask=*/std::nullopt,
+            /*dropout_probability=*/0.0F,
+            /*return_intermediates=*/true,
+            /*preallocated_intermediate=*/std::nullopt,
+            /*preallocated_output=*/std::nullopt,
+            gate,
+            q_range,
+            k_range);
+    };
+    constexpr auto causal = metal::AttentionMaskType::Causal;
+    constexpr auto none = metal::AttentionMaskType::None;
+
+    EXPECT_ANY_THROW(run(causal, {1U, 1U}, {0U, 2U})) << "Causal with a partial Q range must be rejected";
+    EXPECT_ANY_THROW(run(causal, {0U, 2U}, {0U, 1U})) << "Causal with a partial K range must be rejected";
+    EXPECT_ANY_THROW(run(none, {1U, 2U}, {0U, 2U})) << "A Q range past the end of the sequence must be rejected";
+    EXPECT_ANY_THROW(run(none, {0U, 2U}, {0U, 0U})) << "An empty K range must be rejected";
+    EXPECT_ANY_THROW(run(none, {0xFFFFFFFFU, 1U}, {0U, 2U})) << "A Q range whose end wraps past 2^32 must be rejected";
+    const auto gate = ttml::core::from_xtensor(p.query_host, &autograd::ctx().get_device());  // (B, H, S, Dh_v) shape
+    EXPECT_ANY_THROW(run(none, {1U, 1U}, {0U, 2U}, gate)) << "A gate with a partial Q range must be rejected";
 }

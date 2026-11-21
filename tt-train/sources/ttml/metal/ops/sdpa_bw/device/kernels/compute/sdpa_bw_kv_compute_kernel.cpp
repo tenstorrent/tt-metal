@@ -70,7 +70,8 @@ constexpr uint32_t block_size_q = get_compile_time_arg_val(1);     // block size
 constexpr uint32_t block_size_v = get_compile_time_arg_val(2);     // block size for V/dO matmuls (divides vWt)
 constexpr uint32_t qWt = get_compile_time_arg_val(3);              // Q/K inner dim in tiles
 constexpr uint32_t vWt = get_compile_time_arg_val(4);              // V/dO/O inner dim in tiles
-constexpr uint32_t Ht = get_compile_time_arg_val(5);               // num_seq_len / TILE_H
+// Q tiles per K row: the Q range length (St without a range)
+constexpr uint32_t Ht = get_compile_time_arg_val(5);
 constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);  // number of heads per group
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
@@ -103,7 +104,7 @@ const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q ro
  * Process a single K/V row of the SDPA backward KV computation.
  * For each K/V row k, streams through Q, dO, O rows and accumulates dK and dV.
  *
- * @param global_row_idx The global row index (across all batches/groups/sequences)
+ * @param global_row_idx Work-unit index; a global row of the sequence only under causal
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_key, qk_tiles);

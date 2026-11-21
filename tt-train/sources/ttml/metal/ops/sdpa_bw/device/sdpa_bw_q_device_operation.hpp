@@ -42,6 +42,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     const std::optional<ttnn::Tensor>& preallocated_grad_query = std::nullopt,
     const std::optional<ttnn::Tensor>& preallocated_u_scaler = std::nullopt,
     const std::optional<ttnn::Tensor>& gate = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_gate = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_gate = std::nullopt,
+    const std::optional<ttml::metal::SeqTileRange>& q_range = std::nullopt,
+    const std::optional<ttml::metal::SeqTileRange>& k_range = std::nullopt);
 
 }  // namespace ttnn::prim

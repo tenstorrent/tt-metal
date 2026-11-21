@@ -72,20 +72,20 @@ const std::string kHasGateDefKey = "HAS_GATE";
 // iteration of the compute kernel.
 //
 // Constraints:
-//   1. Must divide Ht (so the diagonal of the causal mask falls cleanly within a chunk,
-//      and so the reader never reads past the end of the sequence).
+//   1. Must divide the K range length (St without a range), so the diagonal of the causal mask
+//      falls cleanly within a chunk and the reader never reads past the end of the range.
 //   2. Must fit DST under fp32_dest_acc_en=true (DST has 4 tiles): the chunked softmax
 //      holds Sk_chunk_t exp tiles live across one tile_regs cycle, so we cap at 4.
 //   3. Larger chunks amortize softmax / correction overhead more, but consume L1
 //      proportionally for cb_key, cb_value, and cb_attention_weights.
 //
-// We pick the largest power-of-2 in {1, 2, 4} that divides Ht. Bumping past 4 would require
+// We pick the largest power-of-2 in {1, 2, 4} that divides k_tiles. Bumping past 4 would require
 // either fp32_dest_acc_en=false (loses precision) or splitting the exp pass into multiple
 // DST cycles.
-uint32_t pick_sk_chunk_t(uint32_t Ht) {
+uint32_t pick_sk_chunk_t(uint32_t k_tiles) {
     constexpr uint32_t kMaxSkChunkT = 4U;
     for (uint32_t c = kMaxSkChunkT; c > 1U; c /= 2U) {
-        if (Ht % c == 0U) {
+        if (k_tiles % c == 0U) {
             return c;
         }
     }
@@ -233,8 +233,17 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     const uint32_t NC = qB * qNH;
-    const uint32_t total_rows_to_process =
-        NC * St;  // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+
+    // Query rows to compute and the key rows they attend to. Partial ranges are supported only without a mask.
+    const SeqTileRange q_range = resolve_seq_tile_range(args.q_range, St);
+    const SeqTileRange k_range = resolve_seq_tile_range(args.k_range, St);
+    // Checked here, not in validate: the ring ops call create() directly.
+    TT_FATAL(
+        (q_range.count == St && k_range.count == St) || (mask_type == AttentionMaskType::None && !args.has_gate),
+        "Partial Q/K tile ranges require mask type None and no gate");
+
+    // total rows to process = batch_size * num_heads * num_query_rows_in_range
+    const uint32_t total_rows_to_process = NC * q_range.count;
 
     const uint32_t heads_per_group = qNH / kNH;  // we read heads_per_group heads from Q for one group of K and V
     const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in inner dim
@@ -323,8 +332,12 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
 
     // Multi-tile K/V chunking factor. Compute kernel processes Sk_chunk_t K and V tiles per
     // inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
-    const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
-    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
+    const uint32_t Sk_chunk_t = pick_sk_chunk_t(k_range.count);
+    TT_FATAL(
+        Sk_chunk_t > 0U && (k_range.count % Sk_chunk_t == 0U),
+        "Sk_chunk_t={} must be > 0 and divide the K range length {}",
+        Sk_chunk_t,
+        k_range.count);
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -594,7 +607,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
             qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
             vWt,                        // num tile in inner dim in value (d_v/TILE_W)
-            St,                         // num_seq_len / TILE_H
+            k_range.count,              // K tiles per Q row: the K range length (St without a range)
             scaler,                     // sqrt(Et) - sdpa scaler factor
             minus_one,                  // used to transform mask from 1/0 to 0/-1
             custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
@@ -622,7 +635,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                 block_size,                 // SFPU per-core block size (cap = dst_size - 1, needs scratch)
                 qWt,                        // num tile in inner dim in query/key (d_qk/TILE_W)
                 vWt,                        // num tile in inner dim in value (d_v/TILE_W)
-                St,                         // num_seq_len / TILE_H
+                k_range.count,              // K tiles per Q row: the K range length (St without a range)
                 scaler,                     // sqrt(Et) - sdpa scaler factor
                 minus_one,                  // used to transform mask from 1/0 to 0/-1
                 custom_inf,                 // used to transform mask from 0/-1 to 0/-1e9F
@@ -681,7 +694,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                      mask_buffer != nullptr ? mask_buffer->address() : 0,
                      gate_buffer != nullptr ? gate_buffer->address() : 0,
                      num_rows,
-                     start_row});
+                     start_row,
+                     q_range.begin,
+                     q_range.count,
+                     k_range.begin,
+                     k_range.count});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
@@ -689,7 +706,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                     {output_buffer->address(),
                      intermediates_buffer != nullptr ? intermediates_buffer->address() : 0,
                      num_rows,
-                     start_row});
+                     start_row,
+                     q_range.begin,
+                     q_range.count});
                 SetRuntimeArgs(
                     program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
             });

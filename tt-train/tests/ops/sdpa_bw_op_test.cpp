@@ -15,6 +15,9 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_kv_device_operation.hpp"
+#include "metal/ops/sdpa_bw/device/sdpa_bw_q_device_operation.hpp"
+#include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "test_utils/random_data.hpp"
 #include "ttnn/operations/data_movement/concat/concat.hpp"
@@ -177,7 +180,8 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const size_t D_v = V.shape()[3];
 
     const auto kv_shape = K.shape();
-    const size_t G = kv_shape[1];  // number of KV heads (groups)
+    const size_t G = kv_shape[1];   // number of KV heads (groups)
+    const size_t Sk = kv_shape[2];  // K/V length (differs from S only in the tile-range tests)
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(D));
 
@@ -188,11 +192,11 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
 
     // Step 2: Compute attention scores: S = Q_scaled @ K^T using xt::linalg::dot
     const xt::xarray<float> K_expanded = expand_kv_heads(K, H);
-    xt::xarray<float> scores = xt::zeros<float>({B, H, S, S});
+    xt::xarray<float> scores = xt::zeros<float>({B, H, S, Sk});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             auto q_slice = xt::view(Q_scaled, b, h, xt::all(), xt::all());    // (S, D)
-            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (Sk, D)
             xt::view(scores, b, h, xt::all(), xt::all()) = xt::linalg::dot(q_slice, xt::transpose(k_slice));
         }
     }
@@ -205,18 +209,18 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
 
     // Step 4: Softmax over last dimension and store intermediates (loop-based for correctness)
     xt::xarray<float> intermediates = xt::zeros<float>({B, H, S, intermediate_size});
-    xt::xarray<float> attention_weights = xt::zeros<float>({B, H, S, S});
+    xt::xarray<float> attention_weights = xt::zeros<float>({B, H, S, Sk});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             for (size_t i = 0; i < S; ++i) {
                 // Find max for numerical stability
                 float max_val = scores(b, h, i, 0);
-                for (size_t j = 1; j < S; ++j) {
+                for (size_t j = 1; j < Sk; ++j) {
                     max_val = std::max(max_val, scores(b, h, i, j));
                 }
                 // Compute exp and sum
                 float sum_exp = 0.0F;
-                for (size_t j = 0; j < S; ++j) {
+                for (size_t j = 0; j < Sk; ++j) {
                     float exp_val = std::exp(scores(b, h, i, j) - max_val);
                     attention_weights(b, h, i, j) = exp_val;
                     sum_exp += exp_val;
@@ -224,7 +228,7 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
                 intermediates(b, h, i, 0) = max_val + std::log(sum_exp);
 
                 // Normalize
-                for (size_t j = 0; j < S; ++j) {
+                for (size_t j = 0; j < Sk; ++j) {
                     attention_weights(b, h, i, j) /= sum_exp;
                 }
             }
@@ -239,8 +243,8 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
         const xt::xarray<float> V_expanded_fw = expand_kv_heads(V, H);
         for (size_t b = 0; b < B; ++b) {
             for (size_t h = 0; h < H; ++h) {
-                auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, S)
-                auto v_slice = xt::view(V_expanded_fw, b, h, xt::all(), xt::all());      // (S, D_v)
+                auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, Sk)
+                auto v_slice = xt::view(V_expanded_fw, b, h, xt::all(), xt::all());      // (Sk, D_v)
                 xt::view(attn_output_float, b, h, xt::all(), xt::all()) = xt::linalg::dot(p_slice, v_slice);
             }
         }
@@ -250,10 +254,10 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     const auto& dO = grad_output;
 
     // Step 4: dV = P^T @ dO using xt::linalg::dot, then reduce to groups
-    xt::xarray<float> dV_expanded = xt::zeros<float>({B, H, S, D_v});
+    xt::xarray<float> dV_expanded = xt::zeros<float>({B, H, Sk, D_v});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, S)
+            auto p_slice = xt::view(attention_weights, b, h, xt::all(), xt::all());  // (S, Sk)
             auto do_slice = xt::view(dO, b, h, xt::all(), xt::all());                // (S, D)
             xt::view(dV_expanded, b, h, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(p_slice), do_slice);
         }
@@ -262,27 +266,27 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
 
     // Step 5: dP = dO @ V^T using xt::linalg::dot
     const xt::xarray<float> V_expanded = expand_kv_heads(V, H);
-    xt::xarray<float> dP = xt::zeros<float>({B, H, S, S});
+    xt::xarray<float> dP = xt::zeros<float>({B, H, S, Sk});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             auto do_slice = xt::view(dO, b, h, xt::all(), xt::all());         // (S, D)
-            auto v_slice = xt::view(V_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            auto v_slice = xt::view(V_expanded, b, h, xt::all(), xt::all());  // (Sk, D)
             xt::view(dP, b, h, xt::all(), xt::all()) = xt::linalg::dot(do_slice, xt::transpose(v_slice));
         }
     }
 
     // Step 6: Softmax backward (LOOP-BASED for correctness): dS = P * (dP - sum(P * dP))
-    xt::xarray<float> dS = xt::zeros<float>({B, H, S, S});
+    xt::xarray<float> dS = xt::zeros<float>({B, H, S, Sk});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
             for (size_t i = 0; i < S; ++i) {
                 // Compute sum(P * dP) for this row
                 float sum_p_dp = 0.0F;
-                for (size_t j = 0; j < S; ++j) {
+                for (size_t j = 0; j < Sk; ++j) {
                     sum_p_dp += attention_weights(b, h, i, j) * dP(b, h, i, j);
                 }
                 // Compute dS = P * (dP - sum_p_dp)
-                for (size_t j = 0; j < S; ++j) {
+                for (size_t j = 0; j < Sk; ++j) {
                     dS(b, h, i, j) = attention_weights(b, h, i, j) * (dP(b, h, i, j) - sum_p_dp);
                 }
             }
@@ -296,17 +300,17 @@ std::vector<xt::xarray<float>> float_sdpa_backward(
     xt::xarray<float> dQ = xt::zeros<float>({B, H, S, D});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());         // (S, S)
-            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (S, D)
+            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());         // (S, Sk)
+            auto k_slice = xt::view(K_expanded, b, h, xt::all(), xt::all());  // (Sk, D)
             xt::view(dQ, b, h, xt::all(), xt::all()) = xt::linalg::dot(ds_slice, k_slice);
         }
     }
 
     // Step 8: dK = dS^T @ Q using xt::linalg::dot, then reduce to groups
-    xt::xarray<float> dK_expanded = xt::zeros<float>({B, H, S, D});
+    xt::xarray<float> dK_expanded = xt::zeros<float>({B, H, Sk, D});
     for (size_t b = 0; b < B; ++b) {
         for (size_t h = 0; h < H; ++h) {
-            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());  // (S, S)
+            auto ds_slice = xt::view(dS, b, h, xt::all(), xt::all());  // (S, Sk)
             auto q_slice = xt::view(Q, b, h, xt::all(), xt::all());    // (S, D) - UNSCALED!
             xt::view(dK_expanded, b, h, xt::all(), xt::all()) = xt::linalg::dot(xt::transpose(ds_slice), q_slice);
         }
@@ -1874,4 +1878,257 @@ TEST_F(SDPABackwardTest, NIGHTLY_RingAttentionMergeSimulation) {
     EXPECT_TRUE(dQ_matches) << "Ring attention dQ does not match full-sequence SDPA";
     EXPECT_TRUE(dK_matches) << "Ring attention dK does not match full-sequence SDPA";
     EXPECT_TRUE(dV_matches) << "Ring attention dV does not match full-sequence SDPA";
+}
+
+// =============================================================================
+// TILE RANGE TESTS - ttml_sdpa_q_bw / ttml_sdpa_kv_bw with q_range / k_range (mask None)
+// The forward and both backward ops run on the same ranges, so the expected gradients are plain attention
+// gradients on the sliced Q, K, V and dO. dQ rows outside q_range and dK / dV rows outside k_range must keep the
+// sentinel the preallocated gradients were filled with.
+// =============================================================================
+
+namespace {
+
+using ttml::metal::SeqTileRange;
+
+constexpr std::size_t kTileRows = 32U;
+constexpr uint32_t kRangeHeadDim = 64U;
+constexpr float kGradSentinel = 7.0F;  // exact in bf16
+
+// Rows of x (B, H, S, D) covered by the tile range r.
+xt::xarray<float> slice_rows(const xt::xarray<float>& x, SeqTileRange r) {
+    return xt::view(
+        x, xt::all(), xt::all(), xt::range(r.begin * kTileRows, (r.begin + r.count) * kTileRows), xt::all());
+}
+
+// x with the rows covered by r copied from `from`, so the other rows can be compared exactly.
+xt::xarray<float> with_rows_from(xt::xarray<float> x, const xt::xarray<float>& from, SeqTileRange r) {
+    xt::view(x, xt::all(), xt::all(), xt::range(r.begin * kTileRows, (r.begin + r.count) * kTileRows), xt::all()) =
+        slice_rows(from, r);
+    return x;
+}
+
+// Shapes and ranges of one parameterized tile-range test.
+struct RangedSDPABackwardTestConfig {
+    uint32_t batch_size = 1U;
+    uint32_t sequence_length = 256U;
+    uint32_t num_query_heads = 2U;
+    uint32_t num_kv_heads = 2U;
+    SeqTileRange q_range;
+    SeqTileRange k_range;
+    std::string test_name;
+};
+
+// Q, dO (B, qNH, S, D) and K, V (B, kvNH, S, D) on device, and their bf16 values on host for the reference.
+struct RangedBackwardProblem {
+    ttnn::Tensor query, key, value, grad_output;
+    xt::xarray<float> query_host, key_host, value_host, grad_output_host;
+};
+
+RangedBackwardProblem make_ranged_backward_problem(uint32_t B, uint32_t S, uint32_t qNH, uint32_t kvNH) {
+    auto* device = &ttml::autograd::ctx().get_device();
+    const uint32_t seed = ttml::autograd::ctx().get_generator()();
+    auto upload = [&](std::array<std::size_t, 4> shape, uint32_t s) {
+        return ttml::core::from_xtensor(ttml::test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, s), device);
+    };
+    RangedBackwardProblem p;
+    p.query = upload({B, qNH, S, kRangeHeadDim}, seed);
+    p.key = upload({B, kvNH, S, kRangeHeadDim}, seed + 1U);
+    p.value = upload({B, kvNH, S, kRangeHeadDim}, seed + 2U);
+    p.grad_output = upload({B, qNH, S, kRangeHeadDim}, seed + 3U);
+    p.query_host = ttml::core::to_xtensor(p.query);
+    p.key_host = ttml::core::to_xtensor(p.key);
+    p.value_host = ttml::core::to_xtensor(p.value);
+    p.grad_output_host = ttml::core::to_xtensor(p.grad_output);
+    return p;
+}
+
+// Runs the ranged forward, then both ranged backward ops into gradients prefilled with a sentinel, and checks the
+// rows in range against the reference and the other rows against the sentinel.
+void check_ranged_sdpa_bw(const RangedBackwardProblem& p, SeqTileRange q_range, SeqTileRange k_range) {
+    using namespace ttml;
+    constexpr auto mask_type = metal::AttentionMaskType::None;
+    auto* device = &autograd::ctx().get_device();
+    const xt::xarray<float> dQ_prefill = xt::full_like(p.query_host, kGradSentinel);
+    const xt::xarray<float> dKV_prefill = xt::full_like(p.key_host, kGradSentinel);  // K and V have the same shape
+
+    const auto fw = ttnn::prim::ttml_sdpa_fw(
+        p.query,
+        p.key,
+        p.value,
+        mask_type,
+        /*mask=*/std::nullopt,
+        /*dropout_probability=*/0.0F,
+        /*return_intermediates=*/true,
+        /*preallocated_intermediate=*/std::nullopt,
+        /*preallocated_output=*/std::nullopt,
+        /*gate=*/std::nullopt,
+        q_range,
+        k_range);
+    const auto& attn_output = fw[0];
+    const auto& intermediates = fw[1];
+
+    const auto q_result = ttnn::prim::ttml_sdpa_q_bw(
+        p.grad_output,
+        attn_output,
+        p.query,
+        p.key,
+        p.value,
+        mask_type,
+        /*attn_mask=*/std::nullopt,
+        intermediates,
+        /*dropout_probability=*/0.0F,
+        /*preallocated_grad_query=*/core::from_xtensor(dQ_prefill, device),
+        /*preallocated_u_scaler=*/std::nullopt,
+        /*gate=*/std::nullopt,
+        /*preallocated_grad_gate=*/std::nullopt,
+        q_range,
+        k_range);
+    const auto& u_scaler = std::get<1>(q_result);
+    const auto [grad_key, grad_value] = ttnn::prim::ttml_sdpa_kv_bw(
+        p.grad_output,
+        p.query,
+        p.key,
+        p.value,
+        mask_type,
+        /*attn_mask=*/std::nullopt,
+        intermediates,
+        u_scaler,
+        /*dropout_probability=*/0.0F,
+        /*preallocated_grad_key=*/core::from_xtensor(dKV_prefill, device),
+        /*preallocated_grad_value=*/core::from_xtensor(dKV_prefill, device),
+        q_range,
+        k_range);
+
+    const xt::xarray<float> dQ = core::to_xtensor(std::get<0>(q_result));
+    const xt::xarray<float> dK = core::to_xtensor(grad_key);
+    const xt::xarray<float> dV = core::to_xtensor(grad_value);
+
+    const auto ref = float_sdpa_backward(
+        slice_rows(p.query_host, q_range),
+        slice_rows(p.key_host, k_range),
+        slice_rows(p.value_host, k_range),
+        slice_rows(p.grad_output_host, q_range));
+    const auto& ref_dQ = ref[0];
+    const auto& ref_dK = ref[1];
+    const auto& ref_dV = ref[2];
+
+    constexpr float rtol = 3e-2F, atol = 3e-2F;
+    EXPECT_TRUE(xt::allclose(slice_rows(dQ, q_range), ref_dQ, rtol, atol)) << "dQ rows in q_range do not match";
+    EXPECT_TRUE(xt::allclose(slice_rows(dK, k_range), ref_dK, rtol, atol)) << "dK rows in k_range do not match";
+    EXPECT_TRUE(xt::allclose(slice_rows(dV, k_range), ref_dV, rtol, atol)) << "dV rows in k_range do not match";
+    EXPECT_TRUE(xt::all(xt::equal(with_rows_from(dQ, dQ_prefill, q_range), dQ_prefill)))
+        << "dQ rows outside q_range were written";
+    EXPECT_TRUE(xt::all(xt::equal(with_rows_from(dK, dKV_prefill, k_range), dKV_prefill)))
+        << "dK rows outside k_range were written";
+    EXPECT_TRUE(xt::all(xt::equal(with_rows_from(dV, dKV_prefill, k_range), dKV_prefill)))
+        << "dV rows outside k_range were written";
+}
+
+}  // namespace
+
+class SDPABackwardRangeTest : public SDPABackwardTest,
+                              public ::testing::WithParamInterface<RangedSDPABackwardTestConfig> {};
+
+TEST_P(SDPABackwardRangeTest, MatchesReferenceOnSlices) {
+    const auto& config = GetParam();
+    const auto problem = make_ranged_backward_problem(
+        config.batch_size, config.sequence_length, config.num_query_heads, config.num_kv_heads);
+    check_ranged_sdpa_bw(problem, config.q_range, config.k_range);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    TileRanges,
+    SDPABackwardRangeTest,
+    ::testing::Values(
+        // The two zig-zag rectangles at St = 8: all queries against the first half of the keys, and the second
+        // half of the queries against all keys.
+        RangedSDPABackwardTestConfig{.q_range = {0U, 8U}, .k_range = {0U, 4U}, .test_name = "AllQ_FirstHalfK"},
+        RangedSDPABackwardTestConfig{.q_range = {4U, 4U}, .k_range = {0U, 8U}, .test_name = "SecondHalfQ_AllK"},
+        // GQA with two batches: 4 query heads share 2 KV heads, and both ranges leave rows on either side.
+        RangedSDPABackwardTestConfig{
+            .batch_size = 2U,
+            .num_query_heads = 4U,
+            .num_kv_heads = 2U,
+            .q_range = {2U, 4U},
+            .k_range = {3U, 4U},
+            .test_name = "GQA_2B_MiddleRanges"},
+        // St = 6 with odd range lengths of 3 tiles.
+        RangedSDPABackwardTestConfig{
+            .sequence_length = 192U, .q_range = {3U, 3U}, .k_range = {0U, 3U}, .test_name = "St6_OddHalves"}),
+    [](const ::testing::TestParamInfo<RangedSDPABackwardTestConfig>& info) { return info.param.test_name; });
+
+TEST_F(SDPABackwardTest, RangeTest_ProgramCacheKeepsRangesApart) {
+    // The ranges are part of the program hash: a second range at the same shapes compiles its own programs, and
+    // the first range then hits the cache with new input buffers. Every run is checked against its own reference.
+    auto* device = &ttml::autograd::ctx().get_device();
+    device->enable_program_cache();
+
+    const auto first = make_ranged_backward_problem(1U, 128U, 2U, 2U);
+    const auto second = make_ranged_backward_problem(1U, 128U, 2U, 2U);
+    ASSERT_NE(first.query.buffer()->address(), second.query.buffer()->address())
+        << "Both problems must be alive at distinct device addresses for this test to mean anything";
+
+    check_ranged_sdpa_bw(first, {0U, 4U}, {0U, 2U});
+    const auto entries_after_first_range = device->num_program_cache_entries();
+
+    check_ranged_sdpa_bw(first, {2U, 2U}, {0U, 4U});
+    const auto entries_after_second_range = device->num_program_cache_entries();
+    EXPECT_GT(entries_after_second_range, entries_after_first_range)
+        << "A second range at the same shapes reused the first range's programs";
+
+    check_ranged_sdpa_bw(second, {0U, 4U}, {0U, 2U});
+    EXPECT_EQ(device->num_program_cache_entries(), entries_after_second_range)
+        << "The first range at the same shapes compiled new programs instead of hitting the cache";
+}
+
+TEST_F(SDPABackwardTest, RangeTest_RejectsCausalWithPartialRange) {
+    // Causal masking is defined only on whole sequences, so both backward ops reject it with a partial range.
+    using namespace ttml;
+    using Range = std::optional<SeqTileRange>;
+    constexpr auto causal = metal::AttentionMaskType::Causal;
+    const auto p = make_ranged_backward_problem(1U, 64U, 1U, 1U);  // St = 2
+    const SeqTileRange first_tile{0U, 1U};
+
+    const auto fw = metal::sdpa_fw(p.query, p.key, p.value, causal, std::nullopt, 0.0F, /*return_intermediates=*/true);
+    const auto& attn_output = fw[0].value();
+    const auto& intermediates = fw[1].value();
+    auto run_q = [&](Range q_range, Range k_range) {
+        return ttnn::prim::ttml_sdpa_q_bw(
+            p.grad_output,
+            attn_output,
+            p.query,
+            p.key,
+            p.value,
+            causal,
+            /*attn_mask=*/std::nullopt,
+            intermediates,
+            /*dropout_probability=*/0.0F,
+            /*preallocated_grad_query=*/std::nullopt,
+            /*preallocated_u_scaler=*/std::nullopt,
+            /*gate=*/std::nullopt,
+            /*preallocated_grad_gate=*/std::nullopt,
+            q_range,
+            k_range);
+    };
+    const auto u_scaler = std::get<1>(run_q(std::nullopt, std::nullopt));
+    auto run_kv = [&](Range q_range, Range k_range) {
+        return ttnn::prim::ttml_sdpa_kv_bw(
+            p.grad_output,
+            p.query,
+            p.key,
+            p.value,
+            causal,
+            /*attn_mask=*/std::nullopt,
+            intermediates,
+            u_scaler,
+            /*dropout_probability=*/0.0F,
+            /*preallocated_grad_key=*/std::nullopt,
+            /*preallocated_grad_value=*/std::nullopt,
+            q_range,
+            k_range);
+    };
+
+    EXPECT_ANY_THROW(run_q(first_tile, std::nullopt)) << "dQ with Causal and a partial Q range must be rejected";
+    EXPECT_ANY_THROW(run_kv(std::nullopt, first_tile)) << "dK/dV with Causal and a partial K range must be rejected";
 }

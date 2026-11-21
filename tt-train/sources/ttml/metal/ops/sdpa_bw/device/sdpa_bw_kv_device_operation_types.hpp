@@ -12,6 +12,11 @@ namespace ttml::metal::ops::sdpa_bw::device::kv {
 struct SDPABackwardKVParams {
     AttentionMaskType mask_type{AttentionMaskType::Arbitrary};
     float dropout_probability{0.0F};
+    // Key rows to compute and the query rows that attend to them; std::nullopt = whole sequence.
+    // q_range must lie within the q_range given to ttml_sdpa_q_bw and the forward that produced u_scaler and the
+    // intermediates. dK/dV rows outside k_range are left unwritten.
+    std::optional<SeqTileRange> q_range;
+    std::optional<SeqTileRange> k_range;
 };
 
 struct SDPABackwardKVInputs {

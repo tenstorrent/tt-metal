@@ -69,7 +69,8 @@
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t qWt = get_compile_time_arg_val(1);              // Q/K inner dim in tiles
 constexpr uint32_t vWt = get_compile_time_arg_val(2);              // V/dO/O inner dim in tiles
-constexpr uint32_t Ht = get_compile_time_arg_val(3);               // num_seq_len / TILE_H
+// K tiles per Q row: the K range length (St without a range)
+constexpr uint32_t Ht = get_compile_time_arg_val(3);
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-inf
@@ -115,7 +116,7 @@ const uint32_t num_of_interm_tiles = 1U;  // single FP32 logsumexp tile per Q ro
  * - Compute dS = P * (dP - u) * scale (softmax backward)
  * - Accumulate dQ += dS @ K
  *
- * @param global_row_idx The global row index (across all batches/heads/sequences)
+ * @param global_row_idx Work-unit index; a global row of the sequence only under causal
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_attn_output, v_tiles);

@@ -35,7 +35,8 @@ constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);
 constexpr uint32_t block_size = get_compile_time_arg_val(1);       // SFPU block size (cap = dst_size - 1)
 constexpr uint32_t qWt = get_compile_time_arg_val(2);              // num tile in inner dim in query/key (d_qk/TILE_W)
 constexpr uint32_t vWt = get_compile_time_arg_val(3);              // num tile in inner dim in value (d_v/TILE_W)
-constexpr uint32_t Ht = get_compile_time_arg_val(4);               // num_seq_len / TILE_H
+// K tiles per Q row: the K range length (St without a range)
+constexpr uint32_t Ht = get_compile_time_arg_val(4);
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(5);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(6);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(7);  // used to transform mask from 0/-1 to 0/-1e9F
@@ -73,15 +74,14 @@ constexpr uint32_t cb_gate = tt::CBIndex::c_16;
  * - Softmax with online normalization
  * - Attention @ V
  *
- * @param global_row_idx The global row index (across all batches/heads/sequences)
+ * @param global_row_idx Work-unit index; a global row of the sequence only under causal / balanced
  */
 FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_wait_front(cb_query, qWt);
 
-    // Calculate position within sequence for causal mask
+#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
     const uint32_t q_row_tile = global_row_idx % Ht;  // position within sequence (0 to Ht-1)
 
-#if defined(CAUSAL_MASK) || defined(BALANCED_PARALLELISM)
     // Causal / balanced: process K/V tiles up to and including the diagonal tile of this row.
     // The number of K tiles is rounded UP to the next multiple of Sk_chunk_t (the program
     // factory asserts Ht % Sk_chunk_t == 0, so this round-up never reads past the sequence).
@@ -89,7 +89,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     // out via the all-(-1e9) mask tile (cb_attn_mask[1]).
     const uint32_t num_kv_tiles_to_process = round_up(q_row_tile + 1U, Sk_chunk_t);
 #else
-    // Non-causal: process every K/V chunk in the sequence.
+    // Non-causal: process every K/V chunk in the K range.
     const uint32_t num_kv_tiles_to_process = Ht;
 #endif
     const uint32_t num_kv_chunks = num_kv_tiles_to_process / Sk_chunk_t;

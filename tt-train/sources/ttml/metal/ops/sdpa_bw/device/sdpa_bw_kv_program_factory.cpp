@@ -193,8 +193,17 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // causal(triangular).
     const uint32_t St = qS / tt::constants::TILE_HEIGHT;  // num of tiles in seq len dim
     const uint32_t NC = kB * kNH;
-    const uint32_t total_rows_to_process =
-        NC * St;                    // total rows to process = batch_size * num_heads * num_tiles_in_seq_len
+
+    // Key rows to compute and the query rows that attend to them. Partial ranges are supported only without a mask.
+    const SeqTileRange q_range = resolve_seq_tile_range(args.q_range, St);
+    const SeqTileRange k_range = resolve_seq_tile_range(args.k_range, St);
+    // Checked here, not in validate: the ring ops call create() directly.
+    TT_FATAL(
+        (q_range.count == St && k_range.count == St) || args.mask_type == AttentionMaskType::None,
+        "Partial Q/K tile ranges require mask type None");
+
+    // total rows to process = batch_size * num_heads * num_key_rows_in_range
+    const uint32_t total_rows_to_process = NC * k_range.count;
     const uint32_t kv_heads = kNH;  // number of heads in Key and Value
     const uint32_t heads_per_group = qNH / kv_heads;  // we read heads_per_group heads from Q for one group of K and V
     const uint32_t qWt = qEmbd / tt::constants::TILE_WIDTH;  // num of tiles in Q/K inner dim
@@ -477,7 +486,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             block_size_v,               // 2: block size for V/dO matmuls (divides vWt)
             qWt,                        // 3: Q/K inner dim in tiles
             vWt,                        // 4: V/dO/O inner dim in tiles
-            St,                         // 5: sequence length in tiles
+            q_range.count,              // 5: Q tiles per K row: the Q range length (St without a range)
             heads_per_group,            // 6: heads per group
             scaler,                     // 7: scale factor
             minus_one,                  // 8: mask transform constant
@@ -504,7 +513,7 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                 block_size_v,               // 2: block size for V/dO matmuls (divides vWt)
                 qWt,                        // 3: Q/K inner dim in tiles
                 vWt,                        // 4: V/dO/O inner dim in tiles
-                St,                         // 5: sequence length in tiles
+                q_range.count,              // 5: Q tiles per K row: the Q range length (St without a range)
                 heads_per_group,            // 6: heads per group
                 scaler,                     // 7: scale factor
                 minus_one,                  // 8: mask transform constant
@@ -565,12 +574,21 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
                      intermediates_buffer->address(),
                      u_scaler_buffer->address(),
                      num_rows,
-                     start_row});
+                     start_row,
+                     k_range.begin,
+                     k_range.count,
+                     q_range.begin,
+                     q_range.count});
                 SetRuntimeArgs(
                     program,
                     kernels.writer,
                     core,
-                    {grad_key_buffer->address(), grad_value_buffer->address(), num_rows, start_row});
+                    {grad_key_buffer->address(),
+                     grad_value_buffer->address(),
+                     num_rows,
+                     start_row,
+                     k_range.begin,
+                     k_range.count});
                 SetRuntimeArgs(
                     program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {start_row});
             });

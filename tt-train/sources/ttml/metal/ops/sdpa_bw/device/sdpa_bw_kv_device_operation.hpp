@@ -29,6 +29,8 @@ struct SDPABackwardKVDeviceOperation {
 
 namespace ttnn::prim {
 
+// q_range must lie within the q_range given to ttml_sdpa_q_bw and the forward that produced u_scaler and the
+// intermediates. dK/dV rows outside k_range are left unwritten.
 ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_value_t ttml_sdpa_kv_bw(
     const ttnn::Tensor& grad_output,
     const ttnn::Tensor& query_tensor,
@@ -40,6 +42,8 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardKVDeviceOperation::tensor_return_
     const ttnn::Tensor& u_scaler,
     const float dropout_probability = 0.0F,
     const std::optional<ttnn::Tensor>& preallocated_grad_key = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt);
+    const std::optional<ttnn::Tensor>& preallocated_grad_value = std::nullopt,
+    const std::optional<ttml::metal::SeqTileRange>& q_range = std::nullopt,
+    const std::optional<ttml::metal::SeqTileRange>& k_range = std::nullopt);
 
 }  // namespace ttnn::prim
