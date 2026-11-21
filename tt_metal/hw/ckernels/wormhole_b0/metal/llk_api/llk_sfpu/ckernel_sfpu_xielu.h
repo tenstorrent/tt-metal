@@ -15,14 +15,15 @@ namespace ckernel::sfpu {
 sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
     sfpi::vFloat result = 0.0f;
 
-    constexpr float UNDERFLOW_THRESHOLD = -126.5f;
+    constexpr float UNDERFLOW_LIMIT = -88.0f;
+
+    // Clamp val before range reduction so r = val - k*ln(2) stays inside [-ln(2)/2, ln(2)/2]
+    // and p(r) cannot blow up to large negative powers or -Inf for val < -96.5 / -Inf.
+    val = sfpi::max(val, UNDERFLOW_LIMIT);
 
     // Step 1: Compute k = round(x / ln(2))
     // z = x / ln(2) = x * (1/ln(2))
     sfpi::vFloat z = val * sfpi::vConstFloatPrgm0;
-
-    // Clamp z to -126.5: exp(x) underflows to 0 for large negative x
-    z = sfpi::max(z, UNDERFLOW_THRESHOLD);
 
     // Round z to nearest integer using round-to-nearest
     sfpi::vInt k_int;
