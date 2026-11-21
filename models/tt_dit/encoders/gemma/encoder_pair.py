@@ -119,7 +119,9 @@ class GemmaTokenizerEncoderPair:
         parallel_config,
         checkpoint_name: str | None = None,
         mode: str = "av",
-        dynamic_load: bool = False,
+        offload_weights: bool = False,
+        trace: bool = False,
+        register_exclusions: Callable[..., None],
         sequence_length: int = GEMMA_SEQUENCE_LENGTH,
         video_dim: int = VIDEO_EMBED_DIM,
         audio_dim: int = AUDIO_EMBED_DIM,
@@ -135,7 +137,9 @@ class GemmaTokenizerEncoderPair:
         self.parallel_config = parallel_config
         self.checkpoint_name = checkpoint_name
         self.mode = mode
-        self.dynamic_load = dynamic_load
+        self.offload_weights = offload_weights
+        # The owning pipeline's registration, so that it knows which modules are evicted.
+        self._register_exclusions_with = register_exclusions
         self._num_layers = num_layers
         self._hidden_layer_index = hidden_layer_index
         self._sequence_length = sequence_length
@@ -149,11 +153,10 @@ class GemmaTokenizerEncoderPair:
         self.audio_connector = None
         self._coresident_peers: list = []
         self._cached_trans_mat = None
-        # Trace the whole-encode graph only when the encoder stays resident. Under dynamic_load it
-        # is evicted after each encode, so every encode would be a fresh (cold) capture — slower
-        # than untraced — and the trace never amortizes. Resident (e.g. 4x8) captures once and
-        # replays warm.
-        self._encoder_trace = not dynamic_load
+        # The encode is one of the owning pipeline's traced stages, so it traces only when the pipeline
+        # does, and only while the encoder stays resident: with offloaded weights it is evicted after
+        # each encode, and a trace over it would replay stale weight addresses.
+        self._encoder_trace = trace and not offload_weights
         # A capture taken after this one reuses the memory freed from its capture-time activations,
         # and replaying the encode then writes over whatever now owns that region. Consumers that
         # capture traces of their own after construction call ``defer_trace_capture`` and reopen the
@@ -190,18 +193,18 @@ class GemmaTokenizerEncoderPair:
     def _register_exclusions(self, module) -> None:
         """Bidirectionally exclude a freshly-built encoder module against the stored peers,
         before its first load — so the encoder load auto-evicts the DiT (and the later DiT
-        reload auto-evicts the encoder). No-op unless dynamic_load."""
-        if not self.dynamic_load or not self._coresident_peers:
+        reload auto-evicts the encoder). No-op unless offload_weights."""
+        if not self.offload_weights or not self._coresident_peers:
             return
-        module.register_coresident_exclusions(*self._coresident_peers)
+        self._register_exclusions_with(module, *self._coresident_peers)
         for p in self._coresident_peers:
-            p.register_coresident_exclusions(module)
+            self._register_exclusions_with(p, module)
 
     def is_loaded(self) -> bool:
         return self.gemma_encoder is not None and self.gemma_encoder.is_loaded()
 
     def ensure_loaded(self, connector_state: dict | Callable[[], dict] | None = None) -> None:
-        """Build/reload the encoder + connector weights (evicted by dynamic_load)."""
+        """Build/reload the encoder + connector weights (evicted when weights are offloaded)."""
         if self.is_loaded():
             return
         self.load_gemma_encoder()

@@ -203,6 +203,7 @@ def test_tt_mochi_pipeline(
     tt_pipe = TTMochiPipeline(
         device=mesh_device,
         config=MochiPipelineConfig.default(
+            trace=traced,
             mesh_shape=mesh_device.shape,
             dit_parallel_config=parallel_config,
             vae_parallel_config=vae_parallel_config,
@@ -226,7 +227,6 @@ def test_tt_mochi_pipeline(
         prompts=[prompt],
         num_inference_steps=50,
         guidance_scale=3.5,
-        traced=traced,
     )[0]
 
     # Validate output

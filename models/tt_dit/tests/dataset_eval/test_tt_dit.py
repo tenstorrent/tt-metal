@@ -19,6 +19,7 @@ import ttnn
 from models.demos.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_dit.pipelines.events import profiler_event_callback
+from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 
 from .clip_encoder import CLIPEncoder
 
@@ -188,8 +189,16 @@ def test_tt_dit_accuracy(
     logger.info(f"  Inference steps: {num_inference_steps}")
 
     # Create pipeline similar to test_performance_flux1.py
+    # Traced exactly for the targets whose device params reserve a trace region. Mochi is eager by default;
+    # Wan would trace on a mesh that keeps its weights resident, so it is told not to.
+    if model_metadata["device_params"].get("trace_region_size"):
+        trace = {"trace": True}
+    elif issubclass(dit_pipeline, WanPipeline):
+        trace = {"config_overrides": {"trace": False}}
+    else:
+        trace = {}
     pipeline = dit_pipeline.create_pipeline(
-        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_metadata["hf_id"])
+        mesh_device=mesh_device, checkpoint_name=model_location_generator(model_metadata["hf_id"]), **trace
     )
 
     images = []

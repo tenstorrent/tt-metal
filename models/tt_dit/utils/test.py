@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from loguru import logger
 
 import ttnn
 
@@ -65,3 +66,18 @@ def skip_if_unsupported_num_links(mesh_device, num_links):
             f"Mesh device supports {available_links} link(s) but test requires {num_links}. "
             f"Mesh shape: {mesh_device.shape}"
         )
+
+
+def watch_trace_releases(request: pytest.FixtureRequest) -> list[str]:
+    """The warnings a pipeline logs when an eviction releases its traces, collected until the test ends."""
+    from models.tt_dit.pipelines.pipeline_api import TRACE_RELEASE_NOTICE
+
+    messages: list[str] = []
+    sink = logger.add(
+        lambda message: messages.append(message.record["message"]),
+        level="WARNING",
+        filter=lambda record: TRACE_RELEASE_NOTICE in record["message"],
+    )
+    # A finalizer runs when the test fails too: the sink never outlives its test.
+    request.addfinalizer(lambda: logger.remove(sink))
+    return messages

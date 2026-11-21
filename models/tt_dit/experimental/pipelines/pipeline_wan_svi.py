@@ -141,7 +141,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
             ),
         )
 
-    def __call__(
+    def _run(
         self,
         *args,
         anchor_image: Optional[Image.Image] = None,
@@ -151,7 +151,7 @@ class WanPipelineSVI(WanPipelineI2VLora):
         self._svi_anchor_image = anchor_image
         self._svi_prev_last_latent = prev_last_latent
         try:
-            return super().__call__(*args, **kwargs)
+            return super()._run(*args, **kwargs)
         finally:
             self._svi_anchor_image = None
             self._svi_prev_last_latent = None

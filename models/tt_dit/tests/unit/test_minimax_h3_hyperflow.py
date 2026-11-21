@@ -14,6 +14,7 @@ import torch
 from safetensors.torch import save_file
 
 from models.tt_dit.experimental.lora.h3_adapter_loader import h3_host_deltas
+from models.tt_dit.pipelines.minimax_h3 import pipeline_minimax_h3_turbo
 from models.tt_dit.pipelines.minimax_h3.hyperflow_minimax_h3 import MARKER_KEY, MiniMaxH3HyperFlow, validate_sigmas
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3 import AUDIO_SHIFT, VIDEO_SHIFT, MiniMaxH3Pipeline
 from models.tt_dit.pipelines.minimax_h3.pipeline_minimax_h3_turbo import HYPERFLOW_HOST_PREFIXES, MiniMaxH3TurboPipeline
@@ -164,7 +165,7 @@ def test_an_omitted_step_count_defers_to_the_adapter(monkeypatch, contract, pass
     """A HyperFlow request may leave the step count out; a mismatch still reaches `_build_schedulers`,
     which refuses it."""
     seen = {}
-    monkeypatch.setattr(MiniMaxH3Pipeline, "__call__", lambda self, prompt, **kwargs: seen.update(kwargs))
+    monkeypatch.setattr(MiniMaxH3Pipeline, "_run", lambda self, prompt, **kwargs: seen.update(kwargs))
     pipeline = _pipeline(warming=False, contract=contract)
     pipeline("a prompt", num_inference_steps=passed, seed=3)
     assert seen.get("num_inference_steps", "default") == forwarded
@@ -211,6 +212,7 @@ def hyperflow_files(tmp_path):
         "time_embedder.linear_2.weight": torch.randn(OUT, HIDDEN, generator=generator),
         "time_embedder.linear_2.bias": torch.randn(OUT, generator=generator),
         "proj_in.weight": torch.randn(4, 4, generator=generator),
+        "transformer_blocks.0.attn.to_out.0.weight": torch.randn(16, 16, generator=generator).bfloat16(),
     }
     weights_dir = tmp_path / "MiniMax-H3"
     (weights_dir / "transformer").mkdir(parents=True)
@@ -273,3 +275,111 @@ def test_an_adapter_missing_an_embedder_target_is_refused(hyperflow_files, tmp_p
     pipeline.transformer_subfolder = "transformer"
     with expect_error(RuntimeError, "endpoint_time_embedder.linear_2.weight"):
         pipeline._fused_time_embedder_states()
+
+
+# ------------------------------------- the fused time embedder is part of the merged transformer
+
+_EMBEDDER_WEIGHTS = ("time_embedder.linear_1.weight", "time_embedder.linear_2.weight")
+_BLOCK_WEIGHT = "transformer_blocks.0.attn.to_out.0.weight"
+
+
+def _merging_pipeline(adapter_path, weights_dir, *, contract=None) -> MiniMaxH3TurboPipeline:
+    pipeline = object.__new__(MiniMaxH3TurboPipeline)
+    pipeline.lora_path = adapter_path
+    pipeline.lora_strength = 1.0
+    pipeline.weights_dir = weights_dir
+    pipeline.transformer_subfolder = "transformer"
+    pipeline.hyperflow = _contract() if contract is None else contract
+    return pipeline
+
+
+@pytest.mark.parametrize("checkpoint_dtype", [torch.float32, torch.bfloat16])
+def test_the_merged_transformer_carries_the_fused_time_embedder_unrounded(hyperflow_files, checkpoint_dtype):
+    adapter_path, _, weights_dir, checkpoint = hyperflow_files
+    stored = {
+        key: value.to(checkpoint_dtype) if key.startswith("time_embedder.") else value
+        for key, value in checkpoint.items()
+    }
+    save_file(stored, str(weights_dir / "transformer" / "diffusion_pytorch_model.safetensors"))
+    pipeline = _merging_pipeline(adapter_path, weights_dir)
+
+    state = pipeline._read_safetensors("transformer")
+    deltas = h3_host_deltas(str(adapter_path), HYPERFLOW_HOST_PREFIXES)
+    for key in _EMBEDDER_WEIGHTS:
+        assert state[key].dtype == torch.float32
+        assert torch.equal(state[key], stored[key].float() + deltas[key]), key
+    for key in ("time_embedder.linear_1.bias", "time_embedder.linear_2.bias"):
+        assert torch.equal(state[key], stored[key]), key
+    # The same tensors the endpoint embedder's twin is checked against on device.
+    fused = pipeline._fused_time_embedder_states()["time_embedder"]
+    for key in _EMBEDDER_WEIGHTS:
+        assert torch.equal(state[key], fused[key.removeprefix("time_embedder.")]), key
+
+
+def test_the_endpoint_embedder_stays_out_of_the_merged_transformer(hyperflow_files):
+    adapter_path, _, weights_dir, checkpoint = hyperflow_files
+    state = _merging_pipeline(adapter_path, weights_dir)._read_safetensors("transformer")
+    assert sorted(state) == sorted(checkpoint)
+
+
+def test_a_block_target_is_still_rounded_and_is_the_only_one_counted(hyperflow_files):
+    adapter_path, _, weights_dir, checkpoint = hyperflow_files
+    pipeline = _merging_pipeline(adapter_path, weights_dir)
+    state = pipeline._read_safetensors("transformer")
+    assert state[_BLOCK_WEIGHT].dtype == torch.bfloat16
+    assert not torch.equal(state[_BLOCK_WEIGHT], checkpoint[_BLOCK_WEIGHT])
+    assert pipeline.merged_targets == 1
+
+
+def test_another_partition_is_read_unmerged(hyperflow_files):
+    adapter_path, _, weights_dir, checkpoint = hyperflow_files
+    (weights_dir / "vae").mkdir()
+    save_file(checkpoint, str(weights_dir / "vae" / "diffusion_pytorch_model.safetensors"))
+    state = _merging_pipeline(adapter_path, weights_dir)._read_safetensors("vae")
+    assert all(torch.equal(state[key], value) for key, value in checkpoint.items())
+
+
+@pytest.mark.parametrize(("contract", "suffixed"), [(_contract(), True), (None, False)], ids=["hyperflow", "turbo"])
+def test_only_a_hyperflow_cache_is_named_for_its_float32_time_embedder(tmp_path, contract, suffixed):
+    pipeline = object.__new__(MiniMaxH3TurboPipeline)
+    pipeline.hyperflow = contract
+    pipeline.dit_fsdp = False
+    pipeline.lora_path = tmp_path / "adapter.safetensors"
+    pipeline.lora_strength = 1.0
+    pipeline._lora_digest = "0123456789abcdef"
+    plain = "resident_adaln_adapter_0123456789ab_x1.0"
+    assert pipeline._dit_weight_mode() == (f"{plain}_f32temb" if suffixed else plain)
+
+
+class _RecordingEmbedder:
+    def __init__(self, **kwargs) -> None:
+        self.linear_1 = self.linear_2 = type("Linear", (), {"in_features": 1, "out_features": 1})()
+        self.loaded: list[dict] = []
+
+    def load_torch_state_dict(self, state: dict) -> None:
+        self.loaded.append(state)
+
+
+def test_preparing_the_transformer_loads_the_endpoint_once_and_never_reloads_the_base_embedder(monkeypatch):
+    transformer = type("Transformer", (), {})()
+    transformer.time_embedder = _RecordingEmbedder()
+    transformer.two_time = None
+    monkeypatch.setattr(MiniMaxH3Pipeline, "_prepare_transformer", lambda self: transformer)
+    monkeypatch.setattr(pipeline_minimax_h3_turbo, "MiniMaxH3TimestepEmbedding", _RecordingEmbedder)
+    states = {"time_embedder": {"base": 0}, "endpoint_time_embedder": {"endpoint": 1}}
+    built: list[int] = []
+
+    pipeline = _pipeline(warming=False, contract=_contract())
+    pipeline.task = "t2va"
+    pipeline.transformer_subfolder = "transformer"
+    pipeline.mesh_device = None
+    pipeline.coresident = False
+    pipeline._time_embedder_states = None
+    pipeline._fused_time_embedder_states = lambda: built.append(1) or states
+
+    for _ in range(3):
+        assert pipeline._prepare_transformer() is transformer
+    assert built == [1]
+    assert transformer.two_time.embedder.loaded == [states["endpoint_time_embedder"]]
+    assert transformer.two_time.gate == pipeline.hyperflow.gate
+    assert transformer.time_embedder.loaded == []

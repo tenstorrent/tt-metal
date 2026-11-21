@@ -31,9 +31,9 @@ from .device_params import line_params_flux2, line_params_flux2_klein
 @pytest.mark.parametrize(("width", "height"), [(1024, 1024)])
 @pytest.mark.parametrize(
     "variant, num_inference_steps, mesh_device, sp_axis, tp_axis, encoder_tp_axis, vae_tp_axis, topology, "
-    "num_links, is_fsdp, dynamic_load, traced",
+    "num_links, is_fsdp, offload_weights, traced",
     [
-        # is_fsdp and dynamic_load are both mandatory for 2x2 -- the 32B transformer, the 24B encoder and the VAE
+        # is_fsdp and offload_weights are both mandatory for 2x2 -- the 32B transformer, the 24B encoder and the VAE
         # cannot be co-resident on 4 chips.
         ["dev", 12, (2, 2), 0, 1, 1, 1, ttnn.Topology.Linear, 2, True, True, False],
         ["dev", 12, (1, 8), 0, 1, 1, 1, ttnn.Topology.Linear, 1, False, True, False],
@@ -68,7 +68,7 @@ def test_pipeline(
     no_prompt: bool,
     traced: bool,
     is_fsdp: bool,
-    dynamic_load: bool,
+    offload_weights: bool,
     model_location_generator,
     is_ci_env: bool,
 ) -> None:
@@ -89,7 +89,8 @@ def test_pipeline(
         height=height,
         resolutions=[(width, height)],
         is_fsdp=is_fsdp,
-        dynamic_load=dynamic_load,
+        offload_weights=offload_weights,
+        trace=traced,
         trace_warmup=traced,
         shard_prompt=True,
     )
@@ -117,7 +118,6 @@ def test_pipeline(
             prompts=[prompt],
             num_inference_steps=num_inference_steps,
             seed=seed,
-            traced=traced,
         )
 
         output_filename = f"{filename_prefix}_{number}.png"
@@ -163,6 +163,7 @@ def test_pipeline_sizes_and_editing(
     pipeline = Flux2Pipeline.create_pipeline(
         mesh_device=mesh_device,
         checkpoint_name=model_location_generator("black-forest-labs/FLUX.2-klein-4B"),
+        trace=True,
         trace_warmup=False,
     )
     reference = Image.open("models/sample_data/demo.jpeg")
@@ -170,14 +171,14 @@ def test_pipeline_sizes_and_editing(
     cases = [(width, height, edit) for width, height in pipeline.resolutions for edit in (False, True)]
 
     def run(width: int, height: int, *, edit: bool, traced: bool) -> np.ndarray:
-        images = pipeline(
+        # An eager run of a size is only possible before its traces are captured.
+        images = (pipeline if traced else pipeline.run_untraced)(
             prompts=["turn it into a watercolor painting" if edit else "a lighthouse on a cliff, golden hour"],
             images=[reference] if edit else None,
             num_inference_steps=4,
             seed=0,
             width=width,
             height=height,
-            traced=traced,
         )
         assert images[0].size == (width, height)
         name = f"flux2_klein-4B_{width}x{height}_{'edit' if edit else 't2i'}_{'traced' if traced else 'untraced'}"

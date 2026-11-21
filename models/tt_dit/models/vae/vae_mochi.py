@@ -1240,7 +1240,7 @@ class MochiVAEDecoderAdapter:
             self._decoder.deallocate_weights()
 
     def reload_weights(self) -> None:
-        if self._decoder is None or self._decoder.is_loaded():
+        if self._decoder is None:
             return
         self._decoder.load_torch_state_dict(self._decoder_state_dict)
 
