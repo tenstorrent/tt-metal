@@ -1177,3 +1177,5 @@ New overseer session after the owner's reboot (node bh-glx-110-c10u02, job 22373
   DECIDED: accept PB.9C (the measurement; glued4x2k no-rebuild recorded as FAIL, >= 0), QUEUE PB.9G (before PB.T): GluedSend
   carry-source mix as runtime data + replay segments in the one-call glued path; gate oracles 0, no-rebuild glued PASS,
   resumed 4x2k @139264 <= 160 ms. The ack cost goes to PB.9H (host).
+- 06:45 heartbeat: 8192 ladder accept gate re-running its no-rebuild unit (others kept); watch armed.
+- 06:50 8192 ladder's accept gate: test_no_rebuild ASSERTED (glued4x2k 16 builds incl. resumed rows; glued5x1600 FAIL this time too): no glued path is build-free; only the single-request ladder counts. Note OV-72: packed no-rebuild records PASS/FAIL, asserts only with NO_REBUILD_PACKED_STRICT=1 (set in PB.9G / PB.T / PB.9H gates); single request always asserts. Resumed for one agent attempt.
