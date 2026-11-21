@@ -558,4 +558,23 @@ ttnn::device_operation::ProgramArtifacts SamplingProgramFactory::create_program_
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
+ttnn::command_list::CmdListBindings SamplingProgramFactory::map_cmd_list_parameters(
+    const SamplingParams&,
+    const SamplingInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(
+        /*invoke_name=*/"input_values_tensor",
+        /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input_values"});
+    binder.tensor(
+        /*invoke_name=*/"input_indices_tensor",
+        /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input_indices"});
+    binder.tensor(/*invoke_name=*/"k", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"k"});
+    binder.tensor(/*invoke_name=*/"p", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"p"});
+    binder.tensor(/*invoke_name=*/"temp", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"temp"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
+}
+
 }  // namespace ttnn::prim

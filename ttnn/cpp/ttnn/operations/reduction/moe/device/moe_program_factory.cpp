@@ -388,4 +388,19 @@ ttnn::device_operation::ProgramArtifacts MoeProgramFactory::create_program_artif
     };
 }
 
+ttnn::command_list::CmdListBindings MoeProgramFactory::map_cmd_list_parameters(
+    const MoeParams&,
+    const MoeInputs&,
+    const tt::tt_metal::ProgramSpec& spec,
+    const tt::tt_metal::ProgramRunArgs& run_params) {
+    ttnn::command_list::CmdListBinder binder{spec, run_params};
+    binder.tensor(/*invoke_name=*/"input_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"input"});
+    binder.tensor(
+        /*invoke_name=*/"expert_mask_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"expert_mask"});
+    binder.tensor(
+        /*invoke_name=*/"topk_mask_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"topk_mask"});
+    binder.tensor(/*invoke_name=*/"output_tensor", /*program_spec_param_name=*/tt::tt_metal::TensorParamName{"output"});
+    return binder.finish();
+}
+
 }  // namespace ttnn::prim
