@@ -21,6 +21,7 @@ ENABLE_LOGGING = False
 
 from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
 from .tt_ms_deformable_attention import (
+    QueryCounts,
     grouped_softmax,
     heads_packed_offsets,
     multi_scale_deformable_attn_fused,
@@ -124,6 +125,7 @@ class TTTemporalSelfAttention:
             raise ValueError(f"spatial_shapes must have shape ({num_levels}, 2), got {tuple(spatial_shapes.shape)}")
         # The fused op's levels: every BEV map's, map-major.
         self.map_spatial_shapes = spatial_shapes.repeat(num_bev_queue, 1)
+        self.query_counts = QueryCounts()
 
         self.linear_kwargs = grid_linear_kwargs(device)
 
@@ -268,6 +270,9 @@ class TTTemporalSelfAttention:
             sampling_offsets=sampling_offsets,
             attention_weights=attention_weights,
             spatial_shapes=self.map_spatial_shapes,
+            num_valid_queries_tensor=self.query_counts(
+                self.device, attention_weights.shape[0], attention_weights.shape[1]
+            ),
             reference_mode=reference_mode,
         )
         for tensor in (staged_value, sampling_offsets, attention_weights):

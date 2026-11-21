@@ -37,7 +37,7 @@ from models.experimental.bevformer.model_config import (
     POST_CENTER_RANGE,
     SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import device_constant, signpost
+from models.experimental.bevformer.tt.tt_common import activation_memory_config, device_constant, signpost
 
 # _gather_rows' padded row width, a whole tile.
 _GATHER_WIDTH = ttnn.TILE_SIZE
@@ -235,7 +235,7 @@ class TTNMSFreeCoder:
         box predictions, ``TTBEVFormerHead``'s, in ``CENTERS_FIRST`` order, to each sample's top
         ``max_num`` scores, sorted, as device tensors: scores ``(bs, max_num)`` float32, labels
         ``(bs, max_num)`` uint32 and query indexes ``(bs, max_num)`` uint32, all ROW_MAJOR, and
-        boxes ``(bs, max_num, 9)`` float32, all in L1.
+        boxes ``(bs, max_num, 9)`` float32, all in L1 (DRAM on a reduced grid).
 
         ttnn.topk ranks float32 on a single core, far slower than bfloat16, whose large k takes
         a multi-core route on Blackhole; bfloat16 alone ties many scores. So the logits, which
@@ -256,8 +256,10 @@ class TTNMSFreeCoder:
             raise ValueError(f"{num_query * num_classes} scores for a top-{self.max_num}")
         signpost(header="TTNN Coder TopK Start")
         # The scores and boxes are tens of KB; in L1 the coder's many small ops, which keep their
-        # input's memory, skip DRAM.
-        cls_scores, bbox_preds = (ttnn.to_memory_config(t, ttnn.L1_MEMORY_CONFIG) for t in (cls_scores, bbox_preds))
+        # input's memory, skip DRAM. A reduced grid keeps them in DRAM: the k-th logit search
+        # broadcasts the logits over its thresholds, more than such a grid's L1.
+        memory_config = activation_memory_config(cls_scores.device())
+        cls_scores, bbox_preds = (ttnn.to_memory_config(t, memory_config) for t in (cls_scores, bbox_preds))
         logits = ttnn.reshape(cls_scores, (bs, 1, 1, num_query * num_classes))
         signpost(header="Coder KthLogit Start")
         kth_logit = self._kth_logit(logits)

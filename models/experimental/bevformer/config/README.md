@@ -12,7 +12,7 @@ loss, schedule and dataset-path settings are intentionally omitted.
 | base | [`bevformer_base.json`](bevformer_base.json) | [`bevformer_base.py`](https://github.com/fundamentalvision/BEVFormer/blob/master/projects/configs/bevformer/bevformer_base.py) | 1600 x 900 | ResNet-101 DCN | 4 | 200 x 200 | 6 |
 
 All three variants use six cameras, 256 embedding dimensions, six decoder layers, 900 object
-queries and the same ten nuScenes classes. The image sizes above are after `image_scale` and before
+queries and the same ten object classes. The image sizes above are after `image_scale` and before
 padding to the configured size divisor.
 
 `model_config.py` remains a compatibility facade for existing reference, TTNN and test imports. It

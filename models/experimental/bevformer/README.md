@@ -123,6 +123,36 @@ pytest --disable-warnings models/experimental/bevformer/tests/pcc/test_bevformer
 pytest models/experimental/bevformer/tests/e2e/test_bevformer_trace.py
 ```
 
+### Reduced grid
+
+Every grid, shard and program config is derived from the device. The backbone's and FPN's L1 plan in
+`model_config.py` is sized for P100's 11x10 grid; on a grid with fewer cores (`tt_common.reduced_grid`)
+the detector switches to a DRAM plan instead: the backbone runs one camera at a time with its
+activations in DRAM, its convs and pools in the slice counts conv2d and max_pool2d choose for the
+grid's L1, the stem pool's config tensors in DRAM, and the decoder, head and coder keep their activations
+in DRAM (`tt_common.activation_memory_config`). The DCN op runs a core's blocks in waves of as many as
+its L1 holds, and the fused MSDA takes its query counts from a device tensor, so that a core's runtime
+args name only its index instead of every tile it computes. The full grid keeps its L1 plan and the DCN
+op its single-pass program.
+The E2E test passes on two worker cores:
+
+```sh
+TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=1,0 pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
+
+The override is the inclusive end coordinate of the worker grid, so `1,0` is a 2x1 grid.
+
+### Reduced layer count
+
+`BEVFORMER_NUM_LAYERS=N` keeps the first `N` encoder and decoder layers and, in each ResNet layer, the
+first block, which alone strides and projects the shortcut, and `N` repeats of the block after it.
+The reference is reduced the same way, so the PCC thresholds still apply, but the reduced model is
+not the trained detector and no checkpoint loads into it:
+
+```sh
+BEVFORMER_NUM_LAYERS=1 pytest models/experimental/bevformer/tests/pcc/test_bevformer.py
+```
+
 ## Project Structure
 
 ```

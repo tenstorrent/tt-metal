@@ -394,6 +394,8 @@ class ResNet(nn.Module):
         style (str): ``"pytorch"`` or ``"caffe"``, see ``Bottleneck``.
         dcn (dict, optional): DCNv2 config for the 3x3 convs of the stages flagged in
             ``stage_with_dcn``.
+        max_stage_blocks (int, optional): The most blocks a stage keeps of ``depth``'s, for
+            reduced-layer runs.
 
     The training-only arguments (``frozen_stages``, ``norm_eval``, ``init_cfg``,
     ``zero_init_residual``, ``with_cp``) are accepted so mmdetection configs apply unchanged,
@@ -432,6 +434,7 @@ class ResNet(nn.Module):
         with_cp=False,
         zero_init_residual=True,
         init_cfg=None,
+        max_stage_blocks=None,
     ):
         super(ResNet, self).__init__()
         self.zero_init_residual = zero_init_residual
@@ -475,6 +478,8 @@ class ResNet(nn.Module):
             assert len(stage_with_dcn) == num_stages
         self.plugins = plugins
         self.block, stage_blocks = self.arch_settings[depth]
+        if max_stage_blocks is not None:
+            stage_blocks = tuple(min(blocks, max_stage_blocks) for blocks in stage_blocks)
         self.stage_blocks = stage_blocks[:num_stages]
         self.inplanes = stem_channels
 

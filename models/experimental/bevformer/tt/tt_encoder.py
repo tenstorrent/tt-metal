@@ -318,7 +318,6 @@ class TTBEVFormerEncoder:
         pc_range (List[float]): Point cloud range [x_min, y_min, z_min, x_max, y_max, z_max]
         num_points_in_pillar (int): Number of points sampled in each pillar
         return_intermediate (bool): Whether to return intermediate layer outputs
-        dataset (str): Dataset type for specific configurations
         feedforward_channels (int): FFN intermediate channel size
         batch_first (bool): Whether batch dimension is first
         z_cfg (Dict[str, Any]): Z-axis configuration for point sampling
@@ -349,7 +348,6 @@ class TTBEVFormerEncoder:
         pc_range: List[float] = None,
         num_points_in_pillar: int = 4,
         return_intermediate: bool = False,
-        dataset: str = "nuScenes",
         feedforward_channels: int = 1024,
         batch_first: bool = True,
         z_cfg: Dict[str, Any] = None,

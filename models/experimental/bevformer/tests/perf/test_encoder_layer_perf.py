@@ -58,10 +58,10 @@ def _head_sha():
 @pytest.mark.parametrize(
     "config_name, bev_size",
     [
-        pytest.param("nuscenes_base", (100, 100), id="bev_100x100-nuscenes_base"),
-        pytest.param("nuscenes_base", (200, 200), id="bev_200x200-nuscenes_base"),
-        pytest.param("nuscenes_small_upstream", (150, 150), id="bev_150x150-nuscenes_small_upstream"),
-        pytest.param("nuscenes_tiny_upstream", (50, 50), id="bev_50x50-nuscenes_tiny_upstream"),
+        pytest.param("surround_base", (100, 100), id="bev_100x100-surround_base"),
+        pytest.param("surround_base", (200, 200), id="bev_200x200-surround_base"),
+        pytest.param("surround_small_upstream", (150, 150), id="bev_150x150-surround_small_upstream"),
+        pytest.param("surround_tiny_upstream", (50, 50), id="bev_50x50-surround_tiny_upstream"),
     ],
 )
 @pytest.mark.parametrize("batch_size", [1])

@@ -21,7 +21,7 @@ import ttnn
 
 import torch
 from ..model_config import DeformableAttentionConfig
-from .tt_common import grid_linear_kwargs, l1_if_fits, signpost
+from .tt_common import grid_linear_kwargs, l1_if_fits, reduced_grid, signpost
 
 from loguru import logger
 
@@ -85,6 +85,28 @@ def heads_packed_offsets(rows, num_heads):
     return ttnn.reshape(rows, (bs, num_queries, num_heads, per_head))
 
 
+class QueryCounts:
+    """An attention's full query counts for ``multi_scale_deformable_attn_fused`` on a reduced grid,
+    one (bs,) count tensor per shape, None on the full grid.
+
+    Built on the attention's first forward and reused after it: creating a uint32 tensor uploads it
+    from the host, which a trace capture rejects.
+    """
+
+    def __init__(self):
+        self._counts = {}
+
+    def __call__(self, device, bs, num_queries):
+        if not reduced_grid(device):
+            return None
+        key = (bs, num_queries)
+        if key not in self._counts:
+            self._counts[key] = ttnn.full(
+                (bs,), num_queries, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
+            )
+        return self._counts[key]
+
+
 def multi_scale_deformable_attn_fused(
     value,
     reference_points,
@@ -140,6 +162,11 @@ def multi_scale_deformable_attn_fused(
 
     attention_weights = ttnn.to_layout(attention_weights, ttnn.ROW_MAJOR_LAYOUT)
     reference_points = ttnn.to_layout(reference_points, ttnn.ROW_MAJOR_LAYOUT)
+
+    if num_valid_queries_tensor is None and not num_valid_queries and reduced_grid(value.device()):
+        # Without counts each core takes its list of tiles as runtime args, which on a few cores
+        # outgrows their limit. With counts on device a core gets only its index and derives its run.
+        raise ValueError("a reduced grid needs num_valid_queries_tensor; QueryCounts gives full counts")
 
     if value_memory == "dram":
         target_memory_config = ttnn.DRAM_MEMORY_CONFIG
@@ -266,6 +293,7 @@ class TTMSDeformableAttention:
         self.device = device
         self.params = params
         self.spatial_shapes = spatial_shapes.to(dtype=torch.long).clone()
+        self.query_counts = QueryCounts()
         self.total_keys = int(self.spatial_shapes.prod(dim=1).sum().item())
 
         self.head_dim = self.embed_dims // self.num_heads
@@ -375,6 +403,10 @@ class TTMSDeformableAttention:
         query = ttnn.to_layout(query, ttnn.TILE_LAYOUT)
         sampling_offsets, attention_weights = self.sampling_operands(query, consume_query=consume_query)
 
+        if num_valid_queries is None and num_valid_queries_tensor is None:
+            num_valid_queries_tensor = self.query_counts(
+                value.device(), attention_weights.shape[0], attention_weights.shape[1]
+            )
         output = multi_scale_deformable_attn_fused(
             value=value,
             reference_points=reference_points,

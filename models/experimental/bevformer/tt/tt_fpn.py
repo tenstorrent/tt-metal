@@ -85,6 +85,8 @@ class TTFPN:
         output_conv_dram_conv_slices = config["output_conv_dram_conv_slices"]
         output_conv_act_block_h = config["output_conv_act_block_h"]
         weights_dtype = config["weights_dtype"]
+        # With per_camera the convs are built for one camera and __call__ runs the cameras one by one.
+        self.per_camera = config.get("per_camera", False)
         assert conv_args.add_extra_convs == "on_output", f"extra convs {conv_args.add_extra_convs!r} are not supported"
         self.lateral_convs = []
         self.fpn_convs = []
@@ -140,6 +142,28 @@ class TTFPN:
             )
 
     def __call__(self, input_tensor):
+        if not self.per_camera:
+            return self._forward(input_tensor)
+        # Each level is (1, 1, N*H*W, C); a camera's rows are its H*W consecutive rows.
+        level_rows = [conv.conv.input_height * conv.conv.input_width for conv in self.lateral_convs]
+        num_cams = input_tensor[0].shape[-2] // level_rows[0]
+        cameras = []
+        for camera in range(num_cams):
+            levels = [
+                ttnn.slice(level, [0, 0, camera * rows, 0], [1, 1, (camera + 1) * rows, level.shape[-1]])
+                for level, rows in zip(input_tensor, level_rows)
+            ]
+            cameras.append(self._forward(levels))
+        for level in input_tensor:
+            ttnn.deallocate(level)
+        outs = []
+        for level in zip(*cameras):
+            outs.append(ttnn.concat(list(level), dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            for camera_level in level:
+                ttnn.deallocate(camera_level)
+        return tuple(outs)
+
+    def _forward(self, input_tensor):
         signpost(header="TTNN FPN Forward Start")
         laterals = []
         for i, lateral_conv in enumerate(self.lateral_convs):

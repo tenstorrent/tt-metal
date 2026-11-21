@@ -25,7 +25,14 @@ from models.experimental.bevformer.model_config import (
     GRID_DTYPE,
     SCORE_DTYPE,
 )
-from models.experimental.bevformer.tt.tt_common import device_constant, l1_linear, layer_norm, signpost, stack_layers
+from models.experimental.bevformer.tt.tt_common import (
+    activation_memory_config,
+    device_constant,
+    l1_linear,
+    layer_norm,
+    signpost,
+    stack_layers,
+)
 from models.experimental.bevformer.tt.tt_decoder import TTDetectionTransformerDecoder
 
 
@@ -62,7 +69,7 @@ class TTBEVFormerHead:
     @staticmethod
     def _cls_branch(x, branch):
         for linear, norm in branch.hidden:
-            x = ttnn.relu(layer_norm(l1_linear(x, linear), norm, memory_config=ttnn.L1_MEMORY_CONFIG))
+            x = ttnn.relu(layer_norm(l1_linear(x, linear), norm, memory_config=activation_memory_config(x.device())))
         return l1_linear(x, branch.out, dtype=SCORE_DTYPE)
 
     def __call__(self, bev_embed):
@@ -95,7 +102,9 @@ class TTBEVFormerHead:
 
         centers = ttnn.add(ttnn.multiply(refined_points, p.pc_size), p.pc_min)
         centers = ttnn.pad(centers, [(0, 0)] * 3 + [(0, CODE_SIZE - centers.shape[-1])], 0.0)
-        all_bbox_preds = ttnn.where(self._center_mask, centers, box_codes, memory_config=ttnn.L1_MEMORY_CONFIG)
+        all_bbox_preds = ttnn.where(
+            self._center_mask, centers, box_codes, memory_config=activation_memory_config(centers.device())
+        )
         signpost(header="Head BoxPreds End")
         signpost(header="TTNN Head Forward End")
         return all_cls_scores, all_bbox_preds

@@ -49,20 +49,20 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio, blank_cams, valid_per_pair",
     [
-        ("nuscenes_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, (), None),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 100x100 BEV grid
-        ("nuscenes_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 200x200 BEV grid
-        # CARLA's rig projects symmetrically, NuScenes' does not, so max_len spreads
+        ("surround_tiny", 1, 30, 30, 0.997, 0.06, 0.5, 0.5, (), None),  # Tiny preset - 30x30 BEV grid
+        ("surround_base", 1, 100, 100, 0.999, 0.04, 1.3, 0.5, (), None),  # Base preset - 100x100 BEV grid
+        ("surround_base", 1, 200, 200, 0.998, 0.04, 1.3, 0.5, (), None),  # Base preset - 200x200 BEV grid
+        # CARLA's rig projects symmetrically, the surround rig does not, so max_len spreads
         # across cameras differently and pads the rebatch differently.
         ("carla_base", 1, 100, 100, 0.998, 0.04, 1.3, 0.5, (), None),  # CARLA base model
-        ("nuscenes_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
+        ("surround_base", 2, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 1),), None),  # bs=2, blind cam in one item
         # BEVFormer-small's camera level and BEV grid at bs=2: the grouped softmax.
-        ("nuscenes_small_upstream", 2, 150, 150, 0.998, 0.04, 1.3, 0.5, (), None),
-        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
+        ("surround_small_upstream", 2, 150, 150, 0.998, 0.04, 1.3, 0.5, (), None),
+        ("surround_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, "all", None),  # max_len == 0: residual-only return
         # max_len at the tile edge: the extra row still leaves the padding row unfilled slots read.
-        ("nuscenes_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),
+        ("surround_base", 1, 30, 30, 0.998, 0.04, 1.3, 0.5, ((2, 0),), 32),
         # Off: a grid size between the 30x30 and 100x100 cases, no distinct path.
-        # ("nuscenes_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # NuScenes base model - 50x50 BEV grid
+        # ("surround_base", 1, 50, 50, 0.999, 0.04, 1.3, 0.5, (), None),  # Base preset - 50x50 BEV grid
     ],
 )
 @pytest.mark.parametrize("seed", [0])
@@ -466,7 +466,7 @@ def test_rebatch_plan_over_a_sequence(device, bs):
     assert reallocations >= 2
 
 
-@pytest.mark.parametrize("config_name", ["nuscenes_base", "nuscenes_small_upstream"])
+@pytest.mark.parametrize("config_name", ["surround_base", "surround_small_upstream"])
 def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch, config_name):
     """The 100x100 case with every group of intermediates around the fused op in DRAM, as
     ``tt_common.l1_if_fits`` places them when they do not fit L1; for small's camera level, the
@@ -481,9 +481,9 @@ def test_spatial_cross_attention_glue_intermediates_in_dram(device, monkeypatch,
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, blank_cams",
     [
-        ("nuscenes_base", 1, 100, 100, ()),
-        ("nuscenes_base", 2, 30, 30, ((2, 1),)),
-        ("nuscenes_small_upstream", 1, 100, 100, ()),
+        ("surround_base", 1, 100, 100, ()),
+        ("surround_base", 2, 30, 30, ((2, 1),)),
+        ("surround_small_upstream", 1, 100, 100, ()),
     ],
 )
 def test_spatial_cross_attention_ignores_unwritten_padding(

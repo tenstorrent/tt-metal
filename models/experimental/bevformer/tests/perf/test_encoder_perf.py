@@ -46,7 +46,7 @@ def _head_sha():
 
 @torch.no_grad()
 @pytest.mark.timeout(1200)
-@pytest.mark.parametrize("config_name", ["nuscenes_base"])
+@pytest.mark.parametrize("config_name", ["surround_base"])
 @pytest.mark.parametrize("bev_size", [(100, 100)])
 @pytest.mark.parametrize("num_layers", [6])
 @pytest.mark.parametrize("batch_size", [1])

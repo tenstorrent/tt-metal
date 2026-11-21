@@ -70,6 +70,9 @@ constexpr uint32_t IN_H_FP32 = get_named_compile_time_arg_val("in_h_fp32");
 constexpr uint32_t IN_H_LESS_ONE_FP32 = get_named_compile_time_arg_val("in_h_less_one_fp32");
 constexpr uint32_t IN_W_FP32 = get_named_compile_time_arg_val("in_w_fp32");
 constexpr uint32_t IN_W_LESS_ONE_FP32 = get_named_compile_time_arg_val("in_w_less_one_fp32");
+// A core's blocks run in WAVES waves of up to WAVE_BLOCKS blocks, each through every pass.
+constexpr uint32_t WAVE_BLOCKS = get_named_compile_time_arg_val("wave_blocks");
+constexpr uint32_t WAVES = get_named_compile_time_arg_val("waves");
 constexpr uint32_t CORNERS = 4;
 constexpr uint32_t BLOCK_TILES = CORNERS * CHUNK_TILES;
 constexpr uint32_t WEIGHT_SLICE_TILES = CHUNK_TILES * OUT_TILES;
@@ -305,7 +308,7 @@ void compute_geometry(uint32_t in_cb_index, uint32_t index_cb_index, uint32_t we
 
 void kernel_main() {
     compute_kernel_hw_startup(corner_block_cb_index, scalar_cb_index, column_cb_index);
-    const uint32_t num_blocks = get_arg_val<uint32_t>(0);
+    const uint32_t core_num_blocks = get_arg_val<uint32_t>(0);
 
     CircularBuffer tiled_cb(tiled_cb_index);
     CircularBuffer column_cb(column_cb_index);
@@ -313,10 +316,6 @@ void kernel_main() {
     CircularBuffer acc_cb(acc_cb_index);
     // Written once by the reader and kept for every block.
     CircularBuffer(geom_kernel_cb_index).wait_front(2);
-    // Every block's output tiles stay reserved while the positions accumulate into them; the last
-    // pass hands each block's over as it finishes.
-    acc_cb.reserve_back(num_blocks * OUT_TILES);
-
     auto geometry_of = [&](uint32_t block) {
         const bool odd = block & 1;
         compute_geometry(
@@ -324,12 +323,7 @@ void kernel_main() {
             odd ? odd_geom_index_cb_index : geom_index_cb_index,
             odd ? odd_geom_weight_cb_index : geom_weight_cb_index);
     };
-    for (uint32_t block = 0; block < num_blocks && block < 2; ++block) {
-        geometry_of(block);
-    }
-    if constexpr (HAS_BIAS) {
-        CircularBuffer(bias_cb_index).wait_front(OUT_TILES);
-    }
+    bool bias_ready = false;
 
     // Bias, ReLU, bfloat16: a block's output, at the front of acc_cb, to the reader that owns the
     // block. It runs as each block finishes its last pass, so the readers write it out while the
@@ -377,87 +371,105 @@ void kernel_main() {
         acc_cb.pop_front(OUT_TILES);
     };
 
-    for (uint32_t pass = 0; pass < kernel_positions * CHUNKS; ++pass) {
-        const bool last_pass = pass + 1 == kernel_positions * CHUNKS;
-        conv_weight_cb.wait_front(WEIGHT_SLICE_TILES);
-        for (uint32_t block = 0; block < num_blocks; ++block) {
-            const bool odd = block & 1;
-            const uint32_t corner_cb_index = odd ? odd_corner_block_cb_index : corner_block_cb_index;
-            const uint32_t scalar_index = odd ? odd_scalar_cb_index : scalar_cb_index;
-            CircularBuffer corner_block_cb(corner_cb_index);
-            CircularBuffer scalar_cb(scalar_index);
-
-            // The block's columns of this pass: the four corners times their scalars, summed.
-            reconfig_data_format_srca(corner_cb_index);
-            pack_reconfig_data_format(tiled_cb_index);
-            pack_reconfig_l1_acc(0);
-            fast_tilize_init(corner_cb_index, BLOCK_TILES, tiled_cb_index);
-            corner_block_cb.wait_front(BLOCK_TILES);
-            tiled_cb.reserve_back(BLOCK_TILES);
-            fast_tilize_block(corner_cb_index, BLOCK_TILES, tiled_cb_index);
-            tiled_cb.push_back(BLOCK_TILES);
-            corner_block_cb.pop_front(BLOCK_TILES);
-            fast_tilize_uninit(corner_cb_index, tiled_cb_index, BLOCK_TILES);
-
-            // The four corners' products sum in dest: ELWMUL adds into dest, which every acquire
-            // starts at zero, so each column tile is packed once.
-            bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
-            tiled_cb.wait_front(BLOCK_TILES);
-            scalar_cb.wait_front(CORNERS);
-            column_cb.reserve_back(CHUNK_TILES);
-            for (uint32_t t0 = 0; t0 < CHUNK_TILES; t0 += DEST_TILES) {
-                const uint32_t tiles = CHUNK_TILES - t0 < DEST_TILES ? CHUNK_TILES - t0 : DEST_TILES;
-                tile_regs_acquire();
-                for (uint32_t corner = 0; corner < CORNERS; ++corner) {
-                    for (uint32_t t = 0; t < tiles; ++t) {
-                        mul_tiles_bcast<BroadcastType::COL>(
-                            tiled_cb_index, scalar_index, corner * CHUNK_TILES + t0 + t, corner, t);
-                    }
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t t = 0; t < tiles; ++t) {
-                    pack_tile(t, column_cb_index);
-                }
-                tile_regs_release();
-            }
-            column_cb.push_back(CHUNK_TILES);
-            scalar_cb.pop_front(CORNERS);
-            tiled_cb.pop_front(BLOCK_TILES);
-
-            // The block's output += its columns times the pass's weight slice: fp32 in dest over the
-            // slice's rows, and in L1 across passes; the first pass overwrites. In the last pass
-            // each earlier block's push_back has moved the write pointer to this block's tiles, so
-            // they pack at offset 0.
-            column_cb.wait_front(CHUNK_TILES);
-            reconfig_data_format(conv_weight_cb_index, column_cb_index);
-            pack_reconfig_data_format(acc_cb_index);
-            for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
-                const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
-                matmul_block_init(column_cb_index, conv_weight_cb_index, 0, chunk, 1, CHUNK_TILES);
-                tile_regs_acquire();
-                for (uint32_t k = 0; k < CHUNK_TILES; ++k) {
-                    matmul_block(
-                        column_cb_index, conv_weight_cb_index, k, k * OUT_TILES + n0, 0, 0, chunk, 1, CHUNK_TILES);
-                }
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_reconfig_l1_acc(pass == 0 ? 0 : 1);
-                for (uint32_t i = 0; i < chunk; ++i) {
-                    pack_tile<true>(i, acc_cb_index, (last_pass ? 0 : block * OUT_TILES) + n0 + i);
-                }
-                tile_regs_release();
-            }
-            pack_reconfig_l1_acc(0);
-            column_cb.pop_front(CHUNK_TILES);
-            if (last_pass) {
-                acc_cb.push_back(OUT_TILES);
-                finish_block(block);
-            }
-            if (pass == 0 && block + 2 < num_blocks) {
-                geometry_of(block + 2);
-            }
+    for (uint32_t wave = 0; wave < WAVES; ++wave) {
+        const uint32_t wave_first = wave * WAVE_BLOCKS;
+        const uint32_t num_blocks =
+            core_num_blocks > wave_first
+                ? (core_num_blocks - wave_first < WAVE_BLOCKS ? core_num_blocks - wave_first : WAVE_BLOCKS)
+                : 0;
+        // The wave's output tiles stay reserved while the positions accumulate into them; the last
+        // pass hands each block's over as it finishes.
+        acc_cb.reserve_back(num_blocks * OUT_TILES);
+        for (uint32_t block = 0; block < num_blocks && block < 2; ++block) {
+            geometry_of(block);
         }
-        conv_weight_cb.pop_front(WEIGHT_SLICE_TILES);
+        if (HAS_BIAS && !bias_ready) {
+            CircularBuffer(bias_cb_index).wait_front(OUT_TILES);
+            bias_ready = true;
+        }
+
+        for (uint32_t pass = 0; pass < kernel_positions * CHUNKS; ++pass) {
+            const bool last_pass = pass + 1 == kernel_positions * CHUNKS;
+            conv_weight_cb.wait_front(WEIGHT_SLICE_TILES);
+            for (uint32_t block = 0; block < num_blocks; ++block) {
+                const bool odd = block & 1;
+                const uint32_t corner_cb_index = odd ? odd_corner_block_cb_index : corner_block_cb_index;
+                const uint32_t scalar_index = odd ? odd_scalar_cb_index : scalar_cb_index;
+                CircularBuffer corner_block_cb(corner_cb_index);
+                CircularBuffer scalar_cb(scalar_index);
+
+                // The block's columns of this pass: the four corners times their scalars, summed.
+                reconfig_data_format_srca(corner_cb_index);
+                pack_reconfig_data_format(tiled_cb_index);
+                pack_reconfig_l1_acc(0);
+                fast_tilize_init(corner_cb_index, BLOCK_TILES, tiled_cb_index);
+                corner_block_cb.wait_front(BLOCK_TILES);
+                tiled_cb.reserve_back(BLOCK_TILES);
+                fast_tilize_block(corner_cb_index, BLOCK_TILES, tiled_cb_index);
+                tiled_cb.push_back(BLOCK_TILES);
+                corner_block_cb.pop_front(BLOCK_TILES);
+                fast_tilize_uninit(corner_cb_index, tiled_cb_index, BLOCK_TILES);
+
+                // The four corners' products sum in dest: ELWMUL adds into dest, which every acquire
+                // starts at zero, so each column tile is packed once.
+                bcast_init<EltwiseBinaryType::ELWMUL, BroadcastType::COL>(tiled_cb_index, scalar_index);
+                tiled_cb.wait_front(BLOCK_TILES);
+                scalar_cb.wait_front(CORNERS);
+                column_cb.reserve_back(CHUNK_TILES);
+                for (uint32_t t0 = 0; t0 < CHUNK_TILES; t0 += DEST_TILES) {
+                    const uint32_t tiles = CHUNK_TILES - t0 < DEST_TILES ? CHUNK_TILES - t0 : DEST_TILES;
+                    tile_regs_acquire();
+                    for (uint32_t corner = 0; corner < CORNERS; ++corner) {
+                        for (uint32_t t = 0; t < tiles; ++t) {
+                            mul_tiles_bcast<BroadcastType::COL>(
+                                tiled_cb_index, scalar_index, corner * CHUNK_TILES + t0 + t, corner, t);
+                        }
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    for (uint32_t t = 0; t < tiles; ++t) {
+                        pack_tile(t, column_cb_index);
+                    }
+                    tile_regs_release();
+                }
+                column_cb.push_back(CHUNK_TILES);
+                scalar_cb.pop_front(CORNERS);
+                tiled_cb.pop_front(BLOCK_TILES);
+
+                // The block's output += its columns times the pass's weight slice: fp32 in dest over the
+                // slice's rows, and in L1 across passes; the first pass overwrites. In the last pass
+                // each earlier block's push_back has moved the write pointer to this block's tiles, so
+                // they pack at offset 0.
+                column_cb.wait_front(CHUNK_TILES);
+                reconfig_data_format(conv_weight_cb_index, column_cb_index);
+                pack_reconfig_data_format(acc_cb_index);
+                for (uint32_t n0 = 0; n0 < OUT_TILES; n0 += DEST_TILES) {
+                    const uint32_t chunk = OUT_TILES - n0 < DEST_TILES ? OUT_TILES - n0 : DEST_TILES;
+                    matmul_block_init(column_cb_index, conv_weight_cb_index, 0, chunk, 1, CHUNK_TILES);
+                    tile_regs_acquire();
+                    for (uint32_t k = 0; k < CHUNK_TILES; ++k) {
+                        matmul_block(
+                            column_cb_index, conv_weight_cb_index, k, k * OUT_TILES + n0, 0, 0, chunk, 1, CHUNK_TILES);
+                    }
+                    tile_regs_commit();
+                    tile_regs_wait();
+                    pack_reconfig_l1_acc(pass == 0 ? 0 : 1);
+                    for (uint32_t i = 0; i < chunk; ++i) {
+                        pack_tile<true>(i, acc_cb_index, (last_pass ? 0 : block * OUT_TILES) + n0 + i);
+                    }
+                    tile_regs_release();
+                }
+                pack_reconfig_l1_acc(0);
+                column_cb.pop_front(CHUNK_TILES);
+                if (last_pass) {
+                    acc_cb.push_back(OUT_TILES);
+                    finish_block(block);
+                }
+                if (pass == 0 && block + 2 < num_blocks) {
+                    geometry_of(block + 2);
+                }
+            }
+            conv_weight_cb.pop_front(WEIGHT_SLICE_TILES);
+        }
     }
 }

@@ -46,13 +46,13 @@ pytestmark = pytest.mark.use_module_device({"l1_small_size": 10 * 1024})
 @pytest.mark.parametrize(
     "config_name, batch_size, bev_h, bev_w, num_bev_queue, expected_pcc, expected_abs_error, expected_rel_error, expected_high_error_ratio",
     [
-        ("nuscenes_tiny", 1, 30, 30, 2, 0.999, 0.02, 0.15, 0.2),  # NuScenes tiny model - 30x30 BEV grid
-        ("nuscenes_base", 1, 50, 50, 2, 0.999, 0.02, 0.11, 0.3),  # NuScenes base model - 50x50 BEV grid
-        ("nuscenes_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # NuScenes base model - 100x100 BEV grid
-        ("nuscenes_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
-        ("nuscenes_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
+        ("surround_tiny", 1, 30, 30, 2, 0.999, 0.02, 0.15, 0.2),  # Tiny preset - 30x30 BEV grid
+        ("surround_base", 1, 50, 50, 2, 0.999, 0.02, 0.11, 0.3),  # Base preset - 50x50 BEV grid
+        ("surround_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # Base preset - 100x100 BEV grid
+        ("surround_base", 2, 30, 30, 2, 0.999, 0.02, 0.06, 0.2),  # Batch size 2
+        ("surround_base", 1, 200, 200, 2, 0.999, 0.06, 0.58, 0.4),  # Large BEV grid
         # Off: TSA reads only embed_dims/num_heads/num_points, identical here to
-        # nuscenes_base, and takes its grid from bev_h/bev_w -- same workload.
+        # surround_base, and takes its grid from bev_h/bev_w -- same workload.
         # ("carla_base", 1, 100, 100, 2, 0.999, 0.03, 0.17, 0.4),  # CARLA base model
     ],
 )
@@ -246,7 +246,7 @@ def test_temporal_self_attention_previous_bev(
     if glue_intermediates == "dram":
         monkeypatch.setattr(tt_common, "L1_INTERMEDIATE_SHARE", 0.0)
     torch.manual_seed(0)
-    config = PRESETS["nuscenes_base"]
+    config = PRESETS["surround_base"]
     embed_dims, num_heads, num_points = config.embed_dims, config.num_heads, config.tsa_num_points
     num_queries = bev_h * bev_w
     spatial_shapes = torch.tensor([[bev_h, bev_w]], dtype=torch.long)

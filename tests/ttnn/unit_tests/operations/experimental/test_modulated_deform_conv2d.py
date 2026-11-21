@@ -184,6 +184,18 @@ def test_modulated_deform_conv2d_sharded_input(device, batch, in_h, in_w, channe
     assert_close(expected, sharded)
 
 
+def test_modulated_deform_conv2d_waves(device):
+    """More blocks per core than L1 holds at once: each core runs its blocks in waves, every wave
+    through every pass, and the output matches the reference as in one wave."""
+    conv = ((3, 3), (1, 1), (1, 1), (1, 1))
+    # 5000 blocks of 32 rows, about 45 per core on a full Blackhole grid, each keeping a 512-channel
+    # output accumulator of 32 KB.
+    x, offset, logits, weight, bias = random_inputs(1, 400, 400, 32, 512, *conv, 2.0)
+    actual = run_conv(device, x, offset, logits, weight, bias, *conv, True)
+    expected = (reference_columns(x, offset, logits.sigmoid(), *conv) @ weight + bias).clamp(min=0)
+    assert_close(expected, actual)
+
+
 def test_modulated_deform_conv2d_weight_multicast(device):
     """The blocks fill two whole columns of the grid, a rectangle short of the grid, so one core
     multicasts each weight slice to those cores only."""
