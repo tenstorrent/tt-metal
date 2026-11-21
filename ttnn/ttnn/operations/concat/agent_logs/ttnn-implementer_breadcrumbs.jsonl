@@ -1,0 +1,4 @@
+{"event":"test_run","test":"probe_001 (page_copy, element-granular W, row-granular H)","result":"pass","details":"exact on first run","ts":"2026-11-21T07:44:21+00:00"}
+{"event":"test_run","test":"test_concat.py","result":"pass","details":"7/7","ts":"2026-11-21T07:44:22+00:00"}
+{"event":"test_run","test":"test_concat_regimes.py","result":"pass","details":"67/67: regime pins DRAM+L1, ragged blocks (block_tiles 1,3,5,8,64), split coverage, session with to_layout before/after, R5, refusals, X1-X4","ts":"2026-11-21T07:44:22+00:00"}
+{"event":"test_run","test":"golden suite","result":"pass","details":"60 passed, 0 failed, 0 hangs, 181 skipped, rest xfail (outside PHASE0)","ts":"2026-11-21T07:44:23+00:00"}

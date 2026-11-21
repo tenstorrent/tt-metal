@@ -48,3 +48,11 @@ Chosen split: contiguous ranges of flat output tiles over the full grid (`split_
 Transactions: 1 read and 1 write per output tile in `page_copy`. In `run_assembly` reads are 2–6 per tile (row-granular `dim=-2`), ≤ 8 per tile (face-granular `dim=-1`) or ~64–160 per tile (element-granular `dim=-1`), and writes stay 1 per tile.
 
 > Cheapest-traffic split considered: contiguous flat output-tile ranges with direct sub-page reads, which moves exactly the minimum bytes per tier (each input byte that lands in the output crosses DRAM once, each output page once, no cross-core traffic). Implemented: that same split. It is also the cheapest-traffic split. The only alternative that differs is `staged_shift` (deferred). It moves **more** DRAM bytes: whole source pages plus a halo page per piece per segment, versus `run_assembly`'s exact runs. It trades those bytes for fewer, larger transactions on element-granular `dim=-1` seams. It is deferred because `run_assembly` already serves every such cell at minimum bytes, and no traced caller reaches that predicate. It stays reachable: the split, the writer and `cb_output_tiles` are untouched by it.
+
+## Implementation notes (ttnn-implementer, phase 0)
+
+- Inventory as planned: one ring, `cb_output_tiles`, `OUTPUT_DEPTH · block_tiles` entries. No buffer added, resized or removed.
+- `run_assembly` reads **less** than the budget above: cross-axis tile padding is not read either (the reader limits rows,
+  for `dim=-1`, or column halves, for `dim=-2`, to the valid extent `cross_extent - 32·x`). The design allowed reading it
+  into output padding; skipping it removes those transactions. DRAM read in `run_assembly` is exactly the bytes that land
+  in the output's data, and `≤ total_out_tiles · tile_bytes` still bounds it.
