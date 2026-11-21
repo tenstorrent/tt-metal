@@ -1,0 +1,1 @@
+{"event":"test_run","result":"pass","test":"test_softmax.py","detail":"7/7 acceptance cells; probe PCC 0.999998 on [1,1,32,64] DRAM and [1,4,16,400] L1","ts":"2026-11-21T07:21:15+00:00"}
