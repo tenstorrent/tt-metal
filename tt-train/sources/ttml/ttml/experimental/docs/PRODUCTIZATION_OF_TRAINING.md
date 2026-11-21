@@ -223,8 +223,9 @@ optimizer:
 ```
 
 A trainable weight goes to the first optimizer whose `modules` lists a `/`-separated part of its ttml name (for
-example `llama/blocks/0/attention/qkv_linear/lora_A`), as in ttml's param groups, else to the one optimizer without
-`modules`. Every trainable weight must get an optimizer and every optimizer a weight; `setup` raises otherwise, so a
+example `LoraModel/model/blocks/0/attention/qkv_linear/lora_A` with LoRA, `Llama/blocks/0/attention/qkv_linear/weight`
+without), as in ttml's param groups, else to the one optimizer without `modules`. The parts are matched exactly, case
+included. Every trainable weight must get an optimizer and every optimizer a weight; `setup` raises otherwise, so a
 weight is never left untrained by a missing pattern. One optimizer without `modules` trains every trainable weight.
 With several optimizers, the `learning_rate` metric is logged per optimizer, as `learning_rate/0`, `learning_rate/1`
 and so on, in list order.
