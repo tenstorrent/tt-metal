@@ -1,0 +1,966 @@
+diff -ruN -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 05:51:53.245766038 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 08:03:28.010005122 +0000
+@@ -92,6 +92,8 @@
+ # ready token (compute pack -> compute unpack).
+ CB_FOLD_PLANE = 17
+ CB_FOLD_TOKEN = 18
++# Row-streamed walk (ROWSTREAM): the ones tile of the bias K-step.
++CB_RS_ONES = 19
+ # Bank-run fill: the ROW_MAJOR DRAM-interleaved slab fill reads each chunk of consecutive pixels as one run per DRAM
+ # bank into a staging ring (BRF_NSTG chunks of up to BRF_CHUNK_BYTES), then de-interleaves it into the slab with local
+ # NoC copies. One read per pixel page is DRAM-transaction-bound (~600 M reads/s across the chip); bank runs are
+@@ -351,6 +353,40 @@
+ TAP_DIRECT_FIFO_GROUP = 4
+ WEIGHT_DEPTH = 2
+ OUT_DEPTH_ROW_GROUPS = 2
++# Row-streamed whole-K walk on the ROW_MAJOR ring (rowstream_plan, conv2d_3x3_rowstream.hpp): per batch of
++# ROWSTREAM_ROWS tile-rows, compute tilizes every tap of the batch (tile-row major) and accumulates all of K in DEST
++# against the resident weights, packs the output once and pushes each row group as it completes. No fp32 partials.
++# ROWSTREAM_BIAS: "kstep" adds the bias as one more K-step (a ones-column tile x the bias tile, exact) where the
++# subblock reuses in0 (sb_w >= sb_h), "batch" packs the batch's fp32 sums and runs the row-broadcast add per batch.
++# ROWSTREAM_TABLE_ROWS: tile-rows of tap-direct entries the reader may run ahead of compute's tilize (bounded by the ring:
++# rowstream_plan grows the ring from the freed L1 when it can). ROWSTREAM_OUT_ROWS: output CB depth in row groups.
++ROWSTREAM = True
++ROWSTREAM_ROWS = 4
++ROWSTREAM_TABLE_ROWS = 8
++ROWSTREAM_BIAS = "batch"
++ROWSTREAM_OUT_ROWS = 8
++# One unit per kernel row (bk = 3 C_in tiles) instead of one per tap: a third of the units (K order unchanged).
++ROWSTREAM_KROW = True
++# DRAM banks the writer's store window covers (Blackhole p150b: 8). ROWSTREAM_STORE_GROUPS: a fixed store window in
++# row groups instead (None: the bank-covering one).
++RM_MAX_DRAM_BANKS_STORE = 8
++ROWSTREAM_STORE_GROUPS = None
++# Where kh reuse applies: "fuse" runs the row stream over kh reuse's tile ring (each input tile-row tilized once, K
++# accumulated in DEST), "replace" runs the row stream on the plain ring instead of kh reuse, "keep" keeps kh reuse's
++# K-blocked walk.
++ROWSTREAM_KHR = "replace"
++# Domain rule (None: every ring walk with resident weights). The row stream drains the output at the compute rate on
++# every core at once, where the K-blocked walk stores in bursts (its last K-block). "store_rate": only where that output
++# stream fits the DRAM write bandwidth: work cores x one output tile per K tile-MACs (ROWSTREAM_TILE_MAC_CYCLES each,
++# HiFi4) <= ROWSTREAM_DRAM_BYTES_PER_S. Past it every core stores continuously, and NoC1 write arbitration starves
++# the far grid columns until the others finish. With bf16 output on 110 cores the stream is 4.75e12 / K B/s: 528 GB/s
++# at C_in 32 (1026x2048 32->128 +58%, 514x1024 32->128 +24%), 264 GB/s at C_in 64 (1026x2048 64->64 -7.5%, though its
++# whole-op DRAM time, input + output, is 1.17x its matmul time). "roofline": the whole-op DRAM time <= the matmul time
++# (it turns the row stream off on 1026x2048 64->64, where it wins).
++ROWSTREAM_RULE = "store_rate"
++ROWSTREAM_DRAM_BYTES_PER_S = 450e9
++ROWSTREAM_CLOCK_HZ = 1350e6
++ROWSTREAM_TILE_MAC_CYCLES = 64  # HiFi4 bf16 tile-MAC (the walk's fidelity is fixed by the caller's config)
+ # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
+ # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
+ INPUT_TILE_DEPTH_BATCHES = 2
+@@ -1638,6 +1674,211 @@
+     return None
+ 
+ 
++def _rs_row_lo(g: Conv3x3Geometry, o):
++    """A lower bound of the lowest input pixel output tile-row o.. reads (kernel row 0, tap 0, clamped at 0): mirror of
++    the reader's rs_row_lo. Non-decreasing in o."""
++    ho, wo = divmod(o, g.output_width)
++    return max(0, (ho * g.stride - g.pad_top) * g.input_width + wo * g.stride - g.pad_left)
++
++
++def _rs_row_hi(g: Conv3x3Geometry, o, o_end):
++    """An upper bound of one past the highest input pixel output tile-row [o, min(o + 32, o_end)) reads, at most
++    num_in_px (0: an empty tile-row): mirror of the reader's rs_row_hi."""
++    if o >= o_end:
++        return 0
++    ho, wo = divmod(min(o + TILE, o_end) - 1, g.output_width)
++    x = (ho * g.stride + 2 * g.dilation - g.pad_top) * g.input_width + wo * g.stride - g.pad_left + 2 * g.dilation + 1
++    return min(max(x, 0), g.num_in_px)
++
++
++@functools.lru_cache(maxsize=1024)
++def rowstream_ring_px(g: Conv3x3Geometry, core_m_tiles, bm, lag_rows):
++    """Ring pixels the row-streamed reader needs (mirror of its release / need sequence): before it writes tile-row t's
++    entries it waits for every pixel below rs_row_hi(t), and compute has popped every entry of the tile-rows before
++    t - lag_rows (lag_rows rows of entries in the unit FIFO), so the ring may reuse every slot below rs_row_lo(t -
++    lag_rows) + ring_px."""
++    worst = 0
++    for start, actual in core_m_ranges(g, core_m_tiles):
++        for t in range(_div_up(actual, bm) * bm):
++            m = t // bm
++            o_end = min((start + min((m + 1) * bm, actual)) * TILE, g.num_out_px)
++            hi = _rs_row_hi(g, (start + t) * TILE, o_end)
++            if hi:
++                worst = max(worst, hi - _rs_row_lo(g, (start + max(t - lag_rows, 0)) * TILE))
++    return worst
++
++
++def rowstream_store_rate(g: Conv3x3Geometry, b: Conv3x3Blocking):
++    """Bytes / s the row stream's output leaves the work grid at when compute runs at its matmul rate: every work core
++    packs one output tile per K tile-MACs."""
++    cores = b.num_m_groups * b.n_groups
++    return cores * g.out_tile_bytes * ROWSTREAM_CLOCK_HZ / (g.tensor_k_tiles * ROWSTREAM_TILE_MAC_CYCLES)
++
++
++def _rowstream_rule_ok(g: Conv3x3Geometry, b: Conv3x3Blocking):
++    if ROWSTREAM_RULE == "store_rate":
++        return rowstream_store_rate(g, b) <= ROWSTREAM_DRAM_BYTES_PER_S
++    if ROWSTREAM_RULE == "roofline":
++        compute_s, dram_s = rowstream_roofline(g, b)
++        return compute_s >= dram_s
++    return True
++
++
++def rowstream_roofline(g: Conv3x3Geometry, b: Conv3x3Blocking):
++    """(matmul s, DRAM s) of blocking b: the busiest core's tile-MACs (core_m_tiles x K x bn) at
++    ROWSTREAM_TILE_MAC_CYCLES each, and the op's DRAM bytes (the input read once per N group, the output with its
++    32-lane padding) at ROWSTREAM_DRAM_BYTES_PER_S."""
++    compute_s = b.core_m_tiles * g.tensor_k_tiles * b.block_n_tiles * ROWSTREAM_TILE_MAC_CYCLES / ROWSTREAM_CLOCK_HZ
++    dram_bytes = (
++        b.n_groups * g.num_in_px * g.c_in_p * BF16_BYTES + g.tensor_m_tiles * g.tensor_n_tiles * g.out_tile_bytes
++    )
++    return compute_s, dram_bytes / ROWSTREAM_DRAM_BYTES_PER_S
++
++
++def rowstream_khr_plan(g: Conv3x3Geometry, b: Conv3x3Blocking, has_bias, budget, kstep_ok=True):
++    """The row stream over kh reuse's tile ring (ROWSTREAM_KHR "fuse"): blocking b is kh reuse's. Each input tile-row is
++    tilized once into the tile ring; a batch of `rows` output tile-rows (flat over the core, across M-blocks) multiplies
++    ring rows t + kh * W / 32 for the three kernel rows, all of K in DEST. The ring then holds 2 W / 32 + rows tile-rows;
++    the fp32 partials ([bm, bn]) go, a deeper output CB comes. The reader's unit stream and FIFO are kh reuse's."""
++    if not (ROWSTREAM and b.weights_resident and kh_reuse_capable(g, b)):
++        return None
++    if not _rowstream_rule_ok(g, b):
++        return None
++    bm, bn = b.block_m_tiles, b.block_n_tiles
++    sb_h, sb_w = b.out_subblock_h, b.out_subblock_w
++    assert sb_h == 1
++    tw, wt = g.c_in_tiles, g.input_width // TILE
++    row_bytes = 3 * tw * g.in0_tile_bytes
++    mode = 0 if not has_bias else (2 if ROWSTREAM_BIAS == "kstep" and kstep_ok and sb_w >= sb_h else 1)
++    fixed = (
++        b.footprint_bytes
++        - b.khr_ring_rows * row_bytes
++        - bm * bn * TILE_BYTES_FP32
++        - b.out_depth_row_groups * sb_h * bn * g.out_tile_bytes
++    )
++
++    def total(rows, out_rg):
++        return (
++            fixed
++            + max(b.khr_ring_rows, 2 * wt + rows) * row_bytes
++            + (rows * bn * TILE_BYTES_FP32 if mode == 1 else TILE_BYTES_FP32)
++            + out_rg * sb_h * bn * g.out_tile_bytes
++            + (g.in0_tile_bytes if mode == 2 else 0)
++        )
++
++    best_groups = ROWSTREAM_STORE_GROUPS or _div_up(RM_MAX_DRAM_BANKS_STORE, sb_h * bn)
++    for store_groups in range(best_groups, 0, -1):
++        min_out = max(OUT_DEPTH_ROW_GROUPS, 2 * store_groups)
++        for rows in range(ROWSTREAM_ROWS, 0, -1):
++            if total(rows, min_out) > budget:
++                continue
++            out_rg = max(
++                d for d in range(min_out, max(ROWSTREAM_OUT_ROWS, min_out) + 1) if total(rows, d) <= budget
++            )
++            return dict(
++                khr=True,
++                ring_rows=max(b.khr_ring_rows, 2 * wt + rows),
++                bk=b.block_k_tiles,
++                nkb=b.num_k_blocks,
++                store_groups=store_groups,
++                rows=rows,
++                table_units=b.khr_table,
++                out_rg=out_rg,
++                bias_mode=mode,
++                partials_tiles=rows * bn if mode == 1 else 1,
++                footprint=total(rows, out_rg),
++            )
++    return None
++
++
++def rowstream_plan(g: Conv3x3Geometry, b: Conv3x3Blocking, has_bias, budget, kstep_ok=True):
++    """The row-streamed walk's plan for blocking b (see ROWSTREAM), or None where it does not apply: the ROW_MAJOR ring
++    with resident weights (interleaved, no K split, tap-direct, no center slots, not the C_out fold or kh reuse). Takes
++    the L1 of the fp32 partials ([bm, bn]) and the [bm, bk] in0 back, and spends it on in0 ([rows, K]), the unit FIFO
++    (lag rows), the ring (grown to what the lag needs) and a deeper output CB. Largest batch first, then the longest lag
++    that fits. kstep_ok: the bias K-step's operands match the matmul's (bf16 in0 for the ones tile, the bias in the
++    weights' format)."""
++    if b.khr_ring_rows:
++        return rowstream_khr_plan(g, b, has_bias, budget, kstep_ok) if ROWSTREAM_KHR == "fuse" else None
++    if not (
++        ROWSTREAM
++        and b.rm_ring_px
++        and b.weights_resident
++        and not b.nslice
++        and not g.fold
++        and not g.k_split
++        and not g.sharded_output
++        and not g.tile_input
++        and b.center_mode == CENTER_NONE
++    ):
++        return None
++    if not _rowstream_rule_ok(g, b):
++        return None
++    bm, bk0, bn = b.block_m_tiles, b.block_k_tiles, b.block_n_tiles
++    sb_h, sb_w = b.out_subblock_h, b.out_subblock_w
++    # The walk accumulates all of K in DEST, so the unit's K extent (bk) changes nothing in the arithmetic: one kernel row
++    # per unit (ROWSTREAM_KROW) where it fits, else the blocking's.
++    krow = ROWSTREAM_KROW and bk0 != g.tensor_kkh_tiles and _tap_major(g, g.tensor_kkh_tiles)
++    bks = [g.tensor_kkh_tiles] if krow else []
++    for bk in bks + [bk0]:
++        nkb = g.tensor_k_tiles // bk
++        K = nkb * bk
++        mode = 0 if not has_bias else (2 if ROWSTREAM_BIAS == "kstep" and kstep_ok and sb_w >= sb_h else 1)
++        pixel_bytes = g.c_in_p * BF16_BYTES
++        base_parts = (
++            bm * bk0 * g.in0_tile_bytes
++            + bm * bn * TILE_BYTES_FP32
++            + b.out_depth_row_groups * sb_h * bn * g.out_tile_bytes
++            + _tap_direct_fifo_units(g, bm, bk0, False) * 16
++        )
++        # cb_im2col_rm (the gathered tap blocks, one tap each) keeps its block count, at least two units' worth.
++        depth = max(IM2COL_RM_DEPTH_ROWS, _div_up(b.im2col_rm_depth_rows * bk0, bk))
++        fixed = b.footprint_bytes - base_parts + (depth * bk - b.im2col_rm_depth_rows * bk0) * TILE_BYTES_BF16
++
++        def total(rows, lag, ring_px, out_rg):
++            return (
++                fixed
++                + (ring_px - b.rm_ring_px) * pixel_bytes
++                + rows * K * g.in0_tile_bytes
++                + (rows * bn * TILE_BYTES_FP32 if mode == 1 else TILE_BYTES_FP32)
++                + out_rg * sb_h * bn * g.out_tile_bytes
++                + lag * nkb * 16
++                + (g.in0_tile_bytes if mode == 2 else 0)
++            )
++
++        # The writer stores windows of store_groups row groups (conv2d_3x3_writer.cpp), at best enough to cover every DRAM
++        # bank; the output CB holds at least two windows. Largest window first, then the largest batch, then the lag.
++        best_groups = ROWSTREAM_STORE_GROUPS or _div_up(RM_MAX_DRAM_BANKS_STORE, sb_h * bn)
++        for store_groups in range(best_groups, 0, -1):
++            min_out = max(OUT_DEPTH_ROW_GROUPS, 2 * store_groups)
++            for rows in range(min(ROWSTREAM_ROWS, bm) // sb_h * sb_h, 0, -sb_h):
++                for lag in range(max(ROWSTREAM_TABLE_ROWS, 1), 0, -1):
++                    ring = max(b.rm_ring_px, rowstream_ring_px(g, b.core_m_tiles, bm, lag))
++                    if total(rows, lag, ring, min_out) > budget:
++                        continue
++                    out_rg = max(
++                        d
++                        for d in range(min_out, max(ROWSTREAM_OUT_ROWS, min_out) + 1)
++                        if total(rows, lag, ring, d) <= budget
++                    )
++                    return dict(
++                        bk=bk,
++                        nkb=nkb,
++                        depth=depth,
++                        store_groups=store_groups,
++                        rows=rows,
++                        lag=lag,
++                        table_units=lag * nkb,
++                        ring_px=ring,
++                        out_rg=out_rg,
++                        bias_mode=mode,
++                        in0_tiles=rows * K,
++                        partials_tiles=rows * bn if mode == 1 else 1,
++                        footprint=total(rows, lag, ring, out_rg),
++                    )
++    return None
++
++
+ @functools.lru_cache(maxsize=256)
+ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
+     """The one place block extents are chosen. Order of the L1 solve (op_design Mechanism caps #1):
+@@ -1804,7 +2045,9 @@
+         if ring_blocking is not None:
+             blocking = ring_blocking
+             khr = kh_reuse_blocking(g, blocking, l1_budget)
+-            if khr is not None:
++            if khr is not None and not (
++                ROWSTREAM_KHR == "replace" and rowstream_plan(g, blocking, g.has_bias, l1_budget) is not None
++            ):
+                 blocking = khr
+     if blocking is not None and g.k_split:
+         # N-slice-outer at the K-blocked solve's bm, unless its resident [bm, K] in0 does not fit. There bk only sets
+@@ -3002,6 +3245,31 @@
+     )
+     kwf_args = (g, b, has_bias, l1_cb_budget_bytes(resident, g.l1_small_bytes), compute_kernel_config.math_fidelity)
+     kwf = kw_fold_mode(*kwf_args)
++    # Row-streamed whole-K walk (see ROWSTREAM): its ring, output depth and unit K extent replace the blocking's
++    # (the reader's too).
++    rs = (
++        None
++        if kwf
++        else rowstream_plan(
++            g,
++            b,
++            has_bias,
++            l1_cb_budget_bytes(resident, g.l1_small_bytes),
++            kstep_ok=input_tensor.dtype == ttnn.bfloat16 and (not has_bias or bias_tensor.dtype == weight_tensor.dtype),
++        )
++    )
++    if rs and rs.get("khr"):
++        b = replace(b, khr_ring_rows=rs["ring_rows"], out_depth_row_groups=rs["out_rg"])
++    elif rs:
++        b = replace(
++            b,
++            rm_ring_px=rs["ring_px"],
++            out_depth_row_groups=rs["out_rg"],
++            block_k_tiles=rs["bk"],
++            num_k_blocks=rs["nkb"],
++            weight_depth=rs["nkb"],
++            im2col_rm_depth_rows=rs["depth"],
++        )
+     # The reader keeps the original K-blocking in its CT args (it only fills the slab: its K-block asserts stay true).
+     reader_bk, reader_nkb = b.block_k_tiles, b.num_k_blocks
+     if kwf:
+@@ -3166,7 +3434,13 @@
+                 else (
+                     b.khr_ring_rows * 3 * bk
+                     if khr
+-                    else (s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks))
++                    else (
++                        rs["in0_tiles"]
++                        if rs and not rs.get("khr")
++                        else (
++                            s2_in0_tiles if s2_taps else bm * (in0_k_tiles if b.nslice else bk * b.center_slot_blocks)
++                        )
++                    )
+                 )
+             ),
+             cores,
+@@ -3179,8 +3453,17 @@
+             cores,
+         ),
+         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
+-        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice or g.fold else bm * bn, cores),
++        _cb(
++            CB_MATMUL_PARTIALS,
++            ttnn.float32,
++            TILE_BYTES_FP32,
++            rs["partials_tiles"] if rs else (1 if b.nslice or g.fold else bm * bn),
++            cores,
++        ),
+     ]
++    if rs and rs["bias_mode"] == 2:
++        # The bias K-step's in0: one tile, column 0 all ones (the reader writes it once).
++        cbs.append(_cb(CB_RS_ONES, input_tensor.dtype, g.in0_tile_bytes, 1, cores))
+     if g.remote_output:
+         # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
+         cbs.append(_cb(CB_OUTPUT_TILES, output_tensor.dtype, g.out_tile_bytes, bm * ns, cores))
+@@ -3236,6 +3519,8 @@
+     tap_direct_fifo_units = 0 if kwf else _tap_direct_fifo_units(g, bm, bk, b.nslice)
+     if khr:
+         tap_direct_fifo_units = b.khr_table
++    if rs:
++        tap_direct_fifo_units = rs["table_units"]
+     tap_direct_windows = not kwf and _tap_direct_windows(g, bm, bk, b.nslice, b.center_mode)
+     if tap_direct_fifo_units:
+         cbs.append(_cb(CB_SRC_TABLE, ttnn.bfloat16, 16, tap_direct_fifo_units, cores))
+@@ -4290,6 +4575,20 @@
+         if khr
+         else []
+     )
++    _rs_defines = (
++        [
++            ("CONV2D_3X3_ROWSTREAM", "1"),
++            ("ROWSTREAM_ROWS", str(rs["rows"])),
++            ("ROWSTREAM_BIAS_MODE", str(rs["bias_mode"])),
++            ("ROWSTREAM_STORE_GROUPS", str(rs["store_groups"])),
++            ("CB_RS_ONES", str(CB_RS_ONES)),
++        ]
++        + ([("ROWSTREAM_KHR", "1")] if rs.get("khr") else [])
++        if rs
++        else []
++    )
++    if rs:
++        assert b.rm_ring_px and tap_direct_fifo_units > 0 and khr == bool(rs.get("khr"))
+     _rm_ring_defines = _khr_defines + (
+         [
+             ("RM_RING_PX", str(b.rm_ring_px)),
+@@ -4327,7 +4626,8 @@
+             + _host_fill_defines
+             + _brf_defines
+             + _rm_ring_defines
+-            + _fold_defines,
++            + _fold_defines
++            + _rs_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
+@@ -4348,6 +4648,7 @@
+             + _host_fill_defines
+             + _wr_defines
+             + _fold_defines
++            + _rs_defines
+             + (_rm_ring_defines if rm_split else [])
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+             + (
+@@ -4379,7 +4680,8 @@
+         + _ring_arrival_defines
+         + _wr_defines
+         + _fold_defines
+-        + _khr_defines,
++        + _khr_defines
++        + _rs_defines,
+         config=ttnn.ComputeConfigDescriptor(
+             math_fidelity=compute_kernel_config.math_fidelity,
+             math_approx_mode=compute_kernel_config.math_approx_mode,
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 05:51:53.247766067 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-21 06:45:55.410052562 +0000
+@@ -77,6 +77,7 @@
+ #include "conv2d_3x3_padded_slab.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_kblock_walk.hpp"
++#include "conv2d_3x3_rowstream.hpp"
+ #ifdef CONV2D_3X3_TAP_SHIFT
+ #include "conv2d_3x3_tap_shift.hpp"
+ #endif
+@@ -1498,7 +1499,126 @@
+     const uint32_t fold_ext = get_arg_val<uint32_t>(4);
+     PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
+ #endif
+-    for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
++#ifdef CONV2D_3X3_ROWSTREAM
++    // Row-streamed whole-K walk (conv2d_3x3_rowstream.hpp): replaces the M-block loop below.
++    constexpr bool rowstream = true;
++    constexpr uint32_t rs_bias_mode = ROWSTREAM_BIAS_MODE;
++    {
++        static_assert(kb_tap_direct && !tile_input && !k_split && !face_direct && center_mode == 0 && !strided_window);
++        static_assert((rs_bias_mode == 0) == !has_bias);
++        constexpr uint32_t rs_rows = ROWSTREAM_ROWS;
++        constexpr uint32_t rs_k = num_k_blocks * block_k_tiles;
++        // One tap-direct unit per K-block of a tile-row, in the reader's order; a short batch pads in0 to rs_rows.
++        [[maybe_unused]] auto rs_tilize = [&](uint32_t n) {
++            if constexpr (apply_relu) {
++                pack_relu_config(ReluConfig::none());
++            }
++            {
++                MaybeDeviceZoneScope("compute_tilize");
++                fifo_tilize<
++                    im2col_tilize_width_tiles,
++                    block_k_tiles / im2col_tilize_width_tiles,
++                    false,
++                    cb_im2col_rm,
++                    cb_im2col_tiles,
++                    cb_src_table,
++                    tap_direct_windows>(im2col_rm_dfb, im2col_tiles_dfb, src_table_dfb, n * num_k_blocks);
++            }
++            if (n < rs_rows) {
++                im2col_tiles_dfb.reserve_back((rs_rows - n) * rs_k);
++                im2col_tiles_dfb.push_back((rs_rows - n) * rs_k);
++            }
++        };
++        // Before the first matmul: every weight round, the bias and the ones tile (they stay fronted to the end).
++        auto rs_ready = [&]() {
++            {
++                MaybeDeviceZoneScope("compute_weight_wait");
++                weights.wait_front(num_k_blocks * block_k_tiles * block_n_tiles);
++            }
++            wr_rounds_waited = num_k_blocks;
++            if constexpr (has_bias) {
++                MaybeDeviceZoneScope("compute_bias_wait");
++                bias.wait_front(out_n_tiles);
++                if constexpr (rs_bias_mode == 2) {
++                    CircularBuffer(CB_RS_ONES).wait_front(1);
++                }
++            }
++        };
++        MaybeDeviceZoneScope("compute_rowstream");
++#ifdef ROWSTREAM_KHR
++        // Over kh reuse's tile ring (KH_REUSE): each input tile-row is tilized once, as one three-tap unit (the
++        // reader's kh reuse stream); a batch of n tile-rows from t0 frees every ring row below t0 (no later batch reads
++        // them), tilizes up to row t0 + n + 2 W / 32 and waits for it. Batches run flat over the core.
++        static_assert(rs_k == 9 * c_in_tiles && out_subblock_h == 1);
++        constexpr uint32_t khr_row_tiles = 3 * c_in_tiles;
++        uint32_t rs_t0 = 0;        // the next batch's first tile-row, from the core's first
++        uint32_t rs_row0_pos = 0;  // ring row of the current batch's first tile-row
++        auto rs_khr_tilize = [&](uint32_t n) {
++            const uint32_t t0 = rs_t0;
++            if (t0 > khr_state.acked) {
++                UNPACK((kh_reuse::ack_tiles(cb_im2col_tiles, (t0 - khr_state.acked) * khr_row_tiles)));
++                khr_state.acked = t0;
++            }
++            const uint32_t target = t0 + n + 2 * KHR_WT;
++            if (target > khr_state.hw) {
++                MaybeDeviceZoneScope("compute_tilize");
++                if constexpr (apply_relu) {
++                    pack_relu_config(ReluConfig::none());
++                }
++                // A DEST section's pack never crosses the ring end: one tilize call per contiguous run.
++                while (khr_state.hw < target) {
++                    uint32_t m = target - khr_state.hw;
++                    const uint32_t to_end = KHR_RING_ROWS - khr_state.pos_hw;
++                    m = m < to_end ? m : to_end;
++                    fifo_tilize<c_in_tiles, 3, false, cb_im2col_rm, cb_im2col_tiles, cb_src_table, false>(
++                        im2col_rm_dfb, im2col_tiles_dfb, src_table_dfb, m);
++                    khr_state.hw += m;
++                    khr_state.pos_hw += m;
++                    if (khr_state.pos_hw == KHR_RING_ROWS) {
++                        khr_state.pos_hw = 0;
++                    }
++                }
++            }
++            cb_wait_front(cb_im2col_tiles, (target - khr_state.acked) * khr_row_tiles);
++            rs_row0_pos = t0 % KHR_RING_ROWS;
++            rs_t0 = t0 + n;
++        };
++        using RsIn0 = conv2d_3x3::rowstream::RingIn0<cb_im2col_tiles, khr_row_tiles, KHR_RING_ROWS, KHR_WT>;
++        static_assert(KHR_RING_ROWS >= 2 * KHR_WT + rs_rows, "the ring holds a batch and its two kernel rows below");
++        const RsIn0 rs_in0{&rs_row0_pos};
++        const auto& rs_tilize_fn = rs_khr_tilize;
++        constexpr bool rs_flat = true;
++#else
++        using RsIn0 = conv2d_3x3::rowstream::BlockIn0<cb_im2col_tiles, rs_k, rs_rows>;
++        const RsIn0 rs_in0{};
++        const auto& rs_tilize_fn = rs_tilize;
++        constexpr bool rs_flat = false;
++#endif
++        conv2d_3x3::rowstream::walk<
++            rs_bias_mode,
++            apply_relu,
++            cb_weights,
++            cb_matmul_partials,
++            cb_output_tiles,
++            cb_bias,
++            CB_RS_ONES,
++            in1_num_subblocks,
++            out_subblock_h,
++            out_subblock_w,
++            rs_k,
++            block_m_tiles,
++            rs_rows,
++            rs_flat>(num_m_blocks_this_core, rs_in0, rs_tilize_fn, rs_ready);
++        if constexpr (rs_bias_mode == 2) {
++            if (wr_rounds_waited > 0) {
++                CircularBuffer(CB_RS_ONES).pop_front(1);
++            }
++        }
++    }
++#else
++    constexpr bool rowstream = false;
++#endif
++    for (uint32_t m_block_idx = 0; m_block_idx < (rowstream ? 0 : num_m_blocks_this_core); ++m_block_idx) {
+         [[maybe_unused]] const uint32_t valid_rows =
+             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
+         [[maybe_unused]] const uint32_t slab_rows =
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 05:51:53.248766082 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-21 06:46:01.067135207 +0000
+@@ -783,6 +783,23 @@
+             fifo.fixed_state = 0;
+         }
+     };
++#if defined(CONV2D_3X3_ROWSTREAM) && ROWSTREAM_BIAS_MODE == 2
++    {
++        // The bias K-step's in0 tile: column 0 all ones (bf16 1.0), the rest zero. Column 0 lies in faces 0 and 2, at
++        // elements 16 r and 512 + 16 r (the low half of 32-bit words 8 r and 256 + 8 r). Written before kh reuse's
++        // unit stream: compute waits for it before its first matmul, and the stream waits on compute.
++        cb_reserve_back(CB_RS_ONES, 1);
++        volatile tt_l1_ptr uint32_t* w = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_write_ptr(CB_RS_ONES));
++        for (uint32_t i = 0; i < 512; ++i) {
++            w[i] = 0;
++        }
++        for (uint32_t r = 0; r < 16; ++r) {
++            w[8 * r] = 0x3F80;
++            w[256 + 8 * r] = 0x3F80;
++        }
++        cb_push_back(CB_RS_ONES, 1);
++    }
++#endif
+ #ifdef KH_REUSE
+     // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
+     // tile-row J, in increasing J, over the rows compute tilizes: J in [m_tile_start, m_tile_start + nmb * bm + 2 wt).
+@@ -888,6 +905,36 @@
+ #else
+     constexpr bool kh_reuse = false;
+ #endif
++    // Row-streamed whole-K walk (the descriptor's ROWSTREAM, conv2d_3x3_rowstream.hpp): the units go out tile-row by
++    // tile-row (every K-block of a tile-row), and the ring frees and fills per tile-row instead of per band.
++#ifdef CONV2D_3X3_ROWSTREAM
++    constexpr bool rowstream = true;
++    constexpr uint32_t rs_rows = ROWSTREAM_ROWS;
++#else
++    constexpr bool rowstream = false;
++    constexpr uint32_t rs_rows = 1;
++#endif
++    static_assert(!rowstream || (rm_ring && kb_tap_direct), "the row-streamed walk runs on the ROW_MAJOR ring");
++    [[maybe_unused]] uint32_t rs_unit = 0;  // units written so far over the core
++    // A lower bound of the lowest pixel tile-row o.. reads (kernel row 0, tap 0, clamped at 0), non-decreasing in o; an
++    // upper bound of one past the highest pixel tile-row [o, o + 32) reads, at most num_in_px (descriptor: _rs_row_*).
++    [[maybe_unused]] auto rs_row_lo = [](uint32_t o) -> int32_t {
++        const int32_t ho = static_cast<int32_t>(o / output_width);
++        const int32_t wo = static_cast<int32_t>(o % output_width);
++        const int32_t v = (ho * stride - pad_top) * input_width + wo * stride - pad_left;
++        return v > 0 ? v : 0;
++    };
++    [[maybe_unused]] auto rs_row_hi = [](uint32_t o, uint32_t o_end) -> int32_t {
++        if (o >= o_end) {
++            return 0;
++        }
++        const uint32_t last = (o + TILE_DIM < o_end ? o + TILE_DIM : o_end) - 1;
++        const int32_t ho = static_cast<int32_t>(last / output_width);
++        const int32_t wo = static_cast<int32_t>(last % output_width);
++        int32_t x = (ho * stride + 2 * dilation - pad_top) * input_width + wo * stride - pad_left + 2 * dilation + 1;
++        x = x > 0 ? x : 0;
++        return x < num_in_px ? x : num_in_px;
++    };
+     for (uint32_t m_block_idx = 0; m_block_idx < (kh_reuse ? 0 : num_m_blocks_this_core); ++m_block_idx) {
+         const uint32_t block_tiles_done = m_block_idx * block_m_tiles;
+         const uint32_t block_valid_tiles =
+@@ -1878,7 +1925,59 @@
+                 }
+             }
+         }
+-        for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer || s2_taps ? 0 : num_k_blocks); ++k_block_idx) {
++        if constexpr (rowstream) {
++            // Row-streamed walk: batches of rs_rows tile-rows (compute's batches: the FIFO's groups end with them, so
++            // a batch's last entries go out without waiting for the next tile-row's pixels). Before a tile-row's first
++            // entry the ring may reuse every slot below the lowest pixel of the first tile-row with an entry compute
++            // may not have popped yet (the FIFO holds tap_direct_fifo_units entries, so every older one is popped),
++            // then waits for every pixel the tile-row reads, in whole chunks, and keeps the staging full. The plan
++            // (rowstream_plan) sizes the ring so that wait never needs a pixel past `allowed`.
++            fifo.fixed_state = 0;
++            reads.begin(TRID_GATHER);
++            for (uint32_t row0 = 0; row0 < block_m_tiles; row0 += rs_rows) {
++                const uint32_t n = row0 + rs_rows <= block_m_tiles ? rs_rows : block_m_tiles - row0;
++                uint32_t left = n * num_k_blocks;
++                for (uint32_t tile_row = row0; tile_row < row0 + n; ++tile_row) {
++                    const uint32_t o = o_first + tile_row * TILE_DIM;
++                    for (uint32_t k_block_idx = 0; k_block_idx < num_k_blocks; ++k_block_idx, --left, ++rs_unit) {
++                        fifo.reserve(tap_direct_group, left, rm_idle);
++                        if (k_block_idx == 0) {
++                            const uint32_t reserved = rs_unit + (fifo.tbl_reserved - fifo.tbl_written);
++                            if (reserved > tap_direct_fifo_units) {
++                                const uint32_t popped_rows = (reserved - tap_direct_fifo_units) / num_k_blocks;
++                                rm.release(rs_row_lo((m_tile_start + popped_rows) * TILE_DIM));
++                            }
++                            const int32_t x = rs_row_hi(o, o_end);
++                            if (x > rm.landed_all()) {
++                                MaybeDeviceZoneScope("reader_band_wait");
++                                rm.need_stream(reads, input, x);
++                            }
++                            while (rm.can_issue()) {
++                                rm.issue(reads, input, conv2d_3x3::RM_INF);
++                            }
++                            reads.begin(TRID_GATHER);
++                            fifo.fixed_state = 0;
++                        }
++                        const uint32_t k_tile0 = k_block_idx * block_k_tiles;
++                        const int32_t kh = k_tile0 / tensor_kkh_tiles;
++                        const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
++                        fifo.unit(
++                            reads,
++                            slab_l1,
++                            slab_noc,
++                            zero_src_l1,
++                            zero_src_noc,
++                            o,
++                            o_end,
++                            kh,
++                            col_lo / c_in_p,
++                            slab_x_base[kh]);
++                    }
++                }
++            }
++        }
++        for (uint32_t k_block_idx = 0; k_block_idx < (tile_row_outer || s2_taps || rowstream ? 0 : num_k_blocks);
++             ++k_block_idx) {
+             const uint32_t k_tile0 = k_block_idx * block_k_tiles;
+             const int32_t kh = k_tile0 / tensor_kkh_tiles;
+             const uint32_t col_lo = (k_tile0 - kh * tensor_kkh_tiles) * TILE_DIM;
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_rm_ring.hpp op_copy/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 05:51:53.248766082 +0000
++++ op_copy/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 05:57:41.301788412 +0000
+@@ -494,6 +494,42 @@
+         land_copies(reads);
+     }
+ 
++    // Blocking, as need(), with whole chunks after the split window (up to `allowed`, not cut at x): the row stream
++    // waits for one tile-row's pixels at a time, and cutting there would cost one DRAM round trip per tile-row.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void need_stream(Reads& reads, const Accessor& input, int32_t x) {
++        if (x <= landed_all()) {
++            return;
++        }
++        ASSERT(x <= allowed);
++        if constexpr (split) {
++            widen();
++        }
++        while (copied < x) {
++            if (ep_open) {
++                if (n_issued - n_proc < nstg_now && ep_lo + static_cast<int32_t>(ep_rc) * chunk_px < x) {
++                    if (claim_front()) {
++                        issue_claimed(reads, input);
++                    }
++                    continue;
++                }
++            } else if (can_issue() && iss_a < x) {
++                issue(reads, input, RM_INF);
++                continue;
++            }
++            process(reads);
++        }
++        land_copies(reads);
++        if constexpr (split) {
++            if (landed_all() < x) {
++                MaybeDeviceZoneScope("reader_rm_split_wait");
++                while (rm_load(sw.w_done) == 0) {
++                }
++                wp_lo = RM_INF;
++            }
++        }
++    }
++
+     // Blocking: every needed pixel below x is in the ring. x is within the plan's capacity of the live pixels
+     // (x <= allowed), so the chunks it needs can be issued.
+     template <typename Reads, typename Accessor>
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_rowstream.hpp op_copy/kernels/conv2d_3x3_rowstream.hpp
+--- op_base/kernels/conv2d_3x3_rowstream.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_copy/kernels/conv2d_3x3_rowstream.hpp	2026-11-21 06:45:42.231860040 +0000
+@@ -0,0 +1,196 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// The row-streamed whole-K walk (the descriptor's ROWSTREAM: the ROW_MAJOR ring slab with resident weights).
++//
++// The core's tile-rows run in batches of `rows`: compute tilizes the batch's units, then accumulates each subblock over
++// all of K in DEST against the resident weights (in1 is [K, bn] row major, round k at tile offset k * bk * bn), packs
++// it once and pushes each row group to the output CB as it completes. There are no fp32 partials and no per-K-block
++// packs, so the output leaves evenly across the walk instead of in the last K-block. The next batch's tilize runs
++// between a batch's matmul and its bias pass, so that pass finds every pack done.
++//
++// in0 (the In0 policy): BlockIn0, the batch's [rows, K] block at the CB read pointer (the units tilized tile-row major,
++// every K-block of a tile-row); batches stay inside an M-block (each M-block's last batch may be shorter), and a short
++// batch still pushes and pops `rows` tile-rows of in0 (the extra ones unwritten and unread), so every batch's in0 starts
++// at the CB base and the matmul's tile indices never wrap. RingIn0 (kh reuse's tile ring, ROWSTREAM_KHR): kernel row kh
++// of output tile-row t is ring row t + kh * W / 32 (each input tile-row tilized once); batches run flat over the core.
++//
++// Bias (bias_mode): 1, the batch's fp32 sums go to cb_partials and the row-broadcast add (the K-blocked walk's bias
++// pass) packs the output; 2, the bias is one more K-step at the start of every subblock: a tile whose column 0 is all
++// ones (ones_cb, written once by the reader) times the bias tile (row 0 the bias), exact at HiFi4, so DEST starts at
++// the bias and the matmul packs the output. 2 needs a subblock that reuses in0 (sb_w >= sb_h: the ones tile is read
++// once).
++//
++// Raw LLK (capability), as the K-blocked walk: compute_kernel_lib::matmul_block accumulates across K-blocks through
++// packer L1 accumulation into a partials CB and has no in0 source per K-step (the bias K-step reads another CB, the
++// tile ring is addressed by row); compute_kernel_lib::add_bias_bcast_rows owns its whole-block waits. Same LLK calls
++// as those helpers (matmul_block_init, ckernel::matmul_block, pack_tile, add_bcast_rows_init, add_tiles_bcast_rows).
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/compute/bcast.h"
++#include "api/compute/matmul.h"
++#include "api/compute/pack.h"
++#include "api/compute/reconfig_data_format.h"
++#include "ttnn/cpp/ttnn/kernel_lib/matmul_block_helpers.hpp"
++#include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
++
++namespace conv2d_3x3::rowstream {
++
++// The batch's [rows, K] in0 block at the CB read pointer (tile-row major).
++template <uint32_t in0_cb, uint32_t K, uint32_t rows>
++struct BlockIn0 {
++    static constexpr uint32_t cb = in0_cb;
++    ALWI void wait() const { cb_wait_front(in0_cb, rows * K); }
++    ALWI void pop() const { cb_pop_front(in0_cb, rows * K); }
++    // Tile index of the first K-step of kernel row kh, batch tile-row r.
++    ALWI uint32_t base(uint32_t r, uint32_t kh) const { return r * K + kh * (K / 3); }
++};
++
++// kh reuse's tile ring (read pointer fixed at the CB base): kernel row kh of batch tile-row r is ring row
++// *row0_pos + r + kh * wt. The tilize hook waits for and frees the ring's rows.
++template <uint32_t ring_cb, uint32_t row_tiles, uint32_t ring_rows, uint32_t wt>
++struct RingIn0 {
++    static constexpr uint32_t cb = ring_cb;
++    const uint32_t* row0_pos;
++    ALWI void wait() const {}
++    ALWI void pop() const {}
++    ALWI uint32_t base(uint32_t r, uint32_t kh) const {
++        uint32_t p = *row0_pos + r + kh * wt;
++        if (p >= ring_rows) {
++            p -= ring_rows;
++        }
++        return p * row_tiles;
++    }
++};
++
++template <
++    uint32_t bias_mode,  // 0: no bias, 1: add pass per batch, 2: bias K-step
++    bool relu,
++    uint32_t in1_cb,
++    uint32_t partials_cb,
++    uint32_t out_cb,
++    uint32_t bias_cb,
++    uint32_t ones_cb,
++    uint32_t in1_num_subblocks,
++    uint32_t sb_h,
++    uint32_t sb_w,
++    uint32_t K,
++    uint32_t bm,
++    uint32_t rows,
++    bool flat,  // batches run flat over the core's tile-rows (else inside each M-block)
++    typename In0,
++    typename TilizeFn,
++    typename ReadyFn>
++ALWI void walk(uint32_t num_m_blocks, const In0& in0, const TilizeFn& tilize, const ReadyFn& ready) {
++    static_assert(rows % sb_h == 0 && bm % sb_h == 0 && (flat || rows <= bm));
++    static_assert(bias_mode != 2 || sb_w >= sb_h, "the bias K-step reads one ones tile per subblock");
++    static_assert(K % 3 == 0);
++    constexpr uint32_t in0_cb = In0::cb;
++    constexpr uint32_t kk = K / 3;  // K-steps per kernel row
++    constexpr uint32_t bn = in1_num_subblocks * sb_w;
++    constexpr uint32_t rg_tiles = sb_h * bn;
++    constexpr uint32_t batches = (bm + rows - 1) / rows;
++    constexpr uint32_t mm_target = bias_mode == 1 ? partials_cb : out_cb;
++    const uint32_t total_rows = num_m_blocks * bm;
++    const uint32_t total = flat ? (total_rows + rows - 1) / rows : num_m_blocks * batches;
++    auto rows_of = [&](uint32_t b) -> uint32_t {
++        if constexpr (flat) {
++            return (b + 1) * rows <= total_rows ? rows : total_rows - b * rows;
++        } else {
++            const uint32_t i = b % batches;
++            return (i + 1) * rows <= bm ? rows : bm - i * rows;
++        }
++    };
++
++    auto matmul = [&](uint32_t n) {
++        reconfig_data_format(in1_cb, in0_cb);
++        PACK((pack_reconfig_data_format(mm_target)));
++        if constexpr (relu) {
++            PACK((llk_pack_relu_config(bias_mode == 1 ? ReluConfig::none() : ReluConfig::zero())));
++        }
++        ckernel::matmul_block_init(in0_cb, in1_cb, false, sb_w, sb_h, K);
++        in0.wait();
++        for (uint32_t i0 = 0; i0 < n / sb_h; ++i0) {
++            cb_reserve_back(mm_target, rg_tiles);
++            for (uint32_t i1 = 0; i1 < in1_num_subblocks; ++i1) {
++                const uint32_t col = i1 * sb_w;
++                tile_regs_acquire();
++                if constexpr (bias_mode == 2) {
++                    ckernel::matmul_block(ones_cb, bias_cb, 0, col, 0, false, sb_w, sb_h, K);
++                }
++                uint32_t in1_index = col;
++                for (uint32_t kh = 0; kh < 3; ++kh) {
++                    uint32_t in0_index = in0.base(i0 * sb_h, kh);
++                    for (uint32_t k = 0; k < kk; ++k) {
++                        ckernel::matmul_block(in0_cb, in1_cb, in0_index, in1_index, 0, false, sb_w, sb_h, K);
++                        ++in0_index;
++                        in1_index += bn;
++                    }
++                }
++                tile_regs_commit();
++                tile_regs_wait();
++                compute_kernel_lib::pack_subblock_row_strided(0, mm_target, col, bn, sb_h, sb_w);
++                tile_regs_release();
++            }
++            cb_push_back(mm_target, rg_tiles);
++        }
++        in0.pop();
++    };
++
++    // n tile-rows of fp32 sums + the bias row -> the output CB (ReLU armed for these packs only).
++    auto bias_pass = [&](uint32_t n) {
++        MaybeDeviceZoneScope("compute_bias_add");
++        PACK((pack_reconfig_data_format(out_cb)));
++        if constexpr (relu) {
++            PACK((llk_pack_relu_config(ReluConfig::zero())));
++        }
++        reconfig_data_format(partials_cb, bias_cb);
++        add_bcast_rows_init(partials_cb, bias_cb);
++        for (uint32_t g = 0; g < n / sb_h; ++g) {
++            cb_wait_front(partials_cb, rg_tiles);
++            cb_reserve_back(out_cb, rg_tiles);
++            for (uint32_t i1 = 0; i1 < in1_num_subblocks; ++i1) {
++                const uint32_t col = i1 * sb_w;
++                tile_regs_acquire();
++                for (uint32_t r = 0; r < sb_h; ++r) {
++                    for (uint32_t c = 0; c < sb_w; ++c) {
++                        add_tiles_bcast_rows(partials_cb, bias_cb, r * bn + col + c, col + c, r * sb_w + c);
++                    }
++                }
++                tile_regs_commit();
++                tile_regs_wait();
++                compute_kernel_lib::pack_subblock_row_strided(0, out_cb, col, bn, sb_h, sb_w);
++                tile_regs_release();
++            }
++            cb_pop_front(partials_cb, rg_tiles);
++            cb_push_back(out_cb, rg_tiles);
++        }
++        if constexpr (relu) {
++            PACK((llk_pack_relu_config(ReluConfig::none())));
++        }
++    };
++
++    if (total == 0) {
++        return;
++    }
++    tilize(rows_of(0));
++    ready();
++    for (uint32_t b = 0; b < total; ++b) {
++        const uint32_t n = rows_of(b);
++        matmul(n);
++        if (b + 1 < total) {
++            tilize(rows_of(b + 1));
++        }
++        if constexpr (bias_mode == 1) {
++            bias_pass(n);
++        }
++    }
++    if constexpr (relu) {
++        PACK((llk_pack_relu_config(ReluConfig::none())));
++    }
++}
++
++}  // namespace conv2d_3x3::rowstream
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 05:51:53.249766096 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 05:58:13.053247252 +0000
+@@ -2728,16 +2728,35 @@
+             const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+-            for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#ifdef CONV2D_3X3_ROWSTREAM
++            // Row-streamed walk: compute pushes row groups at an even rate on every core at once, so cores write the
++            // same tile-rows at the same time; a window of row groups whose tiles cover every DRAM bank keeps all banks
++            // busy (one tile-row of 4 pages lands in 4 of the 8 banks, and every core's tile-row t in the same 4).
++            // ROWSTREAM_STORE_GROUPS: the plan's window, at best ceil(DRAM banks / row-group tiles) row groups.
++            constexpr uint32_t store_groups = ROWSTREAM_STORE_GROUPS;
++#else
++            constexpr uint32_t store_groups = 1;
++#endif
++            [[maybe_unused]] const uint32_t out_limit = get_local_cb_interface(cb_output_tiles).fifo_limit;
++            [[maybe_unused]] const uint32_t out_size = get_local_cb_interface(cb_output_tiles).fifo_size;
++            for (uint32_t row_group = 0; row_group < row_groups_per_block; row_group += store_groups) {
++                const uint32_t groups =
++                    row_groups_per_block - row_group < store_groups ? row_groups_per_block - row_group : store_groups;
+ #ifdef RM_SPLIT
+                 // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
+-                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
++                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, groups * row_group_tiles)) {
+                     rm_w.serve(rm_w_reads, rm_w_input);
+                 }
+ #endif
+-                cb_wait_front(cb_output_tiles, row_group_tiles);
++                cb_wait_front(cb_output_tiles, groups * row_group_tiles);
+                 uint32_t l1 = get_read_ptr(cb_output_tiles);
+-                for (uint32_t r = 0; r < out_subblock_h; ++r) {
++                for (uint32_t r = 0; r < groups * out_subblock_h; ++r) {
++                    if constexpr (store_groups > 1) {
++                        // A window of row groups may straddle the CB end.
++                        if (l1 >= out_limit) {
++                            l1 -= out_size;
++                        }
++                    }
+                     const uint32_t local_tile_row = block_tile0 + row_group * out_subblock_h + r;
+                     if (local_tile_row < actual_m_tiles) {
+                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
+@@ -2748,7 +2767,11 @@
+                     l1 += block_n_tiles * out_tile_bytes;
+                 }
+                 noc_async_writes_flushed();
+-                cb_pop_front(cb_output_tiles, row_group_tiles);
++                // One pop per row group: a pop wraps the read pointer only when it lands exactly on the CB end, and the
++                // CB holds whole row groups, but a window of them may straddle the end.
++                for (uint32_t g = 0; g < groups; ++g) {
++                    cb_pop_front(cb_output_tiles, row_group_tiles);
++                }
+ 
+                 while (k_blocks_issued < total_k_blocks &&
+                        cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {

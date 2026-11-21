@@ -1,0 +1,695 @@
+diff -ruN -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 05:55:45.954157960 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 08:36:06.351458472 +0000
+@@ -556,7 +556,10 @@
+ # 386.9 -> 374.6, 514x1024 64->256 1372.6 -> 1386.7 (bm 15 -> 3: flat). Not at C_in 32 (KHR_MIN_C_IN_TILES): there the
+ # output store is the critical path (the most output bytes per MAC), and the faster compute bunches the cores' NoC1
+ # stores until the far-column cores starve: 1026x2048 32->128 1832.7 -> 2590.9, 514x1024 32->128 598 -> 697.5, although
+-# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4.
++# with the store stubbed they gain 1614.8 -> 1437.0 and 432.4 -> 378.4. The rows are streamed and tilized in band-first
++# order (kernels/conv2d_3x3_khr_band_order.hpp: a core's first M-block waits for its own 3 bm rows, not the first
++# window of 2 W / 32 + bm rows every core fetches at once) with the unit FIFO's groups ending at each tilize step; the
++# ring slab's capacity is unchanged (a unit's pixels stay within (table + fill) tile-rows of the oldest live one).
+ KHR_MIN_C_IN_TILES = 2
+ KHR_DEPTH = 4  # gathered-block FIFO, in three-tap units
+ # Column ring rows per NoC on Blackhole (physical y 0..11; worker rows 2..11).
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_compute.cpp op_copy/kernels/conv2d_3x3_compute.cpp
+--- op_base/kernels/conv2d_3x3_compute.cpp	2026-11-21 05:55:45.957158002 +0000
++++ op_copy/kernels/conv2d_3x3_compute.cpp	2026-11-21 08:51:50.937220603 +0000
+@@ -77,6 +77,9 @@
+ #include "conv2d_3x3_padded_slab.hpp"
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_kblock_walk.hpp"
++#ifdef KH_REUSE
++#include "conv2d_3x3_khr_band_order.hpp"
++#endif
+ #ifdef CONV2D_3X3_TAP_SHIFT
+ #include "conv2d_3x3_tap_shift.hpp"
+ #endif
+@@ -882,14 +885,21 @@
+ // 3 kh + kw). Tap (kh, kw) of output tile-row t is tap (0, kw) of tile-row t + kh * W / 32, so each input tile-row is
+ // tilized once, as one three-tap unit ([kw][c] = 3 * tw tiles, the reader's TapDirectFifo entry), into a ring of
+ // ring_rows such rows (cb_im2col_tiles), and K-block (kh, kw) of an M-block multiplies rows m0 + kh * W / 32 + i of it
+-// at tap offset kw * tw. Rows are counted from the core's first output tile-row and tilized lazily: before K-block
+-// (kh, 0), every row up to m0 + kh * wt + bm (so the reader streams rows in increasing order). The unpacker frees rows
+-// with a bare ack of the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a
+-// fixed index): before K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later
+-// K-block reads; ring_rows = max(2 * wt, bm) then always holds the live rows. Same tiles, same K order as the
+-// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Raw LLK (capability): the walk's in0
+-// comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile ring; nothing acks a CB
+-// without moving its read pointer.
++// at tap offset kw * tw. Rows are counted from the core's first output tile-row; row r sits at ring row r mod
++// ring_rows. They are tilized lazily in band-first order (conv2d_3x3_khr_band_order.hpp, the reader streams them in the
++// same order): before K-block (kh, 0), lanes kh.. up to row m0 + kh * wt + bm, each lane's run packed at its own ring
++// rows (the packer's write pointer is placed per run). So M-block 0 waits for its own 3 bm rows, not for the whole
++// first window of 2 wt + bm rows that every core fetches from DRAM at once. The unpacker frees rows with a bare ack of
++// the ring's tiles_acked (its read pointer stays at the CB base, so a ring row's tiles sit at a fixed index): before
++// K-block (kh, 0), every row below m0 + min(bm, kh * wt) (kh > 0) or m0 (kh = 0), which no later K-block reads and
++// which are all tilized; ring_rows = max(2 * wt, bm) then always holds the live rows (a ring row is rewritten only
++// once its row is dead), and the CB counts stay exact (rows pushed, rows freed). Same tiles, same K order as the
++// tap-direct walk (bit-identical); 3x fewer tilized tiles and ~9x fewer units. Measured (Blackhole p150b, FLUX.2 bh2x4,
++// bit-identical, device kernel us), monotone order -> band-first with the reader's FIFO groups ending at each tilize
++// step: 514x1024 64->256 1385.8 -> 1268.8 (first M-block 114 -> 36), 514x1024 64->128 758.6 -> 726.9, 130x256
++// 128->512 374.0 -> 358.0, 258x512 64->256 399.2 -> 397.1 (perf_experiments/ring_band_first_startup). Raw LLK
++// (capability): the walk's in0 comes from a CB read pointer with a per-K-block wait / pop, which cannot address a tile
++// ring; nothing acks a CB without moving its read pointer, and nothing packs a CB push at a chosen ring row.
+ namespace kh_reuse {
+ #ifdef TRISC_UNPACK
+ // tiles_acked += n without moving the read pointer (llk_pop_tiles' counter update and stall).
+@@ -905,11 +915,14 @@
+ #endif
+ 
+ struct State {
+-    uint32_t hw = 0;                 // rows tilized (pushed)
+-    uint32_t acked = 0;              // rows freed
+-    uint32_t pos_hw = 0;             // hw's ring row
+-    uint32_t m_row0 = 0;             // the M-block's first row
+-    uint32_t kh_pos[3] = {0, 0, 0};  // ring row of m_row0 + kh * wt
++    uint32_t hw = 0;                   // rows tilized (pushed), every lane
++    uint32_t acked = 0;                // rows freed (all below it)
++    uint32_t m_row0 = 0;               // the M-block's first row
++    uint32_t kh_pos[3] = {0, 0, 0};    // ring row of m_row0 + kh * wt
++    uint32_t lane_hw[3] = {0, 0, 0};   // lane l's next row
++    uint32_t lane_pos[3] = {0, 0, 0};  // its ring row
++    uint32_t lane_end2 = 0;            // lane 2's end (the core's last row + 1)
++    uint32_t ring_base = 0;            // the ring CB's base (packer, 16 B units)
+ };
+ 
+ template <
+@@ -929,6 +942,20 @@
+     DataflowBuffer* ring;
+     DataflowBuffer* table;
+     State* st;
++    using Order = conv2d_3x3::KhrBandOrder<wt, bm>;
++
++    // Kernel start: the lanes' first rows and ring rows, lane 2's end, the ring CB's base.
++    ALWI void init(uint32_t num_m_blocks) const {
++        st->lane_end2 = num_m_blocks * bm + 2 * wt;
++        for (uint32_t l = 0; l < 3; ++l) {
++            st->lane_hw[l] = l * wt;
++            st->lane_pos[l] = l * wt < ring_rows ? l * wt : l * wt - ring_rows;
++        }
++        PACK(({
++            const auto& cb = get_local_cb_interface(get_output_id(cb_ring));
++            st->ring_base = cb.fifo_limit - cb.fifo_size;
++        }));
++    }
+ 
+     // Per M-block, before the walk.
+     ALWI void begin_block(uint32_t m_block_idx) const {
+@@ -954,24 +981,37 @@
+             UNPACK((ack_tiles(cb_ring, (free_to - st->acked) * row_tiles)));
+             st->acked = free_to;
+         }
+-        const uint32_t target = m0 + kh * wt + bm;
+-        if (target > st->hw) {
++        uint32_t lane_target[3] = {0, 0, 0};
++        bool work = false;
++        for (uint32_t l = kh; l < 3; ++l) {
++            lane_target[l] = Order::target_of(m0, kh, l, st->lane_end2);
++            work = work || lane_target[l] > st->lane_hw[l];
++        }
++        if (work) {
+             MaybeDeviceZoneScope("compute_tilize");
+             // The previous K-block's pack left packer L1 accumulation on; the tilize pack must overwrite.
+             pack_reconfig_l1_acc(0);
+             if constexpr (relu_on_last_matmul_pack) {
+                 pack_relu_config(ReluConfig::none());
+             }
+-            // A DEST section's pack never crosses the ring end: one tilize call per contiguous run.
+-            while (st->hw < target) {
+-                uint32_t n = target - st->hw;
+-                const uint32_t to_end = ring_rows - st->pos_hw;
+-                n = n < to_end ? n : to_end;
+-                fifo_tilize<tw, 3, false, cb_rm, cb_ring, cb_table, windows>(*rm, *ring, *table, n);
+-                st->hw += n;
+-                st->pos_hw += n;
+-                if (st->pos_hw == ring_rows) {
+-                    st->pos_hw = 0;
++            // Each lane's run at its own ring rows; a DEST section's pack never crosses the ring end: one tilize call
++            // per contiguous run.
++            for (uint32_t l = kh; l < 3; ++l) {
++                while (st->lane_hw[l] < lane_target[l]) {
++                    uint32_t n = lane_target[l] - st->lane_hw[l];
++                    const uint32_t to_end = ring_rows - st->lane_pos[l];
++                    n = n < to_end ? n : to_end;
++                    PACK(({
++                        auto& cb = get_local_cb_interface(get_output_id(cb_ring));
++                        cb.fifo_wr_ptr = st->ring_base + st->lane_pos[l] * row_tiles * cb.fifo_page_size;
++                    }));
++                    fifo_tilize<tw, 3, false, cb_rm, cb_ring, cb_table, windows>(*rm, *ring, *table, n);
++                    st->lane_hw[l] += n;
++                    st->hw += n;
++                    st->lane_pos[l] += n;
++                    if (st->lane_pos[l] == ring_rows) {
++                        st->lane_pos[l] = 0;
++                    }
+                 }
+             }
+             if constexpr (relu_on_last_matmul_pack) {
+@@ -980,8 +1020,8 @@
+                 }
+             }
+         }
+-        // The rows this kernel row's K-blocks read are packed.
+-        cb_wait_front(cb_ring, (target - st->acked) * row_tiles);
++        // Every row tilized so far is packed (this kernel row's included).
++        cb_wait_front(cb_ring, (st->hw - st->acked) * row_tiles);
+     }
+ 
+     // Every row left (kernel end).
+@@ -1490,6 +1530,7 @@
+         false,
+         relu_on_last_matmul_pack>;
+     const KhrPre khr_pre{&im2col_rm_dfb, &im2col_tiles_dfb, &src_table_dfb, &khr_state};
++    khr_pre.init(num_m_blocks_this_core);
+ #endif
+ #ifdef CONV2D_3X3_COUT_FOLD
+     // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_khr_band_order.hpp op_copy/kernels/conv2d_3x3_khr_band_order.hpp
+--- op_base/kernels/conv2d_3x3_khr_band_order.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_copy/kernels/conv2d_3x3_khr_band_order.hpp	2026-11-21 08:51:51.101222991 +0000
+@@ -0,0 +1,50 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Band-first order of the kh-reuse tile-rows: the reader's unit stream (conv2d_3x3_rm_ring.hpp KhrBandRuns) and
++// compute's tilize (kh_reuse::Tilize) both follow it, so the unit FIFO stays in order.
++//
++// Virtual tile-row j (counted from the core's first output tile-row) is in lane 0 for j < wt, lane 1 for wt <= j < 2 wt
++// and lane 2 above; K-block (kh, kw) of M-block m reads rows m bm + kh wt + [0, bm). Before K-block (m, kh, 0), lanes
++// kh.. are brought up to that K-block's last row (the lanes below kh hold no row it reads). M-block 0 then waits for
++// its 3 bm rows only, instead of every row up to 2 wt + bm (the whole first window, which all cores fetch from DRAM at
++// once), and the rows between its bands come in behind compute, bm per lane per M-block, until lanes 0 and 1 are
++// complete and the order is the monotone one. Rows no K-block reads (lanes 0 and 1 past nmb bm when a core spans less
++// than an image row) are never produced.
++
++#pragma once
++
++#include <cstdint>
++
++namespace conv2d_3x3 {
++
++template <uint32_t wt, uint32_t bm>
++struct KhrBandOrder {
++    uint32_t hw[3] = {0, wt, 2 * wt};  // lane l's next row
++    uint32_t end2 = 2 * wt;            // lane 2's end: the core's last row + 1
++
++    inline __attribute__((always_inline)) void init(uint32_t num_m_blocks) {
++        hw[0] = 0;
++        hw[1] = wt;
++        hw[2] = 2 * wt;
++        end2 = num_m_blocks * bm + 2 * wt;
++    }
++
++    // Lane l's rows needed by K-block (m, kh, 0) (m0 = m bm, lane 2 ending at e2): up to (excluding) the returned row.
++    static inline __attribute__((always_inline)) uint32_t target_of(uint32_t m0, uint32_t kh, uint32_t l, uint32_t e2) {
++        const uint32_t end = l == 0 ? wt : (l == 1 ? 2 * wt : e2);
++        const uint32_t t = m0 + kh * wt + bm;
++        return t < end ? t : end;
++    }
++    inline __attribute__((always_inline)) uint32_t target(uint32_t m, uint32_t kh, uint32_t l) const {
++        return target_of(m * bm, kh, l, end2);
++    }
++
++    // Rows the order produces in total.
++    static inline __attribute__((always_inline)) uint32_t count(uint32_t num_m_blocks) {
++        const uint32_t rows = num_m_blocks * bm;
++        return 2 * (rows < wt ? rows : wt) + rows;
++    }
++};
++
++}  // namespace conv2d_3x3
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 05:55:45.957158002 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-21 08:52:00.503359939 +0000
+@@ -785,12 +785,16 @@
+     };
+ #ifdef KH_REUSE
+     // kh reuse (the compute kernel's kh_reuse::Tilize): one three-tap unit (kw = 0, 1, 2 of kernel row 0) per virtual
+-    // tile-row J, in increasing J, over the rows compute tilizes: J in [m_tile_start, m_tile_start + nmb * bm + 2 wt).
+-    // Tap (kh, kw) of output tile-row t is unit t + kh * wt's tap kw. A row no in-range output tile-row reads (past the
+-    // core's bands, or between them when the core spans less than an image row) is the zero unit. The fill is the ring
+-    // slab's (RmBankRing): the core's bands, each pixel read once; a unit waits for its 32 + 2 pixels, and the reader
+-    // learns compute's progress from the entry FIFO (tap_direct_fifo_units deep): once units below e are reserved,
+-    // compute popped every unit below e - tap_direct_fifo_units, whose pixels the ring may then overwrite.
++    // tile-row J, over the rows compute tilizes (J in [m_tile_start, m_tile_start + nmb * bm + 2 wt)), in the
++    // band-first order compute tilizes them (conv2d_3x3_khr_band_order.hpp). Tap (kh, kw) of output tile-row t is unit
++    // t + kh * wt's tap kw. A row no in-range output tile-row reads (past the core's bands) is the zero unit. The fill
++    // (RmBandRing) is the order's virtual stream (KhrBandRuns: each run's pixels once, a run's first halo pixels again
++    // where it does not continue the previous run); a unit waits for its 32 + 2 pixels, and the reader learns compute's
++    // progress from the entry FIFO (tap_direct_fifo_units deep): once units before e are reserved, compute popped every
++    // unit before e - tap_direct_fifo_units, whose ring positions the fill may then overwrite (unit positions never
++    // decrease). The FIFO's groups end where a tilize step ends: a group across two steps is reserved only once
++    // compute is inside the first step's tilize, which then waits for the reader to gather that step's last units, on
++    // every M-block.
+     constexpr bool kh_reuse = true;
+     static_assert(
+         rm_ring && kb_tap_direct && stride == 1 && dilation == 1 && static_cast<int32_t>(output_width) == input_width &&
+@@ -821,68 +825,88 @@
+         Fifo3T fifo3;
+         fifo3.init(get_write_ptr(cb_im2col_rm), src_table_l1);
+         const uint32_t c0 = m_tile_start;
+-        const uint32_t total = num_m_blocks_this_core * block_m_tiles + 2 * wt;
+         // Pixel range of virtual tile-row J's three taps: [J * 32 - pad_top * W - pad_left, + 34).
+         constexpr int32_t px_shift = pad_top * input_width + pad_left;
+-        const uint32_t core_end_tiles = (m_tile_start + actual_m_tiles) * TILE_DIM;
+-        const conv2d_3x3::SlabFootprint core_fp =
+-            conv2d_3x3::block_footprint<output_width, input_width, stride, pad_top, pad_left, dilation, band_last_tap>(
+-                c0 * TILE_DIM, core_end_tiles < num_out_px ? core_end_tiles : num_out_px);
+-        rm.template init<input_width, num_in_px, dilation>(
+-            slab_l1, get_write_ptr(cb_rm_stage), core_fp.f > 0 ? core_fp.f : 0, core_fp);
++        using Runs = conv2d_3x3::KhrBandRuns<wt, block_m_tiles, px_shift, num_in_px>;
++        conv2d_3x3::RmBandRing<
++            rm_ring_px,
++            pixel_bytes,
++            NUM_DRAM_BANKS,
++            rm_ring_nstg,
++            rm_ring_chunk,
++            TRID_RM_COPY,
++            TRID_RM_STAGE,
++            Runs>
++            rmb;
++#ifdef RM_RING_STAGE_BYTES
++        static_assert(rm_ring_nstg * decltype(rmb)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
++#endif
++        rmb.init(slab_l1, get_write_ptr(cb_rm_stage), c0, actual_m_tiles, num_m_blocks_this_core);
+         auto idle3 = [&]() {
+-            if (rm.step(reads, input)) {
++            if (rmb.step(reads, input)) {
+                 reads.begin(TRID_GATHER);
+                 fifo3.fixed_state = 0;
+             }
+         };
+-        int32_t q_lo = 0;  // base_for's wrap count at the current unit's lowest pixel
++        // Virtual positions of the last units (the release reads the one T entries back).
++        constexpr uint32_t HN = T < 2 ? 2 : (T < 4 ? 4 : (T < 8 ? 8 : (T < 16 ? 16 : (T < 32 ? 32 : 64))));
++        static_assert(HN > T, "unit history covers the FIFO");
++        int32_t vlo_hist[HN];
++        Runs units;
++        units.init(c0, actual_m_tiles, num_m_blocks_this_core);
++        uint32_t j = 0;
++        int32_t q_v = 0;  // the gather's wrap count at the current unit's lowest virtual position
+         reads.begin(TRID_GATHER);
+-        for (uint32_t j = 0; j < total; ++j) {
+-            fifo3.reserve(tap_direct_group, total - j, idle3);
+-            const uint32_t reserved_end = j + fifo3.tbl_reserved - fifo3.tbl_written;
+-            if (reserved_end > T) {
+-                rm.release(static_cast<int32_t>((c0 + reserved_end - T) * TILE_DIM) - px_shift);
+-            }
+-            const uint32_t J = c0 + j;
+-            const bool needed = j < actual_m_tiles || (j >= wt && j - wt < actual_m_tiles) ||
+-                                (j >= 2 * wt && j - 2 * wt < actual_m_tiles);
+-            const int32_t lo = static_cast<int32_t>(J * TILE_DIM) - px_shift;
+-            // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill), then
+-            // wait for this unit's pixels.
+-            bool refill = false;
+-            if (rm.can_issue()) {
+-                rm.issue(reads, input, conv2d_3x3::RM_INF);
+-                refill = true;
+-            }
+-            if (needed) {
+-                int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
+-                hi = hi < num_in_px ? hi : num_in_px;
+-                // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
+-                if (hi > lo && hi > rm.landed) {
+-                    rm.need_whole(reads, input, hi);
++        while (units.next()) {
++            for (uint32_t r = units.r0; r < units.r1; ++r, ++j) {
++                fifo3.reserve(tap_direct_group, units.step_rem - (r - units.r0), idle3);
++                const uint32_t J = c0 + r;
++                const bool needed = r < actual_m_tiles || (r >= wt && r - wt < actual_m_tiles) ||
++                                    (r >= 2 * wt && r - 2 * wt < actual_m_tiles);
++                const int32_t lo = static_cast<int32_t>(J * TILE_DIM) - px_shift;
++                const int32_t lo_c = Runs::clamp(lo);
++                const int32_t vlo = (lo_c < units.px1 ? lo_c : units.px1) + units.delta;
++                vlo_hist[j % HN] = vlo;
++                const uint32_t reserved_end = j + fifo3.tbl_reserved - fifo3.tbl_written;
++                if (reserved_end > T) {
++                    rmb.release(vlo_hist[(reserved_end - T) % HN]);
++                }
++                // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill),
++                // then wait for this unit's pixels.
++                bool refill = false;
++                if (rmb.can_issue()) {
++                    rmb.issue(reads, input);
+                     refill = true;
+                 }
++                if (needed) {
++                    int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
++                    hi = hi < num_in_px ? hi : num_in_px;
++                    const int32_t vhi = hi + units.delta;
++                    // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
++                    if (vhi > vlo && vhi > rmb.landed) {
++                        rmb.need_whole(reads, input, vhi);
++                        refill = true;
++                    }
++                }
++                if (refill) {
++                    reads.begin(TRID_GATHER);
++                    fifo3.fixed_state = 0;
++                }
++                while (vlo - q_v * rm_ring_px >= rm_ring_px) {
++                    ++q_v;
++                }
++                fifo3.unit(
++                    reads,
++                    slab_l1,
++                    slab_noc,
++                    zero_src_l1,
++                    zero_src_noc,
++                    J * TILE_DIM,
++                    needed ? (J + 1) * TILE_DIM : J * TILE_DIM,
++                    0,
++                    0,
++                    units.delta - q_v * rm_ring_px);
+             }
+-            if (refill) {
+-                reads.begin(TRID_GATHER);
+-                fifo3.fixed_state = 0;
+-            }
+-            const int32_t lo_c = lo > rm.origin ? lo : rm.origin;
+-            while (lo_c - rm.origin - q_lo * rm_ring_px >= rm_ring_px) {
+-                ++q_lo;
+-            }
+-            fifo3.unit(
+-                reads,
+-                slab_l1,
+-                slab_noc,
+-                zero_src_l1,
+-                zero_src_noc,
+-                J * TILE_DIM,
+-                needed ? (J + 1) * TILE_DIM : J * TILE_DIM,
+-                0,
+-                0,
+-                -rm.origin - q_lo * rm_ring_px);
+         }
+     }
+ #else
+diff -ruN -x __pycache__ op_base/kernels/conv2d_3x3_rm_ring.hpp op_copy/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 05:55:45.957158002 +0000
++++ op_copy/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 08:51:50.263210785 +0000
+@@ -50,6 +50,7 @@
+ #include "ttnn/cpp/ttnn/kernel_lib/perf_instrumentation.hpp"
+ #include "conv2d_3x3_slab_dataflow.hpp"
+ #include "conv2d_3x3_gather_dataflow.hpp"
++#include "conv2d_3x3_khr_band_order.hpp"
+ 
+ namespace conv2d_3x3 {
+ 
+@@ -533,6 +534,295 @@
+     }
+ };
+ 
++// kh reuse in band-first order (conv2d_3x3_khr_band_order.hpp): the order's runs (one lane's rows [r0, r1) before one
++// K-block) as segments of a virtual stream. Run k's pixels [px0, px1) (its rows some output tile-row of this core
++// reads, lane l's rows below l wt + the core's tile-rows, with the last one's two halo pixels, clamped to the image)
++// sit at virtual positions [px0, px1) + delta, directly after run k - 1's. A run that continues the previous one (same
++// lane, next row) keeps its delta and starts after the halo pixels already read, so in steady state (lane 2 only) the
++// virtual stream is the monotone pixel stream; any other run reads its first row's two halo pixels again. Units are
++// emitted in the same order, so their virtual positions never decrease and the ring's cursors (copied / landed /
++// allowed) are virtual.
++template <uint32_t wt, uint32_t bm, int32_t px_shift, int32_t num_in_px>
++struct KhrBandRuns {
++    KhrBandOrder<wt, bm> order;
++    uint32_t nmb = 0;
++    uint32_t c0 = 0;
++    uint32_t actual = 0;
++    // Schedule cursor: the next (M-block, kernel row, lane) to look at.
++    uint32_t m = 0;
++    uint32_t kh = 0;
++    uint32_t l = 0;
++    // The current run.
++    uint32_t lane = 3;
++    uint32_t r0 = 0;
++    uint32_t r1 = 0;
++    int32_t px0 = 0;
++    int32_t px1 = 0;
++    int32_t delta = 0;
++    int32_t v_end = 0;
++    // Rows from this run's first on that the same K-block's tilize takes (its later runs included): the unit FIFO's
++    // groups end there, so the reader's next group never waits on a tilize that needs the group's own first units.
++    uint32_t step_rem = 0;
++    uint32_t step_id = 0xFFFFFFFFu;
++
++    FORCE_INLINE void init(uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
++        order.init(num_m_blocks);
++        nmb = num_m_blocks;
++        c0 = first_row;
++        actual = actual_rows;
++        m = kh = l = 0;
++        lane = 3;
++        r0 = r1 = 0;
++        px0 = px1 = delta = v_end = 0;
++        step_rem = 0;
++        step_id = 0xFFFFFFFFu;
++    }
++
++    static FORCE_INLINE int32_t clamp(int32_t p) { return p < 0 ? 0 : (p > num_in_px ? num_in_px : p); }
++
++    // The next run (false: none left).
++    FORCE_INLINE bool next() {
++        while (m < nmb) {
++            const uint32_t ll = l;
++            const uint32_t from = order.hw[ll];
++            const uint32_t t = order.target(m, kh, ll);
++            if (t > from && step_id != m * 3 + kh) {
++                // A new tilize step: its rows over every lane.
++                step_id = m * 3 + kh;
++                step_rem = 0;
++                for (uint32_t b = ll; b < 3; ++b) {
++                    const uint32_t tb = order.target(m, kh, b);
++                    step_rem += tb > order.hw[b] ? tb - order.hw[b] : 0;
++                }
++            } else if (t > from) {
++                step_rem -= r1 - r0;
++            }
++            if (++l == 3) {
++                if (++kh == 3) {
++                    kh = 0;
++                    ++m;
++                }
++                l = kh;
++            }
++            if (t > from) {
++                order.hw[ll] = t;
++                const bool cont = ll == lane && from == r1;
++                lane = ll;
++                r0 = from;
++                r1 = t;
++                // Rows past lim are read by no output tile-row of this core.
++                const uint32_t lim = ll * wt + actual;
++                const uint32_t t_px = t < lim ? t : lim;
++                if (cont) {
++                    px0 = px1;
++                } else {
++                    px0 = clamp(static_cast<int32_t>((c0 + from) * 32) - px_shift);
++                    delta = v_end - px0;
++                }
++                const int32_t hi = t_px > from ? clamp(static_cast<int32_t>((c0 + t_px) * 32) - px_shift + 2) : px0;
++                px1 = hi > px0 ? hi : px0;
++                v_end = px1 + delta;
++                return true;
++            }
++        }
++        return false;
++    }
++};
++
++// The ring slab's bank-run fill over the band-first virtual stream (as RmBankRing, origin 0): a chunk's DRAM pixels are
++// its virtual positions - delta, so it never crosses a change of delta (runs that keep it, the steady state, chunk as
++// one stream), and the de-interleave places virtual position v at ring slot v mod ring_px.
++template <
++    int32_t ring_px,
++    uint32_t pixel_bytes,
++    uint32_t nb,
++    uint32_t nstg,
++    int32_t chunk_px,
++    uint32_t copy_trid,
++    uint32_t stage_trid0,
++    typename Runs>
++struct RmBandRing {
++    static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
++    static_assert(chunk_px >= 1 && chunk_px <= ring_px, "a chunk fits the ring");
++    static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
++    static constexpr uint32_t chunk_bytes = nb * slot_bytes;
++    static constexpr uint32_t ring_bytes = static_cast<uint32_t>(ring_px) * pixel_bytes;
++    static constexpr int32_t origin = 0;
++
++    uint32_t ring_l1 = 0;
++    uint32_t stage_l1 = 0;
++    Runs runs;
++    // DRAM issue cursor (virtual) inside the current segment [.., iss_hi) of runs with one delta; done once no run is
++    // left. The next run (a one-run lookahead: a chunk extends into it when it keeps the delta).
++    int32_t iss_a = 0;
++    int32_t iss_hi = 0;
++    int32_t iss_delta = 0;
++    bool iss_done = false;
++    bool nx_ok = false;
++    int32_t nx_hi = 0;
++    int32_t nx_delta = 0;
++    uint32_t n_issued = 0;
++    uint32_t n_proc = 0;
++    int32_t c_lo[nstg];
++    int32_t c_hi[nstg];
++    int32_t copied = 0;
++    int32_t landed = 0;
++    int32_t allowed = 0;
++    bool copies_out = false;
++
++    FORCE_INLINE void init(
++        uint32_t ring, uint32_t stage, uint32_t first_row, uint32_t actual_rows, uint32_t num_m_blocks) {
++        ring_l1 = ring;
++        stage_l1 = stage;
++        allowed = ring_px;
++        runs.init(first_row, actual_rows, num_m_blocks);
++        iss_a = iss_hi = iss_delta = 0;
++        iss_done = false;
++        copied = landed = 0;
++        n_issued = n_proc = 0;
++        fetch_next();
++        load_run();
++    }
++
++    FORCE_INLINE void fetch_next() {
++        nx_ok = runs.next();
++        if (nx_ok) {
++            nx_hi = runs.v_end;
++            nx_delta = runs.delta;
++        }
++    }
++
++    // The next non-empty run once the current segment is issued.
++    FORCE_INLINE void load_run() {
++        while (iss_a == iss_hi) {
++            if (!nx_ok) {
++                iss_done = true;
++                return;
++            }
++            iss_hi = nx_hi;
++            iss_delta = nx_delta;
++            fetch_next();
++        }
++    }
++
++    // Runs that keep the delta continue the segment (whole chunks across them: the monotone stream's chunking).
++    FORCE_INLINE void extend(int32_t to) {
++        while (iss_hi < to && nx_ok && nx_delta == iss_delta) {
++            iss_hi = nx_hi;
++            fetch_next();
++        }
++    }
++
++    FORCE_INLINE void release(int32_t live_lo) {
++        const int32_t a = live_lo + ring_px;
++        allowed = a > allowed ? a : allowed;
++    }
++
++    template <typename Reads>
++    FORCE_INLINE void land_copies(Reads& reads) {
++        if (copies_out) {
++            reads.wait(copy_trid);
++            copies_out = false;
++        }
++        landed = copied;
++    }
++
++    FORCE_INLINE bool can_issue() const { return n_issued - n_proc < nstg && !iss_done && iss_a < allowed; }
++
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void issue(Reads& reads, const Accessor& input) {
++        const uint32_t slot = n_issued % nstg;
++        if (n_issued >= nstg) {
++            land_copies(reads);
++        }
++        const int32_t a = iss_a;
++        extend(a + chunk_px);
++        int32_t e = a + chunk_px < iss_hi ? a + chunk_px : iss_hi;
++        e = e < allowed ? e : allowed;
++        ASSERT(a < e);
++        const uint32_t base = stage_l1 + slot * chunk_bytes;
++        const int32_t p = a - iss_delta;
++        reads.begin(stage_trid0 + slot);
++        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
++            const uint32_t run = static_cast<uint32_t>(e - a - s + nb - 1) / nb;
++            reads.read(input.get_noc_addr(p + s), base + s * slot_bytes, run * pixel_bytes);
++        }
++        c_lo[slot] = a;
++        c_hi[slot] = e;
++        iss_a = e;
++        load_run();
++        ++n_issued;
++    }
++
++    // The oldest staged chunk into its ring slots (blocking on its DRAM reads).
++    template <typename Reads>
++    FORCE_INLINE void process(Reads& reads) {
++        const uint32_t slot = n_proc % nstg;
++        const int32_t a = c_lo[slot];
++        const int32_t e = c_hi[slot];
++        ASSERT(e <= allowed);
++        reads.wait(stage_trid0 + slot);
++        const uint32_t base = stage_l1 + slot * chunk_bytes;
++        const uint32_t noc = reads.noc.get_noc_id();
++        reads.begin(copy_trid);
++        ncrisc_noc_read_set_state<DM_DEDICATED_NOC, true>(noc, NCRISC_RD_CMD_BUF, get_noc_addr(base, noc), pixel_bytes);
++        const int32_t slot_px = a % ring_px;
++        const uint32_t ring_end = ring_l1 + ring_bytes;
++        for (int32_t s = 0; s < static_cast<int32_t>(nb) && a + s < e; ++s) {
++            uint32_t src = base + s * slot_bytes;
++            int32_t x = slot_px + s;
++            if (x >= ring_px) {
++                x -= ring_px;
++            }
++            uint32_t dst = ring_l1 + static_cast<uint32_t>(x) * pixel_bytes;
++            for (int32_t q = a + s; q < e; q += nb) {
++                ncrisc_noc_read_with_state<DM_DEDICATED_NOC, true, true>(noc, NCRISC_RD_CMD_BUF, src, dst);
++                reads.count_packets(1);
++                src += pixel_bytes;
++                dst += nb * pixel_bytes;
++                if (dst >= ring_end) {
++                    dst -= ring_bytes;
++                }
++            }
++        }
++        reads.drop_fixed_state();
++        copies_out = true;
++        copied = e;
++        ++n_proc;
++    }
++
++    // Opportunistic (compute is behind): one DRAM chunk issue, else one landed chunk's de-interleave.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE bool step(Reads& reads, const Accessor& input) {
++        if (can_issue()) {
++            issue(reads, input);
++            return true;
++        }
++        if (n_proc < n_issued &&
++            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
++            process(reads);
++            return true;
++        }
++        return false;
++    }
++
++    // Blocking, whole chunks: every virtual position below x is in the ring (as RmBankRing::need_whole).
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void need_whole(Reads& reads, const Accessor& input, int32_t x) {
++        if (x <= landed) {
++            return;
++        }
++        while (copied < x) {
++            if (can_issue() && iss_a < x) {
++                issue(reads, input);
++            } else {
++                process(reads);
++            }
++        }
++        land_copies(reads);
++    }
++};
++
+ // The split startup fill's writer part (BRISC, NoC1): claims the window's chunks from the back, one DRAM read per bank
+ // into its own nstg staging chunks, then one self-aimed read per pixel into the ring (as RmBankRing). The writer calls
+ // serve() while it waits for output tiles, so one call does at most one bank's de-interleave run (chunk_px / nb

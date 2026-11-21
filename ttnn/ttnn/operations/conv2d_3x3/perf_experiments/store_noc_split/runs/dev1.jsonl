@@ -1,0 +1,1 @@
+{"case": "36", "variant": "route0", "knobs": {"STORE_EXP": true, "STORE_SPLIT": 3, "STORE_PIPE": 0, "STORE_D1": 2, "STORE_D0": 2, "STORE_NUM": 1, "STORE_DEN": 2}, "log": "dev1", "t": 1795249397.743533, "status": "error", "error": "TT_THROW @ /localdev/pmilojevic/workspaces/opgen/tt_metal/impl/dispatch/system_memory_manager.cpp:803: tt::exception"}

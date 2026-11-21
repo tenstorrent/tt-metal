@@ -2773,3 +2773,101 @@ Where the time is now:
 | no helper covers this: a two-party claim over core-local words (semaphore family) | capability | The reader and writer claim chunks from opposite ends: each side stores its claim count, fences, then reads the other side's, so every chunk has one owner. `Semaphore<>` documents no store-then-load ordering across two words; the claims are raw volatile L1 words with explicit fences. | n/a | as above | `kernels/conv2d_3x3_rm_ring.hpp:76-81` (`rm_load` / `rm_store`), claims `:274-316`, `:587-590` |
 | `compute_kernel_lib::matmul_block` and the K-block walk's in0 (`ckernel::matmul_block` from a CB read pointer) | capability | kh reuse's in0 for K-block (kh, kw) is a row of a tile ring at an offset (ring row t + kh W/32, tap kw), with a wrap. The helper takes in0 as a contiguous block at the CB read pointer with a wait / pop per K-block. `kblock_walk::walk` gained an in0 index function (`In0Indexed`). | n/a (inexpressible) | P8 448358 -> 398713, P11 799444 -> 754560 | `kernels/conv2d_3x3_kblock_walk.hpp:57-93`, index `kernels/conv2d_3x3_compute.cpp:1020` |
 | no helper covers this: free CB pages without moving the read pointer (circular-buffer API family) | capability | The tile ring is read at offsets while its oldest rows are freed for the tilize to overwrite. `cb_pop_front` moves the read pointer, which the indexed reads use as their base; `ack_tiles` does `llk_pop_tiles`' tiles-acked update and stall without moving it. | n/a | as above | `kernels/conv2d_3x3_compute.cpp:896` |
+
+## Perf 19
+- Date: 2026-11-21
+- Scope: perf tournament (this run's round 4 of 5) on the 17 FLUX.2 Blackhole (2, 4) per-device decoder convs (feature_spec block `attention: PERF FOCUS (FLUX.2)`): bf16, HiFi4, fp32 DEST, bias, padding (0, 0, 1, 1), DRAM-interleaved ROW_MAJOR input, 110 cores, Blackhole p150b. Hard gates: Panoptic's 22 `[perf]` cases (timing and bit-identity) and the single-device FLUX.2 convs (TILE input).
+- Outcome: 5 ideas floated (cap 6), 5 WIN. 4 graduated (one-M-block N split, band-first kh-reuse stream, whole-stream fill split, routed output store), 1 WIN not graduated (whole-K row stream v2, reasons below). No idea returned NULL.
+  - FLUX.2 bh2x4, call-weighted over the 17 cases: **61.12 -> 58.96 ms (-3.5%)**; against the 110-core HiFi4 ideal (40.18 ms), 65.7% -> 68.1%. 8 of 17 are now under target (P10 and P11 joined).
+  - P15 66x128 128->512 (10 calls) 139.5 -> 119.1 us (-14.7%), P3 conv_out 1026x2048 128->3 2048 -> 1829 (-10.7%), P9 -9.6%, P4 514x1024 32->128 597 -> 545 (-8.6%), P2 514x1024 64->256 1385 -> 1269 (-8.4%), P11 -5.0%, P10 (17 calls) -4.2%, P1 1819 -> 1760 (-3.3%).
+  - Every focus output is bit-identical to the round start (sha1, all 17 plus TILE-input P15; `perf_experiments/graduation_r19/test_final.py`). PCC vs torch unchanged (0.9999985-6).
+  - End to end, one BH (2, 4) 1024² VAE decode (`test_vae_flux2_conv2d_3x3.py -k "bh2x4 and 1024 and conv2d_3x3"`): 174.4 ms median (176.3 / 174.4 / 174.4), PCC 0.9991865; Perf 17 recorded 174.1 ms. Flat: that decode runs only the 1024² convs, and the saving there (~0.8 ms of conv time) is inside its run-to-run spread.
+- Instrumentation: one new zone, `reader_store_route_wait` (the reader waiting for the writer's last NoC0 write before re-syncing its NoC0 counters). The whole-stream fill split keeps `reader_rm_split_wait`; band-first runs inside `reader_khr_stream` / `compute_tilize`. Fixed a latent profiler failure from Perf 18: `writer_spread_issue` (writer.cpp:1784) and `reader_fill` (reader.cpp:923) had the same 16-bit zone hash, so every `--profile` run compiling both (Panoptic compare cases 6-11) threw "Source location hashes are colliding". `perf_experiments/ablation_r19/zone_hash_check.py <op dir> [...]` lists collisions; the final tree has none (alone, and beside the round-start copy).
+- Raw data: `perf_experiments/ablation_r19/` (`apply_hooks.py`: the ablation stubs fill / weights / store / tilize / bias / matmul updated for the fold, startup split and kh reuse; `ab.sh`, `ab_results.txt` = every run of this round; `guard_pan.sh` / `guard_tile.sh` / `guard_hash.sh`; `BRIEF_COMMON.md` = the optimizers' shared brief). Bit-identity and A/B harness: `perf_experiments/graduation_r19/` (op_base = round start, op_cand = graduated op).
+
+### Measured breakdown (round start, device kernel us; cumulative peel, everything left of a row stubbed)
+
+| stubbed | P1 (41) | P3 (35) | P2 (42) | P4 (36) | P7 (43) | P10 (38) | P8 (37) | P15 (34) |
+|---|---|---|---|---|---|---|---|---|
+| none (full) | 1819 | 2048 | 1385 | 597 | 1309 | 374 | 398 | 139.5 |
+| fill | 1763 | **787** | 1310 | 565 | 1287 | 361 | 385 | 138.5 |
+| + weights | 1748 | 786 | 1305 | 565 | 1282 | 355 | 382 | 126 |
+| + store | 1547 | 785 | 1289 | 393 | 1241 | 342 | 328 | 103 |
+| + tilize | 1480 | 660 | 1231 | 377 | 1194 | 332 | 321 | 103 |
+| + bias | 1401 | 659 | 1206 | 357 | 1179 | 328 | 312 | 101.5 |
+| + matmul (everything) | 394 | 311 | 135 | 108 | 96 | 31 | 28 | 16.5 |
+| solo: store | 1616 | 1932 | 1378 | 433 | 1306 | 373 | 346 | 117 |
+
+Per-core kernel spans (BRISC, max / p50 / min us, max/p50): P3 2047 / 1539 / 1076 (1.33, a grid-ROW gradient on the NCRISC fill: y2-y3 ~2040, y7 ~1430, y11 ~1100); P9 1.26; P4 595 / 504 / 427 (1.18, an x and y gradient: x1 ~440-480, x14 ~525-595); P1 1819 / 1702 / 1608 (1.07, same shape); P8 / P15 1.08; P2, P12, P13 1.00-1.01.
+
+Ranked by measured headroom:
+1. **Position-dependent NoC imbalance** (~2.5 ms call-weighted if every core finished at its p50). The C_out fold (Perf 18) made P3 / P9 fill-bound (fill stubbed, P3 2048 -> 787), and their NoC0-only steady-state fill starves the top grid rows. On the store-bound C_in 32 convs (P1, P4) the NoC1 output writes starve the cores far from the DRAM columns.
+2. **The ring's startup bubble** on compute-bound convs: P2's first M-block took ~110 us against ~26 us steady (block 0's kh = 1 and kh = 2 tilize zones waited ~37 us each for the first window, 2 image rows fetched by all 110 cores at once). Fill-stub cost: P2 -75, P1 -56, P4 -32, P7 -22, P10 -13 us.
+3. **Per-K-block overhead on the small-bm compute-bound convs** (P12 / P13 bm 2, P6 bm 19 x 32 M-blocks): matmul at its roofline, ~24% above it in total.
+4. **P15's core count**: one M-block per core on 86 of 110 cores; its matmul is at the per-core ideal.
+5. The everything-stubbed floor (P1 394, P3 311 us) is off the critical path of the real op (Perf 18 tapdirect_unit_cost).
+
+Roofline gate (by bytes, the NoC-estimator CLI is not built in this tree): DRAM floor at 450 GB/s, input once + 32-lane-padded output: P1 1490 us, P4 373, P3 1490 (1740 with its 21% halo re-read), P9 373 (450). P3 moved 784 MB in 2.05 ms (383 GB/s) and P1 671 MB in 1.82 ms (369 GB/s): both below the DRAM rate through the imbalance, so in scope.
+
+### Portfolio and verdicts (each measured end to end in its own op copy, base = this round's start)
+
+| idea | verdict | measured (base -> candidate, us) | precision | domain / notes |
+|---|---|---|---|---|
+| store_noc_split: the writer sends each output tile on the NoC with fewer hops to its DRAM bank (NoC1, or NoC0 on command buffer 2) | **WIN, graduated (gated)** | P4 598 -> 545 (span max/p50 1.18 -> 1.12), P1 1823 -> 1760 (1.08 -> 1.05), P8 398 -> 387, P5 / P6 -0.6%; P11 +2.2% (4 runs); fold P3 +2.6%, P9 +2.5% | bit-identical | Menu: a share following each NoC's write backlog P4 556-560; route + backlog spill 542; fixed 50% on NoC0 613; deeper output CB (free L1) 600 alone, 539 with the route. A `--dev` build needed the reader to re-sync its NoC0 write counters after the writer's NoC0 writes (otherwise NKFW end-of-kernel hang). On the combined tree (with band-first) it measured P11 720 -> 752 (+4.3%), P2 1269 -> 1283 (+1.1%): gated (below). |
+| ring_fill_steady_split: the reader and writer split the ring's whole fill (every epoch, Dekker front/back claims); the writer claims only while the reader waits for a band | **WIN, graduated (gated)** | P3 2032 -> 1804 (NCRISC span max/p50 1.34 -> 1.13), P9 587 -> 532 (1.25 -> 1.08), P11 755 -> 727, P14 746 -> 733, P2 -1.1%, P7 -1.1%; P1 +0.7%, P4 +0.7%, P10 +0.9% | bit-identical | The writer claiming whenever it waits for output: P1 +13% again (its NoC1 reads beside the store), hence the hungry rule. 2 KB bank runs (16 KB chunks) and more staging chunks were slower on P3 / P9. Replaced the startup-only split and its 512 KB window gate (deleted). Gated off kh reuse and the output-stream-bound convs (below). |
+| ring_band_first_startup: kh-reuse rows streamed and tilized in band-first order (block 0 waits for its own 3 bm rows), FIFO groups ending at each tilize step | **WIN, graduated** | P2 1386 -> 1269 (first M-block 114 -> 36 us), P11 758 -> 727, P10 374 -> 358; P8 flat | bit-identical | The aligned FIFO groups alone (monotone order): P2 1313, P10 364. Band-first on the non-kh-reuse ring: NULL (P1, P7, P14 flat, P4 +1.8%): P7's startup is the first weight round, P4's blocks span the whole window. |
+| whole_k_rowstream_v2: Perf 18's whole-K row-stream walk ported to this tree, no store pacer, taken where the output stream fits DRAM bandwidth (C_in >= 64 at bf16 HiFi4) | WIN, **not graduated** | P13 5335 -> 4797 (-10.1%), P12 2756 -> 2484 (-9.9%), P6 -7.3%, P5 -7.2%, P8 -7.0%, P2 -4.9% (replacing kh reuse); P7, P10 flat; **P14 +2.0%** (median of 3), **P11 +4.2% to +6.7%** | not bit-identical: DEST accumulation replaces packer-L1 accumulation; 0.007-0.016% of outputs differ by <= 1 ulp, PCC 0.9999986 (= base) | Call-weighted 61.13 -> 59.23 ms in its copy (59.69 keeping kh reuse). Not graduated: (1) its reader waits through the startup split's window with the API this round's whole-stream fill split replaced (incompatible as built: the two rewrite the same ring fill); (2) against this round's band-first kh-reuse stream it loses P2 (1318 vs 1269) and P11, so it would apply only off kh reuse, where P14 regresses +2.0% with no geometric rule found; (3) a second walk beside the K-blocked one. It is the largest measured lever left for P5 / P6 / P12 / P13 (~1.4 ms call-weighted): next round, port it onto the epoch split API and keep kh reuse where kh reuse applies. |
+| one_mblock_nsplit: N split over 2 core groups where every core has one M-block (each group streams only its weight half) | **WIN, graduated** | P15 140.1 -> 118.7 (86 -> 104 cores), TILE P15 144.0 -> 127.6, single-device TILE 128x128 32->512 112.6 -> 107.8; 34x64 128->512 72.4 -> 52.1 (equal tile-MACs: the weight stream) | bit-identical | Host-only. 2 output tiles per group measured +24% (130x256 32->128) and +14% (66x128 32->128); 4 flat (66x128 128->256 +0.8%). Four groups slower than two on P15 (129.4). |
+
+### Graduated
+1. **N split at one M-block per core** (`1bc58e8d770`). Domain: interleaved input (ROW_MAJOR and TILE), stride 1, no K split / fold / N-slice, one M-block per core, where the busiest core's tile-MACs do not grow. Carve-out, measured: fewer than 4 output tiles per group (`ONE_MBLOCK_NSPLIT_MIN_BN = 4`; the optimizer's 8 was moved to the measured boundary: 2 tiles regress, 4 is flat). On the FLUX sets it reaches P15 (ROW_MAJOR and TILE) and single-device idx 0. The experiment knob (`ONE_MBLOCK_NSPLIT_FORCE`) was deleted.
+2. **Band-first kh-reuse stream** (`f3c260c339d`). Domain: every kh-reuse program (P2, P8, P10, P11), no exceptions. It replaces the monotone kh-reuse stream (deleted). New file `kernels/conv2d_3x3_khr_band_order.hpp`; the reader's kh-reuse ring is `RmBandRing` (virtual-stream cursors over the band runs).
+3. **Whole-stream fill split** (`60b05b20c42`). Domain: the ROW_MAJOR ring with resident weights. It replaces the startup-window split and its 512 KB gate (deleted; RM_SPLIT_SEMS 6 -> 8). Carve-outs: kh-reuse programs (feasibility: the band-first stream is not monotone, which the split's epochs are; kh reuse never took the old split either, its windows were under 512 KB); convs whose output stream outruns DRAM (`output_stream_bound`: measured beside the routed store, 514x1024 32->128 545 -> 555 us (+1.8%, two runs each way), 1026x2048 32->128 1752 -> 1766-1772 (+1.0%); there the fill is off the critical path and the staging chunk the writer holds slows the reader).
+4. **Routed output store** (`91f90f36961`). Domain: the ROW_MAJOR ring, Blackhole, not the C_out fold, where `output_stream_bound(g, b, fidelity)` holds: the work cores' peak output rate (one output tile per 9 * C_in / 32 tile-MACs at the fidelity's rate) exceeds 450 GB/s, i.e. C_in 32 at bf16 HiFi4 on 110 cores (528 GB/s; C_in 64 is 264 GB/s). Carve-outs, measured: elsewhere the ring's NoC0 fill is the binding NoC0 traffic and NoC0 stores slow it (P11 +4.3% and P2 +1.1% beside the band-first stream; the fold P3 +2.6%, P9 +2.5%); this gives up P8's -3%. A fixed DRAM constant decides it, but with a 2x margin either side on these convs.
+
+No path was added beside an old one except the store route's NoC0 half (the NoC1 store stays the store everywhere else). The kh-reuse monotone stream and the startup-only split were deleted.
+
+FLUX.2 bh2x4 before / after (device kernel us, median of 3 calls; `test_flux_conv3x3_compare.py`, ROW_MAJOR input). "+ 3" = N split + band-first + whole-stream fill split (ungated) before the routed store:
+
+| prio | case (H x W, C_in->C_out) | calls | start | + 3 | final | change | util (110-core HiFi4) | target |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1026x2048 32->128 | 5 | 1819.2 | 1849.6 | 1760.1 | -3.3% | 58% | 1453 |
+| 2 | 514x1024 64->256 | 6 | 1385.4 | 1269.2 | 1269.0 | -8.4% | 80% | 1453 |
+| 3 | 1026x2048 128->3 | 1 | 2047.5 | 1815.5 | 1828.8 | -10.7% | 5% | 136 |
+| 4 | 514x1024 32->128 | 5 | 596.6 | 604.3 | 545.1 | -8.6% | 47% | 363 |
+| 5 | 1026x2048 64->128 | 1 | 2892.1 | 2896.7 | 2891.7 | 0.0% | 70% | 2905 |
+| 6 | 1026x2048 64->256 | 1 | 5282.2 | 5288.3 | 5289.1 | +0.1% | 77% | 5810 |
+| 7 | 258x512 128->512 | 8 | 1309.3 | 1297.2 | 1297.4 | -0.9% | 78% | 1453 |
+| 8 | 258x512 64->256 | 5 | 398.1 | 397.6 | 396.7 | -0.3% | 64% | 363 |
+| 9 | 514x1024 128->3 | 1 | 586.9 | 533.4 | 530.8 | -9.6% | 4% | 34 |
+| 10 | 130x256 128->512 | 17 | 374.4 | 358.1 | 358.6 | -4.2% | 71% | 363 |
+| 11 | 514x1024 64->128 | 1 | 758.2 | 720.5 | 720.2 | -5.0% | 71% | 726 |
+| 12 | 514x1024 128->256 | 1 | 2756.7 | 2752.4 | 2750.5 | -0.2% | 74% | 2905 |
+| 13 | 514x1024 128->512 | 1 | 5337.4 | 5333.9 | 5335.3 | 0.0% | 76% | 5810 |
+| 14 | 258x512 128->256 | 1 | 745.2 | 733.7 | 733.9 | -1.5% | 69% | 726 |
+| 15 | 66x128 128->512 | 10 | 139.5 | 119.1 | 119.1 | -14.7% | 53% | 91 |
+| 16 | 130x256 32->128 | 1 | 70.8 | 70.5 | 70.3 | -0.8% | 23% | 23 |
+| 17 | 66x128 32->128 | 1 | 25.3 | 25.7 | 25.9 | +2.4% (same program: no change reaches it; 25.3-26.1 across runs) | 15% | 6 |
+
+Call-weighted 61.12 -> 59.70 -> 58.96 ms. 8 of 17 under target (P2, P5, P6, P7, P10, P11, P12, P13); P14 is 1.1% over.
+
+Where the time is now:
+- **P1 / P4 (C_in 32, 10 calls):** still store-bound (P1 671 MB in 1.76 ms = 381 GB/s against a ~1.49 ms floor). The routed store cut the x gradient; the y2-y4 rows are now the slowest. With fairer writes, a store that overlaps the next M-block (deeper output CB, whole-K) is worth re-measuring: P4 deeper CB + route measured 539-540 in store_noc_split's menu.
+- **P5 / P6 / P12 / P13 (1 call each, ~1.4 ms):** whole-K row stream (v2 above).
+- **conv_out (P3, P9):** ~422 GB/s with the halo re-read (+21% / +43% input bytes); the remaining x14 column gradient is NoC1 reads.
+- **P7 (8 calls, 1297 us):** compute-bound at 78%; its tilize (47 us) and store tail; kh reuse does not fit beside its resident weights.
+
+### Guard set (no regression)
+- **Panoptic (22 compare cases, LoFi bf8_b sharded):** 45 / 45 LOOSE outputs bit-identical to the round start (sha256, `asym_padding/panoptic_hashes.py`); none of the four changes reaches a sharded program (each needs the ROW_MAJOR ring or an interleaved one-M-block solve). Timing, round start -> final, one run each: all 22 within -1.36% / +0.99% (aspp.convs.2 40008 -> 40112, +0.26%).
+- **Single-device FLUX.2 (TILE input, the 25 compare cases up to 1024²):** 24 within -0.90% / +1.20%; 128x128 32->512 -4.6% (the N split). 1024² 128->3 read +7.4% in a single run; A/B in one session (alternating, 6 calls each) shows it bimodal in both builds (base 1225-1334, final 1229-1333 us), and no kernel edit reaches that program (every edit is behind RM_RING_PX / STORE_ROUTE / KH_REUSE / RM_SPLIT, which TILE input never sets; output bit-identical): noise.
+- **Golden:** interleaved ROW_MAJOR 210 passed; interleaved TILE 567 passed; sharded 1008 passed, 144 xfailed; LOOSE 79 passed. Unit tests (`tests/ttnn/unit_tests/operations/conv2d_3x3/`): 372 passed, 17 skipped. `--dev` (watcher, asserts) on P1, P2, P3, P4, P9, P10, P11, P15: pass.
+
+### Helper bypasses
+| helper | kind | what was missing / hard | helper ns | raw ns | site |
+|---|---|---|---|---|---|
+| no helper covers this: a DRAM write on a chosen command buffer of the other NoC (dataflow family) | capability | `noc_async_write_page` / `noc_async_write` issue on the calling RISC's write command buffer, which for BRISC on NoC0 is the reader's. No helper takes a command buffer, and none tracks sent / acked counts on a NoC the firmware does not sync for this RISC: the writer reads the NIU counters itself, and the reader re-syncs its NoC0 software counters after the writer's last NoC0 write (otherwise the watcher's end-of-kernel check hangs). | n/a (inexpressible); all on NoC1: P4 596637, P1 1819242 | P4 545121, P1 1760097 | `kernels/conv2d_3x3_store_split.hpp:36` (`RoutedStore`, write at `:83`), called at `kernels/conv2d_3x3_writer.cpp:2762`, reader re-sync at `kernels/conv2d_3x3_reader.cpp:2258` |
+| `dataflow_kernel_lib::read_with_state` (`local_copy_helpers_dataflow.hpp`) | capability | The stateful read fixes one address; the writer's de-interleave (now in every fill epoch) changes both on every read (the Perf 17 / 18 gap, wider use). | n/a (inexpressible); reader-only fill P3 2047537, P9 586912 | P3 1828813, P9 530776 | `kernels/conv2d_3x3_rm_ring.hpp:1040` |
+| no helper covers this: a published range under a sequence word, plus two-party claims (semaphore family) | capability | The reader publishes each fill epoch's [lo, hi) under a sequence word (odd while rewritten) and raises a `hungry` flag the writer polls; the writer reads the range only between two equal even sequence values. `Semaphore<>` documents no store-then-load ordering across words, so these are raw volatile L1 words with fences. | n/a | as above | `kernels/conv2d_3x3_rm_ring.hpp:59-88` (`RmSplitWords`), publish `:308-311` |
+| no helper covers this: pack a CB push at a chosen ring position (circular-buffer API family) | capability | Band-first tilizes lane runs out of order into fixed rows of the tile ring; `cb_reserve_back` / `cb_push_back` pack only at the FIFO write pointer, so compute places the packer's `fifo_wr_ptr` per run (and keeps the CB counts exact: rows pushed, rows freed). | n/a (inexpressible); monotone stream P2 1385423 | P2 1268972 | `kernels/conv2d_3x3_compute.cpp:1006` |
+
+The N split needed no bypass (host-only: the kernels already took a per-core column start and one multicast group per N group).

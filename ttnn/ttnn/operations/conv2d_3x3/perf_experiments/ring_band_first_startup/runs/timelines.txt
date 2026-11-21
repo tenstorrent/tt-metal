@@ -1,0 +1,53 @@
+# P2 (42) startup, core (1,2): compute_matmul_walk (one per M-block, plus 0-us entries of the same zone name) and per-RISC compute_tilize (first 6 executions, then the steady median). b13: run 2048 = bf (band-first + aligned groups), 4096 = align only (op_variants mono_r at that time), 6144 = bf unaligned, 8192 = base.
+## run 8192
+8192 (1, 2) compute_matmul_walk n=80 sum=833 0+113.6 114+0.4 114+25.1 139+0.0 140+0.5 140+25.5 166+0.5 166+25.1
+8192 (14, 9) compute_matmul_walk n=82 sum=845 0+110.8 111+15.3 126+25.1 152+0.0 152+0.3 152+25.6 178+0.0 178+0.3
+TRISC_0 31 steady median 3.347 [10.76, 39.48, 41.27, 3.03, 3.48, 3.01]
+TRISC_1 31 steady median 1.187 [10.86, 39.06, 37.68, 1.21, 1.19, 1.19]
+TRISC_2 31 steady median 2.681 [10.81, 38.86, 40.51, 2.38, 2.73, 2.34]
+steady block period (kh=2 tilize starts, all cores): 110 median period 25.905185185185186 min 25.883703703703702 max 25.948888888888888
+## run 6144
+6144 (1, 2) compute_matmul_walk n=61 sum=658 0+36.1 36+0.7 37+26.4 64+0.7 64+26.9 91+0.0 91+0.4 92+26.4
+6144 (14, 9) compute_matmul_walk n=58 sum=672 0+38.6 39+14.0 53+26.4 79+0.0 79+0.3 80+26.4 106+1.2 107+26.4
+TRISC_0 46 steady median 1.752 [10.49, 1.69, 1.66, 1.69, 1.67, 1.74]
+TRISC_1 46 steady median 1.211 [10.62, 1.2, 1.2, 1.49, 1.22, 1.19]
+TRISC_2 46 steady median 1.104 [10.57, 1.04, 1.03, 1.1, 1.05, 1.01]
+steady block period (kh=2 tilize starts, all cores): 110 median period 26.465555555555554 min 26.264444444444443 max 26.549629629629628
+## run 4096
+4096 (1, 2) compute_matmul_walk n=78 sum=789 0+112.2 112+0.5 113+23.8 137+0.0 137+0.3 137+23.8 161+0.0 161+0.3
+4096 (14, 9) compute_matmul_walk n=80 sum=801 0+109.8 110+15.1 125+23.8 149+0.0 149+0.3 149+23.8 173+0.0 173+0.2
+TRISC_0 31 steady median 1.641 [11.38, 39.43, 39.23, 1.64, 1.74, 1.64]
+TRISC_1 31 steady median 1.183 [11.44, 39.0, 37.18, 1.19, 1.19, 1.18]
+TRISC_2 31 steady median 1.018 [11.41, 38.8, 38.47, 1.04, 1.03, 1.02]
+steady block period (kh=2 tilize starts, all cores): 110 median period 24.24111111111111 min 24.228148148148147 max 24.32296296296296
+## run 2048
+2048 (1, 2) compute_matmul_walk n=64 sum=619 0+36.4 37+0.6 37+26.4 64+0.6 64+26.4 91+0.3 91+26.4 118+0.0
+2048 (14, 9) compute_matmul_walk n=62 sum=636 0+37.8 38+14.5 53+26.4 79+0.0 79+0.3 79+26.4 106+0.4 106+26.4
+TRISC_0 46 steady median 1.676 [10.86, 1.67, 1.64, 1.65, 1.65, 1.73]
+TRISC_1 46 steady median 1.196 [10.94, 1.2, 1.19, 1.43, 1.2, 1.19]
+TRISC_2 46 steady median 1.041 [10.88, 1.03, 1.02, 1.1, 1.04, 1.01]
+steady block period (kh=2 tilize starts, all cores): 110 median period 24.33037037037037 min 24.315555555555555 max 24.362962962962964
+
+# P11 (39) and P10 (38), core (1,2), tl1: 2048 = 39 base, 4096 = 39 bf, 6144 = 38 base, 8192 = 38 bf
+## run 2048
+2048 (1, 2) compute_matmul_walk n=28 sum=734 0+149.1 149+0.2 150+48.5 198+0.2 198+48.5 247+0.0
+TRISC_0 15 steady median 3.400 [27.08, 35.49, 41.34, 3.41, 3.39, 3.4]
+## run 4096
+4096 (1, 2) compute_matmul_walk n=25 sum=708 0+78.7 79+0.6 80+69.9 150+0.2 150+70.2 220+0.2
+TRISC_0 19 steady median 3.451 [26.44, 3.45, 3.79, 11.37, 11.0, 3.45]
+## run 6144
+6144 (1, 2) compute_matmul_walk n=19 sum=372 0+90.7 91+0.0 91+0.2 91+46.9 138+0.0 138+0.2
+TRISC_0 9 steady median 2.908 [19.63, 10.74, 16.53, 3.35, 3.68, 3.15]
+## run 8192
+8192 (1, 2) compute_matmul_walk n=19 sum=344 0+64.6 65+0.0 65+0.4 65+48.3 114+0.0 114+0.3
+TRISC_0 13 steady median 1.771 [17.09, 1.85, 1.74, 1.59, 1.76, 1.85]
+
+# P7 (43) and P1 (41) lanes menu option (op_variants RM_LANES), d2: 2048 = 43 base, 4096 = 43 lanes, 6144 = 41 base, 8192 = 41 lanes
+2048 (1, 2) reader_band_wait n=29 sum=78 1+69.5 84+7.5 122+0.0 158+0.0 197+0.0 233+0.0 270+0.0 309+0.0
+2048 (14, 9) reader_band_wait n=29 sum=25 1+16.5 31+7.5 68+0.0 105+0.0 154+0.0 191+0.0 228+0.0 271+0.0
+4096 (1, 2) reader_band_wait n=29 sum=74 1+66.1 81+5.7 118+0.1 154+0.1 193+0.1 230+0.1 267+0.1 306+0.1
+4096 (14, 9) reader_band_wait n=29 sum=23 1+17.0 32+4.3 68+0.1 105+0.1 164+0.1 201+0.1 238+0.1 280+0.1
+6144 (1, 2) reader_band_wait n=29 sum=109 1+38.9 59+34.9 112+34.9 166+0.0 211+0.0 250+0.0 286+0.0 330+0.0
+6144 (14, 9) reader_band_wait n=29 sum=105 1+34.9 54+34.9 108+34.9 161+0.0 332+0.0 370+0.0 407+0.0 481+0.0
+8192 (1, 2) reader_band_wait n=29 sum=172 1+47.2 65+36.8 120+26.4 166+12.2 212+25.2 254+22.8 295+0.1 339+0.1
+8192 (14, 9) reader_band_wait n=29 sum=118 1+43.8 64+36.8 120+22.9 162+12.2 338+0.1 377+0.1 413+0.1 484+0.1

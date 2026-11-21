@@ -1,0 +1,256 @@
+diff -ruN '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_final/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 05:51:14.032194814 +0000
++++ op_final/conv2d_3x3_program_descriptor.py	2026-11-21 08:38:22.931450461 +0000
+@@ -141,6 +141,15 @@
+ # Its handshake words (semaphores): the window's first pixel, end pixel (published last) and the ring origin (reader),
+ # the reader's and the writer's claim counts, the writer's done flag.
+ RM_SPLIT_SEMS = 6
++# Routed output store (STORE_ROUTE, kernels/conv2d_3x3_store_split.hpp): on the ROW_MAJOR ring the writer sends each
++# output tile on whichever NoC reaches its DRAM bank in fewer hops from the core (NoC1, or NoC0 on command buffer 2,
++# which the ring's reader never writes with), instead of every tile on NoC1. With every tile on NoC1, half of each core's
++# tiles cross the chip to the far DRAM column and the cores farthest along NoC1 from the DRAM columns get the least
++# write bandwidth when every core stores at once. One semaphore: the writer's last NoC0 write landed (the reader then
++# re-syncs its NoC0 write counters). Measured (Blackhole p150b, 110 cores, bit-identical, us): 514x1024 32->128 597 ->
++# 545, 1026x2048 32->128 1825 -> 1757, 258x512 64->256 398 -> 387; the other ring cases -0.7% to +0.3% except 514x1024
++# 64->128 (+2 to +3%, its NoC0 fill rows slow down). Not on the C_out fold: its ring fill is the bound, and NoC0 stores
++# slowed it (1026x2048 128->3 +2.6%, 514x1024 128->3 +2.5%) (perf_experiments/store_noc_split).
+ 
+ 
+ # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
+@@ -3818,6 +3827,18 @@
+     bias_addr = bias_tensor.buffer_address() if has_bias else 0
+     output_addr = output_tensor.buffer_address()
+     device = input_tensor.device()
++    store_route = (
++        bool(b.rm_ring_px)
++        and not g.fold
++        and not g.sharded_output
++        and not g.remote_output
++        and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
++    )
++    _store_defines = []
++    if store_route:
++        _store_defines = [("STORE_ROUTE", "1"), ("STORE_SEM_DONE", str(len(sem_ids)))]
++        sem_ids += (len(sem_ids),)
++        assert len(sem_ids) <= MAX_SEMAPHORES, sem_ids
+     row_peer_coords = {}
+     if g.k_split:
+         for core, row, _ in work:
+@@ -4327,6 +4348,7 @@
+             + _host_fill_defines
+             + _brf_defines
+             + _rm_ring_defines
++            + _store_defines
+             + _fold_defines,
+             config=ttnn.ReaderConfigDescriptor(),
+         )
+@@ -4347,6 +4369,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _store_defines
+             + _fold_defines
+             + (_rm_ring_defines if rm_split else [])
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+diff -ruN '--exclude=__pycache__' op_base/kernels/conv2d_3x3_reader.cpp op_final/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 05:51:14.036194872 +0000
++++ op_final/kernels/conv2d_3x3_reader.cpp	2026-11-21 08:26:13.761881975 +0000
+@@ -2219,6 +2219,19 @@
+         }
+     }
+     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++#ifdef STORE_ROUTE
++    {
++        // The writer's NoC0 output writes (conv2d_3x3_store_split.hpp) advanced this NoC's NIU write counters: once
++        // its last one landed, take them as this RISC's own, so its end-of-kernel checks hold.
++        static_assert(noc_index == 0, "the routed store's other NoC is the reader's");
++        MaybeDeviceZoneScope("reader_store_route_wait");
++        while (conv2d_3x3::rm_load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(STORE_SEM_DONE))) ==
++               0) {
++        }
++        noc_nonposted_writes_num_issued[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
++        noc_nonposted_writes_acked[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED);
++    }
++#endif
+ #ifdef SD_R0_NOC0
+     while (r0_state != 2) {
+         r0_try();
+diff -ruN '--exclude=__pycache__' op_base/kernels/conv2d_3x3_store_split.hpp op_final/kernels/conv2d_3x3_store_split.hpp
+--- op_base/kernels/conv2d_3x3_store_split.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_final/kernels/conv2d_3x3_store_split.hpp	2026-11-21 08:38:42.120730332 +0000
+@@ -0,0 +1,116 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Routed output store (STORE_ROUTE): the writer (BRISC) sends each output tile on whichever NoC reaches its DRAM bank
++// in fewer hops from this core, NoC1 (its own) or NoC0.
++//
++// With every output tile on NoC1, the DRAM-write bandwidth a core gets depends on its grid position: half of each
++// core's tiles go to the DRAM column on its far side, across the chip through every core's traffic, and the cores
++// farthest along NoC1 from the DRAM columns get the least (Blackhole p150b, 514x1024 32->128: kernel spans 427 us at
++// grid x 1 to 598 us at x 15). On the torus NoC0 runs +x then +y and NoC1 -y then -x, so the far column is a few hops
++// away on the other NoC. The NoC is chosen per (core, bank) once at kernel start: hops on each NoC from this core's
++// physical coordinates to the bank's endpoint on that NoC (the endpoints' translated coordinates mapped to physical
++// ones through this core's NoC0 ID translation tables). About 40-60% of each core's tiles go on NoC0.
++//
++// Measured (Blackhole p150b, 110 cores, bit-identical, us): 514x1024 32->128 597 -> 545 (kernel span max/p50 1.18 ->
++// 1.12), 1026x2048 32->128 1825 -> 1757 (1.08 -> 1.05). A fixed share or a share that follows each NoC's unsent-write
++// backlog did less (perf_experiments/store_noc_split).
++//
++// NoC0 writes use command buffer 2 (the reader's inline-write buffer; the reader issues no NoC0 write on the paths that
++// enable this) and the NIU's NoC0 nonposted-write counters, which only this RISC advances during the kernel: the writer
++// keeps its own targets for them (BRISC's firmware syncs only its own NoC's software counters). The reader re-syncs its
++// NoC0 write counters from the NIU once the writer's last NoC0 write landed (STORE_SEM_DONE), so its end-of-kernel
++// checks hold.
++//
++// Raw NoC (capability): noc_async_write / noc_async_write_page issue on BRISC's write command buffer, which on NoC0 is
++// the reader's; no dataflow helper issues on a chosen command buffer of the other NoC.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++namespace conv2d_3x3 {
++
++struct RoutedStore {
++    static constexpr uint32_t noc0 = 0;
++    static constexpr uint32_t cmd_buf0 = 2;
++    uint32_t sent0 = 0;   // NoC0 NIU nonposted-write "sent" count once every NoC0 write issued so far left L1
++    uint32_t acked0 = 0;  // ... and its write-ack count once they all landed
++    uint32_t mask0 = 0;   // bank b's tiles go on NoC0
++
++    // Physical coordinate of a translated one (NoC0's ID translation tables: 6 five-bit entries a word).
++    static FORCE_INLINE uint32_t phys(uint32_t table0, uint32_t id) {
++        constexpr uint32_t entry_mask = (1u << NOC_TRANSLATE_ID_WIDTH) - 1;
++        const uint32_t w = NOC_CMD_BUF_READ_REG(noc0, 0, NOC_CFG(table0 + id / NOC_TRANSLATE_TABLE_XY_SIZE));
++        return (w >> ((id % NOC_TRANSLATE_TABLE_XY_SIZE) * NOC_TRANSLATE_ID_WIDTH)) & entry_mask;
++    }
++
++    template <typename Accessor>
++    FORCE_INLINE void init(const Accessor& acc) {
++        sent0 = NOC_STATUS_READ_REG(noc0, NIU_MST_NONPOSTED_WR_REQ_SENT);
++        acked0 = NOC_STATUS_READ_REG(noc0, NIU_MST_WR_ACK_RECEIVED);
++        while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
++        }
++        NOC_CMD_BUF_WRITE_REG(noc0, cmd_buf0, NOC_RET_ADDR_MID, 0);
++        const uint32_t me = NOC_CMD_BUF_READ_REG(noc0, 0, NOC_NODE_ID);
++        const int32_t xs = me & NOC_NODE_ID_MASK;
++        const int32_t ys = (me >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK;
++        constexpr int32_t W = noc_size_x;
++        constexpr int32_t H = noc_size_y;
++        for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
++            // Page b sits in bank b.
++            const uint32_t c0 = static_cast<uint32_t>(acc.get_noc_addr(b, 0, noc0) >> NOC_ADDR_COORD_SHIFT);
++            const uint32_t c1 = static_cast<uint32_t>(acc.get_noc_addr(b, 0, 1) >> NOC_ADDR_COORD_SHIFT);
++            const int32_t x0 = phys(NOC_X_ID_TRANSLATE_TABLE_0, c0 & NOC_NODE_ID_MASK);
++            const int32_t y0 = phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c0 >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK);
++            const int32_t x1 = phys(NOC_X_ID_TRANSLATE_TABLE_0, c1 & NOC_NODE_ID_MASK);
++            const int32_t y1 = phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c1 >> NOC_ADDR_NODE_ID_BITS) & NOC_NODE_ID_MASK);
++            const int32_t h0 = (x0 - xs + W) % W + (y0 - ys + H) % H;
++            const int32_t h1 = (xs - x1 + W) % W + (ys - y1 + H) % H;
++            if (h0 < h1) {
++                mask0 |= 1u << b;
++            }
++        }
++    }
++
++    template <typename Accessor>
++    FORCE_INLINE void write_page(uint32_t page, const Accessor& acc, uint32_t src) {
++        if ((mask0 >> (page % NUM_DRAM_BANKS)) & 1) {
++            while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
++            }
++            ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, false>(
++                noc0,
++                cmd_buf0,
++                src,
++                acc.get_noc_addr(page, 0, noc0),
++                acc.get_aligned_page_size(),
++                NOC_UNICAST_WRITE_VC,
++                false,
++                false,
++                1,
++                false,
++                false);
++            ++sent0;
++            ++acked0;
++        } else {
++            noc_async_write_page(page, acc, src);
++        }
++    }
++
++    // Every write issued so far left L1 (both NoCs).
++    FORCE_INLINE void flushed() {
++        noc_async_writes_flushed();
++        while (NOC_STATUS_READ_REG(noc0, NIU_MST_NONPOSTED_WR_REQ_SENT) != sent0) {
++        }
++    }
++
++    // Every NoC0 write issued so far landed (NoC1: noc_async_write_barrier).
++    FORCE_INLINE void barrier0() {
++        while (NOC_STATUS_READ_REG(noc0, NIU_MST_WR_ACK_RECEIVED) != acked0) {
++        }
++    }
++};
++
++}  // namespace conv2d_3x3
+diff -ruN '--exclude=__pycache__' op_base/kernels/conv2d_3x3_writer.cpp op_final/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 05:51:14.035194858 +0000
++++ op_final/kernels/conv2d_3x3_writer.cpp	2026-11-21 08:26:13.760881960 +0000
+@@ -134,6 +134,9 @@
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
+ #include "conv2d_3x3_rm_ring.hpp"
++#ifdef STORE_ROUTE
++#include "conv2d_3x3_store_split.hpp"
++#endif
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -289,6 +292,12 @@
+     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles + sd_bias_round_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+     constexpr uint32_t row_groups_per_block = block_m_tiles / out_subblock_h;
++#ifdef STORE_ROUTE
++    // Routed output store (conv2d_3x3_store_split.hpp): each tile on the NoC with fewer hops to its bank.
++    static_assert(!output_sharded && !remote_output && noc_index == 1, "the routed store's other NoC is NoC0");
++    conv2d_3x3::RoutedStore out_store;
++    out_store.init(TensorAccessor(output_args, output_addr, get_tile_size(cb_output_tiles)));
++#endif
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
+@@ -2742,12 +2751,20 @@
+                     if (local_tile_row < actual_m_tiles) {
+                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
+                         for (uint32_t n = 0; n < block_n_tiles; ++n) {
++#ifdef STORE_ROUTE
++                            out_store.write_page(row_page + n, output, l1 + n * out_tile_bytes);
++#else
+                             noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
++#endif
+                         }
+                     }
+                     l1 += block_n_tiles * out_tile_bytes;
+                 }
++#ifdef STORE_ROUTE
++                out_store.flushed();
++#else
+                 noc_async_writes_flushed();
++#endif
+                 cb_pop_front(cb_output_tiles, row_group_tiles);
+ 
+                 while (k_blocks_issued < total_k_blocks &&
+@@ -2762,6 +2779,11 @@
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();
+     }
++#ifdef STORE_ROUTE
++    // The last NoC0 output write landed: the reader may re-sync its NoC0 write counters.
++    out_store.barrier0();
++    conv2d_3x3::rm_store(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(STORE_SEM_DONE)), 1);
++#endif
+ #ifdef KWF_XCHG
+     // The last semaphore write of the halo exchange.
+     noc_async_write_barrier();

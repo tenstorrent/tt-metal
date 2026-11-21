@@ -1,0 +1,925 @@
+diff -ru -x __pycache__ op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 05:54:14.678826294 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 08:09:05.005897971 +0000
+@@ -125,22 +125,21 @@
+ # 1408 -> 806 (perf_experiments/rm_ring_bank_run).
+ RM_RING_NSTG = 2
+ RM_RING_CHUNK_BYTES = 8192
+-# Split startup fill (RM_SPLIT, kernels/conv2d_3x3_rm_ring.hpp): before a core's first M-block can finish, the ring
+-# takes its whole first window (~2 image rows), on every core at once: DRAM-bound, and on NoC0 the far grid rows got
+-# their share up to ~3x later than the near ones. With resident weights the writer (BRISC, NoC1) has nothing to store
+-# yet, so the reader and the writer split that window: the reader claims its chunks from the front, the writer from the
+-# back, until they meet. The writer stages through the last RM_SPLIT_W_NSTG of CB_RM_STAGE's RM_RING_NSTG chunks (no
+-# new L1; the reader takes them back after the window) and fills nothing after it: its NoC1 reads beside the NoC1
+-# output store slowed the store-bound far columns (1026x2048 32->128 +13%). Measured (Blackhole p150b, 110 cores,
+-# bit-identical, us): 1026x2048 128->3 2401 -> 2184, 514x1024 128->3 798 -> 595 (perf_experiments/ring_fill_noc_split).
++# Split fill (RM_SPLIT, kernels/conv2d_3x3_rm_ring.hpp): the reader (NCRISC, NoC0) and the writer (BRISC, NoC1) split
++# the ring's fill for the whole stream. The reader cuts it into epochs (each time `allowed` lets the fill go further) and
++# claims each epoch's chunks from the front, the writer from the back, until they meet, so each core's fill follows
++# whichever RISC and NoC deliver faster at its grid position (on NoC0 alone the far grid rows took up to ~1.9x longer).
++# The writer claims only while the reader waits for a band, i.e. where the fill is on compute's path: its NoC1 reads
++# beside the NoC1 output store slow the store-bound convs (1026x2048 32->128 +13% when it claims whenever it waits for
++# output). It stages through the last RM_SPLIT_W_NSTG of CB_RM_STAGE's RM_RING_NSTG chunks for the whole stream (no new
++# L1; a chunk of its own measured no faster: equal on 1026x2048 128->3, slower on 514x1024 128->3). Measured (Blackhole
++# p150b, 110 cores, bit-identical, the reader alone after the first window -> this, us): 1026x2048 128->3 2032 -> 1804,
++# 514x1024 128->3 587 -> 532, 514x1024 64->128 755 -> 727, 258x512 128->256 746 -> 733
++# (perf_experiments/ring_fill_steady_split).
+ RM_SPLIT_W_NSTG = 1
+-# Smallest first window (ring pixels x pixel bytes) the split takes. Below it the reader alone fills the window about as
+-# fast, and the split only lines up every core's first output stores: 130x256 128->512 (213 KB) +1.5%, 514x1024 32->128
+-# (233 KB) +1.2%, 514x1024 64->128 (385 KB) +1.3% (Blackhole p150b, 3-5 runs each); the windows of 541 KB and up gain.
+-RM_SPLIT_MIN_WINDOW_BYTES = 512 * 1024
+-# Its handshake words (semaphores): the window's first pixel, end pixel (published last) and the ring origin (reader),
+-# the reader's and the writer's claim counts, the writer's done flag.
+-RM_SPLIT_SEMS = 6
++# Its handshake words (semaphores): the epoch sequence, the epoch's first and end pixel, the ring origin, the reader's
++# and the writer's claim words, the writer's done epoch, the reader's band-wait flag.
++RM_SPLIT_SEMS = 8
+ 
+ 
+ # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
+@@ -3779,14 +3778,9 @@
+             args[writer_split_arg] = int(split_core)
+         return args
+ 
+-    # Split startup fill (RM_SPLIT): on the ring with resident weights (streamed, the writer's block-0 weight rounds wait
+-    # on compute, which would wait on the writer's chunks).
+-    rm_split = (
+-        bool(b.rm_ring_px)
+-        and b.weights_resident
+-        and b.rm_stage_n > RM_SPLIT_W_NSTG
+-        and b.rm_ring_px * g.c_in_p * 2 >= RM_SPLIT_MIN_WINDOW_BYTES
+-    )
++    # Split fill (RM_SPLIT): on the ring with resident weights (streamed, the writer's weight rounds wait on compute,
++    # which would wait on the writer's chunks).
++    rm_split = bool(b.rm_ring_px) and b.weights_resident and b.rm_stage_n > RM_SPLIT_W_NSTG
+     rm_split_sems = ()
+     if rm_split:
+         rm_split_sems = tuple(range(len(sem_ids), len(sem_ids) + RM_SPLIT_SEMS))
+@@ -4302,16 +4296,18 @@
+         else []
+     )
+     if rm_split:
+-        # The writer stages through the last RM_SPLIT_W_NSTG chunks while it fills (the reader takes them back after).
++        # The writer stages through the last RM_SPLIT_W_NSTG chunks, the reader through the others.
+         _rm_ring_defines += [
+             ("RM_SPLIT", "1"),
+             ("RM_W_NSTG", str(RM_SPLIT_W_NSTG)),
+-            ("RM_SEM_LO", str(rm_split_sems[0])),
+-            ("RM_SEM_HI", str(rm_split_sems[1])),
+-            ("RM_SEM_ORIGIN", str(rm_split_sems[2])),
+-            ("RM_SEM_R_CLAIM", str(rm_split_sems[3])),
+-            ("RM_SEM_W_CLAIM", str(rm_split_sems[4])),
+-            ("RM_SEM_W_DONE", str(rm_split_sems[5])),
++            ("RM_SEM_SEQ", str(rm_split_sems[0])),
++            ("RM_SEM_LO", str(rm_split_sems[1])),
++            ("RM_SEM_HI", str(rm_split_sems[2])),
++            ("RM_SEM_ORIGIN", str(rm_split_sems[3])),
++            ("RM_SEM_R_CLAIM", str(rm_split_sems[4])),
++            ("RM_SEM_W_CLAIM", str(rm_split_sems[5])),
++            ("RM_SEM_W_DONE", str(rm_split_sems[6])),
++            ("RM_SEM_HUNGRY", str(rm_split_sems[7])),
+         ]
+     readers = [
+         ttnn.KernelDescriptor(
+diff -ru -x __pycache__ op_base/kernels/conv2d_3x3_reader.cpp op_copy/kernels/conv2d_3x3_reader.cpp
+--- op_base/kernels/conv2d_3x3_reader.cpp	2026-11-21 05:54:14.682826352 +0000
++++ op_copy/kernels/conv2d_3x3_reader.cpp	2026-11-21 07:48:46.988142322 +0000
+@@ -181,11 +181,13 @@
+ #endif
+ constexpr uint32_t TRID_RM_COPY = 1;
+ constexpr uint32_t TRID_RM_STAGE = 8;
+-// Split startup fill (RM_SPLIT, conv2d_3x3_rm_ring.hpp): the writer fills the back of the ring's first window through
+-// the last RM_W_NSTG staging chunks.
++// Split fill (RM_SPLIT, conv2d_3x3_rm_ring.hpp): the writer fills the back of every epoch of the stream through the last
++// RM_W_NSTG staging chunks; the reader cycles through the others.
+ #ifdef RM_SPLIT
++constexpr bool rm_split = true;
+ constexpr uint32_t rm_split_w_nstg = RM_W_NSTG;
+ #else
++constexpr bool rm_split = false;
+ constexpr uint32_t rm_split_w_nstg = 0;
+ #endif
+ 
+@@ -761,14 +763,22 @@
+         rm_ring_px,
+         pixel_bytes,
+         NUM_DRAM_BANKS,
+-        rm_ring_nstg,
++        rm_ring_nstg - rm_split_w_nstg,
+         rm_ring_chunk,
+         TRID_RM_COPY,
+         TRID_RM_STAGE,
+-        rm_split_w_nstg> rm;
++        rm_split> rm;
+ #ifdef RM_SPLIT
+-    rm.sw = conv2d_3x3::RmSplitWords::
+-        from_semaphores<RM_SEM_LO, RM_SEM_HI, RM_SEM_ORIGIN, RM_SEM_R_CLAIM, RM_SEM_W_CLAIM, RM_SEM_W_DONE>();
++    static_assert(rm_split_w_nstg < rm_ring_nstg, "the reader keeps a staging chunk");
++    rm.sw = conv2d_3x3::RmSplitWords::from_semaphores<
++        RM_SEM_SEQ,
++        RM_SEM_LO,
++        RM_SEM_HI,
++        RM_SEM_ORIGIN,
++        RM_SEM_R_CLAIM,
++        RM_SEM_W_CLAIM,
++        RM_SEM_W_DONE,
++        RM_SEM_HUNGRY>();
+ #endif
+ #ifdef RM_RING_STAGE_BYTES
+     static_assert(rm_ring_nstg * decltype(rm)::chunk_bytes <= RM_RING_STAGE_BYTES, "staging fits CB_RM_STAGE");
+@@ -851,15 +861,15 @@
+             // Keep the staging ring's DRAM reads in flight under the gather (compute may be ahead of the fill), then
+             // wait for this unit's pixels.
+             bool refill = false;
+-            if (rm.can_issue()) {
+-                rm.issue(reads, input, conv2d_3x3::RM_INF);
++            rm.poll();
++            if (rm.keep_busy(reads, input)) {
+                 refill = true;
+             }
+             if (needed) {
+                 int32_t hi = lo + static_cast<int32_t>(TILE_DIM) + 2;
+                 hi = hi < num_in_px ? hi : num_in_px;
+                 // (A row below the image's last pixel has nothing to wait for: its taps are the zero block.)
+-                if (hi > lo && hi > rm.landed) {
++                if (hi > lo && hi > rm.landed_all()) {
+                     rm.need_whole(reads, input, hi);
+                     refill = true;
+                 }
+@@ -2017,6 +2027,8 @@
+                 reads.begin(TRID_GATHER);
+                 for (uint32_t tile_row = 0; tile_row < block_m_tiles; ++tile_row) {
+                     if constexpr (rm_ring) {
++                        // Split fill: hand the writer the next epoch as soon as it claimed the rest of this one.
++                        rm.poll();
+                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row, rm_idle);
+                     } else {
+                         fifo.reserve(tap_direct_group, block_m_tiles - tile_row);
+diff -ru -x __pycache__ op_base/kernels/conv2d_3x3_rm_ring.hpp op_copy/kernels/conv2d_3x3_rm_ring.hpp
+--- op_base/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 05:54:14.682826352 +0000
++++ op_copy/kernels/conv2d_3x3_rm_ring.hpp	2026-11-21 08:09:20.902128393 +0000
+@@ -30,17 +30,24 @@
+ // Raw NoC (capability): dataflow_kernel_lib::read_with_state fixes the source address; the de-interleave changes both
+ // addresses on every read (as the graduated bank-run fill).
+ //
+-// Split startup fill (RM_SPLIT, `w_nstg` > 0): the first window (the stream's first segment up to the first `allowed`,
+-// ~2 image rows) must land before the core's first M-block can finish, on every core at once. The reader publishes
+-// it in L1 words (RmSplitWords) and the writer (BRISC, NoC1; RmRingWriterPart) fills part of it through its own
+-// staging chunks. Both number the window's chunks from its first pixel; the reader claims them from the front, the
+-// writer from the back, until they meet, so each core's split follows whichever RISC and NoC deliver faster there. A
+-// claim is a Dekker pair: each side publishes its claim count, then reads the other's. The writer marks a claim
+-// undecided until it has read the reader's count and gives the chunk up if the reader claimed it; the reader reads
+-// only decided writer claims; so every chunk has exactly one owner. The writer sets `done` once its chunks landed in
+-// the ring; the reader's `landed` passes the first pixel of the writer's part only then. The writer stages through
+-// the last w_nstg of the nstg staging chunks; after the window (the writer done, nothing staged) the reader fills alone
+-// through all nstg again: with one chunk it would wait for each chunk's copies before the next chunk's DRAM reads.
++// Split fill (RM_SPLIT, `split`): the writer (BRISC, NoC1; RmRingWriterPart) fills part of the stream through the last
++// RM_W_NSTG staging chunks; the reader cycles through the others. The reader cuts the stream into epochs: whenever the
++// previous one is closed and `allowed` lets the fill go further, [stream position, min(allowed, its segment's end))
++// becomes epoch e, published in L1 words under a sequence word (odd while the range is rewritten). Both number an
++// epoch's chunks from its first pixel; the reader claims them from the front, the writer from the back, until they
++// meet, so each core's fill follows whichever RISC and NoC deliver faster there. A claim is a Dekker pair: each side
++// publishes its claim count ((e << 16) | count, so neither pairs a count with another epoch's range), then reads the
++// other's. The writer marks a claim undecided until it has read the reader's word and gives the chunk up if the reader
++// claimed it; the reader reads only decided writer claims; so every chunk has exactly one owner. The writer may hold
++// chunks of several epochs and publishes w_done = e once every chunk it claimed in epochs <= e landed in the ring; the
++// reader keeps the writer's parts it has not seen done (epoch, first pixel) in a short queue, and its `landed` passes
++// the oldest one's first pixel only once w_done reaches that epoch.
++// The writer claims only while the reader waits for a band (`hungry`): where the fill is on compute's path. Elsewhere
++// its NoC1 reads beside the output stores slow the store-bound convs (1026x2048 32->128 +13% when it claims whenever it
++// waits for output). The reader re-checks the open epoch at every K-block release and gathered tile-row, so the writer
++// gets the next epoch while the reader gathers. Measured (Blackhole p150b, 110 cores, bit-identical, the reader alone
++// after the first window -> this, us): 1026x2048 128->3 2032 -> 1804, 514x1024 128->3 587 -> 532, 514x1024 64->128
++// 755 -> 727 (perf_experiments/ring_fill_steady_split).
+ 
+ #pragma once
+ 
+@@ -55,22 +62,33 @@
+ 
+ constexpr int32_t RM_INF = 0x7FFFFFFF;
+ 
+-// Split startup fill handshake words (L1 semaphores of this core).
++// Split fill handshake words (L1 semaphores of this core).
+ struct RmSplitWords {
+-    volatile tt_l1_ptr uint32_t* lo;       // the window's first pixel (reader)
+-    volatile tt_l1_ptr uint32_t* hi;       // its end pixel, published last (0: not yet)
+-    volatile tt_l1_ptr uint32_t* origin;   // the ring origin (reader)
+-    volatile tt_l1_ptr uint32_t* r_claim;  // chunks the reader claimed from the front
+-    volatile tt_l1_ptr uint32_t* w_claim;  // chunks the writer claimed from the back, | RM_DECIDED once checked
+-    volatile tt_l1_ptr uint32_t* w_done;   // 1 once the writer's chunks landed in the ring
+-
+-    template <uint32_t lo_id, uint32_t hi_id, uint32_t origin_id, uint32_t rc_id, uint32_t wc_id, uint32_t done_id>
++    volatile tt_l1_ptr uint32_t* seq;      // 2 e once epoch e's [lo, hi) is published, 2 e - 1 while it is written
++    volatile tt_l1_ptr uint32_t* lo;       // the epoch's first pixel
++    volatile tt_l1_ptr uint32_t* hi;       // its end pixel
++    volatile tt_l1_ptr uint32_t* origin;   // the ring origin (published before epoch 1)
++    volatile tt_l1_ptr uint32_t* r_claim;  // (e << 16) | chunks the reader claimed from the front of epoch e
++    volatile tt_l1_ptr uint32_t* w_claim;  // (e << 16) | the writer's back claims, | RM_DECIDED once checked
++    volatile tt_l1_ptr uint32_t* w_done;   // the last epoch whose writer chunks (and every earlier one's) landed
++    volatile tt_l1_ptr uint32_t* hungry;   // 1 while the reader waits for a band
++
++    template <
++        uint32_t seq_id,
++        uint32_t lo_id,
++        uint32_t hi_id,
++        uint32_t origin_id,
++        uint32_t rc_id,
++        uint32_t wc_id,
++        uint32_t done_id,
++        uint32_t hungry_id>
+     static FORCE_INLINE RmSplitWords from_semaphores() {
+         auto w = [](uint32_t id) { return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(id)); };
+-        return RmSplitWords{w(lo_id), w(hi_id), w(origin_id), w(rc_id), w(wc_id), w(done_id)};
++        return RmSplitWords{w(seq_id), w(lo_id), w(hi_id), w(origin_id), w(rc_id), w(wc_id), w(done_id), w(hungry_id)};
+     }
+ };
+-constexpr uint32_t RM_DECIDED = 0x80000000u;
++constexpr uint32_t RM_DECIDED = 0x8000u;
++constexpr uint32_t RM_COUNT = 0x7FFFu;
+ 
+ // The other RISC's word.
+ FORCE_INLINE uint32_t rm_load(volatile tt_l1_ptr uint32_t* p) {
+@@ -163,6 +181,7 @@
+     }
+ };
+ 
++
+ template <
+     int32_t ring_px,
+     uint32_t pixel_bytes,
+@@ -171,10 +190,8 @@
+     int32_t chunk_px,
+     uint32_t copy_trid,
+     uint32_t stage_trid0,
+-    uint32_t w_nstg = 0>
++    bool split = false>
+ struct RmBankRing {
+-    static constexpr bool split = w_nstg > 0;
+-    static_assert(w_nstg < nstg, "the reader keeps a staging chunk");
+     static_assert(nstg >= 1 && stage_trid0 + nstg - 1 <= NOC_MAX_TRANSACTION_ID, "staging trids");
+     static_assert(chunk_px >= 1 && chunk_px <= ring_px, "a chunk fits the ring");
+     static constexpr uint32_t slot_bytes = (static_cast<uint32_t>(chunk_px) + nb - 1) / nb * pixel_bytes;
+@@ -196,7 +213,7 @@
+     uint32_t n_issued = 0;
+     uint32_t n_proc = 0;
+     // Staged chunks: pixels [c_lo, c_hi), and the stream position once they are copied (the next segment's start
+-    // when the chunk ends its segment).
++    // when the chunk ends its segment, or past the writer's part of its epoch).
+     int32_t c_lo[nstg];
+     int32_t c_hi[nstg];
+     int32_t c_after[nstg];
+@@ -204,29 +221,23 @@
+     int32_t landed = 0;
+     int32_t allowed = 0;
+     bool copies_out = false;
+-    // Split startup fill: the handshake words; the window [ep_lo, ep_hi) while it is still claimable (ep_open), its
+-    // chunks and the reader's front claims, the stream position after it (iss_seg / iss_a point there meanwhile); the
+-    // first pixel of the writer's part until the writer is seen done (RM_INF: none, or done).
++    // Split fill: the handshake words; the current epoch (0: none yet), its pixels [ep_lo, ep_hi), chunks and the
++    // reader's front claims, whether it is still claimable, the stream position after it (iss_seg / iss_a point there
++    // meanwhile); the writer's parts not yet seen done, oldest first: their epoch and first pixel (every pixel from
++    // there to the epoch's end is the writer's).
++    static constexpr uint32_t WQ = 4;
+     RmSplitWords sw{};
++    uint32_t ep = 0;
+     bool ep_open = false;
+     int32_t ep_lo = 0;
+     int32_t ep_hi = 0;
+     uint32_t ep_n = 0;
+     uint32_t ep_rc = 0;
+     int32_t ep_next = 0;
+-    int32_t wp_lo = RM_INF;
+-    // Staging chunks the reader cycles through: nstg - w_nstg during the split window, then nstg.
+-    uint32_t nstg_now = nstg;
+-
+-    // Staging chunk of the n-th chunk (both counts compile-time: no runtime division).
+-    FORCE_INLINE uint32_t slot_of(uint32_t n) const {
+-        if constexpr (split) {
+-            if (nstg_now != nstg) {
+-                return n % (nstg - w_nstg);
+-            }
+-        }
+-        return n % nstg;
+-    }
++    uint32_t wq_ep[WQ];
++    int32_t wq_lo[WQ];
++    uint32_t wq_head = 0;
++    uint32_t wq_n = 0;
+ 
+     template <int32_t input_width, int32_t num_in_px, int32_t dilation>
+     FORCE_INLINE void init(uint32_t ring, uint32_t stage, int32_t first_px, const SlabFootprint& core_fp) {
+@@ -256,78 +267,104 @@
+         iss_a = copied = landed = num_segs > 0 ? seg_lo[0] : RM_INF;
+         n_issued = n_proc = 0;
+         if constexpr (split) {
+-            if (num_segs > 0) {
+-                // The window: the first segment up to `allowed`.
+-                ep_lo = seg_lo[0];
+-                ep_hi = seg_hi[0] < allowed ? seg_hi[0] : allowed;
+-                ep_n = static_cast<uint32_t>(ep_hi - ep_lo + chunk_px - 1) / chunk_px;
+-                ep_rc = 0;
+-                ep_open = true;
+-                iss_a = ep_hi;
+-                if (ep_hi == seg_hi[0]) {
+-                    iss_seg = 1;
+-                    iss_a = num_segs > 1 ? seg_lo[1] : RM_INF;
+-                }
+-                ep_next = iss_a;
+-                // The last w_nstg staging chunks are the writer's until it is done; the window goes out last.
+-                nstg_now = nstg - w_nstg;
+-                rm_store(sw.origin, static_cast<uint32_t>(origin));
+-                rm_store(sw.lo, static_cast<uint32_t>(ep_lo));
+-                rm_store(sw.hi, static_cast<uint32_t>(ep_hi));
++            // Epoch 1: the first segment up to `allowed` (~2 image rows, which every core fetches at once).
++            rm_store(sw.origin, static_cast<uint32_t>(origin));
++            open_epoch();
++        }
++    }
++
++    // Split fill: drop the writer's parts it published done; true if the queue has room.
++    FORCE_INLINE bool wq_pop_done() {
++        if (wq_n > 0) {
++            const uint32_t done = rm_load(sw.w_done);
++            while (wq_n > 0 && wq_ep[wq_head] <= done) {
++                wq_head = wq_head + 1 == WQ ? 0 : wq_head + 1;
++                --wq_n;
+             }
+         }
++        return wq_n < WQ;
+     }
+ 
+-    // Split startup fill: the writer's claims, once its latest one is decided.
++    // Split fill: publish the next epoch, [iss_a, min(allowed, its segment's end)), if the stream goes on below
++    // `allowed` and the queue can take the writer's part of it. The reader's claim word moves to the new epoch first.
++    FORCE_INLINE bool open_epoch() {
++        if (ep_open || iss_seg >= num_segs) {
++            return false;
++        }
++        const int32_t lo = iss_a;
++        const int32_t s_hi = seg_hi[iss_seg];
++        const int32_t hi = s_hi < allowed ? s_hi : allowed;
++        if (lo >= hi || (wq_n == WQ && !wq_pop_done())) {
++            return false;
++        }
++        ++ep;
++        ep_lo = lo;
++        ep_hi = hi;
++        ep_n = static_cast<uint32_t>(hi - lo + chunk_px - 1) / chunk_px;
++        ASSERT(ep < 0x10000 && ep_n <= RM_COUNT);
++        ep_rc = 0;
++        ep_open = true;
++        rm_store(sw.r_claim, ep << 16);
++        rm_store(sw.seq, 2 * ep - 1);
++        rm_store(sw.lo, static_cast<uint32_t>(lo));
++        rm_store(sw.hi, static_cast<uint32_t>(hi));
++        rm_store(sw.seq, 2 * ep);
++        iss_a = hi;
++        if (hi == s_hi) {
++            ++iss_seg;
++            iss_a = iss_seg < num_segs ? seg_lo[iss_seg] : RM_INF;
++        }
++        ep_next = iss_a;
++        return true;
++    }
++
++    // The writer's claims in the current epoch, once its latest one is decided.
+     FORCE_INLINE uint32_t writer_claims() const {
+         uint32_t w;
+         do {
+             w = rm_load(sw.w_claim);
+-        } while (w != 0 && (w & RM_DECIDED) == 0);
+-        return w & ~RM_DECIDED;
++        } while ((w >> 16) == ep && (w & RM_DECIDED) == 0);
++        return (w >> 16) == ep ? (w & RM_COUNT) : 0;
+     }
+ 
+-    // The front and back claims met: the writer owns the window's last wc chunks. Every pixel from the reader's last
++    // The front and back claims met: the writer owns the epoch's last wc chunks. Every pixel from the reader's last
+     // chunk to ep_next is then the writer's (or in a segment gap nothing reads).
+-    FORCE_INLINE void close_window(uint32_t wc) {
++    FORCE_INLINE void close_epoch(uint32_t wc) {
+         ep_open = false;
+         if (wc > 0) {
+-            wp_lo = ep_lo + static_cast<int32_t>(ep_n - wc) * chunk_px;
++            const uint32_t t = wq_head + wq_n < WQ ? wq_head + wq_n : wq_head + wq_n - WQ;
++            wq_ep[t] = ep;
++            wq_lo[t] = ep_lo + static_cast<int32_t>(ep_n - wc) * chunk_px;
++            ++wq_n;
+         }
+         if (n_issued > n_proc) {
+-            c_after[slot_of(n_issued - 1)] = ep_next;
++            c_after[(n_issued - 1) % nstg] = ep_next;
+         } else {
+             copied = ep_next;
+         }
+     }
+ 
+-    // After the split window: every staging chunk back to the reader once the writer is done with its own and nothing
+-    // is staged at a slot index both counts agree on.
+-    FORCE_INLINE void widen() {
+-        if constexpr (split) {
+-            if (nstg_now < nstg && !ep_open && wp_lo == RM_INF && n_issued == n_proc && n_issued % nstg == 0) {
+-                nstg_now = nstg;
+-            }
+-        }
+-    }
+-
+-    // The window's next front chunk, or false (the claims met: the window is closed).
++    // The open epoch's next front chunk (opening the next epoch once it is closed), or false: nothing claimable now.
+     FORCE_INLINE bool claim_front() {
+-        rm_store(sw.r_claim, ep_rc + 1);
+-        const uint32_t wc = writer_claims();
+-        if (ep_rc + wc < ep_n) {
+-            ++ep_rc;
+-            return true;
++        while (true) {
++            if (!ep_open && !open_epoch()) {
++                return false;
++            }
++            rm_store(sw.r_claim, (ep << 16) | (ep_rc + 1));
++            const uint32_t wc = writer_claims();
++            if (ep_rc + wc < ep_n) {
++                ++ep_rc;
++                return true;
++            }
++            close_epoch(wc);
+         }
+-        close_window(wc);
+-        return false;
+     }
+ 
+     // The DRAM reads of the front chunk just claimed.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void issue_claimed(Reads& reads, const Accessor& input) {
+-        const uint32_t slot = slot_of(n_issued);
+-        if (n_issued >= nstg_now) {
++        const uint32_t slot = n_issued % nstg;
++        if (n_issued >= nstg) {
+             land_copies(reads);
+         }
+         const int32_t a = ep_lo + static_cast<int32_t>(ep_rc - 1) * chunk_px;
+@@ -344,14 +381,38 @@
+         ++n_issued;
+     }
+ 
+-    // Every needed pixel below it has landed, the writer's part included.
++    // Split fill: close the open epoch once the writer claimed the rest of it, then open the next, so the writer has
++    // work while the reader gathers. Never waits on an undecided writer claim.
++    FORCE_INLINE void poll() {
++        if constexpr (split) {
++            if (ep_open) {
++                const uint32_t w = rm_load(sw.w_claim);
++                if ((w >> 16) != ep || (w & RM_DECIDED) == 0 || ep_rc + (w & RM_COUNT) < ep_n) {
++                    return;
++                }
++                close_epoch(w & RM_COUNT);
++            }
++            open_epoch();
++        }
++    }
++
++    // The first pixel the reader's next claim would cover (the epoch's end once the reader claimed all of it).
++    FORCE_INLINE int32_t front_px() const {
++        if (!ep_open) {
++            return iss_a;
++        }
++        const int32_t f = ep_lo + static_cast<int32_t>(ep_rc) * chunk_px;
++        return f < ep_hi ? f : ep_hi;
++    }
++
++    // Every needed pixel below it has landed, the writer's parts included.
+     FORCE_INLINE int32_t landed_all() {
+         if constexpr (split) {
+-            if (wp_lo < RM_INF) {
+-                if (rm_load(sw.w_done) == 0) {
+-                    return landed < wp_lo ? landed : wp_lo;
++            if (wq_n > 0) {
++                wq_pop_done();
++                if (wq_n > 0) {
++                    return landed < wq_lo[wq_head] ? landed : wq_lo[wq_head];
+                 }
+-                wp_lo = RM_INF;
+             }
+         }
+         return landed;
+@@ -369,6 +430,7 @@
+             const int32_t a = live_lo + ring_px;
+             allowed = a > allowed ? a : allowed;
+         }
++        poll();
+     }
+ 
+     template <typename Reads>
+@@ -380,17 +442,37 @@
+         landed = copied;
+     }
+ 
+-    // (Never while the split startup window is open: chunks are issued and copied in stream order.)
++    // (Split fill: chunks are only issued through claims.)
+     FORCE_INLINE bool can_issue() const {
+-        return !ep_open && n_issued - n_proc < nstg_now && iss_seg < num_segs && iss_a < allowed;
++        if constexpr (split) {
++            return false;
++        }
++        return n_issued - n_proc < nstg && iss_seg < num_segs && iss_a < allowed;
++    }
++
++    // One more chunk in flight if a staging chunk is free (keeps the DRAM reads going under a gather).
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE bool keep_busy(Reads& reads, const Accessor& input) {
++        if constexpr (split) {
++            if (n_issued - n_proc < nstg && claim_front()) {
++                issue_claimed(reads, input);
++                return true;
++            }
++            return false;
++        }
++        if (can_issue()) {
++            issue(reads, input, RM_INF);
++            return true;
++        }
++        return false;
+     }
+ 
+     // The next chunk (at most to `to`, never past `allowed`, so every staged chunk can be copied): NB bank-run DRAM
+     // reads into its staging slot, whose previous chunk's copies must have landed.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void issue(Reads& reads, const Accessor& input, int32_t to) {
+-        const uint32_t slot = slot_of(n_issued);
+-        if (n_issued >= nstg_now) {
++        const uint32_t slot = n_issued % nstg;
++        if (n_issued >= nstg) {
+             land_copies(reads);
+         }
+         const int32_t a = iss_a;
+@@ -419,7 +501,7 @@
+     // The oldest staged chunk into its ring slots (blocking on its DRAM reads).
+     template <typename Reads>
+     FORCE_INLINE void process(Reads& reads) {
+-        const uint32_t slot = slot_of(n_proc);
++        const uint32_t slot = n_proc % nstg;
+         const int32_t a = c_lo[slot];
+         const int32_t e = c_hi[slot];
+         ASSERT(e <= allowed);
+@@ -453,34 +535,69 @@
+         ++n_proc;
+     }
+ 
+-    // Opportunistic (compute is behind): one DRAM chunk issue, else one landed chunk's de-interleave. Returns true if
+-    // it did anything; the caller then restores its own read transaction id and command-buffer state.
++    // Opportunistic (compute is behind): one DRAM chunk issue (split fill: a front claim), else one landed chunk's
++    // de-interleave. Returns true if it did anything; the caller then restores its own read transaction id and
++    // command-buffer state.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE bool step(Reads& reads, const Accessor& input) {
+-        if constexpr (split) {
+-            if (ep_open && n_issued - n_proc < nstg_now && claim_front()) {
+-                issue_claimed(reads, input);
+-                return true;
+-            }
+-            widen();
+-        }
+-        if (can_issue()) {
+-            issue(reads, input, RM_INF);
++        if (keep_busy(reads, input)) {
+             return true;
+         }
+         if (n_proc < n_issued &&
+-            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + slot_of(n_proc))) {
++            ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
+             process(reads);
+             return true;
+         }
+         return false;
+     }
+ 
++    // Split fill need(): the reader's front chunks below x (whole chunks of the epoch grid), then the writer's parts
++    // below x, with `hungry` up meanwhile.
++    template <typename Reads, typename Accessor>
++    FORCE_INLINE void need_split(Reads& reads, const Accessor& input, int32_t x) {
++        if (x <= landed_all()) {
++            return;
++        }
++        ASSERT(x <= allowed);
++        rm_store(sw.hungry, 1);
++        while (copied < x) {
++            if (n_issued - n_proc < nstg && front_px() < x) {
++                if (claim_front()) {
++                    issue_claimed(reads, input);
++                    continue;
++                }
++                if (n_proc == n_issued) {
++                    if (copied >= x) {
++                        break;
++                    }
++                    // The queue of the writer's parts is full: wait for its oldest.
++                    wq_pop_done();
++                    continue;
++                }
++            }
++            process(reads);
++        }
++        land_copies(reads);
++        if (landed_all() < x) {
++            // The writer's part below x: keep this RISC's next chunks going meanwhile.
++            MaybeDeviceZoneScope("reader_rm_split_wait");
++            while (landed_all() < x) {
++                step(reads, input);
++            }
++            land_copies(reads);
++        }
++        rm_store(sw.hungry, 0);
++    }
++
+     // Blocking, whole chunks: every needed pixel below x is in the ring, the chunks that bring it in issued whole (up
+     // to `allowed`), not cut at x. The kh-reuse stream waits for one unit's pixels at a time; cutting there would turn
+     // a lagging fill into one DRAM round trip per unit.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void need_whole(Reads& reads, const Accessor& input, int32_t x) {
++        if constexpr (split) {
++            need_split(reads, input, x);
++            return;
++        }
+         if (x <= landed) {
+             return;
+         }
+@@ -498,45 +615,29 @@
+     // (x <= allowed), so the chunks it needs can be issued.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void need(Reads& reads, const Accessor& input, int32_t x) {
+-        if (x <= landed_all()) {
++        if constexpr (split) {
++            need_split(reads, input, x);
+             return;
+         }
+-        ASSERT(x <= allowed);
+-        if constexpr (split) {
+-            widen();
++        if (x <= landed) {
++            return;
+         }
++        ASSERT(x <= allowed);
+         while (copied < x) {
+-            if (ep_open) {
+-                // Split startup window: the reader's front chunks (a claim that finds the writer's closes it: the
+-                // stream then goes on past the window).
+-                if (n_issued - n_proc < nstg_now && ep_lo + static_cast<int32_t>(ep_rc) * chunk_px < x) {
+-                    if (claim_front()) {
+-                        issue_claimed(reads, input);
+-                    }
+-                    continue;
+-                }
+-            } else if (can_issue() && iss_a < x) {
++            if (can_issue() && iss_a < x) {
+                 issue(reads, input, x);
+                 continue;
+             }
+             process(reads);
+         }
+         land_copies(reads);
+-        if constexpr (split) {
+-            if (landed_all() < x) {
+-                MaybeDeviceZoneScope("reader_rm_split_wait");
+-                while (rm_load(sw.w_done) == 0) {
+-                }
+-                wp_lo = RM_INF;
+-            }
+-        }
+     }
+ };
+ 
+-// The split startup fill's writer part (BRISC, NoC1): claims the window's chunks from the back, one DRAM read per bank
+-// into its own nstg staging chunks, then one self-aimed read per pixel into the ring (as RmBankRing). The writer calls
+-// serve() while it waits for output tiles, so one call does at most one bank's de-interleave run (chunk_px / nb
+-// pixels): a whole chunk's copies would hold back the output store.
++// The split fill's writer part (BRISC, NoC1): claims chunks from the back of each epoch the reader publishes, one DRAM
++// read per bank into its own nstg staging chunks, then one self-aimed read per pixel into the ring (as RmBankRing). The
++// writer calls serve() while it waits for output tiles, so one call does at most one bank's de-interleave run
++// (chunk_px / nb pixels): a whole chunk's copies would hold back the output store.
+ template <
+     int32_t ring_px,
+     uint32_t pixel_bytes,
+@@ -555,22 +656,24 @@
+     uint32_t stage_l1 = 0;
+     RmSplitWords sw{};
+     int32_t origin = 0;
+-    // The window, its chunks, this writer's back claims; started (the reader published it), met (no more claims),
+-    // done (every claimed chunk landed and `done` is published).
++    // The epoch adopted (0: none), its pixels, chunks and this writer's back claims, and whether it still claims there.
++    uint32_t cur = 0;
+     int32_t lo = 0;
+     int32_t hi = 0;
+     uint32_t n = 0;
+     uint32_t wc = 0;
+-    bool started = false;
+-    bool met = false;
+-    bool done = false;
++    bool active = false;
+     uint32_t n_issued = 0;
+     uint32_t n_proc = 0;
++    // Staged chunks: pixels [c_lo, c_hi) of epoch c_ep.
+     int32_t c_lo[nstg];
+     int32_t c_hi[nstg];
++    uint32_t c_ep[nstg];
+     bool copies_out = false;
+     // The oldest staged chunk's next bank run to de-interleave (0: not started).
+     uint32_t proc_bank = 0;
++    // The epoch whose claimed chunks all went through their copies, published once those landed (0: none).
++    uint32_t pend_done = 0;
+ 
+     FORCE_INLINE void init(uint32_t ring, uint32_t stage, const RmSplitWords& words) {
+         ring_l1 = ring;
+@@ -578,25 +681,32 @@
+         sw = words;
+     }
+ 
+-    // Claim the next chunk from the back (false: the claims met).
++    // Claim the next chunk of epoch `cur` from the back (false: the claims met, or the reader moved on).
+     FORCE_INLINE bool claim_back(uint32_t& j) {
+         if (wc >= n) {
+             return false;
+         }
+         j = n - 1 - wc;
+-        if (rm_load(sw.r_claim) > j) {
++        uint32_t r = rm_load(sw.r_claim);
++        if ((r >> 16) != cur || (r & 0xFFFFu) > j) {
+             return false;
+         }
+-        rm_store(sw.w_claim, wc + 1);
+-        if (rm_load(sw.r_claim) > j) {
+-            rm_store(sw.w_claim, wc | RM_DECIDED);
++        rm_store(sw.w_claim, (cur << 16) | (wc + 1));
++        r = rm_load(sw.r_claim);
++        if ((r >> 16) != cur || (r & 0xFFFFu) > j) {
++            rm_store(sw.w_claim, (cur << 16) | RM_DECIDED | wc);
+             return false;
+         }
+         ++wc;
+-        rm_store(sw.w_claim, wc | RM_DECIDED);
++        rm_store(sw.w_claim, (cur << 16) | RM_DECIDED | wc);
+         return true;
+     }
+ 
++    // No staged chunk of epoch e is left (chunks are staged in epoch order).
++    FORCE_INLINE bool none_staged_of(uint32_t e) const {
++        return n_proc == n_issued || c_ep[(n_issued - 1) % nstg] != e;
++    }
++
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void issue(Reads& reads, const Accessor& input, uint32_t j) {
+         const uint32_t slot = n_issued % nstg;
+@@ -615,6 +725,7 @@
+         }
+         c_lo[slot] = a;
+         c_hi[slot] = e;
++        c_ep[slot] = cur;
+         ++n_issued;
+     }
+ 
+@@ -654,47 +765,60 @@
+         }
+     }
+ 
+-    // One non-blocking step: take the published window, claim and issue a chunk, de-interleave one landed bank run,
+-    // or publish `done` once every claimed chunk's copies landed. Leaves the read transaction id at 0.
++    // One non-blocking step: publish a finished epoch once its copies landed, adopt the newest published epoch, claim
++    // and issue one chunk from its back (only while the reader waits for a band), or de-interleave one landed bank run.
++    // Leaves the read transaction id at 0.
+     template <typename Reads, typename Accessor>
+     FORCE_INLINE void serve(Reads& reads, const Accessor& input) {
+-        if (done) {
+-            return;
+-        }
+-        if (!started) {
+-            const uint32_t h = rm_load(sw.hi);
+-            if (h == 0) {
++        const uint32_t noc = reads.noc.get_noc_id();
++        if (pend_done != 0) {
++            if (copies_out && !ncrisc_noc_read_with_transaction_id_flushed(noc, copy_trid)) {
+                 return;
+             }
+-            hi = static_cast<int32_t>(h);
+-            lo = static_cast<int32_t>(*sw.lo);
+-            origin = static_cast<int32_t>(*sw.origin);
+-            n = static_cast<uint32_t>(hi - lo + chunk_px - 1) / chunk_px;
+-            started = true;
++            copies_out = false;
++            rm_store(sw.w_done, pend_done);
++            pend_done = 0;
+         }
+-        if (!met && n_issued - n_proc < nstg) {
++        if (!active) {
++            const uint32_t s = rm_load(sw.seq);
++            if ((s & 1) == 0 && s / 2 > cur) {
++                const int32_t l = static_cast<int32_t>(rm_load(sw.lo));
++                const int32_t h = static_cast<int32_t>(rm_load(sw.hi));
++                if (rm_load(sw.seq) == s) {
++                    if (cur == 0) {
++                        origin = static_cast<int32_t>(rm_load(sw.origin));
++                    }
++                    cur = s / 2;
++                    lo = l;
++                    hi = h;
++                    n = static_cast<uint32_t>(hi - lo + chunk_px - 1) / chunk_px;
++                    wc = 0;
++                    active = true;
++                }
++            }
++        }
++        if (active && n_issued - n_proc < nstg && rm_load(sw.hungry) != 0) {
+             uint32_t j;
+             if (claim_back(j)) {
+                 issue(reads, input, j);
+                 dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+                 return;
+             }
+-            met = true;
+-        }
+-        if (n_proc < n_issued) {
+-            if (proc_bank > 0 ||
+-                ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), stage_trid0 + n_proc % nstg)) {
+-                process_bank(reads);
+-                dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++            active = false;
++            if (wc > 0 && none_staged_of(cur)) {
++                pend_done = cur;
+             }
+             return;
+         }
+-        if (copies_out && !ncrisc_noc_read_with_transaction_id_flushed(reads.noc.get_noc_id(), copy_trid)) {
+-            return;
++        if (n_proc < n_issued &&
++            (proc_bank > 0 || ncrisc_noc_read_with_transaction_id_flushed(noc, stage_trid0 + n_proc % nstg))) {
++            const uint32_t e = c_ep[n_proc % nstg];
++            process_bank(reads);
++            dataflow_kernel_lib::set_read_trid(reads.noc, 0);
++            if (proc_bank == 0 && none_staged_of(e) && (e != cur || !active)) {
++                pend_done = e;
++            }
+         }
+-        copies_out = false;
+-        rm_store(sw.w_done, 1);
+-        done = true;
+     }
+ };
+ 
+diff -ru -x __pycache__ op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 05:54:14.681826337 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 07:48:46.989142337 +0000
+@@ -2474,11 +2474,10 @@
+     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
+ #endif
+ #ifdef RM_SPLIT
+-    // ---- Split startup fill, writer part (conv2d_3x3_rm_ring.hpp RmRingWriterPart): the back chunks of the ring's
+-    // first window, through the last RM_W_NSTG of CB_RM_STAGE's RM_RING_NSTG staging chunks (the reader takes them
+-    // back once this part is done), served while it waits for the first output tiles (resident weights: its weight
+-    // rounds never wait on compute). Copies under transaction id 1, staging reads 8 .. (the weights' 2 / 3 and the
+-    // bias' 7 stay apart).
++    // ---- Split fill, writer part (conv2d_3x3_rm_ring.hpp RmRingWriterPart): the back chunks of every epoch of the
++    // ring's stream, through the last RM_W_NSTG of CB_RM_STAGE's RM_RING_NSTG staging chunks, served while it waits
++    // for output tiles (resident weights: its weight rounds never wait on compute). Copies under transaction id 1,
++    // staging reads 8 .. (the weights' 2 / 3 and the bias' 7 stay apart).
+     static_assert(!tile_input && !output_sharded && !slab_split && !row_split && !nslice_outer && !k_split);
+     conv2d_3x3::RmRingWriterPart<RM_RING_PX, input_page_bytes, NUM_DRAM_BANKS, RM_W_NSTG, RM_RING_CHUNK_PX, 1, 8> rm_w;
+     static_assert(RM_W_NSTG < RM_RING_NSTG, "the reader keeps a staging chunk");
+@@ -2486,8 +2485,15 @@
+     rm_w.init(
+         get_write_ptr(cb_halo_slab),
+         get_write_ptr(CB_RM_STAGE) + (RM_RING_NSTG - RM_W_NSTG) * decltype(rm_w)::chunk_bytes,
+-        conv2d_3x3::RmSplitWords::
+-            from_semaphores<RM_SEM_LO, RM_SEM_HI, RM_SEM_ORIGIN, RM_SEM_R_CLAIM, RM_SEM_W_CLAIM, RM_SEM_W_DONE>());
++        conv2d_3x3::RmSplitWords::from_semaphores<
++            RM_SEM_SEQ,
++            RM_SEM_LO,
++            RM_SEM_HI,
++            RM_SEM_ORIGIN,
++            RM_SEM_R_CLAIM,
++            RM_SEM_W_CLAIM,
++            RM_SEM_W_DONE,
++            RM_SEM_HUNGRY>());
+     const auto rm_w_input = TensorAccessor(input_args, input_addr, input_page_bytes);
+     conv2d_3x3::TaggedReads<false> rm_w_reads;
+ #endif
+@@ -2552,8 +2558,8 @@
+             uint32_t l1 = get_read_ptr(cb_output_tiles);
+             for (uint32_t j = 0; j < cnt; ++j, l1 += out_tile_bytes) {
+ #ifdef RM_SPLIT
+-                // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
+-                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, j + 1)) {
++                // The split fill's writer part while compute works towards the output.
++                while (!cb_pages_available_at_front(cb_output_tiles, j + 1)) {
+                     rm_w.serve(rm_w_reads, rm_w_input);
+                 }
+ #endif
+@@ -2730,8 +2736,8 @@
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
+ #ifdef RM_SPLIT
+-                // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
+-                while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
++                // The split fill's writer part while compute works towards the output.
++                while (!cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
+                     rm_w.serve(rm_w_reads, rm_w_input);
+                 }
+ #endif

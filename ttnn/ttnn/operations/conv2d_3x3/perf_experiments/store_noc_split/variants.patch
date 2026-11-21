@@ -1,0 +1,512 @@
+diff -ruN '--exclude=__pycache__' op_base/conv2d_3x3_program_descriptor.py op_copy/conv2d_3x3_program_descriptor.py
+--- op_base/conv2d_3x3_program_descriptor.py	2026-11-21 05:51:14.032194814 +0000
++++ op_copy/conv2d_3x3_program_descriptor.py	2026-11-21 08:19:16.047798969 +0000
+@@ -141,6 +141,24 @@
+ # Its handshake words (semaphores): the window's first pixel, end pixel (published last) and the ring origin (reader),
+ # the reader's and the writer's claim counts, the writer's done flag.
+ RM_SPLIT_SEMS = 6
++# Output store over both NoCs (STORE_SPLIT, kernels/conv2d_3x3_store_split.hpp; experiment knobs): 0 off (NoC1 only),
++# 1 dynamic (NoC1 while its unsent-write backlog < STORE_D1, else NoC0 while < STORE_D0), 2 static (tile i on NoC0 when
++# i % STORE_DEN < STORE_NUM). Only where the reader issues no NoC0 write (the ROW_MAJOR ring).
++STORE_EXP = False
++STORE_OUT_FREE = False
++STORE_FOLD = False
++STORE_HK = 1
++STORE_HT = 1
++STORE_FIRST_BLOCKS = 0
++STORE_SKIP_BLOCKS = 0
++STORE_N1Y = 1
++STORE_DIAG = False
++STORE_SPLIT = 0
++STORE_PIPE = 0
++STORE_D1 = 2
++STORE_D0 = 2
++STORE_NUM = 1
++STORE_DEN = 2
+ 
+ 
+ # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
+@@ -1707,7 +1725,18 @@
+                         rm_stage_px=chunk_px,
+                         footprint_bytes=fit["footprint_bytes"] + rm_delta,
+                     )
++                out_extra = 0
+                 if fit["footprint_bytes"] <= l1_budget:
++                    if STORE_OUT_FREE and rm_px and not nslice and g.c_in_tiles == 1 and not g.fold:
++                        # Experiment: cb_output_tiles takes the L1 left at this (bm, bk, ub), before the deep im2col
++                        # ring (C_in 32 ring only: kh reuse re-solves its own footprint).
++                        rg_bytes = fit["out_subblock_h"] * bn_ * g.out_tile_bytes
++                        out_extra = min(
++                            (l1_budget - fit["footprint_bytes"]) // rg_bytes,
++                            _div_up(bm, fit["out_subblock_h"]) - OUT_DEPTH_ROW_GROUPS,
++                        )
++                        out_extra = max(0, out_extra)
++                        fit = dict(fit, footprint_bytes=fit["footprint_bytes"] + out_extra * rg_bytes)
+                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
+                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
+                         deep = _footprint(
+@@ -1731,6 +1760,12 @@
+                                 rm_stage_px=fit["rm_stage_px"],
+                                 footprint_bytes=deep["footprint_bytes"] + rm_delta,
+                             )
++                        if out_extra:
++                            deep = dict(
++                                deep,
++                                footprint_bytes=deep["footprint_bytes"]
++                                + out_extra * fit["out_subblock_h"] * bn_ * g.out_tile_bytes,
++                            )
+                         if deep["footprint_bytes"] <= l1_budget:
+                             fit = dict(deep, weights_resident=True) if resident else deep
+                             break
+@@ -1760,7 +1795,7 @@
+                         block_m_tiles=bm,
+                         block_k_tiles=bk,
+                         block_n_tiles=bn_,
+-                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
++                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS + out_extra,
+                         n_groups=ng,
+                         **fit,
+                     )
+@@ -4250,6 +4285,25 @@
+         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
+     )
+     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
++    _store_defines = (
++        [
++            ("STORE_SPLIT", str(STORE_SPLIT)),
++            ("STORE_D1", str(STORE_D1)),
++            ("STORE_D0", str(STORE_D0)),
++            ("STORE_NUM", str(STORE_NUM)),
++            ("STORE_DEN", str(STORE_DEN)),
++            ("STORE_PIPE", str(STORE_PIPE)),
++            ("STORE_CAP", str(b.out_depth_row_groups)),
++            ("STORE_HK", str(STORE_HK)),
++            ("STORE_HT", str(STORE_HT)),
++            ("STORE_FIRST_TILES", str(STORE_FIRST_BLOCKS * b.block_m_tiles * bn)),
++            ("STORE_SKIP_TILES", str(STORE_SKIP_BLOCKS * b.block_m_tiles * bn)),
++            ("STORE_N1Y", str(STORE_N1Y)),
++        ]
++        + ([("STORE_DIAG", "1")] if STORE_DIAG else [])
++        if STORE_EXP and b.rm_ring_px and not g.sharded_output and (STORE_FOLD or not g.fold)
++        else []
++    )
+     _fold_defines = []
+     if g.fold:
+         assert b.weights_resident and b.rm_ring_px and b.num_k_blocks == 3 and bk == g.c_in_tiles and bn == 1
+@@ -4347,6 +4401,7 @@
+             + slot_ack_defines
+             + _host_fill_defines
+             + _wr_defines
++            + _store_defines
+             + _fold_defines
+             + (_rm_ring_defines if rm_split else [])
+             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
+diff -ruN '--exclude=__pycache__' op_base/kernels/conv2d_3x3_store_split.hpp op_copy/kernels/conv2d_3x3_store_split.hpp
+--- op_base/kernels/conv2d_3x3_store_split.hpp	1970-01-01 00:00:00.000000000 +0000
++++ op_copy/kernels/conv2d_3x3_store_split.hpp	2026-11-21 08:20:46.809120389 +0000
+@@ -0,0 +1,260 @@
++// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
++// SPDX-License-Identifier: Apache-2.0
++
++// Output store over both NoCs (STORE_SPLIT): the writer (BRISC) issues each output tile on its own NoC1, or on NoC0.
++// Where all cores store at once, NoC1 DRAM-write bandwidth depends on the writing core's grid position (some cores'
++// NoC1 write queues back up while the others' drain); NoC0 routes the same writes over other links.
++//
++// Policies (STORE_SPLIT):
++//   0  NoC1 only.
++//   1  dynamic: a tile goes on NoC1 while NoC1 holds fewer than d1 issued-but-unsent writes and its command buffer is
++//      free, else on NoC0 while NoC0 holds fewer than d0, else the writer polls both. Each core's NoC0 share follows
++//      how fast its NoC1 queue drains at its position.
++//   2  static: tile i of the core's stream goes on NoC0 when i % den < num.
++//   3  route: a tile goes on the NoC with fewer hops from this core to its DRAM bank's endpoint on that NoC (NoC0
++//      runs +x then +y, NoC1 -y then -x on the physical torus; coordinates through the NoC0 ID translation table).
++//   4  route + dynamic: the shorter NoC while its backlog is below its limit, else the other one.
++//   5  NoC1 while its backlog is below d1; a tile whose bank is closer on NoC0 (policy 3's rule) spills to NoC0 while
++//      NoC0's backlog is below d0.
++//
++// NoC0 writes use command buffer 2 (the reader's inline-write buffer; the reader issues no NoC0 write on the paths that
++// enable this) and the NIU's NoC0 nonposted-write counters, which only this RISC advances there: the writer keeps its
++// own targets for them (BRISC's firmware syncs only its own NoC's software counters).
++//
++// Row-group pipeline (OutPipe, STORE_PIPE): up to `cap` row groups of the output CB issued and not yet popped; a group
++// is popped once its writes left L1 (both NoCs' sent counters passed its last write), so the writes of the next group
++// queue behind it instead of waiting for a flush.
++//
++// Raw NoC (capability): noc_async_write / noc_async_write_page issue on BRISC's write command buffer, which on NoC0 is
++// the reader's; no dataflow helper issues on a chosen command buffer of the other NoC, or reports a NoC's unsent-write
++// backlog without blocking.
++
++#pragma once
++
++#include <cstdint>
++
++#include "api/dataflow/dataflow_api.h"
++
++#ifndef STORE_HK
++#define STORE_HK 1
++#endif
++#ifndef STORE_HT
++#define STORE_HT 1
++#endif
++#ifndef STORE_N1Y
++#define STORE_N1Y 1
++#endif
++#ifndef STORE_FIRST_TILES
++#define STORE_FIRST_TILES 0
++#endif
++#ifndef STORE_SKIP_TILES
++#define STORE_SKIP_TILES 0
++#endif
++
++namespace conv2d_3x3 {
++
++template <uint32_t policy, uint32_t d1, uint32_t d0, uint32_t num, uint32_t den>
++struct DualNocStore {
++    static constexpr uint32_t noc0 = 0;
++    static constexpr uint32_t cmd_buf0 = 2;
++    static constexpr bool uses_noc0 = policy != 0;
++    uint32_t sent0 = 0;   // NoC0 NIU nonposted-write "sent" count once every NoC0 write issued so far left L1
++    uint32_t acked0 = 0;  // ... and its write-ack count once they all landed
++    uint32_t n0 = 0;
++    uint32_t n_all = 0;
++    uint32_t mask0 = 0;  // bank b's tiles prefer NoC0 (policies 3, 4)
++
++    // Physical NoC0-frame coordinate of a translated one (NoC0's ID translation tables, 6 five-bit entries a word).
++    static FORCE_INLINE uint32_t phys(uint32_t table0, uint32_t id) {
++        const uint32_t w = NOC_CMD_BUF_READ_REG(noc0, 0, NOC_CFG(table0 + id / 6));
++        return (w >> ((id % 6) * 5)) & 31;
++    }
++
++    template <typename Accessor>
++    FORCE_INLINE void init_routes(const Accessor& acc) {
++        if constexpr (policy >= 3) {
++            const uint32_t me = NOC_CMD_BUF_READ_REG(noc0, 0, NOC_NODE_ID);
++            const int32_t xs = me & 63;
++            const int32_t ys = (me >> 6) & 63;
++            constexpr int32_t W = noc_size_x;
++            constexpr int32_t H = noc_size_y;
++            for (uint32_t b = 0; b < NUM_DRAM_BANKS; ++b) {
++                const uint32_t c0 = static_cast<uint32_t>(acc.get_noc_addr(b, 0, noc0) >> NOC_ADDR_COORD_SHIFT);
++                const uint32_t c1 = static_cast<uint32_t>(acc.get_noc_addr(b, 0, 1) >> NOC_ADDR_COORD_SHIFT);
++                const int32_t x0 = phys(NOC_X_ID_TRANSLATE_TABLE_0, c0 & 63);
++                const int32_t y0 = phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c0 >> 6) & 63);
++                const int32_t x1 = phys(NOC_X_ID_TRANSLATE_TABLE_0, c1 & 63);
++                const int32_t y1 = phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c1 >> 6) & 63);
++                // NoC0: +x along this core's row, then +y down the bank's column (shared by every row's writes);
++                // NoC1: -y along this core's column, then -x along the endpoint's row (shared by every column's).
++                // The shared final leg counts STORE_HK times.
++                const int32_t h0 = (x0 - xs + W) % W + STORE_HK * ((y0 - ys + H) % H);
++                const int32_t h1 = STORE_N1Y ? (ys - y1 + H) % H + STORE_HK * ((xs - x1 + W) % W)
++                                             : (xs - x1 + W) % W + STORE_HK * ((ys - y1 + H) % H);
++                if (h0 + STORE_HT <= h1) {
++                    mask0 |= 1u << b;
++                }
++            }
++        }
++    }
++
++    FORCE_INLINE void init() {
++        if constexpr (policy != 0) {
++            sent0 = NOC_STATUS_READ_REG(noc0, NIU_MST_NONPOSTED_WR_REQ_SENT);
++            acked0 = NOC_STATUS_READ_REG(noc0, NIU_MST_WR_ACK_RECEIVED);
++            while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
++            }
++            NOC_CMD_BUF_WRITE_REG(noc0, cmd_buf0, NOC_RET_ADDR_MID, 0);
++        }
++    }
++
++    FORCE_INLINE uint32_t backlog1() const {
++        return noc_nonposted_writes_num_issued[noc_index] -
++               NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
++    }
++    FORCE_INLINE uint32_t backlog0() const { return sent0 - NOC_STATUS_READ_REG(noc0, NIU_MST_NONPOSTED_WR_REQ_SENT); }
++
++    FORCE_INLINE void issue0(uint32_t src, uint64_t dst, uint32_t bytes) {
++        while (!noc_cmd_buf_ready(noc0, cmd_buf0)) {
++        }
++        ncrisc_noc_fast_write<DM_DEDICATED_NOC, false, false>(
++            noc0, cmd_buf0, src, dst, bytes, NOC_UNICAST_WRITE_VC, false, false, 1, false, false);
++        ++sent0;
++        ++acked0;
++        ++n0;
++    }
++
++    // `spin` runs while both NoCs are at their backlog limit (dynamic policy).
++    template <typename Accessor, typename Spin>
++    FORCE_INLINE void write_page(uint32_t page, const Accessor& acc, uint32_t src, uint32_t bytes, Spin&& spin) {
++        bool on0 = false;
++        if constexpr (policy == 2) {
++            on0 = n_all % den < num;
++        } else if constexpr (policy == 3) {
++            on0 = ((mask0 >> (page % NUM_DRAM_BANKS)) & 1) && (STORE_FIRST_TILES == 0 || n_all < STORE_FIRST_TILES) &&
++                  n_all >= STORE_SKIP_TILES;
++        } else if constexpr (policy == 4) {
++            const bool pref0 = (mask0 >> (page % NUM_DRAM_BANKS)) & 1;
++            while (true) {
++                const bool ok1 = backlog1() < d1 && noc_cmd_buf_ready(noc_index, write_cmd_buf);
++                const bool ok0 = backlog0() < d0 && noc_cmd_buf_ready(noc0, cmd_buf0);
++                if (pref0 ? ok0 : ok1) {
++                    on0 = pref0;
++                    break;
++                }
++                if (pref0 ? ok1 : ok0) {
++                    on0 = !pref0;
++                    break;
++                }
++                spin();
++            }
++        } else if constexpr (policy == 5) {
++            // NoC1 while it drains; a tile whose bank is closer on NoC0 spills there once NoC1 backs up.
++            const bool can0 = (mask0 >> (page % NUM_DRAM_BANKS)) & 1;
++            while (true) {
++                if (backlog1() < d1 && noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
++                    break;
++                }
++                if (can0 && backlog0() < d0 && noc_cmd_buf_ready(noc0, cmd_buf0)) {
++                    on0 = true;
++                    break;
++                }
++                spin();
++            }
++        } else if constexpr (policy == 1) {
++            while (true) {
++                if (backlog1() < d1 && noc_cmd_buf_ready(noc_index, write_cmd_buf)) {
++                    break;
++                }
++                if (backlog0() < d0 && noc_cmd_buf_ready(noc0, cmd_buf0)) {
++                    on0 = true;
++                    break;
++                }
++                spin();
++            }
++        }
++        if (on0) {
++            issue0(src, acc.get_noc_addr(page, 0, noc0), bytes);
++        } else {
++            noc_async_write_page(page, acc, src);
++        }
++        ++n_all;
++    }
++
++    // Every write issued so far left L1 (both NoCs).
++    FORCE_INLINE void flushed() {
++        noc_async_writes_flushed();
++        if constexpr (policy != 0) {
++            while (NOC_STATUS_READ_REG(noc0, NIU_MST_NONPOSTED_WR_REQ_SENT) != sent0) {
++            }
++        }
++    }
++    // Every NoC0 write issued so far landed (NoC1: noc_async_write_barrier).
++    FORCE_INLINE void barrier0() {
++        if constexpr (policy != 0) {
++            while (NOC_STATUS_READ_REG(noc0, NIU_MST_WR_ACK_RECEIVED) != acked0) {
++            }
++        }
++    }
++};
++
++template <uint32_t cb, uint32_t group_tiles, uint32_t cap, typename Store>
++struct OutPipe {
++    Store& st;
++    uint32_t t1[cap];
++    uint32_t t0[cap];
++    uint32_t head = 0;
++    uint32_t n = 0;
++
++    FORCE_INLINE bool oldest_sent() const {
++        const int32_t s1 = static_cast<int32_t>(NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT) - t1[head]);
++        if constexpr (!Store::uses_noc0) {
++            return s1 >= 0;
++        } else {
++            const int32_t s0 =
++                static_cast<int32_t>(NOC_STATUS_READ_REG(Store::noc0, NIU_MST_NONPOSTED_WR_REQ_SENT) - t0[head]);
++            return s1 >= 0 && s0 >= 0;
++        }
++    }
++    FORCE_INLINE void pop_oldest() {
++        cb_pop_front(cb, group_tiles);
++        head = head + 1 == cap ? 0 : head + 1;
++        --n;
++    }
++    FORCE_INLINE void try_pop() {
++        while (n > 0 && oldest_sent()) {
++            pop_oldest();
++        }
++    }
++    // L1 address of the next row group once compute pushed it (`idle` runs while waiting).
++    template <typename Idle>
++    FORCE_INLINE uint32_t next_group(Idle&& idle) {
++        while (n == cap) {
++            try_pop();
++        }
++        while (!cb_pages_available_at_front(cb, (n + 1) * group_tiles)) {
++            try_pop();
++            idle();
++        }
++        const auto& itf = get_local_cb_interface(cb);
++        uint32_t l1 = itf.fifo_rd_ptr + n * group_tiles * itf.fifo_page_size;
++        if (l1 >= itf.fifo_limit) {
++            l1 -= itf.fifo_size;
++        }
++        return l1;
++    }
++    FORCE_INLINE void group_issued() {
++        uint32_t slot = head + n;
++        slot = slot >= cap ? slot - cap : slot;
++        t1[slot] = noc_nonposted_writes_num_issued[noc_index];
++        t0[slot] = st.sent0;
++        ++n;
++    }
++    FORCE_INLINE void drain() {
++        while (n > 0) {
++            try_pop();
++        }
++    }
++};
++
++}  // namespace conv2d_3x3
+diff -ruN '--exclude=__pycache__' op_base/kernels/conv2d_3x3_writer.cpp op_copy/kernels/conv2d_3x3_writer.cpp
+--- op_base/kernels/conv2d_3x3_writer.cpp	2026-11-21 05:51:14.035194858 +0000
++++ op_copy/kernels/conv2d_3x3_writer.cpp	2026-11-21 06:59:00.796522247 +0000
+@@ -134,6 +134,7 @@
+ #include "conv2d_3x3_slab_direct.hpp"
+ #include "conv2d_3x3_slab_stream.hpp"
+ #include "conv2d_3x3_rm_ring.hpp"
++#include "conv2d_3x3_store_split.hpp"
+ 
+ void kernel_main() {
+     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
+@@ -289,6 +290,55 @@
+     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles + sd_bias_round_tiles;
+     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
+     constexpr uint32_t row_groups_per_block = block_m_tiles / out_subblock_h;
++#ifdef STORE_SPLIT
++    // Output store over both NoCs (conv2d_3x3_store_split.hpp).
++    using OutStoreT = conv2d_3x3::DualNocStore<STORE_SPLIT, STORE_D1, STORE_D0, STORE_NUM, STORE_DEN>;
++    OutStoreT out_store;
++    out_store.init();
++    out_store.init_routes(TensorAccessor(output_args, output_addr, get_tile_size(cb_output_tiles)));
++    DeviceTimestampedData("store_mask0", out_store.mask0);
++#ifdef STORE_DIAG
++    {
++        constexpr uint32_t sh = NOC_ADDR_COORD_SHIFT;
++        DeviceTimestampedData(
++            "sns_phys",
++            (NOC_CMD_BUF_READ_REG(0, 0, NOC_NODE_ID) & 0xFFF) | ((NOC_CMD_BUF_READ_REG(1, 0, NOC_NODE_ID) & 0xFFF) << 16));
++        DeviceTimestampedData("sns_logi", (MY_NOC_ENCODING(0) & 0xFFF) | ((MY_NOC_ENCODING(1) & 0xFFF) << 16));
++        const auto diag_out = TensorAccessor(output_args, output_addr, get_tile_size(cb_output_tiles));
++        for (uint32_t b = 0; b < 8; ++b) {
++            const uint64_t a0 = diag_out.get_noc_addr(b, 0, 0);
++            const uint64_t a1 = diag_out.get_noc_addr(b, 0, 1);
++            DeviceTimestampedData(
++                "sns_bank",
++                (b << 28) | static_cast<uint32_t>((a0 >> sh) & 0xFFF) | (static_cast<uint32_t>((a1 >> sh) & 0xFFF) << 12));
++            const uint32_t c0 = static_cast<uint32_t>(a0 >> sh);
++            const uint32_t c1 = static_cast<uint32_t>(a1 >> sh);
++            DeviceTimestampedData(
++                "sns_bphys",
++                (b << 28) | (OutStoreT::phys(NOC_X_ID_TRANSLATE_TABLE_0, c0 & 63)) |
++                    (OutStoreT::phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c0 >> 6) & 63) << 6) |
++                    (OutStoreT::phys(NOC_X_ID_TRANSLATE_TABLE_0, c1 & 63) << 12) |
++                    (OutStoreT::phys(NOC_Y_ID_TRANSLATE_TABLE_0, (c1 >> 6) & 63) << 18));
++        }
++        for (uint32_t t = 0; t < 6; ++t) {
++            DeviceTimestampedData("sns_xtab", NOC_CMD_BUF_READ_REG(0, 0, NOC_CFG(NOC_X_ID_TRANSLATE_TABLE_0 + t)));
++        }
++        for (uint32_t t = 0; t < 6; ++t) {
++            DeviceTimestampedData("sns_ytab", NOC_CMD_BUF_READ_REG(0, 0, NOC_CFG(NOC_Y_ID_TRANSLATE_TABLE_0 + t)));
++        }
++    }
++#endif
++    [[maybe_unused]] auto store_page = [&](uint32_t page, const auto& acc, uint32_t l1) {
++        out_store.write_page(page, acc, l1, acc.get_aligned_page_size(), []() {});
++    };
++    [[maybe_unused]] auto store_flushed = [&]() { out_store.flushed(); };
++#if STORE_PIPE
++    conv2d_3x3::OutPipe<cb_output_tiles, row_group_tiles, STORE_CAP, OutStoreT> out_pipe{out_store};
++#endif
++#else
++    [[maybe_unused]] auto store_page = [&](uint32_t page, const auto& acc, uint32_t l1) { noc_async_write_page(page, acc, l1); };
++    [[maybe_unused]] auto store_flushed = [&]() { noc_async_writes_flushed(); };
++#endif
+     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
+     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
+ 
+@@ -2558,9 +2608,9 @@
+                 }
+ #endif
+                 cb_wait_front(cb_output_tiles, j + 1);
+-                noc_async_write_page((m_tile_start + t0 + j) * tensor_n_tiles, output, l1);
++                store_page((m_tile_start + t0 + j) * tensor_n_tiles, output, l1);
+             }
+-            noc_async_writes_flushed();
++            store_flushed();
+             cb_pop_front(cb_output_tiles, cnt);
+         }
+     }
+@@ -2729,6 +2779,29 @@
+             const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+             const uint32_t block_tile0 = m_block_idx * block_m_tiles;
+             for (uint32_t row_group = 0; row_group < row_groups_per_block; ++row_group) {
++#if defined(STORE_SPLIT) && STORE_PIPE
++                uint32_t l1 = out_pipe.next_group([&]() {
++#ifdef RM_SPLIT
++                    if (!rm_w.done) {
++                        rm_w.serve(rm_w_reads, rm_w_input);
++                    }
++#endif
++                });
++                for (uint32_t r = 0; r < out_subblock_h; ++r) {
++                    const uint32_t local_tile_row = block_tile0 + row_group * out_subblock_h + r;
++                    if (local_tile_row < actual_m_tiles) {
++                        const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
++                        for (uint32_t n = 0; n < block_n_tiles; ++n) {
++                            out_store.write_page(
++                                row_page + n, output, l1 + n * out_tile_bytes, out_tile_bytes, [&]() {
++                                    out_pipe.try_pop();
++                                });
++                        }
++                    }
++                    l1 += block_n_tiles * out_tile_bytes;
++                }
++                out_pipe.group_issued();
++#else
+ #ifdef RM_SPLIT
+                 // The startup fill's writer part (a no-op once it is done) while compute works towards the output.
+                 while (!rm_w.done && !cb_pages_available_at_front(cb_output_tiles, row_group_tiles)) {
+@@ -2742,13 +2815,14 @@
+                     if (local_tile_row < actual_m_tiles) {
+                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
+                         for (uint32_t n = 0; n < block_n_tiles; ++n) {
+-                            noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
++                            store_page(row_page + n, output, l1 + n * out_tile_bytes);
+                         }
+                     }
+                     l1 += block_n_tiles * out_tile_bytes;
+                 }
+-                noc_async_writes_flushed();
++                store_flushed();
+                 cb_pop_front(cb_output_tiles, row_group_tiles);
++#endif
+ 
+                 while (k_blocks_issued < total_k_blocks &&
+                        cb_pages_reservable_at_back(cb_weights, weight_k_block_tiles)) {
+@@ -2758,10 +2832,18 @@
+         }
+     }
+ #endif
++#if defined(STORE_SPLIT) && STORE_PIPE && !defined(CONV2D_3X3_COUT_FOLD)
++    out_pipe.drain();
++#endif
+     drain_fill();
+     if constexpr (!output_sharded || remote_output) {
+         noc_async_write_barrier();
+     }
++#ifdef STORE_SPLIT
++    out_store.barrier0();
++    DeviceTimestampedData("store_noc0_tiles", out_store.n0);
++    DeviceTimestampedData("store_all_tiles", out_store.n_all);
++#endif
+ #ifdef KWF_XCHG
+     // The last semaphore write of the halo exchange.
+     noc_async_write_barrier();
