@@ -1197,6 +1197,10 @@ class TOPK(TemplateParameter):
     # Rank-stamped only: rank tag field width in the value word's low bits (16 for bf16 values,
     # narrower for fp32 keys whose low mantissa bits are zero).
     topk_tag_bits: int = 16
+    # Local sort as two calls split at this phase (0: one call); the second call resumes at it.
+    topk_split_phase: int = 0
+    # Re-run the topk init between the two split calls (fresh replay recording).
+    topk_split_reinit: bool = False
 
     def convert_to_cpp(self) -> str:
         lines: list[str] = [
@@ -1208,6 +1212,8 @@ class TOPK(TemplateParameter):
             f"constexpr bool TOPK_FUSED_STABLE = {str(self.topk_fused_stable).lower()};",
             f"constexpr bool TOPK_RANK_STAMPED = {str(self.topk_rank_stamped).lower()};",
             f"constexpr std::uint32_t TOPK_TAG_BITS = {self.topk_tag_bits};",
+            f"constexpr int TOPK_SPLIT_PHASE = {self.topk_split_phase};",
+            f"constexpr bool TOPK_SPLIT_REINIT = {str(self.topk_split_reinit).lower()};",
         ]
         return "\n".join(lines)
 
@@ -1221,8 +1227,10 @@ class TOPK(TemplateParameter):
             "bool TOPK_FUSED_STABLE;",
             "bool TOPK_RANK_STAMPED;",
             "std::uint32_t TOPK_TAG_BITS;",
+            "int TOPK_SPLIT_PHASE;",
+            "bool TOPK_SPLIT_REINIT;",
         ]
-        return "\n".join(lines), "IIII???I"
+        return "\n".join(lines), "IIII???Ii?"
 
 
 @dataclass

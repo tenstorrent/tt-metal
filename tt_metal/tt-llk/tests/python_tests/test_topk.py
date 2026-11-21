@@ -265,57 +265,18 @@ def get_value_tiles_from_topk_tensor(
     return torch.cat(tiles)
 
 
-@parametrize(
-    formats=input_output_formats(
-        [
-            DataFormat.Float16_b,
-        ]
-    ),
-    input_dimensions=[
-        [32, 128],
-        [64, 128],
-        [256, 128],
-        [32, 1024],
-    ],
-    # Wider dims (W >= 256) and K=64 are blocked on the wide-width harness
-    # discrepancies tracked in tt-llk#1344; sub-tile K and K=64 coverage lives
-    # in the ttnn-level topk tests.
-    K=[32],
-    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
-    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable
-    # network) / rank-stamped-stable (sign-conditioned local-rank tags in the value lo16,
-    # true indices riding index tracking, unstable network).
-    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
-)
-def test_topk_sfpu(
+def _run_topk_sfpu(
     formats: InputOutputFormat,
     input_dimensions: list,
     K: int,
     sort_direction: TopKSortDirection,
     sort_mode: str,
+    split_phase: int = 0,
+    split_reinit: bool = False,
 ):
     stable_sort = sort_mode == "stable"
     fused_stable = sort_mode == "fused"
     rank_stamped = sort_mode == "rank_stamped"
-
-    if input_dimensions == [32, 1024]:
-        # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
-        # TODO: Fix issue #1344 on tt-llk.
-        pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
-
-    if fused_stable and input_dimensions[1] != 128:
-        # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
-        # multi-iteration fused slabs need the packed-CB round-trip that lands with the ttnn milestone.
-        pytest.skip(
-            "Fused stable mode currently covers single-iteration widths (W == 128) only."
-        )
-
-    if rank_stamped and input_dimensions[1] != 128:
-        # Rank tags do not survive this harness's bf16 L1 round-trip between iterations (the ttnn
-        # pipeline re-stamps inside the merge and moves value words through raw Float32 CBs).
-        pytest.skip(
-            "Rank-stamped stable mode covers single-iteration widths (W == 128) in this harness."
-        )
 
     sfpu_false_spec = StimuliSpec.uniform(low=0.0, high=1.0)
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
@@ -350,6 +311,8 @@ def test_topk_sfpu(
                 topk_stable_sort=stable_sort,
                 topk_fused_stable=fused_stable,
                 topk_rank_stamped=rank_stamped,
+                topk_split_phase=split_phase,
+                topk_split_reinit=split_reinit,
             ),
         ],
         runtimes=[
@@ -407,6 +370,94 @@ def test_topk_sfpu(
     # Validate topk values
     assert passed_test(
         golden_values, res_values, formats.output_format, print_errors=True
+    )
+
+
+@parametrize(
+    formats=input_output_formats(
+        [
+            DataFormat.Float16_b,
+        ]
+    ),
+    input_dimensions=[
+        [32, 128],
+        [64, 128],
+        [256, 128],
+        [32, 1024],
+    ],
+    # Wider dims (W >= 256) and K=64 are blocked on the wide-width harness
+    # discrepancies tracked in tt-llk#1344; sub-tile K and K=64 coverage lives
+    # in the ttnn-level topk tests.
+    K=[32],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    # unstable / comparator-stable / fused-key-stable (packed [bf16|u16] keys, unstable
+    # network) / rank-stamped-stable (sign-conditioned local-rank tags in the value lo16,
+    # true indices riding index tracking, unstable network).
+    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
+)
+def test_topk_sfpu(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    K: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+):
+    fused_stable = sort_mode == "fused"
+    rank_stamped = sort_mode == "rank_stamped"
+
+    if input_dimensions == [32, 1024]:
+        # For 32x1024 input we have observed some discrepancies in the topk values between hardware and golden.
+        # TODO: Fix issue #1344 on tt-llk.
+        pytest.skip("Skipping test for 32x1024 input due to observed discrepancies.")
+
+    if fused_stable and input_dimensions[1] != 128:
+        # The fused kernel path handles a single 2-tile slab per pipeline (TOPK_NUM_ITERATIONS == 1);
+        # multi-iteration fused slabs need the packed-CB round-trip that lands with the ttnn milestone.
+        pytest.skip(
+            "Fused stable mode currently covers single-iteration widths (W == 128) only."
+        )
+
+    if rank_stamped and input_dimensions[1] != 128:
+        # Rank tags do not survive this harness's bf16 L1 round-trip between iterations (the ttnn
+        # pipeline re-stamps inside the merge and moves value words through raw Float32 CBs).
+        pytest.skip(
+            "Rank-stamped stable mode covers single-iteration widths (W == 128) in this harness."
+        )
+
+    _run_topk_sfpu(formats, input_dimensions, K, sort_direction, sort_mode)
+
+
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    input_dimensions=[[32, 128]],
+    K=[32],
+    sort_direction=[TopKSortDirection.Descending, TopKSortDirection.Ascending],
+    sort_mode=["unstable", "stable", "fused", "rank_stamped"],
+    split_phase=[1, 2, 3, 4],
+    split_reinit=[False, True],
+)
+def test_topk_sfpu_split_local_sort(
+    formats: InputOutputFormat,
+    input_dimensions: list,
+    K: int,
+    sort_direction: TopKSortDirection,
+    sort_mode: str,
+    split_phase: int,
+    split_reinit: bool,
+):
+    """Local sort resumed at a nonzero start phase must match the single-call sort.
+
+    split_reinit=False replays the windows the first call left recorded; True re-runs the
+    topk init in between, so the second call records them from scratch.
+    """
+    _run_topk_sfpu(
+        formats,
+        input_dimensions,
+        K,
+        sort_direction,
+        sort_mode,
+        split_phase=split_phase,
+        split_reinit=split_reinit,
     )
 
 
