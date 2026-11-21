@@ -674,8 +674,8 @@ class ttKDA:
         hidden_states, gathered = self._gather_tp_input(hidden_states)
         inputs = self._project_inputs(hidden_states)
         # The SP predecessor's relay can write into this rank's landing buffer before its own recurrence starts. The
-        # convolution's history-exchange entry barrier below keeps every rank from relaying until all have reserved it:
-        # keep an SP barrier between this reservation and the recurrence.
+        # convolution's history-exchange entry barrier (in _forward_projected) keeps every rank from relaying until all
+        # have reserved it: keep an SP barrier between this reservation and the recurrence.
         self.recurrence.reserve_affine_relay()
         if gathered:
             ttnn.deallocate(hidden_states)
