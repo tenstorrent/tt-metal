@@ -1,0 +1,1 @@
+{"stage": "planner", "verdict": "opened", "how": "Bash", "tool_calls": 45, "session_id": "df8fd92d-2a83-4649-9b26-1a9e616c10ea", "spec_path": "eval/specs/to_layout/spec.py", "subagents": {"total": 0, "opened": 0}, "reason": ""}
