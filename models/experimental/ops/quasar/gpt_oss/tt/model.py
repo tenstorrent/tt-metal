@@ -757,7 +757,8 @@ class Model:
             for local_idx, slot in enumerate(list(empty_slots)[:original_n]):
                 target_row = min(int(slot) // max_local_batch_size, num_rows - 1)
                 users_by_row[target_row].append(local_idx)
-            max_per_row = max((len(group) for group in users_by_row), default=1) or 1
+            real_users_per_row = [len(group) for group in users_by_row]
+            max_per_row = max(real_users_per_row, default=1) or 1
             fallback = users_by_row[0][0] if users_by_row[0] else 0
             for r in range(num_rows):
                 if not users_by_row[r]:
@@ -781,6 +782,13 @@ class Model:
             prefill_seq_lens = [prefill_seq_lens_list[i] for i in new_order]
             if page_table is not None:
                 page_table = page_table[new_order]
+                # Lanes allocate block IDs independently. A padding copy from another
+                # row can therefore overwrite a live request in this row. Keep its
+                # tokens for the fixed execution shape, but disable its cache writes.
+                for row, real_count in enumerate(real_users_per_row):
+                    start = row * _max_per_row_padded + real_count
+                    end = (row + 1) * _max_per_row_padded
+                    page_table[start:end] = -1
 
         batch_size = len(prompt_lens)
         actual_batch_size = batch_size
@@ -798,7 +806,8 @@ class Model:
             prompt_lens = list(prompt_lens) + [int(prompt_lens[0])] * pad_count
             prefill_seq_lens = list(prefill_seq_lens) + [prefill_seq_lens[0]] * pad_count
             if page_table is not None:
-                page_table = torch.cat([page_table, page_table[:1].expand(pad_count, -1)], dim=0)
+                padding_pages = torch.full_like(page_table[:1].expand(pad_count, -1), -1)
+                page_table = torch.cat([page_table, padding_pages], dim=0)
             batch_size += pad_count
         users_per_row = batch_size // num_rows
         num_iters = users_per_row // upr
@@ -806,6 +815,13 @@ class Model:
         max_padded_len = max(prefill_seq_lens)
         block_size = get_block_size(kv_cache)
         max_num_blocks = num_blocks_in_seq(max_padded_len, block_size)
+        if page_table is not None:
+            # Only a prompt's real blocks belong to this request. Reused vLLM
+            # table rows can retain old block IDs beyond that valid prefix.
+            page_table = page_table[:, :max_num_blocks].clone()
+            for uid, prompt_len in enumerate(prompt_lens):
+                valid_blocks = num_blocks_in_seq(int(prompt_len), block_size)
+                page_table[uid, valid_blocks:] = -1
         all_last_idxs = [int(prompt_lens[uid]) - 1 for uid in range(batch_size)]
         fixed_glt = (min(all_last_idxs) // 32) * 32
         if (max(all_last_idxs) // 32) * 32 != fixed_glt:
@@ -1227,13 +1243,9 @@ class Model:
                 torch_out = torch.cat([ttnn.to_torch(t) for t in row_tensors], dim=-1)
         else:
             torch_out = self.concat_device_output(tt_out)
-        torch_out = torch_out[:, 0, :, :]  # [1, 1, B, padded_vocab_size]
-        torch_out = torch_out.view(B, S, -1)
-        # Truncate to vocab_size — lm_head is padded to padded_vocab_size for
-        # on-device sampling (pow2 topk), but callers expect vocab_size width.
-        if torch_out.shape[-1] > self.vocab_size:
-            torch_out = torch_out[:, :, : self.vocab_size]
-        return torch_out
+        # Trim vocabulary padding after TP gather, preserving the returned rows.
+        # B is the serving limit; a bucketed decode can return fewer rows.
+        return torch_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
 
     def concat_device_output(self, tt_out):
         """Convert multi-device tensor to torch tensor"""
