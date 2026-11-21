@@ -1,0 +1,185 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+"""A numpy model of a checkpoint for the device-free planner tests.
+
+``FakeCheckpoint.save`` runs the save planner over global device-layout arrays and keeps the resulting files in
+memory; ``FakeCheckpoint.load`` runs the load planner for a destination world and executes its reads and fills with
+numpy. The oracle for every case is plain array slicing, written independently of the planner: through the transforms
+for a tensor's layout, and with ``np.split`` per mesh coordinate (``device_shards``) for what each device holds, both
+for the bytes a save writes and for what a load must give each device. The planner's own label mapping
+(``chunk_boxes``) is never used to cut either side, so a mapping that gave a device the wrong rows fails the round
+trips instead of agreeing with itself.
+"""
+
+from __future__ import annotations
+
+import zlib
+from itertools import product
+
+import numpy as np
+
+from ttml.distributed_checkpointing._boxes import Box
+from ttml.distributed_checkpointing._errors import TopologyError
+from ttml.distributed_checkpointing._index import FileRecord, Index, data_file_name
+from ttml.distributed_checkpointing._planner import TensorInfo, create_load_plan, create_save_plan
+from ttml.distributed_checkpointing._topology import Label, Placement, dist_coords, owner
+
+R = Placement.replicate
+S = Placement.shard
+
+
+def one_process_owner(key: str, group) -> object:
+    """The election of a single-process save: the chunk of the group's coordinates ``_topology.owner`` picks."""
+    coord = owner(key, [c.mesh_coord for c in group])
+    return next(c for c in group if c.mesh_coord == coord)
+
+
+def label_local_shape(label: Label, global_shape) -> tuple[int, ...]:
+    """The per-device shape ``label`` gives a global array of ``global_shape``."""
+    shape = []
+    for d, n in enumerate(global_shape):
+        count = label.shard_count(d)
+        if n % count:
+            raise TopologyError(f"dim {d} of extent {n} does not split evenly into {count} shards")
+        shape.append(n // count)
+    return tuple(shape)
+
+
+def world(placements, dist_shape, mesh_shape=None) -> Label:
+    """A label whose distribution coordinates are the row-major walk of ``mesh_shape`` (``dist_shape`` by default)."""
+    return Label(tuple(placements), tuple(dist_shape), tuple(dist_coords(mesh_shape or dist_shape)))
+
+
+def per_shard_fused(canonical: np.ndarray, sizes, shards: int, dim: int) -> np.ndarray:
+    """The device-layout array a model with ``shards`` TP shards holds for a weight fused from ``sizes`` segments:
+    shard ``j`` holds piece ``j`` of every segment, in segment order, the way ColumnParallelLinear lays it out. Built
+    by slicing, independently of ``fused_segments``."""
+    starts = np.cumsum((0,) + tuple(sizes[:-1]))
+    pieces = []
+    for j in range(shards):
+        for g, size in enumerate(sizes):
+            n = size // shards
+            lo = starts[g] + j * n
+            pieces.append(np.take(canonical, range(lo, lo + n), axis=dim))
+    return np.concatenate(pieces, axis=dim)
+
+
+def arange(shape) -> np.ndarray:
+    return np.arange(int(np.prod(shape)), dtype=np.float32).reshape(shape)
+
+
+def device_global(canonical: np.ndarray, transform, global_shape, pad_value: float = 0.0) -> np.ndarray:
+    """The device-layout global array holding ``canonical`` under ``transform``; padding rows get ``pad_value``."""
+    out = np.full(global_shape, pad_value, dtype=canonical.dtype)
+    for can, dev in transform.from_canonical(Box.whole(canonical.shape)):
+        out[dev.slices()] = canonical[can.slices()]
+    return out
+
+
+def canonical_of(device: np.ndarray, transform, canonical_shape) -> np.ndarray:
+    """The canonical array ``device`` holds under ``transform``; an element no piece writes stays NaN, so a transform
+    that misses one cannot pass a comparison."""
+    out = np.full(canonical_shape, np.nan, dtype=device.dtype)
+    for dev, can in transform.to_canonical(Box.whole(device.shape)):
+        out[can.slices()] = device[dev.slices()]
+    return out
+
+
+def tp_split_of(label: Label, rank: int) -> tuple[int, ...]:
+    """The TP split a save records for a rank-``rank`` tensor under ``label`` when none of its axes is FSDP's."""
+    return tuple(label.shard_count(d) for d in range(rank))
+
+
+def info(key, label, global_shape, transform, dtype="F32", role="param") -> TensorInfo:
+    local_shape = label_local_shape(label, global_shape)
+    return TensorInfo(
+        key, role, dtype, "TILE", label, local_shape, transform, (key,), tp_split=tp_split_of(label, len(global_shape))
+    )
+
+
+def _devices(label: Label):
+    """``(distribution coordinate, mesh coordinate)`` of every device of ``label``: the distribution shape walked in
+    row-major order, paired with the label's mesh coordinates in turn."""
+    return zip(product(*(range(n) for n in label.dist_shape)), label.mesh_coords)
+
+
+def device_shards(global_array: np.ndarray, label: Label) -> dict[tuple, np.ndarray]:
+    """What each device of ``label`` holds of ``global_array``, by mesh coordinate, cut with ``np.split`` as a mesh
+    mapper lays a tensor out: every axis that shards a dim splits it evenly, and axes sharding the same dim nest in
+    axis order, the first outermost."""
+    out = {}
+    for coord, mesh_coord in _devices(label):
+        piece = global_array
+        for axis, placement in enumerate(label.placements):
+            if placement.kind == "shard":
+                piece = np.split(piece, label.dist_shape[axis], axis=placement.dim)[coord[axis]]
+        out[mesh_coord] = piece
+    return out
+
+
+class FakeCheckpoint:
+    def __init__(self) -> None:
+        self.index: Index | None = None
+        self.files: dict[int, bytearray] = {}
+
+    def save(self, tensors: dict[str, tuple[np.ndarray, Label, object]]) -> Index:
+        """``tensors[key] = (device-layout global array, label, transform)``. Each chunk's bytes are what its device
+        holds (``device_shards``), as a real save writes each device's own tensor."""
+        infos = [info(key, label, arr.shape, transform) for key, (arr, label, transform) in tensors.items()]
+        plan = create_save_plan(infos, lambda coord: data_file_name(0, 0, coord), one_process_owner)
+        held = {key: device_shards(arr, label) for key, (arr, label, _) in tensors.items()}
+        self.files = {}
+        records = []
+        crcs = {}
+        for fplan in plan.files:
+            buf = bytearray(fplan.data_bytes)
+            for item in fplan.items:
+                chunk = np.ascontiguousarray(held[item.key][item.chunk.mesh_coord])
+                assert chunk.shape == item.chunk.box.sizes and chunk.nbytes == item.nbytes
+                buf[item.data_offset : item.data_offset + item.nbytes] = chunk.tobytes()
+                crcs[(item.key, fplan.index)] = zlib.crc32(chunk.tobytes())
+            self.files[fplan.index] = buf
+            records.append(FileRecord(fplan.path, len(fplan.header) + fplan.data_bytes, 0, 0, fplan.coord))
+        self.index = Index(checkpoint_id="fake", world={"group_size": 1}, files=records, entries=plan.entries(crcs))
+        return self.index
+
+    def load(self, dests: dict[str, tuple[Label, object, tuple]]):
+        """``dests[key] = (label, transform, global shape)``; returns the plan and ``{key: {group: shard array}}``."""
+        infos = [info(key, label, global_shape, transform) for key, (label, transform, global_shape) in dests.items()]
+        plan = create_load_plan(self.index, infos)
+        shards: dict[str, dict[tuple, np.ndarray]] = {}
+        for key, kplan in plan.keys.items():
+            out = {group: np.full(box.sizes, np.nan, dtype=np.float32) for group, box in kplan.boxes.items()}
+            for read in kplan.reads:
+                record = kplan.entry.chunks[read.chunk]
+                raw = self.files[record.file][record.data_offset : record.data_offset + record.nbytes]
+                chunk = np.frombuffer(bytes(raw), dtype=np.float32).reshape(record.box.sizes)
+                out[read.group][read.dst.slices()] = chunk[read.src.slices()]
+            for fill in kplan.fills:
+                out[fill.group][fill.dst.slices()] = 0.0
+            for group, arr in out.items():
+                assert not np.isnan(arr).any(), f"{key}: shard {group} not fully written"
+            shards[key] = out
+        return plan, shards
+
+
+def expected_shards(expected_global: np.ndarray, label: Label) -> dict[tuple, np.ndarray]:
+    """What every replica group of ``label`` should hold of ``expected_global``: ``device_shards``, keyed the way the
+    planner keys a group (a device's distribution coordinates along the sharding axes). Replicas must agree."""
+    held = device_shards(expected_global, label)
+    out: dict[tuple, np.ndarray] = {}
+    for coord, mesh_coord in _devices(label):
+        group = tuple(coord[a] for a, p in enumerate(label.placements) if p.kind == "shard")
+        if group in out:
+            np.testing.assert_array_equal(out[group], held[mesh_coord], err_msg=f"replicas of group {group}")
+        else:
+            out[group] = held[mesh_coord]
+    return out
+
+
+def assert_shards_equal(actual: dict[tuple, np.ndarray], expected: dict[tuple, np.ndarray]) -> None:
+    assert actual.keys() == expected.keys(), (sorted(actual), sorted(expected))
+    for group in expected:
+        np.testing.assert_array_equal(actual[group], expected[group], err_msg=f"group {group}")
