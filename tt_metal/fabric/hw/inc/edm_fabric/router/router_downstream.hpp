@@ -238,7 +238,8 @@ struct StatelessForwards {
         uint32_t src_addr,
         uint32_t size_bytes,
         uint8_t trid,
-        ForwardBuffersReady /*ready: the API waits*/) {
+        ForwardBuffersReady /*ready: the API waits*/,
+        bool /*node_set*/) {
         forward_stateless<Traits::noc, Traits::data_cmd_buf>(link, dst, src_addr, size_bytes, trid);
     }
 };
@@ -278,7 +279,8 @@ struct FullPresetForwards {
         uint32_t src_addr,
         uint32_t size_bytes,
         uint8_t trid,
-        ForwardBuffersReady ready) {
+        ForwardBuffersReady ready,
+        bool /*node_set: the preset holds the one node*/) {
         // The buffers' ready states come read as a pair (ForwardBuffersReady); a buffer not seen ready is waited for
         // just before its command. The credit command follows the data command with nothing between them (the
         // downstream sees the packet when the credit lands); both are counted after (count_preset_forward_writes).
@@ -371,35 +373,54 @@ struct PartialPresetForwards {
         uint32_t src_addr,
         uint32_t size_bytes,
         uint8_t trid,
-        ForwardBuffersReady ready) {
-        // Read once: the register writes below store through uint32_t pointers, which may alias the field.
-        const uint32_t node = link.noc_coord;
+        ForwardBuffersReady ready,
+        bool node_set) {
         if (__builtin_expect(!(ready.data & ready.credit), 0)) {
             while (!noc_cmd_buf_ready(Traits::noc, Traits::data_cmd_buf));
             while (!noc_cmd_buf_ready(Traits::noc, Traits::sync_cmd_buf));
         }
-        ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, trid);
-        noc_wwrite_with_state<
-            DM_DEDICATED_NOC,
-            Traits::data_cmd_buf,
-            CQ_NOC_SNDL,
-            CQ_NOC_SEND,
-            CQ_NOC_wait,
-            /*update_counter=*/false,
-            /*posted=*/true,
-            /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
         if constexpr (credit_register_fixed) {
-            // The credit register's address is preset (credit_register_fixed): only the node.
+            // Only the node varies between forwards. `node_set`: the buffers already hold this downstream's node (the
+            // last forward on them went there, Downstreams::node_entry), so the two node registers are not written
+            // (nor the link read). The buffers are ready here: their registers may be written.
+            if (__builtin_expect(!node_set, 0)) {
+                const uint32_t node = link.noc_coord;
+                NOC_CMD_BUF_WRITE_REG(Traits::noc, Traits::data_cmd_buf, NOC_RET_ADDR_COORDINATE, node);
+                NOC_CMD_BUF_WRITE_REG(Traits::noc, Traits::sync_cmd_buf, NOC_TARG_ADDR_COORDINATE, node);
+            }
+            ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, trid);
+            noc_wwrite_with_state<
+                DM_DEDICATED_NOC,
+                Traits::data_cmd_buf,
+                CQ_NOC_SnDL,
+                CQ_NOC_SEND,
+                CQ_NOC_wait,
+                /*update_counter=*/false,
+                /*posted=*/true,
+                /*update_addr_mid=*/false>(Traits::noc, src_addr, 0, dst, size_bytes);
+            // The credit register's address is preset (credit_register_fixed) and its node set above: just go.
             noc_fast_write_dw_inline_with_state<
                 DM_DEDICATED_NOC,
                 /*update_addr_lo=*/false,
-                /*update_addr_hi=*/true,
+                /*update_addr_hi=*/false,
                 /*update_val=*/false,
                 /*posted=*/true,
                 /*update_counter=*/false,
                 InlineWriteDst::REG,
-                /*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::sync_cmd_buf, 0, node);
+                /*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::sync_cmd_buf, 0, 0);
         } else {
+            // Read once: the register writes below store through uint32_t pointers, which may alias the field.
+            const uint32_t node = link.noc_coord;
+            ncrisc_noc_set_transaction_id</*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::data_cmd_buf, trid);
+            noc_wwrite_with_state<
+                DM_DEDICATED_NOC,
+                Traits::data_cmd_buf,
+                CQ_NOC_SNDL,
+                CQ_NOC_SEND,
+                CQ_NOC_wait,
+                /*update_counter=*/false,
+                /*posted=*/true,
+                /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
             noc_fast_write_dw_inline_with_state<
                 DM_DEDICATED_NOC,
                 /*update_addr_lo=*/true,
@@ -483,6 +504,19 @@ struct Downstreams {
     std::array<DownstreamSenderChannelProgress, Traits::count> progress;  // by entry
     std::array<DownstreamLink, Traits::count> links;                      // by entry, set at init
 
+    // Partially preset forwards whose only varying field is the node (credit_register_fixed), on buffers only this VC
+    // uses: the entry whose node the buffers hold, so a forward to the same downstream as the last one leaves the node
+    // registers alone. None at first (the preset holds a placeholder).
+    static constexpr uint32_t no_entry = 0xFFFFFFFFu;
+    static constexpr bool tracks_node = [] {
+        if constexpr (std::is_same_v<ForwardCommands<VC>, PartialPresetForwards<VC>>) {
+            return PartialPresetForwards<VC>::credit_register_fixed;
+        } else {
+            return false;
+        }
+    }();
+    uint32_t node_entry = no_entry;
+
     // Every downstream in `forward_to` (live names, one bit each) has a free slot. The known counts are tested first;
     // only when one the packet needs is used up are the live local credit registers re-read, as one group (measured
     // without it: a VC1 router's 2-hop row about 4 cycles per packet slower, single-ERISC forwarding up to 2.6 faster).
@@ -508,7 +542,12 @@ struct Downstreams {
         const uint32_t dst = downstream.next_slot_addr;
         const uint32_t free_slots = downstream.free_slots;
         const uint32_t first_slot_addr = links[entry].first_slot_addr;
-        ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid, ready);
+        bool node_set = false;
+        if constexpr (tracks_node) {
+            node_set = node_entry == entry;
+            node_entry = entry;
+        }
+        ForwardCommands<VC>::template forward<entry>(links[entry], dst, src_addr, size_bytes, trid, ready, node_set);
         downstream.next_slot_addr = slot_after(dst, first_slot_addr, Traits::last_slot_offset);
         downstream.free_slots = free_slots - 1;
         increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
@@ -520,10 +559,14 @@ struct Downstreams {
     FORCE_INLINE bool admit_and_forward(
         uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
         if constexpr (popcount(live) > 1) {
-            if (__builtin_expect((forward_to & (forward_to - 1)) == 0, 1)) {
-                return forward_single<live>(forward_to, src_addr, size_bytes, trid, ready);
-            }
+            return forward_unicast_or_all<live>(forward_to, src_addr, size_bytes, trid, ready);
         }
+        return admit_and_forward_all(forward_to, src_addr, size_bytes, trid, ready);
+    }
+
+    // The grouped admit, then every downstream in `forward_to`.
+    FORCE_INLINE bool admit_and_forward_all(
+        uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
         if (!admit(forward_to)) {
             return false;
         }
@@ -552,21 +595,27 @@ private:
         return progress[entry].free_slots != 0;
     }
 
-    // `forward_to` is one live name in NAMES: admit and forward to it (the last candidate needs no test).
+    // A unicast forward (`forward_to` is exactly one name in NAMES) is matched by one compare per candidate and takes
+    // that downstream's own admit and commands; anything else (several names) falls through to the grouped admit. No
+    // separate single-bit test: a packet for one downstream costs one compare and branch per candidate tried.
     template <uint32_t NAMES>
-    FORCE_INLINE bool forward_single(
+    FORCE_INLINE bool forward_unicast_or_all(
         uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
-        constexpr size_t name = lowest_bit(NAMES);
-        if constexpr (without_lowest_bit(NAMES) != 0) {
-            if (forward_to != (1u << name)) {
-                return forward_single<without_lowest_bit(NAMES)>(forward_to, src_addr, size_bytes, trid, ready);
+        if constexpr (NAMES == 0) {
+            return admit_and_forward_all(forward_to, src_addr, size_bytes, trid, ready);
+        } else {
+            // Highest name first: the order sets which direction runs straight through (the first) and which branch
+            // out of line; on N/S-facing routers with E and W downstreams that puts W first.
+            constexpr size_t name = 31 - __builtin_clz(NAMES);
+            if (__builtin_expect(forward_to == (1u << name), 1)) {
+                if (!admit_one<name>()) {
+                    return false;
+                }
+                forward<name>(src_addr, size_bytes, trid, ready);
+                return true;
             }
+            return forward_unicast_or_all<(NAMES & ~(1u << name))>(forward_to, src_addr, size_bytes, trid, ready);
         }
-        if (!admit_one<name>()) {
-            return false;
-        }
-        forward<name>(src_addr, size_bytes, trid, ready);
-        return true;
     }
 
     // Whether a downstream in NAMES that `forward_to` needs has no known free slot. Bitwise & and | on the tests: no
