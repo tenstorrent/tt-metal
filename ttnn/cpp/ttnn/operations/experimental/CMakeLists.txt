@@ -44,6 +44,9 @@ add_subdirectory(paged_cache)
 # Gemma4 model owners
 add_subdirectory(gemma4)
 
+# Llama-3.1-8B speculative decode model owners
+add_subdirectory(llama31_8b_spec)
+
 # metalium-developers-external-experience
 add_subdirectory(isin)
 
@@ -111,6 +114,7 @@ target_link_libraries(
         TTNN::Ops::Experimental::SparseKvPush
         TTNN::Ops::Experimental::TopkLargeIndices
         TTNN::Ops::Experimental::Gemma4
+        TTNN::Ops::Experimental::Llama31_8BSpec
         TTNN::Ops::Experimental::IndexedPageCache
         TTNN::Ops::Experimental::PagedCache
         TTNN::Ops::Experimental::IsIn
@@ -173,6 +177,7 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::SparseKvPush>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Gemma4>
+        $<TARGET_OBJECTS:TTNN::Ops::Experimental::Llama31_8BSpec>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::PagedCache>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IsIn>
