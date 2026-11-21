@@ -410,6 +410,42 @@ inline void block_max_pool_batched(uint32_t unit_strip) {
     acc.pop_front(unit_strip);
 }
 
+#ifdef INDEXER_BLOCK_MAX
+/** The block maxima of a masked unit, before it is untilized: each q-row's KC k-tiles are row-max reduced, k-tile c's
+ *  32 row maxima landing in column 0 of tile c of that row's push to block_max_cb. acc stays at the front for the
+ *  untilize. */
+template <uint32_t acc_cb, uint32_t scaler_cb>
+inline void unit_block_maxima() {
+    constexpr uint32_t out_cb = get_named_compile_time_arg_val("block_max_cb");
+    // Half-sync bf16 DEST (validated on the host).
+    constexpr uint32_t dest_tiles = 8;
+    CircularBuffer acc(acc_cb);
+    CircularBuffer out(out_cb);
+    acc.wait_front(q_tiles_per_unit * k_tiles_per_unit);
+    reconfig_data_format(acc_cb, scaler_cb);
+    pack_reconfig_data_format(out_cb);
+    reduce_block_max_row_init<1>(acc_cb, scaler_cb, out_cb);
+    for (uint32_t r = 0; r < q_tiles_per_unit; ++r) {
+        out.reserve_back(k_tiles_per_unit);
+        for (uint32_t c0 = 0; c0 < k_tiles_per_unit; c0 += dest_tiles) {
+            const uint32_t n = k_tiles_per_unit - c0 < dest_tiles ? k_tiles_per_unit - c0 : dest_tiles;
+            tile_regs_acquire();
+            for (uint32_t c = 0; c < n; ++c) {
+                reduce_block_max_row<1>(acc_cb, scaler_cb, r * k_tiles_per_unit + c0 + c, c);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t c = 0; c < n; ++c) {
+                pack_tile<true>(c, out_cb, c0 + c);
+            }
+            tile_regs_release();
+        }
+        out.push_back(k_tiles_per_unit);
+    }
+    reduce_block_max_row_uninit(acc_cb);
+}
+#endif
+
 /** Stamp the causal -inf mask onto row r's masked suffix [valid, KC) in place (empty when fully valid).
  *  straddle_* shift the diagonal on the mid-slab boundary chip (0 elsewhere); see causal_diag_tile. */
 inline void stamp_masked_suffix(
@@ -523,7 +559,7 @@ void kernel_main() {
     matmul_block_init(
         cb_q, cb_k, 1 /*transpose k*/, 1 /*ct_dim*/, heads_per_dest_pass /*rt_dim*/, head_dim_tiles /*kt_dim*/);
     CircularBuffer(cb_mask).wait_front(num_mask_tiles);  // never popped
-    if constexpr (block_pool) {
+    if constexpr (block_pool || block_max_out) {
         CircularBuffer(cb_scaler).wait_front(1);  // 1.0 reduce-MAX scaler, reused, never popped
     }
 
@@ -716,6 +752,9 @@ void kernel_main() {
                                 /*batches = q-rows */ q_tiles_per_unit));
                     }
                 } else {
+#ifdef INDEXER_BLOCK_MAX
+                    unit_block_maxima<cb_acc_strip, cb_scaler>();
+#endif
                     compute_kernel_lib::untilize<k_tiles_per_unit, cb_acc_strip, cb_out_strip>(q_tiles_per_unit);
                 }
             }

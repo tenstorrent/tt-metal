@@ -311,6 +311,22 @@ ProgramDescriptor build_ring_program_descriptor(
             make_meta_cb(cb_meta_slot);
         }
     }
+    // Block maxima output: the reader's 1.0 reduce scaler, the writer's row-assembly scratch, and the pooled tiles of
+    // one q-row of a unit (KC tiles, each holding one k-tile's 32 row maxima in column 0).
+    const bool has_block_max = tensors.has_block_max_output();
+    uint32_t cb_block_max = 0;
+    if (has_block_max) {
+        make_cb(cb_scaler_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+        make_cb(cb_pool_scratch_arg, 1, tt::DataFormat::Float16_b, bf16_tile);
+        cb_block_max = next_cb_index++;
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = KC * bf16_tile,
+            .core_ranges = core_ranges,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(cb_block_max),
+                .data_format = tt::DataFormat::Float16_b,
+                .page_size = bf16_tile}}}});
+    }
 
     // Fused-op signal semaphores + consumer signaler (inlined init_fused_op against desc; MULTI). ring_size / rw
     // are computed above (hoisted for the readiness-balanced band assignment).
@@ -452,6 +468,10 @@ ProgramDescriptor build_ring_program_descriptor(
     // Metadata flag and reader-to-writer mailbox.
     writer_ct.push_back(has_meta ? 1u : 0u);
     writer_ct.push_back(has_meta ? cb_meta_writer : 0u);
+    const uint32_t block_max_args_offset = writer_ct.size();
+    if (has_block_max) {
+        tt::tt_metal::TensorAccessorArgs(*tensors.block_max_output->buffer()).append_to(writer_ct);
+    }
 
     std::vector<uint32_t> compute_ct = common_ct;
     compute_ct.push_back(qk_subblock_h);
@@ -505,6 +525,14 @@ ProgramDescriptor build_ring_program_descriptor(
     reader_kernel.named_compile_time_args = schedule_args;
     writer_kernel.named_compile_time_args = schedule_args;
     compute_kernel.named_compile_time_args = schedule_args;
+    if (has_block_max) {
+        for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
+            kernel->defines.emplace_back("INDEXER_BLOCK_MAX", "1");
+        }
+        compute_kernel.named_compile_time_args.emplace_back("block_max_cb", cb_block_max);
+        writer_kernel.named_compile_time_args.emplace_back("block_max_cb", cb_block_max);
+        writer_kernel.named_compile_time_args.emplace_back("block_max_args_offset", block_max_args_offset);
+    }
 
     // Append uniform scalar fields to a kernel's common argument list, preserving order.
     const auto append_scalars = [](KernelDescriptor::RTArgList& rt, const auto& range) {
@@ -591,6 +619,11 @@ ProgramDescriptor build_ring_program_descriptor(
     writer_common.push_back(out.buffer());
     append_scalars(writer_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});
     writer_common.append(shard_order);
+    if (has_block_max) {
+        // After the shard order (one word per physical SP shard), where the kernel reads it.
+        TT_FATAL(shard_order.size() == ring_size, "indexer_score fused: shard order has {} entries", shard_order.size());
+        writer_common.push_back(tensors.block_max_output->buffer());
+    }
     writer_kernel.emplace_common_runtime_args(writer_common);
     KernelDescriptor::RTArgList compute_common;
     append_scalars(compute_common, std::array{kv_len_tiles, chunk_t, geom.straddle_q_tile, geom.straddle_jump_tiles});

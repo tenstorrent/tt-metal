@@ -711,7 +711,7 @@ void kernel_main() {
     // argument reads behind if constexpr, so the regular binary never touches the fused-only tail.
     const auto run = [&](const FusedRingGate* gate) {
         build_mask_tiles(noc);
-        if constexpr (block_pool) {
+        if constexpr (block_pool || block_max_out) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 cb_scaler,
                 ckernel::PoolType::MAX,

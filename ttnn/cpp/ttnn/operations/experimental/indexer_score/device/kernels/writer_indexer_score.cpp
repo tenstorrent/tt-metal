@@ -239,6 +239,61 @@ inline void write_pooled_strip(
     cb.pop_front(blocks_per_unit);
 }
 
+#ifdef INDEXER_BLOCK_MAX
+// ---- block maxima output (INDEXER_BLOCK_MAX) --------------------------------------------------------------------
+// Compute pushes each q-row's KC pooled tiles, k-tile c's 32 row maxima in column 0 of tile c (row R at
+// (R/16)*POOL_FACE_ROW_STRIDE + (R%16)*FACE_WIDTH). Maxima page = one score row, ceil(T/32) bf16 entries, so k-tile
+// t's maximum is entry t. A NoC write keeps each byte at its offset within the 16-byte write-alignment word: each
+// row's run is staged at its destination's offset in that word, in a scratch row of block_max_row_bytes.
+constexpr uint32_t block_max_row_bytes =
+    (k_tiles_per_unit * sizeof(uint16_t) + NOC_DRAM_WRITE_ALIGNMENT_BYTES - 2 + NOC_DRAM_WRITE_ALIGNMENT_BYTES - 1) /
+    NOC_DRAM_WRITE_ALIGNMENT_BYTES * NOC_DRAM_WRITE_ALIGNMENT_BYTES;
+static_assert(
+    tt::constants::TILE_HEIGHT * block_max_row_bytes <= POOL_TILE_HW * sizeof(uint16_t),
+    "indexer_score: block maxima scratch rows exceed the one-tile scratch CB");
+
+/** Write one q-row's block maxima: `num_runs` runs of consecutive k-tiles, run i the strip's tiles from run_col[i]
+ *  whose maxima go to entries from run_logical[i], run_width[i] of them. */
+template <typename MaxAcc>
+inline void write_block_maxima(
+    Noc noc,
+    const MaxAcc& max_acc,
+    uint32_t page_row_start,
+    const uint32_t* run_col,
+    const uint32_t* run_logical,
+    const uint32_t* run_width,
+    uint32_t num_runs) {
+    CircularBuffer cb(get_named_compile_time_arg_val("block_max_cb"));
+    cb.wait_front(k_tiles_per_unit);
+    const auto* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(cb.get_read_ptr());
+    const uint32_t scratch_addr = CircularBuffer(cb_pool_scratch).get_write_ptr();
+    for (uint32_t run = 0; run < num_runs; ++run) {
+        const uint32_t offset_bytes = run_logical[run] * sizeof(uint16_t);
+        const uint32_t lead = offset_bytes % NOC_DRAM_WRITE_ALIGNMENT_BYTES;
+        invalidate_l1_cache();
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            auto* row = reinterpret_cast<uint16_t*>(scratch_addr + rr * block_max_row_bytes + lead);
+            const uint32_t datum = (rr / tt::constants::FACE_HEIGHT) * POOL_FACE_ROW_STRIDE +
+                                   (rr % tt::constants::FACE_HEIGHT) * tt::constants::FACE_WIDTH;
+            for (uint32_t i = 0; i < run_width[run]; ++i) {
+                row[i] = src[(run_col[run] + i) * POOL_TILE_HW + datum];
+            }
+        }
+        for (uint32_t rr = 0; rr < tt::constants::TILE_HEIGHT; ++rr) {
+            noc.async_write<out_opts>(
+                CoreLocalMem<uint32_t>(scratch_addr + rr * block_max_row_bytes + lead),
+                max_acc,
+                run_width[run] * sizeof(uint16_t),
+                {},
+                {.page_id = page_row_start + rr, .offset_bytes = offset_bytes});
+        }
+        // Sent before the scratch is restaged or the CB pages are released.
+        noc.async_writes_flushed<out_opts>();
+    }
+    cb.pop_front(k_tiles_per_unit);
+}
+#endif
+
 void kernel_main() {
     fence_bytes = 0;
     constexpr uint32_t schedule_blocks = get_named_compile_time_arg_val("schedule_blocks");
@@ -296,6 +351,13 @@ void kernel_main() {
 
     constexpr auto out_args = TensorAccessorArgs<num_common_ct_args + 6>();
     const auto out_acc = TensorAccessor(out_args, out_addr, page_bytes);
+#ifdef INDEXER_BLOCK_MAX
+    constexpr auto max_args = TensorAccessorArgs<get_named_compile_time_arg_val("block_max_args_offset")>();
+    const auto max_acc = TensorAccessor(
+        max_args,
+        get_common_arg_val<uint32_t>(indexer_common::writer::Count + shard_physical_sp),
+        k_len_tiles * sizeof(uint16_t));
+#endif
 
     Noc noc;
 
@@ -338,6 +400,52 @@ void kernel_main() {
             // block-pool: this band's slice starts at block-column k_tile0/block_tiles, width valid_blocks.
             const uint32_t col_off_blocks = block_pool ? (k_tile0 / block_tiles) : 0;
             const uint32_t valid_blocks = block_pool ? (valid_w / block_tiles) : 0;  // == blocks_per_unit (no partial)
+#ifdef INDEXER_BLOCK_MAX
+            {
+                // The unit's runs of consecutive logical k-tiles (one plane: num_out_groups == 1).
+                uint32_t run_col[k_tiles_per_unit];
+                uint32_t run_logical[k_tiles_per_unit];
+                uint32_t run_width[k_tiles_per_unit];
+                uint32_t num_runs = 0;
+                if constexpr (fused_ring_enabled && shard_block_cyclic) {
+                    for (uint32_t col = 0; col < valid_w;) {
+                        const uint32_t logical = shard_span.logical_tile(col);
+                        if (logical >= shard_span.valid_k_len_tiles) {
+                            ++col;
+                            continue;
+                        }
+                        uint32_t width = 1;
+                        while (col + width < valid_w) {
+                            const uint32_t next = shard_span.logical_tile(col + width);
+                            if (next >= shard_span.valid_k_len_tiles || next != logical + width) {
+                                break;
+                            }
+                            ++width;
+                        }
+                        run_col[num_runs] = col;
+                        run_logical[num_runs] = logical;
+                        run_width[num_runs] = width;
+                        ++num_runs;
+                        col += width;
+                    }
+                } else {
+                    run_col[0] = 0;
+                    run_logical[0] = k_tile0;
+                    run_width[0] = valid_w;
+                    num_runs = 1;
+                }
+                for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {
+                    write_block_maxima(
+                        noc,
+                        max_acc,
+                        (group * q_tiles_per_unit + q_row) * tt::constants::TILE_HEIGHT,
+                        run_col,
+                        run_logical,
+                        run_width,
+                        num_runs);
+                }
+            }
+#endif
             for (uint32_t g = 0; g < num_out_groups; ++g) {
                 const uint32_t plane_row0 = g * sq_rows;
                 for (uint32_t q_row = 0; q_row < q_tiles_per_unit; ++q_row) {

@@ -167,6 +167,11 @@ struct tensor_args_t {
     // mirroring TtIndexer's own host formula. Mutually exclusive with the scalar cache_batch_idx.
     std::optional<Tensor> cache_batch_idx_tensor{std::nullopt};
     bool has_cache_slot_metadata() const { return cache_batch_idx_tensor.has_value(); }
+    // Fused ring only: [B, 1, Sq, T/32] bf16 row-major DRAM tensor that also receives the maximum of each 32-key
+    // block of every score row (the block maxima topk_large_indices' two-level selection takes as
+    // block_max_tensor). Entries past ceil(kv_len/32) are not written.
+    std::optional<Tensor> block_max_output{std::nullopt};
+    bool has_block_max_output() const { return block_max_output.has_value(); }
 };
 
 using tensor_return_value_t = Tensor;

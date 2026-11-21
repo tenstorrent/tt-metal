@@ -35,6 +35,13 @@ constexpr uint32_t reduce_heads = num_heads / num_out_groups;
 // Block-max-pool: each block_tiles consecutive k-tiles max-reduce to ONE block score, so a unit emits
 // blocks_per_unit tiles (col-0 = per-query block max) instead of the full KC strip.
 constexpr bool block_pool = block_tiles != 0;
+// The fused ring factory's block maxima output (INDEXER_BLOCK_MAX): each k-tile of the unpooled score rows is also
+// row-max reduced, one maximum per 32-key block.
+#ifdef INDEXER_BLOCK_MAX
+constexpr bool block_max_out = true;
+#else
+constexpr bool block_max_out = false;
+#endif
 constexpr uint32_t blocks_per_unit = block_pool ? (k_tiles_per_unit / block_tiles) : k_tiles_per_unit;
 
 // CB indices, forwarded from the factory in CbArg order after the dim args.

@@ -336,9 +336,47 @@ void validate_valid_end_metadata(const operation_attributes_t& attrs, const tens
     validate_scalar_metadata_tensor(*t.valid_end_tensor, t.q, "valid_end_tensor");
 }
 
+// The block maxima output: one bf16 maximum per 32-key block of each score row, row-major in DRAM, one page per row.
+void validate_block_max_output(const operation_attributes_t& attrs, const tensor_args_t& t) {
+    if (!t.has_block_max_output()) {
+        return;
+    }
+    const auto& m = *t.block_max_output;
+    TT_FATAL(
+        attrs.has_fused_ring(), "indexer_score: block_max_output is supported only on ring_indexer_score_dsa");
+    TT_FATAL(
+        attrs.num_groups == 1 && attrs.block_size == 0,
+        "indexer_score: block_max_output needs one unpooled score plane");
+    TT_FATAL(
+        m.storage_type() == StorageType::DEVICE && m.is_allocated() && m.device() == t.q.device(),
+        "indexer_score: block_max_output must be allocated on q's mesh device");
+    TT_FATAL(m.dtype() == DataType::BFLOAT16, "indexer_score: block_max_output must be BFLOAT16 (got {})", m.dtype());
+    TT_FATAL(m.layout() == Layout::ROW_MAJOR, "indexer_score: block_max_output must be ROW_MAJOR");
+    TT_FATAL(
+        m.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
+            m.memory_config().buffer_type() == BufferType::DRAM,
+        "indexer_score: block_max_output must be interleaved in DRAM");
+    const auto& q_shape = t.q.logical_shape();
+    const uint32_t T = t.k.logical_shape()[2];
+    const ttnn::Shape expected({q_shape[0], 1, q_shape[2], T / tt::constants::TILE_WIDTH});
+    TT_FATAL(
+        m.logical_shape() == expected,
+        "indexer_score: block_max_output has shape {}, expected {}",
+        m.logical_shape(),
+        expected);
+    // A block past the valid length holds keys scored against stale cache rows; its maximum would be wrong.
+    const uint32_t kv_len = attrs.kv_len.value_or(T);
+    TT_FATAL(
+        t.has_chunk_start_metadata() || kv_len % tt::constants::TILE_WIDTH == 0,
+        "indexer_score: block_max_output needs kv_len ({}) to be a multiple of {}",
+        kv_len,
+        tt::constants::TILE_WIDTH);
+}
+
 void validate_metadata_mode(const operation_attributes_t& attrs, const tensor_args_t& t) {
     validate_chunk_start_metadata(attrs, t);
     validate_valid_end_metadata(attrs, t);
+    validate_block_max_output(attrs, t);
 }
 
 // Structural checks for the trace-safe cache-slot tensor. Mirrors validate_chunk_start_metadata: the
@@ -447,6 +485,8 @@ ttsl::hash::hash_t IndexerScoreDeviceOperation::compute_program_hash(
         // ring_indexer_score_dsa_program_factory.cpp), since a cached program otherwise keeps the value
         // written at the cache-miss layer.
         tensor_args.has_cache_slot_metadata(),
+        // The block maxima output adds compute, CBs and writer accessor arguments.
+        tensor_args.has_block_max_output(),
         // The block-cyclic layout bakes invP divisors into the reader as compile-time arguments, so sp/chunk_local
         // must be hashed (a contiguous vs block-cyclic read, or a different layout shape, is a different binary).
         attrs.has_block_cyclic(),
@@ -930,7 +970,8 @@ ttnn::Tensor launch_indexer_score(
     // layer terms below (see tensor_args_t::cache_batch_idx_tensor). nullopt = the scalar path.
     std::optional<ttnn::Tensor> cache_batch_idx_tensor = std::nullopt,
     uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0) {
+    uint32_t index_cache_layer_idx = 0,
+    std::optional<ttnn::Tensor> block_max_output = std::nullopt) {
     // Decompose the seq-shard axes into the SP/TP roles the validation + causal geometry below reason about.
     const auto [cluster_axis, seq_subshard_axis] = split_seq_shard_axes(seq_shard_axes, allow_subshard);
     using OperationType = ttnn::operations::experimental::indexer_score::IndexerScoreDeviceOperation;
@@ -1159,6 +1200,7 @@ ttnn::Tensor launch_indexer_score(
     tensor_args.chunk_start_idx_tensor = std::move(chunk_start_idx_tensor);
     tensor_args.valid_end_tensor = std::move(valid_end_tensor);
     tensor_args.cache_batch_idx_tensor = std::move(cache_batch_idx_tensor);
+    tensor_args.block_max_output = std::move(block_max_output);
     operation_attributes.index_cache_num_layers = index_cache_num_layers;
     operation_attributes.index_cache_layer_idx = index_cache_layer_idx;
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
@@ -1272,7 +1314,8 @@ ttnn::Tensor ring_indexer_score_dsa(
     const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
     uint32_t index_cache_num_layers,
     uint32_t index_cache_layer_idx,
-    uint32_t full_mesh_outer_axis) {
+    uint32_t full_mesh_outer_axis,
+    const std::optional<ttnn::Tensor>& block_max_output) {
     // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
     // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
     ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
@@ -1384,7 +1427,8 @@ ttnn::Tensor ring_indexer_score_dsa(
         valid_end_tensor,
         cache_batch_idx_tensor,
         index_cache_num_layers,
-        index_cache_layer_idx);
+        index_cache_layer_idx,
+        block_max_output);
 }
 
 }  // namespace ttnn::experimental

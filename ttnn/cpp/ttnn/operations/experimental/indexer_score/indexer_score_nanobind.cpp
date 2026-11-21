@@ -290,6 +290,10 @@ void bind_indexer_score(nb::module_& mod) {
             full_mesh_outer_axis: optional int (default 0). ``cluster_axis=None`` only: the mesh axis that is
                 outermost in the K-ownership and causal rank order, ``0`` row-major, ``1`` column-major. Pass
                 the SP axis when Q, K and the cache are SP-major (e.g. a TP-deduplicated cache, SP on axis 1).
+            block_max_output: optional [B, 1, Sq, T/32] BFLOAT16 row-major DRAM tensor that also receives the
+                maximum of each 32-key block of every score row, the block maxima ``topk_large_indices`` takes
+                as ``block_max_tensor``. Entries past ceil(kv_len/32) are not written. Needs kv_len a multiple
+                of 32.
 
         Returns: score [B, 1, Sq, T] bf16 row-major; future/pad columns -inf.
         )doc",
@@ -319,7 +323,8 @@ void bind_indexer_score(nb::module_& mod) {
         nb::arg("cache_batch_idx_tensor") = nb::none(),
         nb::arg("index_cache_num_layers") = 1,
         nb::arg("index_cache_layer_idx") = 0,
-        nb::arg("full_mesh_outer_axis") = 0);
+        nb::arg("full_mesh_outer_axis") = 0,
+        nb::arg("block_max_output") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::indexer_score::detail

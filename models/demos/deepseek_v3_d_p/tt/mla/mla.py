@@ -2167,8 +2167,12 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
-            injected=indexer_indices is not None,
+            injected=indexer_indices is not None or os.environ.get("SPARSE_MLA_FULL_PUSH") == "1",
         )
+        if not getattr(self, "_probe_logged", False):
+            self._probe_logged = True
+            print(f"MLA_PROBE layer={self.layer_idx} overlap={self._sparse_mla_overlap is not None} push={self._push is not None} "
+                  f"injected={attention_kwargs['injected']}", flush=True)
         if selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
                 selection_state=selection_state,

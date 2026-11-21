@@ -184,6 +184,9 @@ ttnn::Tensor ring_indexer_score_dsa(
     uint32_t index_cache_layer_idx = 0,
     // cluster_axis=None only: the mesh axis outermost in the K-ownership / causal rank order. 0 = row-major,
     // 1 = column-major. Pass the SP axis when Q, K and the cache are SP-major.
-    uint32_t full_mesh_outer_axis = 0);
+    uint32_t full_mesh_outer_axis = 0,
+    // Optional [B, 1, Sq, T/32] bf16 row-major DRAM tensor that also receives each score row's 32-key block maxima
+    // (for topk_large_indices' block_max_tensor). Needs kv_len a multiple of 32.
+    const std::optional<ttnn::Tensor>& block_max_output = std::nullopt);
 
 }  // namespace ttnn::experimental

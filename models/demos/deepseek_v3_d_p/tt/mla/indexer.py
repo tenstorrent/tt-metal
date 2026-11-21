@@ -53,6 +53,7 @@ class IndexerSelectionState:
     valid_length_tensor: ttnn.Tensor | None = None
     valid_length_offset: int = 0
     valid_end_tensor: ttnn.Tensor | None = None
+    block_max: ttnn.Tensor | None = None
 
 
 def _fused_ring_host_timing_enabled() -> bool:
@@ -993,6 +994,15 @@ class TtIndexerBase:
         # the host scalars a captured program would freeze at their capture-time values.
         traced = metadata is not None
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
+        block_max = None
+        if os.environ.get("SPARSE_MLA_INDEXER_BLOCK_MAX") == "1":
+            block_max = ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, q_dev.shape[2], k_full.shape[2] // 32]),
+                ttnn.bfloat16,
+                ttnn.ROW_MAJOR_LAYOUT,
+                q_dev.device(),
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
         logits = ttnn.experimental.ring_indexer_score_dsa(
             q_dev,
             k_full,
@@ -1027,6 +1037,7 @@ class TtIndexerBase:
             block_cyclic_sp_axis=None,
             # The per-device slab is this chip's Q rows.
             block_cyclic_chunk_local=q_dev.shape[2],
+            block_max_output=block_max,
             # The full mesh stripes the key cache over every device already.
             block_cyclic_cache_tp_sharded=False,
             compute_kernel_config=self._score_compute_kernel_config,
@@ -1066,6 +1077,7 @@ class TtIndexerBase:
             valid_end_tensor=metadata[2] if metadata is not None else None,
             valid_length_offset=glob if metadata is not None else 0,
             requires_tp_redistribution=tpsp and not self.output_tp_sequence_sharded,
+            block_max=block_max,
         )
 
     def select_local(
@@ -1087,6 +1099,10 @@ class TtIndexerBase:
                 valid_length_offset=state.valid_length_offset,
                 valid_end_tensor=state.valid_end_tensor,
             )
+        if state.block_max is not None:
+            metadata_kwargs.update(block_select=32, block_max_tensor=state.block_max)
+        elif os.environ.get("SPARSE_MLA_TWO_LEVEL_TOPK") == "1":
+            metadata_kwargs.update(block_select=32)
         return ttnn.experimental.topk_large_indices(
             state.logits,
             k=self.index_topk_capacity,
