@@ -195,19 +195,20 @@ FabricBuilderContext::FabricBuilderContext(const FabricContext& fabric_context) 
     // Compute max channel counts for this fabric instance
     compute_max_channel_counts();
 
-    // Create configs using computed max
-    router_config_ = create_edm_config();
-    for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
-        router_with_mux_config_[direction] =
-            create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
-    }
-
     tensix_config_ = nullptr;
 
-    // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
-    const auto& control_plane = fabric_context.get_control_plane();
-    for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
-        stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+    if (!fabric_context.get_control_plane().fabric_uses_flat_addressing()) {
+        router_config_ = create_edm_config();
+        for (size_t direction = 0; direction < eth_chan_directions::COUNT; direction++) {
+            router_with_mux_config_[direction] =
+                create_edm_config(FabricTensixConfig::MUX, static_cast<eth_chan_directions>(direction));
+        }
+
+        // Populate immutable per-mesh assignments before concurrent per-device kernel creation reads them.
+        const auto& control_plane = fabric_context.get_control_plane();
+        for (const auto mesh_id : control_plane.get_local_mesh_id_bindings()) {
+            stream_assignments_.emplace(mesh_id, compute_stream_assignment(mesh_id));
+        }
     }
 
     // Initialize per-device build state

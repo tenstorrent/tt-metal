@@ -47,6 +47,8 @@ ALWI void logsigmoid_tile(uint32_t idst_in0, uint32_t idst_in1, uint32_t idst_ou
  * On Wormhole this loads polynomial coefficients into vConstFloatPrgm0..2, the registers exp_tile_init
  * (and other SFPU inits) also program. Call it after those inits, right before logsigmoid_tile, and call
  * exp_tile_init again after it before the next exp_tile.
+ * On Quasar it loads the same registers, which exp_tile_init leaves alone there but other SFPU inits
+ * (reciprocal, log, tanh among them) program: call it again after any of those, before logsigmoid_tile.
  *
  * Return value: None
  */
@@ -58,7 +60,7 @@ ALWI void logsigmoid_tile_init() { MATH((SFPU_BINARY_INIT_FN(unused, sfpu::logsi
 /**
  * Performs element-wise computation of log_sigmoid on each element of a tile in DEST, which holds
  * BF16 data, with one pass of a generated SFPU kernel. The DEST register buffer must be in acquired
- * state via *acquire_dst* call. This call is blocking and is only available on the compute engine.
+ * state via *tile_regs_acquire* call. This call is blocking and is only available on the compute engine.
  *
  * It computes ttnn.log_sigmoid of the tile's own values in this one call. `logsigmoid_tile`, above, is a step of TT-NN's own log_sigmoid kernel, which takes other operands and is unchanged.
  *

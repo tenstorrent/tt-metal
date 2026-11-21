@@ -974,12 +974,12 @@ inline bool should_split_by_batch(
 
     const auto& a_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_a, transpose_a);
     const auto& b_shape = utilities::get_matmul_tensor_padded_shape(input_tensor_b, transpose_b);
-    const uint32_t num_batches = get_batch_size(a_shape);
+    const uint32_t num_batches = utilities::get_output_batch_size(a_shape, b_shape);
     const uint32_t n_tiles = b_shape[-1] / ttnn::TILE_SIZE;
     const uint32_t tiles_per_batch = (a_shape[-2] / ttnn::TILE_SIZE) * n_tiles;
     const uint32_t num_cores = compute_with_storage_grid_size.x * compute_with_storage_grid_size.y;
 
-    // The batched branch needs a batched B.
+    // The batched branch needs a batched B; a batch-1 A is broadcast by the Reuse readers.
     const bool both_batched = num_batches > 1 && get_batch_size(b_shape) > 1;
     // The simple config keeps at most tiles_per_batch cores busy; splitting by batch keeps min(num_batches, num_cores).
     const bool small_output_many_batches = tiles_per_batch < num_cores && num_batches >= tiles_per_batch;
@@ -1324,17 +1324,12 @@ MatmulProgramConfig create_simple_matmul_program_config(
             }
         }
 
-        // A batch=1, B batch>1: force mcast_in0=false so in0_reuse can keep A in L1 across all
-        // B batches. mcast_in0=true has no batch-reuse path and would FATAL in the validator.
-        const bool a_batch_broadcast =
-            all_interleaved and get_batch_size(a_shape_padded) == 1 and get_batch_size(b_shape_padded) > 1;
-
         bool use_mcast_1d_in0_config =
-            (is_wide and not a_batch_broadcast) or
+            is_wide or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::WIDTH_SHARDED or block_sharded_on_1d_row_grid));
         bool use_mcast_1d_in1_config =
-            is_tall or a_batch_broadcast or
+            is_tall or
             (core_range.y == 0 and mem_config.is_sharded() and
              (mem_config.memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED or block_sharded_on_1d_column_grid));
         bool use_mcast_2d_config =
@@ -1348,7 +1343,7 @@ MatmulProgramConfig create_simple_matmul_program_config(
         // still take 1D via is_wide / is_tall above.
         const bool single_row_blocks_prefer_1d = core_range.y == 1 and not all_dram_interleaved;
         const bool single_col_blocks_prefer_1d = core_range.x == 1 and not all_dram_interleaved;
-        if ((single_row_blocks_prefer_1d and not a_batch_broadcast) or use_mcast_1d_in0_config) {
+        if (single_row_blocks_prefer_1d or use_mcast_1d_in0_config) {
             // Pass user's shard_spec when BLOCK_SHARDED on 1D row grid
             std::optional<tt::tt_metal::ShardSpec> user_shard_spec =
                 (block_sharded_on_1d_row_grid && mem_config.shard_spec().has_value())
