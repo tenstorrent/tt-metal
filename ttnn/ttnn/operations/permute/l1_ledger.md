@@ -21,13 +21,13 @@ Target for the worked values: Quasar. `ttnn.get_max_worker_l1_unreserved_size()`
 | `element_bytes` | 2 (bf16, PHASE0); 4 later | `validate()` on `dtype` |
 | `tile_bytes` | 2048 (bf16) | layout = TILE |
 | `l1_align` | `ttnn.get_l1_alignment()` (16 here) | device query |
-| `s[3]` (RM row elements) | ≤ 65,535 for bf16, so the ring is ≤ 1,048,560 B | `validate()` refuses a larger RM row (`NotImplementedError`, ring cap). Applies to the `page_gather` RM path. |
+| `s[3]` (RM row elements) | ≤ 65,535 for bf16, so the ring is ≤ 1,048,560 B | `build_page_gather()` refuses a larger RM row with `NotImplementedError` (ring cap: `entry × num_entries > RING_CAP_BYTES`), on the Python side before dispatch. Applies to the `page_gather` RM path; no INPUTS entry comes near it (largest W = 8192). |
 | `page_ring_depth` | 8 per thread of the wider ring endpoint (`× max(R, W)` entries) | host constant `PAGE_RING_DEPTH` |
 | `transpose_block_tiles` | `min(4, DEST_AUTO_LIMIT)` ≤ 8 | host constant clamped by DEST capacity |
 | `transpose_ring_blocks` | 2 | host constant |
 | `C` (`tile_transpose` compute threads) | 1 | `THREAD_PLANS["tile_transpose"]` |
 | `gather_threads` | 6 | `THREAD_PLANS["staged_gather"]` (R + W ≤ 6) |
-| `threads_engaged` | `1 ≤ threads_engaged ≤ 6`, = `min(6, floor(budget / min_per_thread_bytes))` | Mechanism cap; `validate()` refuses if 0 |
+| `threads_engaged` | `1 ≤ threads_engaged ≤ 6`, = `min(6, floor(budget / min_per_thread_bytes))` | Mechanism cap; `plan_staged_gather()` refuses with `NotImplementedError` if 0 (before dispatch) |
 | `out_slots` | 8 | host constant |
 | `l1_reserve_bytes` | `262,144 + Σ_{L1 tensors} ceil(num_pages / num_l1_banks) × aligned_page_bytes` | Host. `num_l1_banks` from `ttnn.device.GetMemoryView(device, ttnn.BufferType.L1).num_banks`. |
 | `budget` | `ttnn.get_max_worker_l1_unreserved_size() − l1_reserve_bytes` (3,701,184 B here with DRAM tensors) | device query minus reserve |

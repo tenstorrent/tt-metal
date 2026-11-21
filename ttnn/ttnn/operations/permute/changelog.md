@@ -1,5 +1,15 @@
 # permute changelog
 
+## Phase 0 — Core Implementation (verifier summary)
+- **Date**: 2026-11-21
+- **What was done**: Initial implementation via the incremental pipeline (planner → implementer → verifier) on Quasar / ttsim. The implementer's notes follow below.
+- **SUPPORTED at Phase 0**: dtype=[bfloat16], layout=[TILE, ROW_MAJOR], memory_config=[DRAM, L1], sharding=[interleaved], permutation=[leading, last_two, general], alignment=[tile_aligned, w_non_aligned, h_non_aligned], rank=[3, 4] (= PHASE0)
+- **Accuracy achieved**: bit-exact. PCC=1.0, max_abs_err=0.0, rel_rms=0.0, max ULP=0, got/true ratio 1.0 on 5 shapes covering all three regimes and both layouts (`test_permute_precision_baseline.py`)
+- **Golden suite at Phase 0**: 133 / 133 supported cells and 3 / 3 rejections pass; 508 xfail_expected (32-bit dtypes, rank 2); 0 supported_fail / xpass_drift / xfail_wrong_mode (`verifier_report.json`)
+- **Issues encountered (verifier fixes)**: `normalize_dims` used `int(x)`, which silently truncated a float entry of `dims`. It now uses `operator.index`, which refuses one with `ValueError`. `l1_ledger.md` said `validate()` performs the ring-cap and L1-fit refusals; the builders do, and the ledger now says so. No drift fixes were needed.
+- **Tests added**: `test_permute_precision_baseline.py` (verifier); `test_permute.py` (harness-generated), `test_permute_plan.py` (implementer)
+- **Refinement queue**: `op_requirements.md`. R1 adds 32-bit dtypes and rank 2. R2–R4 are perf refinements gated on structural counts (ttsim has no clock).
+
 ## Phase 0 (2026-11-21): the first phase, built from op_design.md
 
 Status: acceptance test 13/13; golden suite 136/136 of the PHASE0 cells, the loose case and the

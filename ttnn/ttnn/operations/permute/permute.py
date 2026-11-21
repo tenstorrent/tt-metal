@@ -13,6 +13,8 @@ The host contract, in order (op_design.md "Host-side contract"):
 
 from __future__ import annotations
 
+import operator
+
 import ttnn
 
 from eval.memory import memory_axes
@@ -59,7 +61,8 @@ def normalize_dims(dims, rank):
     Raises ValueError for a malformed permutation: wrong length (X1), an entry outside [-rank, rank-1] (X3),
     a dimension named twice (X2)."""
     try:
-        dims = [int(x) for x in dims]  # R3: a list or a tuple
+        # R3: a list or a tuple. operator.index, not int(): a float entry is refused, as torch.permute does.
+        dims = [operator.index(x) for x in dims]
     except TypeError as e:
         raise ValueError(f"permute: dims must be a sequence of ints, got {dims!r}") from e
     if len(dims) != rank:
