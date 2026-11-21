@@ -390,8 +390,7 @@ struct WorkerChannel {
 
     // `returned` slots in all: into the read counter and, while a worker is connected, from there into the worker's L1.
     // With presets the command is all preset (preset_credit): the credit waits for the buffer and sends it.
-    // Without stream registers the count goes as the library's inline write (a posted NoC write from L1 is not served
-    // there).
+    // Without stream registers the count goes as the library's inline write, as an upstream router's does.
     __attribute__((noinline)) static void credit(uint32_t returned, bool worker_connected) {
         constexpr uint32_t source = read_counter_addr;
         *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source) = returned;

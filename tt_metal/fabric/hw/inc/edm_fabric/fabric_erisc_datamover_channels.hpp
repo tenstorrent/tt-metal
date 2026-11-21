@@ -459,7 +459,7 @@ struct EdmChannelWorkerConnection {
     }
 
     // Closes the connection: the semaphore back to unused, `read_counter` (the credits returned so far) into the
-    // producer's location info, and +1 on the producer's teardown semaphore.
+    // producer's location info, and +1 on the producer's teardown semaphore (on a Keraunos CCE, 1 stored to it).
     template <bool posted = false, bool RISC_CPU_DATA_CACHE_ENABLED>
     FORCE_INLINE void close_connection(uint32_t read_counter) const {
         router_invalidate_l1_cache<RISC_CPU_DATA_CACHE_ENABLED>();
@@ -473,7 +473,13 @@ struct EdmChannelWorkerConnection {
 
         worker_location_info_ptr->edm_read_counter = read_counter;
 
+#ifdef KERAUNOS_CCE
+        // A store, not an increment, so that a router never loads from another tile: the closer zeroes the word at
+        // open and waits for it to equal 1 (close_finish()), and this channel's router is its only writer.
+        noc_inline_dw_write<InlineWriteDst::L1, posted>(worker_semaphore_address, 1, 0xF, WORKER_HANDSHAKE_NOC);
+#else
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
+#endif
     }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr = nullptr;
@@ -554,13 +560,7 @@ struct EdmChannelWorkerInterface : EdmChannelWorkerConnection<WORKER_HANDSHAKE_N
 
         this->copy_read_counter_to_worker_location_info();
 
-#ifdef KERAUNOS_CCE
-        // A store, not an increment, so that a router never loads from another tile: the closer zeroes the word at
-        // open and waits for it to equal 1 (close_finish()), and this channel's router is its only writer.
-        noc_inline_dw_write<InlineWriteDst::L1, posted>(worker_semaphore_address, 1, 0xF, WORKER_HANDSHAKE_NOC);
-#else
         noc_semaphore_inc<posted>(worker_semaphore_address, 1, WORKER_HANDSHAKE_NOC);
-#endif
     }
 };
 
