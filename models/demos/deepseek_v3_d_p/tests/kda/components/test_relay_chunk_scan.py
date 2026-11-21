@@ -599,8 +599,8 @@ def _perf_case(shape: tuple[int, int], topology: str, case_id: str, reference_us
 # Galaxy on TorusXY and a 4x4 stage on its X ring. LoudBox and QuietBox (TorusY) report until a CI run gives their
 # references.
 _PERF_CASES = [
-    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 227.8, 0.05),
-    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 213.4, 0.05),
+    _perf_case((8, 4), "mesh-8x4", "SP8xTP4", 207.0, 0.05),
+    _perf_case((4, 4), "mesh-4x4", "galaxy4x4-SP4xTP4", 198.5, 0.05),
     _perf_case((8, 1), "ring", "loudbox-SP8xTP1-ring", None, 0.05),
     _perf_case((4, 1), "ring", "quietbox-SP4xTP1-ring", None, 0.05),
 ]
