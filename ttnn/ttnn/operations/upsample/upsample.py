@@ -124,12 +124,14 @@ def upsample(
     return _dispatch(input_tensor, scale_h, scale_w)
 
 
-def _dispatch(input_tensor, scale_h, scale_w, **probe):
-    """The one device dispatch. `probe` (reader_thread_mask / writer_thread_mask) is for tests only."""
-    n, h, w, c = tuple(input_tensor.shape)
-    out_shape = ttnn.Shape([n, h * scale_h, w * scale_w, c])
-    # Rule R5: the output lives in the input's buffer, interleaved.
-    out_spec = ttnn.TensorSpec(out_shape, input_tensor.dtype, input_tensor.layout, input_tensor.memory_config())
-    output = ttnn.allocate_tensor_on_device(out_spec, input_tensor.device())
+def _dispatch(input_tensor, scale_h, scale_w, *, output=None, **probe):
+    """The one device dispatch. For tests only: `output` (a preallocated, e.g. sentinel-filled, output of
+    the right spec) and `probe` (reader_thread_mask / writer_thread_mask, see create_program_artifacts)."""
+    if output is None:
+        n, h, w, c = tuple(input_tensor.shape)
+        out_shape = ttnn.Shape([n, h * scale_h, w * scale_w, c])
+        # Rule R5: the output lives in the input's buffer, interleaved.
+        out_spec = ttnn.TensorSpec(out_shape, input_tensor.dtype, input_tensor.layout, input_tensor.memory_config())
+        output = ttnn.allocate_tensor_on_device(out_spec, input_tensor.device())
     spec, run_args, tensor_indices = create_program_artifacts(input_tensor, output, scale_h, scale_w, **probe)
     return ttnn.generic_op([input_tensor, output], spec, run_args, tensor_indices)
