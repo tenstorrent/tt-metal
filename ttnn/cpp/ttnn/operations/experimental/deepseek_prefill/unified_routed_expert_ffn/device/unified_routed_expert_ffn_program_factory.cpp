@@ -1577,6 +1577,13 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         compute_kernel_desc.emplace_runtime_args(core, compute_rt_args);
     }
 
+    if (GRID_Y != 8) {
+        // adaptive_chunk.hpp's chunk rows (kGridY)
+        const auto gy = std::to_string(GRID_Y);
+        reader_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+        writer_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+        compute_kernel_desc.defines.emplace_back("UNIFIED_RE_GRID_Y", gy);
+    }
     if (NG > 1) {
         // EXPERT_GROUPS: the kernels run experts group, group + NG, ... (the group is a per-core runtime arg)
         const auto ng = std::to_string(NG);

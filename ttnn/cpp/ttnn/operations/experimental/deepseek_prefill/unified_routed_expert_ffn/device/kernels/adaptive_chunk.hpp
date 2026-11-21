@@ -28,7 +28,12 @@
 // is valid in BRISC, NCRISC, and TRISC translation units alike.
 namespace adaptive_chunk {
 
-constexpr uint32_t kGridY = 8;  // M-row cores; a chunk spans per_core_M * kGridY tile-rows
+// M-row cores; a chunk spans per_core_M * kGridY tile-rows. The program factory defines UNIFIED_RE_GRID_Y when its
+// grid (an expert group's) is not 8 rows tall.
+#ifndef UNIFIED_RE_GRID_Y
+#define UNIFIED_RE_GRID_Y 8
+#endif
+constexpr uint32_t kGridY = UNIFIED_RE_GRID_Y;
 
 // Row-major x, tilized once per M-row: how many gate/up K-blocks ahead of its matmul an
 // owner core tilizes (it tilizes block kb + kXTilizeLookahead before MACing kb). The
