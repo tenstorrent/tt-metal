@@ -1,6 +1,6 @@
 # Find Operation Tests and Pipelines
 
-Find which unit tests in `tests/ttnn/unit_tests/operations` test a given operation, and identify which CI/CD pipelines run those tests.
+Find which unit tests in `tests/ttnn/unit_tests/operations` and `tests/ttnn/nightly/unit_tests/operations` test a given operation, and identify which CI/CD pipelines run those tests.
 
 ## Usage
 
@@ -38,7 +38,7 @@ This command helps you:
 ### Step 1: Search for Test Files
 
 The command searches for test files that reference the operation:
-- Searches in `tests/ttnn/unit_tests/operations/` directory
+- Searches in `tests/ttnn/unit_tests/operations/` and `tests/ttnn/nightly/unit_tests/operations/`
 - Looks for files containing the operation name (case-insensitive)
 - Checks both direct matches and common variations (e.g., `slice_write` matches `test_slice_write.py`)
 
@@ -54,29 +54,39 @@ Based on the operation location and test file locations, identifies which test d
 - `reduce/` - for reduction operations
 - `ccl/` - for collective communication operations
 - `transformers/` - for transformer operations
-- `rand/` - for random operations
+- `sdpa/` - for scaled dot-product attention operations
+- `moreh/` - for moreh operations
+- `experimental/` - for experimental operations
+- `point_to_point/` - for point-to-point operations
 - `debug/` - for debug operations
-- `ssm/` - for state space model operations
+
+`rand/` and `ssm/` tests exist only under `tests/ttnn/nightly/unit_tests/operations/`.
 
 ### Step 3: Map to CI/CD Pipelines
 
-Maps test directories to CI/CD pipelines based on workflow configurations:
+CI test matrices live in `tests/pipeline_reorg/*.yaml`; each entry has a `name` and the exact `cmd` it runs. Map test directories to pipelines by searching the `cmd:` lines of these files (e.g. `grep -n "tests/ttnn/unit_tests/operations/conv" tests/pipeline_reorg/*.yaml`):
 
-**Post-Commit Pipelines** (`.github/workflows/ttnn-post-commit.yaml`):
-- `ttnn eltwise group 1-8` - runs `tests/ttnn/unit_tests/operations/eltwise`
-- `ttnn data_movement/ccl group 1-3` - runs `tests/ttnn/unit_tests/operations/data_movement`, `ccl`, `point_to_point`
+**Sanity** (`tests/pipeline_reorg/ttnn_sanity_tests.yaml`, run by `ttnn-sanity-tests-impl.yaml` from `sanity-tests.yaml`):
+- `ttnn data movement group` - runs a selected list of tests from `tests/ttnn/unit_tests/operations/data_movement`
+- `ttnn eltwise group 1-4` - runs `tests/ttnn/unit_tests/operations/eltwise`
 - `ttnn conv group` - runs `tests/ttnn/unit_tests/operations/conv`
 - `ttnn pool group` - runs `tests/ttnn/unit_tests/operations/pool`
 - `ttnn matmul group` - runs `tests/ttnn/unit_tests/operations/matmul`
-- `ttnn fused group` - runs `tests/ttnn/unit_tests/operations/fused`
-- `ttnn transformers group` - runs `tests/ttnn/unit_tests/operations/transformers`
-- `ttnn reduce and misc ops group` - runs `tests/ttnn/unit_tests/operations/reduce`, `rand`, `debug`, `ssm`
+- `ttnn fused group 1-2` - runs `tests/ttnn/unit_tests/operations/fused`
+- `ttnn misc ops group` - runs `tests/ttnn/unit_tests/operations/debug`, `point_to_point`, `transformers`
+- `ttnn sdpa group` - runs `tests/ttnn/unit_tests/operations/sdpa`
+- `ttnn reduce group` - runs `tests/ttnn/unit_tests/operations/reduce`
 
-**Nightly Pipelines** (`.github/workflows/tt-metal-l2-nightly-impl.yaml`):
-- Similar structure but with nightly-specific test paths in `tests/ttnn/nightly/unit_tests/operations/`
+**Merge gate** (`tests/pipeline_reorg/ttnn_merge_gate_tests.yaml`, run by `ttnn-smoke-tests-impl.yaml` from `merge-gate.yaml`):
+- Smoke subset of individual tests from `data_movement`, `eltwise`, `fused`, `matmul`, `moreh`, `reduce`
 
-**Blackhole Multi-Card Tests** (`.github/workflows/blackhole-multi-card-unit-tests-impl.yaml`):
-- Special CCL tests for Blackhole hardware
+**Nightly** (`tests/pipeline_reorg/ops_unit_tests.yaml`, run by `ops-unit-tests-impl.yaml` from `tt-metal-l2-nightly.yaml`):
+- `ttnn nightly <category> tests` - runs `tests/ttnn/nightly/unit_tests/operations/<category>`, including `ttnn nightly misc (rand and ssm) tests`
+- Post-commit suites over `tests/ttnn/unit_tests/operations/` (e.g. `ttnn nightly data_movement tests (post-commit suite)`, `ttnn conv group`)
+- CCL tests (`ttnn n300 ccl tests`, `ccl nightly tests`)
+
+**Blackhole Multi-Card Sanity** (`tests/pipeline_reorg/blackhole_multi_card_sanity_tests.yaml`, run by `blackhole-multi-card-sanity-tests-impl.yaml` from `sanity-tests.yaml`):
+- CCL tests for Blackhole hardware (`tests/ttnn/unit_tests/operations/ccl/blackhole_CI/`)
 
 ## Example Usage
 
@@ -89,8 +99,7 @@ Maps test directories to CI/CD pipelines based on workflow configurations:
 - Test file: `tests/ttnn/unit_tests/operations/data_movement/test_slice_write.py`
 - Test directory: `data_movement/`
 - Pipelines:
-  - **Post-Commit:** `ttnn data_movement/ccl group 1`, `group 2`, `group 3`
-  - **Nightly:** `data_movement` group (if exists)
+  - **Nightly:** `ttnn nightly data_movement tests (post-commit suite)` (not in the selected list of `ttnn data movement group` in sanity)
 
 ### Example 2: Finding Tests for `conv2d`
 
@@ -101,8 +110,8 @@ Maps test directories to CI/CD pipelines based on workflow configurations:
 - Test files: `tests/ttnn/unit_tests/operations/conv/test_conv2d.py`
 - Test directory: `conv/`
 - Pipelines:
-  - **Post-Commit:** `ttnn conv group`
-  - **Nightly:** `conv` group
+  - **Sanity:** `ttnn conv group`
+  - **Nightly:** `ttnn conv group` (`ttnn nightly conv tests` runs the separate `tests/ttnn/nightly/unit_tests/operations/conv/` suite, not this file)
 
 ### Example 3: Finding Tests for `dropout`
 
@@ -113,7 +122,8 @@ Maps test directories to CI/CD pipelines based on workflow configurations:
 - Test file: `tests/ttnn/unit_tests/operations/data_movement/test_dropout.py`
 - Test directory: `data_movement/`
 - Pipelines:
-  - **Post-Commit:** `ttnn data_movement/ccl group 1`, `group 2`, `group 3`
+  - **Sanity:** `ttnn data movement group` (`test_dropout.py::test_dopout`)
+  - **Nightly:** `ttnn nightly data_movement tests (post-commit suite)`
 
 ## Implementation Steps
 
@@ -142,12 +152,12 @@ Maps test directories to CI/CD pipelines based on workflow configurations:
 
 ### Step 4: Find Pipelines
 
-1. Search `.github/workflows/` for workflows that run pytest on the identified test directory
-2. Key workflows to check:
-   - `.github/workflows/ttnn-post-commit.yaml` - main post-commit tests
-   - `.github/workflows/tt-metal-l2-nightly-impl.yaml` - nightly tests
-   - `.github/workflows/blackhole-multi-card-unit-tests-impl.yaml` - Blackhole multi-card tests
-   - `.github/workflows/sanity-tests.yaml` - orchestrates sanity tests
+1. Search the `cmd:` lines in `tests/pipeline_reorg/*.yaml` for the identified test directory or test file
+2. Key test matrices to check:
+   - `tests/pipeline_reorg/ttnn_sanity_tests.yaml` - sanity tests (`sanity-tests.yaml`)
+   - `tests/pipeline_reorg/ttnn_merge_gate_tests.yaml` - merge gate smoke tests (`merge-gate.yaml`)
+   - `tests/pipeline_reorg/ops_unit_tests.yaml` - nightly tests (`tt-metal-l2-nightly.yaml`)
+   - `tests/pipeline_reorg/blackhole_multi_card_sanity_tests.yaml` - Blackhole multi-card tests (`sanity-tests.yaml`)
 
 ### Step 5: Extract Pipeline Details
 
@@ -155,7 +165,7 @@ For each matching pipeline, extract:
 - **Workflow file:** The YAML file that defines the pipeline
 - **Test group name:** The name of the test group/job
 - **Command:** The exact pytest command used
-- **Trigger conditions:** When the pipeline runs (post-commit, nightly, manual, etc.)
+- **Trigger conditions:** When the pipeline runs (sanity, merge gate, nightly, manual, etc.)
 - **Runner labels:** Which hardware runners are used
 
 ## Output Format
@@ -204,9 +214,9 @@ Pipelines That Run These Tests:
 | `reduction/` | `reduce/` | Note: operation uses "reduction", tests use "reduce" |
 | `ccl/` | `ccl/` | Direct mapping |
 | `transformer/` | `transformers/` | Note: operation uses "transformer", tests use "transformers" |
-| `rand/` | `rand/` | Direct mapping |
+| `rand/` | `rand/` | Nightly only: `tests/ttnn/nightly/unit_tests/operations/rand/` |
 | `debug/` | `debug/` | Direct mapping |
-| `ssm/` | `ssm/` | Direct mapping |
+| `ssm/` | `ssm/` | Nightly only: `tests/ttnn/nightly/unit_tests/operations/ssm/` |
 
 ## Special Cases
 
@@ -221,7 +231,7 @@ Some experimental operations are tested in non-experimental test directories:
 CCL operations have special test organization:
 - Main tests in `tests/ttnn/unit_tests/operations/ccl/`
 - Blackhole-specific tests in `tests/ttnn/unit_tests/operations/ccl/blackhole_CI/`
-- Run in `ttnn data_movement/ccl group` pipelines
+- Run in `ops_unit_tests.yaml` (nightly) and `blackhole_multi_card_sanity_tests.yaml`
 
 ### Nightly Tests
 
