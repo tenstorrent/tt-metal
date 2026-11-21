@@ -41,6 +41,7 @@
 #include "tt_metal/test_utils/print_helpers.hpp"
 #include <tt-umd/types/arch.hpp>
 #include "tt_metal/test_utils/bfloat_utils.hpp"
+#include "tt_metal/test_utils/mx_utils.hpp"
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 #include "single_core_compute_runners.hpp"
@@ -1094,6 +1095,250 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 
     return pass;
 }
+
+/// Quasar version of single_core_reconfig over the 2.0 host API (reconfig_2_0.cpp). Quasar has no Bfp8_b, so in0
+/// and out1 use MxFp8P instead; like Bfp8_b it unpacks to Float16_b, so SrcA/SrcB still differ in L1 format.
+bool single_core_reconfig_quasar(
+    const std::shared_ptr<distributed::MeshDevice>& mesh_device, const ReconfigConfig& test_config) {
+    constexpr tt::DataFormat mx_format = tt::DataFormat::MxFp8P;
+    const tt::DataFormat out0_format =
+        test_config.fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint32_t num_tiles = static_cast<std::uint32_t>(test_config.num_tiles);
+    const std::uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    const std::uint32_t mx_tile_size = tt::tile_size(mx_format);
+    const std::uint32_t out0_tile_size = tt::tile_size(out0_format);
+    const std::uint32_t num_elems = num_tiles * tt::constants::TILE_HW;
+
+    const CoreCoord core = {0, 0};
+    auto& cq = mesh_device->mesh_command_queue();
+    auto zero_coord = distributed::MeshCoordinate(0, 0);
+    const NodeCoord node{static_cast<std::uint32_t>(core.x), static_cast<std::uint32_t>(core.y)};
+
+    auto make_dram_buffer = [&](std::uint32_t tile_size) {
+        return distributed::MeshBuffer::create(
+            distributed::ReplicatedBufferConfig{.size = num_tiles * tile_size},
+            distributed::DeviceLocalBufferConfig{
+                .page_size = tile_size, .buffer_type = tt::tt_metal::BufferType::DRAM, .bottom_up = false},
+            mesh_device.get());
+    };
+    auto in0_dram = make_dram_buffer(mx_tile_size);
+    auto in1_dram = make_dram_buffer(bf16_tile_size);
+    auto in2_dram = make_dram_buffer(bf16_tile_size);
+    auto out0_dram = make_dram_buffer(out0_tile_size);
+    auto out1_dram = make_dram_buffer(mx_tile_size);
+
+    const DFBSpecName IN0_DFB{"in0"};
+    const DFBSpecName IN1_DFB{"in1"};
+    const DFBSpecName IN2_DFB{"in2"};
+    const DFBSpecName OUT0_DFB{"out0"};
+    const DFBSpecName OUT1_DFB{"out1"};
+    const KernelSpecName READER{"reader"};
+    const KernelSpecName WRITER0{"writer0"};
+    const KernelSpecName WRITER1{"writer1"};
+    const KernelSpecName COMPUTE{"compute"};
+
+    auto make_dfb = [&](const DFBSpecName& name, std::uint32_t tile_size, tt::DataFormat format) {
+        return DataflowBufferSpec{
+            .unique_id = name,
+            .entry_size = tile_size,
+            .num_entries = num_tiles,
+            .data_format_metadata = format,
+        };
+    };
+    auto dfb_binding = [](const DFBSpecName& name, DFBEndpointType endpoint) {
+        return DFBBinding{
+            .dfb_spec_name = name,
+            .accessor_name = name.get(),
+            .endpoint_type = endpoint,
+            .access_pattern = DFBAccessPattern::STRIDED,
+        };
+    };
+    const DataMovementHardwareConfig dm_hw_config{
+        .config_2xx =
+            DataMovementHardwareConfig::DataMovement2XXConfig{
+                .disable_dfb_implicit_sync_for_all = true,
+            },
+    };
+    auto make_writer_spec = [&](const KernelSpecName& writer_id, const DFBSpecName& out_dfb) {
+        return KernelSpec{
+            .unique_id = writer_id,
+            .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_2_0.cpp",
+            .num_threads = 1,
+            .dfb_bindings = {ConsumerOf(out_dfb, "in")},
+            .runtime_arg_schema = {.runtime_arg_names = {"dst_addr", "bank_id", "num_tiles"}},
+            .hw_config = dm_hw_config,
+        };
+    };
+
+    KernelSpec reader_spec{
+        .unique_id = READER,
+        .source = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_binary_2_0.cpp",
+        .num_threads = 1,
+        .compiler_options = {.defines = {{"LOAD_BUF2_DATA", "1"}}},
+        .dfb_bindings =
+            {dfb_binding(IN0_DFB, DFBEndpointType::PRODUCER),
+             dfb_binding(IN1_DFB, DFBEndpointType::PRODUCER),
+             dfb_binding(IN2_DFB, DFBEndpointType::PRODUCER)},
+        .runtime_arg_schema =
+            {.runtime_arg_names =
+                 {"src0_addr", "src0_bank_id", "src1_addr", "src1_bank_id", "num_tiles", "src2_addr", "src2_bank_id"}},
+        .hw_config = dm_hw_config,
+    };
+
+    KernelSpec compute_spec{
+        .unique_id = COMPUTE,
+        .source = "tests/tt_metal/tt_metal/test_kernels/compute/reconfig_2_0.cpp",
+        .num_threads = 1,
+        .dfb_bindings =
+            {dfb_binding(IN0_DFB, DFBEndpointType::CONSUMER),
+             dfb_binding(IN1_DFB, DFBEndpointType::CONSUMER),
+             dfb_binding(IN2_DFB, DFBEndpointType::CONSUMER),
+             dfb_binding(OUT0_DFB, DFBEndpointType::PRODUCER),
+             dfb_binding(OUT1_DFB, DFBEndpointType::PRODUCER)},
+        .compile_time_args =
+            {{"num_tiles", num_tiles},
+             {"ublock_size_tiles", static_cast<std::uint32_t>(test_config.ublock_size_tiles)},
+             {"explicit_reconfig", static_cast<std::uint32_t>(test_config.explicit_reconfig)},
+             {"split_src_reconfig", static_cast<std::uint32_t>(test_config.split_src_reconfig)},
+             {"block_copy", static_cast<std::uint32_t>(test_config.block_copy)},
+             {"l1_acc", static_cast<std::uint32_t>(test_config.l1_acc)}},
+        .hw_config =
+            ComputeHardwareConfig{
+                .enable_32_bit_dest = test_config.fp32_dest_acc_en,
+                .double_buffer_dest = !test_config.dst_full_sync_en,
+            },
+    };
+
+    ProgramSpec spec{
+        .name = "tile_copy_reconfig_quasar",
+        .kernels =
+            {reader_spec, make_writer_spec(WRITER0, OUT0_DFB), make_writer_spec(WRITER1, OUT1_DFB), compute_spec},
+        .dataflow_buffers =
+            {make_dfb(IN0_DFB, mx_tile_size, mx_format),
+             make_dfb(IN1_DFB, bf16_tile_size, tt::DataFormat::Float16_b),
+             make_dfb(IN2_DFB, bf16_tile_size, tt::DataFormat::Float16_b),
+             make_dfb(OUT0_DFB, out0_tile_size, out0_format),
+             make_dfb(OUT1_DFB, mx_tile_size, mx_format)},
+        .work_units = {WorkUnitSpec{
+            .name = "main",
+            .kernels = {READER, WRITER0, WRITER1, COMPUTE},
+            .target_nodes = node,
+        }},
+    };
+    Program program(*mesh_device, spec);
+
+    // Positive inputs keep the sum away from cancellation, so a relative tolerance is meaningful. in0 is
+    // round-tripped through MxFp8P so the golden uses the values the device actually unpacks.
+    std::mt19937 rng(0x3001);
+    std::uniform_real_distribution<float> in0_dist(0.0f, 2.0f);
+    std::vector<float> in0_floats(num_elems);
+    for (auto& v : in0_floats) {
+        v = in0_dist(rng);
+    }
+    auto src0 =
+        tt::test_utils::pack_as_mx_tiles(mx_format, ttsl::make_const_span(in0_floats), /*row_major_input=*/false);
+    auto src1 = create_random_vector_of_bfloat16(num_tiles * bf16_tile_size, 4, /*seed=*/0x3002);
+    auto src2 = create_random_vector_of_bfloat16(num_tiles * bf16_tile_size, 1, /*seed=*/0x3003);
+    const auto in0 = tt::test_utils::mx_to_floats(mx_format, src0, /*row_major_output=*/false);
+    const auto in1 = unpack_uint32_vec_into_bfloat16_vec(src1);
+    const auto in2 = unpack_uint32_vec_into_bfloat16_vec(src2);
+
+    distributed::WriteShard(cq, in0_dram, src0, zero_coord, false);
+    distributed::WriteShard(cq, in1_dram, src1, zero_coord, false);
+    distributed::WriteShard(cq, in2_dram, src2, zero_coord, false);
+
+    ProgramRunArgs params;
+    params.kernel_run_args = {
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = READER,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"src0_addr", static_cast<std::uint32_t>(in0_dram->address())},
+                 {"src0_bank_id", 0u},
+                 {"src1_addr", static_cast<std::uint32_t>(in1_dram->address())},
+                 {"src1_bank_id", 0u},
+                 {"num_tiles", num_tiles},
+                 {"src2_addr", static_cast<std::uint32_t>(in2_dram->address())},
+                 {"src2_bank_id", 0u}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER0,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<std::uint32_t>(out0_dram->address())},
+                 {"bank_id", 0u},
+                 {"num_tiles", num_tiles}}),
+        },
+        ProgramRunArgs::KernelRunArgs{
+            .kernel = WRITER1,
+            .runtime_arg_values = MakeRuntimeArgsForSingleNode(
+                node,
+                {{"dst_addr", static_cast<std::uint32_t>(out1_dram->address())},
+                 {"bank_id", 0u},
+                 {"num_tiles", num_tiles}}),
+        },
+        ProgramRunArgs::KernelRunArgs{.kernel = COMPUTE},
+    };
+    program.set_program_run_args(params);
+
+    LaunchProgram(*mesh_device, std::move(program));
+
+    std::vector<std::uint32_t> out0_data;
+    std::vector<std::uint32_t> out1_data;
+    distributed::ReadShard(cq, out0_data, out0_dram, zero_coord, false);
+    distributed::ReadShard(cq, out1_data, out1_dram, zero_coord, false);
+    distributed::Finish(cq);
+
+    std::vector<float> out0;
+    if (test_config.fp32_dest_acc_en) {
+        out0.resize(out0_data.size());
+        std::transform(
+            out0_data.begin(), out0_data.end(), out0.begin(), [](std::uint32_t u) { return std::bit_cast<float>(u); });
+    } else {
+        for (const bfloat16 v : unpack_vector<bfloat16, std::uint32_t>(out0_data)) {
+            out0.push_back(static_cast<float>(v));
+        }
+    }
+    const auto out1 = tt::test_utils::mx_to_floats(mx_format, out1_data, /*row_major_output=*/false);
+
+    // out0: Float32, or Float16_b rounding (one rounding per add). L1 accumulation doubles the Float16_b result.
+    // out1: one E4M3 step (2^-3 relative) covers rounding into MxFp8P from either DEST width.
+    const float out0_rtol = test_config.fp32_dest_acc_en ? 0.001f : 0.0155f;
+    constexpr float out1_rtol = 0.125f;
+    bool pass = true;
+    auto check = [&](const char* name, const std::vector<float>& device, auto golden_at, float rtol) {
+        std::uint32_t mismatches = 0;
+        for (std::uint32_t i = 0; i < num_elems; ++i) {
+            const float golden = golden_at(i);
+            if (!is_close(device[i], golden, rtol, 0.01f)) {
+                if (mismatches < 8) {
+                    log_error(tt::LogTest, "{}[{}]: device {} vs golden {}", name, i, device[i], golden);
+                }
+                ++mismatches;
+            }
+        }
+        if (mismatches != 0) {
+            log_error(tt::LogTest, "{}: {}/{} mismatches", name, mismatches, num_elems);
+            pass = false;
+        }
+    };
+    auto result_at = [&](std::uint32_t i) { return static_cast<float>(in1[i]) + in0[i] + static_cast<float>(in2[i]); };
+    TT_FATAL(out0.size() == num_elems && out1.size() == num_elems, "Unexpected output size");
+    check(
+        "out0",
+        out0,
+        [&](std::uint32_t i) {
+            if (!test_config.l1_acc) {
+                return result_at(i);
+            }
+            const float packed =
+                test_config.fp32_dest_acc_en ? result_at(i) : static_cast<float>(bfloat16(result_at(i)));
+            return packed + packed;
+        },
+        out0_rtol);
+    check("out1", out1, result_at, out1_rtol);
+    return pass;
+}
 }  // namespace unit_tests::compute::reconfig
 
 ////////////////////////////////////////////////////////////////////////////
@@ -1111,9 +1356,6 @@ bool single_core_pack_reconfig_quasar(const std::shared_ptr<distributed::MeshDev
 ////////////////////////////////////////////////////////////////////////////
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
-    if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     for (bool explicit_reconfig : {true, false}) {
         for (bool split_src_reconfig : {true, false}) {
             for (bool fp32_dest_acc_en : {true, false}) {
@@ -1140,7 +1382,12 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
                             .block_copy = block_copy,
                             .dst_full_sync_en = dst_full_sync_en};
                         for (auto& device : this->devices_) {
-                            ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
+                            if (this->arch_ == ARCH::QUASAR) {
+                                ASSERT_TRUE(
+                                    unit_tests::compute::reconfig::single_core_reconfig_quasar(device, test_config));
+                            } else {
+                                ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
+                            }
                         }
                     }
                 }
@@ -1150,16 +1397,20 @@ TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigExplicitSplitDstAcc) {
 }
 
 TEST_F(LLKMeshDeviceFixture, TensixTileCopyReconfigL1Acc) {
-    if (this->arch_ == ARCH::QUASAR) {
-        GTEST_SKIP() << "disabled due to hang on Quasar (tenstorrent/tt-metal#59923)";
-    }
     for (bool l1_acc : {true, false}) {
         for (bool dst_full_sync_en : {true, false}) {
             log_info(LogTest, "L1 accumulation is {}, DstSyncFull = {}", l1_acc ? "on." : "off.", dst_full_sync_en);
             unit_tests::compute::reconfig::ReconfigConfig test_config = {
                 .num_tiles = 1, .ublock_size_tiles = 1, .dst_full_sync_en = dst_full_sync_en};
             for (auto& device : this->devices_) {
-                ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
+                if (this->arch_ == ARCH::QUASAR) {
+                    // The WH/BH runner's L1-acc golden depends on L1 left over from a previous run, so l1_acc is
+                    // only set for the Quasar runner, which seeds the output entry itself.
+                    test_config.l1_acc = l1_acc;
+                    ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig_quasar(device, test_config));
+                } else {
+                    ASSERT_TRUE(unit_tests::compute::reconfig::single_core_reconfig(device, test_config));
+                }
             }
         }
     }
