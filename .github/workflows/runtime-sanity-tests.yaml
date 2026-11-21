@@ -5,6 +5,7 @@ name: "(Runtime) Sanity Tests"
 on:
   schedule:
     - cron: "0 3 * * *" # 03:00 UTC daily
+  workflow_call:  # UMD bump prototype: lets umd-bump-tests.yaml call this workflow
   workflow_dispatch:
     inputs:
       all:

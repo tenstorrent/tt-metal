@@ -1,0 +1,78 @@
+# PROTOTYPE: replaces the Testing table / state machine of umd_bump_metal.sh.
+# Runs the required workflows on the UMD bump PR as ordinary PR checks, so GitHub's
+# own checks UI + branch protection replace the PR-body status table.
+#
+# Caveat: for PRs opened by Dependabot, pull_request runs get a read-only token and only
+# *Dependabot* secrets, so the secrets used by the called workflows (secrets: inherit)
+# must also be added under Settings > Secrets > Dependabot.
+name: "UMD bump tests"
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - tt_metal/third_party/umd
+
+permissions:
+  actions: read
+  contents: read
+  packages: write
+  pull-requests: write
+  checks: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: umd-bump-tests-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    # Only the bump PR, not every PR that touches the submodule.
+    if: ${{ startsWith(github.event.pull_request.title, '[UMD Bump]') }}
+    runs-on: ubuntu-slim
+    steps:
+      - run: echo "UMD bump PR detected"
+
+  sanity:
+    needs: gate
+    uses: ./.github/workflows/sanity-tests.yaml
+    secrets: inherit
+
+  device-perf:
+    needs: gate
+    uses: ./.github/workflows/perf-device-models.yaml
+    secrets: inherit
+
+  galaxy:
+    needs: gate
+    uses: ./.github/workflows/galaxy-tests.yaml
+    secrets: inherit
+
+  t3000:
+    needs: gate
+    uses: ./.github/workflows/t3000-tests.yaml
+    secrets: inherit
+
+  runtime-sanity:
+    needs: gate
+    uses: ./.github/workflows/runtime-sanity-tests.yaml
+    secrets: inherit
+
+  runtime-unit:
+    needs: gate
+    uses: ./.github/workflows/runtime-unit-tests.yaml
+    secrets: inherit
+
+  # Single required status check for branch protection (replaces "Overall Test Status").
+  # To tolerate known-unhealthy workflows (the old "No new failures vs main" logic), drop
+  # them from `needs` / the result check below so they inform but do not block.
+  umd-bump-status:
+    needs: [gate, sanity, device-perf, galaxy, t3000, runtime-sanity, runtime-unit]
+    if: ${{ always() && needs.gate.result == 'success' }}
+    runs-on: ubuntu-slim
+    steps:
+      - name: All required workflows passed?
+        run: |
+          echo '${{ toJSON(needs) }}'
+          [[ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" == "false" ]]
