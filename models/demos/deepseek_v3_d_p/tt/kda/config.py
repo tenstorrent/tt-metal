@@ -288,8 +288,9 @@ def decay_projection_program_config(
         compute_with_storage_grid_size=grid,
         in0_block_w=key_dim // tile,
         out_subblock_h=1,
-        # FP32 accumulation holds four tiles in DST.
-        out_subblock_w=max(w for w in range(1, 5) if out_block_w % w == 0),
+        # FP32 accumulation holds four tiles in DST. A subblock and its bias row share them when the FP32 bias is
+        # added in DST on the pack thread (one K block), so at most two columns.
+        out_subblock_w=max(w for w in range(1, 3) if out_block_w % w == 0),
         out_block_h=out_block_h,
         out_block_w=out_block_w,
         per_core_M=per_core_M,

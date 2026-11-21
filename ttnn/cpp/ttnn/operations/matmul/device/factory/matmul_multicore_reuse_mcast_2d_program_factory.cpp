@@ -726,6 +726,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                                bias_tile == tt::tt_metal::Tile() && device.arch() != tt::ARCH::QUASAR;
     if (bias_add_sfpu) {
         mm_kernel_defines["FUSE_BIAS_SFPU"] = "1";
+        // With K in one block the products are final in DEST: the bias tiles join them there and the pack thread
+        // adds them and applies the activation before packing straight to the output, with no partials round trip.
+        // A subblock and its bias row must fit the four FP32 DEST tiles of half sync.
+        if (num_blocks == 1 && out_subblock_h * out_subblock_w + out_subblock_w <= 4) {
+            mm_kernel_defines["FUSE_BIAS_SFPU_DIRECT"] = "1";
+        }
     }
     const bool bias_reload_alias =
         fp32_dest_acc_en && interm0_data_format == tt::DataFormat::Float32 && bias_tensor.has_value() && !bias_add_sfpu;
@@ -746,11 +752,12 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     // Quasar is single-NoC, so its multicast channels are lowered for NOC_0, and its kernels say NOC_0 too: the
     // multicast helpers check that a sender's NoC matches its channel's.
     const bool is_quasar_mm = device.arch() == tt::ARCH::QUASAR;
-    const auto dm_hw_config = [is_quasar_mm](tt_metal::DataMovementProcessor proc,
-                                             tt_metal::NOC noc) -> DataMovementHardwareConfig {
+    const auto dm_hw_config =
+        [is_quasar_mm](tt_metal::DataMovementProcessor proc, tt_metal::NOC noc) -> DataMovementHardwareConfig {
         return DataMovementHardwareConfig{
-            .config_1xx = DataMovementHardwareConfig::DataMovement1XXConfig{
-                .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
+            .config_1xx =
+                DataMovementHardwareConfig::DataMovement1XXConfig{
+                    .processor = proc, .noc = is_quasar_mm ? tt_metal::NOC::NOC_0 : noc},
             .config_2xx = DataMovementHardwareConfig::DataMovement2XXConfig{.disable_dfb_implicit_sync_for_all = true},
         };
     };
