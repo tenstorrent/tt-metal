@@ -397,6 +397,28 @@ def get_rot_mats(
     return [cos_matrix, sin_matrix]
 
 
+def _hf_cos_sin(
+    head_dim: int, seq_len: int, theta: float, rope_scaling: Optional[RopeScaling]
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """HF-layout cos/sin, each [seq_len, head_dim], including the rope-type attention factor.
+
+    Scaled rope goes through the same classes as the Meta path (llama3 band factors from the
+    config, yarn, longrope) and is converted back to the HF layout, so both paths agree.
+    """
+    if rope_scaling is None:
+        from models.ttt_compat.tt.common import precompute_freqs
+
+        cos_freqs, sin_freqs = precompute_freqs(head_dim, seq_len * 2, theta, None, None, "llama3")
+    else:
+        cos_meta, sin_meta = compute_gather_cos_sin(head_dim, 2 * seq_len, theta, rope_scaling)
+        # Meta layout is [c0, c0, c1, c1, ...]; keep one copy of each frequency.
+        cos_freqs = cos_meta[0, 0, :, 0::2]
+        sin_freqs = sin_meta[0, 0, :, 0::2]
+    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1)
+    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1)
+    return cos_hf, sin_hf
+
+
 def get_rot_mats_hf(
     head_dim: int,
     device: Any,
@@ -415,24 +437,7 @@ def get_rot_mats_hf(
         layout: Device tensor layout. Decode caches for :class:`HfRotarySetup` use
             ``ROW_MAJOR``; prefill uses the default ``TILE`` layout.
     """
-    from models.ttt_compat.tt.common import precompute_freqs
-
-    # Generate HF-format cos/sin directly
-    # precompute_freqs returns cos/sin in shape [seq_len, head_dim//2]
-    cos_freqs, sin_freqs = precompute_freqs(
-        head_dim,
-        seq_len * 2,  # Generate for 2*seq_len to match compute_gather_cos_sin behavior
-        theta,
-        rope_scaling.factor if rope_scaling else None,
-        rope_scaling.original_max_position_embeddings if rope_scaling else None,
-        rope_scaling.rope_type.value if rope_scaling else "llama3",
-    )
-
-    # HF format: concat freqs with itself [c0, c1, ..., c_{d/2-1}, c0, c1, ..., c_{d/2-1}]
-    # cos_freqs and sin_freqs are [seq_len*2, head_dim//2], we need [seq_len, head_dim]
-    # Take first seq_len rows and duplicate
-    cos_hf = torch.cat([cos_freqs[:seq_len], cos_freqs[:seq_len]], dim=-1)  # [seq_len, head_dim]
-    sin_hf = torch.cat([sin_freqs[:seq_len], sin_freqs[:seq_len]], dim=-1)  # [seq_len, head_dim]
+    cos_hf, sin_hf = _hf_cos_sin(head_dim, seq_len, theta, rope_scaling)
 
     # Add batch dimensions: [1, 1, seq_len, head_dim]
     cos_hf = cos_hf.unsqueeze(0).unsqueeze(0)
