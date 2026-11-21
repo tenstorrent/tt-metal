@@ -2148,6 +2148,53 @@ def test_eltwise_binary_sfpu_int_uniform(mathop, dest_acc, **run_kwargs):
     )
 
 
+_MUL_INT32_EDGE_VALUES = [
+    0,
+    1,
+    -1,
+    2047,
+    2048,
+    -2048,
+    2**22 - 1,
+    2**22,
+    2**22 + 1,
+    -(2**22),
+    2**31 - 1,
+    -(2**31),
+    -(2**31) + 1,
+    0x55555555,
+    -0x55555555,
+    46341,
+    -46341,
+    0x7FF007FF,
+    -0x0F0F0F0F,
+]
+
+
+def test_eltwise_binary_sfpu_mul_int32_full_range():
+    """Full-width Int32 multiply against the product modulo 2**32, bit-exact.
+
+    Edge cross product (11-bit chunk boundaries, 2**22 bias neighbours, INT32_MIN/MAX,
+    negatives, overflowing products) plus random full-range pairs. Run under
+    TT_METAL_DISABLE_SFPLOADMACRO=1 as well to cover the plain path.
+    """
+    edges = [(a, b) for a in _MUL_INT32_EDGE_VALUES for b in _MUL_INT32_EDGE_VALUES]
+    gen = np.random.default_rng(0x3238)
+    n = 2 * _ELEMENTS_PER_TILE
+    rand = gen.integers(-(2**31), 2**31, size=(n - len(edges), 2), dtype=np.int64)
+    pairs = np.concatenate([np.array(edges, dtype=np.int64), rand])
+    in0 = pairs[:, 0].astype(np.int32)
+    in1 = pairs[:, 1].astype(np.int32)
+    got = _run_sfpu_binary_word_pairs(
+        MathOperation.SfpuMulInt32, in0, in1, 0, DataFormat.Int32
+    )
+    want = ((pairs[:, 0] * pairs[:, 1]) & 0xFFFFFFFF).astype(np.uint32).view(np.int32)
+    bad = np.flatnonzero(got != want)
+    assert bad.size == 0, f"{bad.size}/{n} lanes differ, first: " + ", ".join(
+        f"{in0[i]}*{in1[i]}: got {got[i]} want {want[i]}" for i in bad[:8]
+    )
+
+
 _DIV_INT32_SIGNED_DIVIDENDS = [
     *integer_specials(DataFormat.Int32),
     -7,
