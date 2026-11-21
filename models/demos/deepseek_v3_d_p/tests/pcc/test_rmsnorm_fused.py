@@ -90,6 +90,8 @@ def test_kimi_fused_rmsnorm(mesh_device, device_params, topology, seq_len, emb_d
     assert len(ccl.fused_rmsnorm_resources) == 1
     resources = next(iter(ccl.fused_rmsnorm_resources.values()))
     assert len(resources["pairs"]) == 2
+    # One semaphore pair per (cluster_axis, num_links), shared by every geometry on it.
+    assert len(ccl.fused_rmsnorm_semaphores) == 1
     pair_ids = [(id(semaphores), id(stats)) for semaphores, stats in resources["pairs"]]
     # An explicit opt-out and re-enable must reuse the initialized resources.
     for enabled in (False, True):
