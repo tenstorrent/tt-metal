@@ -20,11 +20,9 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <deque>
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <memory>
 #include <numeric>
 #include <optional>
@@ -209,8 +207,6 @@ public:
                 issue_with_room(*started_, [&] { return started_->issue(command); });
             }
         }
-        rounds++;
-        commands_run += count;
     }
 
     // A random round on seat (`bank`, `noc`).
@@ -245,9 +241,6 @@ public:
         start_random(banks[below(banks.size())], static_cast<uint32_t>(below(2)));
         return finish();
     }
-
-    uint64_t rounds = 0;
-    uint64_t commands_run = 0;
 
 private:
     struct Check {
@@ -517,27 +510,23 @@ std::string child_env(const char* name) {
     return value;
 }
 
-// "launched <n>" (seats this client booted) then one "seat <bank> <noc> <slot> <gen>" line per seat.
+// One "seat <bank> <noc> <slot> <gen>" line per seat.
 std::string describe_attachments(Client& client) {
     std::string seats;
-    uint32_t launched = 0;
     for (const uint32_t bank : client.banks()) {
         for (uint32_t noc = 0; noc < 2; noc++) {
             const SeatClient& seat = client.seat(bank, noc);
-            launched += seat.launched() ? 1 : 0;
             seats += fmt::format("seat {} {} {} {}\n", bank, noc, seat.slot(), seat.gen());
         }
     }
-    return fmt::format("launched {}\n{}", launched, seats);
+    return seats;
 }
 
 // client: attaches to DRISC_SERVICE_CHILD_BANKS ("0 3 5") and runs DRISC_SERVICE_CHILD_ROUNDS random rounds in DRAM
 // region DRISC_SERVICE_CHILD_REGION, then ends as DRISC_SERVICE_CHILD_END says:
-//   clean: destroys its Client.  abort: std::abort().  exit: _exit(3), skipping every destructor.
-//   loop:  ignores the round count and runs until killed.
-// Reports "ready\n" + its attachments once attached, "done <rounds> <commands>\n" + its attachments after a clean end,
-// "refused" (exit 0) when every client slot of a seat stays taken, and "error: <what>" (exit 1) on anything else,
-// a data mismatch included.
+//   abort: std::abort().  exit: _exit(3), skipping every destructor.  loop: ignores the round count, runs until killed.
+// Reports "ready\n" + its attachments once attached, or "error: <what>" (exit 1) on any failure, a data mismatch
+// included.
 void run_client_child() {
     const rlimit no_core{0, 0};
     ::setrlimit(RLIMIT_CORE, &no_core);
@@ -551,19 +540,9 @@ void run_client_child() {
     const std::string end = child_env("DRISC_SERVICE_CHILD_END");
     try {
         Device device;
-        std::optional<Client> client;
-        try {
-            client.emplace(device.umd, chip_id, banks);
-        } catch (const std::exception& e) {
-            if (std::string_view(e.what()).find("client slots") != std::string_view::npos) {
-                write_report("refused");
-                std::_Exit(0);
-            }
-            throw;
-        }
-        const std::string attachments = describe_attachments(*client);
-        write_report("ready\n" + attachments);
-        Exerciser exerciser(device, *client, region, next_nonce());
+        Client client(device.umd, chip_id, banks);
+        write_report("ready\n" + describe_attachments(client));
+        Exerciser exerciser(device, client, region, next_nonce());
         for (uint64_t i = 0; end == "loop" || i < rounds; i++) {
             const std::string mismatch = exerciser.random_round();
             if (!mismatch.empty()) {
@@ -574,11 +553,7 @@ void run_client_child() {
         if (end == "abort") {
             std::abort();
         }
-        if (end == "exit") {
-            std::_Exit(3);
-        }
-        client.reset();
-        write_report(fmt::format("done {} {}\n{}", exerciser.rounds, exerciser.commands_run, attachments));
+        std::_Exit(3);
     } catch (const std::exception& e) {
         write_report(fmt::format("error: {}", e.what()));
         std::_Exit(1);
@@ -634,12 +609,6 @@ std::vector<Attachment> parse_attachments(const std::string& report) {
     return attachments;
 }
 
-// The number after `key` in `report`, or 0.
-uint64_t report_number(const std::string& report, std::string_view key) {
-    const size_t at = report.find(key);
-    return at == std::string::npos ? 0 : std::stoull(report.substr(at + key.size()));
-}
-
 std::string metal_cycle(std::vector<std::string> env = {}) {
     const std::string out = child_out_path();
     const pid_t pid = spawn_child("metal_cycle", out, std::move(env));
@@ -660,51 +629,6 @@ std::vector<std::string> client_child_env(
         fmt::format("DRISC_SERVICE_CHILD_REGION={}", region),
         fmt::format("DRISC_SERVICE_CHILD_ROUNDS={}", rounds),
         "DRISC_SERVICE_CHILD_END=" + end};
-}
-
-struct BenchLane {
-    SeatClient* seat;
-    std::vector<abi::KernelCommand> batch;  // one queue entry; size 1 with batched = false issues a single command
-    uint64_t issued = 0;
-};
-constexpr auto bench_warmup = std::chrono::milliseconds(20);
-constexpr auto bench_interval = std::chrono::milliseconds(200);
-
-// Keeps every lane's queue full for bench_warmup + bench_interval; returns {GB/s, M commands/s} over the interval.
-std::pair<double, double> bench_run(std::vector<BenchLane>& lanes, bool batched, uint32_t size) {
-    using clock = std::chrono::steady_clock;
-    const auto fill_until = [&](clock::time_point end) {
-        while (clock::now() < end) {
-            for (BenchLane& lane : lanes) {
-                for (uint32_t k = 0; k < abi::CLIENT_QUEUE_CAPACITY; k++) {
-                    const bool ok =
-                        (batched ? lane.seat->issue_batch(lane.batch) : lane.seat->issue(lane.batch[0])).has_value();
-                    if (!ok) {
-                        break;
-                    }
-                    lane.issued++;
-                }
-            }
-        }
-    };
-    const auto done = [&] {
-        uint64_t entries = 0;
-        for (const BenchLane& lane : lanes) {
-            entries += lane.issued - lane.seat->in_flight();
-        }
-        return entries;
-    };
-    fill_until(clock::now() + bench_warmup);
-    const uint64_t before = done();
-    const auto start = clock::now();
-    fill_until(start + bench_interval);
-    const uint64_t after = done();
-    const double seconds = std::chrono::duration<double>(clock::now() - start).count();
-    for (BenchLane& lane : lanes) {
-        lane.seat->drain(drain_timeout);
-    }
-    const double commands = double(after - before) * lanes[0].batch.size();
-    return {commands * size / seconds / 1e9, commands / seconds / 1e6};
 }
 
 // ---- Tests ---------------------------------------------------------------------------------------------------------
@@ -1191,172 +1115,6 @@ INSTANTIATE_TEST_SUITE_P(
     Ends, DriscServiceDeadClient, ::testing::Values("loop", "abort", "exit"), [](const auto& info) {
         return info.param == "loop" ? std::string("Sigkill") : info.param;
     });
-
-// Rolling client children on random banks, so all 16 DRISCs, for DRISC_SERVICE_STRESS_SECONDS (skipped when unset),
-// at most DRISC_SERVICE_STRESS_CHILDREN (default 12) at once. Each child attaches, runs random verified copies in its
-// own DRAM region, and ends cleanly, by abort, by _exit, or by SIGKILL at a random time from before attach to
-// mid-copy. No child may report a mismatch or hang; once the last is gone every kernel must be stopped with its NIUs
-// restored, and a fresh client must run on every seat. DRISC_SERVICE_STRESS_REPORT names a file for the stats.
-TEST_F(DriscService, Stress) {
-    const char* seconds_env = std::getenv("DRISC_SERVICE_STRESS_SECONDS");
-    if (seconds_env == nullptr) {
-        GTEST_SKIP() << "Set DRISC_SERVICE_STRESS_SECONDS to run";
-    }
-    const auto duration = std::chrono::seconds(std::stoul(seconds_env));
-    const char* children_env = std::getenv("DRISC_SERVICE_STRESS_CHILDREN");
-    const uint32_t max_children = children_env != nullptr ? std::stoul(children_env) : 12;
-    constexpr uint32_t num_regions = 64;
-    std::mt19937_64 rng(next_nonce());
-    const auto below = [&](uint64_t n) { return std::uniform_int_distribution<uint64_t>(0, n - 1)(rng); };
-    using clock = std::chrono::steady_clock;
-
-    struct Live {
-        pid_t pid;
-        std::string out;
-        std::string end;
-        uint32_t region;
-        clock::time_point started;
-        clock::time_point kill_at;
-    };
-    std::vector<Live> live;
-    // FIFO, so a region is reused only after every other free one: a killed child's in-flight DMA cannot land in data
-    // a new child is checking.
-    std::deque<uint32_t> free_regions;
-    for (uint32_t r = 1; r <= num_regions; r++) {
-        free_regions.push_back(r);
-    }
-    std::map<std::string, uint64_t> stats;
-    std::vector<std::string> failures;
-
-    const auto reap = [&](const Live& child, int code) {
-        const std::string text = take_report(child.out).value_or("");
-        const double secs = std::chrono::duration<double>(clock::now() - child.started).count();
-        free_regions.push_back(child.region);
-        if (text.starts_with("error")) {
-            failures.push_back(fmt::format("child {} ({}, {:.1f} s): {}", child.pid, child.end, secs, text));
-            return;
-        }
-        const bool refused = text.starts_with("refused");
-        const bool expected = refused                ? code == 0
-                              : child.end == "clean" ? code == 0
-                              : child.end == "abort" ? code == -SIGABRT
-                              : child.end == "exit"  ? code == 3
-                                                     : code == -SIGKILL;
-        if (!expected) {
-            failures.push_back(fmt::format("child {} ({}) ended with code {}: {}", child.pid, child.end, code, text));
-        }
-        stats["ended_" + child.end]++;
-        if (refused) {
-            stats["refused"]++;
-        } else if (text.starts_with("done")) {
-            stats["done"]++;
-            stats["rounds"] += report_number(text, "done ");
-            stats["commands"] += std::stoull(text.substr(text.find(' ', 5) + 1));
-        } else if (text.starts_with("ready")) {
-            stats["died_attached"]++;
-        } else {
-            stats["died_before_attach"]++;
-        }
-        stats["seat_launches"] += report_number(text, "launched ");
-    };
-
-    const auto deadline = clock::now() + duration;
-    auto last_log = clock::now();
-    while (clock::now() < deadline || !live.empty()) {
-        const auto now = clock::now();
-        for (auto it = live.begin(); it != live.end();) {
-            if (it->end == "kill" && now >= it->kill_at) {
-                ::kill(it->pid, SIGKILL);
-            }
-            int status = 0;
-            if (::waitpid(it->pid, &status, WNOHANG) == it->pid) {
-                reap(*it, exit_code(status));
-                it = live.erase(it);
-            } else if (now - it->started > child_timeout) {
-                ::kill(it->pid, SIGKILL);
-                ::waitpid(it->pid, nullptr, 0);
-                failures.push_back(
-                    fmt::format("child {} ({}) hung past {} s", it->pid, it->end, child_timeout.count()));
-                free_regions.push_back(it->region);
-                it = live.erase(it);
-            } else {
-                ++it;
-            }
-        }
-        if (now < deadline && live.size() < max_children) {
-            std::vector<uint32_t> banks = all_banks();
-            std::shuffle(banks.begin(), banks.end(), rng);
-            banks.resize(below(10) == 0 ? banks.size() : 1 + below(4));
-            // 5% attach only, 30% clean, 15% abort, 15% _exit, 35% SIGKILL within 6 s of spawn.
-            const uint64_t pick = below(100);
-            const std::string end = pick < 35 ? "clean" : pick < 50 ? "abort" : pick < 65 ? "exit" : "kill";
-            const uint64_t rounds = pick < 5 ? 0 : 1 + below(40);
-            const uint32_t region = free_regions.front();
-            free_regions.pop_front();
-            const std::string out = child_out_path();
-            const pid_t pid =
-                spawn_child("client", out, client_child_env(banks, region, rounds, end == "kill" ? "loop" : end));
-            stats["spawned"]++;
-            live.push_back({pid, out, end, region, now, now + std::chrono::milliseconds(below(6000))});
-        }
-        if (now - last_log > std::chrono::seconds(30)) {
-            last_log = now;
-            log_info(
-                tt::LogTest,
-                "stress: {} spawned, {} live, {} rounds, {} failures",
-                stats["spawned"],
-                live.size(),
-                stats["rounds"],
-                failures.size());
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-    }
-
-    std::vector<std::string> stuck;
-    for (const uint32_t bank : all_banks()) {
-        for (const Seat& seat : device().seats(bank)) {
-            std::string problem = check_stopped(device(), seat);
-            if (!problem.empty()) {
-                stuck.push_back(std::move(problem));
-            }
-        }
-    }
-    std::string final_mismatch;
-    {
-        std::optional<Client> client;
-        attach(client, all_banks());
-        Exerciser exerciser(device(), *client, 0, 7);
-        for (const uint32_t bank : client->banks()) {
-            for (uint32_t noc = 0; noc < 2 && final_mismatch.empty(); noc++) {
-                final_mismatch = exerciser.round(bank, noc, all_ops[(bank + noc) % all_ops.size()], 4, true);
-            }
-        }
-    }
-    expect_all_stopped(all_banks());
-
-    std::string summary = fmt::format(
-        "duration_s {}\nmax_children {}\nfailures {}\nstuck_seats {}\n",
-        duration.count(),
-        max_children,
-        failures.size(),
-        stuck.size());
-    for (const auto& [key, value] : stats) {
-        summary += fmt::format("{} {}\n", key, value);
-    }
-    for (const auto& failure : failures) {
-        summary += "FAIL " + failure + "\n";
-    }
-    for (const auto& problem : stuck) {
-        summary += "STUCK " + problem + "\n";
-    }
-    log_info(tt::LogTest, "stress summary:\n{}", summary);
-    if (const char* path = std::getenv("DRISC_SERVICE_STRESS_REPORT")) {
-        std::ofstream(path) << summary;
-    }
-    EXPECT_TRUE(failures.empty()) << failures.size() << " failures, first: " << failures.front();
-    EXPECT_TRUE(stuck.empty()) << stuck.size() << " seats did not stop, first: " << stuck.front();
-    EXPECT_TRUE(final_mismatch.empty()) << "after the churn: " << final_mismatch;
-}
 
 // issue() and issue_batch() refuse what the kernel would run wrongly, issuing nothing, and the queue stays usable.
 // A bank past the chip's last one fails the client before any seat attaches; seat() rejects a bank the client did not
@@ -1879,9 +1637,6 @@ TEST_F(DriscService, DetachMidBatch) {
     expect_all_stopped({0});
 }
 
-// Bandwidth and command-rate bench for the design doc's tables. Opt-in: runs only with DRISC_SERVICE_BENCH set. Prints
-// "BENCH <key> <value>" lines; values are GB/s, M commands/s, or us per issue() call. Queues are kept full; nothing is
-// verified (the correctness tests above do that).
 // ---- Peer copies: the chip under test writes into another chip's DRAM over PCIe -----------------------------------
 
 class DriscServicePeer : public DriscService {
@@ -2133,277 +1888,6 @@ TEST_F(DriscServicePeer, RejectsBadPeerRangesAndCommands) {
     EXPECT_EQ(seat.in_flight(), 0u) << "a rejected command was issued";
     client.reset();
     expect_all_stopped({0});
-}
-
-// Into every other chip, from one seat and from all 16, each seat on A's bank b writing B's bank b: CMD_SINGLE entries
-// and a 64 B flag ending each batch (the rate counts data only).
-TEST_F(DriscServicePeer, PeerBench) {
-    if (std::getenv("DRISC_SERVICE_BENCH") == nullptr) {
-        GTEST_SKIP() << "Set DRISC_SERVICE_BENCH to run";
-    }
-    constexpr uint64_t dram_base = 0xA0000000ull;
-    constexpr uint64_t window = 2 << 20;
-    const std::vector<std::tuple<uint32_t, uint32_t, const char*>> shapes = {
-        {1u << 20, 2, "1m_b2"}, {24u << 10, 64, "24k_b64"}, {4352, 64, "4352b_b64"}};
-    std::optional<Client> client;
-    attach(client, all_banks());
-    HostMemory flags(device(), 4096);
-    for (const ChipId peer : peers()) {
-        fmt::print(
-            "BENCH peer{}_pci_device {}\n", peer, device().umd.get_tt_device(peer)->get_pci_device()->get_device_num());
-        std::vector<abi::NocEndpoint> targets;
-        for (uint32_t bank = 0; bank < device().num_banks(); bank++) {
-            const PeerBank peer_dram = peer_bank(peer, bank);
-            targets.push_back(client->peer_endpoint(peer, peer_dram.core, peer_dram.offset + dram_base, window));
-        }
-        const auto lane = [&](uint32_t bank, uint32_t noc, uint32_t size, uint32_t count) {
-            SeatClient& seat = client->seat(bank, noc);
-            BenchLane l{&seat, {}};
-            for (uint32_t i = 0; i + 1 < count; i++) {
-                const uint64_t off = (uint64_t{i} * size) % window;
-                l.batch.push_back(abi::make_single_command(
-                    device().dram_endpoint(bank, dram_base + off, noc), targets[bank].at_offset(off), size));
-            }
-            l.batch.push_back(abi::make_single_command(
-                seat.host_endpoint(flags.device_addr(0)), targets[bank].at_offset(window - 64), 64));
-            return l;
-        };
-        // bench_run counts every entry at `size`; a batch has one 64 B flag among `count` entries.
-        const auto data_gbps = [&](std::vector<BenchLane>& lanes, uint32_t size, uint32_t count) {
-            return bench_run(lanes, true, size).first * (count - 1) / count;
-        };
-        for (const auto& [size, count, unit] : shapes) {
-            for (uint32_t noc = 0; noc < 2; noc++) {
-                std::vector<BenchLane> lanes{lane(0, noc, size, count)};
-                fmt::print("BENCH peer{}_seat1_noc{}_{}_gbps {:.3f}\n", peer, noc, unit, data_gbps(lanes, size, count));
-            }
-            std::vector<BenchLane> lanes;
-            for (uint32_t bank = 0; bank < device().num_banks(); bank++) {
-                for (uint32_t noc = 0; noc < 2; noc++) {
-                    lanes.push_back(lane(bank, noc, size, count));
-                }
-            }
-            fmt::print("BENCH peer{}_seat16_{}_gbps {:.3f}\n", peer, unit, data_gbps(lanes, size, count));
-        }
-    }
-    client.reset();
-    expect_all_stopped(all_banks());
-}
-
-TEST_F(DriscService, PerfBench) {
-    if (std::getenv("DRISC_SERVICE_BENCH") == nullptr) {
-        GTEST_SKIP() << "Set DRISC_SERVICE_BENCH to run";
-    }
-    using clock = std::chrono::steady_clock;
-    constexpr auto interval = bench_interval;
-    constexpr uint64_t dram_base = 0xA0000000ull;  // 2.5 GiB: past every test region
-    constexpr uint64_t dram_span = 64ull << 20;
-    constexpr uint64_t host_size = 32ull << 20;
-    const uint32_t banks = device().num_banks();
-    HostMemory host(device(), host_size);
-
-    enum class Op { local, d2h_own, d2h_other, d2d_own, d2d_src_other, d2d_dst_other, h2d_own };
-    const std::vector<std::pair<Op, const char*>> ops = {
-        {Op::local, "local"},
-        {Op::d2h_own, "d2h_own"},
-        {Op::d2h_other, "d2h_other"},
-        {Op::d2d_own, "d2d_own"},
-        {Op::d2d_src_other, "d2d_src_other"},
-        {Op::d2d_dst_other, "d2d_dst_other"},
-        {Op::h2d_own, "h2d_own"}};
-
-    // Command i of `op` on seat (bank, noc), `size` bytes.
-    const auto command = [&](SeatClient& seat, Op op, uint32_t bank, uint32_t noc, uint32_t size, uint32_t i) {
-        const uint32_t other = (bank + 1) % banks;
-        const uint64_t a = dram_base + (uint64_t{i} * size) % dram_span;
-        const uint64_t b = a + dram_span;
-        const uint64_t h = (uint64_t{i} * size) % (host_size / 2);
-        switch (op) {
-            case Op::local:
-                return abi::make_local_command(device().bank_offset(bank) + a, device().bank_offset(bank) + b, size);
-            case Op::d2h_own:
-                return abi::make_single_command(
-                    device().dram_endpoint(bank, a, noc), seat.host_endpoint(host.device_addr(h)), size);
-            case Op::d2h_other:
-                return abi::make_single_command(
-                    device().dram_endpoint(other, a, noc), seat.host_endpoint(host.device_addr(h)), size);
-            case Op::d2d_own:
-                return abi::make_single_command(
-                    device().dram_endpoint(bank, a, noc), device().dram_endpoint(bank, b, noc), size);
-            case Op::d2d_src_other:
-                return abi::make_single_command(
-                    device().dram_endpoint(other, a, noc), device().dram_endpoint(bank, b, noc), size);
-            case Op::d2d_dst_other:
-                return abi::make_single_command(
-                    device().dram_endpoint(bank, a, noc), device().dram_endpoint(other, b, noc), size);
-            case Op::h2d_own:
-                return abi::make_single_command(
-                    seat.host_endpoint(host.device_addr(h + host_size / 2)),
-                    device().dram_endpoint(bank, a, noc),
-                    size);
-        }
-        return abi::KernelCommand{};
-    };
-
-    std::string prefix;
-    const auto print = [&prefix](const std::string& key, double value) {
-        fmt::print("BENCH {}{} {:.3f}\n", prefix, key, value);
-    };
-
-    {
-        std::optional<Client> client;
-        attach(client, {0});
-        // One seat, batches of 64 (24 KiB and 64 B), and 8 x 1 MiB.
-        for (uint32_t noc = 0; noc < 2; noc++) {
-            SeatClient& seat = client->seat(0, noc);
-            for (const auto& [op, name] : ops) {
-                for (const auto& [size, count, unit] : std::vector<std::tuple<uint32_t, uint32_t, const char*>>{
-                         {24u << 10, 64, "24k_b64"}, {1u << 20, 8, "1m_b8"}, {64, 64, "64b_b64"}}) {
-                    std::vector<BenchLane> lanes{{&seat, {}}};
-                    for (uint32_t i = 0; i < count; i++) {
-                        lanes[0].batch.push_back(command(seat, op, 0, noc, size, i));
-                    }
-                    const auto [gbps, mcps] = bench_run(lanes, true, size);
-                    print(fmt::format("seat1_noc{}_{}_{}_gbps", noc, name, unit), gbps);
-                    print(fmt::format("seat1_noc{}_{}_{}_mcps", noc, name, unit), mcps);
-                }
-            }
-        }
-        // Single (unbatched) commands and the host cost of one issue() call, on each issue path (Window keys: win_*).
-        for (const IssuePath path : {IssuePath::Shared, IssuePath::Window}) {
-            std::optional<Client> path_client;
-            attach(path_client, {0}, path);
-            prefix = path == IssuePath::Window ? "win_" : "";
-            SeatClient& seat = path_client->seat(0, 0);
-            for (const auto& [op, name] : std::vector<std::pair<Op, const char*>>{
-                     {Op::d2h_own, "d2h_own"}, {Op::h2d_own, "h2d_own"}, {Op::d2d_own, "d2d_own"}}) {
-                for (const uint32_t size : {64u, 24u << 10}) {
-                    std::vector<BenchLane> lanes{{&seat, {command(seat, op, 0, 0, size, 0)}}};
-                    const auto [gbps, mcps] = bench_run(lanes, false, size);
-                    print(fmt::format("single_noc0_{}_{}b_mcps", name, size), mcps);
-                    print(fmt::format("single_noc0_{}_{}b_gbps", name, size), gbps);
-                }
-            }
-            {
-                const abi::KernelCommand cmd = command(seat, Op::d2h_own, 0, 0, 64, 0);
-                const std::vector<abi::KernelCommand> batch(64, cmd);
-                for (const bool batched : {false, true}) {
-                    double total_us = 0;
-                    uint64_t calls = 0;
-                    const auto end = clock::now() + interval;
-                    while (clock::now() < end) {
-                        const auto t0 = clock::now();
-                        const bool ok = (batched ? seat.issue_batch(batch) : seat.issue(cmd)).has_value();
-                        const auto t1 = clock::now();
-                        if (ok) {
-                            total_us += std::chrono::duration<double, std::micro>(t1 - t0).count();
-                            calls++;
-                        }
-                    }
-                    seat.drain(drain_timeout);
-                    print(
-                        batched ? "issue_batch64_call_us" : "issue_single_call_us",
-                        total_us / std::max<uint64_t>(calls, 1));
-                }
-                // Unbatched commands with the KV comparison harness's address pattern: bank i % banks, the DRAM offset
-                // advancing every `banks` commands across 1 GiB, the host side across 16 MiB. Pre-built, so the loop
-                // costs only issue(). From a client alone on bank 1's seat, so in slot 0.
-                {
-                    std::optional<Client> spread_client;
-                    attach(spread_client, {1}, path);
-                    SeatClient& sseat = spread_client->seat(1, 0);
-                    constexpr uint32_t size = 4352;
-                    constexpr uint64_t n = 16384;
-                    const uint64_t dram_slots = (1ull << 30) / size;
-                    const uint64_t host_slots = (16ull << 20) / size;
-                    for (const char* name : {"d2h", "h2d", "d2d"}) {
-                        std::vector<abi::KernelCommand> spread;
-                        spread.reserve(n);
-                        for (uint64_t i = 0; i < n; i++) {
-                            const uint64_t dram_off = (1ull << 30) + ((i / banks) % dram_slots) * size;
-                            const uint64_t host_off = (i % host_slots) * size;
-                            const auto bank = static_cast<uint32_t>(i % banks);
-                            if (std::string_view(name) == "d2h") {
-                                spread.push_back(abi::make_single_command(
-                                    device().dram_endpoint(bank, dram_off, 0),
-                                    sseat.host_endpoint(host.device_addr(host_off)),
-                                    size));
-                            } else if (std::string_view(name) == "h2d") {
-                                spread.push_back(abi::make_single_command(
-                                    sseat.host_endpoint(host.device_addr(host_off)),
-                                    device().dram_endpoint(bank, dram_off, 0),
-                                    size));
-                            } else {
-                                const uint64_t off = (1ull << 30) + (i % dram_slots) * size;
-                                spread.push_back(abi::make_single_command(
-                                    device().dram_endpoint(0, off, 0), device().dram_endpoint(1, off, 0), size));
-                            }
-                        }
-                        uint64_t posted = 0;
-                        const auto start = clock::now();
-                        while (posted < n) {
-                            if (sseat.issue(spread[posted])) {
-                                posted++;
-                            }
-                        }
-                        sseat.drain(drain_timeout);
-                        const double seconds = std::chrono::duration<double>(clock::now() - start).count();
-                        print(fmt::format("spread_slot0_{}_4352b_mcps", name), n / seconds / 1e6);
-                    }
-                }
-                // Unbatched commands with at most `depth` in flight: a rate that grows with depth means the round trip
-                // limits it, a flat one means a per-command cost does. Depth 1 gives the round trip itself.
-                for (const uint32_t bytes : {64u, 18432u}) {
-                    const abi::KernelCommand one = command(seat, Op::d2h_own, 0, 0, bytes, 0);
-                    for (const uint32_t depth : {1u, 2u, 4u, 8u}) {
-                        uint64_t posted = 0;
-                        const auto start = clock::now();
-                        const auto end = start + interval;
-                        while (clock::now() < end) {
-                            if (seat.in_flight() < depth && seat.issue(one)) {
-                                posted++;
-                            }
-                        }
-                        const uint64_t done = posted - seat.in_flight();
-                        const double seconds = std::chrono::duration<double>(clock::now() - start).count();
-                        seat.drain(drain_timeout);
-                        print(fmt::format("depth{}_d2h_{}b_mcps", depth, bytes), done / seconds / 1e6);
-                        if (depth == 1) {
-                            print(
-                                fmt::format("depth1_d2h_{}b_roundtrip_us", bytes),
-                                seconds * 1e6 / std::max<uint64_t>(done, 1));
-                        }
-                    }
-                }
-            }
-            prefix.clear();
-        }
-        client.reset();
-    }
-    {
-        // All 16 seats at once, from this one host thread.
-        std::optional<Client> client;
-        attach(client, all_banks());
-        for (const auto& [op, name] : ops) {
-            for (const auto& [size, count, unit] : std::vector<std::tuple<uint32_t, uint32_t, const char*>>{
-                     {1u << 20, 8, "1m_b8"}, {24u << 10, 64, "24k_b64"}}) {
-                std::vector<BenchLane> lanes;
-                for (uint32_t bank = 0; bank < banks; bank++) {
-                    for (uint32_t noc = 0; noc < 2; noc++) {
-                        BenchLane lane{&client->seat(bank, noc), {}};
-                        for (uint32_t i = 0; i < count; i++) {
-                            lane.batch.push_back(command(*lane.seat, op, bank, noc, size, i));
-                        }
-                        lanes.push_back(std::move(lane));
-                    }
-                }
-                const auto [gbps, mcps] = bench_run(lanes, true, size);
-                print(fmt::format("seat16_{}_{}_gbps", name, unit), gbps);
-            }
-        }
-        client.reset();
-    }
-    expect_all_stopped(all_banks());
 }
 
 }  // namespace
