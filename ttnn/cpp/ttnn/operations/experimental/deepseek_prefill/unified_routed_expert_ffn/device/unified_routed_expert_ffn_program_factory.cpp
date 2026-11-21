@@ -278,7 +278,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
     // tokens * 4 / 32 of them (top-4), so m_tiles >= 128 (4K tokens) is >= 512 per expert.
     uint32_t NG = 1;
     if (from_pages) {
-        GRID_Y = M_tiles_full >= kGroupTallFromMTiles ? 4 : 2;
+        // Heavy loads: two groups over every grid row (12x5 each on the 10-row Blackhole grid; 12x4 left two rows
+        // idle). Untraced TTFT, 12x4 -> 12x5: 4K 114.3 -> 111.4 ms, 8K 200.1 -> 192.2, 16K 391.0 -> 374.4; 2K (light
+        // load, 5 x 12x2) 68.5 vs 70.7 with 12x5.
+        GRID_Y = M_tiles_full >= kGroupTallFromMTiles ? std::max<uint32_t>(2, grid_size.y / 2) : 2;
         NG = std::max<uint32_t>(1, std::min<uint32_t>(grid_size.y / GRID_Y, experts_per_chip));
     }
     const uint32_t kMaxChunkMTiles = 4 * GRID_Y;  // per_core_M <= 4 (see above)
