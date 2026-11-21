@@ -7,6 +7,7 @@
 #include <utility>
 #include <variant>
 #include <cstdint>
+#include <limits>
 
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/common/binary_op_utils.hpp"
@@ -110,6 +111,26 @@ void validate_where_scalar_for_integer_tensor(float scalar, DataType tensor_dtyp
         tensor_dtype);
 }
 
+// python ints arrive as int64 and have to survive packing into the tensor's dtype exactly,
+// which for a 32 bit int tensor just means being inside its range
+bool int_scalar_fits(std::int64_t scalar, DataType tensor_dtype) {
+    if (tensor_dtype == DataType::INT32) {
+        return scalar >= std::numeric_limits<std::int32_t>::min() &&
+               scalar <= std::numeric_limits<std::int32_t>::max();
+    }
+    if (tensor_dtype == DataType::UINT32) {
+        return scalar >= 0 && scalar <= static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max());
+    }
+    return false;
+}
+
+operations::unary::ScalarVariant pack_int_scalar(std::int64_t scalar, DataType tensor_dtype) {
+    if (tensor_dtype == DataType::INT32) {
+        return operations::unary::ScalarVariant{static_cast<std::int32_t>(scalar)};
+    }
+    return operations::unary::ScalarVariant{static_cast<std::uint32_t>(scalar)};
+}
+
 // TTT: tensor, tensor, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -167,6 +188,42 @@ Tensor invoke_impl(
         sub_core_grids);
 }
 
+// TTS with an integer scalar: on int32/uint32 tensors the scalar goes into the kernel as an
+// actual int, so values past float32's 24 bit mantissa stay exact. float tensors keep the
+// old float path.
+Tensor invoke_impl(
+    const Tensor& predicate,
+    const Tensor& t_true,
+    std::int64_t scalar_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (t_true.dtype() != DataType::INT32 && t_true.dtype() != DataType::UINT32) {
+        return invoke_impl(predicate, t_true, static_cast<float>(scalar_false), memory_config, output, sub_core_grids);
+    }
+    TT_FATAL(
+        int_scalar_fits(scalar_false, t_true.dtype()),
+        "ttnn.where with a {} tensor cannot represent the scalar {}: it is outside the range of {}. "
+        "Typecast the tensor to a floating-point dtype first.",
+        t_true.dtype(),
+        scalar_false,
+        t_true.dtype());
+
+    Tensor condition = predicate;
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_true);
+    if (typecast_needed) {
+        condition = ttnn::typecast(predicate, t_true.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+    }
+
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TTS>(
+        condition,
+        t_true,
+        pack_int_scalar(scalar_false, t_true.dtype()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_true, condition.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
 // TST: tensor, scalar, tensor
 Tensor invoke_impl(
     const Tensor& predicate,
@@ -191,6 +248,40 @@ Tensor invoke_impl(
         sub_core_grids);
 }
 
+// TST with an integer scalar, same story as the TTS overload above
+Tensor invoke_impl(
+    const Tensor& predicate,
+    std::int64_t scalar_true,
+    const Tensor& t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    if (t_false.dtype() != DataType::INT32 && t_false.dtype() != DataType::UINT32) {
+        return invoke_impl(predicate, static_cast<float>(scalar_true), t_false, memory_config, output, sub_core_grids);
+    }
+    TT_FATAL(
+        int_scalar_fits(scalar_true, t_false.dtype()),
+        "ttnn.where with a {} tensor cannot represent the scalar {}: it is outside the range of {}. "
+        "Typecast the tensor to a floating-point dtype first.",
+        t_false.dtype(),
+        scalar_true,
+        t_false.dtype());
+
+    Tensor condition = predicate;
+    bool typecast_needed = ternary_utils::typecast_predicate(predicate, t_false);
+    if (typecast_needed) {
+        condition = ttnn::typecast(predicate, t_false.dtype(), std::nullopt, std::nullopt, sub_core_grids);
+    }
+
+    return operations::binary::where_operation_with_scalar<operations::binary::BinaryOpType::WHERE_TST>(
+        condition,
+        t_false,
+        pack_int_scalar(scalar_true, t_false.dtype()),
+        ternary_utils::determine_memory_config_for_broadcast(memory_config, t_false, condition.logical_shape()),
+        output,
+        sub_core_grids);
+}
+
 // TSS: tensor, scalar, scalar
 Tensor invoke_impl(
     const Tensor& condition,
@@ -201,6 +292,67 @@ Tensor invoke_impl(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     log_debug(tt::LogOp, "Where LLK - TSS");
     return ttnn::where_tss(condition, t_true, t_false, memory_config, output, sub_core_grids);
+}
+
+// TSS with integer scalars: an int condition keeps them as ints and rejects
+// out of range ones like the TTS/TST overloads do, anything else promotes to
+// float like torch (the float path typecasts an int condition anyway)
+Tensor invoke_impl(
+    const Tensor& condition,
+    std::int64_t t_true,
+    std::int64_t t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    log_debug(tt::LogOp, "Where LLK - TSS");
+    if (condition.dtype() == DataType::INT32 || condition.dtype() == DataType::UINT32) {
+        TT_FATAL(
+            int_scalar_fits(t_true, condition.dtype()),
+            "ttnn.where with a {} tensor cannot represent the scalar {}: it is outside the range of {}. "
+            "Typecast the tensor to a floating-point dtype first.",
+            condition.dtype(),
+            t_true,
+            condition.dtype());
+        TT_FATAL(
+            int_scalar_fits(t_false, condition.dtype()),
+            "ttnn.where with a {} tensor cannot represent the scalar {}: it is outside the range of {}. "
+            "Typecast the tensor to a floating-point dtype first.",
+            condition.dtype(),
+            t_false,
+            condition.dtype());
+        return ttnn::where_tss(
+            condition,
+            pack_int_scalar(t_true, condition.dtype()),
+            pack_int_scalar(t_false, condition.dtype()),
+            memory_config,
+            output,
+            sub_core_grids);
+    }
+    return invoke_impl(
+        condition, static_cast<float>(t_true), static_cast<float>(t_false), memory_config, output, sub_core_grids);
+}
+
+// the two mixed scalar pairs: without these the int64/int64 and float/float overloads are
+// both one conversion away from each call and overload resolution can't pick. a mixed pair
+// promotes to float anyway, which is what torch does
+Tensor invoke_impl(
+    const Tensor& condition,
+    std::int64_t t_true,
+    float t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return invoke_impl(condition, static_cast<float>(t_true), t_false, memory_config, output, sub_core_grids);
+}
+
+Tensor invoke_impl(
+    const Tensor& condition,
+    float t_true,
+    std::int64_t t_false,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return invoke_impl(condition, t_true, static_cast<float>(t_false), memory_config, output, sub_core_grids);
 }
 
 // A native mac needs float operands the SFPU can consume and a broadcast the ternary
