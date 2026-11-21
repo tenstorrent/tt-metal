@@ -40,5 +40,6 @@ prepared programs; no per-descriptor host caches. Measured: host ms a new layout
 PERFORMANCE = THE LADDER (owner 2026-11-21): the no-rebuild check (tests/test_no_rebuild.py, fresh-traffic build counting) is
 PASS/FAIL only, a gate unit, never a throughput number. The performance number is the standard context-length ladder
 (results/agentx_ladder_20261119.md's method and table: agentic_cc, steady chunk, DECODER_SKIP=decode, layers 0-20, resident runner,
-histories 51200 / 131072 / 262144 / 524288 / 786432 / 1024000; steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms),
+REAL fixed histories 51200 / 131072 / 139264 (AgentX p50) / 262144 / 524288 / 786432 / 1024000, every segment of a packed chunk
+at that same history (no murky "mixed history" definitions, owner 2026-11-21); steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms),
 one table per path, counted only when the no-rebuild check passes on the same code. AgentX-mix walls are a diagnostic, never a headline.

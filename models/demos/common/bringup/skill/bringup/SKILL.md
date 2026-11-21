@@ -434,8 +434,9 @@ Standing owner decisions (moved here from private memory, 2026-10-30):
   no-rebuild check (tests/test_no_rebuild.py, the fresh-traffic build counting) is a gate unit, PASS / FAIL only (0
   program builds after warm-up on fresh starts / slots / last chunks / replays), never a throughput number. The
   performance number is the standard ladder (method and table of results/agentx_ladder_20261119.md: agentic_cc text,
-  steady chunk, DECODER_SKIP=decode, layers 0-20 on the resident runner, histories 51200, 131072, 262144, 524288,
-  786432, 1024000; columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms), one table per path,
+  steady chunk, DECODER_SKIP=decode, layers 0-20 on the resident runner, REAL fixed histories 51200, 131072, 139264
+  (AgentX p50), 262144, 524288, 786432, 1024000 (every segment of a packed chunk at that same history; no "mixed
+  history" cases, owner 2026-11-21); columns steady wall ms, tok/s, resumed wall ms, device ms, exposed host ms), one table per path,
   and it counts only when the no-rebuild check passes on the same code. AgentX-mix walls are a diagnostic, never a
   headline.
 - Serving never rebuilds (owner, 2026-11-20): every program a server can need is built once at startup from a finite
