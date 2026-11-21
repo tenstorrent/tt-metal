@@ -83,6 +83,7 @@
   "perf_sdpa_weighted_reduce": 8.2,
   "perf_sfpu_binop_scalar": 16.9,
   "perf_sfpu_ema": 0.5,
+  "perf_sfpu_generic_moe_gate_topk": 264.0,
   "perf_sfpu_reduce": 19.2,
   "perf_sfpu_reduce_sdpa": 0.0,
   "perf_sfpu_sdpa": 49.3,
