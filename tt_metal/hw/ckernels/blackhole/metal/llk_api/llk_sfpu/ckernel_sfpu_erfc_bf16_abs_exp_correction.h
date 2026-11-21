@@ -24,7 +24,7 @@ inline void calculate_abs_exp_correction() {
     };
     auto reciprocal = [](sfpi::vFloat x) __attribute__((always_inline)) {
         auto iteration = [](sfpi::vFloat v) __attribute__((always_inline)) { return sfpu_reciprocal_iter<1>(v); };
-        return ttpoly::erfc::correction_finite_reciprocal<decltype(iteration), true>(x, iteration);
+        return ttpoly::erfc::correction_finite_reciprocal<decltype(iteration)>(x, iteration);
     };
     for (int row = 0; row < Iterations; ++row) {
         sfpi::vFloat raw = sfpi::dst_reg[row];

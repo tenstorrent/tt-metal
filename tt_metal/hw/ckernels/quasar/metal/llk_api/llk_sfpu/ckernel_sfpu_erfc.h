@@ -80,7 +80,7 @@ inline void calculate_erfc() {
     }
 }
 
-template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = true>
+template <bool APPROXIMATION_MODE>
 void erfc_init() {
     math::_reset_counters_<p_setrwc::SET_ABD_F>();
     _init_reciprocal_<true>();

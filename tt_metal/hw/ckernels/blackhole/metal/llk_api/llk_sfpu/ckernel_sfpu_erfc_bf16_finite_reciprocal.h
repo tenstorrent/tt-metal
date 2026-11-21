@@ -4,16 +4,12 @@
 namespace ckernel::sfpu::ttpoly::erfc {
 using ::sfpi::DataLayout;
 using ::sfpi::vFloat;
-template <typename Reciprocal, bool Held = false>
+template <typename Reciprocal>
 __attribute__((always_inline)) inline vFloat correction_finite_reciprocal(
     vFloat x, [[maybe_unused]] Reciprocal reciprocal) {
     vFloat y = sfpi::approx_recip(x);
     vFloat residual;
-    if constexpr (Held) {
-        residual = x * y - 2.0f;
-    } else {
-        residual = x * y - sfpi::vConstFloatPrgm0;
-    }
+    residual = x * y - 2.0f;
     return y * -residual - 0.0f;
 }
 }  // namespace ckernel::sfpu::ttpoly::erfc
