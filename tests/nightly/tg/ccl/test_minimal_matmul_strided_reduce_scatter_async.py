@@ -858,6 +858,52 @@ def test_minimal_matmul_strided_reduce_scatter_fused_concat_non_aligned(mesh_dev
     )
 
 
+@pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True, ids=["4x8"])
+@pytest.mark.parametrize("cluster_axis", [0, 1], ids=["axis_0", "axis_1"])
+@pytest.mark.parametrize("mm_window_blocks", [None, 2], ids=["progress", "progress_credit"])
+@pytest.mark.parametrize(
+    "device_params, topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_ring"],
+)
+def test_minimal_matmul_strided_reduce_scatter_counters_move_on_cache_hit(
+    mesh_device, cluster_axis, mm_window_blocks, topology
+):
+    """Program cache hits after the caller-owned progress (and, windowed, credit) counters were reallocated: the cached
+    program must take the new addresses (every iteration after the first allocates fresh counters)."""
+    mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    run_minimal_matmul_strided_reduce_scatter_impl(
+        mesh_device,
+        M=512,
+        K=256,
+        N=512,
+        dim=3,
+        num_links=1,
+        input_dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mem_config_input=mem_config,
+        mem_config_mm=mem_config,
+        mem_config_rs=mem_config,
+        topology=topology,
+        mm_block_m=64,
+        mm_block_k=64,
+        mm_block_n=64,
+        subblock_h=1,
+        subblock_w=1,
+        mm_core_grid=ttnn.CoreCoord(8, 2),
+        chunk_width_in_mm_blocks=1,
+        rs_mode="fused",
+        cluster_axis=cluster_axis,
+        num_iters=3,
+        mm_window_blocks=mm_window_blocks,
+        replace_counters_on_hit=True,
+        check_program_cache=True,
+    )
+
+
 # Production blockings the models adopted from the 2026-08-24 windowed-handoff sweep (see
 # fused_mmrs_configs). Kept OUT of test_minimal_matmul_strided_reduce_scatter_async's test_config
 # list on purpose: that test crosses every config with 2 cluster axes x 2 iteration settings x
