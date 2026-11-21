@@ -95,6 +95,23 @@ xt::xarray<float> gelu_tanh_grad_reference(const xt::xarray<float>& x) {
     return 0.5F * (1.0F + t) + 0.5F * x * (1.0F - t * t) * kSqrt2OverPi * (1.0F + 3.0F * kGeluTanhK * x * x);
 }
 
+// Sigmoid: 1 / (1 + e^-x)
+xt::xarray<float> sigmoid_reference(const xt::xarray<float>& x) {
+    return 1.0F / (1.0F + xt::exp(-x));
+}
+
+// d/dx of sigmoid: s * (1 - s)
+xt::xarray<float> sigmoid_grad_reference(const xt::xarray<float>& x) {
+    xt::xarray<float> s = sigmoid_reference(x);
+    return s * (1.0F - s);
+}
+
+// d/dx of tanh: 1 - tanh^2
+xt::xarray<float> tanh_grad_reference(const xt::xarray<float>& x) {
+    xt::xarray<float> t = xt::tanh(x);
+    return 1.0F - t * t;
+}
+
 }  // namespace
 
 class UnaryOpsTest : public ::testing::Test {
@@ -272,6 +289,76 @@ TEST_F(UnaryOpsTest, GeluTanh) {
 
     result->backward();
     EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), gelu_tanh_grad_reference(data), 8e-3F, 3e-2F));
+}
+
+TEST_F(UnaryOpsTest, Sigmoid) {
+    auto* device = &autograd::ctx().get_device();
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto result = sigmoid(tensor_ptr);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), sigmoid_reference(data), 8e-3F, 2e-2F));
+
+    result->backward();
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), sigmoid_grad_reference(data), 8e-3F, 2e-2F));
+}
+
+TEST_F(UnaryOpsTest, SigmoidKnownValues) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data = {{{{0.F, 1.F, -1.F, 4.F, -4.F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = sigmoid(tensor_ptr);
+    xt::xarray<float> expected = {{{{0.5F, 0.73106F, 0.26894F, 0.98201F, 0.01799F}}}};
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), expected, 1e-2F, 1e-2F));
+
+    result->backward();
+    // d(sigmoid)/dx = s * (1 - s), upstream grad is 1
+    xt::xarray<float> expected_grad = {{{{0.25F, 0.19661F, 0.19661F, 0.01766F, 0.01766F}}}};
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), expected_grad, 1e-2F, 1e-2F));
+}
+
+TEST_F(UnaryOpsTest, Tanh) {
+    auto* device = &autograd::ctx().get_device();
+
+    auto N = 4;
+    auto C = 1;
+    auto H = 20;
+    auto W = 5;
+
+    // Load random data from OS using getrandom and copy into tensor
+    xt::xarray<float> data = xt::empty<float>({N, C, H, W});
+    load_random_data_from_os(std::span{data.data(), data.size()});
+
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+    auto result = tanh(tensor_ptr);
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), xt::tanh(data), 8e-3F, 2e-2F));
+
+    result->backward();
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), tanh_grad_reference(data), 8e-3F, 2e-2F));
+}
+
+TEST_F(UnaryOpsTest, TanhKnownValues) {
+    auto* device = &autograd::ctx().get_device();
+    xt::xarray<float> data = {{{{0.F, 0.5F, -0.5F, 1.F, -1.F, 3.F, -3.F}}}};
+    auto tensor_ptr = autograd::create_tensor(core::from_xtensor(data, device), /* requires_grad */ true);
+
+    auto result = tanh(tensor_ptr);
+    xt::xarray<float> expected = {{{{0.F, 0.46212F, -0.46212F, 0.76159F, -0.76159F, 0.99505F, -0.99505F}}}};
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(result->get_value()), expected, 1e-2F, 1e-2F));
+
+    result->backward();
+    // d(tanh)/dx = 1 - tanh^2, upstream grad is 1
+    xt::xarray<float> expected_grad = {{{{1.F, 0.78645F, 0.78645F, 0.41997F, 0.41997F, 0.00987F, 0.00987F}}}};
+    EXPECT_TRUE(xt::allclose(core::to_xtensor(tensor_ptr->get_grad()), expected_grad, 1e-2F, 1e-2F));
 }
 
 }  // namespace ttml::ops::tests
