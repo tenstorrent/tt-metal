@@ -16,10 +16,31 @@
 
 using namespace ckernel;
 
+namespace ckernel::packer {
+// An SDPA kernel with a CB at 24 or above (joint_sdpa's intermediates; the sdpa kernel uses 0-17): its reconfigure picks the
+// form by the last push (pack_sdpa_last_push).
+template <int dep>
+constexpr bool llk_pack_sdpa_joint() {
+    bool high = false;
+    for (std::uint32_t i = 24; i < sizeof(pack_dst_format); i++) {
+        high = high || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    // joint_sdpa leaves CBs 4, 6 and 8-15 unused; sdpa, sparse_sdpa and flash_decode configure some of them
+    bool mid = pack_dst_format[4] != to_underlying(DataFormat::Invalid) || pack_dst_format[6] != to_underlying(DataFormat::Invalid);
+    for (std::uint32_t i = 8; i < 16; i++) {
+        mid = mid || pack_dst_format[i] != to_underlying(DataFormat::Invalid);
+    }
+    return llk_pack_sdpa_api<dep * 0 + 1>::value && high && !mid;
+}
+}  // namespace ckernel::packer
+
 // Blocking call to wait for free space needed to pack N tiles
 template <bool skip_sync = false, bool wait_for_blocks = false, bool brisc_pack = false>
 inline void llk_wait_for_free_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     DeviceZoneScopedSumN2("CB-COMPUTE-RESERVE-BACK");
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<skip_sync * 0 + 1>()) {
+        ckernel::packer::pack_sdpa_reserve = num_tiles;
+    }
     std::uint32_t output = operand;
 
     volatile tt_reg_ptr std::uint32_t* tiles_acked_ptr = get_cb_tiles_acked_ptr(operand);
@@ -83,6 +104,9 @@ inline void llk_push_to_brisc(const std::int32_t operand, const std::int32_t num
 template <bool push_blocks = false, bool brisc_pack = false>
 inline void llk_push_tiles(const std::int32_t operand, const std::int32_t num_tiles) {
     SYNC_SIGNAL("SYNC-CB-PUSH", operand);
+    if constexpr (ckernel::packer::llk_pack_sdpa_joint<push_blocks * 0 + 1>()) {
+        ckernel::packer::pack_sdpa_last_push = num_tiles;
+    }
     std::uint32_t output = operand;
 
     auto& cb = get_local_cb_interface(output);

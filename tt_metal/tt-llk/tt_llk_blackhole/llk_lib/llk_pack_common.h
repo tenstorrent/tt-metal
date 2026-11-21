@@ -110,7 +110,8 @@ inline void _llk_pack_dest_section_done_()
     constexpr bool pack_bound   = ckernel::packer::llk_pack_matmul_pack_bound<static_cast<std::uint32_t>(Dst)>();
     constexpr bool offset_first = Dst == DstSync::SyncHalf && !pack_size_mode<Dst> &&
                                   (pack_bound || !((is_fp32_dest_acc_en && pack_reconfig_u2d<Dst>) ||
-                                                   ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
+                                                   ckernel::packer::llk_pack_late_start<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en) ||
+                                                   ckernel::packer::llk_pack_copy<static_cast<std::uint32_t>(Dst)>(is_fp32_dest_acc_en)));
     if constexpr (Dst == DstSync::SyncHalf && by_branch)
     {
         if (dest_offset_id == 0)

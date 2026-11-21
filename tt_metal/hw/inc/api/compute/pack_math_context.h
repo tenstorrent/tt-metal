@@ -20,6 +20,8 @@ template <int api>
 struct llk_pack_norm_api;
 template <int api>
 struct llk_pack_lofi_api;
+template <int api>
+struct llk_pack_sdpa_api;
 template <>
 struct llk_pack_lofi_api<1> {
     static constexpr bool value = MATH_FIDELITY == MathFidelity::LoFi;
@@ -51,10 +53,19 @@ struct llk_pack_lofi_api<1> {
         static constexpr bool value = true; \
     };                                      \
     }
+// The SDPA SFPU header marks the SDPA kernels.
+#define PACK_SDPA_API()                     \
+    namespace ckernel::packer {             \
+    template <>                             \
+    struct llk_pack_sdpa_api<1> {           \
+        static constexpr bool value = true; \
+    };                                      \
+    }
 #else
 #define PACK_MATH_CONTEXT(matmul)
 #define PACK_SFPU_CONTEXT()
 #define PACK_MATMUL_API(api)
 #define PACK_SFPU_API(api)
 #define PACK_NORM_API()
+#define PACK_SDPA_API()
 #endif
