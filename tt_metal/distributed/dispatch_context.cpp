@@ -31,6 +31,8 @@
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -473,8 +475,12 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
     metal_context.set_fast_dispatch_mode(false);
-    // The dispatch cores rejoin the compute grid.
+    // The dispatch cores rejoin the compute grid, except those still claimed as service cores.
     mesh_device_impl.refresh_compute_grid();
+    auto& service_cores = metal_context.get_service_core_manager().impl();
+    if (service_cores.has_any_claims()) {
+        service_cores.track_capped_mesh(mesh_device->shared_from_this());
+    }
     num_fd_inits_--;
 }
 

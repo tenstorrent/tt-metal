@@ -5,6 +5,7 @@
 #include <internal/service/service_core_manager.hpp>
 #include "impl/internal/service/service_core_manager_impl.hpp"
 
+#include <algorithm>
 #include <memory>
 #include <unordered_map>
 #include <unordered_set>
@@ -97,6 +98,35 @@ void ServiceCoreManagerImpl::release(IDevice* device, const std::vector<CoreCoor
         }
     }
     claims_generation_.fetch_add(1, std::memory_order_acq_rel);
+
+    // The device's compute grid grows back once its last claim is gone. Meshes that cached the capped grid in
+    // slow dispatch refresh now; in fast dispatch the grid stays the same and terminate refreshes them anyway.
+    if (!it->second.cores.empty() || env_.get_rtoptions().get_fast_dispatch()) {
+        return;
+    }
+    std::erase_if(capped_meshes_, [&](const std::weak_ptr<distributed::MeshDevice>& weak_mesh) {
+        const auto mesh_device = weak_mesh.lock();
+        if (!mesh_device) {
+            return true;
+        }
+        const auto mesh_device_ids = mesh_device->get_device_ids();
+        if (std::find(mesh_device_ids.begin(), mesh_device_ids.end(), device->id()) == mesh_device_ids.end()) {
+            return false;
+        }
+        mesh_device->impl().refresh_compute_grid();
+        return std::none_of(mesh_device_ids.begin(), mesh_device_ids.end(), [this](ChipId id) {
+            return get_safe_compute_grid(id).has_value();
+        });
+    });
+}
+
+void ServiceCoreManagerImpl::track_capped_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const bool tracked = std::any_of(capped_meshes_.begin(), capped_meshes_.end(), [&](const auto& weak_mesh) {
+        return weak_mesh.lock() == mesh_device;
+    });
+    if (!tracked) {
+        capped_meshes_.push_back(mesh_device);
+    }
 }
 
 void ServiceCoreManagerImpl::wait_done(IDevice* device, CoreCoord core) const {

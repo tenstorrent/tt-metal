@@ -22,6 +22,9 @@ class IDevice;
 class MetalContext;
 class MetalEnvImpl;
 using DeviceAddr = uint64_t;
+namespace distributed {
+class MeshDevice;
+}  // namespace distributed
 }  // namespace tt::tt_metal
 
 namespace tt::tt_metal::internal {
@@ -73,6 +76,10 @@ public:
     // disjoint worker-set invariant between the regular worker grid and service cores.
     std::optional<CoreCoord> get_safe_compute_grid(ChipId device_id) const;
 
+    // Records a mesh that cached its compute grid while claims capped it, so that release() can refresh the mesh
+    // once the last claim on one of its devices is dropped. Called when fast dispatch is torn down.
+    void track_capped_mesh(const std::shared_ptr<distributed::MeshDevice>& mesh_device);
+
     // Called on every EnqueueMeshWorkload - common case is no claims, in which case routing is skipped.
     bool has_any_claims() const;
     // Bumped whenever the set of claimed cores changes (claim / release / device close). Lets callers
@@ -105,6 +112,7 @@ private:
     MetalEnvImpl& env_;
     MetalContext& ctx_;
     std::unordered_map<ChipId, DeviceServiceState> devices_;
+    std::vector<std::weak_ptr<distributed::MeshDevice>> capped_meshes_;
     std::atomic<uint64_t> claims_generation_{0};
 };
 

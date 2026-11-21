@@ -30,6 +30,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_workload.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <internal/mesh_device.hpp>
 #include "impl/program/program_impl.hpp"
@@ -171,6 +172,13 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
     const CoreCoord capped_grid = device->compute_with_storage_grid_size();
     EXPECT_EQ(capped_grid.x, fd_grid.x) << "SD grid x must be capped to FD grid x when service cores are claimed";
     EXPECT_EQ(capped_grid.y, fd_grid.y) << "SD grid y must be capped to FD grid y when service cores are claimed";
+    // The mesh caches its grid and default sub-device, so it must agree with the device in each phase.
+    auto expect_mesh_grid = [&](const CoreCoord& grid, const char* phase) {
+        EXPECT_EQ(mesh_device->compute_with_storage_grid_size(), grid) << phase;
+        EXPECT_EQ(mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0}), grid.x * grid.y)
+            << phase;
+    };
+    expect_mesh_grid(fd_grid, "SD with claimed service cores");
 
     // Phase 5: release service cores and verify the full SD grid is restored
     MetalContext::instance().get_service_core_manager().release(device, free_cores);
@@ -178,6 +186,7 @@ TEST_F(ServiceCoreSdFixture, ServiceCoreGridCap) {
     const CoreCoord restored_grid = device->compute_with_storage_grid_size();
     EXPECT_EQ(restored_grid.x, sd_grid.x) << "SD grid x must be restored to original after release";
     EXPECT_EQ(restored_grid.y, sd_grid.y) << "SD grid y must be restored to original after release";
+    expect_mesh_grid(sd_grid, "SD after the last service core is released");
 
     MetalContext::instance().get_service_core_manager().impl().on_device_close(device->id());
 }
