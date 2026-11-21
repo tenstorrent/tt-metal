@@ -1264,3 +1264,75 @@ def test_reshape_docstring_supported_inputs(dtype, layout, buffer_type, device):
     assert output.layout == layout
     assert output.memory_config().buffer_type == buffer_type
     assert_exact(ttnn.to_torch(input_tensor).reshape(1, 1, 100, 64), ttnn.to_torch(output))
+
+
+# (input shape, [W, Z, Y, X]) per layout, each within the rules of the ttnn.reshape_on_device docstring.
+_RESHAPE_ON_DEVICE_CASES = {
+    ttnn.TILE_LAYOUT: [
+        ((1, 2, 64, 64), (1, 1, 128, 64)),  # same last dim: a view of the input
+        ((1, 2, 64, 64), (2, 1, 32, 128)),
+        ((1, 2, 64, 96), (1, 2, 96, 64)),  # neither last dim is a multiple of the other
+        ((1, 2, 64, 64), (-1, 1, 32, 128)),  # W inferred
+    ],
+    ttnn.ROW_MAJOR_LAYOUT: [
+        ((1, 2, 50, 64), (1, 1, 100, 64)),  # same last dim: a view of the input
+        ((1, 2, 32, 64), (1, 2, 64, 32)),
+        ((1, 2, 30, 32), (1, 2, 10, 96)),  # the larger last dim is 3 times the smaller
+        ((1, 2, 30, 16), (1, 2, 60, 8)),
+        ((1, 2, 30, 8), (1, -1, 15, 16)),  # Z inferred
+    ],
+}
+# ROW_MAJOR last dims that are not both multiples of 8, which need a BFLOAT16 input.
+_RESHAPE_ON_DEVICE_BFLOAT16_CASES = [((1, 2, 30, 10), (1, 2, 20, 15)), ((1, 2, 30, 16), (1, 2, 40, 12))]
+
+
+def _reshape_on_device_needs_l1_input(dtype, layout, input_last_dim, output_last_dim):
+    """The DRAM rule of the ttnn.reshape_on_device docstring: a ROW_MAJOR input whose last dim changes, with both last
+    dims multiples of 8, can be in DRAM only with a last dim that is a multiple of 32 (BFLOAT16) or 16 (FLOAT32)."""
+    return (
+        layout == ttnn.ROW_MAJOR_LAYOUT
+        and input_last_dim != output_last_dim
+        and input_last_dim % 8 == 0
+        and output_last_dim % 8 == 0
+        and input_last_dim % (32 if dtype == ttnn.bfloat16 else 16) != 0
+    )
+
+
+@pytest.mark.parametrize("output_buffer_type", docstring_interleaved_buffer_type_params(ttnn.reshape_on_device))
+@pytest.mark.parametrize("input_buffer_type", docstring_interleaved_buffer_type_params(ttnn.reshape_on_device))
+@pytest.mark.parametrize("dtype, layout", docstring_dtype_layout_params(ttnn.reshape_on_device))
+def test_reshape_on_device_docstring_supported_inputs(dtype, layout, input_buffer_type, output_buffer_type, device):
+    """Runs every dtype, layout and interleaved buffer type the ttnn.reshape_on_device docstring lists, keeping and
+    changing the last dim as its rules allow. A reshape that changes the last dim also runs into every interleaved
+    buffer type the docstring lists; one that keeps it gives a view of the input."""
+    check_readable(dtype, layout, input_buffer_type, output_buffer_type)
+    cases = _RESHAPE_ON_DEVICE_CASES[layout]
+    if dtype == ttnn.bfloat16 and layout == ttnn.ROW_MAJOR_LAYOUT:
+        cases = cases + _RESHAPE_ON_DEVICE_BFLOAT16_CASES
+    for input_shape, output_shape in cases:
+        output_last_dim = torch.empty(input_shape).reshape(output_shape).shape[-1]
+        if input_buffer_type == ttnn.BufferType.DRAM and _reshape_on_device_needs_l1_input(
+            dtype, layout, input_shape[-1], output_last_dim
+        ):
+            continue
+        input_tensor = ttnn.from_torch(
+            full_range_input(input_shape, dtype),
+            dtype=dtype,
+            layout=layout,
+            device=device,
+            memory_config=interleaved_memory_config(input_buffer_type),
+        )
+        expected = ttnn.to_torch(input_tensor).reshape(output_shape)
+        same_last_dim = output_last_dim == input_shape[-1]
+        output_memory_config = input_tensor.memory_config()
+        if not same_last_dim:
+            output_memory_config = interleaved_memory_config(output_buffer_type)
+        for memory_config in (output_memory_config, None):
+            output = ttnn.reshape_on_device(input_tensor, *output_shape, memory_config=memory_config)
+
+            assert output.dtype == dtype
+            assert output.layout == layout
+            assert output.memory_config() == (memory_config or input_tensor.memory_config())
+            if same_last_dim:
+                assert output.buffer_address() == input_tensor.buffer_address()
+            assert_exact(expected, ttnn.to_torch(output))

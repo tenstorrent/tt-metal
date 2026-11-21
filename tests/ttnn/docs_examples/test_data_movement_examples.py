@@ -130,6 +130,15 @@ def test_repeat_interleave(device):
     logger.debug(f"Repeat Interleave Tensor Shape: {repeated_tensor.shape}")  # Shape([20, 10])
 
 
+def test_reshape_on_device(device):
+    # Create a rank-4 tensor to reshape
+    input_tensor = ttnn.rand((1, 1, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Reshape it to [W, Z, Y, X] = [1, 2, 64, 32]
+    reshaped_tensor = ttnn.reshape_on_device(input_tensor, 1, 2, 64, 32)
+    logger.debug(f"Reshaped Tensor Shape: {reshaped_tensor.shape}")  # Shape([1, 2, 64, 32])
+
+
 def test_slice(device):
     # Create a tensor to slice
     input_tensor = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)

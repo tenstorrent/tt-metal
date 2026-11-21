@@ -33,36 +33,45 @@ ttnn::Tensor reshape_on_device_wrapper(
 void bind_reshape(nb::module_& mod) {
     const auto* doc =
         R"doc(
+            Reshapes `input_tensor` to ``[W, Z, Y, X]``, keeping its elements in the same row-major order.
 
-        Returns a tensor with the new shape of ``[W, Z, Y, X]``. The X dimension of input and output tensor must have same size.
+            Args:
+                input_tensor (ttnn.Tensor): the input tensor, of rank 4, on device. A TILE input must use 32x32 tiles.
+                W (int): the first dimension of the output.
+                Z (int): the second dimension of the output.
+                Y (int): the third dimension of the output.
+                X (int): the last dimension of the output.
 
-        Equivalent pytorch code:
+            Keyword Args:
+                memory_config (ttnn.MemoryConfig, optional): Memory configuration of the output. It must be interleaved. When `X` equals the last dimension of the input, it must be `None` or the input's memory configuration. Defaults to `None`, which uses the input's memory configuration.
 
-        .. code-block:: python
+            Returns:
+                ttnn.Tensor: the output tensor, of shape ``[W, Z, Y, X]``, with the input's dtype and layout. When `X` equals the last dimension of the input, the output is a view that shares the input's device buffer.
 
-            input_tensor = torch.arange(4.)
-            W = 1
-            Z = 1
-            Y = 2
-            X = 2
-            output_tensor = torch.reshape(input_tensor, (W, Z, Y, X))
+            Note:
+                Supported dtypes and layouts:
 
+                .. list-table::
+                   :header-rows: 1
 
-        Args:
-            * :attr:`input_tensor`: Input Tensor. A TILE layout tensor must use the standard 32x32 tile.
-            * :attr:`W`: W dim of tensor.
-            * :attr:`Z`: Z dim of tensor.
-            * :attr:`Y`: Y dim of tensor.
-            * :attr:`X`: X dim of tensor.
+                   * - Dtypes
+                     - Layouts
+                   * - BFLOAT16, FLOAT32
+                     - TILE, ROW_MAJOR
 
-        Keyword Args:
-            * :attr:`memory_config`: Memory Config of the output tensor
+                ``W * Z * Y * X`` must equal the number of elements of the input. One of `W`, `Z`, `Y` and `X` can be
+                -1: it is then inferred from that number and the other three.
 
-        Example:
+                For a TILE input, the last two dimensions of the input and of the output must be multiples of 32.
 
-            >>> tensor = ttnn.from_torch(torch.tensor((1, 4), dtype=torch.bfloat16), device=device)
-            >>> output = ttnn.reshape(tensor, 1, 1, 2, 2)
+                For a ROW_MAJOR input whose last dimension differs from `X`:
 
+                - When both are multiples of 8, the larger must be a multiple of the smaller. An input in DRAM then
+                  needs a last dimension that is a multiple of 32 for ``BFLOAT16``, or of 16 for ``FLOAT32``.
+                - Otherwise, the input must be ``BFLOAT16``.
+
+            Memory Support:
+                - Interleaved: DRAM and L1
         )doc";
 
     ttnn::bind_function<"reshape_on_device">(
