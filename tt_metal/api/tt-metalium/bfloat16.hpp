@@ -12,6 +12,9 @@
 #include <vector>
 #include <compare>
 #include <bit>
+#include <cmath>
+#include <limits>
+#include <type_traits>
 
 class bfloat16 {
 private:
@@ -24,8 +27,23 @@ public:
     // create from arithmetic type: tie-to-even rounding
     template <class T>
         requires std::is_arithmetic_v<T>
-    constexpr bfloat16(T v) noexcept
-        : uint16_data(from_float(static_cast<float>(v))) {}
+    constexpr bfloat16(T v) noexcept {
+        const float narrowed = static_cast<float>(v);
+        if constexpr (std::numeric_limits<T>::digits > std::numeric_limits<float>::digits) {
+            const auto bits = std::bit_cast<uint32_t>(narrowed);
+            // Only an FP32 result halfway between two BF16 values can hide which one was closer.
+            if ((bits & 0xffffu) == 0x8000u && std::isfinite(narrowed)) {
+                // For integer inputs a rounded value just outside T's range is a power of two, never a midpoint.
+                const T midpoint = static_cast<T>(narrowed);
+                if (v != midpoint) {
+                    const bool larger_magnitude = narrowed > 0 ? v > midpoint : v < midpoint;
+                    uint16_data = static_cast<uint16_t>((bits >> 16) + larger_magnitude);
+                    return;
+                }
+            }
+        }
+        uint16_data = from_float(narrowed);
+    }
 
     // create from float: truncate rounding
     static bfloat16 truncate(float float_num);
