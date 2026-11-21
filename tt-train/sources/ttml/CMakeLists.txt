@@ -148,6 +148,10 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/subtract_at_target.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/subtract_at_target/device/subtract_at_target_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/minimal_matmul_reduce_scatter_async/minimal_matmul_reduce_scatter_async.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/minimal_matmul_reduce_scatter_async/device/minimal_matmul_reduce_scatter_async_device_operation.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/minimal_matmul_reduce_scatter_async/device/minimal_matmul_reduce_scatter_async_program_factory.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/minimal_matmul_reduce_scatter_async/device/slice_layout.cpp
     # K-Split Gram Matmul (multicast)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/k_split_gram_matmul.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/k_split_gram_matmul/device/k_split_gram_matmul_device_operation.cpp
