@@ -1,0 +1,34 @@
+{
+  "dtype": [
+    "FLOAT32",
+    "BFLOAT16",
+    "BFLOAT8_B"
+  ],
+  "layout": [
+    "TILE",
+    "ROW_MAJOR"
+  ],
+  "memory_config": [
+    "DRAM",
+    "L1"
+  ],
+  "sharding": [
+    "interleaved",
+    "height"
+  ],
+  "memory_argument": [
+    null,
+    "input"
+  ],
+  "mode": [
+    "nearest"
+  ],
+  "channel_alignment": [
+    "tile_aligned",
+    "non_tile_aligned"
+  ],
+  "scale": [
+    "uniform",
+    "per_axis"
+  ]
+}

@@ -4,7 +4,7 @@
 - **Formula**: `output[n, i, j, c] = input[n, i // sh, j // sw, c]`; output `[N, H·sh, W·sw, C]`, the input's dtype, layout and buffer (interleaved). Every output element is an input element, unchanged (spec R1).
 - **PyTorch Reference**: `reference(input_tensor, scale_factor)` in `eval/specs/upsample/spec.py` — `input.double().repeat_interleave(sh, dim=1).repeat_interleave(sw, dim=2)` (= `torch.nn.functional.interpolate(mode="nearest")` on the channels-first permutation).
 - **Import Path**: `from ttnn.operations.upsample import upsample`
-- **Function Signature**: `upsample(input_tensor: ttnn.Tensor, scale_factor, mode: str = "nearest") -> ttnn.Tensor` — `scale_factor` an int or a pair `(sh, sw)` of whole numbers ≥ 1 (form never gated, R2).
+- **Function Signature**: `upsample(input_tensor: ttnn.Tensor, scale_factor, mode: str = "nearest", *, memory_config=None) -> ttnn.Tensor` (`memory_config` since Refinement 0: None or the input's own config) — `scale_factor` an int or a pair `(sh, sw)` of whole numbers ≥ 1 (form never gated, R2).
 - **Specification**: `eval/specs/upsample/spec.py` (the only source of requirements). One `ttnn.generic_op` dispatch per call (run rule); Metal 2.0 `ttnn.ProgramSpec` only (Quasar).
 
 ## Phases
@@ -28,7 +28,7 @@
 - **Compute config**: none (spec DECISIONS: pure data movement, CONVENTIONS §2.2 exemption).
 - **Golden baseline**: 26 / 26 supported cells pass (bit-exact); 142 xfail_expected, 84 invalid_skipped, 0 loud (per `verifier_report.json`).
 
-### [ ] Refinement 0 — The `memory_config` argument and a height-sharded input (the YOLOv8 sharded upsample)
+### [x] Refinement 0 — The `memory_config` argument and a height-sharded input (the YOLOv8 sharded upsample)
 
 **Goal**: two things the specification gained after Phase 0, in one refinement because the model's call needs both.
 1. The signature gains a keyword-only `memory_config=None` (the stub in `eval/specs/upsample/spec.py`; rule R7; `CALL["canonical"]`, axis `memory_argument`). Add `memory_argument` to SUPPORTED with `None` and `"input"`: `memory_config=` the input tensor's own memory config gives the same result as leaving it out, and any other config reads as `"other"` and is refused by name.

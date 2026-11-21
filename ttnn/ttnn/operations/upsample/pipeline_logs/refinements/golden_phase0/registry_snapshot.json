@@ -1,0 +1,40 @@
+{
+  "supported": {
+    "dtype": [
+      "BFLOAT16"
+    ],
+    "layout": [
+      "ROW_MAJOR"
+    ],
+    "memory_config": [
+      "DRAM",
+      "L1"
+    ],
+    "sharding": [
+      "interleaved"
+    ],
+    "mode": [
+      "nearest"
+    ],
+    "channel_alignment": [
+      "tile_aligned"
+    ],
+    "scale": [
+      "uniform"
+    ]
+  },
+  "exclusions": [],
+  "invalid": [
+    {
+      "dtype": "BFLOAT8_B",
+      "layout": "ROW_MAJOR"
+    },
+    {
+      "memory_config": "DRAM",
+      "sharding": "height"
+    },
+    {
+      "dtype": "BFLOAT8_B"
+    }
+  ]
+}

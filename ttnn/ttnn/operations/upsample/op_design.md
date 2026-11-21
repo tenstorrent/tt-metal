@@ -57,7 +57,7 @@ predicate uses the query, never the value.
 | Shape | `[N, H, W, C]`, rank 4; Phase 0: `C % 32 == 0` (`channel_alignment = tile_aligned`) |
 | Dtype | Phase 0: `bfloat16` (TARGET adds `float32`; `bfloat8_b` unbuildable on Quasar) |
 | Layout | Phase 0: `ROW_MAJOR_LAYOUT` — one page = one stick = the `C` values of one position `[n, h, w]`, `stick_bytes = C · element_size` |
-| Memory | interleaved, DRAM or L1 (R3); sharded refused by name (R6) |
+| Memory | interleaved, DRAM or L1 (R3); height-sharded in L1 (Refinement 0), read through the same `TensorAccessor` (it resolves sharded page addresses); width/block/nd sharding refused by name (R6). `memory_config=` None or the input's own config (axis `memory_argument`, R7; `canonical_memory` imported from the spec); any other config is `"other"`, refused by name |
 
 ### Output
 
@@ -66,7 +66,7 @@ predicate uses the query, never the value.
 | Shape | `[N, H·scale_h, W·scale_w, C]` |
 | Dtype | input's |
 | Layout | input's (ROW_MAJOR in Phase 0) |
-| Memory | input's buffer type, interleaved (R5): `ttnn.allocate_tensor_on_device(ttnn.TensorSpec(out_shape, input.dtype, input.layout, input.memory_config()), device)` (`ttnn/cpp/ttnn-nanobind/tensor.cpp:290-305`). Allocation is not a dispatch. |
+| Memory | R5, `output_memory_config()` in `upsample.py`: an interleaved input's own config (its buffer, interleaved); for a height-sharded input, height-sharded in L1 over the input's shard grid and orientation with shard shape `[input shard height * sh * sw, C]`. Allocated with `ttnn.allocate_tensor_on_device(ttnn.TensorSpec(out_shape, input.dtype, input.layout, out_memory), device)` (`ttnn/cpp/ttnn-nanobind/tensor.cpp:290-305`). Allocation is not a dispatch. |
 
 ## Blocking Model
 
@@ -141,7 +141,7 @@ wait.
 | `output_split` — split output sticks/rows across clusters; each cluster reads the input sticks its outputs need | **rejected** — superseded by `stick_stream`: every input stick yields exactly `sh·sw` writes, so the input-stick split is already write-balanced; the output split re-reads an input stick on every cluster that owns one of its replicas (up to `sh·sw` DRAM crossings of the input at cluster boundaries, `sh` for a whole-row split) | — | — | input crosses up to `sh·sw` times | — |
 | `l1_row_replicate` — reader assembles the replicated output row in L1 (`sw` local copies per stick) so the writer writes contiguous output rows | **rejected** — superseded by `stick_stream`: an interleaved row-major page is one stick at its own bank address, so the output needs one NoC write per page either way; this adds `sw·` local L1 copies per stick and an output-row-sized ring for zero DRAM saving | — | — | adds core-local traffic `(sw−1)·input bytes` | — |
 | `tile_layout` — TILE-layout cells (`[N, H, W, C]` tiles over `(W, C)` per `(n, h)`): H replication writes whole output tile-rows `sh` times; W replication repacks 32-element tile rows (face rows) of each tile into `sw`-dilated output tiles | **deferred** — positive reason: `layout = TILE_LAYOUT` is outside PHASE0 (no caller in the trace); it is a second kernel pair, not a change of this one (spec DECISIONS 2026-11-21). Reachable: the split (contiguous ranges of input tile-rows `(n, h, w-tile)` across clusters) and the ring structure are the same; the W-repack is either a DM face-row shuffle into an output-tile ring or `untilize` → `stick_stream` → `tilize` helpers in one compute kernel. Tile geometry is per image and `ceil`: `tensor_c_tiles = ceil(C/32)`, `tensor_w_tiles = ceil(W/32)` per `(n, h)` | `layout == TILE_LAYOUT` | tile-row block of `block_tiles` × `scale_h` | minimum (input once, output once) for the H replication; W repack core-local | per-block handshakes as `stick_stream`, plus tilize/untilize inits once per block |
-| `sharded_in_place` — a height-sharded L1 input consumed through a ring borrowed from its shard (`borrowed_from`), output shards written locally | **deferred** — positive reason: TARGET's `sharding` axis is `["interleaved"]` only and the signature has no `memory_config` argument (spec DECISIONS 2026-11-21); a sharded input is refused by name (R6). Reachable: per-cluster work is already a contiguous stick range; a height shard is exactly such a range, so the reader becomes a no-op on a borrowed ring | `sharding != interleaved` | the whole shard (one block) | zero input NoC traffic | one block per shard |
+| `sharded_in_place` — a height-sharded L1 input consumed through a ring borrowed from its shard (`borrowed_from`), output shards written locally | **deferred** — Refinement 0 serves height-sharded inputs on the `stick_stream` path (accessor reads/writes over the full grid; the operator's notes put per-shard upsampling out of its scope as a performance refinement of its own). Reachable: per-cluster work is already a contiguous stick range; a height shard is exactly such a range, so the reader becomes a no-op on a borrowed ring | `sharding != interleaved` | the whole shard (one block) | zero input NoC traffic | one block per shard |
 
 Regime selection: one built regime. Its predicate is checked in `validate()` (step 6); there is no
 run-time selection between built regimes, so no regime-pinned test beyond the predicate's refusal
@@ -213,7 +213,7 @@ No inter-cluster communication in any built or deferred regime.
 | `dtype = bfloat8_b` | not buildable on Quasar | refused in `validate()`; no refinement (target page *Family facts*); INVALID with ROW_MAJOR anyway |
 | `layout = TILE_LAYOUT` | scheme-change | deferred `tile_layout` regime |
 | `memory_config = L1` | in Phase 0 | output allocated in L1 (R5); same kernels |
-| `sharding` | only `interleaved` in TARGET | — (`sharded_in_place` deferred row) |
+| `sharding` | `interleaved`, `height` (Refinement 0) | height: same `stick_stream` kernels, sharded output config built on the host (`sharded_in_place` still deferred) |
 | `channel_alignment = non_tile_aligned` | knob-turn | `stick_stride = align_up(stick_bytes, max(l1_align, dram_align))` already in the formula; gate only |
 | `scale = per_axis` | knob-turn | kernels take `scale_h`, `scale_w` separately from Phase 0; gate only |
 

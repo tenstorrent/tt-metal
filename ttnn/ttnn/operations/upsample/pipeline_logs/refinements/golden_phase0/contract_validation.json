@@ -1,0 +1,55 @@
+{
+  "op": "upsample",
+  "spec": "/localdev/iwrosz/tt-metal-q3/eval/specs/upsample/spec.py",
+  "sha256": "a06fe5ed4448d68812421a583eec932cc96c2a7acf58ac3d92b25f1b536dbcd3",
+  "status": "failed",
+  "errors": 3,
+  "unresolved": 5,
+  "findings": [
+    {
+      "check": "cell_count",
+      "level": "info",
+      "message": "1056 cells = 22 INPUTS x 48 combinations; 396 skipped by INVALID; 28 in PHASE0; 0 loose, 0 numeric, 3 rejection test(s)"
+    },
+    {
+      "check": "signature",
+      "level": "error",
+      "message": "the op's signature differs from the stub. Specification: (input_tensor[positional_or_keyword], scale_factor[positional_or_keyword], mode[positional_or_keyword]='nearest', memory_config[keyword_only]=None). Op: (input_tensor[positional_or_keyword], scale_factor[positional_or_keyword], mode[positional_or_keyword]='nearest')"
+    },
+    {
+      "check": "phase0_supported",
+      "level": "error",
+      "message": "SUPPORTED has no entry for 'memory_argument'"
+    },
+    {
+      "check": "phase0_supported",
+      "level": "error",
+      "message": "SUPPORTED['memory_argument'] lacks [None], which PHASE0 requires"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "DEFINITION['tt_regen_spec']['governs'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "NUMERIC['special_values'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "NUMERIC['freedoms'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['bar'] is UNRESOLVED"
+    },
+    {
+      "check": "open_items",
+      "level": "unresolved",
+      "message": "PERFORMANCE['measure'] is UNRESOLVED"
+    }
+  ]
+}
