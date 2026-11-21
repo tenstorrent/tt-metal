@@ -11,6 +11,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -77,6 +78,17 @@ void kernel_main() {
     }
 
     const bool enable_sqrt = not(use_two_stage_reduce and not is_second_stage_reader);
+
+    // The reduce scalers are 1.0; the 1/N factors are applied here as float32 in DEST, since a bfloat16
+    // scaler tile cannot hold 1/3, 1/5, 1/6, 1/7 exactly and would bias E[x] and Var[x]. A two-stage reduce's
+    // second-stage cores combine sums the first stage has already scaled, so they apply no cross-core factor.
+    constexpr uint32_t reduce_scale_w = get_arg(args::reduce_scale_w);
+    constexpr uint32_t reduce_scale_c = get_arg(args::reduce_scale_c);
+    const bool apply_reduce_scale_c = not(use_two_stage_reduce and not is_second_stage_reader);
+    auto scale_partial_reduce = [=](uint32_t dst_idx) {
+        binop_with_scalar_tile_init();
+        mul_unary_tile(dst_idx, reduce_scale_w);
+    };
 
     constexpr uint32_t dst0 = 0;
     constexpr uint32_t scaler0 = 0;
@@ -311,7 +323,9 @@ void kernel_main() {
         dfb_scaler,
         dfb_ex_partial,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w),
+        compute_kernel_lib::NoAccumulation{},
+        scale_partial_reduce);
 #ifdef DO_COL_MASK
     dfb_mask_scratch.pop_front(num_tiles_per_block);
 #endif
@@ -344,6 +358,10 @@ void kernel_main() {
                 dfb_ex_external.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
                 dummy_unpack(dfb_ex_external_id);
                 dfb_ex_external.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+            }
+            if (apply_reduce_scale_c) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst0, reduce_scale_c);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -487,7 +505,9 @@ void kernel_main() {
         dfb_scaler,
         dfb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
-        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+        compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w),
+        compute_kernel_lib::NoAccumulation{},
+        scale_partial_reduce);
     reconfig_data_format(dfb_xmm2_id, dfb_scaler_id);
     dfb_xmm2.pop_front(num_tiles_per_block);
 
@@ -519,6 +539,10 @@ void kernel_main() {
                 dfb_ex_external2.wait_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
                 dummy_unpack(dfb_ex_external2_id);
                 dfb_ex_external2.pop_front(static_cast<uint16_t>(num_blocks_second_stage - 1));
+            }
+            if (apply_reduce_scale_c) {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(dst0, reduce_scale_c);
             }
             tile_regs_commit();
             tile_regs_wait();
