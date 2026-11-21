@@ -89,6 +89,7 @@ set(UNIT_TESTS_API_SOURCES
     test_worker_config_buffer.cpp
     test_work_split.cpp
     test_blockfloat_common.cpp
+    test_data_format_quasar.cpp
     test_mx_common.cpp
     test_descriptor_patching.cpp
     test_duplicate_kernel.cpp
