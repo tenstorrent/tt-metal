@@ -39,7 +39,7 @@ One grace covers every graceful shutdown: `TT_RUN_STOP_GRACE_S`, 120 s by defaul
 A stop logs a warning with the grace; ranks still running when it runs out are forced through the launcher, with a
 warning to run `tt-smi -r`. Every other bound is fixed: a process tt-run sends SIGTERM (the launcher on a force, a leftover, a
 launcher still up after a rank's `MPI_Abort`) is SIGKILLed 10 s later. The constants are at the top of
-`ttnn/ttnn/distributed/ttrun.py`.
+tt-run's `ttrun.py`.
 
 Under Slurm, `scancel` and a time limit send SIGTERM to the job step's process group, which is tt-run's: tt-run stops
 the job as for a SIGTERM at tt-run. Measured with a real `scancel` of an sbatch job and of an `srun` step on
