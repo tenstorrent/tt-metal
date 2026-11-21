@@ -181,4 +181,5 @@ void kernel_main() {
 #endif
         }
     }
+    noc_async_atomic_barrier();
 }
