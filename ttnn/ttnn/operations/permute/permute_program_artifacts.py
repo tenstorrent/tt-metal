@@ -41,7 +41,7 @@ THREAD_PLANS = {
 FREE_DM_HARTS = 6  # of 8 per cluster: DM0 serves ring interrupts, DM1 the remapper (target page, cluster model)
 NEOS = 4
 
-PAGE_RING_DEPTH = 8  # cb_pages entries (page_gather)
+PAGE_RING_DEPTH = 8  # cb_pages entries per thread of its wider endpoint (page_gather)
 TRANSPOSE_BLOCK_TILES = 4  # tiles per DEST window; <= DEST_AUTO_LIMIT (16-bit DEST, half sync: 8), asserted in-kernel
 TRANSPOSE_RING_BLOCKS = 2  # windows per NEO in each tile_transpose ring (double buffer)
 OUT_SLOTS = 8  # staged_gather output slots per worker thread
@@ -224,14 +224,18 @@ def _reader_writer(plan_r, plan_w, ring_in, ring_out, rt_common, per_core):
 
 def build_page_gather(inp, out, s, d, *, page_ring_depth=PAGE_RING_DEPTH, plan=None):
     R, _, W = plan or THREAD_PLANS["page_gather"]
+    if not (R >= 1 and W >= 1 and R + W <= FREE_DM_HARTS and max(R, W) % min(R, W) == 0):
+        raise ValueError(f"thread plan {(R, 0, W)}: need R + W <= {FREE_DM_HARTS} and min(R, W) | max(R, W)")
     entry = _entry_bytes(inp)
-    if entry * page_ring_depth > RING_CAP_BYTES:
-        raise NotImplementedError(f"permute: a row of {entry} B x {page_ring_depth} entries exceeds the ring cap")
+    # A STRIDED ring is sliced per thread of its wider endpoint: the depth is counted per such thread.
+    num_entries = page_ring_depth * max(R, W)
+    if entry * num_entries > RING_CAP_BYTES:
+        raise NotImplementedError(f"permute: a row of {entry} B x {num_entries} entries exceeds the ring cap")
     core_set, _, per_core, common = _page_run_args(inp, out, s, d, "page_gather")
     ring = E.DataflowBufferSpec(
         unique_id="cb_pages",
         entry_size=entry,
-        num_entries=page_ring_depth,
+        num_entries=num_entries,
         data_format_metadata=_ring_format(inp.dtype),
     )
     reader, writer, reader_args, writer_args = _reader_writer(R, W, "cb_pages", "cb_pages", common, per_core)
@@ -359,20 +363,13 @@ class GatherGeometry:
                 if e[j] <= q[j]:
                     break
             e[j] = self._chunk(e[j], 2, q[j])
-        # 3. Occupancy: RM chunks along 3 / b until every worker can have a box.
+        # 3. Occupancy: RM chunks along 3 / b (the longer first) until every worker can have a box. One pass:
+        #    a second would halve the boxes again without shortening the longest thread's work.
         if not self.tile:
-            for _ in range(4):
-                changed = False
-                order = [3, self.b] if e[3] >= e[self.b] else [self.b, 3]
-                for j in order:
-                    nb = self.n_blocks(e)
-                    if nb >= workers or e[j] <= q[j]:
-                        continue
-                    new = self._chunk(e[j], _ceil(workers, nb), q[j])
-                    if new < e[j]:
-                        e[j], changed = new, True
-                if not changed:
-                    break
+            for j in ([3, self.b] if e[3] >= e[self.b] else [self.b, 3]):
+                nb = self.n_blocks(e)
+                if nb < workers and e[j] > q[j]:
+                    e[j] = min(e[j], self._chunk(e[j], _ceil(workers, nb), q[j]))
         # 4. Coarsen: while there are >= 2 boxes per worker, grow the free axis innermost in output order.
         while self.n_blocks(e) >= 2 * workers:
             grown = False
@@ -398,14 +395,14 @@ class GatherGeometry:
         return e
 
 
-def build_staged_gather(inp, out, s, d, *, gather_threads=GATHER_THREADS, out_slots=OUT_SLOTS, extent=None):
-    device = inp.device()
+def plan_staged_gather(inp, out, s, d, *, gather_threads=GATHER_THREADS, out_slots=OUT_SLOTS, extent=None):
+    """(geometry, box extents e, threads engaged): the single source of gather_extent and the thread clamp."""
     eb = _element_bytes(inp.dtype)
     slot_align = max(ttnn.get_l1_alignment(), ttnn.get_dram_alignment())
     align_elems = _buffer_alignment(inp) // eb  # input and output share a buffer type (R7)
     geo = GatherGeometry(inp.layout, s, d, eb, align_elems, _buffer_alignment(out) // eb, slot_align)
 
-    grid = device.compute_with_storage_grid_size()
+    grid = inp.device().compute_with_storage_grid_size()
     n_cores = grid.x * grid.y
     budget = ttnn.get_max_worker_l1_unreserved_size() - _l1_reserve_bytes([inp, out])
     min_bytes = geo.per_thread_bytes(geo.start() if geo.tile else _min_rm_box(geo), out_slots)
@@ -414,7 +411,17 @@ def build_staged_gather(inp, out, s, d, *, gather_threads=GATHER_THREADS, out_sl
         raise NotImplementedError(f"permute: the smallest box ({min_bytes} B) does not fit L1 ({budget} B)")
     budget_per_thread = (budget // threads) // slot_align * slot_align
     e = list(extent) if extent is not None else geo.choose(n_cores * threads, budget_per_thread, out_slots)
-    assert geo.per_thread_bytes(e, out_slots) <= budget_per_thread, (e, budget_per_thread)
+    if geo.per_thread_bytes(e, out_slots) > budget_per_thread:
+        raise NotImplementedError(f"permute: box {e} does not fit {budget_per_thread} B per thread")
+    return geo, e, threads
+
+
+def build_staged_gather(inp, out, s, d, *, gather_threads=GATHER_THREADS, out_slots=OUT_SLOTS, extent=None):
+    geo, e, threads = plan_staged_gather(
+        inp, out, s, d, gather_threads=gather_threads, out_slots=out_slots, extent=extent
+    )
+    eb, slot_align = geo.eb, geo.slot_align
+    grid = inp.device().compute_with_storage_grid_size()
 
     nb = [_ceil(s[j], e[j]) for j in range(4)]
     n_blocks = _prod(nb)

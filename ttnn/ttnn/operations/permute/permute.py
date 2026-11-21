@@ -114,10 +114,11 @@ def _output_spec(input_tensor, norm):
     )
 
 
-def _permute_into(input_tensor, dims, output_tensor):
+def _permute_into(input_tensor, dims, output_tensor, **knobs):
     """Run the permute program writing into a caller-given output (tests pre-fill it with a sentinel to see
-    that every thread of the plan did its share). `dims` must already be validated and normalized."""
-    spec, run_args, tensor_indices = create_program_artifacts(input_tensor, output_tensor, dims)
+    that every thread of the plan did its share). `dims` must already be validated and normalized; `knobs`
+    turn the regime's block knobs and thread plan (permute_program_artifacts.BUILDERS)."""
+    spec, run_args, tensor_indices = create_program_artifacts(input_tensor, output_tensor, dims, **knobs)
     return ttnn.generic_op([input_tensor, output_tensor], spec, run_args, tensor_indices)
 
 
