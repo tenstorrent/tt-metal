@@ -676,3 +676,4 @@
   64.2k; 786432 85.9 / 59.6k; 1024000 86.9 / 58.9k = at or better than 11-19 everywhere. Branch ready to push (owner).
 - 17:20 on model_bringup: framework F298 parity (a46a236777f); QUEUED MB.5 (the no-conversion probe on the 5120 single path at 1M, tests only, outputs A == B). Launched --until MB.5.
 - 17:14 heartbeat: MB.5 agent active; watch armed.
+- 17:35 MB.5 ACCEPTED (tests-only probe, outputs equal). NO-CONVERSION at 5120 / 1M: 86.1-87.1 -> 85.1-85.9 ms (saving 0.2-2.0 ms, ~1%; device 0.26-0.49, pack host ~0.8). Both paths: ~1% at 1M.
