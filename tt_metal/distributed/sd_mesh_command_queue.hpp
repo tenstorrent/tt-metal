@@ -52,6 +52,8 @@ public:
         std::shared_ptr<distributed::multihost::DistributedContext> distributed_context);
     ~SDMeshCommandQueue() override;
 
+    bool should_pin_write(const MeshBuffer& buffer, size_t local_bytes, size_t max_shard_bytes) const override;
+
     std::optional<MeshTraceId> trace_id() const override;
 
     WorkerConfigBufferMgr& get_config_buffer_mgr(uint32_t index) override;

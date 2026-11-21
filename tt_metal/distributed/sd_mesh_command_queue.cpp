@@ -20,6 +20,7 @@
 #include <mesh_event.hpp>
 #include <tt-metalium/experimental/core_subset_write/buffer_write.hpp>
 #include <tt-metalium/experimental/dispatch_context.hpp>
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/graph_tracking.hpp>
 #ifdef TT_METAL_USE_EMULE
 #include "emule_deferred_mesh_dispatch.hpp"
@@ -35,6 +36,10 @@
 #endif
 
 namespace {
+
+// Slow dispatch DMAs each device's shards straight out of the pinned buffer, so its pin pays off per device rather than
+// per upload. Below this many bytes for one device, the bounce-buffer copy was as fast or faster on Blackhole.
+constexpr size_t k_pin_write_min_bytes_per_device = 8 * 1024 * 1024;  // 8 MB
 
 bool logical_cores_intersect(
     const std::vector<std::vector<tt::tt_metal::CoreCoord>>& previous_cores,
@@ -121,13 +126,28 @@ std::optional<MeshTraceId> SDMeshCommandQueue::trace_id() const {
     return std::nullopt;
 }
 
+bool SDMeshCommandQueue::should_pin_write(
+    const MeshBuffer& buffer, size_t /*local_bytes*/, size_t max_shard_bytes) const {
+    // Each device's write threads DMA their own shard, so the pin is worth it when one shard is big enough.
+    if (max_shard_bytes < k_pin_write_min_bytes_per_device) {
+        return false;
+    }
+    // Only DMA reads the pin, and an interleaved buffer is written one page at a time, so its pages must reach the
+    // DMA minimum. A sharded buffer is written one contiguous shard per core.
+    if (is_sharded(buffer.device_local_config().sharding_args.buffer_layout())) {
+        return true;
+    }
+    const auto& hal = mesh_device_->impl().metal_env().get_hal();
+    return buffer.page_size() >= hal.get_dma_write_min_bytes(tt::umd::IoOrdering::Relaxed);
+}
+
 bool SDMeshCommandQueue::write_shard_to_device(
     const MeshBuffer& buffer,
     const MeshCoordinate& device_coord,
     const void* src,
     const std::optional<BufferRegion>& region,
     ttsl::Span<const SubDeviceId> sub_device_ids,
-    std::shared_ptr<experimental::PinnedMemory> /* pinned_memory */,
+    std::shared_ptr<experimental::PinnedMemory> pinned_memory,
     const tt::tt_metal::CoreRangeSet* logical_core_filter) {
     if (!mesh_device_->impl().is_local(device_coord)) {
         return false;
@@ -154,12 +174,17 @@ bool SDMeshCommandQueue::write_shard_to_device(
         host_transfer_stats_,
         HostTransferCategory::BufferWriteSlowDispatch,
         host_transfer_stats_->enabled() ? host_bytes_written(*shard_view, region_value.size, logical_core_filter) : 0);
+    const ChipId chip_id = device_buffer->device()->id();
     if (logical_core_filter != nullptr) {
         tt::tt_metal::experimental::core_subset_write::WriteToBuffer(*shard_view, payload, *logical_core_filter);
+    } else if (pinned_memory != nullptr && pinned_memory->has_device(chip_id)) {
+        tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload, pinned_memory->get_buffer(chip_id));
     } else {
         tt::tt_metal::slow_dispatch::WriteToBuffer(*shard_view, payload);
     }
-    return false;  // Slow dispatch doesn't support pinned memory
+    // Pinned or not, the write has finished reading host memory when it returns, so there is no pinned memory for the
+    // caller to keep alive past this call.
+    return false;
 }
 
 void SDMeshCommandQueue::read_shard_from_device(

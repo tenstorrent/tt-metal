@@ -150,18 +150,22 @@ public:
         ChipId device_id,
         int dram_view,
         uint64_t addr,
-        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt,
+        tt::umd::SysmemBuffer* pinned_src = nullptr) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
     // Without an explicit ordering, writes to DRAM cores are Relaxed and all others Strict. Large writes can go through
     // PCIe DMA instead of MMIO, see Hal::get_dma_write_min_bytes. Relaxed writes are not ordered against any other
     // write until a barrier.
+    // If `pinned_src` is a mapping of this chip that holds all of [mem_ptr, mem_ptr + sz_in_bytes), a DMA write reads
+    // straight from it instead of being copied through the driver's bounce buffer.
     void write_core(
         const void* mem_ptr,
         uint32_t sz_in_bytes,
         tt_cxy_pair core,
         uint64_t addr,
-        std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
+        std::optional<tt::umd::IoOrdering> ordering = std::nullopt,
+        tt::umd::SysmemBuffer* pinned_src = nullptr) const;
 
     // Access physical noc coordinates. Does write without effects of write combining. On a remote chip a payload
     // that lies in L1 or a DRAM bank goes out as a block; anything else keeps register-width writes.

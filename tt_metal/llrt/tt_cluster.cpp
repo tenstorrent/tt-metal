@@ -889,7 +889,8 @@ void Cluster::write_dram_vec(
     ChipId device_id,
     int dram_view,
     uint64_t addr,
-    std::optional<tt::umd::IoOrdering> ordering) const {
+    std::optional<tt::umd::IoOrdering> ordering,
+    tt::umd::SysmemBuffer* pinned_src) const {
     const metal_SocDescriptor& desc_to_use = get_soc_desc(device_id);
     TT_FATAL(
         dram_view < desc_to_use.get_num_dram_views(),
@@ -900,7 +901,8 @@ void Cluster::write_dram_vec(
     tt::tt_metal::CoreCoord dram_core_coord = desc_to_use.get_preferred_worker_core_for_dram_view(dram_view, tt_metal::NOC::NOC_0);
     tt_cxy_pair dram_core = tt_cxy_pair(device_id, dram_core_coord.x, dram_core_coord.y);
     size_t offset = desc_to_use.get_address_offset(dram_view);
-    write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, ordering);
+    write_core(
+        mem_ptr, sz_in_bytes, tt_cxy_pair(device_id, dram_core.x, dram_core.y), addr + offset, ordering, pinned_src);
 }
 
 void Cluster::read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const {
@@ -950,7 +952,8 @@ void Cluster::write_core(
     uint32_t sz_in_bytes,
     tt_cxy_pair core,
     uint64_t addr,
-    std::optional<tt::umd::IoOrdering> ordering) const {
+    std::optional<tt::umd::IoOrdering> ordering,
+    tt::umd::SysmemBuffer* pinned_src) const {
     if (sz_in_bytes == 0) {
         return;  // nothing to write
     }
@@ -976,7 +979,16 @@ void Cluster::write_core(
         core_coord.core_type == CoreType::DRAM ? tt::umd::IoOrdering::Relaxed : tt::umd::IoOrdering::Strict);
 
     if (this->use_dma_write(chip_id, sz_in_bytes, addr, resolved_ordering)) {
-        this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        const auto* src = static_cast<const uint8_t*>(mem_ptr);
+        const auto* pinned_base = pinned_src != nullptr ? static_cast<const uint8_t*>(pinned_src->get_va()) : nullptr;
+        if (pinned_base != nullptr && src >= pinned_base &&
+            src + sz_in_bytes <= pinned_base + pinned_src->get_size()) {
+            // The DMA engine reads the caller's pinned pages directly; the call returns once the transfer is done.
+            pinned_src->dma_write_to_device(
+                static_cast<size_t>(src - pinned_base), sz_in_bytes, {core_coord.x, core_coord.y}, addr);
+        } else {
+            this->driver_->dma_write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+        }
     } else {
         this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr, resolved_ordering);
     }

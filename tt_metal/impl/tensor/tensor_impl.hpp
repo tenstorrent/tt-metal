@@ -35,6 +35,7 @@ struct LocalHostShard {
 struct LocalHostShards {
     ttsl::SmallVector<LocalHostShard> shards;
     size_t size_bytes = 0;
+    size_t max_shard_bytes = 0;
 };
 
 // Host presence does not imply destination ownership on a mesh shared by multiple processes.

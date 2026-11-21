@@ -108,6 +108,9 @@ protected:
         tt_fabric::FabricConfig fabric_config = tt_fabric::FabricConfig::DISABLED;
         tt_fabric::FabricTensixConfig fabric_tensix_config = tt_fabric::FabricTensixConfig::DISABLED;
         tt_fabric::FabricUDMMode fabric_udm_mode = tt_fabric::FabricUDMMode::DISABLED;
+
+        // Mesh device suites skip hardware slow dispatch unless this is set.
+        bool allow_slow_dispatch = false;
     };
 
     explicit MeshDeviceFixtureBase(const Config& fixture_config) : config_(fixture_config) {}
@@ -115,7 +118,7 @@ protected:
     void SetUp() override {
         auto* slow_dispatch = getenv("TT_METAL_SLOW_DISPATCH_MODE");
         auto* emulated = getenv("TT_METAL_EMULE_MODE");
-        if (slow_dispatch && !emulated) {
+        if (slow_dispatch && !emulated && !config_.allow_slow_dispatch) {
             GTEST_SKIP() << "Skipping Mesh-Device test suite, since it can only be run in Fast Dispatch Mode.";
         }
 

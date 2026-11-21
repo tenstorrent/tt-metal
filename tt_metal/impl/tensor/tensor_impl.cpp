@@ -10,6 +10,7 @@
 #include "tensor_impl.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
 
+#include <algorithm>
 #include <vector>
 
 #include <tt_stl/span.hpp>
@@ -27,6 +28,7 @@ LocalHostShards select_local_host_shards(
         }
         if (auto shard = host_buffer.get_shard(coord)) {
             local.size_bytes += shard->view_bytes().size();
+            local.max_shard_bytes = std::max(local.max_shard_bytes, shard->view_bytes().size());
             local.shards.push_back({.coord = coord, .buffer = std::move(*shard)});
         }
     }

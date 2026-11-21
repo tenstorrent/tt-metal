@@ -23,6 +23,7 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
+#include "tt_metal/distributed/mesh_command_queue_base.hpp"
 #include "tt_metal/distributed/pinned_memory_cache.hpp"
 #include "pinned_upload.hpp"
 #include "tt_metal/distributed/mesh_device_view_impl.hpp"
@@ -100,8 +101,15 @@ bool is_uniform_write(const HostTensor& host_tensor, const distributed::MeshDevi
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
 
-bool should_use_pinned_write_path(distributed::MeshDevice& mesh_device, size_t size_bytes) {
-    if (size_bytes <= pinned_upload::k_pin_write_threshold_bytes) {
+bool should_use_pinned_write_path(
+    distributed::MeshDevice& mesh_device,
+    distributed::MeshCommandQueue& cq,
+    const distributed::MeshBuffer& buffer,
+    size_t local_bytes,
+    size_t max_shard_bytes) {
+    const auto* queue = dynamic_cast<const distributed::MeshCommandQueueBase*>(&cq);
+    TT_FATAL(queue != nullptr, "MeshCommandQueue is not a MeshCommandQueueBase");
+    if (!queue->should_pin_write(buffer, local_bytes, max_shard_bytes)) {
         return false;
     }
     const auto params = experimental::GetMemoryPinningParameters(mesh_device);
@@ -226,7 +234,8 @@ void h2d_as_replicate_tensor_on_1x1_mesh(
     auto* mesh_device = mesh_buffer->device();
 
     const bool use_pinned =
-        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*mesh_device, data_to_write.size());
+        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(
+            *mesh_device, command_queue, *mesh_buffer, data_to_write.size(), data_to_write.size());
 
     if (use_pinned) {
         // Replication fans a single 1x1 host shard out to the whole mesh, but only the chips owned
@@ -316,7 +325,8 @@ std::vector<distributed::MeshCoordinate> enqueue_write_tensor(
     auto local_shards = tensor_impl::select_local_host_shards(distributed_host_buffer, *mesh_device);
 
     const bool use_pinned =
-        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(*cq.device(), local_shards.size_bytes);
+        ::tt::tt_metal::CMAKE_UNIQUE_NAMESPACE::should_use_pinned_write_path(
+            *cq.device(), cq, *mesh_buffer, local_shards.size_bytes, local_shards.max_shard_bytes);
 
     if (use_pinned) {
         std::vector<distributed::ShardDataTransfer> transfers;
