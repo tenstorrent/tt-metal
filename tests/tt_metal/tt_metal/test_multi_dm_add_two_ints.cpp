@@ -22,13 +22,7 @@
 using namespace tt;
 using namespace tt::tt_metal;
 
-// This test requires simulator environment
 TEST_F(QuasarMeshDeviceSingleCardFixture, MultiDmAddTwoInts) {
-    // Skip if simulator is not available
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
     auto mesh_device = devices_[0];
     if (mesh_device->compute_with_storage_grid_size().x < 2) {
         GTEST_SKIP() << "This test requires at least 2 worker nodes.";

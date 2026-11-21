@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "common/device_fixture.hpp"
-#include "context/metal_context.hpp"
 
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/buffer.hpp>
@@ -65,11 +64,6 @@ std::shared_ptr<distributed::MeshBuffer> make_sharded_l1_mesh_buffer(
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::DRAM, devices_[0].get());
 
@@ -86,11 +80,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadDRAM) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::DRAM, devices_[0].get());
 
@@ -108,11 +97,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsDRAM)
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::L1, devices_[0].get());
 
@@ -129,11 +113,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWriteReadL1) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq = devices_[0]->mesh_command_queue();
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::L1, devices_[0].get());
 
@@ -151,11 +130,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferMultipleWriteReadRoundsL1) {
 }
 
 TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRoundsDRAM) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     distributed::MeshCommandQueue& cq0 = devices_[0]->mesh_command_queue(0);
     distributed::MeshCommandQueue& cq1 = devices_[0]->mesh_command_queue(1);
     std::shared_ptr<distributed::MeshBuffer> buf = make_interleaved_mesh_buffer(BufferType::DRAM, devices_[0].get());
@@ -176,11 +150,6 @@ TEST_F(QuasarMultiCQMeshDeviceSingleCardFixture, MeshBufferCrossCQWriteReadRound
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferHeightShardedL1) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
@@ -201,11 +170,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferHeightShardedL1) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, MeshBufferWidthShardedL1) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;

@@ -201,11 +201,6 @@ SyncWorkloads create_sync_workloads(
 }  // namespace
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
@@ -254,11 +249,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDevicePartitionsWorkerGrid) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     constexpr uint32_t page_size = 64;
 
     auto mesh_device = devices_[0];
@@ -333,11 +323,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceShardedL1BufferAllocation
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceStallGroup) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
@@ -366,11 +351,6 @@ TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceStallGroup) {
 }
 
 TEST_F(QuasarMeshDeviceSingleCardFixture, TestSubDeviceManagerSwitching) {
-    if (!MetalContext::instance().rtoptions().is_simulator_or_emulated()) {
-        GTEST_SKIP() << "This test can only be run under the simulator or emulator. "
-                        "Set TT_METAL_SIMULATOR or TT_METAL_EMULE_MODE=1.";
-    }
-
     auto mesh_device = devices_[0];
     const CoreCoord worker_grid = mesh_device->compute_with_storage_grid_size();
     const uint32_t num_nodes = worker_grid.x * worker_grid.y;
