@@ -90,7 +90,7 @@ def test_resnetblock2d(
         torch_resnet = unet.up_blocks[down_block_id].resnets[resnet_id]
         block = f"up_blocks.{down_block_id}"
     else:
-        assert "Incorrect block name"
+        assert False, "Incorrect block name"
 
     model_config = load_refiner_model_optimisations(image_resolution)
     tt_resnet = TtResnetBlock2D(

@@ -740,7 +740,7 @@ def shapes_and_datagen(
                 yield shapes, datagen_funcs, test_args
 
         else:
-            raise NotImplementedError("Method {method} is not a valid choice")
+            raise NotImplementedError(f"Method {method} is not a valid choice")
 
 
 def set_slow_dispatch_mode(set_var):

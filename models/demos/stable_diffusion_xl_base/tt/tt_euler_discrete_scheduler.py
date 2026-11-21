@@ -41,30 +41,30 @@ class TtEulerDiscreteScheduler(LightweightModule):
         self.num_train_timesteps = num_train_timesteps
         self.beta_start = beta_start
         self.beta_end = beta_end
-        assert beta_schedule == "scaled_linear", "beta_schedule {beta_schedule} is not supported in this version"
+        assert beta_schedule == "scaled_linear", f"beta_schedule {beta_schedule} is not supported in this version"
         self.beta_schedule = beta_schedule
         assert trained_betas is None, "trained_betas is not supported in this version"
         self.betas = torch.linspace(beta_start**0.5, beta_end**0.5, num_train_timesteps, dtype=torch.float32) ** 2
-        assert prediction_type == "epsilon", "prediction_type {prediction_type} is not supported in this version"
+        assert prediction_type == "epsilon", f"prediction_type {prediction_type} is not supported in this version"
         self.prediction_type = prediction_type
         assert (
             interpolation_type == "linear"
-        ), "interpolation_type {interpolation_type} is not supported in this version"
+        ), f"interpolation_type {interpolation_type} is not supported in this version"
         self.interpolation_type = interpolation_type
         assert use_karras_sigmas == False, "karras sigmas are not supported in this version"
         assert use_exponential_sigmas == False, "exponential sigmas are not supported in this version"
         assert use_beta_sigmas == False, "beta sigmas are not supported in this version"
         assert sigma_min is None, "sigma_min is not supported in this version"
         assert sigma_max is None, "sigma_max is not supported in this version"
-        assert timestep_spacing == "leading", "timestep_spacing {timestep_spacing} is not supported in this version"
+        assert timestep_spacing == "leading", f"timestep_spacing {timestep_spacing} is not supported in this version"
         self.timestep_spacing = timestep_spacing
         timesteps = np.linspace(0, num_train_timesteps - 1, num_train_timesteps, dtype=float)[::-1].copy()
         timesteps = torch.from_numpy(timesteps).to(dtype=torch.float32)
-        assert timestep_type == "discrete", "timestep_type {timestep_type} is not supported in this version"
+        assert timestep_type == "discrete", f"timestep_type {timestep_type} is not supported in this version"
         self.timestep_type = timestep_type
         self.steps_offset = steps_offset
         assert rescale_betas_zero_snr == False, "rescale_betas_zero_snr is not supported in this version"
-        assert final_sigmas_type == "zero", "final_sigmas_type {final_sigmas_type} is not supported in this version"
+        assert final_sigmas_type == "zero", f"final_sigmas_type {final_sigmas_type} is not supported in this version"
 
         self.final_sigmas_type = final_sigmas_type
         self.alphas = 1.0 - self.betas

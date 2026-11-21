@@ -233,8 +233,6 @@ class TtRelPosAttention:
             self._sdpa_prog[key_w] = prog
         return prog
 
-        return prog
-
     def _pos_proj(self, pos_emb, b):
         """`linear_pos`, head-split and transposed -- cached on the `pos_emb` object.
 

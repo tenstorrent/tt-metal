@@ -29,7 +29,7 @@ def _determine_num_cores_for_even_sharding(shard_dim: int, max_cores: int):
 
 def get_memory_config_for_persistent_dram_tensor(shape, shard_strategy, dram_grid_size):
     if len(shape) < 2:
-        raise ValueError("Shape must be 2D or higher (was {shape})")
+        raise ValueError(f"Shape must be 2D or higher (was {shape})")
     if dram_grid_size.y != 1:
         raise ValueError(f"Only 1D DRAM grid is supported (was {dram_grid_size})")
 

@@ -52,7 +52,7 @@ def test_splitting_sequence_length(
     assert does_pass, f"PCC value ({output_pcc}) is lower than 1.0"
 
     does_pass, output_allclose = comp_allclose(expected, actual)
-    assert does_pass, "Allclose check failed: {output_allclose}"
+    assert does_pass, f"Allclose check failed: {output_allclose}"
 
 
 @pytest.mark.parametrize(
