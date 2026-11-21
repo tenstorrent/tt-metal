@@ -106,7 +106,12 @@ def run_perf_ssd(
                         class_bbox[label] = bbox
 
                 for label, confidence in class_confidence.items():
-                    prediction = {"class": label, "confidence": confidence, "bbox": class_bbox[label]}
+                    prediction = {
+                        "class": label,
+                        "confidence": confidence,
+                        "bbox": class_bbox[label],
+                        "image_id": len(all_ground_truths) - 1,
+                    }
                     all_predictions.append(prediction)
 
             iteration += 1

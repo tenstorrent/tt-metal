@@ -40,30 +40,46 @@ def calculate_iou(box1, box2):
 
 # Compute Average Precision (AP) for a single class
 def calculate_ap(predictions, ground_truth, iou_threshold=0.5):
+    """VOC 11-point AP. ground_truth is a list of per-image GT lists; a prediction may carry
+    "image_id" (index into ground_truth) to restrict matching to its own image. Each GT object
+    matches at most one detection; later detections on it count as false positives."""
     # Sort predictions by confidence score in descending order
     predictions = sorted(predictions, key=lambda x: x["confidence"], reverse=True)
 
     true_positives = np.zeros(len(predictions))
     false_positives = np.zeros(len(predictions))
-    num_ground_truth = len(ground_truth)
+    num_ground_truth = sum(len(gt_list) for gt_list in ground_truth)
+    matched = set()
 
     for i, prediction in enumerate(predictions):
         iou_max = 0
-        gt_match = -1
+        gt_match = None
+
+        image_id = prediction.get("image_id")
+        images = [image_id] if image_id is not None else range(len(ground_truth))
 
         # Match prediction with ground truth with highest IoU
-        for j, gt_list in enumerate(ground_truth):
-            for gt in gt_list:
+        for j in images:
+            for k, gt in enumerate(ground_truth[j]):
                 iou = calculate_iou(prediction["bbox"], gt["bbox"])
                 if iou > iou_max:
                     iou_max = iou
-                    gt_match = j
+                    gt_match = (j, k)
 
-        # If IoU exceeds threshold and class matches, it's a true positive
-        if iou_max >= iou_threshold and prediction["class"] == ground_truth[gt_match]["class"]:
+        # True positive if IoU exceeds threshold, class matches and that GT is not already matched
+        if (
+            gt_match is not None
+            and iou_max >= iou_threshold
+            and prediction["class"] == ground_truth[gt_match[0]][gt_match[1]]["class"]
+            and gt_match not in matched
+        ):
             true_positives[i] = 1
+            matched.add(gt_match)
         else:
             false_positives[i] = 1
+
+    if num_ground_truth == 0:
+        return 0.0
 
     # Compute precision and recall
     cumulative_tp = np.cumsum(true_positives)
