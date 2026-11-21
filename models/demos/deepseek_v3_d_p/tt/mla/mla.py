@@ -36,7 +36,7 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
 # EXPERIMENT default for SPARSE_MLA_FULL_PUSH.
-_FULL_PUSH_DEFAULT = "1"
+_FULL_PUSH_DEFAULT = "0"
 
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 

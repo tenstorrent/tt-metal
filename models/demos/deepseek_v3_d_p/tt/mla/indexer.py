@@ -22,7 +22,7 @@ import torch
 from loguru import logger
 
 # EXPERIMENT default for SPARSE_MLA_INDEXER_BLOCK_MAX.
-_BLOCK_MAX_DEFAULT = "1"
+_BLOCK_MAX_DEFAULT = "0"
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
