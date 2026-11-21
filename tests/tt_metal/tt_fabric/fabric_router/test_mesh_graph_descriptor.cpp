@@ -3149,4 +3149,61 @@ TEST(MeshGraphDescriptorTests, ExpressLinks4x32Dim1) {
     EXPECT_EQ(z_directed, 96) << "expected exactly 48 bidirectional express edges (96 directed Z entries)";
 }
 
+TEST(MeshGraphDescriptorTests, SwitchOnlyGetArchAndPorts) {
+    const std::string text_proto = R"proto(
+        switch_descriptors: {
+          name: "SW0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 2, 4 ] }
+          channels: { count: 2 }
+        }
+
+        top_level_instance: { switch: { switch_descriptor: "SW0" switch_id: 0 } }
+    )proto";
+
+    MeshGraphDescriptor desc(text_proto);
+    EXPECT_EQ(desc.get_arch(), proto::Architecture::WORMHOLE_B0);
+    EXPECT_EQ(desc.get_num_eth_ports_per_direction(), 2u);
+}
+
+TEST(MeshGraphDescriptorTests, InvalidProtoZeroHostTopologyDims) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 4, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 0, 1 ] }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Failed to validate MeshGraphDescriptor textproto"),
+            ::testing::HasSubstr("Host topology dimensions must be positive (Mesh: M0)"))));
+}
+
+TEST(MeshGraphDescriptorTests, InvalidProtoZeroDeviceAndHostTopologyDims) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors: {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology: { dims: [ 0, 4 ] }
+          channels: { count: 1 }
+          host_topology: { dims: [ 0, 1 ] }
+        }
+
+        top_level_instance: { mesh: { mesh_descriptor: "M0" mesh_id: 0 } }
+    )proto";
+
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::AllOf(
+            ::testing::HasSubstr("Device topology dimensions must be positive (Mesh: M0)"),
+            ::testing::HasSubstr("Host topology dimensions must be positive (Mesh: M0)"))));
+}
+
 }  // namespace tt::tt_fabric::fabric_router_tests
