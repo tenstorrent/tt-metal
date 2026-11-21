@@ -20,8 +20,9 @@
 //                           - cross-reader pad-immediate scratch (pad_val != 0): this reader fills
 //                             pad_fill (its own pad DFB) and broadcasts from pad_read (the peer
 //                             reader's identical pad DFB), avoiding a DM-kernel self-loop.
-//   dfb::gather_config_scratch / dfb::padding_config_scratch
-//                           - DRAM config landing (config_tensors_in_dram path).
+//   scratch::gather_config_scratch / scratch::padding_config_scratch
+//                           - DRAM config landing (config_tensors_in_dram path): private
+//                             scratchpads this reader fills by NoC read and then reads back.
 
 #include <stdint.h>
 #include <cstdint>
@@ -31,6 +32,7 @@
 #include "api/dataflow/dataflow_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
+#include "api/scratchpad.h"
 #include "api/tensor/tensor_accessor.h"
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/local_tensor_accessor.h"
@@ -261,28 +263,35 @@ void kernel_main() {
     uint32_t padding_config_l1_addr = 0;
 #ifdef CONFIG_TENSOR_IN_DRAM
     // DRAM config: async-read the per-core page into a private L1 scratch, then read it.
-    constexpr uint32_t config_read_index = get_arg(args::config_read_index);
+    const uint32_t config_read_index = get_arg(args::config_read_index);
     TensorAccessor gather_config_acc(tensor::gather_config);
-    DataflowBuffer gather_config_scratch(dfb::gather_config_scratch);
-    gather_config_l1_addr = gather_config_scratch.get_write_ptr();
+    Scratchpad<uint16_t> gather_config_scratch(scratch::gather_config_scratch);
     noc.async_read(
         gather_config_acc,
         gather_config_scratch,
-        gather_config_scratch.get_entry_size(),
+        gather_config_scratch.size_in_bytes(),
         {.page_id = config_read_index},
-        {});
+        {.offset_bytes = 0});
 #ifdef ENABLE_PADDING
     TensorAccessor padding_config_acc(tensor::padding_config);
-    DataflowBuffer padding_config_scratch(dfb::padding_config_scratch);
-    padding_config_l1_addr = padding_config_scratch.get_write_ptr();
+    Scratchpad<uint16_t> padding_config_scratch(scratch::padding_config_scratch);
     noc.async_read(
         padding_config_acc,
         padding_config_scratch,
-        padding_config_scratch.get_entry_size(),
+        padding_config_scratch.size_in_bytes(),
         {.page_id = config_read_index},
-        {});
+        {.offset_bytes = 0});
 #endif
     noc.async_read_barrier();
+    // The config pages were written by the NoC, so the CPU must not read them from its caches. Each lock
+    // drops the cached lines when taken and lasts until kernel_main returns; the config is read-only.
+    const auto gather_config_lock = gather_config_scratch.scoped_lock(0, gather_config_scratch.size());
+    // Raw: the config walkers below take an L1 address.
+    gather_config_l1_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&gather_config_scratch[0]));
+#ifdef ENABLE_PADDING
+    const auto padding_config_lock = padding_config_scratch.scoped_lock(0, padding_config_scratch.size());
+    padding_config_l1_addr = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(&padding_config_scratch[0]));
+#endif
 #else
     // L1 config: the config tensor is sharded one shard per core; read the local shard directly.
     // Raw address: shared with the DRAM-scratch path above and read through raw pointers below.

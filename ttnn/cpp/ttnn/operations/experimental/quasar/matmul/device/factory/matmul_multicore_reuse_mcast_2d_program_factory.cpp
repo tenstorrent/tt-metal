@@ -3831,6 +3831,17 @@ ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_artifacts(
         .math_approx_mode = math_approx_mode,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .dst_full_sync_en = false});
+    // With a 32-bit DST every consumed 32-bit DFB needs an explicit unpack mode, and cb_intermed0 holds 32-bit
+    // partials under fp32 accumulation. UnpackToSrc, unlike matmul_unified's UnpackToDest: the fused bias add
+    // here reads the partials as an FPU SrcA operand, and on Quasar UnpackToDest is kernel-wide (UnpackToDestEn
+    // sends every copy_tile through Dest). The cost is that the reload between K blocks rounds through SrcA
+    // (TF32), as on WH/BH, whose mcast factories set no unpack-to-dest mode for interm0 either.
+    const bool interm0_is_32bit = interm0_data_format == tt::DataFormat::Float32 ||
+                                  interm0_data_format == tt::DataFormat::Int32 ||
+                                  interm0_data_format == tt::DataFormat::UInt32;
+    if (fp32_dest_acc_en && interm0_is_32bit) {
+        compute_hw_config.unpack_modes.emplace(RO_INTERM0_DFB, m2::UnpackMode::UnpackToSrc);
+    }
 
     // in1 reader uses the optimized reader noc; in0 the dram-write noc. (The legacy split-half
     // _other receivers ran on the opposite NOC for perf; the Metal 2.0 host API selects the NOC via
