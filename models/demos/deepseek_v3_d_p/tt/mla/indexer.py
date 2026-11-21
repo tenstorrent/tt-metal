@@ -21,6 +21,9 @@ from types import SimpleNamespace
 import torch
 from loguru import logger
 
+# EXPERIMENT default for SPARSE_MLA_INDEXER_BLOCK_MAX.
+_BLOCK_MAX_DEFAULT = "1"
+
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mla.compressor import TtCSACompressor, rope_table_tokens
 from models.demos.deepseek_v3_d_p.tt.mla.mla_config import get_indexer_key_chunk, get_matmul_config
@@ -994,10 +997,19 @@ class TtIndexerBase:
         # the host scalars a captured program would freeze at their capture-time values.
         traced = metadata is not None
         host_start = time.perf_counter() if _fused_ring_host_timing_enabled() else None
+        # EXPERIMENT (SPARSE_MLA_INDEXER_BLOCK_MAX, default below): the indexer also writes each row's 32-key block
+        # maxima, which top-k then takes as block_max_tensor (two-level selection without its own maxima pass).
+        width = k_full.shape[2]
         block_max = None
-        if os.environ.get("SPARSE_MLA_INDEXER_BLOCK_MAX") == "1":
+        if (
+            os.environ.get("SPARSE_MLA_INDEXER_BLOCK_MAX", _BLOCK_MAX_DEFAULT) == "1"
+            and self.index_topk_capacity == 2048
+            and 65536 <= width <= 2097152
+            and width % 32 == 0
+            and (traced or valid_pos % 32 == 0)
+        ):
             block_max = ttnn.allocate_tensor_on_device(
-                ttnn.Shape([1, 1, q_dev.shape[2], k_full.shape[2] // 32]),
+                ttnn.Shape([1, 1, q_dev.shape[2], width // 32]),
                 ttnn.bfloat16,
                 ttnn.ROW_MAJOR_LAYOUT,
                 q_dev.device(),
@@ -1101,8 +1113,6 @@ class TtIndexerBase:
             )
         if state.block_max is not None:
             metadata_kwargs.update(block_select=32, block_max_tensor=state.block_max)
-        elif os.environ.get("SPARSE_MLA_TWO_LEVEL_TOPK") == "1":
-            metadata_kwargs.update(block_select=32)
         return ttnn.experimental.topk_large_indices(
             state.logits,
             k=self.index_topk_capacity,

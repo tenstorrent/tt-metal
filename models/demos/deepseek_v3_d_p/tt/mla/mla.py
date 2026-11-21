@@ -35,6 +35,9 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 )
 from models.demos.deepseek_v3_d_p.utils.weight_cache_dump import weight_cache_dump_mode
 
+# EXPERIMENT default for SPARSE_MLA_FULL_PUSH.
+_FULL_PUSH_DEFAULT = "1"
+
 # Axis 0 is N/S (mesh rows), axis 1 is E/W (mesh cols) -- the same convention high_bw_all_gather uses.
 
 
@@ -2106,9 +2109,17 @@ class ttMLA:
             indexer_indices is None or self.layer_idx == self._first_layer_idx
         ):
             self.tt_ccl.sparse_kv_push_planner.invalidate()
+        # EXPERIMENT (SPARSE_MLA_FULL_PUSH, default below): a full layer also takes the shared layers' push path for its
+        # own fresh top-k (plan, push of the referenced rows, attention over the compact buffer) instead of gathering
+        # the prefix, and runs its top-k serially on the full grid instead of beside the gather.
+        full_push = (
+            indexer_indices is None
+            and self._push is not None
+            and os.environ.get("SPARSE_MLA_FULL_PUSH", _FULL_PUSH_DEFAULT) == "1"
+        )
         if indexer_indices is not None:
             indices = indexer_indices
-        elif self._sparse_mla_overlap is not None:
+        elif self._sparse_mla_overlap is not None and not full_push:
             selection_state = self._indexer.score(
                 hidden_states,
                 indexer_qr,
@@ -2167,12 +2178,8 @@ class ttMLA:
             kv_actual_isl=kv_actual_isl,
             actual_end=actual_end,
             metadata=metadata,
-            injected=indexer_indices is not None or os.environ.get("SPARSE_MLA_FULL_PUSH") == "1",
+            injected=indexer_indices is not None or full_push,
         )
-        if not getattr(self, "_probe_logged", False):
-            self._probe_logged = True
-            print(f"MLA_PROBE layer={self.layer_idx} overlap={self._sparse_mla_overlap is not None} push={self._push is not None} "
-                  f"injected={attention_kwargs['injected']}", flush=True)
         if selection_state is not None:
             attn_out, indices = self._sparse_chunked_attn_overlapped(
                 selection_state=selection_state,

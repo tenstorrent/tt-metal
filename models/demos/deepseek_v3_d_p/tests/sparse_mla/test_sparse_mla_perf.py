@@ -87,6 +87,8 @@ PERF_TARGETS_MS = {
     for case, row in rows.items()
     for (scenario, mode), ms in zip([(s, m) for s in SCENARIO_CACHE_TOKENS for m in MODES], row)
 }
+# EXPERIMENT branch: report only (the full-layer push and indexer block maxima move every target).
+PERF_TARGETS_MS = {}
 # Traced output must match the untraced output of the same forward.
 TRACE_PCC = 0.9999
 CI_RUN = os.environ.get("CI") == "true"
