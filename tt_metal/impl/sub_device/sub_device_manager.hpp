@@ -74,6 +74,10 @@ public:
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids);
     void reset_sub_device_stall_group();
 
+    // Replaces the default manager's full-grid sub-devices after the device's compute grid changes, which manual
+    // fast dispatch does when it claims or releases the dispatch cores. The global allocator is left as is.
+    void reset_full_grid_sub_devices(ttsl::Span<const SubDevice> sub_devices);
+
 private:
     void validate_sub_devices() const;
     uint8_t get_sub_device_index(SubDeviceId sub_device_id) const;

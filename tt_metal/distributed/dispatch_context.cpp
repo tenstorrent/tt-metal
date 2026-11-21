@@ -31,6 +31,8 @@
 #include "impl/dispatch/cq_shared_state.hpp"
 #include "impl/dispatch/dispatch_core_manager.hpp"
 #include "impl/dispatch/system_memory_manager.hpp"
+#include "impl/internal/service/service_core_manager_impl.hpp"
+#include <internal/service/service_core_manager.hpp>
 #include "llrt/hal/generated/dev_msgs.hpp"
 #include "llrt/rtoptions.hpp"
 #include "llrt/llrt.hpp"
@@ -330,6 +332,13 @@ void DispatchContext::initialize_fast_dispatch(
 
     uint8_t num_hw_cqs = active_devices[0]->num_hw_cqs();
 
+    // Drain pending SD work while the SD queues still own the workers. Bringing up the dispatch firmware rewrites
+    // every worker's mailboxes, so a workload still running then would finish against an FD launch message, and
+    // its cleared go would also read as done to this drain.
+    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
+        cq->finish();
+    }
+
     // Enable Fast Dispatch and reinitialize dispatch managers to pick up FD core descriptor before allocating cores
     metal_context.set_fast_dispatch_mode(true);
 
@@ -366,10 +375,7 @@ void DispatchContext::initialize_fast_dispatch(
     // Query the number of command queues requested
     device_manager->initialize_dispatch_firmware(/*force_recreate_topology=*/true);
 
-    // Drain pending SD work and stash the SD queues for restoration on terminate
-    for (auto& cq : mesh_device_impl.mesh_command_queues_) {
-        cq->finish();
-    }
+    // Stash the SD queues for restoration on terminate
     for (const auto& dev : active_devices) {
         dev->set_smc_dispatch_telemetry_slow_dispatch_enabled(false);
     }
@@ -379,6 +385,10 @@ void DispatchContext::initialize_fast_dispatch(
     }
     mesh_device_impl.mesh_command_queues_.clear();
     mesh_device_impl.mesh_command_queues_.reserve(num_hw_cqs);
+
+    // The dispatch cores have left the compute grid. The fast-dispatch queues count GO acks from the default
+    // sub-device, which must now match the grid the dispatcher multicasts to.
+    mesh_device_impl.refresh_compute_grid();
 
     auto cq_shared_state = std::make_shared<CQSharedState>();
     cq_shared_state->sub_device_cq_owner.resize(1);
@@ -460,6 +470,12 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
             tt::llrt::internal_::wait_until_cores_done(
                 metal_context, dev->id(), dev_msgs::RUN_MSG_GO, dispatch_cores, 0);
         }
+
+        // Fast dispatch advanced each worker's launch read pointer, but slow dispatch launches into slot 0 and polls
+        // go row 0 slot 0. Put the workers back in the state slow dispatch firmware init leaves them in.
+        for (const auto& dev : active_devices) {
+            dev->reset_worker_mailboxes(dev_msgs::DISPATCH_MODE_HOST);
+        }
     }
 
     // HWCommandQueue holds a reference to sysmem_manager_. Clear now so any future
@@ -473,6 +489,12 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
 
     // Disable Fast Dispatch and reinitialize dispatch managers to pick up SD core descriptor
     metal_context.set_fast_dispatch_mode(false);
+    // The dispatch cores rejoin the compute grid, except those still claimed as service cores.
+    mesh_device_impl.refresh_compute_grid();
+    auto& service_cores = metal_context.get_service_core_manager().impl();
+    if (service_cores.has_any_claims()) {
+        service_cores.track_capped_mesh(mesh_device->shared_from_this());
+    }
     num_fd_inits_--;
 }
 
