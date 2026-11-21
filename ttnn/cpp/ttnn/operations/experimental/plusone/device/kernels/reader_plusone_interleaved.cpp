@@ -33,7 +33,6 @@ void kernel_main() {
 #else
     DataflowBuffer dfb_in0(dfb::in0);
     const uint32_t cb_addr = dfb_in0.get_write_ptr();
-    volatile tt_l1_ptr uint32_t* stick = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr);
 #endif
 
     for (uint32_t h = 0; h < H; h++) {
@@ -45,6 +44,9 @@ void kernel_main() {
         // previous stick (or an earlier program) so the loads below see the new data (as paged_fill_cache does).
         invalidate_l2_cache_range(stick_addr, stick_size);
 #endif
+#else
+        volatile tt_l1_ptr uint32_t* stick =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb_addr + h * stick_size);
 #endif
         for (uint32_t i = 0; i < W; i++) {
             int32_t val = stick[i];
