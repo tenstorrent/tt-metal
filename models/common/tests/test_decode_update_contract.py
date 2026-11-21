@@ -200,6 +200,86 @@ def test_output_penalty_reset_masks_only_selected_slots(monkeypatch):
     assert keep.deallocated
 
 
+def test_prefill_state_preserves_earlier_slot_prompt_penalty_state():
+    """Bug B: Sequential single-slot prefills must retain earlier slots' prompt penalty state."""
+    from unittest.mock import Mock
+
+    from models.common.sampling import tt_penalties
+
+    tp = object.__new__(tt_penalties.TTPenalties)
+    tp._total_batch = 4
+    tp.vocab_size = 100
+    tp.prompt_mask = object()
+    tp._shard_dims_mask = (0, None)
+    uploaded = []
+    tp._copy_int_host_to_device = lambda dev_buf, host_buf, dims: uploaded.append(host_buf.clone())
+
+    gen = object.__new__(SamplingGenerator)
+    gen._penalties_active = True
+    gen.tt_penalties = tp
+    gen.reset_sampling_params = Mock()
+    gen.seed_manager = Mock()
+    gen.reset_output_state = Mock()
+
+    # User 0 prefill at slot 0 with prompt tokens [10, 11, 12]
+    p0 = torch.full((4, 4), -1, dtype=torch.long)
+    p0[0, :3] = torch.tensor([10, 11, 12])
+    SamplingGenerator.apply_prefill_state(
+        gen,
+        sampling_params=SimpleNamespace(seed=[100]),
+        empty_slots=[0],
+        prompt_tokens=p0,
+    )
+
+    assert (tp._prompt_tokens_host[0, :3] == torch.tensor([10, 11, 12])).all()
+    assert uploaded[-1][0, 10].item() == 1
+    assert uploaded[-1][0, 11].item() == 1
+    assert uploaded[-1][0, 12].item() == 1
+
+    # User 1 prefill at slot 1 with prompt tokens [20, 21]
+    p1 = torch.full((4, 4), -1, dtype=torch.long)
+    p1[1, :2] = torch.tensor([20, 21])
+    SamplingGenerator.apply_prefill_state(
+        gen,
+        sampling_params=SimpleNamespace(seed=[200]),
+        empty_slots=[1],
+        prompt_tokens=p1,
+    )
+
+    # Slot 0's prompt tokens and penalty mask must STILL be kept after slot 1 prefill
+    assert (tp._prompt_tokens_host[0, :3] == torch.tensor([10, 11, 12])).all()
+    assert uploaded[-1][0, 10].item() == 1
+    assert uploaded[-1][0, 11].item() == 1
+    assert uploaded[-1][0, 12].item() == 1
+    assert uploaded[-1][0, 20].item() == 0
+
+    # Slot 1 has its own prompt tokens
+    assert (tp._prompt_tokens_host[1, :2] == torch.tensor([20, 21])).all()
+    assert uploaded[-1][1, 20].item() == 1
+    assert uploaded[-1][1, 21].item() == 1
+    assert uploaded[-1][1, 10].item() == 0
+
+
+def test_apply_prefill_state_resets_only_the_prefilled_slots():
+    from unittest.mock import Mock
+
+    calls = []
+    fake = SimpleNamespace(
+        reset_sampling_params=Mock(),
+        seed_manager=Mock(),
+        reset_prompt_tokens=lambda tokens, slots=None: calls.append(("prompt", tokens, slots)),
+        reset_output_state=Mock(),
+    )
+    tokens = torch.tensor([[1, 2, 3]])
+    SamplingGenerator.apply_prefill_state(
+        fake,
+        sampling_params=SimpleNamespace(seed=[42]),
+        empty_slots=[2],
+        prompt_tokens=tokens,
+    )
+    assert calls == [("prompt", tokens, [2])]
+
+
 def test_no_sampling_updates_is_a_true_noop():
     fake, calls = _fake_sampling_generator()
 

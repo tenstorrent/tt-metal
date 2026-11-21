@@ -264,6 +264,98 @@ def test_prefill_routes_tokens_pages_and_output_by_the_same_rows(
         assert not hasattr(generator, "_slots_prefilled_since_decode")
 
 
+def test_prefill_prompt_tokens_pad_with_negative_one(monkeypatch):
+    """Bug A: Padded positions and non-prefilled slot rows in prompt_tokens must be -1, not 0.
+
+    When prompts have unequal lengths and contain no token 0, any 0 in prompt_tokens would
+    spuriously count toward repetition penalty for token ID 0.
+    """
+    from models.ttt_compat.tt import generator as generator_module
+
+    generator = object.__new__(Generator)
+    generator.data_parallel = 1
+    generator.model_args = [
+        SimpleNamespace(
+            max_batch_size=32,
+            max_prefill_chunk_size=32768,
+            vocab_size=1000,
+            batched_prefill_compact_rows=False,
+            can_enable_trace=lambda *args: False,
+        )
+    ]
+    sampler = SimpleNamespace(
+        tt_sampling=SimpleNamespace(
+            max_batch_size=32,
+            log_probs_calculator=SimpleNamespace(enable_log_probs=False),
+            force_argmax_sampling=True,
+        ),
+        _penalties_active=False,
+        apply_prefill_state=Mock(),
+        sample=lambda logits, **kwargs: (logits.long() + 100, None),
+    )
+    model = SimpleNamespace(
+        process_logits_after_prefill_trace=lambda hidden, last: hidden[:, :, last : last + 1],
+        process_output_prefill=lambda logits, **kwargs: logits.reshape(1, 1),
+        mesh_device=object(),
+        sampling=sampler,
+        _supports_on_device_sampling=True,
+        extract_last_tokens_batched_prefill=lambda hidden, last, padded_batch, seq_len, target_batch, slot_map=None: torch.zeros(
+            target_batch, 1, dtype=torch.long
+        ),
+        _apply_norm_and_lm_head=lambda hidden: hidden,
+    )
+    generator.model = [model]
+    generator._will_row_shard_prefill = lambda *args: False
+    generator.prefill_forward_single_user_text = lambda tokens, **kwargs: tokens.float().unsqueeze(-1)
+    monkeypatch.setattr(generator_module.ttnn, "synchronize_device", lambda *args: None)
+    monkeypatch.setattr(generator_module.ttnn, "get_device_tensors", lambda tensor: [tensor])
+    monkeypatch.setattr(generator_module.ttnn, "to_torch", lambda tensor: tensor)
+    monkeypatch.setattr(generator_module.ttnn, "reshape", torch.reshape)
+    monkeypatch.setattr(generator_module.ttnn, "to_layout", lambda tensor, *args, **kwargs: tensor)
+
+    prompt_lens = [4, 2, 5]
+    empty_slots = [31, 4, 17]
+    tokens = torch.tensor(
+        [
+            [11, 12, 13, 14, 999],
+            [21, 22, 999, 999, 999],
+            [31, 32, 33, 34, 35],
+        ],
+        dtype=torch.long,
+    )
+    pages = torch.zeros(3, 4, dtype=torch.int32)
+    cache = [[(SimpleNamespace(shape=(100, 1, 64, 128)), None)]]
+
+    generator._prefill_forward_text_impl(
+        tokens,
+        page_table=pages,
+        kv_cache=cache,
+        prompt_lens=prompt_lens,
+        empty_slots=empty_slots,
+        enable_trace=False,
+        warmup_prefill=False,
+        sampling_params=SamplingParams(temperature=[0.1, 0.2, 0.3], top_k=[1, 2, 3], top_p=[0.5, 0.6, 0.7]),
+        page_tables_per_layer=[pages],
+    )
+
+    state = sampler.apply_prefill_state.call_args.kwargs
+    prompt_tokens = state["prompt_tokens"]
+    assert prompt_tokens.shape == (32, 5)
+
+    assert not (prompt_tokens == 0).any(), "prompt_tokens must contain no 0s when prompts contain no token 0"
+
+    assert prompt_tokens[31, :4].tolist() == [11, 12, 13, 14]
+    assert (prompt_tokens[31, 4:] == -1).all()
+
+    assert prompt_tokens[4, :2].tolist() == [21, 22]
+    assert (prompt_tokens[4, 2:] == -1).all()
+
+    assert prompt_tokens[17, :5].tolist() == [31, 32, 33, 34, 35]
+
+    unprefilled_slots = [s for s in range(32) if s not in empty_slots]
+    assert (prompt_tokens[unprefilled_slots] == -1).all()
+
+
 def test_single_user_forward_passes_explicit_layer_tables():
     generator = object.__new__(Generator)
     generator.data_parallel = 1

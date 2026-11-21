@@ -167,7 +167,7 @@ class Gemma4Generator:
         self.sampler.reset_sampling_params(formatted)
         if prompt_tokens is not None:
             self.sampler.reset_prompt_tokens(prompt_tokens, slots=slots)
-        self.sampler.reset_output_state()
+        self.sampler.reset_output_state(slots=slots)
 
     def _reset_sampling_seeds(self, request_seeds, seed_offsets=None):
         if seed_offsets is not None:
