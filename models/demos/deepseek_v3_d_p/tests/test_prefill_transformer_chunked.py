@@ -789,6 +789,7 @@ def run_chunked_transformer_padded(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -994,6 +995,7 @@ def run_chunked_transformer(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -1666,6 +1668,18 @@ def test_mistral4_prefill_transformer_chunked_no_pcc(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            1,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -2021,6 +2035,7 @@ def run_chunked_transformer_updated(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     profiler.start("tt_transformer_creation")
@@ -3162,6 +3177,19 @@ def test_ds_prefill_transformer_chunked_no_pcc(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
             id="torus-x-4x4-sp1",
         ),
+        pytest.param(
+            (4, 4),
+            torus_xy_device_params(
+                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                l1_small_size=GLM_L1_SMALL_SIZE,
+                trace_region_size=GLM_TRACE_REGION_SIZE,
+            ),
+            2,
+            1,
+            CHUNK // 2,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+            id="torus-xy-4x4-sp1",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -3308,6 +3336,7 @@ def run_chunked_transformer_padded_trace(
         num_layers,
         experts_per_chip=experts_per_chip,
         first_k_dense=variant.model_config.NUM_DENSE_LAYERS,
+        model_cfg=variant.model_config,
     ), f"TTNN cache incomplete for {num_layers} layers at {effective_cache_path}"
 
     transformer = acquire_transformer(

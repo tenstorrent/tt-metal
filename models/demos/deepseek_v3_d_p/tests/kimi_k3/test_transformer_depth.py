@@ -41,7 +41,7 @@ from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.attn_res import fol
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config, kimi_k3_hf_config
 from models.demos.deepseek_v3_d_p.tests.attn_res.checkpoint_utils import load_attn_res_state_dict
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_x_device_params, torus_xy_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import resolve_model_root
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
@@ -129,6 +129,14 @@ PLACEMENTS = [
         0,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
         id="4x4-sp1",
+    ),
+    pytest.param(
+        (4, 4),
+        torus_xy_device_params(l1_small_size=KimiK3Config.L1_SMALL_SIZE),
+        1,
+        0,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 4), topology="mesh-4x4"),
+        id="xy4-sp1",
     ),
 ]
 # The full-Galaxy row alone, for the tests that reuse this file's helpers on 8x4 only.

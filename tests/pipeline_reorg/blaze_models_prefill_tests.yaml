@@ -796,10 +796,13 @@
       # ttnn.experimental.sparse_push_plan + sparse_kv_push on the 8x4 TorusXY mesh: op checks against a host
       # reference and determinism (repeated runs, bit-exact, compared on device), then the real GLM-5.3 1M top-k push
       # (L14/L62) against the dense gather, with attention beside the prefix push on a sub-device.
-      timeout -k 2m 20m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 30m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/op_unit_tests/test_sparse_push_plan.py -vvv --tb=short &&
         python3 -m pytest tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -vvv --tb=short &&
+        # The xy4 rows (the unnarrowed run above skips them) on a [RING, RING] 4x4 sub-torus of this Galaxy. All 10
+        # must run.
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 10 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k "not perf" &&
         python3 -m pytest tests/nightly/blackhole/sdpa/test_sparse_sdpa_kv_push.py::test_sparse_kv_push_real_topk_matches_gather -vvv --tb=short
       '
     )
@@ -856,25 +859,44 @@
       '
     )
 
-    echo "===== [1/6] (GLM-5.3-744B) sparse MLA accuracy, incl. chunked 5k@1k, and production-shape determinism ====="
+    glm_subtorus_4x4() (
+      export MESH_DEVICE=TG
+      # The 4x4 [RING, RING] rows that cover this stack's changes, on a 16-chip sub-torus of this Galaxy
+      # (run_subtorus_4x4_tests.sh narrows the box and fails unless every selected row passed and none skipped):
+      # GLM sparse MLA on the carve (sparse KV push owner index, tt_ccl torus links) and the whole-mesh
+      # high_bw_all_gather on both rings. The carve's CCL perf gates run in the GLM chunked perf leg, on the high-power pool.
+      # The full set is models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_all.sh.
+      timeout -k 2m 10m mpirun --bind-to none --pernode --tag-output bash -lc '
+        set -e
+        export OMP_NUM_THREADS=$(nproc)
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla.py
+        models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 300 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k "not perf"
+      '
+    )
+
+    echo "===== [1/7] (GLM-5.3-744B) sparse MLA accuracy, incl. chunked 5k@1k, and production-shape determinism ====="
     glm_dsa_mla || exit $?
-    echo "===== [2/6] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
+    echo "===== [2/7] (GLM-5.3-744B) sparse KV push plan + push, incl. real 1M top-k ====="
     glm_sparse_kv_push || exit $?
-    echo "===== [3/6] (GLM-5.3-744B) prefill block accuracy 5k ====="
+    echo "===== [3/7] (GLM-5.3-744B) sparse MLA and high_bw_all_gather on the 4x4 [RING, RING] sub-torus ====="
+    glm_subtorus_4x4 || exit $?
+    echo "===== [4/7] (GLM-5.3-744B) prefill block accuracy 5k ====="
     glm_prefill_block || exit $?
-    echo "===== [4/6] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
+    echo "===== [5/7] (GLM-5.3-744B) MTP module + predictor accuracy 5k ====="
     glm_mtp || exit $?
-    echo "===== [5/6] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
+    echo "===== [6/7] (GLM-5.3-744B) MoE accuracy + perf 5k ====="
     glm_moe || exit $?
-    echo "===== [6/6] (GLM-5.3-744B) multi-user: interleaved, packed and traced packed forwards 5k ====="
+    echo "===== [7/7] (GLM-5.3-744B) multi-user: interleaved, packed and traced packed forwards 5k ====="
     glm_multiuser || exit $?
-    echo "===== all 6 sections passed ====="
+    echo "===== all 7 sections passed ====="
   test_type: glm_components_suite
   test_tags: [glm_5_3, mla, determinism, block, mtp, moe, dsa_mla_glm, glm_prefill_block, glm_mtp, glm_moe, sparse_kv_push, glm_multiuser]
   test_group: module
   skus:
     bh_sc1:
-      # The sum of the section bounds (32 + 20 + 20 + 25 + 40 + 40).
+      # The leg's overall bound. It is not the sum of the section bounds (32 + 30 + 20 + 25 + 40 + 40 + 10 = 197):
+      # the slowest run on record is 102 min (sub-torus section 6 min of it, with the perf gates it no longer runs), so 177 leaves 75 min of margin and the
+      # bounds only cap a single hung section.
       timeout: 177
       tier: 2
       release_ready: false
@@ -919,7 +941,7 @@
 # comparable and each is gated against its own baseline table / band (glm_chunked_perf_gate). Traced
 # replays one captured chunk forward instead of re-dispatching every op from host, so it needs less wall
 # time than its untraced twin.
-- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k"
+- name: "(GLM-5.3-744B) chunked prefill perf code_debug 55k@5k, no-trace and traced + sparse MLA perf 5k@50k, 5k@500k + 4x4 [RING, RING] carve CCL perf"
   fabric_profile: torus_xy
   cmd: |
     export MESH_DEVICE=TG
@@ -935,6 +957,11 @@
       # chunks). Before DS_PREFILL_REUSE_MODEL, as its targets were taken.
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
       models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- models/demos/deepseek_v3_d_p/tests/sparse_mla/test_sparse_mla_perf.py::test_sparse_mla_perf -k glm_5_3 -vvv --tb=short || exit $?
+      # CCL perf gates of the 4x4 [RING, RING] carve (a 16-chip sub-torus of this Galaxy): the whole-mesh high_bw_all_gather
+      # bandwidth floors, and the sparse KV push plan, table gather and push ceilings at the 1M cache of a stage. Their
+      # numbers depend on the host's power rating, so they run here and not in the 8 kW GLM components leg.
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 600 --expect 1 tests/ttnn/unit_tests/operations/experimental/test_high_bw_all_gather.py -k perf || exit $?
+      models/demos/deepseek_v3_d_p/tests/run_subtorus_4x4_tests.sh --timeout-s 900 --expect 3 tests/ttnn/unit_tests/operations/experimental/test_sparse_kv_push.py -k perf || exit $?
       export DS_PREFILL_REUSE_MODEL=1
       python3 -m pytest models/demos/deepseek_v3_d_p/tests/test_prefill_transformer_chunked.py::test_glm_prefill_transformer_chunked_no_pcc -k "glm53 and torus-xy-8x4 and L78 and preload0 and chunks_eleven and ten_iters and (notrace or traced)" -xvs
     '
@@ -943,6 +970,8 @@
   test_group: module
   skus:
     bh_sc1_high_power:
+      # The slowest of the last 5 completed runs of this job is 51 min and the carve's CCL perf gates add about 3 min,
+      # so the bound only caps a hang.
       timeout: 166
       tier: 2
       release_ready: false
