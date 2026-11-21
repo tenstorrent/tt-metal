@@ -71,8 +71,13 @@ struct SenderChannel {
     // Whether its free-slots register (raw) says it holds a packet: the producer takes a slot per packet it writes, the
     // router gives one back per packet it sends, so anything but the slot count means a packet. ("Below the slot count"
     // would not do: an over-fill must read as holding packets, as the generic loop reads it, or it is never served.)
+    // Tested as the register XOR the slot count, zero in the count bits (the same test, as num_slots fits the count
+    // bits): the pass's combined forwarding test computes the same XOR, so a channel's own test reuses it.
+    static FORCE_INLINE uint32_t xor_slot_count(uint32_t free_slots_register) {
+        return free_slots_register ^ num_slots;
+    }
     static FORCE_INLINE bool holds_packet(uint32_t free_slots_register) {
-        return (free_slots_register & stream_count_mask) != num_slots;
+        return (xor_slot_count(free_slots_register) & stream_count_mask) != 0;
     }
 
     static_assert(num_slots > 0 && num_slots <= stream_count_mask);
@@ -484,18 +489,6 @@ FORCE_INLINE void read_free_slots_registers(uint32_t* registers) {
     }
 }
 
-// The channels in MASK whose free-slots register (in registers[CH]) says they hold a packet, one bit each.
-template <uint32_t MASK>
-FORCE_INLINE uint32_t channels_holding_packets(const uint32_t* registers) {
-    if constexpr (MASK != 0) {
-        constexpr size_t CH = lowest_bit(MASK);
-        return (static_cast<uint32_t>(SenderChannel<CH>::holds_packet(registers[CH])) << CH) |
-               channels_holding_packets<without_lowest_bit(MASK)>(registers);
-    } else {
-        return 0;
-    }
-}
-
 // The connection semaphores of the worker channels in WORKERS, into connection_semaphores[CH], lowest channel first.
 template <uint32_t WORKERS>
 FORCE_INLINE void read_connection_semaphores(uint32_t* connection_semaphores) {
@@ -507,16 +500,42 @@ FORCE_INLINE void read_connection_semaphores(uint32_t* connection_semaphores) {
     }
 }
 
-// The channels in MASK that hold a packet, one bit each, and the connection semaphores of the worker channels in
-// WORKERS (into connection_semaphores[CH]). Every register and semaphore is read first, then the registers are
-// tested. Only the one-word result stays live across the pass.
-template <uint32_t MASK, uint32_t WORKERS = 0>
-FORCE_INLINE uint32_t channels_with_packets(uint32_t* connection_semaphores = nullptr) {
-    uint32_t registers[MASK == 0 ? 1 : mask_width(MASK)];
-    read_free_slots_registers<MASK>(registers);
-    read_connection_semaphores<WORKERS>(connection_semaphores);
-    return channels_holding_packets<MASK>(registers);
-}
+// The free-slots registers of the channels in MASK as read (raw[CH]), carried into the visits and tested where a visit
+// needs them: a channel's own test is a shift of its register XOR its slot count, and a group's is one combined test
+// (that XOR, OR'd). No per-channel bits are built first (on a pass that found a forwarded packet the bits took 16
+// instructions after the combined test). Fully inlined, the array lives in registers.
+template <uint32_t MASK>
+struct FreeSlotsRegisters {
+    uint32_t raw[MASK == 0 ? 1 : mask_width(MASK)];
+
+    // Reads them, lowest channel first.
+    FORCE_INLINE void read() { read_free_slots_registers<MASK>(raw); }
+
+    template <size_t CH>
+    FORCE_INLINE bool holds_packet() const {
+        static_assert(((MASK >> CH) & 1u) != 0);
+        return SenderChannel<CH>::holds_packet(raw[CH]);
+    }
+
+    // Each register in SUB XOR its channel's slot count, OR'd: zero in the count bits exactly when none holds a packet.
+    template <uint32_t SUB>
+    FORCE_INLINE uint32_t xor_slot_counts() const {
+        static_assert((SUB & ~MASK) == 0);
+        if constexpr (SUB == 0) {
+            return 0;
+        } else {
+            constexpr size_t CH = lowest_bit(SUB);
+            return SenderChannel<CH>::xor_slot_count(raw[CH]) |
+                   this->template xor_slot_counts<without_lowest_bit(SUB)>();
+        }
+    }
+
+    // Whether a channel in SUB holds a packet or has packets in flight (`in_flight`, one bit per channel), in one test.
+    template <uint32_t SUB>
+    FORCE_INLINE bool any_with_work(uint32_t in_flight) const {
+        return ((this->template xor_slot_counts<SUB>() & stream_count_mask) | (in_flight & SUB)) != 0;
+    }
+};
 
 // ---------------------------------------------------------------------------------------------------------------------
 // Sending
@@ -681,7 +700,8 @@ FORCE_INLINE void visit_channel_with_work(
     uint32_t completions = 0;
     uint32_t sent_acks = 0;  // the ack count the send read (first-level-ack VCs)
     bool did_send = false;
-    if (has_packet && remote.has_room(SenderChannel<CH>::remote_free_slots_to_send)) {
+    // Room expected: the send falls through (the "no room" exit was a backward branch to the shared completions code).
+    if (has_packet && __builtin_expect(remote.has_room(SenderChannel<CH>::remote_free_slots_to_send), 1)) {
         uint32_t next_slot_addr = state.progress.next_slot_addr;
         did_send = send<CH>(next_slot_addr, remote, sent, completed, completions, sent_acks, send_yielded);
         if (did_send) {
@@ -779,76 +799,98 @@ struct SenderChannelStates {
     }
 };
 
-// The forwarding channels in MASK that have a packet (`holding`) or packets in flight (`channels_in_flight`), lowest
-// channel first.
-template <uint32_t MASK, typename Remote>
+// The forwarding channels in MASK that hold a packet (their free-slots registers, `registers`) or have packets in
+// flight (`channels_in_flight`), lowest channel first. Both tests expect no work, so a channel without work is passed
+// by falling through and only the channel with work is reached by a taken branch (one per channel visited).
+template <uint32_t MASK, typename Registers, typename Remote>
 FORCE_INLINE void visit_forwarding_channels(
-    SenderChannelStates& states, uint32_t holding, uint32_t& channels_in_flight, Remote& remote, bool& send_yielded) {
+    SenderChannelStates& states,
+    const Registers& registers,
+    uint32_t& channels_in_flight,
+    Remote& remote,
+    bool& send_yielded) {
     if constexpr (MASK != 0) {
         constexpr size_t CH = lowest_bit(MASK);
-        const bool has_packet = ((holding >> CH) & 1u) != 0;
-        if (has_packet || ((channels_in_flight >> CH) & 1u) != 0) {
-            visit_channel_with_work<CH>(
-                states.forwarding.template get<CH>(), channels_in_flight, has_packet, remote, send_yielded);
+        SenderChannelState<CH>& state = states.forwarding.template get<CH>();
+        if (__builtin_expect(registers.template holds_packet<CH>(), 0)) {
+            visit_channel_with_work<CH>(state, channels_in_flight, /*has_packet=*/true, remote, send_yielded);
+        } else if (__builtin_expect(((channels_in_flight >> CH) & 1u) != 0, 0)) {
+            visit_channel_with_work<CH>(state, channels_in_flight, /*has_packet=*/false, remote, send_yielded);
         }
-        visit_forwarding_channels<without_lowest_bit(MASK)>(states, holding, channels_in_flight, remote, send_yielded);
+        visit_forwarding_channels<without_lowest_bit(MASK)>(
+            states, registers, channels_in_flight, remote, send_yielded);
     }
 }
 
-// VC's channels against its remote receiver progress (`remote`): its worker channel (visited every pass where VC is the
-// loop-local VC, otherwise when it holds a packet or has packets in flight), then its forwarding channels, skipped with
-// one test when none holds a packet or has packets in flight.
-template <size_t VC, typename Remote>
+// VC's channels against its remote receiver progress (`remote`), from their free-slots registers (`registers`): its
+// worker channel (visited every pass where VC is the loop-local VC, otherwise when it holds a packet or has packets in
+// flight), then its forwarding channels, skipped with one combined test when none holds a packet or has packets in
+// flight (the compiler may compute it early, in the shadow of the pass's first reads).
+template <size_t VC, typename Remote, typename Registers>
 FORCE_INLINE void visit_channels(
     SenderChannelStates& states,
     SenderVcState<VC>& send_state,
     Remote& remote,
-    uint32_t holding,
+    const Registers& registers,
     uint32_t& channels_in_flight,
     bool& send_yielded) {
+    constexpr uint32_t forwarding = SenderVc<VC>::forwarding_channels;
     if constexpr (SenderVc<VC>::has_worker_channel) {
         constexpr size_t CH = SenderVc<VC>::worker_channel;
-        const bool has_packet = ((holding >> CH) & 1u) != 0;
+        const bool has_packet = registers.template holds_packet<CH>();
         if constexpr (SenderChannelStates::visited_every_pass<VC>) {
             visit_worker<CH>(send_state.worker, has_packet, remote, send_yielded);
         } else if (has_packet || ((channels_in_flight >> CH) & 1u) != 0) {
             visit_channel_with_work<CH>(send_state.worker, channels_in_flight, has_packet, remote, send_yielded);
         }
     }
-    if constexpr (SenderVc<VC>::forwarding_channels != 0) {
-        if (((holding | channels_in_flight) & SenderVc<VC>::forwarding_channels) != 0) {
-            visit_forwarding_channels<SenderVc<VC>::forwarding_channels>(
-                states, holding, channels_in_flight, remote, send_yielded);
+    if constexpr (forwarding != 0) {
+        if (__builtin_expect(registers.template any_with_work<forwarding>(channels_in_flight), 0)) {
+            visit_forwarding_channels<forwarding>(states, registers, channels_in_flight, remote, send_yielded);
         }
     }
 }
 
-// VC's visit, on its send state where SenderChannelStates places it: its free-slots registers (when not read with the
-// pass's first reads), then its channels. A later VC is skipped with one test when none of its channels has work;
-// otherwise its remote receiver progress is taken into a local and put back where it changed (after_visit).
-template <size_t VC, typename LoopCopy>
+// VC's channels, on its send state, from their free-slots registers: a later VC is skipped with one test when none of
+// its channels has work; otherwise its remote receiver progress is taken into a local and put back where it changed
+// (after_visit).
+template <size_t VC, typename Registers>
+FORCE_INLINE void visit_vc_channels(
+    SenderChannelStates& states,
+    SenderVcState<VC>& send_state,
+    Registers& registers,
+    uint32_t& channels_in_flight,
+    bool& send_yielded) {
+    if constexpr (SenderChannelStates::visited_every_pass<VC>) {
+        visit_channels<VC>(states, send_state, send_state.remote, registers, channels_in_flight, send_yielded);
+    } else {
+        if (!registers.template any_with_work<SenderVc<VC>::sender_channels>(channels_in_flight)) {
+            return;
+        }
+        const RemoteReceiverChannelProgress<VC> taken = send_state.remote;
+        RemoteReceiverChannelProgress<VC> remote = taken;
+        visit_channels<VC>(states, send_state, remote, registers, channels_in_flight, send_yielded);
+        states.template after_visit<VC>(send_state, taken, remote);
+    }
+}
+
+// VC's visit, on its send state where SenderChannelStates places it: its free-slots registers (the pass's first reads
+// where VC reads them there, `at_pass_start`; otherwise read now), then its channels.
+template <size_t VC, typename LoopCopy, typename PassStartRegisters>
 FORCE_INLINE void visit_vc(
     LoopCopy& loop_copy,
     SenderChannelStates& states,
-    uint32_t holding_at_pass_start,
+    PassStartRegisters& at_pass_start,
     uint32_t& channels_in_flight,
     bool& send_yielded) {
     if constexpr (SenderVc<VC>::sender_channels != 0) {
-        uint32_t holding = holding_at_pass_start;
-        if constexpr (!SenderVc<VC>::reads_free_slots_at_pass_start) {
-            holding = channels_with_packets<SenderVc<VC>::sender_channels>();
-        }
         SenderVcState<VC>& send_state = states.template progress_for<VC>(loop_copy);
-        if constexpr (SenderChannelStates::visited_every_pass<VC>) {
-            visit_channels<VC>(states, send_state, send_state.remote, holding, channels_in_flight, send_yielded);
+        if constexpr (SenderVc<VC>::reads_free_slots_at_pass_start) {
+            visit_vc_channels<VC>(states, send_state, at_pass_start, channels_in_flight, send_yielded);
         } else {
-            if (((holding | channels_in_flight) & SenderVc<VC>::sender_channels) == 0) {
-                return;
-            }
-            const RemoteReceiverChannelProgress<VC> taken = send_state.remote;
-            RemoteReceiverChannelProgress<VC> remote = taken;
-            visit_channels<VC>(states, send_state, remote, holding, channels_in_flight, send_yielded);
-            states.template after_visit<VC>(send_state, taken, remote);
+            FreeSlotsRegisters<SenderVc<VC>::sender_channels> registers;
+            registers.read();
+            visit_vc_channels<VC>(states, send_state, registers, channels_in_flight, send_yielded);
         }
     }
 }
@@ -884,8 +926,13 @@ FORCE_INLINE uint32_t total_sent(LoopCopy& loop_copy, SenderChannelStates& state
 
 // Whether a sender channel holds a packet (telemetry, once per round; the pass's register groups).
 FORCE_INLINE bool any_channel_holds_packet() {
-    return (channels_with_packets<SenderChannels::read_at_pass_start>() |
-            channels_with_packets<SenderChannels::serviced & ~SenderChannels::read_at_pass_start>()) != 0;
+    constexpr uint32_t first = SenderChannels::read_at_pass_start;
+    constexpr uint32_t later = SenderChannels::serviced & ~SenderChannels::read_at_pass_start;
+    FreeSlotsRegisters<first> first_registers;
+    first_registers.read();
+    FreeSlotsRegisters<later> later_registers;
+    later_registers.read();
+    return first_registers.template any_with_work<first>(0) || later_registers.template any_with_work<later>(0);
 }
 
 // The base firmware may have used the command buffers (router commands, the context switch): program each connected
@@ -927,14 +974,17 @@ FORCE_INLINE void pass(
     // Indexed by sender channel, so up to the highest worker channel; at least 1, as an array can't be empty.
     constexpr uint32_t semaphore_slots = std::max<uint32_t>(1, mask_width(worker_channels));
     uint32_t connection_semaphores[semaphore_slots];
-    const uint32_t holding =
-        channels_with_packets<SenderChannels::read_at_pass_start, worker_channels>(connection_semaphores);
+    // The first reads: every register and semaphore is read before any is tested; the registers stay raw until their
+    // visit tests them (FreeSlotsRegisters).
+    FreeSlotsRegisters<SenderChannels::read_at_pass_start> registers;
+    registers.read();
+    read_connection_semaphores<worker_channels>(connection_semaphores);
     check_worker_connection<0>(loop_copy, states, connection_semaphores);
     check_worker_connection<1>(loop_copy, states, connection_semaphores);
     check_worker_connection<2>(loop_copy, states, connection_semaphores);
-    visit_vc<0>(loop_copy, states, holding, channels_in_flight, send_yielded);
-    visit_vc<1>(loop_copy, states, holding, channels_in_flight, send_yielded);
-    visit_vc<2>(loop_copy, states, holding, channels_in_flight, send_yielded);
+    visit_vc<0>(loop_copy, states, registers, channels_in_flight, send_yielded);
+    visit_vc<1>(loop_copy, states, registers, channels_in_flight, send_yielded);
+    visit_vc<2>(loop_copy, states, registers, channels_in_flight, send_yielded);
 }
 
 // The sender's round state: every loop's round counters, whether a send yielded this round (the TX queue was busy) and
