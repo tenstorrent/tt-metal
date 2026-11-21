@@ -21,6 +21,37 @@ endif()
 # Avoid hard failures on hosts without invariant TSC.
 set(TRACY_TIMER_FALLBACK ON)
 
+# tracy_srcloc_fix.patch removes opID from a device-marker source-location field (upstream issue
+# tenstorrent-metal/tracy#14847): embedding opID there registers every op instance as a distinct
+# Tracy source location, exhausting Tracy's 32K-entry cap on long/MoE runs. Applied here at
+# configure time (rather than committed inside the submodule) because this repo has no push
+# access to the tracy submodule's own remote. Idempotent: a reverse-apply --check tells us
+# whether it's already in place so re-configuring doesn't re-apply or fail.
+set(TRACY_SRCLOC_PATCH "${CMAKE_CURRENT_SOURCE_DIR}/tracy_srcloc_fix.patch")
+execute_process(
+    COMMAND
+        git apply --check --reverse ${TRACY_SRCLOC_PATCH}
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tracy
+    RESULT_VARIABLE TRACY_SRCLOC_PATCH_ALREADY_APPLIED
+    OUTPUT_QUIET
+    ERROR_QUIET
+)
+if(NOT TRACY_SRCLOC_PATCH_ALREADY_APPLIED EQUAL 0)
+    execute_process(
+        COMMAND
+            git apply ${TRACY_SRCLOC_PATCH}
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tracy
+        RESULT_VARIABLE TRACY_SRCLOC_PATCH_APPLY_RESULT
+    )
+    if(NOT TRACY_SRCLOC_PATCH_APPLY_RESULT EQUAL 0)
+        message(
+            FATAL_ERROR
+            "Failed to apply ${TRACY_SRCLOC_PATCH} to tt_metal/third_party/tracy -- "
+            "the submodule may have diverged from what this patch expects."
+        )
+    endif()
+endif()
+
 add_subdirectory(tracy)
 
 # TracyClient is linked unconditionally by libtt_metal and several installed tools. With

@@ -94,6 +94,10 @@ private:
     // Set if any risc reported DROPPED_ZONES; downgrades start-without-end errors to warnings.
     std::atomic<bool> had_dropped_markers{false};
 
+    // Zone endpoints processDeviceMarkerData could not pair, counted so a run can report them
+    // instead of aborting on the first one. See the skip sites in processDeviceMarkerData.
+    std::atomic<uint64_t> unpairable_markers{0};
+
     // Smallest timestamp
     uint64_t smallest_timestamp = (1lu << 63);
 

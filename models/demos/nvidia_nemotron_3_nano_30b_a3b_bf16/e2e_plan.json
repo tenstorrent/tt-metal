@@ -1,0 +1,72 @@
+{
+  "model_id": "nvidia/NVIDIA-Nemotron-3-Nano-30B-A3B-BF16",
+  "planner_notes": "Sketch plan (mental model) for the REAL end-to-end TTNN pipeline. Source A = HF hub (config, tokenizer, AutoModelForCausalLM reference + model.generate golden). Source B = bring-up tool output (_stubs graduated bodies, _captured goldens, tests/pcc). This is a SINGLE task head: causal text generation (NemotronHForCausalLM). Bring-up is single-phase TP=2: the five Phase-2 shard stubs carry a .last_good_sharded body (ShardTensorToMesh + all_reduce over the TP axis); the two native-only stubs run replicated (full exact math). Chip placement = 4-chip MeshShape(2,2), rows=DP=2, cols=TP=2, FABRIC_1D.",
+
+  "graduated_modules_source_b": [
+    {"name": "nemotron_h_model", "graduated": "native+sharded", "role": "monolith backbone: embedding, 52-layer residual scaffold, fp32 pre/final RMSNorm, attention helper (REUSE), and the expert-parallel MoE. Drives the whole forward in both compose modes."},
+    {"name": "nemotron_h_block", "graduated": "native+sharded", "role": "one full Mamba2 M-layer (own pre-norm + residual + row-parallel out-proj all_reduce). Routed for the FIRST mamba layer so the block stub runs on real data."},
+    {"name": "nemotron_h_mamba2_mixer", "graduated": "native+sharded", "role": "Mamba2 SSD mixer for the remaining M-layers; row-parallel in-proj shard -> partial -> all_reduce."},
+    {"name": "mamba_r_m_s_norm_gated", "graduated": "native", "role": "gated grouped RMSNorm inside every Mamba2 mixer; invoked transitively whenever a mamba mixer runs."},
+    {"name": "nemotron_h_m_o_e", "graduated": "native+sharded", "role": "MoE E-layer: expert-parallel disjoint expert slice per TP chip -> local weighted mixture -> all_reduce -> add replicated shared expert."},
+    {"name": "nemotron_h_topk_router", "graduated": "native+sharded", "role": "replicated top-k router (sigmoid + e_score_correction_bias + per-row-max recenter + exact top-k one-hot); invoked transitively inside the MoE mixer."},
+    {"name": "re_l_u_squared_activation", "graduated": "native", "role": "relu^2 expert activation; invoked transitively inside every MoE expert."}
+  ],
+  "graduated_modules_verified_count": 7,
+  "graduated_modules_none_left_out": true,
+
+  "task_heads": [
+    {
+      "call_id": 1,
+      "name": "causal_text_generation",
+      "hf_task": "NemotronHForCausalLM.generate (greedy)",
+      "input": "HF AutoTokenizer(prompt='The capital of France is') -> input_ids (1,5), from _captured/_e2e_golden/input_ids.pt (== live tokenizer output).",
+      "output": "generated next-token ids + per-step next-token logits; decoded text.",
+      "reference_golden": "_captured/_e2e_golden/{input_ids,golden_new_ids,golden_step_logits}.pt captured from AutoModelForCausalLM.generate(max_new_tokens=N). golden_new_ids=[6993,2613,3501,7185,34315] -> \" Paris.\\\" No extra punct\". BOTH sides capped to the SAME N (default 5).",
+      "chained_stubs_in_order": [
+        "nemotron_h_model._apply_embeddings (token ids -> replicated fp32 residual stream)",
+        "per layer i in 0..51 (nemotron_h_model._g_norm_f32 pre-RMSNorm, replicated):",
+        "  i == first MAMBA layer (0) -> nemotron_h_block (own norm+residual)",
+        "  i in MAMBA_LAYERS (rest)  -> nemotron_h_mamba2_mixer -> mamba_r_m_s_norm_gated",
+        "  i in ATTN_LAYERS (5,12,19,26,33,42) -> nemotron_h_model._attn (REUSE, not graduated)",
+        "  else (MoE E-layers)       -> nemotron_h_m_o_e -> nemotron_h_topk_router + re_l_u_squared_activation",
+        "nemotron_h_model._g_norm_f_f32 final RMSNorm -> lm_head linear -> last-position logits"
+      ],
+      "uses_all_graduated_modules": true,
+      "no_reference_injection_at_joints": "each layer is fed the PREVIOUS TT layer's real residual output; only the token ids (Source A/B) enter at the front and logits leave at the back.",
+      "pass_definition": {
+        "gate_1": "every routed graduated stub is still real ttnn (no torch runtime fallback; _runtime_fallbacks.json empty). A sharded TP=2 body counts as native.",
+        "gate_2": "every one of the 7 graduated modules is actually invoked in the compose run (recorded in tt._invocation registry).",
+        "gate_3": "mean per-step next-token-logits PCC vs HF golden >= 0.95, AND first-N token ids match the golden.",
+        "shard_requirement": "final pipeline MUST contain ShardTensorToMesh (ShardTensor2dMesh) + a collective (all_reduce over the TP/cluster axis); a pure-replication pipeline is NOT acceptable."
+      },
+      "validation_metric": "models.common.utility_functions.comp_pcc over fp32 logits, per step; report mean_pcc.",
+      "behavioral_proof": "TT greedy decode of 'The capital of France is' reproduces the golden ids [6993,2613,3501,7185,34315] i.e. ' Paris.\" No extra punct' (token_match == True).",
+      "self_validation_plan": [
+        "print e2e PCC on its own line before every assert (pass or fail).",
+        "assert Gate1 (no fallbacks), Gate2 (no missing graduated modules), Gate3 (mean_pcc>=0.95 + token_match).",
+        "print the discovered mesh shape and shard_active flag so the TP=2 placement is visible in the log.",
+        "fast proxy test_e2e_prefill (one prefill, first-token PCC) + full test_e2e_generate (capped decode)."
+      ]
+    }
+  ],
+
+  "chip_placement": {
+    "chips": 4,
+    "mesh_shape": [2, 2],
+    "dp": 2,
+    "tp": 2,
+    "fabric": "ttnn.FabricConfig.FABRIC_1D set BEFORE open_mesh_device; topology auto-discovered (no TT_MESH_GRAPH_DESC_PATH).",
+    "shard_activation": "TT_HW_PLANNER_SHARD_RUN=1 + MeshDevice enables the graduated .last_good_sharded bodies (expert-parallel MoE shard on TP axis, all_reduce). Residual stream / embeddings / norms / lm_head replicated.",
+    "readback": "outputs are replicated across all 4 chips; read back with ConcatMeshToTensor(dim=0) and take replica 0 -> numerically identical to the single-device golden.",
+    "single_device_fallback": "if the mesh cannot be opened, fall back to one device (TP=1, everything replicated == native) and note it in the run output."
+  },
+
+  "package_layout": {
+    "tt/pipeline.py": "the ONE shared chained forward (open_pipeline_mesh helper + NemotronHPipeline) imported by BOTH demo and test.",
+    "demo/demo_text_generation.py": "runnable `python -m ...demo.demo_text_generation` entrypoint: opens the mesh, runs the shared pipeline, prints generated text.",
+    "tests/e2e/test_e2e_pipeline.py": "opens the mesh, runs the shared pipeline, asserts Gate 1/2/3 vs the HF golden.",
+    "README.md": "what Call 1 does, how to run, PCC numbers."
+  },
+
+  "orchestration": "Exactly ONE task head (one Call) and all 7 graduated modules are shared by it, so a SINGLE build agent owns the whole pipeline (parallel fan-out would only create wiring drift on shared modules)."
+}

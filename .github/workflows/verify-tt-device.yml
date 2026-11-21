@@ -1,0 +1,357 @@
+name: verify-tt-device
+
+# Device-side verification of the auto-synced tool branch (apande-TT:feature/tt-hw-planner).
+# The cloud auto-sync (sync-upstream.yml) only merges + pushes -- it has no TT hardware, so it
+# cannot prove the merge still builds and still computes correct numbers. This workflow does
+# that on a self-hosted TT box labelled `tt-verify`.
+#
+# RUNS DAILY, BUT YIELDS TO HUMANS. The TT box is an interactive machine that people also drive
+# by hand for perf/bring-up runs, and seizing the device mid-run wedges the board (a colliding
+# pytest and trace capture kill each other, which surfaces as an unexplained hang). So the
+# `preflight` job below checks whether anything holds a device node FIRST and, if the box is
+# busy, skips the whole verification cleanly -- no failure, no issue filed, nothing queued
+# against the device. The next daily run picks it up: a busy board postpones verification to
+# tomorrow rather than competing for the chips.
+#
+# Never triggered by the sync itself (no `workflow_run`): a push landing while someone is
+# mid-optimize is exactly when you least want CI grabbing the device.
+
+on:
+  schedule:
+    # 07:00 UTC -- after the 06:00-Berlin sync plus its typical queue drift, so this normally
+    # verifies the branch that sync produced a couple of hours earlier. Plain UTC on purpose:
+    # unlike the sync this job has no reason to be punctual in local time, so it is not worth a
+    # second cron and a DST gate. It shifts by an hour against Berlin twice a year.
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/SHA to verify"
+        required: false
+        default: "feature/tt-hw-planner"
+      skip_build:
+        description: "Reuse the existing build/ tree (much faster; only safe if C++ is unchanged)"
+        type: boolean
+        required: false
+        default: false
+      force:
+        description: "Run even if the device looks busy (DANGEROUS -- can wedge the board)"
+        type: boolean
+        required: false
+        default: false
+
+permissions:
+  contents: read
+  issues: write
+
+# One device, one job. Never cancel a job that may hold the device -- a half-killed run is how
+# boards get wedged. Queue instead.
+concurrency:
+  group: tt-device
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    # Decide whether the board is ours to touch, BEFORE any checkout or build. If a human run is
+    # live, this reports idle=false and `verify` is skipped cleanly -- no failure, no issue filed,
+    # nothing queued against the device. Verification simply waits for the next run.
+    runs-on: [self-hosted, tt-verify]
+    timeout-minutes: 5
+    outputs:
+      idle: ${{ steps.check.outputs.idle }}
+    steps:
+      # Scripts only -- preflight must stay cheap and must not clone the tree it may not touch.
+      # Defaults to this workflow's own ref, which is where the helpers live (the tool branch does
+      # not carry them: it has no berlin_gate.sh either).
+      - name: Checkout CI helpers
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+
+      - name: Is the device free?
+        id: check
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "idle=true" >> "$GITHUB_OUTPUT"
+            echo "::warning::force=true -- skipping the device-idle check. This can wedge the board."
+            exit 0
+          fi
+
+          REASONS=""
+          eval "$(bash .github/scripts/tt_device_state.sh)"
+
+          # Primary signal: does ANY process hold a device node? This catches every holder,
+          # including orphaned or wedged runs whose command line matches no known pattern.
+          [ -n "$TT_HOLDERS" ] && REASONS="$REASONS\n  device node(s) held by PID(s): $TT_HOLDERS"
+
+          # Secondary: a known perf/bring-up harness that is ALIVE -- holding a chip, or burning
+          # CPU on its way to grabbing one. A name match on its own is not enough (see the script).
+          [ -n "$TT_ACTIVE_HARNESS" ] && REASONS="$REASONS\n  active harness PID(s): $TT_ACTIVE_HARNESS"
+
+          # Name matches that hold nothing and burn no CPU are leftovers, not work. Say so out loud
+          # -- they need reaping -- but do NOT let them postpone verification indefinitely.
+          if [ -n "$TT_ORPHAN_HARNESS" ]; then
+            echo "::warning::Ignoring idle harness leftovers (no device handle, no CPU): $TT_ORPHAN_HARNESS"
+            echo "::warning::Reap them with: pkill -f 'agent\.loop|agent\.before_loop|tt_hw_planner|tracy-capture'"
+          fi
+
+          # A stale tracy-capture listener breaks any later profile/capture.
+          if command -v ss >/dev/null && ss -ltn 2>/dev/null | grep -q ':8086'; then
+            REASONS="$REASONS\n  stale listener on :8086 (tracy-capture?)"
+          fi
+
+          if [ ! -e /dev/tenstorrent/0 ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::/dev/tenstorrent/0 missing -- no device on this runner. Skipping."
+            exit 0
+          fi
+
+          if [ -n "$REASONS" ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Device is BUSY -- verification postponed to the next run (not a failure)."
+            printf 'busy because:%b\n' "$REASONS"
+            exit 0
+          fi
+
+          # FREE IS NOT THE SAME AS HEALTHY. A board left in a bad state by a killed or wedged run
+          # holds nothing, so every check above passes -- and then the gates die 15 minutes later
+          # with "Read 0xffffffff over PCIe ID N: the board should be reset". Seen for real: a run
+          # spun 100 minutes inside from_torch on a FABRIC_1D_RING mesh and left a chip unresponsive.
+          # Catch it here, cheaply, instead of after a full build.
+          # Health is per chip. `tt-smi -s` was used here and is the wrong instrument: it hangs when
+          # ANY chip's ARC is down, so three dead chips beside one good one read as a dead board and
+          # postponed verification forever. sysfs answers per chip and cannot hang the step.
+          if [ "$TT_HEALTHY_COUNT" -eq 0 ]; then
+            echo "idle=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No chip has responsive telemetry (all report tt_serial=FFFFFFFFFFFFFFFF)."
+            echo "::warning::Needs a human: tt-smi -r <ids>, and a power cycle if the ARC will not start."
+            exit 0
+          fi
+          echo "Healthy chips: $TT_HEALTHY_CHIPS (of $(ls -d /dev/tenstorrent/[0-9]* 2>/dev/null | wc -l) present)"
+
+          echo "idle=true" >> "$GITHUB_OUTPUT"
+          echo "Device is free and responsive."
+
+  verify:
+    needs: preflight
+    if: needs.preflight.outputs.idle == 'true'
+    runs-on: [self-hosted, tt-verify]
+    timeout-minutes: 180
+    env:
+      GH_API: https://api.github.com/repos/${{ github.repository }}
+      ARCH_NAME: blackhole
+      TT_METAL_HOME: ${{ github.workspace }}
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - name: Checkout ${{ inputs.ref || 'feature/tt-hw-planner' }}
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || 'feature/tt-hw-planner' }}
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Record what we are verifying, and prove it is the tool branch
+        run: |
+          echo "ref=${{ inputs.ref || 'feature/tt-hw-planner' }}  sha=$(git rev-parse --short HEAD)"
+          git log -1 --format='%h %an %ad %s' --date=iso
+          echo "upstream merged? $(git merge-base --is-ancestor origin/main HEAD 2>/dev/null && echo yes || echo 'n/a')"
+
+          # TRIPWIRE. The tool lives ONLY on feature/tt-hw-planner; the fork's default branch is a
+          # stale upstream snapshot that contains none of it. If a wrong/empty ref ever gets us the
+          # default branch again, every gate below would pass and prove nothing about the tool --
+          # a silent green. So fail loudly here instead. (This exact bug was live once: on a
+          # schedule event the inputs context is empty, so an unguarded inputs.ref resolved to the
+          # default branch -- a workflow_dispatch input default does NOT apply to scheduled runs.)
+          missing=""
+          for d in scripts/tt_hw_planner models/experimental/perf_automation; do
+            [ -d "$d" ] || missing="$missing $d"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Checked-out tree is NOT the tool branch -- missing:$missing"
+            echo "::error::HEAD=$(git rev-parse HEAD). Refusing to 'verify' a tree with no tool in it."
+            exit 1
+          fi
+          echo "Tool present: this is the tool branch."
+
+      # The checked-out tool branch does not carry these helpers, so take them from the branch the
+      # workflow itself came from. After the root checkout, which would otherwise clean this away.
+      - name: Checkout CI helpers from the workflow branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          path: _ci
+
+      - name: Device-idle re-check (races between preflight and here)
+        if: ${{ inputs.force != true }}
+        run: |
+          # preflight ran minutes ago and a human may have started something since. Cheap re-check
+          # right before we touch the chips. This one DOES fail the job: we already committed to
+          # running, so the safe move is to stop loudly rather than fight for the device.
+          eval "$(bash _ci/.github/scripts/tt_device_state.sh)"
+          if [ -n "$TT_HOLDERS" ]; then
+            echo "::error::Device became busy after preflight (PID(s): $TT_HOLDERS) -- aborting before we touch it."
+            exit 1
+          fi
+          if [ -n "$TT_ACTIVE_HARNESS" ]; then
+            echo "::error::A harness started after preflight (PID(s): $TT_ACTIVE_HARNESS) -- aborting."
+            exit 1
+          fi
+          [ -n "$TT_ORPHAN_HARNESS" ] && echo "::warning::Idle harness leftovers ignored: $TT_ORPHAN_HARNESS"
+          # A stale tracy-capture on :8086 breaks any subsequent profile/capture.
+          if command -v ss >/dev/null && ss -ltnp 2>/dev/null | grep -q ':8086'; then
+            echo "::error::Stale listener on :8086 (tracy-capture?) -- kill it before verifying."
+            exit 1
+          fi
+          test -e /dev/tenstorrent/0 || { echo "::error::/dev/tenstorrent/0 missing -- no device on this runner."; exit 1; }
+          echo "Device idle."
+
+      - name: Python env (3.12) + deps
+        run: |
+          # System default is 3.10; ttnn requires 3.12. The transformers pin is read from
+          # requirements-dev.txt on purpose -- never hardcode it here (it drifts upstream).
+          if [ ! -x python_env/bin/python ]; then
+            ./create_venv.sh --skip-compat-check --python-version 3.12
+          fi
+          . python_env/bin/activate
+          python -V
+          uv pip install --index-strategy unsafe-best-match -r tt_metal/python_env/requirements-dev.txt || true
+          echo "transformers pin -> $(grep -iE '^transformers' tt_metal/python_env/requirements-dev.txt)"
+
+      - name: Build tt-metal
+        if: ${{ inputs.skip_build != true }}
+        run: |
+          export PYTHON_ENV_DIR="$PWD/python_env"
+          . python_env/bin/activate
+          ./build_metal.sh
+
+      - name: Pin the gates to a healthy chip
+        run: |
+          # Without this the gates open the device unpinned, and on a p300c that is NOT "use chip 0":
+          # cluster construction runs TopologyDiscovery across every chip on the bus before a single
+          # op executes, so one wedged chip aborts everything with
+          #   RuntimeError: Read 0xffffffff over PCIe ID 1: the board should be reset
+          # -- which reads as a branch failure and files an issue against a tree that is fine. On
+          # 2026-07-30 the same two gates that died this way passed on the first try once pinned.
+          #
+          # One chip, not several. Exposing a single chip ALONE trips "CUSTOM cluster type for P300
+          # with 1 chip, Custom fabric mesh graph descriptor path must be specified"; exposing two or
+          # more brings up cross-chip fabric and hangs on the ethernet handshake. The p150 single-chip
+          # mesh-graph descriptor satisfies the cluster check while needing no fabric at all.
+          eval "$(bash _ci/.github/scripts/tt_device_state.sh)"
+          if [ "$TT_HEALTHY_COUNT" -eq 0 ]; then
+            echo "::error::No healthy chip left to verify on -- board needs a reset or power cycle."
+            exit 1
+          fi
+          CHIP=${TT_HEALTHY_CHIPS%%,*}
+          DESC="$GITHUB_WORKSPACE/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto"
+          test -f "$DESC" || { echo "::error::mesh-graph descriptor missing: $DESC"; exit 1; }
+          {
+            echo "TT_VISIBLE_DEVICES=$CHIP"
+            echo "TT_METAL_VISIBLE_DEVICES=$CHIP"
+            echo "TT_MESH_GRAPH_DESC_PATH=$DESC"
+            echo "TT_HEALTHY_CHIPS=$TT_HEALTHY_CHIPS"
+            echo "TT_MESH_DESC=$DESC"
+          } >> "$GITHUB_ENV"
+          echo "Pinned to chip $CHIP (healthy: $TT_HEALTHY_CHIPS) with the p150 single-chip descriptor."
+
+          # A green run must never imply the whole board is well. Pinning deliberately steps around
+          # dead chips, so without this a 1-of-4 board and a 4-of-4 board produce identical output.
+          PRESENT=$(ls -d /dev/tenstorrent/[0-9]* 2>/dev/null | wc -l)
+          if [ "$TT_HEALTHY_COUNT" -lt "$PRESENT" ]; then
+            DEAD=""
+            for d in /dev/tenstorrent/[0-9]*; do
+              id=${d##*/}
+              echo ",$TT_HEALTHY_CHIPS," | grep -q ",$id," || DEAD="$DEAD $id"
+            done
+            echo "::warning::PARTIAL BOARD: verified on $TT_HEALTHY_COUNT of $PRESENT chips. Unresponsive:$DEAD"
+            echo "::warning::Those chips need tt-smi -r, or a power cycle if the ARC will not start."
+            echo "::warning::Multi-chip work (TP>1, fabric, p300_x2) is NOT covered by this run."
+          fi
+
+      - name: Import gate
+        run: |
+          . python_env/bin/activate
+          python -c "import ttnn; print('ttnn import OK', ttnn.__file__)"
+
+      - name: On-device matmul gate (every healthy chip)
+        run: |
+          . python_env/bin/activate
+          # One chip at a time, each in its own process: pinning is read once at cluster
+          # construction, so a second chip needs a fresh interpreter. Serial and ~3s per chip.
+          # This is the only step with per-chip coverage -- the pytest gate below uses a
+          # single-device fixture and runs on the pinned chip only.
+          rc=0
+          for chip in $(echo "$TT_HEALTHY_CHIPS" | tr ',' ' '); do
+            echo "--- chip $chip ---"
+            TT_VISIBLE_DEVICES=$chip TT_METAL_VISIBLE_DEVICES=$chip \
+            TT_MESH_GRAPH_DESC_PATH="$TT_MESH_DESC" \
+            python - <<'PY' || rc=1
+          import torch, ttnn
+          d = ttnn.open_device(device_id=0)
+          try:
+              a = torch.randn(1, 1, 256, 512); b = torch.randn(1, 1, 512, 256)
+              ta = ttnn.from_torch(a, layout=ttnn.TILE_LAYOUT, device=d, dtype=ttnn.bfloat16)
+              tb = ttnn.from_torch(b, layout=ttnn.TILE_LAYOUT, device=d, dtype=ttnn.bfloat16)
+              got = ttnn.to_torch(ttnn.matmul(ta, tb)).float()
+              exp = (a @ b).float()
+              pcc = torch.corrcoef(torch.stack([got.flatten(), exp.flatten()]))[0, 1].item()
+              print(f"matmul PCC = {pcc:.6f}")
+              assert pcc > 0.99, f"on-device matmul PCC too low: {pcc}"
+          finally:
+              ttnn.close_device(d)
+          PY
+          done
+          [ "$rc" -eq 0 ] || echo "::error::matmul gate failed on at least one healthy chip."
+          exit $rc
+
+      - name: PCC gate (rms_norm on device)
+        run: |
+          . python_env/bin/activate
+          # Weight-free, single-device op test: proves the merged tree still computes correctly
+          # without downloading model weights and without a multi-chip fabric (a (1,4) FABRIC_1D
+          # test would hit the ethernet-fabric bring-up timeout on a p300c box).
+          pytest -q -x tests/ttnn/unit_tests/operations/fused/test_rms_norm.py::test_rms_norm
+
+      # NO tool self-test gate. `pytest scripts/tt_hw_planner/tests` (~1400 host-only tests) was
+      # tried here and removed: it does not currently pass on the branch, so it can only ever be
+      # red. Invoked from the repo root, pytest also collects tt-metal's top-level conftest.py,
+      # whose ttnn fixture raises AttributeError at setup -- 389 of the tests error before they
+      # run (378 in a separate tree, so it is the branch's state, not this runner's). A gate that
+      # is always red teaches people to ignore red. Re-add it once the suite is isolated from the
+      # root conftest and actually passes; until then the device gates above carry the signal.
+
+      - name: File an issue on failure (comment on the open one instead of duplicating)
+        if: failure()
+        run: |
+          BODY="Device verification of \`${{ inputs.ref || 'feature/tt-hw-planner' }}\` FAILED on runner \`$(hostname)\` (run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}). The branch was NOT reverted -- inspect the logs, then either fix forward or reset the branch by hand."
+          python3 - "$BODY" <<'PY'
+          # Daily schedule + a persistent cause (a board needing a reset, say) would otherwise open
+          # a fresh identical issue every morning. Reuse the open one and add a comment, so the
+          # issue count tracks distinct problems rather than days elapsed.
+          import json, os, sys, urllib.request
+
+          API, TOKEN = os.environ["GH_API"], os.environ["TOKEN"]
+          TITLE = "Device verification of the synced tool branch FAILED"
+          HDRS = {"Authorization": "token %s" % TOKEN, "Accept": "application/vnd.github+json"}
+
+          def call(url, data=None):
+              req = urllib.request.Request(url, data=data, headers=HDRS)
+              with urllib.request.urlopen(req) as r:
+                  return r.status, json.load(r) if r.length != 0 else None
+
+          _, issues = call(API + "/issues?state=open&per_page=100")
+          existing = next((i for i in issues if i["title"] == TITLE and "pull_request" not in i), None)
+
+          if existing:
+              status, _ = call(API + "/issues/%d/comments" % existing["number"],
+                               json.dumps({"body": sys.argv[1]}).encode())
+              print("commented on #%d -> %s" % (existing["number"], status))
+          else:
+              status, new = call(API + "/issues", json.dumps({"title": TITLE, "body": sys.argv[1]}).encode())
+              print("opened #%s -> %s" % (new["number"], status))
+          PY
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
