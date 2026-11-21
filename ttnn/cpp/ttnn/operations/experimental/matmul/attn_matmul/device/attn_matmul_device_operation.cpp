@@ -34,6 +34,15 @@ void AttnMatmulDeviceOperation::validate_on_program_cache_miss(
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
+    if (tensor_args.preallocated_output.has_value() && tensor_args.preallocated_output->is_allocated()) {
+        // The reader re-reads A tiles for every output tile while the writer stores output tiles, so a shared buffer
+        // corrupts the result.
+        const auto* out_buffer = tensor_args.preallocated_output->buffer();
+        TT_FATAL(
+            out_buffer != input_tensor_a.buffer() && out_buffer != input_tensor_b.buffer(),
+            "attn_matmul: optional_output_tensor must not alias an input buffer");
+    }
+
     const auto& ashape = input_tensor_a.padded_shape();
     const auto& bshape = input_tensor_b.padded_shape();
     TT_FATAL((ashape[0] == 1), "Input q_len must be 1!");
