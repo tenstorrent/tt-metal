@@ -73,7 +73,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     const tt::DataFormat max_scaler_cb_data_format =
         in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     const std::uint32_t max_scaler_tile_size = tt::tile_size(max_scaler_cb_data_format);
-    const std::uint32_t fused_attention_scale_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
+    // The fused scale holds one scalar per tile, so it follows the input dtype like the max scaler
+    // does: a float32 input keeps a float32 scale instead of truncating it to bfloat16.
+    const tt::DataFormat fused_attention_scale_cb_data_format =
+        in0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
+    const std::uint32_t fused_attention_scale_tile_size = tt::tile_size(fused_attention_scale_cb_data_format);
 
     const tt::DataFormat out0_cb_data_format = datatype_to_dataformat_converter(output_tensor.dtype());
     const std::uint32_t out0_tile_size = tt::tile_size(out0_cb_data_format);
@@ -213,6 +217,14 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             Wt,
             block_size);
     }
+    // SrcA/SrcB registers only carry TF32 on Wormhole and Blackhole, so an FPU mul by the fused
+    // scale rounds the raw logits (and the scale) to 10 mantissa bits before the softmax runs. With
+    // a float32 scale and fp32 Dest the small kernel instead copies the tiles to Dest and multiplies
+    // there, where the SFPU multiply is float32-accurate. Quasar keeps its FPU mul (different Src
+    // register formats), the large kernel keeps its streaming FPU mul, and the sharded kernel is a
+    // separate factory.
+    const bool fused_scale_on_dest = has_mask && !use_large_kernel && fp32_dest_acc_en && arch != tt::ARCH::QUASAR &&
+                                     fused_attention_scale_cb_data_format == tt::DataFormat::Float32;
     TT_FATAL(
         im0_t % block_size == 0,
         "Size of cb: {} must be divisible by the size of block used by the reader and compute kernel.",
@@ -321,7 +333,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
             .unique_id = FUSED_SCALE,
             .entry_size = fused_attention_scale_tile_size,
             .num_entries = in3_t,
-            .data_format_metadata = tt::DataFormat::Float16_b});
+            .data_format_metadata = fused_attention_scale_cb_data_format});
         dfbs.push_back(DataflowBufferSpec{
             .unique_id = FUSED_ATTN,
             .entry_size = mask_tile_size,
@@ -367,6 +379,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
     KernelSpec::CompilerOptions::Defines compute_defines = base_defines;
     compute_defines["EXP_APPROX"] = math_approx_mode ? "1" : "0";
     compute_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
+    if (fused_scale_on_dest) {
+        compute_defines["FUSED_SCALE_ON_DEST"] = "1";
+    }
     // The small compute kernel gates the pad-mask (c_5) intermediate (c_10) path on the host-known
     // MASK_PADDED_DATA define; the large compute keeps mask_padded_data as a runtime arg.
     if (!use_large_kernel && mask_padded_data) {
@@ -499,6 +514,11 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         compute_rta_names = {"num_rows", "Wt", "blk", "mask_padded_data", "dfb_length"};
     } else {
         compute_rta_names = {"num_rows", "Ht", "Wt", "blk", "start_ht"};
+        if (fused_scale_on_dest) {
+            // The SFPU scale multiply reads the raw float32 bits directly; the fused_scale DFB
+            // stays bound (the reader still produces it) but the compute no longer unpacks it.
+            compute_rta_names.push_back("pre_scale");
+        }
     }
 
     // Compute hardware config (Style A). Legacy defaulted unpack_to_dest_mode (=> UnpackToSrc); Metal 2.0
@@ -514,14 +534,22 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
         // Each DFB registers under the format it was declared with. The sum accumulators
         // follow acc_cb_data_format, the bulk buffers follow im_cb_data_format, and the two
         // differ for a non-fp32 input.
-        add_unpack(IN0, in0_cb_data_format);
+        if (fused_scale_on_dest) {
+            // The dest-side scale multiply is the compute kernel's only unpack of in0, and it must
+            // reach Dest bit-exactly: UnpackToSrc would round the tiles to the 19-bit Src register
+            // format on the way in and defeat the multiply's precision. Nothing else consumes in0
+            // on this path (the mask add reads cb_scale_mask), so UnpackToDest is safe here.
+            gen1.unpack_modes.insert({IN0, tt::tt_metal::UnpackMode::UnpackToDest});
+        } else {
+            add_unpack(IN0, in0_cb_data_format);
+        }
         add_unpack(MAX_SCALER, max_scaler_cb_data_format);
         add_unpack(SUM_SCALER, sum_scaler_cb_data_format);
         add_unpack(MASK_PADDED, tt::DataFormat::Float16_b);
         add_unpack(EXPS, im_cb_data_format);
         add_unpack(RECIP_SUM_EXPS, acc_cb_data_format);
         if (has_mask) {
-            add_unpack(FUSED_SCALE, tt::DataFormat::Float16_b);
+            add_unpack(FUSED_SCALE, fused_attention_scale_cb_data_format);
             add_unpack(FUSED_ATTN, mask_cb_data_format);
             add_unpack(SCALE_MASK, im_cb_data_format);
         }
@@ -644,6 +672,9 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryAttentionOptimized::create_program_
                  {"Wt", Wt},
                  {"blk", block_size},
                  {"start_ht", curr_ht}});
+            if (fused_scale_on_dest) {
+                AddRuntimeArgsForNode(compute_ra.runtime_arg_values, core, {{"pre_scale", scale_value}});
+            }
         }
 
         curr_row += num_tile_rows_per_core;
