@@ -125,7 +125,8 @@ inline void llk_math_eltwise_unary_sfpu_init() {
     // never depends on a separate once-init having run first. The co-located sfpu::<op>_init() below then
     // programs only the op's residual state (op-specific ADDR_MOD_6 where needed + counter reset).
     _llk_math_eltwise_unary_sfpu_init_once_();
-    if constexpr (sfpu_op == SfpuType::abs) {
+    if constexpr (sfpu_op == SfpuType::abs || sfpu_op == SfpuType::abs_int32) {
+        // abs_int32 needs the ADDR_MOD_6 abs_init programs (ttnn reaches it through abs_tile_init).
         sfpu::abs_init();
     } else if constexpr (sfpu_op == SfpuType::acos) {
         sfpu::acos_init<is_fp32_dest_acc_en>();
