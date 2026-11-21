@@ -462,16 +462,44 @@ void bind_fabric_api(nb::module_& mod) {
 
     mod.def(
         "get_tt_fabric_packet_header_size_bytes",
-        &tt::tt_fabric::get_tt_fabric_packet_header_size_bytes,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            return tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device);
+        },
+        nb::arg("mesh_device"),
         R"(
-            Returns the fabric packet header size in bytes.
+            Returns the fabric packet header size in bytes for ``mesh_device``.
+        )");
+
+    mod.def(
+        "get_tt_fabric_packet_header_size_bytes",
+        []() { return tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(); },
+        R"(
+            Returns the fabric packet header size in bytes of the default context.
+
+            .. deprecated::
+                Pass ``mesh_device`` instead. This overload resolves the default context and will be
+                removed after 2026-12-31.
         )");
 
     mod.def(
         "get_tt_fabric_max_payload_size_bytes",
-        &tt::tt_fabric::get_tt_fabric_max_payload_size_bytes,
+        [](const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+            return tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh_device);
+        },
+        nb::arg("mesh_device"),
         R"(
-            Returns the maximum fabric packet payload size in bytes.
+            Returns the maximum fabric packet payload size in bytes for ``mesh_device``.
+        )");
+
+    mod.def(
+        "get_tt_fabric_max_payload_size_bytes",
+        []() { return tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(); },
+        R"(
+            Returns the maximum fabric packet payload size in bytes of the default context.
+
+            .. deprecated::
+                Pass ``mesh_device`` instead. This overload resolves the default context and will be
+                removed after 2026-12-31.
         )");
 
     mod.def(

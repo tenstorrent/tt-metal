@@ -187,33 +187,39 @@ size_t get_worker_l1_end_address() {
            hal.get_dev_size(tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::BASE);
 }
 
-uint32_t get_aligned_packet_header_size_bytes() {
-    return align_up(static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes()), get_l1_alignment());
+uint32_t get_aligned_packet_header_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return align_up(
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device)), get_l1_alignment());
 }
 
-uint32_t get_sender_channel_buffer_size_bytes(const TestCaseConfig& test_case, uint32_t packet_payload_size_bytes) {
+uint32_t get_sender_channel_buffer_size_bytes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const TestCaseConfig& test_case,
+    uint32_t packet_payload_size_bytes) {
     const uint32_t alignment = get_l1_alignment();
     const uint32_t exact_fit_size =
-        align_up(get_aligned_packet_header_size_bytes() + packet_payload_size_bytes, alignment);
+        align_up(get_aligned_packet_header_size_bytes(mesh_device) + packet_payload_size_bytes, alignment);
     if (test_case.channel_buffer_size_kind == ChannelBufferSizeKind::ExactFitAligned) {
         return exact_fit_size;
     }
     return exact_fit_size + alignment;
 }
 
-uint32_t resolve_packet_payload_size_bytes(const TestCaseConfig& test_case) {
+uint32_t resolve_packet_payload_size_bytes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const TestCaseConfig& test_case) {
     if (test_case.packet_payload_size_bytes != 0) {
         return test_case.packet_payload_size_bytes;
     }
-    return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh_device));
 }
 
 TestRuntimeConfig build_test_runtime_config(
     const tt::tt_metal::distributed::MeshDevice& mesh_device, const TestCaseConfig& test_case) {
-    const auto packet_payload_size_bytes = resolve_packet_payload_size_bytes(test_case);
+    const auto packet_payload_size_bytes = resolve_packet_payload_size_bytes(mesh_device, test_case);
     return TestRuntimeConfig{
         .packet_payload_size_bytes = packet_payload_size_bytes,
-        .sender_channel_buffer_size_bytes = get_sender_channel_buffer_size_bytes(test_case, packet_payload_size_bytes),
+        .sender_channel_buffer_size_bytes =
+            get_sender_channel_buffer_size_bytes(mesh_device, test_case, packet_payload_size_bytes),
         .use_mesh_api = is_2d_fabric(mesh_device),
     };
 }
@@ -257,7 +263,7 @@ std::optional<SenderMemoryLayout> try_build_sender_memory_layout(
     SenderMemoryLayout layout{};
     layout.test_results_address = cursor.reserve(kTestResultsSizeBytes);
     layout.credit_handshake_address = cursor.reserve(get_l1_alignment());
-    layout.packet_header_buffer_address = cursor.reserve(get_aligned_packet_header_size_bytes());
+    layout.packet_header_buffer_address = cursor.reserve(get_aligned_packet_header_size_bytes(*device));
     layout.payload_buffer_address = cursor.reserve(packet_payload_size_bytes);
     return cursor.fits_in_worker_l1() ? std::optional<SenderMemoryLayout>{layout} : std::nullopt;
 }
@@ -267,12 +273,14 @@ std::optional<ReceiverMemoryLayout> try_build_receiver_memory_layout(
     AlignedL1Cursor cursor(device);
     ReceiverMemoryLayout layout{};
     layout.test_results_address = cursor.reserve(kTestResultsSizeBytes);
-    layout.packet_header_buffer_address = cursor.reserve(get_aligned_packet_header_size_bytes());
+    layout.packet_header_buffer_address = cursor.reserve(get_aligned_packet_header_size_bytes(*device));
     layout.receiver_slots_base_address = cursor.reserve(receiver_slot_count * packet_payload_size_bytes);
     return cursor.fits_in_worker_l1() ? std::optional<ReceiverMemoryLayout>{layout} : std::nullopt;
 }
 
-uint32_t get_receiver_mux_channel_buffer_size_bytes() { return get_aligned_packet_header_size_bytes(); }
+uint32_t get_receiver_mux_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    return get_aligned_packet_header_size_bytes(mesh_device);
+}
 
 std::vector<RemoteReceiverDevice> collect_1d_remote_devices_in_direction(
     BaseFabricFixture& fixture,
@@ -586,7 +594,7 @@ std::optional<std::unordered_map<ChipId, ReceiverDeviceContext>> build_receiver_
             remote_device.receiver_mux_logical_core,
             count_it->second,
             test_case.num_buffers_per_channel,
-            get_receiver_mux_channel_buffer_size_bytes(),
+            get_receiver_mux_channel_buffer_size_bytes(*remote_device.device),
             test_case);
         if (!receiver_mux_deployment.has_value()) {
             return std::nullopt;

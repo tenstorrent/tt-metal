@@ -139,9 +139,9 @@ void add_history_exchange(
     const uint32_t row_bytes = channel_tiles * qkv_conv::tile_row_bytes;
     const auto tail = qkv_causal_conv1d_silu_tail_layout(attrs);
     // A single rank sends nothing; any aligned value satisfies the kernel's static_assert.
-    const uint32_t max_payload = sp_size > 1
-                                     ? static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes())
-                                     : qkv_conv::read_alignment;
+    const uint32_t max_payload =
+        sp_size > 1 ? static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(device))
+                    : qkv_conv::read_alignment;
 
     std::vector<uint32_t> convolution_core_xy;
     convolution_core_xy.reserve(2 * convolution_cores.size());

@@ -409,7 +409,8 @@ LlamaReduceScatterPlan make_llama_reduce_scatter_plan(
     const auto schedule_string = schedule_to_string(plan.schedule);
     std::tie(plan.sender_core_grid, plan.all_cores_grid) =
         LlamaReduceScatterDeviceOperation::get_rs_core_grids(operation_attributes, tensor_args);
-    plan.packet_header_size_bytes = static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes());
+    plan.packet_header_size_bytes =
+        static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device));
     const uint32_t max_shards = max_shards_per_worker(plan.schedule);
     plan.num_pages_total = max_shards * (plan.ring_size - 1) * plan.input_tiles_per_core_width;
 

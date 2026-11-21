@@ -137,7 +137,7 @@ tt::tt_metal::ProgramDescriptor RecvAsyncProgramFactory::create_descriptor(
     auto total_num_pages = output_buffer->num_pages();
     auto fabric_max_payload_size = tt::round_down(
         std::min(
-            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(),
+            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*socket_mesh_device),
             static_cast<size_t>(mesh_socket.get_config().socket_mem_config.fifo_size)),
         max_alignment);
     auto num_pages_per_packet = fabric_max_payload_size / socket_aligned_page_size;

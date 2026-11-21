@@ -75,7 +75,7 @@ struct SenderCtArgs {
         fwd_sem_noc_x(static_cast<uint32_t>(downstream.worker_virtual.x)),
         fwd_sem_noc_y(static_cast<uint32_t>(downstream.worker_virtual.y)),
         final_sem_addr(plan.final_arrived_addr),
-        first_packet_bytes(cmbf2d::first_packet_bytes(token_size_bytes)),
+        first_packet_bytes(cmbf2d::first_packet_bytes(*tensor_args.dispatched_buffer.device(), token_size_bytes)),
         // plan.launch_credit_core is this same core -- the program factory asserts it sends back to us --
         // so the one pair serves the launch credit and the couriered channel credits alike.
         credit_noc_x(static_cast<uint32_t>(downstream_opposite.worker_virtual.x)),

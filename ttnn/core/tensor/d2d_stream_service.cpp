@@ -529,8 +529,9 @@ CommonPlan derive_common_plan(const D2DStreamConfig& cfg, const std::vector<Tens
     const uint32_t socket_page_size = tt::align(kSocketPageSizeBytes, l1_alignment);
     const auto plan = derive_chunk_plan(socket_page_size, tensor_num_pages, socket_page_size);
 
-    const auto fabric_max_payload_size = static_cast<uint32_t>(
-        tt::round_down(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(), static_cast<size_t>(l1_alignment)));
+    const auto fabric_max_payload_size = static_cast<uint32_t>(tt::round_down(
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*backings.front().device()),
+        static_cast<size_t>(l1_alignment)));
     TT_FATAL(fabric_max_payload_size > 0, "D2DStreamService: fabric max payload size rounded to zero");
 
     const uint32_t metadata_size_bytes = cfg.metadata_size_bytes;
@@ -1741,7 +1742,7 @@ Program build_receiver_program(
 
     // One packet header is enough for the receiver (control-flow notify only);
     // allocate two to mirror the sender and leave headroom.
-    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device);
     auto ph_cfg = CircularBufferConfig(2 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
                       .set_page_size(kPacketHeaderCbIndex, header_size);
     CreateCircularBuffer(program, service_core, ph_cfg);
@@ -1853,7 +1854,7 @@ Program build_sender_program(
 
     const uint32_t total_pages = plan.num_socket_pages * plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;  // lane 0 takes the odd page
-    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device);
     auto accessor_ct = TensorAccessorArgs(input_buffer).get_compile_time_args();
     std::vector<uint32_t> page_sizes = {tensor_page_size};
     for (const auto& seg : extra_segments) {
@@ -2961,13 +2962,18 @@ void patch_receiver_config(
 
 // Both relays: one scratch CB (each lane uses its own ring of kSenderReadRingSlots pages) and
 // one header CB (two headers per lane). The kernels add the sub lane's offsets themselves.
-void create_relay_cbs(Program& program, const CoreCoord& core, uint32_t page_size, tt::tt_metal::DataType dtype) {
+void create_relay_cbs(
+    Program& program,
+    const distributed::MeshDevice& mesh_device,
+    const CoreCoord& core,
+    uint32_t page_size,
+    tt::tt_metal::DataType dtype) {
     const uint32_t scratch_bytes = 2 * kSenderReadRingSlots * page_size;
     auto scratch_cfg =
         CircularBufferConfig(scratch_bytes, {{tt::CBIndex::c_0, datatype_to_dataformat_converter(dtype)}})
             .set_page_size(tt::CBIndex::c_0, scratch_bytes);
     CreateCircularBuffer(program, core, scratch_cfg);
-    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device);
     auto ph_cfg = CircularBufferConfig(4 * header_size, {{kPacketHeaderCbIndex, tt::DataFormat::UInt32}})
                       .set_page_size(kPacketHeaderCbIndex, header_size);
     CreateCircularBuffer(program, core, ph_cfg);
@@ -3056,7 +3062,7 @@ Program build_exit_relay_program(
     auto program = CreateProgram(*mesh);
     const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
-    create_relay_cbs(program, core, max_page_size, backing.dtype());
+    create_relay_cbs(program, *backing.device(), core, max_page_size, backing.dtype());
     const auto compile_args = relay_compile_args(common, backings, e);
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
     const uint32_t half = (total_pages + 1) / 2;
@@ -3229,7 +3235,7 @@ Program build_entry_relay_program(
     auto program = CreateProgram(*mesh);
     const uint32_t max_page_size = relay_slot_bytes(common);
     const auto num_extra = static_cast<uint32_t>(backings.size() - 1);
-    create_relay_cbs(program, core, max_page_size, backing.dtype());
+    create_relay_cbs(program, *backing.device(), core, max_page_size, backing.dtype());
     const auto compile_args = relay_compile_args(common, backings, e);
     const uint32_t total_pages = common.plan.num_socket_pages * common.plan.pages_per_chunk;
     const auto backing_addr = static_cast<uint32_t>(backing.mesh_buffer().address());

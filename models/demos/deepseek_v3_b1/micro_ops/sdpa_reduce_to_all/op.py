@@ -40,6 +40,7 @@ def _get_element_size_bytes(dtype):
 
 
 def compute_forwarder_scratch_size(
+    mesh_device,
     batch_size: int,
     l_width: int,
     num_cores: int,
@@ -57,7 +58,7 @@ def compute_forwarder_scratch_size(
     This matches the calculation in sdpa_reduce_to_all/op.py for proper L1 allocation.
     """
     if max_payload_size_bytes is None:
-        max_payload_size_bytes = ttnn.get_tt_fabric_max_payload_size_bytes()
+        max_payload_size_bytes = ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device)
 
     config = resolve_sdpa_reduce_config(
         batch_size=batch_size,
@@ -67,7 +68,7 @@ def compute_forwarder_scratch_size(
         tile_width=tile_width,
         bytes_per_element=bytes_per_element,
         num_links=num_links,
-        packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(),
+        packet_header_size_bytes=ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device),
         max_payload_size_bytes=max_payload_size_bytes,
         num_l_chunks_override=num_l_chunks_override,
         compute_block_size_override=compute_block_size_override,
@@ -255,8 +256,8 @@ class SdpaReduceToAll:
         r1_recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[0])
         r2_recv_sem_addr = ttnn.get_global_semaphore_address(semaphores[1])
 
-        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
-        max_fabric_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes()
+        packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes(mesh_device)
+        max_fabric_payload_size = ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device)
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
 

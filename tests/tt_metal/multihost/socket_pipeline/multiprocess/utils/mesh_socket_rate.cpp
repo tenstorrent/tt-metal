@@ -66,7 +66,7 @@ tt::tt_metal::Program create_send_async_rate_program(
     TT_FATAL(link_indices.size() > 1, "Single core multi link version of SendAsync only supports multiple links");
     uint32_t num_links = 2;
 
-    uint32_t fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    uint32_t fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
 
     uint32_t num_whole_packets = input_page_size / fabric_max_payload_size;
     uint32_t partial_packet_size = input_page_size % fabric_max_payload_size;
@@ -97,7 +97,7 @@ tt::tt_metal::Program create_send_async_rate_program(
 
     // Only 2 packet headers needed (no upstream connection for rate-mode sender)
     uint32_t packet_header_cb_num_pages = num_links;
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     auto packet_header_cb_index = tt::CBIndex::c_1;
 
@@ -208,7 +208,7 @@ tt::tt_metal::Program create_socket_forward_rate_program(
     uint32_t num_fwd_links = 2;
     uint32_t num_bwd_links = 1;
 
-    auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_payload_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     uint32_t partial_packet_size = num_bytes % fabric_max_payload_size;
     uint32_t socket_block_size = socket_aligned_page_size;
 
@@ -222,7 +222,7 @@ tt::tt_metal::Program create_socket_forward_rate_program(
     }
 
     uint32_t packet_header_cb_num_pages = num_fwd_links + num_bwd_links;
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     auto packet_header_cb_index = tt::CBIndex::c_0;
 
@@ -335,7 +335,7 @@ tt::tt_metal::Program create_recv_async_rate_program(
 
     // Packet header CB for upstream acks
     uint32_t packet_header_cb_num_pages = num_bwd_links;
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
 
     auto packet_header_cb_index = tt::CBIndex::c_0;
 

@@ -551,7 +551,7 @@ std::tuple<HighBwAllGatherParams, HighBwAllGatherInputs> high_bw_all_gather_buil
         }
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];
-    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
 
     // Resolve negative gather dim
     const int32_t rank = static_cast<int32_t>(input_tensor.logical_shape().rank());

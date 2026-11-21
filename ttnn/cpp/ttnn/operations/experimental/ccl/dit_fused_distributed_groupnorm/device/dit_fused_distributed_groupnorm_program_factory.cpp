@@ -341,7 +341,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
     tt::tt_metal::Buffer* stats_dram_buffer = use_mux ? stats_dram_tensor->buffer() : nullptr;
 
     if (use_mux) {
-        const uint32_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+        const uint32_t max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
         TT_FATAL(
             num_masters * stick_bytes <= max_payload,
             "coalesced GN stats packet ({} masters × {} B = {} B) exceeds fabric max payload ({} B)",
@@ -429,7 +429,7 @@ DitFusedDistributedGroupnormMeshWorkloadFactory::create_at(
         // grid so masters and the forwarder see the same L1 base address.
         const uint32_t packet_bytes = num_masters * stick_bytes;
         create_cb(packet_cb_id, program, CoreRangeSet({core_grid}), packet_bytes, 2, fp32_df);
-        const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        const uint32_t header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
         create_cb(reserved_packet_header_cb_id, program, forwarder_core_set, header_size, 4, tt::DataFormat::RawUInt32);
     }
 

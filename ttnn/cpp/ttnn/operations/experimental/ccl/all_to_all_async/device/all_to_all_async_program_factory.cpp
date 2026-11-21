@@ -66,6 +66,7 @@ std::tuple<uint32_t, uint32_t, uint32_t> calculate_chunk_params(uint32_t pages_p
 
 // Create circular buffers for sender cores
 void create_sender_buffers(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
     tt::tt_metal::ProgramDescriptor& desc,
     const tt::tt_metal::CoreRangeSet& sender_core_range,
     uint32_t cb_num_pages,
@@ -84,12 +85,13 @@ void create_sender_buffers(
 
     // Packet header buffer
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
-        .total_size = PACKET_HEADER_BUFFER_SIZE * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes() * 2,
+        .total_size =
+            PACKET_HEADER_BUFFER_SIZE * tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device) * 2,
         .core_ranges = sender_core_range,
         .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
             .buffer_index = static_cast<uint8_t>(tt::CB::c_in1),
             .data_format = tt::DataFormat::RawUInt32,
-            .page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(),
+            .page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(mesh_device),
         }}},
     });
 }
@@ -278,7 +280,7 @@ tt::tt_metal::ProgramDescriptor AllToAllAsyncProgram::create_descriptor(
 
     // Create buffers
     tt::DataFormat data_format = tt::tt_metal::datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
-    create_sender_buffers(desc, sender_worker_core_range, cb_pages, page_size, data_format);
+    create_sender_buffers(*mesh_device, desc, sender_worker_core_range, cb_pages, page_size, data_format);
     create_receiver_buffer(desc, receiver_worker_core_range, pages_per_packet, page_size, data_format);
 
     const auto [chunk_granularity, chunk_num_tiles, num_chunks_per_shard] = calculate_chunk_params(

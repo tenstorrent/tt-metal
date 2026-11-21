@@ -115,8 +115,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     const uint32_t summary_tile = tt::constants::TILE_HW * sizeof(uint16_t);
     const uint32_t heads_per_link = (batch_heads + attrs.num_links - 1) / attrs.num_links;
     const uint32_t num_chunks = attrs.local_rows / tt::constants::TILE_HEIGHT;
-    const uint32_t cores_per_head =
-        relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
+    const uint32_t cores_per_head = relay_chunk_scan_cores_per_head(attrs.cores.size(), batch_heads, attrs.num_links);
     const uint32_t core_chunks = num_chunks / cores_per_head;
     const uint32_t grid_x = mesh->compute_with_storage_grid_size().x;
     const uint32_t first_core = attrs.cores[0].y * grid_x + attrs.cores[0].x;
@@ -207,7 +206,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     // columns at its own cb_eout address.
     const auto eout_set = head_set.merge(sender_set);
 
-    const uint32_t sender_slots = relay_chunk_scan_sender_slots(kt, mesh->arch());
+    const uint32_t sender_slots = relay_chunk_scan_sender_slots(*mesh, kt);
     const uint32_t chron_slot_bytes =
         std::max(tt::tt_metal::hal::get_dram_alignment(), tt::tt_metal::hal::get_l1_alignment());
     // A K x K slot of the landing buffer on each head core, in place.
@@ -342,7 +341,7 @@ tt::tt_metal::ProgramDescriptor build_program(
     std::vector<uint32_t> sender_ct = {cb_stage, cb_eout};
     sender_ct.insert(sender_ct.end(), chronology.begin(), chronology.end());
     sender_ct.insert(
-        sender_ct.end(), {kt * state_tile, relay_chunk_scan_packet_bytes(), kt, sender_slots, ack_semaphore_id});
+        sender_ct.end(), {kt * state_tile, relay_chunk_scan_packet_bytes(*mesh), kt, sender_slots, ack_semaphore_id});
     tt::tt_metal::TensorAccessorArgs(in.actual_start.buffer()).append_to(sender_ct);
     tt::tt_metal::TensorAccessorArgs(carry.buffer()).append_to(sender_ct);
     sender_ct.insert(sender_ct.end(), slab_ct.begin(), slab_ct.end());

@@ -589,7 +589,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     // c_8: packet header CB for fabric sends (sender-only)
     if (operation_attributes.num_links > 0) {
         constexpr uint32_t num_packet_headers = 2;
-        auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+        auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
         uint32_t packet_header_cb_size = num_packet_headers * packet_header_size_bytes;
 
         desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -617,7 +617,7 @@ tt::tt_metal::ProgramDescriptor create_dispatch_program(
     log_debug(tt::LogOp, "dest_mesh_id: {}", ccl::common::stringify(dest_mesh_id));
     log_debug(tt::LogOp, "directions: {}", ccl::common::stringify(directions));
 
-    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    auto fabric_max_packet_size = local_only ? 0 : tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     log_debug(
         tt::LogOp, "Fabric max packet size: {} bytes, L1 alignment: {} bytes", fabric_max_packet_size, l1_alignment);
 

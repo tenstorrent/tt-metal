@@ -168,7 +168,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     const uint32_t packed_tiles =
         (kStatsPerPartial * ring_size * packed_row_size + scalar_tile_size - 1) / scalar_tile_size;
 
-    const auto max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const auto max_payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
     TT_FATAL(
         scalar_tile_size <= max_payload,
         "A {} B statistics page exceeds the {} B fabric payload limit; narrow the statistics dtype",
@@ -313,7 +313,7 @@ AttnResGatherSoftmaxMeshWorkloadFactory::cached_program_t AttnResGatherSoftmaxMe
     // The gather core holds no operand — one route header and one increment header per
     // peer, and a staging buffer for the plane it sends.
     const uint32_t kPeers = ring_size - 1;
-    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    const auto packet_header_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*mesh_device);
     make_cb(tt::CBIndex::c_8, gather_core_set, kStatsPerRow * kPeers, packet_header_size, tt::DataFormat::UInt32);
 
     // The gather stages a run of pages and sends them behind a single read barrier.

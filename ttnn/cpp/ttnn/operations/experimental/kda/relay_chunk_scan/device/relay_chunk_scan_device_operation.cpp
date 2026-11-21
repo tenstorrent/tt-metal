@@ -143,15 +143,15 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
         "{}: needs three global semaphores",
         operation_name);
     TT_FATAL(
-        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() >= tt::constants::TILE_HW * sizeof(float),
+        tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh) >= tt::constants::TILE_HW * sizeof(float),
         "{}: the relay sends whole FP32 tiles",
         operation_name);
     TT_FATAL(
-        relay_chunk_scan_sender_slots(key_tiles, mesh->arch()) > 0,
+        relay_chunk_scan_sender_slots(*mesh, key_tiles) > 0,
         "{}: a tile column of K = {} tiles needs {} packet headers, the pool holds {} per RISC",
         operation_name,
         key_tiles,
-        relay_chunk_scan_column_packets(key_tiles),
+        relay_chunk_scan_column_packets(*mesh, key_tiles),
         fabric_packet_headers_per_risc(mesh->arch()));
 
     std::vector<CoreCoord> head_cores;
@@ -208,9 +208,9 @@ void RelayChunkScanOperation::validate_on_program_cache_miss(
     }
     // A sender reuses the relay's packet headers for the carry, a write per tile of a column and the arrival
     // increment, and reads the next column into a second stage slot.
-    const uint32_t slots = relay_chunk_scan_sender_slots(key_tiles, mesh->arch());
+    const uint32_t slots = relay_chunk_scan_sender_slots(*mesh, key_tiles);
     TT_FATAL(
-        slots * relay_chunk_scan_column_packets(key_tiles) >= key_tiles + 1 && slots >= 2,
+        slots * relay_chunk_scan_column_packets(*mesh, key_tiles) >= key_tiles + 1 && slots >= 2,
         "{}: the final carry needs {} packet headers and two stage slots per sender",
         operation_name,
         key_tiles + 1);

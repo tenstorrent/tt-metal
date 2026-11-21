@@ -690,7 +690,7 @@ class TtMoe(LightweightModule):
         # does not wrap, runs the routed expert then combine instead; moe_fabric_payload_size opens one with room for
         # the overlap.
         overlap_payload = combine_overlap_payload_size(self.routed_emb_dim)
-        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes() if is_blackhole() else 0
+        fabric_payload = ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device) if is_blackhole() else 0
         # TORUS_Y wraps mesh axis 0, TORUS_X wraps axis 1, TORUS_XY both.
         ring_axis_wraps = ttnn.get_fabric_config(mesh_device) in (
             ttnn.FabricConfig.FABRIC_2D_TORUS_Y if self.sp_axis == 0 else ttnn.FabricConfig.FABRIC_2D_TORUS_X,

@@ -17,16 +17,17 @@
 namespace ttnn::experimental::prim::qsr {
 
 // A fabric packet of whole FP32 tiles, up to three.
-inline uint32_t relay_affine_prefix_packet_bytes() {
+inline uint32_t relay_affine_prefix_packet_bytes(const tt::tt_metal::distributed::MeshDevice& mesh) {
     constexpr uint32_t state_tile = tt::constants::TILE_HW * sizeof(float);
-    const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const uint32_t payload = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh);
     return std::min(3 * state_tile, payload / state_tile * state_tile);
 }
 
 // The packets of one tile column of a head's state.
-inline uint32_t relay_affine_prefix_column_packets(uint32_t key_tiles) {
+inline uint32_t relay_affine_prefix_column_packets(
+    const tt::tt_metal::distributed::MeshDevice& mesh, uint32_t key_tiles) {
     const uint32_t column_bytes = key_tiles * tt::constants::TILE_HW * sizeof(float);
-    const uint32_t packet_bytes = relay_affine_prefix_packet_bytes();
+    const uint32_t packet_bytes = relay_affine_prefix_packet_bytes(mesh);
     return (column_bytes + packet_bytes - 1) / packet_bytes;
 }
 
@@ -36,8 +37,10 @@ inline uint32_t fabric_packet_headers_per_risc(tt::ARCH arch) { return arch == t
 
 // Tile-column buffers per sender, each holding one packet header per packet of its column: later columns are read out
 // of their head cores while earlier ones are on the link. Up to four, as many as the header pool holds.
-inline uint32_t relay_affine_prefix_sender_slots(uint32_t key_tiles, tt::ARCH arch) {
-    return std::min(4u, fabric_packet_headers_per_risc(arch) / relay_affine_prefix_column_packets(key_tiles));
+inline uint32_t relay_affine_prefix_sender_slots(
+    const tt::tt_metal::distributed::MeshDevice& mesh, uint32_t key_tiles) {
+    return std::min(
+        4u, fabric_packet_headers_per_risc(mesh.arch()) / relay_affine_prefix_column_packets(mesh, key_tiles));
 }
 
 // Heads one sender serves: each needs its own count semaphore on the sender core, and the fabric connection takes

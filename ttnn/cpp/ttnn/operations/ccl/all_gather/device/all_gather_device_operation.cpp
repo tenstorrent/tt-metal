@@ -318,7 +318,7 @@ std::tuple<AllGatherParams, AllGatherInputs> all_gather_build_operation_args(
         axis_num_links[axis] = ttnn::operations::ccl::common::get_num_links(*mesh_device, axis);
     }
     const uint32_t num_devices = axis_num_devices[0] * axis_num_devices[1];  // devices partaking in the collective
-    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes();
+    const size_t packet_size = tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(*mesh_device);
 
     log_debug(
         tt::LogOp,

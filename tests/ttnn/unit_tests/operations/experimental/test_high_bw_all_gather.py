@@ -614,7 +614,7 @@ _LOUDBOX_ONLY = {"require_exact_physical_num_devices": True}
 @_AG_TRACED_AXIS
 def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device, ag_traced):
     """A bank-owned GLM q-latent page must use the single-page writer when only one page fits a packet."""
-    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
+    assert ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device) == 6144
     rank_line, cluster_axis = _rank_line_mesh(mesh_device)
     _run_high_bw_all_gather_accuracy(
         rank_line,
@@ -651,7 +651,7 @@ def test_high_bw_all_gather_single_page_bank_owned_packet(mesh_device, ag_traced
 def test_high_bw_all_gather_glm_topk_uint32_page_larger_than_fabric_payload(mesh_device):
     """Reproduce GLM's TP-axis top-k gather when an 8 KiB RM page exceeds the 6 KiB fabric payload."""
     assert tuple(mesh_device.shape) in ((1, 4), (2, 4))
-    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 6144
+    assert ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device) == 6144
     _run_high_bw_all_gather_accuracy(
         mesh_device,
         dtype=ttnn.uint32,
@@ -951,7 +951,7 @@ def _run_high_bw_all_gather_perf(
     )
     page_size = ttnn.get_device_tensors(device_input)[0].buffer_aligned_page_size()
     assert page_size == expected_page_size
-    assert ttnn.get_tt_fabric_max_payload_size_bytes() == 14 * 1024
+    assert ttnn.get_tt_fabric_max_payload_size_bytes(mesh_device) == 14 * 1024
 
     if invocation == "metadata":
         # One slab spanning the PADDED extent, chunk start 0: the reader derives the extent as

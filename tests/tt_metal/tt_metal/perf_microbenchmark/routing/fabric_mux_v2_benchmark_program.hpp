@@ -34,11 +34,12 @@ struct MuxV2ThroughputCase {
     uint32_t num_packets = kPacketsPerSender;
 };
 
-inline uint32_t resolve_packet_payload_size_bytes(const MuxV2ThroughputCase& benchmark_case) {
+inline uint32_t resolve_packet_payload_size_bytes(
+    const tt::tt_metal::distributed::MeshDevice& mesh_device, const MuxV2ThroughputCase& benchmark_case) {
     if (benchmark_case.packet_payload_size_bytes != 0) {
         return benchmark_case.packet_payload_size_bytes;
     }
-    return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
+    return static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes(mesh_device));
 }
 
 class FabricMuxV2BenchmarkContext {

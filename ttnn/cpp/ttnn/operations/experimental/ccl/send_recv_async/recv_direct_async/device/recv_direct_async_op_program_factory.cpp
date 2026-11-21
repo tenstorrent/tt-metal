@@ -108,7 +108,8 @@ ProgramDescriptor RecvDirectAsyncProgramFactory::create_descriptor(
 
     constexpr uint8_t packet_header_cb_index = tt::CBIndex::c_0;
     uint32_t packet_header_cb_num_pages = 2;
-    uint32_t packet_header_cb_page_size = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    uint32_t packet_header_cb_page_size =
+        tt::tt_fabric::get_tt_fabric_packet_header_size_bytes(*output_tensor.device());
     desc.cbs.push_back(CBDescriptor{
         .total_size = packet_header_cb_num_pages * packet_header_cb_page_size,
         .core_ranges = receiver_core_range_set,
