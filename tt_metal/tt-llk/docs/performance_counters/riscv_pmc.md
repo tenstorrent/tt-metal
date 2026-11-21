@@ -11,7 +11,9 @@ Reference for the performance monitor inside the RISC-V cores of a Tensix tile a
 | Quasar | TRISC0..3 of each Neo | yes: same CSR set and event layout, two extra IF events (section 6) | yes |
 | Quasar | data-movement cores DM0..DM7 | yes: `mcycle`, `minstret`, four programmable counters `mhpmcounter3..6`, set-and-mask event selects (section 7) | yes, DM0 and the DMs that run a kernel (DM2..DM7) |
 | Wormhole | all RISC-V cores | no: the cores implement no performance counter CSRs | no |
-| Blackhole | idle ethernet tile, subordinate ERISC1, DRAM tile RISC | same core design | no, see below |
+| Blackhole | idle ethernet tile ERISC0 | yes: same core and CSRs as the baby cores | yes, the host also reads the idle ethernet cores while the option is set |
+| Blackhole | subordinate ERISC1 of an ethernet tile | same core design | no, the host profiler has no lane for it, see below |
+| Blackhole | DRAM tile RISC (DRISC) | same core design | no, the classic device profiler does not support DRISC, see below |
 
 Blackhole is documented in the public ISA documentation: its baby-core CSR list contains `mcycle`,
 `minstret`, `mhpmcounter3/4`, `mhpmevent3/4` and `mcountinhibit` at the addresses used here, and says
@@ -27,12 +29,28 @@ Wormhole RISC-V cores have no `mcycle`, `minstret` or `mhpm*` CSRs, so there is 
 the option fails the JIT build on Wormhole instead of producing empty data.
 
 The Blackhole ethernet cores are the same baby core as BRISC and NCRISC: the same CSR file, the same
-`mhpmevent` nibble layout and the same event tables. The kernel on the active ethernet ERISC0 is captured and
-its records land in the profiler buffer the host reads for the ethernet core (profiler name `ERISC`). The idle
-ethernet firmware and the subordinate ERISC1 firmware have no hook: the host reads the device profiler of
-active ethernet cores only, and only the first profiler buffer of each, so markers from either would never
-reach the log. The DRAM tile RISC has the same core but no hook: the host never reads a DRAM tile profiler
-and the DRAM firmware does not set one up.
+`mhpmevent` nibble layout and the same event tables. The kernel on the ERISC0 of an active or an idle ethernet
+tile is captured and its records land in the profiler buffer the host reads for the ethernet core (profiler name
+`ERISC` for both). The idle ethernet firmware already runs the device profiler: it has a main zone
+(`ERISC-IDLE-FW`) and flushes its buffers to DRAM like the active ethernet firmware. The host only read the active
+ethernet cores, so with the option set it also reads the idle ones (`get_inactive_ethernet_cores()`); with the
+option unset the set of cores read is unchanged. A card without cabling has all its ethernet tiles idle.
+
+Two cores have the counters and are not captured:
+
+- Subordinate ERISC1 (`subordinate_erisc.cc`, present on idle ethernet tiles and on active ones in two-ERISC
+  mode). It writes zones to profiler buffer 1 and the ERISC0 firmware pushes that buffer to DRAM together with its
+  own, so the data reaches the host. The host parses one buffer per non-Tensix core and names its lane `ERISC`;
+  `tracy::RiscType` (the tracy submodule) has no `ERISC1`, and parsing buffer 1 into the `ERISC` lane would merge two
+  RISCs' overlapping zones into one. A hook there would be dead weight until the submodule gains the lane and the
+  host reads `get_num_risc_processors()` buffers for ethernet cores.
+- DRAM tile RISC. The classic device profiler has no DRISC support: `kernel_profiler.hpp` does not list
+  `COMPILE_FOR_DRISC`, the DRISC firmware has no profiler init, main zone or flush, DRAM tiles have no flat id
+  (`physical_routing_to_profiler_flat_id` holds Tensix and ethernet tiles only, and the DRAM profiler region is
+  sized for 154 of them), the host never writes a control buffer to a DRAM tile and never reads one. The DRISC mailbox
+  does hold a `profiler_msg_t` (one buffer), and the only DRISC profiler path is the streaming profiler, which has no
+  `TS_DATA` marker. Supporting it means a DRISC profiler in `kernel_profiler.hpp`, flat ids and a DRAM region for
+  DRAM tiles, which changes the profiler memory layout for every profiler user, so it is not behind the option.
 
 ## 2. Where the definitions live
 
@@ -85,8 +103,12 @@ markers from pass 0 only, which is correct because the selects do not change bet
 
 Cost with the option on: on the Blackhole Tensix cores the hook is part of the kernel image, 264 to 280 B per core
 (`metal_example_eltwise_binary` on a p100a), so the firmware regions and the L1 layout do not change. The active
-ethernet ERISC0 firmware grows by about 265 B (17624 B of 24576 B), the Quasar TRISCs by 280 to
+ethernet ERISC0 firmware grows by about 265 B (17624 B of 24576 B), the idle ethernet ERISC0 by 240 B (15192 B of 24576 B, 15280 B with the runtime's 48000 B DRAM buffer per RISC), the Quasar TRISCs by 280 to
 300 B and the Quasar DM image by about 790 B (8100 B of 12288 B), 1104 B with all four DM counters armed (8412 B).
+
+Cores without a hook, for comparison, with the profiler on: the subordinate ERISC1 images are 14384 B (idle) and 13516 B
+(active) of 24576 B and a hook would add about 200 B; the DRISC image is 13356 B of its 26624 B region and has no profiler
+code at all.
 
 Only one event pair is captured per run (two pairs on a Quasar data-movement core); a sweep over several pairs needs one run per pair. Without
 the option the hooks compile to nothing.
@@ -404,5 +426,6 @@ riscv_pmc.decode_launch("blackhole", kind, launch)         # event names, mcycle
 ## 13. Open questions
 
 - Quasar TRISC and DM capture on silicon or an emulator, including counters 5 and 6.
-- Idle ethernet and ERISC1 capture need the host profiler to read those cores first.
+- ERISC1 capture needs an `ERISC1` lane in the tracy submodule and a host read of every ethernet profiler buffer. DRISC capture needs a DRISC device profiler first (section 1).
+- The idle ethernet capture has been built and checked for size, but not run on silicon: `tests/tt_metal/tools/profiler/check_riscv_pmc_more_cores.py` is the single-card check.
 - The meaning of individual per-stage events comes from the hardware description; only the union counter, `mcycle`, `EX_INST_RET` and the TRISC-only `MEM_INS_BUF_WRITE` were validated on silicon.
