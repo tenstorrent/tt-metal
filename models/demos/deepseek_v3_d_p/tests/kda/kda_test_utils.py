@@ -58,7 +58,7 @@ def _finiteness(name: str, tensor: torch.Tensor) -> tuple[list[str], str]:
     return failures, summary
 
 
-def _pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
+def pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
     expected_flat = expected.detach().float().reshape(-1)
     actual_flat = actual.detach().float().reshape(-1)
     if torch.equal(expected_flat, actual_flat):
@@ -74,12 +74,12 @@ def _pcc(expected: torch.Tensor, actual: torch.Tensor) -> float:
 def _pcc_per_slice(expected: torch.Tensor, actual: torch.Tensor, keep_dims: Sequence[int]) -> torch.Tensor:
     """PCC of each slice that ``keep_dims`` indexes, computed over the remaining dimensions."""
     if not keep_dims:
-        return torch.tensor([_pcc(expected, actual)], dtype=torch.float64)
+        return torch.tensor([pcc(expected, actual)], dtype=torch.float64)
     keep = sorted(dim % expected.ndim for dim in keep_dims)
     order = keep + [dim for dim in range(expected.ndim) if dim not in keep]
     slices = expected.permute(order).flatten(0, len(keep) - 1)
     actual_slices = actual.permute(order).flatten(0, len(keep) - 1)
-    return torch.tensor([_pcc(e, a) for e, a in zip(slices, actual_slices)], dtype=torch.float64)
+    return torch.tensor([pcc(e, a) for e, a in zip(slices, actual_slices)], dtype=torch.float64)
 
 
 NRMSE_FLOOR_FRACTION = 0.01
