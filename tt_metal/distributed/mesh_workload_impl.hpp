@@ -168,6 +168,7 @@ private:
     const std::vector<uint64_t>& get_cross_node_program_ids();
     void compile_program(const MeshCoordinateRange& device_range, MeshDevice* mesh_device);
     void finalize_offsets(MeshDevice* mesh_device);
+    void check_kernel_config_fits_window(MeshDevice* mesh_device);
 
     struct FinalizedMetadata {
         std::vector<uint32_t> program_config_sizes;

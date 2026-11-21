@@ -579,6 +579,7 @@ public:
     bool get_disable_sfploadmacro() const { return disable_sfploadmacro; }
 
     bool get_allocator_mode_hybrid() const { return allocator_mode_hybrid; }
+    void set_allocator_mode_hybrid(bool enable) { allocator_mode_hybrid = enable; }
 
     static bool get_trace_allocation_tracking_enabled();
     static bool get_trace_allocation_diagnostics_enabled();

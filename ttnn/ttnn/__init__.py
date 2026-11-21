@@ -634,6 +634,12 @@ from ttnn._ttnn.operations.experimental import SparseKvPushPart, SPARSE_KV_PUSH_
 experimental.SparseKvPushPart = SparseKvPushPart
 experimental.SPARSE_KV_PUSH_CORES_PER_LINK = SPARSE_KV_PUSH_CORES_PER_LINK
 
+# A generic op compiled outside the program cache (compile_generic_op), and the kernel config buffer it can run from
+from ttnn._ttnn.operations.experimental import CompiledProgram, KernelConfigBuffer
+
+experimental.CompiledProgram = CompiledProgram
+experimental.KernelConfigBuffer = KernelConfigBuffer
+
 # PrefetcherPipe (Metal 2.0 durable cross-program remote DFB). Experimental-only surface.
 from ttnn._ttnn import prefetcher_pipe as _prefetcher_pipe
 

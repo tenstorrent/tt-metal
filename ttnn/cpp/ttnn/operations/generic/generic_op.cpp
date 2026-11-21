@@ -105,6 +105,34 @@ uint64_t compute_program_spec_hash(const ProgramSpec& spec) {
     return ttnn::operations::generic::compute_program_spec_hash(spec);
 }
 
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor) {
+    return ttnn::prim::compile_generic_op(io_tensors, mesh_program_descriptor);
+}
+
+ttnn::device_operation::CompiledProgram compile_generic_op(
+    const std::vector<Tensor>& io_tensors, const tt::tt_metal::ProgramDescriptor& program_descriptor) {
+    return compile_generic_op(io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor));
+}
+
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::experimental::MeshProgramDescriptor& mesh_program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer) {
+    return ttnn::prim::run_compiled_generic_op(compiled, io_tensors, mesh_program_descriptor, kernel_config_buffer);
+}
+
+Tensor run_compiled_program(
+    ttnn::device_operation::CompiledProgram& compiled,
+    const std::vector<Tensor>& io_tensors,
+    const tt::tt_metal::ProgramDescriptor& program_descriptor,
+    const tt::tt_metal::experimental::KernelConfigBuffer* kernel_config_buffer) {
+    return run_compiled_program(
+        compiled, io_tensors, make_spmd_mesh_program_descriptor(io_tensors, program_descriptor), kernel_config_buffer);
+}
+
 }  // namespace experimental
 
 }  // namespace ttnn
