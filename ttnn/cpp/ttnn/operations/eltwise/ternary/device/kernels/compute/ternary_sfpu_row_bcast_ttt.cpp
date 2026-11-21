@@ -140,6 +140,9 @@ void kernel_main() {
         }
 #endif
 
+        // Restore packer data format to output after broadcast
+        pack_reconfig_data_format(dfb::out);
+
         // Now execute the ternary SFPU operation on the effective inputs.
         // Reserve output when ready to write.
         dfb_out.reserve_back(num_tiles_per_cycle);
