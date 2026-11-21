@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from dataclasses import dataclass
 from typing import Optional, Tuple, Union
 
@@ -506,6 +507,11 @@ def to_slice_config(slice_strategy: Optional[SliceStrategy]):
 
 
 class TtConv2d:
+    # Opt-in: run eligible 3x3 convs on ttnn.operations.conv2d_3x3 instead of ttnn.conv2d. Set TT_CNN_CONV2D_3X3=1
+    # or this attribute before the first call. A conv that conv2d_3x3 cannot run (its parameters, or the layout its
+    # input arrives in) keeps running ttnn.conv2d.
+    use_conv2d_3x3: bool = os.environ.get("TT_CNN_CONV2D_3X3") == "1"
+
     def __init__(
         self,
         configuration: Conv2dConfiguration,
@@ -520,6 +526,9 @@ class TtConv2d:
 
         self.weight = configuration.weight
         self.bias = configuration.bias
+        # None until the first conv2d_3x3 attempt, then False (runs ttnn.conv2d) or the prepared conv2d_3x3 state.
+        self.conv2d_3x3_state = None
+        self.conv2d_3x3_skip_reason = None
 
         # Initialize weight_slices as empty list
         self.weight_slices = []
@@ -661,7 +670,146 @@ class TtConv2d:
 
         return accumulated_output, (h_out, w_out)
 
+    def _conv2d_3x3_eligible(self):
+        c = self.configuration
+        relu = c.activation is not None and c.activation.op_type == ttnn.UnaryOpType.RELU
+        # A channel-sliced conv runs as one full-K conv2d_3x3 call: the slices only work around ttnn.conv2d's L1 use,
+        # and the sliced path's sum-then-bias is the same math.
+        return (
+            tuple(c.kernel_size) == (3, 3)
+            and c.groups == 1
+            and c.batch_size == 1
+            and c.stride[0] == c.stride[1]
+            and c.stride[0] in (1, 2)
+            and c.dilation[0] == c.dilation[1]
+            and len(c.padding) == 2
+            and c.padding[0] == c.padding[1]
+            and (c.activation is None or relu)
+            and c.output_layout == ttnn.TILE_LAYOUT
+        )
+
+    def _prepare_conv2d_3x3(self, x):
+        from ttnn.operations.conv2d_3x3 import prepare_conv2d_bias, prepare_conv2d_weights
+
+        c = self.configuration
+        torch_weight = ttnn.to_torch(c.weight).float()
+        # An input carrying more channels than the layer (an RGB image padded to 8 for its shard width) meets zero
+        # weight rows for the extra channels.
+        extra_channels = x.shape[-1] - c.in_channels
+        if extra_channels > 0:
+            torch_weight = torch.nn.functional.pad(torch_weight, (0, 0, 0, 0, 0, extra_channels))
+        prep = dict(
+            stride=c.stride[0],
+            padding=c.padding[0],
+            dilation=c.dilation[0],
+            input_dtype=x.dtype,
+            input_layout=x.layout,
+            weight_dtype=c.weights_dtype,
+            input_memory_config=x.memory_config(),
+            device=self.device,
+        )
+        weight = prepare_conv2d_weights(torch_weight, **prep)
+        bias = None if c.bias is None else prepare_conv2d_bias(ttnn.to_torch(c.bias).float().reshape(-1), **prep)
+        return {
+            "input_memory_config": x.memory_config(),
+            "input_dtype": x.dtype,
+            "weight": weight,
+            "bias": bias,
+            "compute_config": ttnn.ComputeConfigDescriptor(
+                math_fidelity=c.math_fidelity, fp32_dest_acc_en=True, math_approx_mode=False
+            ),
+        }
+
+    def _conv2d_3x3_shard_config(self, x):
+        """The sharded layout ttnn.conv2d builds for an interleaved input, by its parallel-config rules (they reproduce
+        Panoptic-DeepLab's measured shard grids), so conv2d_3x3 runs on the same geometry. BLOCK when the layer asks
+        for it, HEIGHT otherwise (conv2d_3x3 has no WIDTH path)."""
+        c = self.configuration
+        grid = self.device.compute_with_storage_grid_size()
+        m_tiles = -(-(c.input_height * c.input_width) // ttnn.TILE_SIZE)
+        if c.sharding_strategy.get_tensor_memory_layout() == ttnn.TensorMemoryLayout.BLOCK_SHARDED:
+            c_tiles = -(-x.shape[-1] // ttnn.TILE_SIZE)
+            col_tiles = -(-c_tiles // grid.x)
+            cols = -(-c_tiles // col_tiles)
+            rows = max(r for r in range(1, grid.y + 1) if m_tiles % r == 0)
+            return ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))}),
+                    [-(-m_tiles // rows) * ttnn.TILE_SIZE, col_tiles * ttnn.TILE_SIZE],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            )
+        rows_per_core = -(-m_tiles // (grid.x * grid.y))
+        cores = -(-m_tiles // rows_per_core)
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.num_cores_to_corerangeset(cores, grid, row_wise=True),
+                [rows_per_core * ttnn.TILE_SIZE, x.padded_shape[-1]],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
+    def _try_conv2d_3x3(self, x):
+        """conv2d_3x3's output, or None when this conv runs on ttnn.conv2d."""
+        if self.conv2d_3x3_state is False:
+            return None
+        if self.conv2d_3x3_state is None and not self._conv2d_3x3_eligible():
+            self.conv2d_3x3_state = False
+            self.conv2d_3x3_skip_reason = "parameters"
+            return None
+        from ttnn.operations.conv2d_3x3 import conv2d_3x3
+
+        c = self.configuration
+        state = self.conv2d_3x3_state
+        if len(x.shape) == 4 and x.shape[1] == c.input_height and x.shape[2] == c.input_width and x.shape[1] > 1:
+            # ttnn.conv2d also takes [1, H, W, C]; conv2d_3x3 takes the flattened [1, 1, H*W, C], the same rows.
+            x = ttnn.reshape(x, (1, 1, c.input_height * c.input_width, x.shape[3]))
+        source = x
+        if not x.memory_config().is_sharded():
+            x = ttnn.to_memory_config(x, self._conv2d_3x3_shard_config(x))
+        try:
+            # The prepared weight rows depend on the input's placement, so they are rebuilt if it changes.
+            if not state or state["input_memory_config"] != x.memory_config() or state["input_dtype"] != x.dtype:
+                state = self.conv2d_3x3_state = self._prepare_conv2d_3x3(x)
+            out = conv2d_3x3(
+                x,
+                state["weight"],
+                input_height=c.input_height,
+                input_width=c.input_width,
+                bias=state["bias"],
+                padding=c.padding[0],
+                stride=c.stride[0],
+                dilation=c.dilation[0],
+                activation=None if c.activation is None else "relu",
+                compute_kernel_config=state["compute_config"],
+            )
+        except (ValueError, NotImplementedError) as e:
+            # validate() rejects what conv2d_3x3 does not support before anything runs on device.
+            if x is not source:
+                ttnn.deallocate(x)
+            self.conv2d_3x3_state = False
+            self.conv2d_3x3_skip_reason = str(e)
+            return None
+        if x is not source:
+            ttnn.deallocate(x)
+        if out.dtype != c.output_dtype:
+            out = ttnn.typecast(out, c.output_dtype)
+        if c.deallocate_activation:
+            ttnn.deallocate(source)
+        return out
+
     def __call__(self, x, return_output_dim: bool = False):
+        if self.use_conv2d_3x3:
+            out = self._try_conv2d_3x3(x)
+            if out is not None:
+                c = self.configuration
+                h_out = (c.input_height + 2 * c.padding[0] - 2 * c.dilation[0] - 1) // c.stride[0] + 1
+                w_out = (c.input_width + 2 * c.padding[1] - 2 * c.dilation[1] - 1) // c.stride[1] + 1
+                return (out, (h_out, w_out)) if return_output_dim else out
         if not self.weight_slices:
             # No slicing
             x, [h_out, w_out], [self.weight, self.bias] = ttnn.conv2d(
