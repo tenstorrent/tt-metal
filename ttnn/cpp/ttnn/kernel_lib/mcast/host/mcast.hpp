@@ -102,6 +102,12 @@ struct McastConfig {
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+    // Fixed-sender groups that tile one rectangle on a grid with separable NoC coordinates (rows or columns of a
+    // matmul grid, for example) carry no per-core words: each core derives its arguments from its logical
+    // coordinates and a NoC table appended to the kernel's common runtime args (ProgramDescriptor and ProgramSpec
+    // attachments; a direct Program keeps per-core words). Turn this off when the kernel's common runtime args are
+    // replaced after attachment.
+    bool derive_regular_grid = true;
 };
 
 // One in-group sender per receiver group, optionally staggered across groups.

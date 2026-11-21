@@ -92,7 +92,7 @@ typename McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyB
             static_assert(sender_noc == noc_index, "Host multicast NoC does not match forwarding receiver kernel NoC");
             return ReceiverPipeType(noc, chain_runtime_arguments());
         } else {
-            return ReceiverPipeType(noc, Runtime::coordinates(runtime_layout.sender_coordinates));
+            return ReceiverPipeType(noc, receiver_coordinates_());
         }
     }
 }
@@ -119,8 +119,7 @@ McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, S
             return std::optional<ReceiverPipeType>(std::in_place, noc, chain_runtime_arguments());
         } else {
             // Construct the owned coordinate table in the optional's final storage.
-            return std::optional<ReceiverPipeType>(
-                std::in_place, noc, Runtime::coordinates(runtime_layout.sender_coordinates));
+            return std::optional<ReceiverPipeType>(std::in_place, noc, receiver_coordinates_());
         }
     }
 }
@@ -147,6 +146,10 @@ McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBinding, S
         prepared.ack_count = ack_count != ACK_EQUALS_FANOUT ? ack_count : Runtime::read(runtime_layout.ack);
     }
     ASSERT(prepared.num_rectangles >= 1 && prepared.num_rectangles <= rectangle_capacity);
+    if constexpr (grid_derived) {
+        prepared.rectangles[0].bounds =
+            mcast_wire::grid_bounds(GridTableType{}, METADATA.grid, grid_position_(), sender_noc == 1);
+    }
     for (uint32_t i = 0; i < prepared.num_rectangles; ++i) {
         const uint32_t base = runtime_layout.rectangles + i * runtime_layout.rectangle_stride;
         auto& rectangle = prepared.rectangles[i];

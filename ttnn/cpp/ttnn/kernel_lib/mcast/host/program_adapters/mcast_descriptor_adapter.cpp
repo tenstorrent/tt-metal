@@ -80,7 +80,7 @@ void McastImpl::attach(
         TT_FATAL(selected.insert(&target.get()).second, "Duplicate multicast attachment kernel");
         auto kernel = target.get();
         const auto noc = kernel_noc(kernel, prepared_arch_);
-        const auto metadata = argument_metadata_(&kernel.core_ranges);
+        const auto metadata = argument_metadata_(&kernel.core_ranges, kernel.common_runtime_args.size());
         const auto ct = compile_time_args_(ids, metadata);
         size_t rt_offset = 0;
         std::set<CoreCoord> runtime_cores;
@@ -105,6 +105,8 @@ void McastImpl::attach(
                 entry != kernel.runtime_args.end() && binding.arg_idx < entry->second.size(),
                 "Multicast attachment encountered an invalid buffer binding");
         }
+        // Every core gets the channel's words at rt_offset, padded alike, unless the channel has none here.
+        const bool no_words = wire::RuntimeLayout(metadata).words == 0;
         for (const auto& core : corerange_to_cores(kernel.core_ranges)) {
             if (const auto* group = group_for_core_(core)) {
                 const bool sender =
@@ -113,6 +115,11 @@ void McastImpl::attach(
                     !(sender || chain) || noc == cfg_.noc,
                     "Multicast sender/forwarder NoC differs from the configured multicast NoC");
             }
+            if (no_words) {
+                // The channel has no per-core words on this kernel: its runtime args stay as the operation set them.
+                continue;
+            }
+            const auto payload = runtime_args_(core, metadata);
             auto entry = std::find_if(
                 kernel.runtime_args.begin(),
                 kernel.runtime_args.end(),
@@ -121,7 +128,6 @@ void McastImpl::attach(
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());
             }
-            const auto payload = runtime_args_(core, metadata);
             TT_FATAL(
                 rt_offset <= std::numeric_limits<uint32_t>::max() - payload.size(),
                 "Multicast runtime argument positions overflow");
@@ -130,6 +136,9 @@ void McastImpl::attach(
             args.insert(args.end(), payload.begin(), payload.end());
         }
         kernel.compile_time_args.insert(kernel.compile_time_args.end(), ct.begin(), ct.end());
+        if (metadata.grid.derived) {
+            kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), grid_table_.begin(), grid_table_.end());
+        }
         kernels.push_back(std::move(kernel));
     }
     descriptor.semaphores = std::move(semaphores);
