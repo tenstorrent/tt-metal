@@ -61,8 +61,6 @@ struct MinimalMatmulStridedReduceScatterAsyncMeshWorkloadFactory {
         std::array<std::vector<std::pair<tt::tt_metal::RuntimeArgsData*, uint32_t>>, kNumCounters> slots;
         std::array<std::optional<uint32_t>, kNumCounters> written;
     };
-    // The resolved bindings' runtime-arg slots and the address last written to each, and the CB bindings' last
-    // addresses: a hit writes a binding only when its buffer moved.
     struct BindingSlots {
         bool recorded = false;
         std::vector<tt::tt_metal::RuntimeArgsData*> rt_args;
