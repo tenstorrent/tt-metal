@@ -176,10 +176,14 @@ def cache_format(latent: torch.Tensor, kpe: torch.Tensor, fmt: str) -> tuple[tor
     return latent, kpe
 
 
-def index_fp8(index_q: torch.Tensor, keys: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-    """Index query and keys as vLLM's fp8 indexer reads them (ao3i.5.7 emulation): bf16 key in fp8 with one ue8m0
-    scale per token, query in fp8 with one amax/448 scale per token and head."""
-    return fp8_e4m3(bf16(index_q), index_q.shape[-1], False), fp8_e4m3(bf16(keys), keys.shape[-1], True)
+# vLLM's fp8 indexer as ao3i.5.7 emulates it: the query in fp8 with one amax/448 scale per token and head, the bf16
+# key in fp8 with one ue8m0 scale per token.
+def index_q_fp8(index_q: torch.Tensor) -> torch.Tensor:
+    return fp8_e4m3(bf16(index_q), index_q.shape[-1], False)
+
+
+def index_k_fp8(keys: torch.Tensor) -> torch.Tensor:
+    return fp8_e4m3(bf16(keys), keys.shape[-1], True)
 
 
 def attend(q: dict, row: int, latent: torch.Tensor, kpe: torch.Tensor, w: dict, dims: Dims = Dims()) -> torch.Tensor:
@@ -289,8 +293,11 @@ def golden_row(q: dict, i: int, row: int, keys: dict, keys_fp8: torch.Tensor, w:
     outs = {}
     for arm, fmt in zip(ARMS[:4], KV_FORMATS):
         outs[arm] = attend(q, i, *cache_format(keys["latent"][sel], keys["kpe"][sel], fmt), w, dims)
-    iq8, _ = index_fp8(q["index_q"][i], keys["index_key"][:1])
-    sel8 = index_scores(iq8, q["index_w"][i], keys_fp8[:causal]).topk(min(dims.topk, causal)).indices
+    sel8 = (
+        index_scores(index_q_fp8(q["index_q"][i]), q["index_w"][i], keys_fp8[:causal])
+        .topk(min(dims.topk, causal))
+        .indices
+    )
     outs["idx_fp8"] = attend(q, i, keys["latent"][sel8], keys["kpe"][sel8], w, dims)
     pad = ORDER - top.indices.numel()
     return {
@@ -325,7 +332,7 @@ def build_queries(*, out: Path, checkpoint: Path, name: str, rows: list[int], se
     w = layer_weights(checkpoint, keys_manifest["input_identity"]["layer"])
     keys = load_keys(out, max(rows) + 1)
     inputs = dict(zip(rows, input_rows(input_dir, rows)))
-    _, keys_fp8 = index_fp8(keys["index_key"][:1], keys["index_key"])
+    keys_fp8 = index_k_fp8(keys["index_key"])
     for index in range(len(manifest["segments"]), segments):
         batch = rows[index * segment : (index + 1) * segment]
         began = time.perf_counter()
@@ -477,7 +484,8 @@ def compare(*, out: Path, name: str, trace: Trace, device: Path | None, checkpoi
 
 
 def summarize(records: list[dict], floor: float, windows: int = 8) -> dict:
-    """Median (and p90 for NRMSE) of every per-row metric, over all rows and per position window; recall means."""
+    """Median (and p90 for NRMSE) of every per-row metric, over all rows, over rows >= top-k, and per position window
+    over rows >= top-k (rows below select every causal key); recall means."""
     count = max(r["row"] for r in records) + 1
     gated = [r for r in records if r["row"] >= C.INDEX_TOPK]  # rows < top-k select every causal key
 
@@ -509,7 +517,7 @@ def summarize(records: list[dict], floor: float, windows: int = 8) -> dict:
         "windows": [
             {"start": lo, "end": hi, **stats(recs)}
             for lo, hi in zip(edges[:-1], edges[1:])
-            if (recs := [r for r in records if lo <= r["row"] < hi])
+            if (recs := [r for r in gated if lo <= r["row"] < hi])
         ],
     }
 

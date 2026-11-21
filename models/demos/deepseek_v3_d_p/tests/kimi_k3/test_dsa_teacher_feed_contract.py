@@ -424,3 +424,17 @@ def test_fp64_compare_on_a_trace_built_from_the_golden(tmp_path: Path):
     assert o["fp64_tracesel_owncache_vs_fp64_p90"] > o["fp64_devicesel_owncache_vs_fp64_p90"]  # FP8 keys
     assert o["trace_score_ratio_median"] == pytest.approx(1.0, abs=1e-6)
     assert (tmp_path / "r" / "rows.tsv").read_text().count("\n") == len(sampled) + 1
+
+
+def test_summaries_leave_out_rows_below_topk():
+    """A row below top-k selects every causal key (recall 1, no selection error), so neither the rows >= top-k
+    summary nor any position window counts it: rows 100 / 2100 / 5000 with recall 1 / 0.5 / 0.7 give window recalls
+    0.5 and 0.7, not (1 + 0.5) / 2."""
+    records = [
+        {"row": r, "trace_recall": v, "trace_vs_fp64": e}
+        for r, v, e in ((100, 1.0, 0.0), (2100, 0.5, 0.2), (5000, 0.7, 0.4))
+    ]
+    s = golden.summarize(records, floor=0.0, windows=2)
+    assert s["overall"]["rows"] == 3 and s["overall_rows_ge_topk"]["rows"] == 2
+    assert [(w["start"], w["end"], w["rows"]) for w in s["windows"]] == [(0, 2500, 1), (2500, 5001, 1)]
+    assert [w["trace_recall_mean"] for w in s["windows"]] == pytest.approx([0.5, 0.7])
