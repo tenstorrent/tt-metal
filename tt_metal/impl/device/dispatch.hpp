@@ -70,8 +70,6 @@ void issue_core_read_command_sequence(const CoreReadDispatchParams& dispatch_par
 
 void read_core_data_from_completion_queue(
     const ReadCoreDataDescriptor& read_descriptor,
-    ChipId mmio_device_id,
-    uint16_t channel,
     uint8_t cq_id,
     SystemMemoryManager& sysmem_manager,
     std::atomic<bool>& exit_condition);

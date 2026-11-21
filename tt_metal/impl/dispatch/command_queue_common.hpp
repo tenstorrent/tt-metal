@@ -35,7 +35,6 @@ enum class CommandQueueDeviceAddrType : uint8_t {
     UNRESERVED = 13,
 };
 
-// likely only used in impl
 enum class CommandQueueHostAddrType : uint8_t {
     ISSUE_Q_RD = 0,
     ISSUE_Q_WR = 1,
@@ -44,18 +43,13 @@ enum class CommandQueueHostAddrType : uint8_t {
     UNRESERVED = 4
 };
 
-// used in system_memory_manager.cpp and command_queue_interface.cpp
-
 /// @brief Get offset of the command queue relative to its channel
 /// @param cq_id uint8_t ID the command queue
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t relative offset
 uint32_t get_relative_cq_offset(uint8_t cq_id, uint32_t cq_size);
 
-// used in system_memory_manager and device
 uint16_t get_umd_channel(uint16_t channel);
-
-// only used in impl
 
 /// @brief Get absolute offset of the command queue
 /// @param channel uint16_t channel ID (hugepage)
@@ -63,20 +57,6 @@ uint16_t get_umd_channel(uint16_t channel);
 /// @param cq_size uint32_t size of the command queue
 /// @return uint32_t absolute offset
 uint32_t get_absolute_cq_offset(uint16_t channel, uint8_t cq_id, uint32_t cq_size, uint32_t base = 0);
-
-// mostly used in debug_tools
-template <bool addr_16B>
-uint32_t get_cq_issue_rd_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-
-template <bool addr_16B>
-uint32_t get_cq_issue_wr_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-
-// has usage in system_memory_manager.cpp
-template <bool addr_16B>
-uint32_t get_cq_completion_wr_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
-
-template <bool addr_16B>
-uint32_t get_cq_completion_rd_ptr(MetalContext& ctx, ChipId chip_id, uint8_t cq_id, uint32_t cq_size);
 
 uint32_t get_cq_dispatch_progress(MetalContext& ctx, ChipId chip_id, uint8_t cq_id);
 
