@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import numpy as np
 import torch
 import pytest
 from loguru import logger
@@ -88,3 +89,24 @@ def test_petr(device, reset_seeds):
     )
     ttnn_output = ttnn_model.predict(ttnn_inputs, ttnn_batch_img_metas, skip_post_processing=True)
     verify_output(torch_output, ttnn_output)
+
+
+def test_petr_reference_sample_images(reset_seeds):
+    from models.experimental.petr.demo.demo import Det3DDataPreprocessor, load_images_with_calibration
+
+    input_data, _ = load_images_with_calibration()
+    data = Det3DDataPreprocessor()(input_data)
+    batch_img_metas = [ds.metainfo for ds in data["data_samples"]]
+
+    # A point 10 m ahead (+y in the nuScenes lidar frame) lies in front of CAM_FRONT, near its centre column.
+    u, _, depth, _ = batch_img_metas[0]["lidar2img"][0] @ np.array([0.0, 10.0, 0.0, 1.0])
+    assert depth > 0
+    assert abs(u / depth - 400) < 50
+
+    torch_model = prepare_torch_model()
+    with torch.no_grad():
+        output = torch_model.predict(data["inputs"], batch_img_metas)
+    scores = output[0]["pts_bbox"]["scores_3d"]
+    num_detections = int((scores > 0.3).sum())
+    logger.info(f"PETR reference: {num_detections} detections above 0.3 on the sample images")
+    assert num_detections >= 30
