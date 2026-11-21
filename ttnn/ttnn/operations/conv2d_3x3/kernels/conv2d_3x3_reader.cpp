@@ -2255,6 +2255,19 @@ void kernel_main() {
         }
     }
     dataflow_kernel_lib::set_read_trid(reads.noc, 0);
+#ifdef STORE_ROUTE
+    {
+        // The writer's NoC0 output writes (conv2d_3x3_store_split.hpp) advanced this NoC's NIU write counters: once
+        // its last one landed, take them as this RISC's own, so its end-of-kernel checks hold.
+        static_assert(noc_index == 0, "the routed store's other NoC is the reader's");
+        MaybeDeviceZoneScope("reader_store_route_wait");
+        while (conv2d_3x3::rm_load(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(STORE_SEM_DONE))) ==
+               0) {
+        }
+        noc_nonposted_writes_num_issued[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_NONPOSTED_WR_REQ_SENT);
+        noc_nonposted_writes_acked[noc_index] = NOC_STATUS_READ_REG(noc_index, NIU_MST_WR_ACK_RECEIVED);
+    }
+#endif
 #ifdef SD_R0_NOC0
     while (r0_state != 2) {
         r0_try();

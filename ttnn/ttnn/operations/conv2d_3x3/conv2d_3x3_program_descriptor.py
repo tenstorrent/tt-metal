@@ -140,6 +140,16 @@ RM_SPLIT_W_NSTG = 1
 # Its handshake words (semaphores): the epoch sequence, the epoch's first and end pixel, the ring origin, the reader's
 # and the writer's claim words, the writer's done epoch, the reader's band-wait flag.
 RM_SPLIT_SEMS = 8
+# Routed output store (STORE_ROUTE, kernels/conv2d_3x3_store_split.hpp): on the ROW_MAJOR ring the writer sends each
+# output tile on whichever NoC reaches its DRAM bank in fewer hops from the core (NoC1, or NoC0 on command buffer 2,
+# which the ring's reader never writes with), instead of every tile on NoC1. With every tile on NoC1, half of each core's
+# tiles cross the chip to the far DRAM column, and the cores farthest along NoC1 from the DRAM columns get the least
+# write bandwidth when every core stores at once. One semaphore: the writer's last NoC0 write landed (the reader then
+# re-syncs its NoC0 write counters). Measured (Blackhole p150b, 110 cores, bit-identical, us): 514x1024 32->128 597 ->
+# 545, 1026x2048 32->128 1825 -> 1757 (perf_experiments/store_noc_split). Only where the output stream outruns DRAM
+# (output_stream_bound): elsewhere the ring's NoC0 fill is the binding NoC0 traffic and NoC0 stores slow it (514x1024
+# 64->128 +4.3%, 514x1024 64->256 +1.1% beside the band-first kh-reuse fill; 1026x2048 128->3 +2.6%, 514x1024 128->3
+# +2.5% on the C_out fold), against 258x512 64->256 -3%.
 
 
 # R4 reduce-scatter semaphores; the weight multicast channel allocates its own after them.
@@ -3870,6 +3880,19 @@ def create_program_descriptor(
     bias_addr = bias_tensor.buffer_address() if has_bias else 0
     output_addr = output_tensor.buffer_address()
     device = input_tensor.device()
+    store_route = (
+        bool(b.rm_ring_px)
+        and not g.fold
+        and not g.sharded_output
+        and not g.remote_output
+        and device.arch() == ttnn._ttnn.device.Arch.BLACKHOLE
+        and output_stream_bound(g, b, compute_kernel_config.math_fidelity)
+    )
+    _store_defines = []
+    if store_route:
+        _store_defines = [("STORE_ROUTE", "1"), ("STORE_SEM_DONE", str(len(sem_ids)))]
+        sem_ids += (len(sem_ids),)
+        assert len(sem_ids) <= MAX_SEMAPHORES, sem_ids
     row_peer_coords = {}
     if g.k_split:
         for core, row, _ in work:
@@ -4381,6 +4404,7 @@ def create_program_descriptor(
             + _host_fill_defines
             + _brf_defines
             + _rm_ring_defines
+            + _store_defines
             + _fold_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
@@ -4401,6 +4425,7 @@ def create_program_descriptor(
             + slot_ack_defines
             + _host_fill_defines
             + _wr_defines
+            + _store_defines
             + _fold_defines
             + (_rm_ring_defines if rm_split else [])
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])

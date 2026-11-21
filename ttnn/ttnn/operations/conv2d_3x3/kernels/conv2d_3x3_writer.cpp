@@ -134,6 +134,9 @@
 #include "conv2d_3x3_slab_direct.hpp"
 #include "conv2d_3x3_slab_stream.hpp"
 #include "conv2d_3x3_rm_ring.hpp"
+#ifdef STORE_ROUTE
+#include "conv2d_3x3_store_split.hpp"
+#endif
 
 void kernel_main() {
     constexpr uint32_t cb_weights = get_compile_time_arg_val(0);
@@ -289,6 +292,12 @@ void kernel_main() {
     constexpr uint32_t weight_k_block_tiles = block_k_tiles * block_n_tiles + sd_bias_round_tiles;
     constexpr uint32_t row_group_tiles = out_subblock_h * block_n_tiles;
     constexpr uint32_t row_groups_per_block = block_m_tiles / out_subblock_h;
+#ifdef STORE_ROUTE
+    // Routed output store (conv2d_3x3_store_split.hpp): each tile on the NoC with fewer hops to its bank.
+    static_assert(!output_sharded && !remote_output && noc_index == 1, "the routed store's other NoC is NoC0");
+    conv2d_3x3::RoutedStore out_store;
+    out_store.init(TensorAccessor(output_args, output_addr, get_tile_size(cb_output_tiles)));
+#endif
     const uint32_t weight_tile_bytes = get_tile_size(cb_weights);
     const auto weights = TensorAccessor(weight_args, weight_addr, weight_tile_bytes);
 
@@ -1127,7 +1136,8 @@ void kernel_main() {
         prefetch_bias_serving();
     }
 #ifdef CONV2D_3X3_KW_FOLD
-    // kw-fold adds the bias in its final pass (srcB rows the reader decodes from cb_bias, conv2d_3x3_kw_fold.hpp).
+    // kw-fold adds the bias in its final pass: srcB rows the reader decodes from cb_bias
+    // (conv2d_3x3_kw_fold.hpp).
     // With weight servers it takes the late reads below (issued after round 0, completed after the block's last round).
     // Without, it is read after the first M-block's weight rounds, so the cores reading the same bias pages do not hold
     // the weight stream behind it (stem.conv2 / conv3, in-grid sender: 40.6 -> 37.6 / 60.0 -> 53.3 us). A blocking
@@ -2748,12 +2758,20 @@ void kernel_main() {
                     if (local_tile_row < actual_m_tiles) {
                         const uint32_t row_page = (m_tile_start + local_tile_row) * tensor_n_tiles + n_tile_start;
                         for (uint32_t n = 0; n < block_n_tiles; ++n) {
+#ifdef STORE_ROUTE
+                            out_store.write_page(row_page + n, output, l1 + n * out_tile_bytes);
+#else
                             noc_async_write_page(row_page + n, output, l1 + n * out_tile_bytes);
+#endif
                         }
                     }
                     l1 += block_n_tiles * out_tile_bytes;
                 }
+#ifdef STORE_ROUTE
+                out_store.flushed();
+#else
                 noc_async_writes_flushed();
+#endif
                 cb_pop_front(cb_output_tiles, row_group_tiles);
 
                 while (k_blocks_issued < total_k_blocks &&
@@ -2768,6 +2786,11 @@ void kernel_main() {
     if constexpr (!output_sharded || remote_output) {
         noc_async_write_barrier();
     }
+#ifdef STORE_ROUTE
+    // The last NoC0 output write landed: the reader may re-sync its NoC0 write counters.
+    out_store.barrier0();
+    conv2d_3x3::rm_store(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(STORE_SEM_DONE)), 1);
+#endif
 #ifdef KWF_XCHG
     // The last semaphore write of the halo exchange.
     noc_async_write_barrier();
