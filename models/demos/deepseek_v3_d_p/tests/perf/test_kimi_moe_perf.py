@@ -61,10 +61,11 @@ class MoEPerfCase:
         return f"{self.model}-{self.mesh}-{self.chunk}"
 
 
-# Targets: CI run 44900949382 (bh-glx-120-d09u02, 14 kW, 2026-11-21).
+# Targets: CI runs 44900949382 (bh-glx-120-d09u02) and 44905230066 (d06u02), 14 kW, 2026-11-21; untraced the fastest
+# run, traced the mean of the runs (as test_sparse_mla_perf's).
 CASES = [
-    MoEPerfCase("kimi_k3", "8x4", 5120, targets_ms=(2.42, 2.26)),
-    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560, targets_ms=(3.64, 3.57)),
+    MoEPerfCase("kimi_k3", "8x4", 5120, targets_ms=(2.38, 2.27)),
+    MoEPerfCase("kimi_k3_1", "4x4-sp1", 2560, targets_ms=(3.63, 3.54)),
 ]
 PERF_TARGETS_MS = {(c.id, mode): ms for c in CASES if c.targets_ms is not None for mode, ms in zip(MODES, c.targets_ms)}
 
