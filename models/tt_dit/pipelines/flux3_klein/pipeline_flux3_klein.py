@@ -31,7 +31,7 @@ from ...models.transformers.flux3_klein.transformer_flux3_klein import (
     timestep_inputs,
 )
 from ...models.vae.canvas_flux3_klein import REFERENCE_CANVASES
-from ...models.vae.vae_flux3_klein import Flux3KleinVae
+from ...models.vae.vae_flux3_klein import FULL_CANVAS, Flux3KleinVae
 from ...parallel.config import DiTGParallelConfigNoCFG, EncoderParallelConfig, ParallelFactor
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
@@ -280,12 +280,13 @@ class Flux3KleinPipeline:
     def warmup(self, sizes: tuple[int, ...] = SIZES) -> None:
         """Compile every program of the served shapes: each size without a reference and with one per reference token
         bucket (a square reference that fills the bucket), at each text bucket of that layout (a long prompt reaches the
-        larger ones), two steps each (every step runs the same programs), and the VAE encoder on every reference
-        canvas. A reference of any other shape runs its bucket's DiT programs and its canvas's encoder programs.
+        larger ones), two steps each (every step runs the same programs), the VAE encoder on every reference canvas
+        (an image 16 px narrower: the masked path) and on the full 1 MP square canvas (the plain encoder). A reference of any other shape runs its bucket's DiT programs and its canvas's encoder programs.
         The multi-reference buckets the single reference lacks run with 1 MP square references."""
         multi = [b for b in MULTI_REFERENCE_TOKEN_BUCKETS if b not in REFERENCE_TOKEN_BUCKETS]
-        for canvas in REFERENCE_CANVASES:
-            self._vae.encode(Image.new("RGB", canvas))
+        for width, height in REFERENCE_CANVASES:
+            self._vae.encode(Image.new("RGB", (width - 16, height)))
+        self._vae.encode(Image.new("RGB", FULL_CANVAS))
         for model in self._transformers:
             for size in sizes:
                 for bucket in (None, *REFERENCE_TOKEN_BUCKETS, *multi):

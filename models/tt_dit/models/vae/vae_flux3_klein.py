@@ -22,13 +22,16 @@ from ...parallel.config import Flux2VaeParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils import cache, tensor
 from .canvas_flux3_klein import CanvasMasks, CanvasVaeEncoder, canvas_for
-from .vae_flux2 import Flux2VaeDecoder
+from .vae_flux2 import Flux2VaeDecoder, Flux2VaeEncoder
 
 SUBFOLDER = "vae"
 VAE_WEIGHTS = "diffusion_pytorch_model.safetensors"
 SCALE = 8
 PATCH = 2
 LATENT_CHANNELS = 128
+# A reference that fills the 1 MP square canvas (the served square reference, every square multi-reference canvas)
+# runs the plain encoder: fused GroupNorms, no masks, 4x faster there (0.053 vs 0.21 s, jobs 189638 / 226340)
+FULL_CANVAS = (1024, 1024)
 BLOCK_OUT_CHANNELS = (128, 256, 512, 512)
 Z_CHANNELS = 32
 
@@ -167,6 +170,9 @@ class Flux3KleinVae:
         encoder_slices = ENCODER_SLICE_PARAMS.get(mesh_shape, {})
         configure_conv2d(self._encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
         load(self._encoder, encoder_parallel, "vae_encoder_canvas")
+        self._full_encoder = Flux2VaeEncoder(parallel_config=encoder_parallel, **common)
+        configure_conv2d(self._full_encoder, slice_params={mesh_shape: encoder_slices}, replace=True)
+        load(self._full_encoder, encoder_parallel, "vae_encoder_full")
 
         state = state_dict()
         self._bn_mean = state["bn.running_mean"].float()
@@ -211,9 +217,12 @@ class Flux3KleinVae:
         x = tensor.from_torch(
             x, device=self._device, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.bfloat16, mesh_axes=[None] * 4
         )
-        masks = CanvasMasks(self._device, canvas=(cw, ch), image=(width, height))
-        out = self._encoder.forward_canvas(x, masks)
-        masks.deallocate()
+        if (width, height) == FULL_CANVAS:
+            out = self._full_encoder.forward(x)
+        else:
+            masks = CanvasMasks(self._device, canvas=(cw, ch), image=(width, height))
+            out = self._encoder.forward_canvas(x, masks)
+            masks.deallocate()
         ttnn.deallocate(x)
         mean = tensor.to_torch(out).float()[:, : height // SCALE, : width // SCALE]
         ttnn.deallocate(out)
@@ -226,3 +235,4 @@ class Flux3KleinVae:
     def deallocate_weights(self) -> None:
         self._decoder.deallocate_weights()
         self._encoder.deallocate_weights()
+        self._full_encoder.deallocate_weights()

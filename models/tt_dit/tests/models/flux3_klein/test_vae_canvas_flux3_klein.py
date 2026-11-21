@@ -25,6 +25,7 @@ from ....models.vae.canvas_flux3_klein import REFERENCE_CANVASES, canvas_for
 from ....models.vae.vae_flux3_klein import (
     BLOCK_OUT_CHANNELS,
     ENCODER_SLICE_PARAMS,
+    FULL_CANVAS,
     PATCH,
     SCALE,
     SUBFOLDER,
@@ -268,8 +269,9 @@ def test_vae_canvas(*, mesh_device: ttnn.MeshDevice) -> None:
     vae = Flux3KleinVae(
         snapshot, device=mesh_device, ccl_manager=ccl, dit_ccl_manager=ccl, dit_sp_axis=1, sizes=(1024,)
     )
-    for canvas in REFERENCE_CANVASES:
-        vae.encode(Image.new("RGB", canvas))
+    for width, height in REFERENCE_CANVASES:
+        vae.encode(Image.new("RGB", (width - 16, height)))
+    vae.encode(Image.new("RGB", FULL_CANVAS))
     torch_vae = AutoencoderKLFlux2.from_pretrained(str(snapshot), subfolder=SUBFOLDER).eval()
 
     failures = []
