@@ -128,7 +128,7 @@ inline void calculate_exp2() {
         // and fl(x * 1 + 127) == fl(x + 127): the same algorithm and coefficients as _sfpu_exp2_bf16_
         // (FP32_C0 loads c0 as the fp32 EXP_21F_BF16_C0), so the output bits match it. BASE_TWO also
         // reads the upper-clamp 255 from LREG12 (exp2_init), so the body hoists all its constants and
-        // pipelines two rows: a row pair takes 33 cycles (29 instructions and 4 SFPSWAP stalls)
+        // pipelines two rows: a row pair takes 32 cycles (28 instructions and 4 SFPSWAP stalls)
         // where the sfpi loop issued 24 slots per row.
         _sfpu_exp_21f_bf16_tti_<
             false /*SCALE_EN*/,
@@ -154,6 +154,7 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm0 = 255.0f;
         sfpi::vConstFloatPrgm1 = EXP_21F_BF16_C2;
         sfpi::vConstFloatPrgm2 = EXP_21F_BF16_C1;
+        _sfpu_exp_21f_bf16_tti_configure_addrmod_();
     }
 }
 
