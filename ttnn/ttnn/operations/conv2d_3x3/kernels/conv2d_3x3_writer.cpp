@@ -2472,6 +2472,74 @@ void kernel_main() {
 #ifdef WEIGHTS_RESIDENT
     static_assert(!row_split && !nslice_outer && !k_split && !weight_servers && !slab_split && !output_sharded);
 #endif
+#ifdef CONV2D_3X3_COUT_FOLD
+    // ---- C_out fold (conv2d_3x3_cout_fold.hpp). Weights: round kh = the bk tiles W'[(kh, c), FOLD_LS kw + co] =
+    // W[(kh, kw, c), co], built from the prepared [3 kkh, C_out] weights (a kernel row's 3 bk tiles in (kw, c) order).
+    // Each kernel row's tiles are read into compute's plane (compute writes it only after its first matmul, which waits
+    // for these rounds), then each c-tile's three kw tiles merge lane group by lane group into its fold tile (faces 0
+    // and 2: lanes [0, 16)). Raw L1 stores (capability): no dataflow helper moves sub-tile lanes between tiles.
+    static_assert(block_n_tiles == 1 && num_k_blocks == 3 && 3 * FOLD_LS <= 16 && FOLD_COUT <= FOLD_LS);
+    if (num_m_blocks_this_core > 0) {
+        MaybeDeviceZoneScope("writer_weight_fetch");
+        constexpr uint32_t round_tiles = block_k_tiles * block_n_tiles;
+        cb_reserve_back(cb_weights, num_k_blocks * round_tiles);
+        const uint32_t base = get_write_ptr(cb_weights);
+        const uint32_t stage = get_write_ptr(FOLD_CB_PLANE);
+        constexpr uint32_t face_words = 16 * 16;  // bf16 datums per face
+        for (uint32_t kh = 0; kh < 3; ++kh) {
+            uint32_t l1 = stage;
+            for (uint32_t kw = 0; kw < 3; ++kw) {
+                for (uint32_t c = 0; c < block_k_tiles; ++c, l1 += weight_tile_bytes) {
+                    const uint32_t k_tile = weight_k_tile_start + (kh * 3 + kw) * block_k_tiles + c;
+                    noc_async_read_page(k_tile * tensor_n_tiles, weights, l1);
+                }
+            }
+            noc_async_read_barrier();
+            invalidate_l1_cache();
+            for (uint32_t c = 0; c < block_k_tiles; ++c) {
+                const uint32_t dst = base + (kh * block_k_tiles + c) * weight_tile_bytes;
+                volatile tt_l1_ptr uint32_t* d32 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst);
+                for (uint32_t i = 0; i < weight_tile_bytes / 4; ++i) {
+                    d32[i] = 0;
+                }
+                volatile tt_l1_ptr uint16_t* d = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(dst);
+                for (uint32_t kw = 0; kw < 3; ++kw) {
+                    volatile tt_l1_ptr uint16_t* src = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(
+                        stage + (kw * block_k_tiles + c) * weight_tile_bytes);
+                    for (uint32_t f = 0; f < 4; f += 2) {
+                        for (uint32_t r = 0; r < 16; ++r) {
+                            const uint32_t row = f * face_words + r * 16;
+                            for (uint32_t co = 0; co < FOLD_COUT; ++co) {
+                                d[row + kw * FOLD_LS + co] = src[row + co];
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        cb_push_back(cb_weights, num_k_blocks * round_tiles);
+        k_blocks_issued = num_k_blocks;
+    }
+    {
+        // Output: compute's final pass pushes the core's output tile-rows one at a time, in order (actual_m_tiles - 1:
+        // the walk's extra tile-row is not an output). Drained in groups of half the CB, which never straddle its end.
+        MaybeDeviceZoneScope("writer_store");
+        const uint32_t out_tile_bytes = get_tile_size(cb_output_tiles);
+        const auto output = TensorAccessor(output_args, output_addr, out_tile_bytes);
+        const uint32_t real = num_m_blocks_this_core > 0 ? actual_m_tiles - 1 : 0;
+        constexpr uint32_t group = FOLD_OUT_TILES / 2;
+        for (uint32_t t0 = 0; t0 < real; t0 += group) {
+            const uint32_t cnt = real - t0 < group ? real - t0 : group;
+            uint32_t l1 = get_read_ptr(cb_output_tiles);
+            for (uint32_t j = 0; j < cnt; ++j, l1 += out_tile_bytes) {
+                cb_wait_front(cb_output_tiles, j + 1);
+                noc_async_write_page((m_tile_start + t0 + j) * tensor_n_tiles, output, l1);
+            }
+            noc_async_writes_flushed();
+            cb_pop_front(cb_output_tiles, cnt);
+        }
+    }
+#else
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         if constexpr (slab_split) {
 #ifdef CONV2D_3X3_SLAB_DIRECT
@@ -2658,6 +2726,7 @@ void kernel_main() {
             }
         }
     }
+#endif
     drain_fill();
     if constexpr (!output_sharded || remote_output) {
         noc_async_write_barrier();

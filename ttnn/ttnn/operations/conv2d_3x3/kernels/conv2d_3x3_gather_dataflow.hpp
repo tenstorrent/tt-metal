@@ -889,6 +889,52 @@ struct TapDirectFifo {
         const int32_t h_in0 = ho0 + kh * dilation - pad_top;
         const bool one_run = wo0 + n <= static_cast<int32_t>(output_width);
         uint32_t pages = 0;
+#ifdef CONV2D_3X3_COUT_FOLD
+        // C_out fold (conv2d_3x3_cout_fold.hpp): the unit is the row-major pixel stream's [v, v + n), v = the kw = 0
+        // tap's pixel of o, across an image-row end too (compute masks the rows that wrap); zeros outside the image.
+        static_assert(taps == 1 && dilation == 1, "one tap (kw = 0) per unit");
+        if (n > 0) {
+            constexpr int32_t num_in_px = input_height * input_width;
+            const int32_t v = h_in0 * input_width + wo0 - pad_left;
+            if (v >= 0 && v + n <= num_in_px) {
+                const int32_t x = ring_x(slab_x_base_kh + v);
+                if (!crosses(x, n)) {
+                    e[0] = slab_l1 + static_cast<uint32_t>(x) * pixel_bytes;
+                } else {
+                    const uint32_t b = alloc(reads);
+                    const uint32_t dst = blk_base + b * blk_bytes;
+                    run(reads, slab_noc, x, dst, n);
+                    e[0] = dst;
+                    pages += blk_pages;
+                }
+            } else {
+                const int32_t lo = v < 0 ? (-v < n ? -v : n) : 0;
+                int32_t hi = num_in_px - v;
+                hi = hi < lo ? lo : (hi > n ? n : hi);
+                const uint32_t b = alloc(reads);
+                const uint32_t dst = blk_base + b * blk_bytes;
+                if (lo > 0) {
+                    zeros(reads, zero_noc, dst, lo);
+                }
+                if (hi > lo) {
+                    run(reads, slab_noc, ring_x(slab_x_base_kh + v + lo), dst + lo * pixel_bytes, hi - lo);
+                }
+                if (n > hi) {
+                    zeros(reads, zero_noc, dst + hi * pixel_bytes, n - hi);
+                }
+                e[0] = dst;
+                pages += blk_pages;
+            }
+        } else {
+            e[0] = zero_l1;
+        }
+        e[3] = pages;
+        ++tbl_written;
+        if (tbl_written == tbl_reserved) {
+            flush(reads);
+        }
+        return;
+#endif
         if (n <= 0 || (one_run && (h_in0 < 0 || h_in0 >= input_height))) {
             for (uint32_t t = 0; t < taps; ++t) {
                 e[t] = zero_l1;

@@ -86,6 +86,9 @@
 #ifdef CONV2D_3X3_S2_TAPS
 #include "conv2d_3x3_s2_taps.hpp"
 #endif
+#ifdef CONV2D_3X3_COUT_FOLD
+#include "conv2d_3x3_cout_fold.hpp"
+#endif
 
 namespace ckl = compute_kernel_lib;
 
@@ -1337,6 +1340,13 @@ void kernel_main() {
     [[maybe_unused]] uint32_t ring_need = 0;
     // Weights resident: rounds waited for so far (see ResidentWeightsPreKBlock).
     [[maybe_unused]] uint32_t wr_rounds_waited = 0;
+#ifdef CONV2D_3X3_COUT_FOLD
+    // C_out fold (conv2d_3x3_cout_fold.hpp): the core's first output tile-row and walk tile-rows (runtime args 3, 4).
+    conv2d_3x3::cout_fold::State fold_state{};
+    const uint32_t fold_m_tile_start = get_arg_val<uint32_t>(3);
+    const uint32_t fold_ext = get_arg_val<uint32_t>(4);
+    PACK((conv2d_3x3::cout_fold::mask_tables_init((1u << FOLD_COUT) - 1)));
+#endif
     for (uint32_t m_block_idx = 0; m_block_idx < num_m_blocks_this_core; ++m_block_idx) {
         [[maybe_unused]] const uint32_t valid_rows =
             rt_valid ? get_arg_val<uint32_t>(rt_arg_base + 2 * m_block_idx) : block_m_tiles;
@@ -2211,6 +2221,19 @@ void kernel_main() {
             constexpr uint32_t wr_round_tiles = block_k_tiles * block_n_tiles;
             using WrPre = ResidentWeightsPreKBlock<PreKBlockFn, cb_weights, wr_round_tiles>;
             const WrPre wr_pre{pre_k_block, &wr_rounds_waited};
+#ifdef CONV2D_3X3_COUT_FOLD
+            static_assert(has_bias && block_n_tiles == 1 && num_k_blocks == 3 && block_k_tiles == c_in_tiles);
+            conv2d_3x3::cout_fold::block<
+                cb_im2col_tiles,
+                cb_weights,
+                FOLD_CB_PLANE,
+                FOLD_CB_TOKEN,
+                cb_output_tiles,
+                cb_bias,
+                block_m_tiles,
+                block_k_tiles,
+                apply_relu>(wr_pre, fold_state, m_block_idx, fold_m_tile_start, fold_ext);
+#else
             conv2d_3x3::kblock_walk::walk<
                 has_bias,
                 bias_batch_groups,
@@ -2229,6 +2252,7 @@ void kernel_main() {
                 block_k_tiles,
                 num_k_blocks>(
                 wr_pre, CenterTapIn0<center_mode, cb_center_tiles>{}, ResidentIn1Offset<wr_round_tiles>{});
+#endif
 #else
             conv2d_3x3::kblock_walk::walk<
                 has_bias,

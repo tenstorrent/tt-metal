@@ -88,6 +88,10 @@ CB_KWF_HALO_OUT = 14
 CB_KWF_HALO_IN = 15
 # ROW_MAJOR ring slab: the bank-run fill's staging (RM_RING_NSTG chunks).
 CB_RM_STAGE = 16
+# C_out fold (kernels/conv2d_3x3_cout_fold.hpp): the fp32 plane the kw shift accumulates into, and its one-page
+# ready token (compute pack -> compute unpack).
+CB_FOLD_PLANE = 17
+CB_FOLD_TOKEN = 18
 # Bank-run fill: the ROW_MAJOR DRAM-interleaved slab fill reads each chunk of consecutive pixels as one run per DRAM
 # bank into a staging ring (BRF_NSTG chunks of up to BRF_CHUNK_BYTES), then de-interleaves it into the slab with local
 # NoC copies. One read per pixel page is DRAM-transaction-bound (~600 M reads/s across the chip); bank runs are
@@ -577,6 +581,8 @@ class Conv3x3Geometry:
     block_rows: int = 0
     # DRAM-interleaved ROW_MAJOR input with one pixel per page (no padded lanes): the bank-run reads apply (rm ring).
     bank_run_input: bool = False
+    # C_out fold (COUT_FOLD): the walk's K is (kh, c) and its N lanes (kw, c_out); see cout_fold_capable.
+    fold: bool = False
 
     @property
     def pad_sides(self):
@@ -622,7 +628,16 @@ class Conv3x3Geometry:
 
     @property
     def tensor_kkh_tiles(self):
+        # C_out fold: one tap (kw = 0) per kernel row; kw lives in the N lanes.
+        if self.fold:
+            return self.c_in_tiles
         return _div_up(3 * self.c_in_p, TILE)
+
+    @property
+    def num_out_px_walk(self):
+        """Output pixels the walk covers: the C_out fold also multiplies one tile-row past the end (its first rows hold
+        the last output pixels' kw = 1, 2 partials)."""
+        return self.num_out_px + (TILE if self.fold else 0)
 
     @property
     def tensor_k_tiles(self):
@@ -802,6 +817,9 @@ def core_m_ranges(g: Conv3x3Geometry, core_m_tiles):
     """(first output tile-row, tile-rows) per M work index: the balanced split's ranges, else the uniform split."""
     if g.m_ranges:
         return list(g.m_ranges)
+    if g.fold:
+        # The C_out fold's walk multiplies one tile-row past the core's range (cout_fold_capable).
+        return [(s, a + 1) for s, a in _core_m_ranges(g.tensor_m_tiles, core_m_tiles)]
     return _core_m_ranges(g.tensor_m_tiles, core_m_tiles)
 
 
@@ -912,7 +930,7 @@ def _block_extents(g: Conv3x3Geometry, core_m_tiles, block_m_tiles):
         for block_start in range(0, actual, block_m_tiles):
             tiles = min(block_m_tiles, actual - block_start)
             o_first = (start + block_start) * TILE
-            o_last = min((start + block_start + tiles) * TILE, g.num_out_px) - 1
+            o_last = min((start + block_start + tiles) * TILE, g.num_out_px_walk) - 1
             band_len = _block_band_len(g, o_first, o_last)
             worst_band = max(worst_band, band_len)
             if g.tile_input:
@@ -1171,7 +1189,8 @@ def _footprint(
         if _row_split(g, bm, bk)
         else (IM2COL_RM_DEPTH_ROWS if im2col_depth is None else im2col_depth)
     )
-    max_m_blocks = _div_up(core_m_tiles, bm)
+    # C_out fold: one more tile-row per core (core_m_ranges).
+    max_m_blocks = _div_up(core_m_tiles + (1 if g.fold else 0), bm)
     num_slices = _div_up(g.tensor_n_tiles, g.out_n_tiles)
     weight_rounds = (num_slices if nslice else num_k_blocks) * max_m_blocks
     weight_depth = 1 if weight_rounds == 1 else (NSLICE_WEIGHT_DEPTH if nslice else WEIGHT_DEPTH)
@@ -1217,13 +1236,22 @@ def _footprint(
         + bm * (g.tensor_k_tiles if nslice else bk) * g.in0_tile_bytes
         + weight_depth * (g.tensor_k_tiles * ns if nslice else bk * bn) * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
-        + (RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32 if nslice else bm * bn * TILE_BYTES_FP32)
+        + (
+            RING_TOKEN_PAGES * RING_TOKEN_BYTES + TILE_BYTES_FP32
+            if nslice
+            else (TILE_BYTES_FP32 if g.fold else bm * bn * TILE_BYTES_FP32)
+        )
         + combine_bytes
         + (
             bm * ns * g.out_tile_bytes
             if g.remote_output
-            else (0 if g.sharded_output else OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes)
+            else (
+                0
+                if g.sharded_output
+                else (COUT_FOLD_OUT_TILES if g.fold else OUT_DEPTH_ROW_GROUPS * sb_h * bn) * g.out_tile_bytes
+            )
         )
+        + (cout_fold_plane_bytes(g, bm) + RING_TOKEN_BYTES if g.fold else 0)
         + (
             (_tap_direct_fifo_units(g, bm, bk, nslice) * 16 or _src_table_bytes(im2col_rm_depth_rows))
             if _tap_direct(g, bm, bk, nslice)
@@ -1378,7 +1406,7 @@ def rm_ring_plan(g: Conv3x3Geometry, core_m_tiles, bm, bk):
         for block_start in range(0, actual, bm):
             tiles = min(bm, actual - block_start)
             o_first = (start + block_start) * TILE
-            o_end = min((start + block_start + tiles) * TILE, g.num_out_px)
+            o_end = min((start + block_start + tiles) * TILE, g.num_out_px_walk)
             band_len = _block_band_len(g, o_first, o_end - 1)
             f = _block_first_tap(g, o_first)
             bands = []
@@ -1411,6 +1439,52 @@ def rm_ring_plan(g: Conv3x3Geometry, core_m_tiles, bm, bk):
                     worst = max(worst, bands[kh][1] - live_run)
             prev_last_lo = first_band_lo(bands, (nkb - 1) * bk // kkh)
     return worst
+
+
+# C_out fold (kernels/conv2d_3x3_cout_fold.hpp): where C_out fits a few lanes of one N tile, the walk folds kw into the
+# N lanes (K' = (kh, c), N' = lane group kw of COUT_FOLD_LANE_STRIDE fp32 lanes, c_out fastest) and multiplies each
+# output tile-row against the kw = 0 tap of the three kernel rows only: 3 tap-direct units and 3 C_in-tile K-blocks per
+# tile-row instead of 9. The kw shift and lane select move into the packs (fp32 packer L1 accumulation into a plane at
+# -kw rows and -kw lane groups).
+COUT_FOLD_LANE_STRIDE = 4  # fp32 lanes per kw group: one 16 B step of the packer's L1 address
+COUT_FOLD_OUT_TILES = 8  # output CB: two final-pass batches
+COUT_FOLD_PRE_BYTES = 256  # plane rows below slot 0 the backward spills of slot 0's tiles land in
+COUT_FOLD_SLOT_BYTES = TILE * 16 * 4  # one tile-row of the plane: 32 rows of 16 fp32 lanes
+
+
+def cout_fold_capable(g: Conv3x3Geometry):
+    """Geometry side of the C_out fold: the DRAM-interleaved ROW_MAJOR ring walk at stride 1, dilation 1, one column of
+    padding each side (W_out = W, so an output tile-row's kw taps are its pixels shifted by -1, 0, +1 in the row-major
+    pixel stream), W % 32 == 0 (an image row starts a tile-row), whole-tile C_in, bf16 activations and weights, a bias,
+    and the three kw lane groups of C_out fp32 lanes inside the tile's left 16 lanes."""
+    return (
+        g.bank_run_input
+        and not g.tile_input
+        and not g.sharded_output
+        and not g.k_split
+        and g.stride == 1
+        and g.dilation == 1
+        and g.pad_left == 1
+        and g.pad_sides[3] == 1
+        and g.output_width == g.input_width
+        and g.input_width % TILE == 0
+        and g.c_in_p % TILE == 0
+        and g.c_in == g.c_in_p
+        and g.has_bias
+        and g.in0_tile_bytes == TILE_BYTES_BF16
+        and g.weight_tile_bytes == TILE_BYTES_BF16
+        and g.c_out <= COUT_FOLD_LANE_STRIDE
+        and 3 * COUT_FOLD_LANE_STRIDE <= 16
+    )
+
+
+def cout_fold_plane_bytes(g: Conv3x3Geometry, bm):
+    """The fold's fp32 plane: PRE bytes, bm + 1 slots (the M-block's tile-rows and the previous block's last, which the
+    next block's first tile-row completes), one alias slot; the final pass's right half-plane run reads as far again
+    (masked). The writer stages one kernel row's 3 C_in-tile prepared weight tiles in it before compute's first pack."""
+    left = COUT_FOLD_PRE_BYTES + (bm + 2) * COUT_FOLD_SLOT_BYTES
+    stage = 3 * g.c_in_tiles * g.weight_tile_bytes
+    return _div_up(max(2 * left, stage), COUT_FOLD_SLOT_BYTES) * COUT_FOLD_SLOT_BYTES
 
 
 # The most DRAM banks a chunk's bank runs round up to (a staging chunk holds NB runs of ceil(chunk / NB) pixels).
@@ -2960,7 +3034,7 @@ def create_program_descriptor(
             cores,
         ),
         # Unused by the N-slice ring: one page there keeps the face-direct startup's output format defined.
-        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice else bm * bn, cores),
+        _cb(CB_MATMUL_PARTIALS, ttnn.float32, TILE_BYTES_FP32, 1 if b.nslice or g.fold else bm * bn, cores),
     ]
     if g.remote_output:
         # One [bm, out_n] block (tile-row major), drained by the writer to the output shards every M-block.
@@ -2981,10 +3055,15 @@ def create_program_descriptor(
                 CB_OUTPUT_TILES,
                 output_tensor.dtype,
                 g.out_tile_bytes,
-                b.out_depth_row_groups * b.out_subblock_h * bn,
+                COUT_FOLD_OUT_TILES if g.fold else b.out_depth_row_groups * b.out_subblock_h * bn,
                 cores,
             )
         )
+    if g.fold:
+        # C_out fold: the fp32 plane (raw region: packs at computed rows, final-pass unpacks) and its ready token.
+        plane_slots = cout_fold_plane_bytes(g, bm) // COUT_FOLD_SLOT_BYTES
+        cbs.append(_cb(CB_FOLD_PLANE, ttnn.float32, COUT_FOLD_SLOT_BYTES, plane_slots, cores))
+        cbs.append(_cb(CB_FOLD_TOKEN, ttnn.float32, RING_TOKEN_BYTES, 1, cores))
     if has_bias:
         cbs.append(_cb(CB_BIAS, bias_tensor.dtype, g.weight_tile_bytes, ns, cores))
     input_ring_batches = INPUT_TILE_DEPTH_BATCHES
@@ -3333,7 +3412,7 @@ def create_program_descriptor(
             g.input_height,
             g.input_width,
             g.output_width,
-            g.num_out_px,
+            g.num_out_px_walk,
             slice_channels,
             g.c_in_p,
             g.pad_top,
@@ -3796,6 +3875,8 @@ def create_program_descriptor(
                     compute_args += [min(bm, actual_m_tiles - m * bm), slab_rows_per_block[m]]
         if slab_direct or s2_taps:
             compute_args += [m_tile_start, actual_m_tiles]
+        if g.fold:
+            compute_args += [m_tile_start, actual_m_tiles]
         if kwf or padded_slab:
             compute_args += [m_tile_start, actual_m_tiles]
             compute_args += _kwf_xchg_flags(g, m_tile_start, actual_m_tiles) if kwf_xchg else [0, 0]
@@ -4009,6 +4090,21 @@ def create_program_descriptor(
         [("CONV2D_3X3_HOST_FILL", "1"), ("HOST_FILL_WRITER_WINDOW", str(HOST_FILL_WRITER_WINDOW))] if host_fill else []
     )
     _wr_defines = [("WEIGHTS_RESIDENT", "1")] if b.weights_resident else []
+    _fold_defines = []
+    if g.fold:
+        assert b.weights_resident and b.rm_ring_px and b.num_k_blocks == 3 and bk == g.c_in_tiles and bn == 1
+        _fold_defines = [
+            ("CONV2D_3X3_COUT_FOLD", "1"),
+            ("FOLD_R", str(g.input_width // TILE)),
+            ("FOLD_COUT", str(g.c_out)),
+            ("FOLD_LS", str(COUT_FOLD_LANE_STRIDE)),
+            ("FOLD_S", str(bm + 1)),
+            ("FOLD_PRE", str(COUT_FOLD_PRE_BYTES)),
+            ("FOLD_LEFT", str(COUT_FOLD_PRE_BYTES + (bm + 2) * COUT_FOLD_SLOT_BYTES)),
+            ("FOLD_CB_PLANE", str(CB_FOLD_PLANE)),
+            ("FOLD_CB_TOKEN", str(CB_FOLD_TOKEN)),
+            ("FOLD_OUT_TILES", str(COUT_FOLD_OUT_TILES)),
+        ]
     if b.weights_resident:
         assert not (kwf or slab_direct or row_split or b.nslice or g.k_split or g.sharded_output or weight_servers)
     if b.rm_ring_px:
@@ -4049,7 +4145,8 @@ def create_program_descriptor(
             + _s2_dm_defines
             + _host_fill_defines
             + _brf_defines
-            + _rm_ring_defines,
+            + _rm_ring_defines
+            + _fold_defines,
             config=ttnn.ReaderConfigDescriptor(),
         )
         for slice_channels, (reader_cores, reader_rt) in reader_groups.items()
@@ -4069,6 +4166,7 @@ def create_program_descriptor(
             + slot_ack_defines
             + _host_fill_defines
             + _wr_defines
+            + _fold_defines
             + ([("NSLICE_ROUND0", "1")] if round0_args else [])
             + (
                 [
@@ -4097,7 +4195,8 @@ def create_program_descriptor(
         + _wide_short_defines
         + _s2_compute_defines
         + _ring_arrival_defines
-        + _wr_defines,
+        + _wr_defines
+        + _fold_defines,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=compute_kernel_config.math_fidelity,
             math_approx_mode=compute_kernel_config.math_approx_mode,

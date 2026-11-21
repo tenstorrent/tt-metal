@@ -29,6 +29,7 @@ import ttnn
 from ttnn.operations._op_contract import ExcludedCell, UnsupportedAxisValue
 
 from .conv2d_3x3_program_descriptor import (
+    cout_fold_capable,
     Conv3x3Geometry,
     _core_m_ranges,
     _kw_fold_group,
@@ -675,6 +676,22 @@ def conv2d_3x3(
         output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         resident_shard_bytes = 0
     blocking = select_blocking(geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
+    if cout_fold_capable(geometry):
+        # C_out fold (COUT_FOLD): kw in the N lanes, on the ROW_MAJOR ring walk with resident weights.
+        fold_geometry = dataclasses.replace(geometry, fold=True)
+        try:
+            fold_blocking = select_blocking(fold_geometry, work_grid, l1_cb_budget_bytes(resident_shard_bytes))
+        except ValueError:
+            fold_blocking = None
+        if (
+            fold_blocking is not None
+            and fold_blocking.rm_ring_px
+            and fold_blocking.weights_resident
+            and fold_blocking.num_k_blocks == 3
+            and fold_blocking.block_k_tiles == geometry.c_in_tiles
+            and fold_blocking.block_n_tiles == 1
+        ):
+            geometry, blocking = fold_geometry, fold_blocking
 
     output_tensor = ttnn.allocate_tensor_on_device(
         ttnn.Shape([1, 1, h_out * w_out, c_out]),
