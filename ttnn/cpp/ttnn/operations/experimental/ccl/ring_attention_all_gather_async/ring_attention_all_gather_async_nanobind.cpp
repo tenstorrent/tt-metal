@@ -82,7 +82,7 @@ void bind_ring_attention_all_gather_async(nb::module_& mod) {
                             memory_config=mem_config,
                             mesh_mapper=ShardTensor2dMesh(mesh_device, mesh_shape=(1, 8), dims=(-1, -2)))
             >>> ttnn_tensor = ttnn.to_device(ttnn_tensor, mesh_device)
-            >>> output = ttnn.all_gather(ttnn_tensor, dim=0, topology=ttnn.Topology.Ring)
+            >>> output = ttnn.experimental.ring_attention_all_gather_async([ttnn_tensor], persistent_output_buffer, dim=0, multi_device_global_semaphore=[ccl_semaphore], cluster_axis=1, mesh_device=mesh_device, topology=ttnn.Topology.Linear)
 
         )doc",
         ring_attention_all_gather_async_wrapper,

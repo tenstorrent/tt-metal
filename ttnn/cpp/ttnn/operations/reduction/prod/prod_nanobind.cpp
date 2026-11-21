@@ -77,7 +77,7 @@ void bind_reduction_prod_operation(nb::module_& mod) {
 
             Limitations:
                 - All input tensors must be on-device.
-                - When :attr:`dim` is not specified (i.e. full product), keepdim=True is not supported  (as this operation results in a scalar).
+                - When :attr:`dim` is not specified (i.e. full product), the result is a scalar; with keepdim=True it is reshaped to all ones of the input rank.
                 - BFLOAT8_B and BFLOAT4_B inputs must be TILE layout.
                 - Dim-based reductions do not support BFLOAT4_B.
                 - Sharding is not supported for this operation

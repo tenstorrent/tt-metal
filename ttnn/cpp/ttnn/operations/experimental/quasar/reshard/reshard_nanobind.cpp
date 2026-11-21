@@ -36,7 +36,7 @@ void bind_reshard(nb::module_& mod) {
                 strategy=ttnn.ShardStrategy.BLOCK,
             ),
             >>> shard_memory_config = ttnn.create_sharded_memory_config(input_shape, **input_sharded_memory_config_args)
-            >>> sharded_tensor = ttnn.reshard(tensor, shard_memory_config)
+            >>> sharded_tensor = ttnn.experimental.quasar.reshard(tensor, shard_memory_config)
 
         )doc";
 

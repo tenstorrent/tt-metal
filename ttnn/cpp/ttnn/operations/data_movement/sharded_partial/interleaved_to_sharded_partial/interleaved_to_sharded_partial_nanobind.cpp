@@ -26,15 +26,15 @@ void bind_interleaved_to_sharded_partial(nb::module_& mod) {
             * :attr:`shard_shape` (List[int]): Shape [height, width] of each shard, in elements. Both must be greater than 0.
             * :attr:`num_slices` (int): Number of slices.
             * :attr:`slice_index` (int): Slice index.
-            * :attr:`shard_scheme` (ttl.tensor.TensorMemoryLayout): Sharding scheme(height, width or block).
-            * :attr:`shard_orientation` (ttl.tensor.ShardOrientation): Shard orientation (ROW or COL major).
+            * :attr:`shard_scheme` (ttnn.TensorMemoryLayout): Sharding scheme(height, width or block).
+            * :attr:`shard_orientation` (ttnn.ShardOrientation): Shard orientation (ROW or COL major).
 
         Keyword Args:
             * :attr:`output_dtype` (Optional[ttnn.DataType]): Output data type, defaults to same as input.
 
         Example:
 
-            >>> sharded_tensor = ttnn.sharded_to_interleaved(tensor, ttnn.CoreGrid(3,3), 2, 2, ttl.tensor.TensorMemoryLayout.HEIGHT_SHARDED, ttl.tensor.ShardOrientation.ROW_MAJOR)
+            >>> sharded_tensor = ttnn.interleaved_to_sharded_partial(tensor, ttnn.CoreGrid(3,3), [32, 32], 2, 2, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.ShardOrientation.ROW_MAJOR)
 
         )doc";
 

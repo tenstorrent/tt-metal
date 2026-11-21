@@ -49,7 +49,10 @@ void bind_llama_rs_create_heads(nb::module_& mod) {
                                 worker_sub_device_id,
                                 cluster_axis=1,
                                 mesh_device=mesh_device,
+                                topology=ttnn.Topology.Linear,
                                 num_links=num_links,
+                                num_heads=num_heads,
+                                num_kv_heads=num_kv_heads,
                                 memory_config=output_mem_config))doc";
 
     ttnn::bind_function<"llama_rs_create_heads", "ttnn.experimental.">(

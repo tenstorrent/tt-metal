@@ -42,7 +42,7 @@ void bind_slice_write(nb::module_& mod) {
             Example:
                 >>> input_tensor = ttnn.from_torch(torch.rand(1, 4, 4, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
                 >>> output_tensor = ttnn.from_torch(torch.zeros(1, 8, 8, 32, dtype=torch.bfloat16), dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
-                >>> ttnn.experimental.slice_write(input_tensor, output_tensor, [0, 0, 0, 0], [1, 4, 4, 32], [1, 1, 1, 1])
+                >>> ttnn.experimental.quasar.slice_write(input_tensor, output_tensor, [0, 0, 0, 0], [1, 4, 4, 32], [1, 1, 1, 1])
                 )doc";
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
