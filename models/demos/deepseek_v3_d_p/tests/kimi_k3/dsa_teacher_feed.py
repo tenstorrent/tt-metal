@@ -5,11 +5,11 @@
 Three steps, and only the middle one opens a device (``test_dsa_teacher_feed.py``), so CPU work never holds it:
 
 1. ``input``: the layer's attention input, rebuilt from the trace segment by segment and stored with a
-   ``manifest.json`` (resumable, as ``tests/kda/long_context_golden.py``). Layer 92 reads AttnRes, not
-   ``decoder_output_layer_91`` (the trace's ``decoder_input`` alias): its input is ``input_layernorm`` of the
-   AttnRes read over the eight sealed block snapshots and the live sum of layers 84-91. A trace that records every
-   layer's ``attn_output`` and FFN output (``decoder_output``, the tracer's FFN output alone) rebuilds it by the
-   tracer's replay rule (``debug_trace_io.get_prefix_sum``) in vLLM's bf16 order; a trace that records the read's
+   ``manifest.json`` (resumable, with ``tests/kda/long_context_golden.py``'s manifest helpers). Layer 92 reads
+   AttnRes, not ``decoder_output_layer_91`` (the trace's ``decoder_input`` alias): its input is ``input_layernorm``
+   of the AttnRes read over the eight sealed block snapshots and the live sum of layers 84-91. A trace that records
+   every layer's ``attn_output`` and FFN output (``decoder_output``, the tracer's FFN output alone) rebuilds it by
+   the tracer's replay rule (``debug_trace_io.get_prefix_sum``) in vLLM's bf16 order; a trace that records the read's
    output itself names that stream with ``--input-stream``. Every segment is checked against the layer's own
    captured projections (indexer key, KV latent) recomputed from the rebuilt input, and fails closed below
    ``INPUT_CHECK_PCC``.
@@ -28,8 +28,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import platform
-import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -40,24 +38,32 @@ from safetensors import safe_open
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor, pcc
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import (
+    MANIFEST,
+    atomic_save,
+    resume_manifest,
+    segment_path,
+    write_manifest,
+)
 
 LAYER = KimiK3Config.NUM_LAYERS - 1  # 92: the one DSA layer whose input and outputs every K3.1 trace records
-MANIFEST = "manifest.json"
 EPS = KimiK3Config.RMS_NORM_EPS
 # The rebuilt input must reproduce the layer's captured projections to this PCC; measured 0.999992 (KV latent) and
 # 0.999996 (indexer key) at 10K and 128K, against <= 0.16 for the decoder_output_layer_91 alias.
 INPUT_CHECK_PCC = 0.9999
 CHECK_ROWS = 64  # rows per segment the input check samples
 
-# Stability bars, every one held per window of context positions (proposed, pending
-# the owner's decision; measured on layer 92 at 10K and 128K, 4x4-sp1, against the vLLM trace):
-# * attention output per-row NRMSE, window median <= 0.06 (measured 0.044-0.048; an fp32 host recompute from the
-#   trace's own KV and top-k reads 0.032 against the trace, so the trace's own noise is two thirds of it), and no
-#   window more than 15% above the first (measured +3.4% at most): growth with context is what the run looks for.
+# Stability bars, every one held per window of context positions (proposed, pending the owner's decision; measured on
+# layer 92 at 10K and 128K, 4x4-sp1, against the vLLM trace):
+# * attention output per-row NRMSE against the trace, window median <= 0.06 (measured 0.044-0.048). On sampled rows
+#   the device reads 0.051 against an fp32 host recompute from the trace's own KV and top-k, and the trace itself
+#   0.032 against it; which part of the device's distance is its own is left to an FP64 golden. And no window more
+#   than 15% above the first (measured +3.4% at most): growth with context is what the run looks for.
 # * kvpe latent / rope and index key PCC >= 0.999 / 0.9999 / 0.999 (measured 0.99958 / 0.99999 / 0.99994, flat).
 # * top-k recall, window mean over rows >= top-k, >= 0.85 (measured 0.955-0.987; 0.85 is the 128K floor of the
-#   depth ladder at HiFi2) and recall 1 below top-k; misses near-ties: <= 1% of missed keys from the trace's top half
-#   (measured 0).
+#   depth ladder at HiFi2) and recall 1 below top-k; misses are near-ties: <= 1% of missed keys ranked in the top
+#   half of the trace's own selection by its score.
 BARS = {
     "attn_nrmse_median": ("max", 0.06),
     "kv_latent_pcc": ("min", 0.999),
@@ -68,24 +74,6 @@ BARS = {
     "miss_top_half_fraction": ("max", 0.01),
 }
 NRMSE_GROWTH = 1.15
-
-
-def check_bars(windows: list[dict]) -> list[str]:
-    """The windows that break a bar (NaN, a metric a window does not define, passes), and NRMSE growth."""
-    failures = []
-    for name, (kind, bar) in BARS.items():
-        for w in windows:
-            v = w[name]
-            if v == v and (v < bar if kind == "min" else v > bar):
-                failures.append(f"{name} {v:.6f} {'<' if kind == 'min' else '>'} {bar} at [{w['start']}, {w['end']})")
-    first = windows[0]["attn_nrmse_median"]
-    worst = max(windows, key=lambda w: w["attn_nrmse_median"])
-    if worst["attn_nrmse_median"] > NRMSE_GROWTH * first:
-        failures.append(
-            f"attn NRMSE grows {worst['attn_nrmse_median'] / first:.3f}x (> {NRMSE_GROWTH}) "
-            f"by [{worst['start']}, {worst['end']})"
-        )
-    return failures
 
 
 class Trace:
@@ -150,9 +138,11 @@ def replay_live_and_sealed(trace: Trace, start: int, end: int, layer: int = LAYE
 
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
-    """vLLM's RMSNorm: normalize and scale in fp32, one bf16 rounding."""
+    """The model reference's RMSNorm (`modeling_kimi_k3_mla.KimiRMSNorm`) in bf16: normalize in fp32, round to bf16,
+    then scale by the bf16 weight (a second rounding)."""
     xf = x.float()
-    return (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + EPS) * weight.float()).to(torch.bfloat16)
+    normed = (xf * torch.rsqrt(xf.pow(2).mean(-1, keepdim=True) + EPS)).to(torch.bfloat16)
+    return weight.to(torch.bfloat16) * normed
 
 
 def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tensor]:
@@ -174,12 +164,6 @@ def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tenso
     return {n: tensors[root + n] for n in names}
 
 
-def pcc(a: torch.Tensor, b: torch.Tensor) -> float:
-    a, b = a.double().flatten(), b.double().flatten()
-    a, b = a - a.mean(), b - b.mean()
-    return float((a @ b) / (a.norm() * b.norm()))
-
-
 def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: int = LAYER) -> dict[str, float]:
     """PCC of the layer's indexer key and KV latent recomputed (fp32) from ``normed`` against the trace's."""
     rows = torch.linspace(0, normed.shape[0] - 1, min(CHECK_ROWS, normed.shape[0])).long()
@@ -197,27 +181,7 @@ def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: 
         [trace.rows(f"kv_post_transform_layer_{layer}", start + r, start + r + 1) for r in rows.tolist()]
     )
     want_key = torch.cat([trace.rows(f"indexer_k_layer_{layer}", start + r, start + r + 1) for r in rows.tolist()])
-    return {"kv_latent_pcc": pcc(latent, want_kv[:, : KimiK3Config.KV_LORA_RANK]), "index_key_pcc": pcc(key, want_key)}
-
-
-def provenance() -> dict:
-    try:
-        revision = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=Path(__file__).parent, capture_output=True, text=True, check=True
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        revision = "unknown"
-    return {"code_revision": revision, "torch": torch.__version__, "host": platform.node()}
-
-
-def write_json(path: Path, payload: dict) -> None:
-    temporary = path.with_suffix(f".{os.getpid()}.tmp")
-    temporary.write_text(json.dumps(payload, indent=1))
-    temporary.replace(path)
-
-
-def segment_path(run_dir: Path, index: int) -> Path:
-    return run_dir / f"segment_{index:06d}.pt"
+    return {"kv_latent_pcc": pcc(want_kv[:, : KimiK3Config.KV_LORA_RANK], latent), "index_key_pcc": pcc(want_key, key)}
 
 
 def build_input(
@@ -239,25 +203,15 @@ def build_input(
         "trace": str(trace.path),
         "trace_commit": trace.metadata.get("trace_commit"),
         "input": f"stream {input_stream}" if input_stream else "attn_res replay (bf16, tracer order)",
+        "norm": "KimiRMSNorm bf16 (normalize fp32, round, scale)",
         "checkpoint": str(checkpoint),
         "count": count,
         "segment": segment,
     }
-    manifest_path = out / MANIFEST
-    if manifest_path.is_file():
-        manifest = json.loads(manifest_path.read_text())
-        mismatched = sorted(k for k, v in expected.items() if manifest.get(k) != v)
-        if mismatched:
-            raise ValueError(f"{out} holds a different input; mismatched fields: {mismatched}")
-    else:
-        manifest = {**expected, "sessions": [], "segments": []}
     segments = -(-count // segment)
-    done = len(manifest["segments"])
-    if done < segments:
-        manifest["sessions"].append({"first_segment": done, **provenance()})
-        write_json(manifest_path, manifest)
+    manifest = resume_manifest(out, expected, segments)
     w = layer_weights(checkpoint)
-    for index in range(done, segments):
+    for index in range(len(manifest["segments"]), segments):
         start, end = index * segment, min((index + 1) * segment, count)
         began = time.perf_counter()
         if input_stream is None:
@@ -271,10 +225,10 @@ def build_input(
         check = check_input(normed, trace, start, w)
         if min(check.values()) < INPUT_CHECK_PCC:
             raise ValueError(f"rows [{start}, {end}): rebuilt input fails its check {check} (< {INPUT_CHECK_PCC})")
-        torch.save({"start": start, "end": end, "normed": normed}, segment_path(out, index))
+        atomic_save({"start": start, "end": end, "normed": normed}, segment_path(out, index))
         seconds = time.perf_counter() - began
         manifest["segments"].append({"start": start, "end": end, "seconds": round(seconds, 2), **check})
-        write_json(manifest_path, manifest)
+        write_manifest(out, manifest)
         print(
             f"{time.strftime('%H:%M:%S')} segment {index + 1}/{segments} rows [{start}, {end}) {seconds:.1f} s "
             + " ".join(f"{k}={v:.6f}" for k, v in check.items()),
@@ -299,102 +253,125 @@ def load_input(run_dir: Path, start: int, end: int) -> torch.Tensor:
 
 # --- scoring -------------------------------------------------------------------------------------------------
 
+# What a device run writes into its output directory; a new run clears all of it first.
+RUN_FILES = ("chunk_*.pt", "caches.pt", "metrics.json", "windows.tsv", "rows.pt", MANIFEST)
+
 
 def chunk_path(out: Path, index: int) -> Path:
     return out / f"chunk_{index:06d}.pt"
 
 
+def start_run(out: Path, manifest: dict) -> None:
+    """Begin a device run in ``out``: remove every file an earlier run left (so no stale chunk or cache can be
+    scored with this run's) and write this run's manifest, not yet marked complete."""
+    out.mkdir(parents=True, exist_ok=True)
+    for pattern in RUN_FILES:
+        for stale in out.glob(pattern):
+            stale.unlink()
+    write_manifest(out, {**manifest, "complete": False})
+
+
+def finish_run(out: Path, manifest: dict, seconds: float) -> None:
+    """Mark the run in ``out`` complete, after every chunk and both caches are written; ``score`` requires it."""
+    write_manifest(out, {**manifest, "complete": True, "seconds": round(seconds, 1)})
+
+
 def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
-    """Per row |got ∩ want| / |want| over ``want``'s valid (>= 0) keys; ``got``'s negatives match nothing."""
+    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
+    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s no-key entries (the uint32 0xFFFFFFFF
+    sentinel, or -1) match nothing. Rows with no valid `want` entry read NaN."""
     rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
     valid = want >= 0
-    return (torch.isin(rows + want, rows + got.masked_fill(got < 0, -(1 << 31))) & valid).sum(1) / valid.sum(1)
+    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
 
 
-def miss_margins(got: torch.Tensor, want: torch.Tensor, scores: torch.Tensor) -> list[torch.Tensor]:
-    """Per row, the trace keys the device missed as (trace score - cut) / (top - cut), the cut being the trace's
-    lowest selected score: 0 is a miss at the cut (a near-tie), 1 a miss of the row's best key. Rows with fewer
-    than two valid trace keys have no spread and yield no margins."""
-    out = []
+def missed_keys(got: torch.Tensor, want: torch.Tensor, scores: torch.Tensor) -> dict[str, torch.Tensor]:
+    """Every trace key the device missed, one entry per miss: its ``row`` (index into the chunk), its ``rank`` in the
+    trace's own selection ordered by the trace's score (0 = best), that selection's size ``selected``, and its
+    ``spread_share`` (score - cut) / (top - cut), the cut being the lowest selected score. A rank near ``selected``
+    or a share near 0 is a near-tie at the cut."""
     rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    missed = ~torch.isin(rows + want, rows + got.masked_fill(got < 0, -(1 << 31))) & (want >= 0)
     valid = want >= 0
-    for r in range(want.shape[0]):
-        s = scores[r][valid[r]]
-        if s.numel() < 2 or not missed[r].any():
-            out.append(torch.empty(0))
-            continue
-        cut, top = s.min(), s.max()
-        out.append(((scores[r][missed[r]] - cut) / (top - cut).clamp_min(1e-30)).float())
-    return out
+    missed = ~torch.isin(rows + want, rows + got) & valid
+    masked = scores.masked_fill(~valid, -float("inf"))
+    rank = torch.empty_like(want)
+    rank.scatter_(1, masked.argsort(dim=1, descending=True), torch.arange(want.shape[1]).expand_as(want).contiguous())
+    top = masked.max(dim=1, keepdim=True).values
+    cut = scores.masked_fill(~valid, float("inf")).min(dim=1, keepdim=True).values
+    share = (scores - cut) / (top - cut).clamp_min(1e-30)
+    row = torch.arange(want.shape[0]).unsqueeze(1).expand_as(want)
+    return {
+        "row": row[missed],
+        "rank": rank[missed],
+        "selected": valid.sum(dim=1, keepdim=True).expand_as(want)[missed],
+        "spread_share": share[missed].float(),
+    }
 
 
-class Pooled:
-    """Pearson correlation pooled over every pair of rows added, from float64 sums, so a window can span chunks."""
-
-    def __init__(self):
-        self.sums = torch.zeros(6, dtype=torch.float64)  # n, sx, sy, sxx, syy, sxy
-
-    def add(self, want: torch.Tensor, got: torch.Tensor) -> None:
-        x, y = want.double().flatten(), got.double().flatten()
-        self.sums += torch.stack(
-            [torch.tensor(float(x.numel()), dtype=torch.float64), x.sum(), y.sum(), x @ x, y @ y, x @ y]
+def check_bars(windows: list[dict]) -> list[str]:
+    """The windows that break a bar (NaN, a metric a window does not define, passes), and NRMSE growth."""
+    failures = []
+    for name, (kind, bar) in BARS.items():
+        for w in windows:
+            v = w[name]
+            if v == v and (v < bar if kind == "min" else v > bar):
+                failures.append(f"{name} {v:.6f} {'<' if kind == 'min' else '>'} {bar} at [{w['start']}, {w['end']})")
+    first = windows[0]["attn_nrmse_median"]
+    worst = max(windows, key=lambda w: w["attn_nrmse_median"])
+    if worst["attn_nrmse_median"] > NRMSE_GROWTH * first:
+        failures.append(
+            f"attn NRMSE grows {worst['attn_nrmse_median'] / first:.3f}x (> {NRMSE_GROWTH}) "
+            f"by [{worst['start']}, {worst['end']})"
         )
-
-    def value(self) -> float:
-        n, sx, sy, sxx, syy, sxy = self.sums.tolist()
-        return (sxy - sx * sy / n) / ((sxx - sx * sx / n) * (syy - sy * sy / n)) ** 0.5
+    return failures
 
 
 def score(*, trace: Trace, out: Path, window: int) -> dict:
-    """Score a device run in ``out`` against the trace per context position; writes metrics.json and windows.tsv.
+    """Score a complete device run in ``out`` against the trace per context position; writes metrics.json,
+    windows.tsv and rows.pt.
 
     Streams chunk by chunk (the 1M attention output is 15 GB per side). Per row: attention output NRMSE (floored at
-    1% of the median trace row norm, as the KDA golden), top-k recall and missed-key score margins. Per ``window``
-    rows: pooled PCC of the attention output, kvpe latent / rope and index key, and summaries of the per-row values.
+    1% of the median trace row norm, as the KDA golden), top-k recall, and each missed key's rank and spread share.
+    Per ``window`` rows: summaries of those, and the kvpe latent / rope and index key PCC.
     """
-    from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import golden_floor
-
     manifest = json.loads((out / MANIFEST).read_text())
+    if not manifest.get("complete"):
+        raise ValueError(f"{out} holds no complete device run (its manifest is not marked complete)")
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     num_chunks = -(-count // chunk)
-    num_windows = -(-count // window)
-    attn_pcc = [Pooled() for _ in range(num_windows)]
-    ref_norm, err_norm, recall, margins = [], [], [], []
+    attn = TokenErrorAccumulator()
+    recall, misses = [], []
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
-        got_attn = payload["attn_out"].double()
-        want_attn = trace.rows(f"attn_output_layer_{layer}", lo, hi).double()
-        ref_norm.append(want_attn.norm(dim=-1))
-        err_norm.append((got_attn - want_attn).norm(dim=-1))
-        for w in range(lo // window, -(-hi // window)):
-            a, b = max(lo, w * window) - lo, min(hi, (w + 1) * window) - lo
-            attn_pcc[w].add(want_attn[a:b], got_attn[a:b])
+        attn.update(trace.rows(f"attn_output_layer_{layer}", lo, hi), payload["attn_out"])
         want = trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long()
         got = payload["topk"].long()
         recall.append(topk_recall(got, want))
-        margins += miss_margins(got, want, trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float())
+        chunk_misses = missed_keys(got, want, trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float())
+        chunk_misses["row"] = chunk_misses["row"] + lo
+        misses.append(chunk_misses)
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
-    ref_norm, err_norm, recall = torch.cat(ref_norm), torch.cat(err_norm), torch.cat(recall)
-    floor = golden_floor(ref_norm)
-    row_nrmse = err_norm / ref_norm.clamp_min(floor)
+    floor = golden_floor(attn.expected_norms())
+    row_nrmse = attn.token_nrmse(floor)
+    recall = torch.cat(recall)
+    misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     caches = torch.load(out / "caches.pt", weights_only=True)
-    kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count).float()
-    key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count).float()
+    kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count)
+    key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count)
     lora = KimiK3Config.KV_LORA_RANK
     topk = KimiK31Config.INDEX_TOPK
+    nan = float("nan")
     windows = []
-    for w, lo in enumerate(range(0, count, window)):
+    for lo in range(0, count, window):
         hi = min(lo + window, count)
-        m = torch.cat(margins[lo:hi])
+        inside = (misses["row"] >= lo) & (misses["row"] < hi)
+        rank, selected, share = (misses[k][inside] for k in ("rank", "selected", "spread_share"))
         gated = recall[max(lo, topk) : hi]  # rows < top-k select every causal key on both sides
-        nan = float("nan")
         windows.append(
             {
                 "start": lo,
                 "end": hi,
-                "attn_pcc": attn_pcc[w].value(),
                 "attn_nrmse_median": float(row_nrmse[lo:hi].median()),
                 "attn_nrmse_p99": float(row_nrmse[lo:hi].quantile(0.99)),
                 "attn_nrmse_max": float(row_nrmse[lo:hi].max()),
@@ -404,13 +381,15 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
                 "recall_mean": float(gated.mean()) if gated.numel() else nan,
                 "recall_p05": float(gated.quantile(0.05)) if gated.numel() else nan,
                 "recall_min_below_topk": float(recall[lo : min(hi, topk)].min()) if lo < topk else nan,
-                "miss_margin_median": float(m.median()) if m.numel() else nan,
-                "miss_margin_p90": float(m.quantile(0.9)) if m.numel() else nan,
-                "miss_top_half_fraction": float((m > 0.5).float().mean()) if m.numel() else nan,
+                "misses": int(rank.numel()),
+                "miss_rank_p10": float(rank.float().quantile(0.1)) if rank.numel() else nan,
+                "miss_rank_median": float(rank.float().median()) if rank.numel() else nan,
+                "miss_rank_min": int(rank.min()) if rank.numel() else -1,
+                "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else nan,
+                "miss_spread_share_median": float(share.median()) if share.numel() else nan,
+                "miss_spread_share_p90": float(share.quantile(0.9)) if share.numel() else nan,
             }
         )
-    whole = Pooled()
-    whole.sums = sum((p.sums for p in attn_pcc), torch.zeros(6, dtype=torch.float64))
     result = {
         "layer": layer,
         "count": count,
@@ -419,17 +398,20 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         "run": manifest,
         "attn_nrmse_floor": floor,
         "overall": {
-            "attn_pcc": whole.value(),
             "attn_nrmse_median": float(row_nrmse.median()),
             "kv_latent_pcc": pcc(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
             "kv_rope_pcc": pcc(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
             "index_key_pcc": pcc(key_ref, caches["index"]),
-            "recall_mean": float(recall[topk:].mean()) if count > topk else float("nan"),
+            "recall_mean": float(recall[topk:].mean()) if count > topk else nan,
+            "misses": int(misses["rank"].numel()),
+            "miss_top_half_fraction": (
+                float((2 * misses["rank"] < misses["selected"]).float().mean()) if misses["rank"].numel() else nan
+            ),
         },
         "windows": windows,
     }
     result["bar_failures"] = check_bars(windows)
-    write_json(out / "metrics.json", result)
+    (out / "metrics.json").write_text(json.dumps(result, indent=1))
     columns = list(windows[0])
     (out / "windows.tsv").write_text(
         "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in windows)
