@@ -206,7 +206,8 @@ void ZeroPaddedKvCacheDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& cache = tensor_args.cache;
     // cache storage is pinned in validate_runtime_args so it also runs on hits.
-    TT_FATAL(cache.buffer()->buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
+    TT_FATAL(
+        cache.memory_config().buffer_type() == BufferType::DRAM, "zero_padded_kv_cache requires a DRAM-backed cache");
     TT_FATAL(
         cache.layout() == Layout::TILE || cache.layout() == Layout::ROW_MAJOR,
         "cache layout must be TILE or ROW_MAJOR");
@@ -305,9 +306,10 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     auto* device = cache.device();
     const auto& cache_shape = cache.padded_shape();
     const bool has_metadata = tensor_args.slot_idx.has_value();
-    const uint32_t slot_idx_addr = has_metadata ? static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address()) : 0u;
+    const uint32_t slot_idx_addr =
+        has_metadata ? static_cast<uint32_t>(tensor_args.slot_idx->mesh_buffer().address()) : 0u;
     const uint32_t valid_global_addr =
-        has_metadata ? static_cast<uint32_t>(tensor_args.valid_global->buffer()->address()) : 0u;
+        has_metadata ? static_cast<uint32_t>(tensor_args.valid_global->mesh_buffer().address()) : 0u;
 
     const tt::DataFormat cache_format = datatype_to_dataformat_converter(cache.dtype());
     const bool is_row_major = cache.layout() == Layout::ROW_MAJOR;
@@ -356,7 +358,7 @@ tt::tt_metal::ProgramDescriptor ZeroPaddedKvCacheDeviceOperation::ProgramFactory
     if (is_row_major) {
         // A row is one opaque DRAM page. Use a dataflow-only zero writer so FP8 never enters the
         // unpack/compute engine (and therefore needs no fp32 destination accumulator setting).
-        const uint32_t row_page_size = cache.buffer()->aligned_page_size();
+        const uint32_t row_page_size = cache.mesh_buffer().aligned_page_size();
         desc.cbs.push_back(CBDescriptor{
             .total_size = row_page_size,
             .core_ranges = all_cores,
@@ -487,8 +489,8 @@ void ZeroPaddedKvCacheDeviceOperation::MeshWorkloadFactory::override_runtime_arg
     //   - scalar path: every kernel reads slot_idx (9)/valid_global (3). TILE has reader/compute/writer
     //     (3 kernels); ROW_MAJOR is a dataflow-only writer (1 kernel).
     if (tensor_args.slot_idx.has_value()) {
-        const uint32_t slot_idx_addr = static_cast<uint32_t>(tensor_args.slot_idx->buffer()->address());
-        const uint32_t valid_global_addr = static_cast<uint32_t>(tensor_args.valid_global->buffer()->address());
+        const uint32_t slot_idx_addr = static_cast<uint32_t>(tensor_args.slot_idx->mesh_buffer().address());
+        const uint32_t valid_global_addr = static_cast<uint32_t>(tensor_args.valid_global->mesh_buffer().address());
         for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
             for (uint32_t kernel_handle : {0u, 2u}) {  // reader, writer (metadata path is TILE-only)
                 auto& common = GetCommonRuntimeArgs(program, kernel_handle);

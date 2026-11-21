@@ -21,6 +21,9 @@
 #include "internal/tt-2xx/quasar/semaphore_cached_pool.h"
 #include <kernel_includes.hpp>
 #include "api/kernel_thread_globals.h"
+#if !defined(COMPILE_FOR_DISPATCH_ENGINE)
+#include "internal/tt-2xx/dataflow_buffer/dataflow_buffer_finish.h"
+#endif
 #if defined ALIGN_LOCAL_CBS_TO_REMOTE_CBS
 #include "api/remote_circular_buffer.h"
 #endif
@@ -120,6 +123,10 @@ std::uint32_t _start() {
         // Unregister all the DFB L1 extents this RISC declared in the DFB ctor. Done here rather than in the dtor so
         // DFBs stays trivially copyable.
         RECORD_DFB_REGION_CLEAR();
+#if !defined(COMPILE_FOR_DISPATCH_ENGINE)
+        // Finish every DFB this DM is bound to before it reports done
+        dfb_dm_kernel_exit(hartid, &(*GET_MAILBOX_ADDRESS_DEV(subordinate_sync.map))[hartid - 1]);
+#endif
         if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
             WAYPOINT("NKFW");
             // TODO enable once NOC is ready

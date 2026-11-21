@@ -28,8 +28,9 @@ Hybrid FSDP + DDP (HSDP) on a 2D mesh ``[D, F]`` with axes
     # DDP-replicated shards across the "dp" axis; FSDP-sharded params are
     # skipped on the "fsdp" axis (already reduce-scattered in backward-post)
     # but still reduced on the "dp" axis to average across DP replicas.
-    # The per-param axis filter in ttml.sync_gradients is what makes the
-    # same single call cover pure DDP, pure FSDP, and HSDP.
+    # ttml.sync_gradients skips, per parameter, any axis its value is
+    # sharded on (backward-post reinstalls the Shard-labelled shard), which
+    # is what makes the same single call cover pure DDP, pure FSDP, and HSDP.
 
 Contract:
     * Call ``fully_shard`` BEFORE ``create_optimizer`` so optimizer state
@@ -85,12 +86,23 @@ def _sharded_tensor_dims(placements: Optional[List[Any]]) -> set:
     return {p.dim for p in placements if _is_shard(p)}
 
 
-def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int) -> bool:
-    """True if the param's placement on the FSDP axis is already a Shard. ``None``, a lazy
-    param without a mapper (see :func:`_param_placements`), is replicated."""
-    if placements is None or axis_index >= len(placements):
-        return False
-    return _is_shard(placements[axis_index])
+def _per_axis_placements(placements: Optional[List[Any]], mesh_shape: Sequence[int], what: str) -> List[Any]:
+    """``placements`` per mesh axis; a collapsed ``{N}, [placement]`` is that placement on every axis of size > 1."""
+    if placements is None:
+        return [ttnn.PlacementReplicate()] * len(mesh_shape)
+    if len(placements) == len(mesh_shape):
+        return list(placements)
+    if len(placements) == 1:
+        return [placements[0] if size > 1 else ttnn.PlacementReplicate() for size in mesh_shape]
+    raise RuntimeError(
+        f"FSDP: {what} has {len(placements)} placements for a {len(mesh_shape)}-axis mesh (placements={placements}). "
+        f"Create the parameter with a mapper that has one placement per mesh axis (ttnn.create_mesh_mapper / "
+        f"mesh.axis_mapper)."
+    )
+
+
+def _already_fsdp_sharded(placements: Optional[List[Any]], axis_index: int, mesh_shape: Sequence[int]) -> bool:
+    return _is_shard(_per_axis_placements(placements, mesh_shape, "parameter topology")[axis_index])
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +124,7 @@ class FSDPState:
         module: AbstractModuleBase,
         mesh_axis: str,
         reshard_after_forward: bool,
+        reduce_dtype: Optional[ttnn.DataType],
     ) -> None:
         self.module = module
         self.mesh_axis_name = mesh_axis
@@ -119,6 +132,7 @@ class FSDPState:
         mesh = ttml.mesh()
         self.axis_index = mesh.axis_index(mesh_axis)
         self.axis_size = mesh.axis_size(mesh_axis)
+        self.reduce_dtype = reduce_dtype
 
         self.reshard_after_forward = reshard_after_forward
         self.sharded_state = _ShardedState.SHARDED
@@ -199,43 +213,52 @@ class FSDPState:
         """Called after all of the module's internal backward closures have run.
 
         At this point every managed parameter has its ``.grad`` populated at
-        gathered shape. We reduce-scatter each grad into a shard-shaped grad,
-        explicitly deallocate the gathered value and gathered grad, and
-        restore the sharded m_value (in that order, so ``set_grad``'s shape
-        check sees the shard-shaped m_value).
+        gathered shape. We restore the sharded m_value and free the gathered
+        weight first, then reduce-scatter each grad into a shard-shaped grad,
+        free the gathered grad, and install the shard (``set_grad``'s shape
+        check then sees the shard-shaped m_value).
+
+        Without a ``reduce_dtype`` from ``fully_shard``, the sum takes the one
+        ``create_optimizer`` stored from the training config, read here as the
+        DDP sync reads it: this hook first runs in the first backward, after the
+        optimizer exists.
         """
+        reduce_dtype = ttml.core.distributed.resolve_reduce_dtype(self.reduce_dtype)
         for parameter, shard_dim in self.managed:
             param_tensor = parameter.tensor
             if not param_tensor.is_grad_initialized():
                 continue
-            # Pull a Python-side handle to the gathered grad before we reduce
-            # it; we'll explicitly deallocate it after set_grad to release the
-            # full-size buffer on device immediately.
-            gathered_grad = param_tensor.get_grad()
-            reduced = ttml.core.distributed.reduce_scatter(
-                gathered_grad,
-                shard_dim,
-                self.axis_index,
-            )
-            # Mean-reduction: reduce_scatter sums one shard's contribution
-            # per DP rank; divide by axis_size to get the per-shard average,
-            # matching the implicit averaging a DDP all-reduce would do.
-            reduced = ttnn.multiply(reduced, 1.0 / float(self.axis_size))
-
-            # Swap m_value to the cached shard and free the gathered weight,
-            # then set_grad to the reduced shard. Order matters: set_grad
-            # shape-checks against m_value, so m_value must be shard-shape
-            # before we install a shard-shape grad.
+            # Swap m_value back to the cached shard and free the gathered
+            # weight before the grad's reduce-scatter, the peak of this hook:
+            # nothing reads the weight from here on, and set_value doesn't
+            # check shapes. Freed explicitly, since Python GC may keep the
+            # full-size buffer around for too long.
             gathered_value = param_tensor.get_value(ttml.autograd.PreferredPrecision.NATIVE)
             shard = self._cached_shards.get(id(param_tensor))
             if shard is not None:
                 param_tensor.set_value(shard)
-            param_tensor.set_grad(reduced)
-
-            # Explicit deallocate of the now-unreferenced full-size buffers.
-            # Without this, Python GC may keep them around for too long
             ttnn.deallocate(gathered_value)
-            ttnn.deallocate(gathered_grad)
+
+            # The gathered grad is still installed until set_grad below, but
+            # nothing reads it after the reduce-scatter's input is made: the
+            # fp32 cast when the sum runs in fp32 (the scatter half of
+            # core::distributed::synchronize_tensor's fp32 route, written here
+            # because FSDP keeps the shard), the grad itself otherwise.
+            gathered_grad = param_tensor.get_grad()
+            grad_dtype = gathered_grad.dtype
+            to_reduce = gathered_grad
+            if reduce_dtype == ttnn.DataType.FLOAT32 and grad_dtype != ttnn.DataType.FLOAT32:
+                to_reduce = ttnn.typecast(gathered_grad, ttnn.DataType.FLOAT32)
+                ttnn.deallocate(gathered_grad)
+            summed = ttml.core.distributed.reduce_scatter(to_reduce, shard_dim, self.axis_index)
+            ttnn.deallocate(to_reduce)
+            # Mean-reduction: reduce_scatter sums one shard's contribution
+            # per DP rank; divide by axis_size to get the per-shard average,
+            # matching the implicit averaging a DDP all-reduce would do. The
+            # multiply writes the grad's own dtype.
+            reduced = ttnn.multiply(summed, 1.0 / float(self.axis_size), dtype=grad_dtype)
+            ttnn.deallocate(summed)
+            param_tensor.set_grad(reduced)
 
         self.sharded_state = _ShardedState.SHARDED
 
@@ -486,13 +509,8 @@ def _shard_replicated_param(
     """
     device = ttml.autograd.AutoContext.get_instance().get_device()
     mesh_shape = ttml.mesh().shape
-    n_axes = len(mesh_shape)
 
-    placements = _get_placements(autograd_tensor)
-    if len(placements) != n_axes:
-        # A tensor replicated by the default topology (e.g. one from ttml.init.*)
-        # flattens to a single Replicate; spell that out per axis.
-        placements = [ttnn.PlacementReplicate()] * n_axes
+    placements = _per_axis_placements(_get_placements(autograd_tensor), mesh_shape, "parameter topology")
 
     # Build a multi-axis composer that gathers the tensor onto host:
     #   - For each Shard{tdim} axis, concat along tdim (gather the shards).
@@ -561,7 +579,7 @@ def _shard_lazy_param(
     parameter: Parameter,
     shard_dim: int,
     axis_index: int,
-    n_axes: int,
+    mesh_shape: Sequence[int],
 ) -> None:
     """Install ``Shard{shard_dim}`` on the FSDP axis of a *lazy* parameter's mapper.
 
@@ -577,13 +595,9 @@ def _shard_lazy_param(
     meta = parameter.peek_tensor()
     assert isinstance(meta, TensorMetadata)
 
-    # Existing placements (from TP-aware modules' mappers) or all-Replicate
-    # fallback when the param has no explicit mapper.
-    existing = _placements_from_mapper(meta.mapper)
-    if existing is None or len(existing) != n_axes:
-        new_placements: List[Any] = [ttnn.PlacementReplicate()] * n_axes
-    else:
-        new_placements = list(existing)
+    # Existing placements (from TP-aware modules' mappers), or all-Replicate
+    # when the param has no explicit mapper.
+    new_placements: List[Any] = _per_axis_placements(_placements_from_mapper(meta.mapper), mesh_shape, "lazy mapper")
 
     if isinstance(new_placements[axis_index], ttnn.PlacementShard):
         raise RuntimeError(
@@ -604,6 +618,7 @@ def _shard_eager_param(
     axis_index: int,
     axis_size: int,
     mesh_axis_name: str,
+    mesh_shape: Sequence[int],
 ) -> None:
     """Eager-path counterpart to :func:`_shard_lazy_param`.
 
@@ -614,7 +629,7 @@ def _shard_eager_param(
     """
     param_tensor = parameter.tensor
     placements = _get_placements(param_tensor)
-    if _already_fsdp_sharded(placements, axis_index):
+    if _already_fsdp_sharded(placements, axis_index, mesh_shape):
         raise RuntimeError(
             f"Parameter is already sharded on mesh axis {mesh_axis_name!r} "
             f"(placements={placements}). FSDP cannot layer a second shard on "
@@ -695,6 +710,8 @@ def fully_shard(
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
     replicate: Sequence[str] = (),
+    *,
+    reduce_dtype: Optional[ttnn.DataType] = None,
 ) -> AbstractModuleBase:
     """Wrap ``module`` with torch-style FSDP in place.
 
@@ -725,9 +742,19 @@ def fully_shard(
             ``mesh_axis``. The training loop must average their gradients over
             ``mesh_axis`` with ``ttml.sync_gradients``; ``SFTTrainer`` and
             ``GRPOTrainer`` already do.
+        reduce_dtype: The dtype the gradients are reduce-scattered in, as ``ttml.sync_gradients`` takes it:
+            ``ttnn.DataType.FLOAT32`` sums and averages in fp32 and casts the shard back to the gradient's dtype.
+            During backward it holds an fp32 copy of each gathered gradient plus the reduce-scatter's working buffer,
+            allocated in that fp32 dtype at the input's size (twice that on a line): about 12 bytes per gathered
+            element on a line, against 6 for the bf16 sum. ``None``
+            takes the training config's ``precision.reduce_dtype`` that ``create_optimizer`` stores
+            (``AutoContext.get_gradient_reduce_dtype``), read when the backward hook runs, as ``ttml.sync_gradients``
+            does; with no default stored either, it sums in each gradient's own dtype. A value passed here applies to
+            the parameters this call shards and wins over the stored one.
     Returns:
         ``module`` (modified in place).
     """
+    ttml.core.distributed.check_reduce_dtype(reduce_dtype)
     if _is_fsdp_wrapped_module(module):
         raise RuntimeError(f"Module {module.get_name()!r} already wrapped with fully_shard.")
     replicate_res = _compile_replicate_patterns(replicate)
@@ -746,10 +773,12 @@ def fully_shard(
         )
         return module
 
-    state = FSDPState(module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward)
+    state = FSDPState(
+        module, mesh_axis=mesh_axis, reshard_after_forward=reshard_after_forward, reduce_dtype=reduce_dtype
+    )
     module._fsdp_state = state
 
-    n_axes = len(mesh.shape)
+    mesh_shape = mesh.shape
 
     # Walk Python ``Parameter`` wrappers (one collector for both eager and
     # lazy models — see ``_collect_root_param_wrappers``). For each, decide
@@ -766,7 +795,7 @@ def fully_shard(
         # Match every alias of a tied parameter, not just the first-seen one.
         matched = _matching_replicate_patterns(names, replicate_res)
         if matched:
-            if _already_fsdp_sharded(_param_placements(parameter), axis_index):
+            if _already_fsdp_sharded(_param_placements(parameter), axis_index, mesh_shape):
                 raise RuntimeError(
                     f"replicate: parameter {rel_name!r} (matched by {matched}) is already sharded on mesh "
                     f"axis {mesh_axis!r}, so it cannot be kept replicated on it."
@@ -810,9 +839,9 @@ def fully_shard(
             _warn_misaligned_shard(rel_name, shape, chosen, axis_size)
 
         if isinstance(parameter.peek_tensor(), TensorMetadata):
-            _shard_lazy_param(parameter, chosen, axis_index, n_axes)
+            _shard_lazy_param(parameter, chosen, axis_index, mesh_shape)
         else:
-            _shard_eager_param(parameter, chosen, axis_index, axis_size, mesh_axis)
+            _shard_eager_param(parameter, chosen, axis_index, axis_size, mesh_axis, mesh_shape)
 
         state.add_managed_param(parameter, chosen)
         _mark_fsdp_managed(parameter, chosen, axis_index)
@@ -842,9 +871,9 @@ def _mark_fsdp_managed(parameter: Parameter, shard_dim: int, axis_index: int) ->
 
     The wrapper-side marker is used by ``fully_shard``'s own dedup (so a
     second pass can skip already-managed wrappers, e.g. tied weights). The
-    tensor-side marker is what downstream infra — ``ttml.sync_gradients``,
-    the Muon guard, ``ttml.fsdp.is_fsdp_managed`` — looks at, since it
-    iterates ``model.parameters()`` (autograd tensors).
+    tensor-side marker is what downstream infra — the Muon guard,
+    ``ttml.fsdp.is_fsdp_managed`` — looks at, since it iterates
+    ``model.parameters()`` (autograd tensors).
 
     For eager wraps the autograd tensor exists already and the mirror runs
     immediately. For lazy wraps the tensor doesn't exist yet, so the mirror

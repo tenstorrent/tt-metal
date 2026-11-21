@@ -79,3 +79,41 @@ def test_ssm_1d_sum_reduce_with_program_cache(device):
         tt_dummy_tensor = ttnn.Tensor(py_dummy_tensor, dtype).to(ttnn.TILE_LAYOUT).to(device, mem_config)
 
     assert device.num_program_cache_entries() == 2
+
+
+@pytest.mark.parametrize(
+    "in_dtype, out_dtype",
+    (
+        (ttnn.bfloat16, ttnn.bfloat8_b),
+        (ttnn.bfloat8_b, ttnn.bfloat16),
+    ),
+)
+@pytest.mark.parametrize(
+    "H, W",
+    (
+        (32, 1024),
+        (64, 2048),
+        (32, 32768),
+    ),
+)
+def test_ssm_reduce_output_dtype(H, W, in_dtype, out_dtype, device):
+    torch.manual_seed(0)
+    latent_size = 32
+
+    x = ttnn.from_torch(
+        torch.randn([1, 1, H, W]),
+        dtype=in_dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    expected = torch.sum(ttnn.to_torch(x).float().reshape((1, 1, H, W // latent_size, latent_size)), dim=-1)
+
+    actual = ttnn.experimental.hc_sum_reduce(x, memory_config=ttnn.DRAM_MEMORY_CONFIG, dtype=out_dtype)
+
+    assert list(actual.padded_shape) == [1, 1, H, W // latent_size]
+    assert actual.dtype == out_dtype
+
+    passing_pcc, output_pcc = comp_pcc(ttnn.to_torch(actual).float(), expected, 0.999)
+    logger.debug(f"Output pcc={output_pcc}")
+    assert passing_pcc

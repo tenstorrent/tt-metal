@@ -6,14 +6,13 @@
 
 #include <cstdint>
 #include <optional>
-#include <utility>
 #include <variant>
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/kernel_types.hpp>
 
-#include "tt_metal/hw/inc/internal/tt-2xx/dataflow_buffer/dataflow_buffer_config.h"
+#include "tt_metal/hw/inc/api/dataflow/dfb_access.h"
 
 namespace tt {
 enum class DataFormat : uint8_t;

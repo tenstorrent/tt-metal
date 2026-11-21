@@ -439,7 +439,7 @@ const TileClockOffsets* tile_clock_offsets(ContextId context_id, uint32_t chip) 
 // the chip is up.
 void measure_tile_clock_offsets(std::span<Device* const> devices, ContextId context_id) {
     auto& mc = MetalContext::instance(context_id);
-    if (!can_capture(mc)) {
+    if (!can_capture(mc) || mc.get_cluster().get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
     auto& cluster = mc.get_cluster();
