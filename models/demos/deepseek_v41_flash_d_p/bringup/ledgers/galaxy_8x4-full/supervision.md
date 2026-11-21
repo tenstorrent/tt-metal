@@ -660,3 +660,8 @@
   Serving entry at 139264: +0.4 ms (80.2 vs 79.8); host split in results/ladder_5120_20261121.md.
   BRANCH READY for the owner to push (not pushed). Local commits on top of origin: the MB.1 / MB.2 / MB.3 work, framework
   parity, supervision. Dashboards uncommitted (> 500 KB hook).
+- 10:55 back on model_bringup for the slowdown (batching: PB.9G committed 5c274f18959, its records committed, dashboards
+  stashed). The only model code change since 11-19's 04c14a09d00 is MB.2 (POS_DYNAMIC). QUEUED MB.4 (perf, ab
+  POS_DYNAMIC off/on): measure on vs off at 51200 / 524288 / 786432 / 1024000 with per-section device ms + host split,
+  separate the harness change (MB.3) from the model, name every ms; fix at the cause with 0 builds and bit-identity;
+  gate = the 5120 accept units + ladder + cold no-rebuild, steady 1024000 <= 88.5 ms (11-19: 87.4).

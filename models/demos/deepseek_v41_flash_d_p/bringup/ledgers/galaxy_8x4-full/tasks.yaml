@@ -6024,3 +6024,66 @@ tasks:
       resumed_wall_ms_p*: '> 0'
       program_builds_after_warmup_serving*: == 0
       ids_uploads_per_chunk*: == 0
+- id: MB.4
+  title: 'OWNER 2026-11-21: explain and fix the shipped branch''s long-history slowdown (5120 ladder at 512k+ is 3.7-5.4 ms
+    slower a chunk than 11-19''s) without bringing program builds back'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - MB.3
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/tests/
+  - models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md
+  - ttnn/ttnn/bringup
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.2_fresh_walls.md
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.4_slowdown.md
+  ab:
+    env:
+      POS_DYNAMIC: 'off'
+    change:
+      POS_DYNAMIC: 'on'
+  ab_mode: full
+  ab_rungs:
+  - last
+  brief:
+    prior_work: 'models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/ladder_5120_20261121.md (MB.3,
+      3e23381c932) vs results/agentx_ladder_20261119.md (04c14a09d00): steady wall at 524288 83.2 vs 79.5 (512000), 786432
+      89.9 vs 84.9 (768000), 1024000 92.8 vs 87.4 ms; device +1.1 / +1.6 / +2.1 ms, exposed host +2.6 / +3.4 / +3.3 ms; same
+      up to 256k. The ONLY model code change between 04c14a09d00 and the head is MB.2 (b3decade3d8: POS_DYNAMIC, default on:
+      RoPE / compressed-RoPE rows, DeviceScalars, history slice_rows by slot x layer x start, tail slices, srv_row, replay
+      offsets, snapshot patterns as page copies / runtime values; ids reordered on device). The ladder harness also changed
+      (MB.3: the real previous chunk first, no memoised history between repeats): separate the two.'
+    details: 'OWNER 2026-11-21: (1) MEASURE with the ladder (test_skip_positions, MB.3''s method) at 51200 (control), 524288,
+      786432, 1024000: POS_DYNAMIC on vs off in one load (call-time switch), per-section device ms (BRINGUP_PROFILE_OPS rows
+      for the sections that move) and the host split; also MB.3''s harness vs 11-19''s at the same position (1024000 is common
+      to both). Name every ms of the gap: which op / call, device or host, and why it grows with history (e.g. a page copy
+      whose size scales with history, a slice replaced by a copy over the whole history buffer). (2) FIX it at the cause on
+      the shipped path, keeping 0 builds after warm-up (rule 20) and bit-identity (POS_DYNAMIC on vs off output 0.0). Target:
+      the 1024000 steady wall back to <= 88.5 ms (11-19: 87.4). If part of the gap is the harness, not the model, say so with
+      the numbers and leave it. Report in models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/MB.4_slowdown.md
+      (write it after your last gate check: a gate check deletes results/<task>_*.md written before it). Read rule 20 of models/demos/common/bringup/agents/bringup-engineer.md.'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_decoder_skip_decode.py
+      && scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py && scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_outside_history.py && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode SKIP_POS=51200,131072,139264,262144,524288,786432,1024000 scripts/run_safe_pytest.sh
+      --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_skip_positions.py && BRINGUP_CHUNK=5120 DS41_ENGRAM_TABLE=resident
+      BRINGUP_POS_TOKENS=agentic_cc DS41_DECODER_SKIP=decode scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_no_rebuild.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      determinism_max_abs_diff: == 0
+      contract_checks_failed: == 0
+      contract_checks_failed_decoder_skip: == 0
+      outside_history_max_abs_diff: == 0
+      program_builds_after_warmup_serving*: == 0
+      ids_uploads_per_chunk*: == 0
+      steady_tok_s_p*: '> 0'
+      steady_wall_ms_p1024000_tagentic_cc: <= 88.5
