@@ -79,6 +79,9 @@ flatbuffers::Offset<flatbuffer::CircularBufferConfig> to_flatbuffer(
             ? flatbuffer::CreateUint32Optional(builder, ctx.get_global_id(config.shadow_global_buffer))
             : 0;
 
+    TT_FATAL(
+        !config.buffer_unbound(),
+        "Cannot serialize a circular buffer whose backing buffer is not bound: bind it first");
     auto globally_allocated_address =
         config.globally_allocated_address()
             ? flatbuffer::CreateUint32Optional(builder, *config.globally_allocated_address())
