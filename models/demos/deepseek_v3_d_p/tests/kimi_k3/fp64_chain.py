@@ -571,6 +571,8 @@ def run_chain(
 def load_products(run_dir: Path, names: list[str], start: int = 0, end: int | None = None) -> dict[str, torch.Tensor]:
     """Per-row products (segment files) and keys (``latent`` / ``kpe`` / ``index_key``, state files) of rows
     ``[start, end)``; the run must hold them."""
+    if any(n in SAMPLED for n in names):
+        raise ValueError(f"{[n for n in names if n in SAMPLED]} are sampled-row products; read them with load_sampled")
     manifest = json.loads((Path(run_dir) / MANIFEST).read_text())
     done = manifest["segments"][-1]["end"] if manifest["segments"] else 0
     end = done if end is None else end
@@ -586,6 +588,14 @@ def load_products(run_dir: Path, names: list[str], start: int = 0, end: int | No
         for n in names:
             parts[n].append(data[n][max(start, lo) - lo : end - lo])
     return {n: torch.cat(v) for n, v in parts.items()}
+
+
+def load_sampled(run_dir: Path) -> dict[str, torch.Tensor]:
+    """The sampled-row products of every complete segment: ``sampled_rows`` (absolute rows, ascending) and
+    ``attn_output_3`` (FP64 ``[rows, hidden]``)."""
+    manifest = json.loads((Path(run_dir) / MANIFEST).read_text())
+    parts = [torch.load(segment_path(run_dir, i), weights_only=True) for i in range(len(manifest["segments"]))]
+    return {k: torch.cat([p[k] for p in parts]) for k in SAMPLED}
 
 
 def main() -> None:

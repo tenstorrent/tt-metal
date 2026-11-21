@@ -38,6 +38,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     check_bars,
     chunk_path,
     finish_run,
+    load_input,
     missed_keys,
     replay_live_and_sealed,
     replay_missing,
@@ -344,8 +345,8 @@ def test_moe_score_places_rows_and_misses_by_context_position(tmp_path: Path):
     assert [w["moe_nrmse_median"] for w in windows] == pytest.approx([0.0, 0.0, want_nrmse], abs=1e-6)
     assert want_nrmse == pytest.approx(0.1, abs=0.01)
     assert [w["misses"] for w in windows] == [0, 0, 1]
-    assert [w["recall_vs_trace_mean"] for w in windows] == pytest.approx([1.0, 1.0, 15 / 16])
-    assert [w["dropped_trace_weight_mean"] for w in windows] == pytest.approx([0.0, 0.0, 1 / 16])
+    assert [w["recall_vs_reference_mean"] for w in windows] == pytest.approx([1.0, 1.0, 15 / 16])
+    assert [w["dropped_reference_weight_mean"] for w in windows] == pytest.approx([0.0, 0.0, 1 / 16])
     assert result["count"] == count and result["overall"]["misses"] == 1
 
 
@@ -1172,3 +1173,138 @@ def test_chain_model_reads_each_checkpoint_tensor_into_its_slot(tmp_path: Path):
         "layers.1.experts",
         "layers.2.experts",
     }
+
+
+# --- teacher feeds from the FP64 chain (moe_teacher_feed.py / dsa_teacher_feed.py with --chain) ---------------------
+
+
+def _chain_checkpoint(model, path: Path) -> Path:
+    """The layer tensors the teacher-feed input and score steps read, from a tiny ChainModel, as a checkpoint."""
+    t = {}
+    for l in (1, 2, 3):
+        L, p = model.layers[l], f"model.layers.{l}."
+        t[p + "input_layernorm.weight"] = L["input_layernorm"]
+        t[p + "post_attention_layernorm.weight"] = L["post_attention_layernorm"]
+        t[p + "mlp_res_norm.weight"], t[p + "mlp_res_proj.weight"] = L["mlp_res"]
+        t[p + "self_attention_res_norm.weight"], t[p + "self_attention_res_proj.weight"] = L["attn_res"]
+        if l in (1, 2):
+            t[p + "block_sparse_moe.gate.weight"] = L["moe"].w["gate.weight"]
+            t[p + "block_sparse_moe.gate.e_score_correction_bias"] = L["moe"].w["gate.e_score_correction_bias"]
+        else:
+            t.update({f"{p}self_attn.{n}": v for n, v in L["dsa"].items()})
+    path.mkdir()
+    save_file({k: v.contiguous() for k, v in t.items()}, str(path / "shard.safetensors"))
+    (path / "model.safetensors.index.json").write_text(
+        json.dumps({"weight_map": dict.fromkeys(t, "shard.safetensors")})
+    )
+    return path
+
+
+def _fed_chain(tmp_path: Path, rows: int = 10):
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain
+
+    model, _ = _tiny_chain()
+    chain = tmp_path / "chain"
+    ids = torch.randint(0, 50, (rows,), generator=torch.Generator().manual_seed(4))
+    with torch.no_grad():
+        fp64_chain.run_chain(
+            run_dir=chain, model=model, token_ids=ids, segment=4, sampled=[2, 6, 9], identity={"checkpoint": "c"}
+        )
+    return model, chain, _chain_checkpoint(model, tmp_path / "ckpt")
+
+
+def test_moe_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path):
+    """The MoE input built from the chain is its gate input rounded once to bf16 and records the chain; a device run
+    that reproduces the chain (its MoE output in bf16, its routing) scores against the chain, not the trace: recall
+    1, NRMSE at bf16 level; with one planted swap of a row's last expert, recall 1 - 1/2 / 10 per that window and the
+    miss at FP64 rank 1. The GPU trace's routing (here the chain's with one row changed) is the third reference."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import fp64_chain, moe_teacher_feed
+
+    model, chain, ckpt = _fed_chain(tmp_path)
+    layer, src = 1, tmp_path / "moe_in"
+    m = moe_teacher_feed.build_moe_input_from_chain(
+        chain=chain, checkpoint=ckpt, layer=layer, count=10, out=src, segment=4
+    )
+    assert m["chain"] == str(chain) and m["checkpoint"] == "c" and all(s["router_recall"] == 1.0 for s in m["segments"])
+    p = fp64_chain.load_products(chain, ["moe_input_1", "moe_output_1", "routing_ids_1", "routing_weights_1"])
+    assert torch.equal(load_input(src, 0, 10), p["moe_input_1"].to(torch.bfloat16))
+    gpu = p["routing_ids_1"].clone()
+    gpu[5, 0] = next(e for e in range(6) if e not in gpu[5].tolist())
+    _write_trace(tmp_path / "trace", {"expert_ids_layer_1": gpu}, chunk_rows=4)
+    out = tmp_path / "dev"
+    run = {"layer": layer, "count": 10, "chunk": 4, "input": str(src)}
+    start_run(out, run)
+    dev_ids = p["routing_ids_1"].clone()
+    dev_ids[7, 1] = next(e for e in range(6) if e not in dev_ids[7].tolist())
+    for c, lo in enumerate(range(0, 10, 4)):
+        hi = min(lo + 4, 10)
+        torch.save(
+            {
+                "start": lo,
+                "end": hi,
+                "moe_out": p["moe_output_1"][lo:hi].to(torch.bfloat16),
+                "expert_ids": dev_ids[lo:hi].to(torch.int16),
+                "expert_weights": p["routing_weights_1"][lo:hi].to(torch.bfloat16),
+            },
+            chunk_path(out, c),
+        )
+    finish_run(out, run, 1.0)
+    w = model.layers[layer]["moe"].w
+    result = score_moe(
+        trace=Trace(tmp_path / "trace"),
+        out=out,
+        window=4,
+        gate=w["gate.weight"],
+        bias=w["gate.e_score_correction_bias"],
+    )
+    assert result["reference"] == str(chain)
+    o = result["overall"]
+    assert o["recall_vs_reference_mean"] == pytest.approx(1 - 0.5 / 10) and o["miss_rank_histogram"][1] == 1
+    assert o["recall_gpu_vs_reference_mean"] == pytest.approx(1 - 0.5 / 10)
+    assert o["moe_nrmse_median"] < 1e-2
+    assert result["windows"][1]["recall_vs_reference_mean"] == pytest.approx(1 - 0.5 / 4)
+
+
+def test_dsa_teacher_feed_from_the_chain_scores_against_it(tmp_path: Path, expect_error):
+    """The DSA input built from the chain is input_layernorm of its layer-3 read in FP64, rounded once to bf16, and
+    passes the key check against the chain's FP64 keys; a device run that reproduces the chain scores against it:
+    attention only on the chain's sampled rows (bf16 level), recall 1 and the bf16 keys' PCC ~1; the GPU trace's
+    top-k (one row missing its FP64 best key) is the third reference."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3 import dsa_teacher_feed, fp64_chain
+
+    model, chain, ckpt = _fed_chain(tmp_path)
+    src = tmp_path / "dsa_in"
+    m = dsa_teacher_feed.build_dsa_input_from_chain(chain=chain, checkpoint=ckpt, count=10, out=src, segment=4)
+    assert m["layer"] == 3 and all(s["kv_latent_pcc"] > 0.9999 and s["index_key_pcc"] > 0.9999 for s in m["segments"])
+    p = fp64_chain.load_products(chain, ["dsa_input_3", "latent", "kpe", "index_key", "topk_indices_3"])
+    read = p["dsa_input_3"].double()
+    norm = model.layers[3]["input_layernorm"]
+    want = (read * torch.rsqrt(read.pow(2).mean(-1, keepdim=True) + model.eps) * norm).to(torch.bfloat16)
+    assert torch.equal(load_input(src, 0, 10), want)
+    sampled = fp64_chain.load_sampled(chain)
+    assert sampled["sampled_rows"].tolist() == [2, 6, 9]
+    gpu = p["topk_indices_3"].clone()
+    gpu[8, 0] = 9
+    _write_trace(tmp_path / "trace", {"dsa_topk_indices_layer_3": gpu}, chunk_rows=4)
+    attn = torch.zeros(10, sampled["attn_output_3"].shape[1], dtype=torch.bfloat16)
+    attn[sampled["sampled_rows"]] = sampled["attn_output_3"].to(torch.bfloat16)
+    out = tmp_path / "dev"
+    run = {"layer": 3, "count": 10, "chunk": 4, "input": str(src)}
+    start_run(out, run)
+    for c, lo in enumerate(range(0, 10, 4)):
+        hi = min(lo + 4, 10)
+        torch.save(
+            {"start": lo, "end": hi, "attn_out": attn[lo:hi], "topk": p["topk_indices_3"][lo:hi]}, chunk_path(out, c)
+        )
+    kvpe = torch.cat([p["latent"], p["kpe"]], -1).to(torch.bfloat16)
+    torch.save({"kvpe": kvpe, "index": p["index_key"].to(torch.bfloat16)}, out / "caches.pt")
+    finish_run(out, run, 1.0)
+    result = dsa_teacher_feed.score(trace=Trace(tmp_path / "trace"), out=out, window=4)
+    o = result["overall"]
+    assert result["reference"] == str(chain) and o["attn_rows"] == 3 and o["attn_nrmse_median"] < 1e-2
+    assert o["recall_mean"] == 1.0 and o["misses"] == 0
+    assert o["recall_gpu_vs_reference_mean"] == pytest.approx((3 + 5 / 6) / 4)  # rows 6-9 select fully (top-k 6)
+    assert o["kv_latent_pcc"] > 0.9999 and o["index_key_pcc"] > 0.9999
+    assert [w["attn_rows"] for w in result["windows"]] == [1, 1, 1]
+    with expect_error(ValueError, "sampled-row products"):
+        fp64_chain.load_products(chain, ["attn_output_3"])

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3.1 DSA layer 92 teacher-fed from a vLLM trace: host input, host scoring, error vs context position.
+"""Kimi-K3.1 DSA layer teacher-fed from a vLLM trace (layer 92) or the FP64 chain (layer 3): host input, host scoring,
+error vs context position.
 
 Three steps, and only the middle one opens a device (``test_dsa_teacher_feed.py``), so CPU work never holds it:
 
@@ -34,14 +35,16 @@ from pathlib import Path
 import torch
 
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
-from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor, pcc
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     EPS,
     Trace,
     build_input,
+    chain_identity,
     check_bars,
+    checkpoint_tensors,
     chunk_path,
     complete_run,
     missed_keys,
@@ -81,9 +84,6 @@ NRMSE_GROWTH = 1.15
 
 def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tensor]:
     """The host weights the input and its check need: AttnRes query, input_layernorm, KV-A and indexer key."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import checkpoint_prefix, load_checkpoint_tensors
-
-    root = f"{checkpoint_prefix(checkpoint)}layers.{layer}."
     names = [
         "self_attention_res_norm.weight",
         "self_attention_res_proj.weight",
@@ -94,23 +94,33 @@ def layer_weights(checkpoint: Path, layer: int = LAYER) -> dict[str, torch.Tenso
         "self_attn.indexer.k_norm.weight",
         "self_attn.indexer.k_norm.bias",
     ]
-    tensors = load_checkpoint_tensors(checkpoint, [root + n for n in names])
-    return {n: tensors[root + n] for n in names}
+    return checkpoint_tensors(checkpoint, layer, names)
 
 
-def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: int = LAYER) -> dict[str, float]:
-    """PCC of the layer's indexer key and KV latent recomputed (fp32) from ``normed`` against the trace's."""
-    rows = torch.linspace(0, normed.shape[0] - 1, min(CHECK_ROWS, normed.shape[0])).long()
-    x = normed[rows].float()
+def check_rows(n: int) -> torch.Tensor:
+    return torch.linspace(0, n - 1, min(CHECK_ROWS, n)).long()
+
+
+def recomputed_keys(x: torch.Tensor, w: dict) -> tuple[torch.Tensor, torch.Tensor]:
+    """The layer's KV latent and indexer key recomputed in fp32 from input rows ``x`` (the input check's)."""
+    x = x.float()
     kv = x @ w["self_attn.kv_a_proj_with_mqa.weight"].float().T
-    latent = rms_norm(kv[:, : KimiK3Config.KV_LORA_RANK], w["self_attn.kv_a_layernorm.weight"]).float()
+    lora = w["self_attn.kv_a_layernorm.weight"].numel()
+    latent = rms_norm(kv[:, :lora], w["self_attn.kv_a_layernorm.weight"]).float()
     key = torch.nn.functional.layer_norm(
         x @ w["self_attn.indexer.wk.weight"].float().T,
-        (KimiK31Config.INDEX_HEAD_DIM,),
+        (w["self_attn.indexer.k_norm.weight"].numel(),),
         w["self_attn.indexer.k_norm.weight"].float(),
         w["self_attn.indexer.k_norm.bias"].float(),
         EPS,
     )
+    return latent, key
+
+
+def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: int = LAYER) -> dict[str, float]:
+    """PCC of the layer's indexer key and KV latent recomputed (fp32) from ``normed`` against the trace's."""
+    rows = check_rows(normed.shape[0])
+    latent, key = recomputed_keys(normed[rows], w)
     want_kv = torch.cat(
         [trace.rows(f"kv_post_transform_layer_{layer}", start + r, start + r + 1) for r in rows.tolist()]
     )
@@ -119,33 +129,41 @@ def check_input(normed: torch.Tensor, trace: Trace, start: int, w: dict, layer: 
 
 
 def build_dsa_input(
-    *, trace: Trace, checkpoint: Path, count: int, out: Path, segment: int, input_stream: str | None = None
+    *,
+    trace: Trace,
+    checkpoint: Path,
+    count: int,
+    out: Path,
+    segment: int,
+    input_stream: str | None = None,
+    layer: int = LAYER,
 ) -> dict:
-    """Write (or resume) the teacher-fed input ``normed = input_layernorm(read)`` for rows ``[0, count)``."""
+    """Write (or resume) the teacher-fed input ``normed = input_layernorm(read)`` of DSA layer ``layer`` (92, the one
+    a K3.1 trace records the outputs of, by default) for rows ``[0, count)``."""
     if input_stream is None:
-        missing = replay_missing(trace, LAYER)
+        missing = replay_missing(trace, layer)
         if missing:
             raise ValueError(
-                f"{trace.path.name} cannot rebuild layer {LAYER}'s attention input: no attn_output/decoder_output "
-                f"for {len(missing)} of {LAYER} layers ({missing[:8]}...); pass --input-stream with a captured read"
+                f"{trace.path.name} cannot rebuild layer {layer}'s attention input: no attn_output/decoder_output "
+                f"for {len(missing)} of {layer} layers ({missing[:8]}...); pass --input-stream with a captured read"
             )
     elif not trace.has(input_stream):
         raise ValueError(f"{trace.path.name} has no stream {input_stream}")
-    w = layer_weights(checkpoint)
+    w = layer_weights(checkpoint, layer)
 
     def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
         if input_stream is None:
-            live, sealed = replay_live_and_sealed(trace, start, end, LAYER)
+            live, sealed = replay_live_and_sealed(trace, start, end, layer)
             read = hf_attn_res(
                 live, sealed, w["self_attention_res_norm.weight"], w["self_attention_res_proj.weight"], EPS
             )
         else:
             read = trace.rows(input_stream, start, end)
         normed = rms_norm(read, w["input_layernorm.weight"])
-        return normed, check_input(normed, trace, start, w)
+        return normed, check_input(normed, trace, start, w, layer)
 
     expected = {
-        "layer": LAYER,
+        "layer": layer,
         "trace": str(trace.path),
         "trace_commit": trace.metadata.get("trace_commit"),
         "input": f"stream {input_stream}" if input_stream else "attn_res replay (bf16, tracer order)",
@@ -156,69 +174,137 @@ def build_dsa_input(
     return build_input(out=out, expected=expected, count=count, segment=segment, make=make, check_bars=bars)
 
 
+def build_dsa_input_from_chain(*, chain: Path, checkpoint: Path, count: int, out: Path, segment: int) -> dict:
+    """Write (or resume) DSA layer 3's teacher-fed input from an FP64 chain run: ``input_layernorm`` of the chain's
+    ``dsa_input_3`` (the AttnRes read, FP64 stored fp32) in FP64, rounded once to bf16, the device's input format.
+    Every segment is checked by recomputing (fp32) the KV latent and index key of sampled rows from that bf16 input
+    against the chain's FP64 keys, and fails closed below ``INPUT_CHECK_PCC``."""
+    from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import DSA_LAYER, load_products
+
+    w = layer_weights(checkpoint, DSA_LAYER)
+    norm = w["input_layernorm.weight"].double()
+
+    def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
+        p = load_products(chain, ["dsa_input_3", "latent", "index_key"], start, end)
+        read = p["dsa_input_3"].double()
+        normed = (read * torch.rsqrt(read.pow(2).mean(-1, keepdim=True) + EPS) * norm).to(torch.bfloat16)
+        rows = check_rows(normed.shape[0])
+        latent, key = recomputed_keys(normed[rows], w)
+        return normed, {
+            "kv_latent_pcc": pcc(p["latent"][rows], latent),
+            "index_key_pcc": pcc(p["index_key"][rows], key),
+        }
+
+    expected = {
+        "layer": DSA_LAYER,
+        **chain_identity(chain),
+        "input": "fp64_chain dsa_input_3 (AttnRes read, FP64, stored fp32)",
+        "norm": "input_layernorm in FP64, one bf16 rounding",
+    }
+    bars = {"kv_latent_pcc": INPUT_CHECK_PCC, "index_key_pcc": INPUT_CHECK_PCC}
+    return build_input(out=out, expected=expected, count=count, segment=segment, make=make, check_bars=bars)
+
+
 # --- scoring -------------------------------------------------------------------------------------------------
 
 
 def score(*, trace: Trace, out: Path, window: int) -> dict:
-    """Score a complete device run in ``out`` against the trace per context position; writes metrics.json,
+    """Score a complete device run in ``out`` per context position against its reference; writes metrics.json,
     windows.tsv and rows.pt.
 
-    Streams chunk by chunk (the 1M attention output is 15 GB per side). Per row: attention output NRMSE (floored at
-    1% of the median trace row norm, as the KDA golden), top-k recall, and each missed key's rank and spread share.
+    The reference is the run's input's source. From a trace: the trace's attention output (every row), top-k and its
+    scores, kv_post_transform and indexer_k. From an FP64 chain (``fp64_chain.py``): the chain's FP64 attention output
+    on its sampled rows only, its top-2048 and FP64 scores, and its FP64 keys; the GPU trace's top-k recall of the
+    chain's selection is reported beside the device's (``recall_gpu_vs_reference``). Streams chunk by chunk (the 1M
+    attention output is 15 GB per side). Per row: attention output NRMSE (floored at 1% of the median reference row
+    norm, as the KDA golden), top-k recall, and each missed key's rank and spread share in the reference's scores.
     Per ``window`` rows: summaries of those, and the kvpe latent / rope and index key PCC.
     """
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
+    chain = json.loads((Path(manifest["input"]) / MANIFEST).read_text()).get("chain")
     num_chunks = -(-count // chunk)
-    attn = TokenErrorAccumulator()
-    recall, misses = [], []
+    attn, attn_rows = TokenErrorAccumulator(), []
+    recall, gpu_recall, misses = [], [], []
+    if chain is not None:
+        from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products, load_sampled
+
+        sampled = load_sampled(Path(chain))
+        keep = sampled["sampled_rows"] < count
+        sampled = {k: v[keep] for k, v in sampled.items()}
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
-        attn.update(trace.rows(f"attn_output_layer_{layer}", lo, hi), payload["attn_out"])
-        want = trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long()
         got = payload["topk"].long()
+        if chain is None:
+            attn.update(trace.rows(f"attn_output_layer_{layer}", lo, hi), payload["attn_out"])
+            attn_rows.append(torch.arange(lo, hi))
+            want = trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long()
+            want_scores = trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float()
+        else:
+            inside = (sampled["sampled_rows"] >= lo) & (sampled["sampled_rows"] < hi)
+            if inside.any():
+                rows = sampled["sampled_rows"][inside]
+                attn.update(sampled["attn_output_3"][inside].float(), payload["attn_out"][rows - lo])
+                attn_rows.append(rows)
+            p = load_products(Path(chain), ["topk_indices_3", "topk_scores_3"], lo, hi)
+            want, want_scores = p["topk_indices_3"].long(), p["topk_scores_3"].float()
+            gpu_recall.append(topk_recall(trace.rows(f"dsa_topk_indices_layer_{layer}", lo, hi).long(), want))
         recall.append(topk_recall(got, want))
-        chunk_misses = missed_keys(got, want, trace.rows(f"dsa_topk_scores_layer_{layer}", lo, hi).float())
+        chunk_misses = missed_keys(got, want, want_scores)
         chunk_misses["row"] = chunk_misses["row"] + lo
         misses.append(chunk_misses)
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     floor = golden_floor(attn.expected_norms())
-    row_nrmse = attn.token_nrmse(floor)
+    row_nrmse, attn_rows = attn.token_nrmse(floor), torch.cat(attn_rows)
     recall = torch.cat(recall)
+    gpu_recall = torch.cat(gpu_recall) if gpu_recall else None
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     caches = torch.load(out / "caches.pt", weights_only=True)
-    kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count)
-    key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count)
-    lora = KimiK3Config.KV_LORA_RANK
-    topk = KimiK31Config.INDEX_TOPK
+    if chain is None:
+        lora = KimiK3Config.KV_LORA_RANK
+        kv_ref = trace.rows(f"kv_post_transform_layer_{layer}", 0, count)
+        key_ref = trace.rows(f"indexer_k_layer_{layer}", 0, count)
+    else:
+        k = load_products(Path(chain), ["latent", "kpe", "index_key"], 0, count)
+        lora, kv_ref, key_ref = k["latent"].shape[1], torch.cat([k["latent"], k["kpe"]], -1), k["index_key"]
+    topk = want.shape[1]  # the reference's selection size (2048)
     nan = float("nan")
+
+    def q(t: torch.Tensor, x: float) -> float:
+        return float(t.float().quantile(x)) if t.numel() else nan
+
     windows = []
     for lo in range(0, count, window):
         hi = min(lo + window, count)
         inside = (misses["row"] >= lo) & (misses["row"] < hi)
         rank, selected, share = (misses[k][inside] for k in ("rank", "selected", "spread_share"))
         gated = recall[max(lo, topk) : hi]  # rows < top-k select every causal key on both sides
+        nr = row_nrmse[(attn_rows >= lo) & (attn_rows < hi)]
         windows.append(
             {
                 "start": lo,
                 "end": hi,
-                "attn_nrmse_median": float(row_nrmse[lo:hi].median()),
-                "attn_nrmse_p99": float(row_nrmse[lo:hi].quantile(0.99)),
-                "attn_nrmse_max": float(row_nrmse[lo:hi].max()),
+                "attn_rows": int(nr.numel()),
+                "attn_nrmse_median": float(nr.median()) if nr.numel() else nan,
+                "attn_nrmse_p99": q(nr, 0.99),
+                "attn_nrmse_max": float(nr.max()) if nr.numel() else nan,
                 "kv_latent_pcc": pcc(kv_ref[lo:hi, :lora], caches["kvpe"][lo:hi, :lora]),
                 "kv_rope_pcc": pcc(kv_ref[lo:hi, lora:], caches["kvpe"][lo:hi, lora:]),
                 "index_key_pcc": pcc(key_ref[lo:hi], caches["index"][lo:hi]),
                 "recall_mean": float(gated.mean()) if gated.numel() else nan,
-                "recall_p05": float(gated.quantile(0.05)) if gated.numel() else nan,
+                "recall_p05": q(gated, 0.05),
+                "recall_gpu_vs_reference_mean": (
+                    float(gpu_recall[max(lo, topk) : hi].mean()) if gpu_recall is not None and gated.numel() else nan
+                ),
                 "recall_min_below_topk": float(recall[lo : min(hi, topk)].min()) if lo < topk else nan,
                 "misses": int(rank.numel()),
-                "miss_rank_p10": float(rank.float().quantile(0.1)) if rank.numel() else nan,
-                "miss_rank_median": float(rank.float().median()) if rank.numel() else nan,
+                "miss_rank_p10": q(rank, 0.1),
+                "miss_rank_median": q(rank, 0.5),
                 "miss_rank_min": int(rank.min()) if rank.numel() else -1,
                 "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else nan,
-                "miss_spread_share_median": float(share.median()) if share.numel() else nan,
-                "miss_spread_share_p90": float(share.quantile(0.9)) if share.numel() else nan,
+                "miss_spread_share_median": q(share, 0.5),
+                "miss_spread_share_p90": q(share, 0.9),
             }
         )
     result = {
@@ -226,14 +312,19 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
         "count": count,
         "window": window,
         "trace": str(trace.path),
+        "reference": chain or "trace",
         "run": manifest,
         "attn_nrmse_floor": floor,
         "overall": {
+            "attn_rows": int(row_nrmse.numel()),
             "attn_nrmse_median": float(row_nrmse.median()),
             "kv_latent_pcc": pcc(kv_ref[:, :lora], caches["kvpe"][:, :lora]),
             "kv_rope_pcc": pcc(kv_ref[:, lora:], caches["kvpe"][:, lora:]),
             "index_key_pcc": pcc(key_ref, caches["index"]),
             "recall_mean": float(recall[topk:].mean()) if count > topk else nan,
+            "recall_gpu_vs_reference_mean": (
+                float(gpu_recall[topk:].mean()) if gpu_recall is not None and count > topk else nan
+            ),
             "misses": int(misses["rank"].numel()),
             "miss_top_half_fraction": (
                 float((2 * misses["rank"] < misses["selected"]).float().mean()) if misses["rank"].numel() else nan
@@ -247,15 +338,19 @@ def score(*, trace: Trace, out: Path, window: int) -> dict:
     (out / "windows.tsv").write_text(
         "\t".join(columns) + "\n" + "".join("\t".join(f"{w[c]:.6g}" for c in columns) + "\n" for w in windows)
     )
-    torch.save({"attn_nrmse": row_nrmse.float(), "recall": recall.float()}, out / "rows.pt")
+    torch.save({"attn_rows": attn_rows, "attn_nrmse": row_nrmse.float(), "recall": recall.float()}, out / "rows.pt")
     return result
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
-    build = sub.add_parser("input", help="rebuild the teacher-fed input from the trace")
-    build.add_argument("--trace", type=Path, required=True)
+    build = sub.add_parser("input", help="rebuild the teacher-fed input from the trace, or take it from a chain")
+    build.add_argument("--trace", type=Path, help="rebuild from this trace")
+    build.add_argument(
+        "--chain", type=Path, help="take layer 3's input from this fp64_chain run (and score against it)"
+    )
+    build.add_argument("--layer", type=int, default=LAYER, help="DSA layer (0-based) to rebuild from the trace")
     build.add_argument("--checkpoint", type=Path, default=Path(os.environ.get("KIMI_K31_HF_MODEL", "")))
     build.add_argument("--count", type=int, help="rows to build (default: the trace's prompt)")
     build.add_argument("--out", type=Path, required=True)
@@ -266,6 +361,12 @@ def main() -> None:
     rate.add_argument("--out", type=Path, required=True)
     rate.add_argument("--window", type=int, default=4096)
     args = parser.parse_args()
+    if args.command == "input" and args.chain:
+        count = args.count or json.loads((args.chain / MANIFEST).read_text())["segments"][-1]["end"]
+        build_dsa_input_from_chain(
+            chain=args.chain, checkpoint=args.checkpoint, count=count, out=args.out, segment=args.segment
+        )
+        return
     trace = Trace(args.trace)
     if args.command == "input":
         build_dsa_input(
@@ -275,6 +376,7 @@ def main() -> None:
             out=args.out,
             segment=args.segment,
             input_stream=args.input_stream,
+            layer=args.layer,
         )
     else:
         result = score(trace=trace, out=args.out, window=args.window)

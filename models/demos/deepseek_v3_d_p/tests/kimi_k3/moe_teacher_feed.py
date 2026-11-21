@@ -40,12 +40,16 @@ import torch
 from models.demos.deepseek_v3_d_p.reference.kimi_k3.attn_res.hf_walk import hf_attn_res
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
 from models.demos.deepseek_v3_d_p.tests.kda.kda_test_utils import TokenErrorAccumulator, golden_floor
+from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.fp64_chain import load_products
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import (
     EPS,
     FFN,
     Trace,
     build_input,
+    chain_identity,
     check_bars,
+    checkpoint_tensors,
     chunk_path,
     complete_run,
     load_input,
@@ -79,9 +83,9 @@ INPUT_CHECK_RECALL = 0.98
 #   15); trace routing weight the device drops, mean <= 0.01 (measured 0.002-0.006).
 BARS = {
     "moe_nrmse_median": ("max", 0.20),
-    "recall_vs_trace_mean": ("min", 0.98),
+    "recall_vs_reference_mean": ("min", 0.98),
     "miss_top_half_fraction": ("max", 0.01),
-    "dropped_trace_weight_mean": ("max", 0.01),
+    "dropped_reference_weight_mean": ("max", 0.01),
 }
 NRMSE_GROWTH = 1.15
 
@@ -89,9 +93,6 @@ NRMSE_GROWTH = 1.15
 def layer_weights(checkpoint: Path, layer: int) -> dict[str, torch.Tensor]:
     """The host weights the input and the router need: the pre-FFN AttnRes query, post_attention_layernorm, the gate
     and its selection bias."""
-    from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import checkpoint_prefix, load_checkpoint_tensors
-
-    root = f"{checkpoint_prefix(checkpoint)}layers.{layer}."
     names = [
         "mlp_res_norm.weight",
         "mlp_res_proj.weight",
@@ -99,8 +100,7 @@ def layer_weights(checkpoint: Path, layer: int) -> dict[str, torch.Tensor]:
         "block_sparse_moe.gate.weight",
         "block_sparse_moe.gate.e_score_correction_bias",
     ]
-    tensors = load_checkpoint_tensors(checkpoint, [root + n for n in names])
-    return {n: tensors[root + n] for n in names}
+    return checkpoint_tensors(checkpoint, layer, names)
 
 
 def route(
@@ -182,6 +182,38 @@ def build_moe_input(
     )
 
 
+def build_moe_input_from_chain(*, chain: Path, checkpoint: Path, layer: int, count: int, out: Path, segment: int):
+    """Write (or resume) layer ``layer``'s teacher-fed MoE input from an FP64 chain run: the chain's gate input
+    ``moe_input_L`` (after ``post_attention_layernorm``) rounded once to bf16, the device's input format. Every segment
+    is checked by routing sampled rows of that bf16 input with the layer's gate in fp32 against the chain's FP64
+    routing, and fails closed below ``INPUT_CHECK_RECALL``."""
+    w = layer_weights(checkpoint, layer)
+    gate, bias = w["block_sparse_moe.gate.weight"], w["block_sparse_moe.gate.e_score_correction_bias"]
+
+    def make(start: int, end: int) -> tuple[torch.Tensor, dict[str, float]]:
+        p = load_products(chain, [f"moe_input_{layer}", f"routing_ids_{layer}"], start, end)
+        normed = p[f"moe_input_{layer}"].to(torch.bfloat16)
+        rows = torch.linspace(0, normed.shape[0] - 1, min(CHECK_ROWS, normed.shape[0])).long()
+        want = p[f"routing_ids_{layer}"][rows].long()
+        recall = topk_recall(route(normed[rows], gate, bias, top_k=want.shape[1])[0], want)
+        return normed, {"router_recall": float(recall.mean()), "router_set_equal": float((recall == 1).float().mean())}
+
+    expected = {
+        "layer": layer,
+        **chain_identity(chain),
+        "input": f"fp64_chain moe_input_{layer} (post post_attention_layernorm, FP64, stored fp32) rounded to bf16",
+        "norm": "in the chain (FP64)",
+    }
+    return build_input(
+        out=out,
+        expected=expected,
+        count=count,
+        segment=segment,
+        make=make,
+        check_bars={"router_recall": INPUT_CHECK_RECALL},
+    )
+
+
 def owner_positions(
     sp_row: int, tp_col: int, *, rows_per_sp_row: int, pad_rows: int, row_blocks: int, tp: int
 ) -> tuple[torch.Tensor, torch.Tensor]:
@@ -221,38 +253,61 @@ def _q(t: torch.Tensor, q: float) -> float:
     return float(t.float().quantile(q)) if t.numel() else float("nan")
 
 
+def _mean(t) -> float:
+    t = torch.cat(t) if isinstance(t, list) else t
+    return float(t.float().mean()) if t.numel() else float("nan")
+
+
 def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: torch.Tensor) -> dict:
-    """Score a complete device run in ``out`` against the trace per context position; writes metrics.json,
-    windows.tsv and rows.pt. Routes every row of the run's input with the fp32 router too (``gate`` / ``bias``: the
-    layer's gate weight and selection bias), for the trace's own router noise and the device's distance to fp32,
-    beside the device's distance to the trace."""
+    """Score a complete device run in ``out`` per context position against its reference; writes metrics.json,
+    windows.tsv and rows.pt. The reference is the run's input's source: the trace (MoE output
+    ``decoder_output_layer_L``, routing ``expert_ids`` / ``expert_weights``, missed experts ranked by the fp32 router's
+    choice score), or the FP64 chain the input came from (``moe_output_L``, ``routing_ids_L`` / ``routing_weights_L``,
+    best first, so a miss's rank is its FP64 rank), with the GPU trace's routing as a third reference
+    (``recall_gpu_vs_reference``). Routes every row of the run's input with the fp32 router too (``gate`` / ``bias``:
+    the layer's gate weight and selection bias), for the reference's distance to fp32 and the device's."""
     manifest = complete_run(out)
     count, chunk, layer = manifest["count"], manifest["chunk"], manifest["layer"]
     source = Path(manifest["input"])
+    chain = json.loads((source / MANIFEST).read_text()).get("chain")
     gate = gate.float()
     num_chunks = -(-count // chunk)
     moe = TokenErrorAccumulator()
-    per_row = {k: [] for k in ("recall", "dropped", "weight_err", "recall_trace_vs_fp32", "recall_device_vs_fp32")}
+    keys = ("recall", "dropped", "weight_err", "recall_reference_vs_fp32", "recall_device_vs_fp32")
+    per_row = {k: [] for k in keys + ("recall_gpu_vs_reference",)}
     misses = []
     for c in range(num_chunks):
         payload = torch.load(chunk_path(out, c), weights_only=True)
         lo, hi = payload["start"], payload["end"]
-        moe.update(trace.rows(f"decoder_output_layer_{layer}", lo, hi), payload["moe_out"])
-        want = trace.rows(f"expert_ids_layer_{layer}", lo, hi).long()
-        want_w = trace.rows(f"expert_weights_layer_{layer}", lo, hi)
         got, got_w = payload["expert_ids"].long(), payload["expert_weights"]
-        host_ids, _, choice = route(load_input(source, lo, hi), gate, bias)
-        r = routing_window(got, got_w, want, want_w, choice.gather(1, want))
+        if chain is None:
+            expected = trace.rows(f"decoder_output_layer_{layer}", lo, hi)
+            want = trace.rows(f"expert_ids_layer_{layer}", lo, hi).long()
+            want_w = trace.rows(f"expert_weights_layer_{layer}", lo, hi)
+        else:
+            names = [f"moe_output_{layer}", f"routing_ids_{layer}", f"routing_weights_{layer}"]
+            expected, want, want_w = load_products(Path(chain), names, lo, hi).values()
+            want = want.long()
+        host_ids, _, choice = route(load_input(source, lo, hi), gate, bias, top_k=want.shape[1])
+        if chain is None:
+            want_score = choice.gather(1, want)
+        else:
+            want_score = -torch.arange(want.shape[1], dtype=torch.float32).expand(want.shape)  # FP64 order
+            per_row["recall_gpu_vs_reference"].append(
+                topk_recall(trace.rows(f"expert_ids_layer_{layer}", lo, hi).long(), want)
+            )
+        moe.update(expected, payload["moe_out"])
+        r = routing_window(got, got_w, want, want_w, want_score)
         for k in ("recall", "dropped", "weight_err"):
             per_row[k].append(r[k])
-        per_row["recall_trace_vs_fp32"].append(topk_recall(host_ids, want))
+        per_row["recall_reference_vs_fp32"].append(topk_recall(host_ids, want))
         per_row["recall_device_vs_fp32"].append(topk_recall(got, host_ids))
         r["misses"]["row"] = r["misses"]["row"] + lo
         misses.append(r["misses"])
         print(f"{time.strftime('%H:%M:%S')} scored chunk {c + 1}/{num_chunks} rows [{lo}, {hi})", flush=True)
     floor = golden_floor(moe.expected_norms())
     row_nrmse = moe.token_nrmse(floor)
-    per_row = {k: torch.cat(v) for k, v in per_row.items()}
+    per_row = {k: torch.cat(v) if v else torch.zeros(0) for k, v in per_row.items()}
     misses = {k: torch.cat([m[k] for m in misses]) for k in misses[0]}
     windows = []
     for lo in range(0, count, window):
@@ -267,16 +322,17 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
                 "moe_nrmse_median": float(row_nrmse[lo:hi].median()),
                 "moe_nrmse_p99": _q(row_nrmse[lo:hi], 0.99),
                 "moe_nrmse_max": float(row_nrmse[lo:hi].max()),
-                "recall_vs_trace_mean": float(recall.mean()),
-                "set_equal_vs_trace": float((recall == 1).float().mean()),
-                "recall_trace_vs_fp32_mean": float(per_row["recall_trace_vs_fp32"][lo:hi].mean()),
+                "recall_vs_reference_mean": float(recall.mean()),
+                "set_equal_vs_reference": float((recall == 1).float().mean()),
+                "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"][lo:hi].mean()),
                 "recall_device_vs_fp32_mean": float(per_row["recall_device_vs_fp32"][lo:hi].mean()),
                 "misses": int(rank.numel()),
                 "miss_rank_median": _q(rank, 0.5),
                 "miss_rank_min": int(rank.min()) if rank.numel() else -1,
                 "miss_top_half_fraction": float((2 * rank < selected).float().mean()) if rank.numel() else float("nan"),
-                "dropped_trace_weight_mean": float(per_row["dropped"][lo:hi].mean()),
-                "dropped_trace_weight_p99": _q(per_row["dropped"][lo:hi], 0.99),
+                "dropped_reference_weight_mean": float(per_row["dropped"][lo:hi].mean()),
+                "dropped_reference_weight_p99": _q(per_row["dropped"][lo:hi], 0.99),
+                "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"][lo:hi]),
                 "weight_err_median": float(per_row["weight_err"][lo:hi].median()),
                 "weight_err_p99": _q(per_row["weight_err"][lo:hi], 0.99),
             }
@@ -287,18 +343,20 @@ def score(*, trace: Trace, out: Path, window: int, gate: torch.Tensor, bias: tor
         "count": count,
         "window": window,
         "trace": str(trace.path),
+        "reference": chain or "trace",
         "run": manifest,
         "moe_nrmse_floor": floor,
         "overall": {
             "moe_nrmse_median": float(row_nrmse.median()),
-            "recall_vs_trace_mean": float(per_row["recall"].mean()),
-            "set_equal_vs_trace": float((per_row["recall"] == 1).float().mean()),
-            "recall_trace_vs_fp32_mean": float(per_row["recall_trace_vs_fp32"].mean()),
+            "recall_vs_reference_mean": float(per_row["recall"].mean()),
+            "set_equal_vs_reference": float((per_row["recall"] == 1).float().mean()),
+            "recall_gpu_vs_reference_mean": _mean(per_row["recall_gpu_vs_reference"]),
+            "recall_reference_vs_fp32_mean": float(per_row["recall_reference_vs_fp32"].mean()),
             "recall_device_vs_fp32_mean": float(per_row["recall_device_vs_fp32"].mean()),
             "misses": int(rank.numel()),
             "miss_top_half_fraction": float((2 * rank < misses["selected"]).float().mean()) if rank.numel() else 0.0,
             "miss_rank_histogram": torch.bincount(rank, minlength=TOP_K).tolist(),
-            "dropped_trace_weight_mean": float(per_row["dropped"].mean()),
+            "dropped_reference_weight_mean": float(per_row["dropped"].mean()),
             "weight_err_median": float(per_row["weight_err"].median()),
         },
         "windows": windows,
@@ -442,8 +500,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = parser.add_subparsers(dest="command", required=True)
     checkpoint = Path(os.environ.get("KIMI_K31_HF_MODEL", ""))
-    build = sub.add_parser("input", help="rebuild the teacher-fed MoE input from the trace")
-    build.add_argument("--trace", type=Path, required=True)
+    build = sub.add_parser("input", help="rebuild the teacher-fed MoE input from the trace, or take it from a chain")
+    build.add_argument("--trace", type=Path, help="rebuild from this trace")
+    build.add_argument("--chain", type=Path, help="take the input from this fp64_chain run (and score against it)")
     build.add_argument("--layer", type=int, required=True)
     build.add_argument("--checkpoint", type=Path, default=checkpoint)
     build.add_argument("--count", type=int, help="rows to build (default: the trace's prompt)")
@@ -470,6 +529,17 @@ def main() -> None:
         result = same_rows(*args.runs)
         print(json.dumps(result))
         raise SystemExit(1 if result["differ"] else 0)
+    if args.command == "input" and args.chain:
+        count = args.count or json.loads((args.chain / MANIFEST).read_text())["segments"][-1]["end"]
+        build_moe_input_from_chain(
+            chain=args.chain,
+            checkpoint=args.checkpoint,
+            layer=args.layer,
+            count=count,
+            out=args.out,
+            segment=args.segment,
+        )
+        return
     trace = Trace(args.trace)
     if args.command == "input":
         build_moe_input(

@@ -146,6 +146,21 @@ def rms_norm(x: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
     return weight.to(torch.bfloat16) * normed
 
 
+def chain_identity(chain: Path) -> dict:
+    """What a teacher-fed input built from an FP64 chain run (``fp64_chain.py``) records of its source, under the keys
+    a trace-built input uses (``trace``, ``trace_commit``, ``checkpoint``) plus the chain's own identity; ``chain`` in an
+    input's manifest also tells the scorers to score against the chain."""
+    m = json.loads((Path(chain) / MANIFEST).read_text())
+    return {
+        "chain": str(chain),
+        "chain_producer_version": m["producer_version"],
+        "chain_token_ids_sha256": m["token_ids_sha256"],
+        "trace": m["identity"].get("token_source"),
+        "trace_commit": m["identity"].get("trace_commit"),
+        "checkpoint": m["identity"].get("checkpoint"),
+    }
+
+
 def build_input(
     *,
     out: Path,
@@ -280,8 +295,11 @@ def check_bars(windows: list[dict], bars: dict, growth: tuple[str, float]) -> li
             if v == v and (v < bar if kind == "min" else v > bar):
                 failures.append(f"{name} {v:.6f} {'<' if kind == 'min' else '>'} {bar} at [{w['start']}, {w['end']})")
     metric, factor = growth
-    first = windows[0][metric]
-    worst = max(windows, key=lambda w: w[metric])
+    defined = [w for w in windows if w[metric] == w[metric]]  # (a window without rows for the metric reads NaN)
+    if not defined:
+        return failures
+    first = defined[0][metric]
+    worst = max(defined, key=lambda w: w[metric])
     if worst[metric] > factor * first:
         ratio = worst[metric] / first if first > 0 else float("inf")  # (from an exact first window, any error grows)
         failures.append(f"{metric} grows {ratio:.3f}x (> {factor}) by [{worst['start']}, {worst['end']})")

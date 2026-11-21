@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Kimi-K3.1 DSA layer 92 teacher-fed from a vLLM trace on one 4x4 stage (SP on axis 1), chunk by chunk.
+"""A Kimi-K3.1 DSA layer teacher-fed on one 4x4 stage (SP on axis 1), chunk by chunk: layer 92 from a vLLM trace, or
+layer 3 from the FP64 chain (``dsa_teacher_feed.py input --chain``); the layer is the input's.
 
 The device half of ``dsa_teacher_feed.py`` (read its docstring for the three steps; its CPU half is tested in
-``test_teacher_feed_contract.py``). The production DSA module (``ttMLA`` for layer 92 from the stage's TTNN
+``test_teacher_feed_contract.py``). The production DSA module (``ttMLA`` for the input's layer from the stage's TTNN
 weight cache, scaled-FP8 kvpe and bf8 index-key caches allocated by the adapter as the runner does) runs every
 2560-token chunk of the prefix in order, eager, reading the KV and index keys its earlier chunks wrote. Its input is
 the trace-rebuilt ``input_layernorm`` output, so each chunk is teacher-fed and only the attention module's own error
@@ -13,7 +14,7 @@ unless ``$TT_DSA_TF_INPUT`` and ``$TT_DSA_TF_OUT`` are set.
 
     TT_DSA_TF_INPUT=/mnt/.../k31-l92-input-128k-v2 TT_DSA_TF_OUT=/mnt/.../k31-l92-dev-128k \\
     models/demos/deepseek_v3_d_p/tests/run_4x4_stage_tests.sh --half top -- \\
-        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dsa_teacher_feed.py::test_k31_dsa_layer92_teacher_fed[blackhole-4x4-sp1]"
+        "models/demos/deepseek_v3_d_p/tests/kimi_k3/test_dsa_teacher_feed.py::test_k31_dsa_layer_teacher_fed[blackhole-4x4-sp1]"
 """
 
 from __future__ import annotations
@@ -29,9 +30,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_1_config import KimiK31Config
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, provenance
 from models.demos.deepseek_v3_d_p.tests.kimi_k3 import k31_stage
-from models.demos.deepseek_v3_d_p.tests.kimi_k3.dsa_teacher_feed import LAYER
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import chunk_path, finish_run, load_input, start_run
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_depth import k31_topk_rows
@@ -47,24 +48,25 @@ SOURCE, OUT = os.environ.get("TT_DSA_TF_INPUT"), os.environ.get("TT_DSA_TF_OUT")
 )
 @pytest.mark.timeout(0)
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENT_4X4, indirect=True)
-def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
+def test_k31_dsa_layer_teacher_fed(mesh_device, device_params):
     from models.demos.deepseek_v3_d_p.tt.mla.mla import ttMLA
     from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 
     source, out = Path(SOURCE), Path(OUT)
     built = json.loads((source / MANIFEST).read_text())
-    assert built["layer"] == LAYER
+    layer = built["layer"]
+    assert layer + 1 in KimiK31Config.DSA_LAYERS_1BASED, f"layer {layer} is not a DSA layer"
     count = int(os.environ.get("TT_DSA_TF_COUNT", built["segments"][-1]["end"]))
     mesh_shape = tuple(mesh_device.shape)
     layout = k31_stage.STAGE_LAYOUTS[mesh_shape]
     chunk = layout.chunk
     max_seq_len = -(-count // CACHE_LEN) * CACHE_LEN
     hf_config, params = k31_stage.window_params(
-        mesh_shape, LAYER, 1, max_seq_len, is_first_rank=False, is_last_rank=True
+        mesh_shape, layer, 1, max_seq_len, is_first_rank=False, is_last_rank=True
     )
     adapter = k31_stage.ADAPTER
     manifest = {
-        "layer": LAYER,
+        "layer": layer,
         "input": str(source),
         "input_manifest": {k: built[k] for k in ("trace", "trace_commit", "input", "checkpoint")},
         "count": count,
@@ -83,7 +85,7 @@ def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
         hf_config,
         {},
         mesh_device,
-        layer_idx=LAYER,
+        layer_idx=layer,
         seq_len=max_seq_len,
         sp_axis=layout.sp_axis,
         tp_axis=layout.tp_axis,
@@ -94,7 +96,7 @@ def test_k31_dsa_layer92_teacher_fed(mesh_device, device_params):
         active_seq_len=chunk,
         slot_num=adapter.kv_cache_slots(params),
         layer_num=1,
-        first_layer_idx=LAYER,
+        first_layer_idx=layer,
         tp_shard_kv=True,
         sparse_kv_cache_format=adapter.resolve_sparse_kv_cache_format(params.sparse_kv_cache_format),
     )
