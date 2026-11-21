@@ -72,8 +72,9 @@ def test_ttrun_dead_rank():
 
 
 def test_ttrun_hang_timeout():
-    """A rank spins forever. With --timeout 20 in --mpi-args, tt-run sends SIGTERM to every rank at 20 s (graceful; PRRTE's
-    own --timeout stays as a backstop after the stop grace), the job ends with 241 and leaves nothing (P5)."""
+    """A rank spins forever. With --timeout 20 in --mpi-args, tt-run sends SIGTERM to every rank at 20 s (graceful; tt-run
+    runs the clock itself and takes PRRTE's --timeout off the launch line), the job ends with 241 and leaves nothing (P5).
+    """
     r = run_case(
         "ttrun_hang_timeout",
         {**NP, "PROBE_SCENARIO": "victim_hang"},
@@ -196,7 +197,7 @@ def test_ttrun_stop_on_each_mpi_install(prefix):
 def _ttrun_stop(sig, case, mpi_prefix=None):
     env = {**NP, "PROBE_SCENARIO": "all_hang" if case == "delivered" else "victim_hang"}
     if case == "no_helper":
-        env["TT_RUN_SIGNAL_HELPER"] = "/nonexistent/tt-run-signal"
+        env["TT_RUN_SIGNAL_HELPER"] = "/nonexistent/tt-run-rank"
     r = run_case(
         f"ttrun_stop_{signal.Signals(sig).name}_{case}",
         env,
@@ -274,6 +275,29 @@ def test_ttrun_ctrl_z_pauses_and_resumes_the_ranks():
     assert "=T" not in resumed and "gone" not in resumed, f"SIGCONT did not resume every rank: {resumed!r}\n{r}"
     assert _ranks_got(r, signal.SIGCONT) == {0, 1, 2}, r.log[-3000:]
     assert "the job is paused" in r.log and r.exit == 128 + signal.SIGTERM, r.log[-3000:]
+
+
+def test_ttrun_hangup_keeps_the_job():
+    """SIGHUP at tt-run (the terminal closed, an ssh session dropped): the job keeps running with tt-run still
+    supervising it; nothing reaches the ranks, and a later stop (SIGTERM) ends the job gracefully as usual."""
+    r = run_case(
+        "ttrun_sighup",
+        {**NP, "PROBE_SCENARIO": "all_hang"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGHUP,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+        then_signals=[(signal.SIGTERM, 1.0)],
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    after = re.findall(r"ranks: ([^;]*)", r.signal_sent)[0]
+    assert "gone" not in after, f"the hangup ended a rank: {r}"
+    assert "SIGHUP received" in r.log and "the job keeps running" in r.log, r.log[-3000:]
+    got = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] caught signal 15\b", r.log)}
+    assert got == {0, 1, 2} and r.exit == 128 + signal.SIGTERM, f"the stop after the hangup did not end the job: {r}"
 
 
 def test_ttrun_killed_stops_the_ranks():
@@ -407,19 +431,12 @@ def _run(cmd: list, timeout: int = 30, env: dict | None = None) -> subprocess.Co
 
 
 def test_mpi_build_is_open_mpi_5_plus():
-    """tt-run's launch line (PRRTE --timeout, --map-by, the self,tcp btl line) is Open MPI 5.x / PRRTE. Confirm the
+    """tt-run's launch line (--map-by, the self,tcp btl line, PRRTE job control) is Open MPI 5.x / PRRTE. Confirm the
     mpirun tt-run would use is that build, so an older or foreign MPI on PATH is caught early, not mid-job."""
     out = (_run([mpirun_path(), "--version"]).stdout or "") + (_run([mpirun_path(), "--version"]).stderr or "")
     m = re.search(r"Open MPI[)\s]+v?(\d+)\.(\d+)", out)
     assert m, f"not an Open MPI build: {out.strip()[:120]!r}"
     assert int(m.group(1)) >= 5, f"Open MPI >= 5.0 required (PRRTE launcher); got {m.group(1)}.{m.group(2)}"
-
-
-def test_launcher_supports_timeout():
-    """tt-run's opt-in wall clock (P5) is PRRTE's own --timeout, reachable only through --mpi-args. Confirm this
-    launcher accepts it — a trivial job with --timeout must run, not be rejected as an unknown option."""
-    r = _run([mpirun_path(), "--timeout", "10", "--allow-run-as-root", "-np", "1", "true"])
-    assert r.returncode == 0, f"the launcher does not accept --timeout (P5 backstop unreachable): {r.stderr[:200]}"
 
 
 def test_required_mca_components_available():

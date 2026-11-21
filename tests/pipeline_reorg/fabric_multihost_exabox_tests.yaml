@@ -491,7 +491,7 @@
 # remote host. Needs more than one host, so it cannot run in the single-host
 # lane; here on SC4.
 # ============================================================================
-- name: "Teardown across hosts: a remote rank dies, hangs or loses its daemon; Ctrl-C reaches every rank"
+- name: "SC4 MPI Teardown tests"
   cmd: |
     set -o pipefail
     # the hosts come from the hostfile SC4 provisions for this job (/etc/ttop/hostfile, as every other entry in this
@@ -505,6 +505,8 @@
     # the setup action provisions passwordless ssh for the 'user' account and syncs the workspace with `ssh -l user`;
     # reach the peers as the same account for staging, census and cleanup
     export TEARDOWN_REMOTE_USER=user
+    # the PR's tt-run, as every other entry runs it: the image's tt-run on PATH is an older copy
+    export TEARDOWN_TTRUN="python3 ${TTRUN_PY}"
     ./tests/scripts/multihost/run_teardown_multihost_tests.sh --hosts "$RESOLVED_HOSTS" 2>&1 \
       | tee "${PIPELINE_DIR}/teardown_multihost.log"
   skus:

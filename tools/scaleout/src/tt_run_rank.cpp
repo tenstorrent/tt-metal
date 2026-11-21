@@ -15,18 +15,30 @@
 //     the program was a tt-metal rank (its context wrote "context"), stay up in its place until the launcher ends the
 //     job once the other ranks have closed and exited (at most TT_METAL_STOP_TIMEOUT_S), so this exit does not make
 //     the launcher kill them mid-close.
-// A program killed by a signal is reported with exit 128 + the signal.
+// A program killed by a signal is reported with exit 128 + the signal. If the daemon that started this wrapper dies
+// (a killed prted), the program is sent SIGTERM, then SIGKILL 10 s later: a rank never outlives its daemon.
 //
-//   tt-run-rank --guard <prterun pid> [<tt-run-signal>]
+//   tt-run-rank --guard <prterun pid> [<signal tool>]
 //
 // The guard tt-run starts next to the launcher, so the job still stops gracefully when tt-run itself is killed
 // (SIGKILL, an abort, a crash): tt-run cannot act then, and the launcher outlives it in a session of its own. tt-run
 // holds the write end of the guard's stdin and writes "done" once the job is over. If stdin closes without it, tt-run
-// died: while the launcher still runs, send SIGTERM to every rank through PRRTE job control (tt-run-signal), wait the
-// stop grace (TT_RUN_STOP_GRACE_S, 120 s by default) for the job to end, then force it through the launcher
-// (SIGTERM, which kills every rank: SIGTERM, then SIGKILL 250 ms later), as tt-run would have.
+// died: while the launcher still runs, send SIGTERM to every rank through PRRTE job control (the signal tool, by
+// default this binary's --uri mode), wait the stop grace (TT_RUN_STOP_GRACE_S, 120 s by default) for the job to end,
+// then force it through the launcher (SIGTERM, which kills every rank: SIGTERM, then SIGKILL 250 ms later), as tt-run
+// would have.
+//
+//   tt-run-rank --uri <prterun PMIx server URI> --signal <N>
+//
+// Send signal N to every rank of a running prterun job, on every host, through PRRTE job control: tt-run's stop
+// (SIGTERM) and the signals it passes on. PMIx_Job_control(PMIX_JOB_CTRL_SIGNAL) makes prterun tell every daemon to
+// kill() its own ranks with it; unlike a signal sent to prterun itself (SIGTERM, then SIGKILL 250 ms later), the job is
+// not aborted and no SIGKILL follows. The URI is the first line of prterun's tool rendezvous file
+// (<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>); connecting by URI avoids PMIx's pid lookup, which
+// searches the whole system tmpdir recursively. Exit code: 0 on success, 1 on a PMIx error, 2 on bad arguments.
 
 #include <pmix.h>
+#include <pmix_tool.h>
 
 #include <cerrno>
 #include <csignal>
@@ -138,10 +150,10 @@ std::string tool_uri(pid_t pid) {
     return uri;
 }
 
-// Run tt-run-signal to send SIGTERM to every rank; "" when sent, else why not. Bounded like tt-run's own call.
+// Run the signal tool (tt-run-rank --uri) to send SIGTERM to every rank; "" when sent, else why not. Bounded.
 std::string stop_ranks(const char* helper, pid_t launcher) {
     if (helper == nullptr || *helper == '\0') {
-        return "no tt-run-signal";
+        return "no signal tool";
     }
     std::string uri;
     for (int i = 0; i < 50 && uri.empty(); ++i) {  // a launcher started a moment ago may not have published it yet
@@ -166,18 +178,59 @@ std::string stop_ranks(const char* helper, pid_t launcher) {
         if (::waitpid(pid, &status, WNOHANG) == pid) {
             return WIFEXITED(status) && WEXITSTATUS(status) == 0
                        ? ""
-                       : "tt-run-signal exited " + std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
+                       : "the signal tool exited " + std::to_string(WIFEXITED(status) ? WEXITSTATUS(status) : -1);
         }
         ::usleep(100000);
     }
     ::kill(pid, SIGKILL);
     ::waitpid(pid, &status, 0);
-    return "tt-run-signal timed out";
+    return "the signal tool timed out";
+}
+
+int signal_job(int argc, char** argv) {
+    const char* uri = nullptr;
+    int32_t signum = SIGTERM;
+    for (int i = 1; i + 1 < argc; i += 2) {
+        if (std::strcmp(argv[i], "--uri") == 0) {
+            uri = argv[i + 1];
+        } else if (std::strcmp(argv[i], "--signal") == 0) {
+            signum = static_cast<int32_t>(std::atoi(argv[i + 1]));
+        }
+    }
+    if (uri == nullptr) {
+        std::fprintf(stderr, "usage: %s --uri <prterun PMIx URI> --signal <N>\n", argv[0]);
+        return 2;
+    }
+
+    // Identify as a tool with a namespace of our own, the way PRRTE's own tools (pterm) do.
+    char nspace[PMIX_MAX_NSLEN + 1];
+    std::snprintf(nspace, sizeof nspace, "tt-run-rank.%d", static_cast<int>(::getpid()));
+    pmix_rank_t rank = 0;
+    pmix_info_t init[3];
+    PMIX_INFO_LOAD(&init[0], PMIX_TOOL_NSPACE, nspace, PMIX_STRING);
+    PMIX_INFO_LOAD(&init[1], PMIX_TOOL_RANK, &rank, PMIX_PROC_RANK);
+    PMIX_INFO_LOAD(&init[2], PMIX_SERVER_URI, uri, PMIX_STRING);
+    pmix_proc_t me;
+    pmix_status_t rc = PMIx_tool_init(&me, init, 3);
+    if (rc != PMIX_SUCCESS) {
+        std::fprintf(stderr, "tt-run-rank: PMIx_tool_init(%s): %s\n", uri, PMIx_Error_string(rc));
+        return 1;
+    }
+
+    // No targets: every rank of the job this prterun runs.
+    pmix_info_t directive;
+    PMIX_INFO_LOAD(&directive, PMIX_JOB_CTRL_SIGNAL, &signum, PMIX_INT32);
+    rc = PMIx_Job_control(nullptr, 0, &directive, 1, nullptr, nullptr);
+    if (rc != PMIX_SUCCESS) {
+        std::fprintf(stderr, "tt-run-rank: PMIx_Job_control(signal %d): %s\n", signum, PMIx_Error_string(rc));
+    }
+    PMIx_tool_finalize();
+    return rc == PMIX_SUCCESS ? 0 : 1;
 }
 
 int guard(int argc, char** argv) {
     if (argc < 3) {
-        std::fprintf(stderr, "usage: %s --guard <prterun pid> [<tt-run-signal>]\n", argv[0]);
+        std::fprintf(stderr, "usage: %s --guard <prterun pid> [<signal tool>]\n", argv[0]);
         return 2;
     }
     const pid_t launcher = static_cast<pid_t>(std::atoi(argv[2]));
@@ -257,6 +310,9 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::strcmp(argv[1], "--guard") == 0) {
         return guard(argc, argv);
     }
+    if (argc > 1 && std::strcmp(argv[1], "--uri") == 0) {
+        return signal_job(argc, argv);
+    }
     int first = 1;
     if (first < argc && std::strcmp(argv[first], "--") == 0) {
         ++first;
@@ -279,6 +335,7 @@ int main(int argc, char** argv) {
     }
 
     const pid_t wrapper = ::getpid();
+    const pid_t daemon = ::getppid();  // the launcher's daemon that started this rank
     const pid_t child = ::fork();
     if (child < 0) {
         std::perror("tt-run-rank: fork");
@@ -308,13 +365,26 @@ int main(int argc, char** argv) {
     }
 
     // Wait for the program. If the job is stopping while the program is still writing a core dump (a crash that is
-    // not over yet), end it: a core dump never holds the job (teardown plan P8); the core is cut short.
+    // not over yet), end it: a core dump never holds the job (teardown plan P8); the core is cut short. If the daemon
+    // that started this wrapper is gone (this wrapper was reparented), nothing will ever stop the program: stop it.
     int status = 0;
     bool dump_ended = false;
+    int orphaned_ticks = -1;  // 100 ms ticks since the daemon was found gone
     for (;;) {
         const pid_t done = ::waitpid(child, &status, WNOHANG);
         if (done == child || (done < 0 && errno != EINTR)) {
             break;
+        }
+        if (orphaned_ticks < 0 && ::getppid() != daemon) {
+            orphaned_ticks = 0;
+            std::fprintf(
+                stderr,
+                "[tt-run-rank] rank %s: the daemon that started it (pid %d) is gone; stopping the rank (SIGTERM)\n",
+                std::getenv("OMPI_COMM_WORLD_RANK") != nullptr ? std::getenv("OMPI_COMM_WORLD_RANK") : "?",
+                static_cast<int>(daemon));
+            forward(SIGTERM);
+        } else if (orphaned_ticks >= 0 && ++orphaned_ticks == 100) {  // still there 10 s later
+            ::kill(child, SIGKILL);
         }
         if (g_stop_signal != 0 && !dump_ended && core_dumping(child)) {
             std::fprintf(

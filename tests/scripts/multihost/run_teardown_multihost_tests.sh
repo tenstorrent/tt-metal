@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Teardown sanity, multi-host (lane L1c of the plan, tt-metal #56902).
 #
-# One question: when a fault lands on a REMOTE host, does tt-run / PRRTE tear the whole job down correctly across
-# every host? The single-host sanity lane cannot see this, so these cases need more than one host and run on SC4.
-# Each case launches the raw C++ probe (sanity_mpi_probe.cpp) across the hosts, one rank per host, on the production
-# transport line (--mca btl self,tcp), then asserts the teardown shape: the right exit code AND no rank left alive
-# on any host.
+# One question: when a fault lands on a REMOTE host, does tt-run tear the whole job down correctly across every
+# host? The single-host sanity lane cannot see this, so these cases need more than one host and run on SC4. Each case
+# launches the C++ probe (sanity_mpi_probe.cpp) through tt-run, as every real job is launched, one rank per host, then
+# asserts the teardown shape: the right exit code AND no rank left alive on any host.
 #
 # Run it yourself:
 #   ./run_teardown_multihost_tests.sh --hosts host1,host2[,host3,...]
 # Needs: at least two hosts, passwordless ssh between them (or TEARDOWN_REMOTE=srun inside a Slurm allocation that
-# holds them, where the compute nodes have no ssh keys), and mpirun + mpicxx on PATH. The probe source is found
-# under $TT_METAL_HOME (falls back to the current directory).
+# holds them, where the compute nodes have no ssh keys), tt-run (TEARDOWN_TTRUN, else tt-run on PATH, else the
+# ttnn module), and mpicxx on the hosts when the build has no probe. The probe source is found under $TT_METAL_HOME
+# (falls back to the current directory). Run it from the repository root.
 set -uo pipefail
 
 # --------------------------------------------------------------------------------------------------------------
@@ -92,29 +92,37 @@ done
 # carries the pattern in its cmdline — a bare pattern self-matches and would count/kill itself.
 probe_pat="${probe%e}[e]"
 
-# Select the SAME launcher tt-run uses: the PLAIN mpirun of the ULFM-capable install, never the mpirun-ulfm
-# wrapper itself. mpirun-ulfm can inject --with-ft ulfm, which makes PRRTE treat the job as recoverable — a rank
-# killed by a signal no longer aborts the job — so with that wrapper cases 2-4 would silently exercise the wrong
-# mode. This mirrors get_mpi_launcher()/_plain_mpirun_beside() in ttnn/ttnn/distributed/ttrun.py: resolve
-# mpirun-ulfm, take the mpirun beside it, and fall back to it (then to a bare mpirun) only when there is no sibling.
-select_launcher() {
-  local ulfm plain
-  ulfm="$(command -v mpirun-ulfm 2>/dev/null || true)"
-  if [ -n "$ulfm" ]; then
-    plain="$(dirname "$(readlink -f "$ulfm")")/mpirun"
-    if [ -x "$plain" ]; then printf '%s\n' "$plain"; return 0; fi
-    printf '%s\n' "$ulfm"; return 0  # no sibling plain mpirun; use it directly (it may enable ULFM)
-  fi
-  command -v mpirun 2>/dev/null || return 1
-}
-launcher="$(select_launcher)" || { echo "::error::no mpirun-ulfm / mpirun on PATH"; exit 1; }
+# tt-run: an override (the CI lane points it at the PR's ttrun.py), then tt-run on PATH, then the module.
+if [ -n "${TEARDOWN_TTRUN:-}" ]; then read -r -a ttrun_cmd <<<"$TEARDOWN_TTRUN"
+elif command -v tt-run >/dev/null 2>&1; then ttrun_cmd=(tt-run)
+else ttrun_cmd=(python3 -m ttnn.distributed.ttrun); fi
+"${ttrun_cmd[@]}" --help >/dev/null 2>&1 || { echo "::error::tt-run is not runnable here: ${ttrun_cmd[*]}"; exit 1; }
+# A stop that has to be forced is forced within the harness's own `timeout 120`.
+export TT_RUN_STOP_GRACE_S="${TT_RUN_STOP_GRACE_S:-30}"
 
-# the production launch line: one rank per host, tcp transport only (no shared-memory layer), tagged output.
-# -x forwards the fault settings to the SSH-launched remote ranks: mpirun does NOT pass the launching shell's
-# environment to remote ranks on its own, so without these the victim rank (on a remote host) would run the
-# clean default and no fault would be injected.
-launch=(--host "$hosts" -np "$num_hosts" --map-by node --oversubscribe --bind-to none --mca btl self,tcp --tag-output
-        -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP)
+# One rank per host. tt-run starts one app context per rank, so -np or --map-by node in --mpi-args would multiply
+# the ranks or pile them on the first host; a rankfile places rank r on host r. It sits under the working directory
+# with a plain relative name, which is how tt-run hands it to PRRTE (--map-by rankfile:file=<path>; a ../ path is
+# rejected). -x forwards the fault settings to the ranks on the remote hosts.
+binding="$(mktemp --suffix=.yaml)"
+{ echo "rank_bindings:"
+  for r in $(seq 0 $((num_hosts - 1))); do printf '  - rank: %d\n    mesh_id: 0\n' "$r"; done
+  echo 'mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"'
+} >"$binding"
+mkdir -p generated/teardown_sanity
+rankfile="generated/teardown_sanity/rankfile_$$"
+r=0; for host in $(host_names); do printf 'rank %d=%s slot=0\n' "$r" "$host"; r=$((r + 1)); done >"$rankfile"
+trap 'rm -f "$binding" "$rankfile"' EXIT
+
+# Launch the probe through tt-run with the PROBE_* settings of the caller, under the harness's `timeout 120` (124 if
+# the job never ends). usage: ttrun_job [more --mpi-args]. With bound=() the job runs unbounded, for a case that signals
+# tt-run's own pid (timeout passes on only one signal).
+bound=(timeout 120)
+ttrun_job() {
+  "${bound[@]}" "${ttrun_cmd[@]}" --rank-binding "$binding" \
+    --mpi-args "--rankfile $rankfile --oversubscribe --bind-to none --tag-output -x PROBE_SCENARIO -x PROBE_VICTIM -x PROBE_NP $*" \
+    "$probe"
+}
 
 # --------------------------------------------------------------------------------------------------------------
 # helpers
@@ -168,7 +176,7 @@ failures=0
 #   torn_down  -> the job must exit non-zero, but NOT 124. 124 is this harness's own `timeout 120` killing a
 #                 launcher that hung: the launcher never tore the job down itself, which is the failure these
 #                 cases exist to catch, not a teardown. With [exact-code] given the job must exit exactly that
-#                 code (241, the PRRTE --timeout wall clock, for the hang case).
+#                 code (137 for a rank killed by SIGKILL, 241 for the --timeout).
 # in both cases nothing of this job may be left alive on any host.
 expect() {
   local shape="$1" name="$2" rc="$3" exact="${4:-}"
@@ -197,91 +205,67 @@ expect() {
   fi
 }
 
-echo "=== hosts: $hosts  (one rank per host, victim = rank $victim_rank on $last_host)  launcher: $launcher"
+echo "=== hosts: $hosts  (one rank per host, victim = rank $victim_rank on $last_host)  tt-run: ${ttrun_cmd[*]}"
 
 # --------------------------------------------------------------------------------------------------------------
-# the cases
+# the cases, every one launched through tt-run
 # --------------------------------------------------------------------------------------------------------------
 
 echo "--- 1. a clean job across hosts: it should just finish, exit 0, nothing left (baseline)"
-PROBE_SCENARIO=clean PROBE_NP="$num_hosts" \
-  timeout 120 "$launcher" "${launch[@]}" "$probe"
+PROBE_SCENARIO=clean PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
 expect clean "multihost_clean" $?
 
-echo "--- 2. a rank dies on the remote host (P20): PRRTE must end the whole job non-zero, nothing left on any host"
-PROBE_SCENARIO=victim_sigkill PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
-  timeout 120 "$launcher" "${launch[@]}" "$probe"
-expect torn_down "multihost_remote_rank_death" $?
+echo "--- 2. a rank dies on the remote host (P20): its tt-run-rank wrapper stops the job, tt-run returns the rank's"
+echo "       137, nothing left on any host"
+PROBE_SCENARIO=victim_sigkill PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
+expect torn_down "multihost_remote_rank_death" $? 137
 
-echo "--- 3. a rank hangs on the remote host (P22): the PRRTE --timeout wall clock ends it (241), nothing left"
-PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
-  timeout 120 "$launcher" --timeout 30 --report-state-on-timeout "${launch[@]}" "$probe"
-expect torn_down "multihost_remote_hang_timeout" $? 241  # PRRTE --timeout 30 must end it with 241, not a hang
+echo "--- 3. a rank hangs on the remote host (P22): at the --timeout tt-run stops the job (SIGTERM to every rank),"
+echo "       241, nothing left"
+PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job --timeout 30
+expect torn_down "multihost_remote_hang_timeout" $? 241
 
-echo "--- 4. the daemon on the remote host is killed (P19): with the plain launcher PRRTE must abort the job itself"
-echo "       instead of exiting 0 and orphaning the launch-host rank. We wait for this job's rank to come up on the"
-echo "       remote host, kill ONLY this job's prted there, and require PRRTE's own abort (a fast non-zero). There"
-echo "       is no --timeout backstop on purpose: if PRRTE does not abort, the rank hangs, the outer 'timeout 120'"
-echo "       ends it with 124, and expect rejects that as the failure — so the case tests the abort, not the clock."
+echo "--- 4. the daemon on the remote host is killed (P19): the rank there must not outlive it. We wait for this"
+echo "       job's rank to come up on the remote host and kill ONLY this job's prted there; the rank's tt-run-rank"
+echo "       wrapper sees its daemon die and stops its rank, the job ends non-zero and nothing is left on any host."
+echo "       There is no --timeout on purpose: if the teardown does not happen, the outer 'timeout 120' ends the job"
+echo "       with 124, and expect rejects that as the failure."
 ( for _ in $(seq 1 30); do
     remote_sh "$last_host" "pgrep -f '$probe_pat' >/dev/null 2>&1" && break; sleep 1
   done
   kill_this_jobs_prted "$last_host" || echo "::error::daemon-death fault was not injected on $last_host" ) &
 inject_pid=$!
-PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" \
-  timeout 120 "$launcher" "${launch[@]}" "$probe"
+PROBE_SCENARIO=victim_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job
 rc=$?
 wait "$inject_pid"  # require the injector to finish and report what it did before we judge the teardown
 expect torn_down "multihost_remote_daemon_death" $rc
 
 echo "--- 5. an interrupt at tt-run is forwarded to EVERY rank (P7), remote hosts included, as a catchable signal the"
-echo "       rank handles — NOT a direct kill. The probe runs all_hang THROUGH tt-run (so tt-run's own SIGINT relay is"
-echo "       what is tested); on SIGINT each rank prints 'caught signal' from its handler and exits. We require that"
-echo "       marker from all $num_hosts ranks (so a remote rank got it too) and nothing left. A killed rank never prints it."
-# Resolve tt-run: an override, then tt-run on PATH, then the module. Skip (not fail) if it will not run here, so
-# an environment without the ttnn package does not fail the raw-launcher cases above; the SC4 lane has tt-run.
-if [ -n "${TEARDOWN_TTRUN:-}" ]; then read -r -a ttrun_cmd <<<"$TEARDOWN_TTRUN"
-elif command -v tt-run >/dev/null 2>&1; then ttrun_cmd=(tt-run)
-else ttrun_cmd=(python3 -m ttnn.distributed.ttrun); fi
-if ! "${ttrun_cmd[@]}" --help >/dev/null 2>&1; then
-  echo "  SKIP  multihost_interrupt_forwarded_to_ranks  (tt-run not runnable here: ${ttrun_cmd[*]})"
+echo "       rank handles — NOT a direct kill. On SIGINT tt-run sends SIGTERM to every rank through PRRTE job control;"
+echo "       in all_hang each rank prints 'caught signal 15' from its handler and exits. We require that marker from"
+echo "       all $num_hosts ranks (so a remote rank got it too) and nothing left. A killed rank never prints it."
+sig_log="$(mktemp)"
+bound=()
+PROBE_SCENARIO=all_hang PROBE_VICTIM="$victim_rank" PROBE_NP="$num_hosts" ttrun_job >"$sig_log" 2>&1 &
+ttrun_pid=$!
+# all ranks up first (each rank counts twice under tt-run: its tt-run-rank wrapper carries the probe path too)
+for _ in $(seq 1 60); do [ "$(ranks_still_alive)" -ge "$num_hosts" ] 2>/dev/null && break; sleep 1; done
+kill -INT "$ttrun_pid" 2>/dev/null
+for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
+kill -9 "$ttrun_pid" 2>/dev/null || true
+wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
+caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null)  # grep -c prints 0 itself (and exits 1) on no match
+caught=${caught:-0}
+sleep 2; sig_alive=$(ranks_still_alive)
+grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
+if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then
+  echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught SIGTERM, nothing left; exit $sig_rc)"
 else
-  binding="$(mktemp --suffix=.yaml)"
-  { echo "rank_bindings:"
-    for r in $(seq 0 $((num_hosts - 1))); do printf '  - rank: %d\n    mesh_id: 0\n' "$r"; done
-    echo 'mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/dual_galaxy_mesh_graph_descriptor.textproto"'
-  } >"$binding"
-  sig_log="$(mktemp)"
-  # tt-run starts one app context per rank, so -np or --map-by node in --mpi-args would multiply the ranks or pile
-  # them on the first host. A rankfile places rank r on host r. It sits under the working directory with a plain
-  # relative name, which is how tt-run hands it to PRRTE (--map-by rankfile:file=<path>; a ../ path is rejected).
-  mkdir -p generated/teardown_sanity
-  rankfile="generated/teardown_sanity/rankfile_$$"
-  r=0; for host in $(host_names); do printf 'rank %d=%s slot=0\n' "$r" "$host"; r=$((r + 1)); done >"$rankfile"
-  PROBE_SCENARIO=all_hang PROBE_NP="$num_hosts" \
-    "${ttrun_cmd[@]}" --rank-binding "$binding" \
-      --mpi-args "--rankfile $rankfile --oversubscribe --tag-output -x PROBE_SCENARIO -x PROBE_NP" \
-      "$probe" >"$sig_log" 2>&1 &
-  ttrun_pid=$!
-  # all ranks up first (each rank counts twice under tt-run: its tt-run-rank wrapper carries the probe path too)
-  for _ in $(seq 1 60); do [ "$(ranks_still_alive)" -ge "$num_hosts" ] 2>/dev/null && break; sleep 1; done
-  kill -INT "$ttrun_pid" 2>/dev/null  # tt-run sends SIGTERM to every rank on every host through PRRTE job control
-  for _ in $(seq 1 60); do kill -0 "$ttrun_pid" 2>/dev/null || break; sleep 1; done
-  kill -9 "$ttrun_pid" 2>/dev/null || true
-  wait "$ttrun_pid" 2>/dev/null; sig_rc=$?
-  caught=$(grep -c "caught signal 15" "$sig_log" 2>/dev/null)  # grep -c prints 0 itself (and exits 1) on no match
-  caught=${caught:-0}
-  sleep 2; sig_alive=$(ranks_still_alive)
-  grep "caught signal" "$sig_log" 2>/dev/null | sed 's/^/    /'
-  if [ "$caught" -eq "$num_hosts" ] && [ "$sig_alive" = 0 ]; then
-    echo "  PASS  multihost_interrupt_forwarded_to_ranks  ($caught/$num_hosts ranks caught SIGTERM, nothing left; exit $sig_rc)"
-  else
-    echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught SIGTERM=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving SIGTERM, or a leftover remains)"
-    echo "---- tt-run output ----"; tail -40 "$sig_log"
-    failures=$((failures + 1)); kill_stragglers
-  fi
-  rm -f "$sig_log" "$binding" "$rankfile"
+  echo "::error::  FAIL  multihost_interrupt_forwarded_to_ranks  (caught SIGTERM=$caught/$num_hosts, alive=$sig_alive, exit $sig_rc — a rank was killed without receiving SIGTERM, or a leftover remains)"
+  echo "---- tt-run output ----"; tail -40 "$sig_log"
+  failures=$((failures + 1)); kill_stragglers
 fi
+rm -f "$sig_log"
 
 # --------------------------------------------------------------------------------------------------------------
 kill_stragglers

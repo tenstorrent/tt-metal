@@ -12,7 +12,7 @@ lands; the marker is dropped in the PR that fixes it.
 ## How tt-run stops a job
 
 What tt-run does for every way a job ends. A stop is SIGTERM to every rank on every host through PRRTE job control
-(PMIx), sent by tt-run itself (`tt-run-signal`) or, for a rank that died or failed, by that rank's wrapper
+(PMIx), sent by tt-run itself (`tt-run-rank --uri … --signal N`) or, for a rank that died or failed, by that rank's wrapper
 (`tt-run-rank`, which tt-run starts every rank in); never the launcher's own kill path (SIGTERM, SIGKILL 250 ms later).
 This suite checks that the stop reaches the ranks and that each rank detects the SIGTERM (`caught signal 15` from every
 rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
@@ -20,9 +20,10 @@ rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
 | ending | what tt-run does | tt-run returns | rows |
 |---|---|---|---|
 | Ctrl-C / SIGTERM at tt-run | SIGTERM to every rank through job control; every rank detects it | 130 / 143 | `test_ttrun_stop[ctrl_c, sigterm]`, `test_ttrun_stop_on_each_mpi_install` |
-| no `tt-run-signal` | forces through the launcher and says to reset the devices | 130 | `test_ttrun_stop[ctrl_c_no_helper]` |
+| no `tt-run-rank` (not built) | forces through the launcher and says to reset the devices | 130 | `test_ttrun_stop[ctrl_c_no_helper]` |
 | a rank killed, aborting or exiting non-zero | its wrapper stops the job; tt-run names the rank and returns its code | 128 + signal / the code | `test_ttrun_dead_rank`, `test_ttrun_abort_ends`, `test_ttrun_dead_peer_survivors_abort` |
-| the job reaches its `--timeout N` | SIGTERM to every rank at N s, as for Ctrl-C; PRRTE's own `--timeout` stays only as a backstop at N + the grace + 30 s | 241 | `test_ttrun_hang_timeout` |
+| the daemon on a host dies (a killed `prted`, a lost node) | each rank's wrapper there sees its daemon gone and stops its rank (SIGTERM, SIGKILL 10 s later); prterun ends the job but exits 0, so tt-run fails it, naming the host | 1 | `multihost_remote_daemon_death` (SC4), `test_ttrun.py::test_rank_wrapper_stops_its_rank_when_its_daemon_dies` |
+| the job reaches its `--timeout N` | SIGTERM to every rank at N s, as for Ctrl-C; tt-run runs the clock itself and takes PRRTE's `--timeout` (which kills every rank at once) off the launch line | 241 | `test_ttrun_hang_timeout` |
 | Ctrl-C (or SIGTERM) a second time | forces at once: SIGTERM to the launcher, which kills every rank still running (SIGTERM, then SIGKILL 250 ms later), with a warning to run `tt-smi -r` | 128 + the first signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[second_signal]` |
 | ranks still running when the stop grace runs out | forced the same way, with the same warning | 128 + the signal | `test_ttrun.py::test_run_launcher_stops_the_ranks_with_sigterm[grace_expired]` |
 | tt-run itself killed (SIGKILL, an abort, a crash) | tt-run cannot act; its guard (`tt-run-rank --guard`, started next to the launcher in a session of its own) sees tt-run gone and stops the job as tt-run would: SIGTERM to every rank, the grace, then the force; with tt-metal ranks, their mesh close is #64546 | (tt-run is gone) | `test_ttrun_killed_stops_the_ranks`, `test_ttrun.py::test_rank_wrapper_guard_stops_the_job_when_tt_run_dies`, `test_teardown_sanity.py::test_ttrun_killed_ranks_close_their_mesh` (strict xfail until #64546) |
@@ -31,12 +32,14 @@ rank); how a tt-metal rank then closes its devices is the rank side, in #64546.
 | SIGHUP at tt-run (its terminal closed) | not handled yet: tt-run dies and the job goes on under its guard's watch, which stops it as for a killed tt-run | (tt-run is gone) | |
 | an uncaught C++ exception in a rank | `std::terminate` aborts the rank (SIGABRT); its wrapper stops the job as for any killed rank and tt-run names it. The other ranks leave without closing their mesh: on the failed collective (MPI_ERR_PROC_FAILED) or on the SIGTERM, which they do not handle yet | 134 | `test_teardown_sanity.py::test_uncaught_cxx_exception_stops_the_job` (strict xfail until #64546) |
 | a Python exception or `sys.exit(1)` in a rank | nothing until the rank exits, and it does not: the exception unwinds into `MPI_Finalize`, which waits on the other ranks, still in their collectives; the job hangs until `--timeout` | 241 with `--timeout` | `test_teardown_sanity.py` (`test_raise_after_open`, `test_exit1_stops_the_job`, `test_thread_exception_stops_the_job`, `test_bad_shape`; strict xfails until #64546) |
-| a process still exiting after the launcher returned | waited for up to the grace after a clean finish (10 s after a stop), then SIGTERM, then SIGKILL; a zombie counts as ended | 0 if it exits in time | `test_ttrun.py` (`TestJobOwnership`) |
+| a process still exiting after the launcher returned | waited for up to the grace after a clean finish (not at all after a stop: it already had the grace), then SIGTERM, then SIGKILL 10 s later; a zombie counts as ended | 0 if it exits in time | `test_ttrun.py` (`TestJobOwnership`) |
 | clean | normal finalize | 0 | `test_ttrun_clean` |
 
 One grace covers every graceful shutdown: `TT_RUN_STOP_GRACE_S`, 120 s by default (tt-run forwards it to the ranks).
 A stop logs a warning with the grace; ranks still running when it runs out are forced through the launcher, with a
-warning to run `tt-smi -r`.
+warning to run `tt-smi -r`. Every other bound is fixed: a process tt-run sends SIGTERM (the launcher on a force, a leftover, a
+launcher still up after a rank's `MPI_Abort`) is SIGKILLed 10 s later. The constants are at the top of
+`ttnn/ttnn/distributed/ttrun.py`.
 
 A raw MPI program that exits non-zero while still inside `MPI_Finalize` cannot be seen by the wrapper
 (`test_ttrun_error_exit_fails_fast_not_hang`, a strict xfail).
@@ -69,7 +72,7 @@ How tt-run ends the job for each class of single-rank failure, each launched thr
 | `test_ttrun_hang_timeout` | a rank that spins forever → the job ends at the opt-in PRRTE `--timeout` (given via `--mpi-args`) with exit 241, nothing left |
 | `test_ttrun_no_shm_leak` | a failed job leaves nothing in `/dev/shm` (the `self,tcp` line maps no shared-memory segment) |
 | `test_ttrun_stop[ctrl_c, sigterm]` | Ctrl-C / SIGTERM at tt-run: every rank gets SIGTERM through PRRTE job control and exits; 128 + the signal |
-| `test_ttrun_stop[ctrl_c_no_helper]` | without `tt-run-signal` tt-run forces through the launcher and says the devices may need a reset |
+| `test_ttrun_stop[ctrl_c_no_helper]` | without `tt-run-rank` tt-run forces through the launcher and says the devices may need a reset |
 | `test_ttrun_stop_on_each_mpi_install` | the stop on every Open MPI 5 install on the host |
 
 ### Group B — the mpirun transport/config line
@@ -94,13 +97,14 @@ are forwarded, a leftover rank makes the job fail, and the pre-launch stale-segm
 ### Group D — multi-host (runs on SC4, needs ≥ 2 hosts)
 What a single host cannot show: a fault on a **remote** host, and whether tt-run tears the **whole** job down
 across every host — the right exit code **and** nothing left alive on **any** host. `run_teardown_multihost_tests.sh`
-launches the C probe one rank per host on the production `mpirun` line and runs:
+launches the C probe through tt-run, one rank per host (the SC4 job "SC4 MPI Teardown tests"), and runs:
 | case | the additional thing it tests |
 |---|---|
 | `multihost_clean` | a healthy cross-host job finishes 0 with nothing left on any host (baseline) |
-| `multihost_remote_rank_death` | a rank is SIGKILLed on a **remote** host → the launcher ends the whole job non-zero, nothing left on either host |
-| `multihost_remote_hang_timeout` | a rank hangs on a remote host → the PRRTE `--timeout` wall clock ends the job (exit 241), nothing left |
-| `multihost_remote_daemon_death` | the launch daemon (`prted`) on a remote host is killed while the ranks wait → the job must still end non-zero with nothing left, instead of finishing 0 and orphaning the rank on the launch host |
+| `multihost_remote_rank_death` | a rank is SIGKILLed on a **remote** host → its wrapper stops the job, tt-run returns 137, nothing left on any host |
+| `multihost_remote_hang_timeout` | a rank hangs on a remote host → tt-run stops the job at its `--timeout` (exit 241), nothing left |
+| `multihost_remote_daemon_death` | the launch daemon (`prted`) on a remote host is killed while the ranks wait → the wrapper of the rank there stops it (a rank never outlives its daemon), and tt-run fails the job although prterun exits 0 after losing a daemon; nothing left |
+| `multihost_interrupt_forwarded_to_ranks` | Ctrl-C at tt-run → every rank, on every host, catches SIGTERM; nothing left |
 
 ### Group E — MPI install & configuration requirements
 Gates that check the OpenMPI / PRRTE install itself (no job fault injected), so a host with the wrong MPI on
@@ -109,7 +113,6 @@ Honours `TT_SANITY_MPI_PREFIX`, so a second install can be checked with the same
 | test | what it requires of the install |
 |---|---|
 | `test_mpi_build_is_open_mpi_5_plus` | the `mpirun` tt-run would use is Open MPI 5.x / PRRTE |
-| `test_launcher_supports_timeout` | the launcher accepts the `--timeout` option (tt-run's opt-in wall clock) |
 | `test_required_mca_components_available` | `ompi_info` lists btl `self`, btl `tcp`, and pml `ob1` |
 | `test_production_transport_line_runs_clean` | a trivial job under `pml ob1` + `--mca btl self,tcp` actually runs |
 | `test_ulfm_launcher_available` | `mpirun-ulfm` is installed and a `--with-ft ulfm` job runs |
