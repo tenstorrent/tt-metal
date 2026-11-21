@@ -448,6 +448,7 @@ models:
     bh_sc1: 2463
     bh_sc1_high_power: 500
     bh_sc4: 60
+    bh_sc4_high_power: 30
     wh_n150: 500
     wh_n150_civ2: 300
     wh_n300: 600
