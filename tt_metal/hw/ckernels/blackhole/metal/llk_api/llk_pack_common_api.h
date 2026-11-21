@@ -14,8 +14,17 @@
 #include "llk_outputs.h"
 #include "llk_pack.h"
 #include "llk_pack_common.h"
+#include "llk_io_pack.h"
 #include "llk_size_mode.h"
 #include "llk_pack_block_tile.h"
+#include "llk_copy_kernel.h"
+
+namespace ckernel::packer {
+template <>
+struct llk_pack_copy_api<1> {
+    static constexpr bool value = LLK_COPY_KERNEL;
+};
+}  // namespace ckernel::packer
 
 namespace ckernel::packer {
 template <>
@@ -291,6 +300,23 @@ inline void llk_pack_reconfig_data_format_body(const std::uint32_t new_output) {
     if constexpr (!gate) {
         TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::UNPACK0);
     }
+    [[maybe_unused]] constexpr std::uint32_t full_skip = ckernel::packer::
+        llk_pack_reconfig_skip_all<is_fp32_dest_acc_en, DST_SYNC_MODE, sizeof(pack_dst_format), gate>(
+            pack_src_format, pack_dst_format, pack_tile_num_faces, pack_partial_face);
+    // SDPA kernels: after a push of 8+ tiles (the k512 q chunk's QK row) the full reconfigure, whose GPR writes overlap the
+    // packer drain; after a shorter one the immediates (joint_sdpa k512 bfp8 +0.7 % vs k128 gains).
+    if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && ckernel::packer::llk_pack_sdpa_joint<gate * 0 + 1>()) {
+        if (ckernel::packer::pack_sdpa_last_push >= 8) {
+            _llk_pack_reconfig_data_format_<is_fp32_dest_acc_en, full_skip, inl, LLK_SIZE_MODE>(
+                pack_src_format[output_id],
+                pack_dst_format[output_id],
+                get_local_cb_interface(output_id).fifo_page_size,
+                tile_c_dim,
+                num_faces,
+                false /* partial_face */);
+            return;
+        }
+    }
     if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>() && inl) {
         llk_pack_reconfig_data_format_table_inl<is_fp32_dest_acc_en>(output_id);
     } else if constexpr (llk_pack_reconfig_table_ok<is_fp32_dest_acc_en, gate>()) {
@@ -441,6 +467,12 @@ __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct_gate
 
 template <bool is_fp32_dest_acc_en, std::uint32_t new_output>
 __attribute__((always_inline)) inline void llk_pack_reconfig_data_format_ct() {
+    if constexpr (!LLK_SIZE_MODE && ckernel::packer::llk_pack_sdpa_joint<new_output * 0 + 1>()) {
+        if (ckernel::packer::pack_sdpa_last_push >= 8) {
+            llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
+            return;
+        }
+    }
     if constexpr (LLK_SIZE_MODE) {
         llk_pack_reconfig_data_format<is_fp32_dest_acc_en>(new_output);
     } else if constexpr (

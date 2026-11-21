@@ -345,6 +345,10 @@ constexpr std::uint8_t LLK_PACK_STATE_W       = 0x80;
 [[maybe_unused]] static std::uint32_t pack_pre_next = 0;
 // The last release drained the packer and no pack has run since the next section's wait: the push needs no stall of its own.
 [[maybe_unused]] static bool pack_push_drained = false;
+// SDPA kernels: tiles of the last push (llk_push_tiles), which picks the reconfigure form.
+[[maybe_unused]] static std::uint32_t pack_sdpa_last_push = 0;
+// SDPA kernels: tiles of the last reserve (llk_wait_for_free_tiles), the block now being packed.
+[[maybe_unused]] static std::uint32_t pack_sdpa_reserve = 0;
 constexpr std::uint32_t LLK_PACK_PRE_WRITTEN        = 0x80000000u;
 inline void llk_pack_live_forget()
 {
@@ -491,6 +495,13 @@ constexpr bool llk_pack_late_start(const bool is_fp32_dest_acc_en)
 // Specialized by the headers of the pack-thread SFPU inits (compute_kernel_api.h and seven eltwise_unary headers).
 template <int api>
 struct llk_pack_sfpu_api
+{
+    static constexpr bool value = false;
+};
+
+// Specialized by the SDPA SFPU header (ckernel_sfpu_sdpa.h): SDPA compute kernels.
+template <int api>
+struct llk_pack_sdpa_api
 {
     static constexpr bool value = false;
 };
@@ -968,6 +979,21 @@ template <std::uint32_t dep>
 constexpr int llk_pack_one_output()
 {
     return llk_pack_one_output_of<dep>(std::make_integer_sequence<int, 64> {});
+}
+
+// Specialized by the metal pack API (llk_copy_kernel.h): a half-sync 16-bit DEST copy kernel with no math between unpack and pack.
+template <int api>
+struct llk_pack_copy_api
+{
+    static constexpr bool value = false;
+};
+
+// Such a kernel keeps main's late pack start: the word-form destination write and the DEST offset after the drain, as its
+// pack runs while its unpacker reads the next tile (sharded identity +0.25 %).
+template <std::uint32_t dep>
+constexpr bool llk_pack_copy(const bool is_fp32_dest_acc_en)
+{
+    return !is_fp32_dest_acc_en && llk_pack_copy_api<static_cast<int>(dep * 0 + 1)>::value;
 }
 
 // Specialized where the kernel's formats are known (llk_pack_block_tile.h): whether output cb is block float or 32 bit.
