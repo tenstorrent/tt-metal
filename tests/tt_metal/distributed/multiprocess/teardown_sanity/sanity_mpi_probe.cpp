@@ -20,6 +20,7 @@
 //                         | revoke_shrink | abort | exit_nofinalize
 //   PROBE_SECOND_BARRIER  1 -> survivors try a second collective after an error
 //   PROBE_PIDDIR          directory to write rank_<r>.pid into (external per-rank signals)
+//   PROBE_STOP_DELAY_MS   all_hang: how long a rank takes to exit after it caught the stop (a mesh close; default 0)
 #include <mpi.h>
 #if __has_include(<mpi-ext.h>)
 #include <mpi-ext.h>
@@ -171,6 +172,9 @@ int main(int argc, char** argv) {
         for (int i = 0;; i++) {
             if (g_caught_signal) {
                 mark("caught signal %d; exiting gracefully", (int)g_caught_signal);
+                if (const char* d = getenv("PROBE_STOP_DELAY_MS")) {
+                    sleep_ms(atoi(d));  // the time a real rank takes to close its devices
+                }
                 mark("main_exit");
                 return 0;  // atexit -> MPI_Finalize: a graceful exit, not a kill
             }

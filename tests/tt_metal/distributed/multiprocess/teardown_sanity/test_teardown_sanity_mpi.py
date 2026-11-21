@@ -277,6 +277,32 @@ def test_ttrun_ctrl_z_pauses_and_resumes_the_ranks():
     assert "the job is paused" in r.log and r.exit == 128 + signal.SIGTERM, r.log[-3000:]
 
 
+def test_ttrun_sigterm_to_every_process_stops_gracefully():
+    """SIGTERM to tt-run and prterun at the same instant: what scancel of an srun step or a Slurm time limit does. tt-run
+    starts prterun with SIGTERM blocked, so prterun's own kill path (SIGKILL 250 ms after its SIGTERM) does not run: the
+    ranks get tt-run's graceful stop and each takes its 2 s to exit (finalize_done from every rank, none killed)."""
+    r = run_case(
+        "ttrun_sigterm_everyone",
+        {**NP, "PROBE_SCENARIO": "all_hang", "PROBE_STOP_DELAY_MS": "2000"},
+        DEADLINE_HANG,
+        cmd=ttrun_mpi_cmd(),
+        launcher_signal=signal.SIGTERM,
+        launcher_ready=(0, "ready"),
+        signal_after=1,
+        launcher_too=True,
+    )
+    fault_delivered(r)
+    ended(r)
+    clean(r)
+    done = {int(m.group(1)) for m in re.finditer(r"\[probe r=(\d+) [^\]]*\] finalize_done", r.log)}
+    assert done == {
+        0,
+        1,
+        2,
+    }, f"ranks killed during their exit (prterun's kill path): only {sorted(done)} finished\n{r.log[-3000:]}"
+    assert r.exit == 128 + signal.SIGTERM and "outcome=stopped" in r.log, r.log[-3000:]
+
+
 def test_ttrun_hangup_keeps_the_job():
     """SIGHUP at tt-run (the terminal closed, an ssh session dropped): the job keeps running with tt-run still
     supervising it; nothing reaches the ranks, and a later stop (SIGTERM) ends the job gracefully as usual."""

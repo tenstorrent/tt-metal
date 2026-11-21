@@ -310,6 +310,7 @@ def run_case(
     signal_after: float = 0.0,
     launcher_ready: tuple | None = None,  # (rank, marker): wait for this rank's phase marker before the launcher signal
     then_signals: list | None = None,  # [(signal, seconds after the previous one)] to tt-run after launcher_signal
+    launcher_too: bool = False,  # send launcher_signal to this job's prterun at the same instant (scancel of a step)
     rank_signal: tuple | None = None,  # (rank, signal, seconds after the rank is ready)
     signal_on_marker: str | None = None,  # gate rank_signal on this phase marker file (e.g. "open_enter") not the pid
     phase1_kill: bool = False,  # SIGKILL the first generate_rank_bindings process that appears (new mode)
@@ -382,8 +383,15 @@ def run_case(
                     wait_marker(gr, gm)  # the ranks are at the tested phase before we signal, not a wall-clock guess
                     where = f"{signal_after:.0f} s after rank {gr} reached {gm}"
                 time.sleep(signal_after)
+                launchers = [p for p, (c, a) in _procs(piddir).items() if c == "prterun"] if launcher_too else []
                 os.kill(proc.pid, launcher_signal)
-                sent.append(f"{signal.Signals(launcher_signal).name} to tt-run {where}")
+                for p in launchers:
+                    os.kill(p, launcher_signal)
+                sent.append(
+                    f"{signal.Signals(launcher_signal).name} to tt-run{' and prterun' if launchers else ''} {where}"
+                )
+                if launcher_too and not launchers:
+                    sent.append("FAULT NOT DELIVERED: no prterun of this job to signal")
                 for sig, after in then_signals or []:
                     time.sleep(1.0)  # let the signal reach the ranks before reading their state
                     sent.append(f"ranks: {rank_states()}")

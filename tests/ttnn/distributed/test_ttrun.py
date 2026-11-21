@@ -1487,7 +1487,7 @@ class TestJobOwnership:
         # for a stop at tt-run, then tt-run forces through the launcher. The code is still the stopping rank's.
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
         line = "[1,0]<stderr>: [tt-stop] rank 0 on nodeA (pid 11): sys.exit(5); stopping the job (exit 5)"
-        script = f"echo {shlex.quote(line)} >&2; trap 'exit 143' TERM; while :; do sleep 0.1; done"
+        script = f"echo {shlex.quote(line)} >&2; trap 'exit 143' INT TERM; while :; do sleep 0.1; done"
         t0 = time.time()
         text, rc = self._logged_rc(lambda: m.run_launcher(["bash", "-c", script], cwd=Path.cwd()))
         assert rc == 5, text
@@ -1516,12 +1516,12 @@ class TestJobOwnership:
     # A fake prterun for the stop tests: it publishes the PMIx tool rendezvous file the way prterun does
     # (<TMPDIR>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>, URI on the first line), then runs until its
     # "ranks" are gone (the fake helper creates REC/ranks_gone) or it is signalled. Every signal it gets is
-    # recorded in REC/launcher.signals; IGNORE_TERM=1 makes it ignore SIGTERM like a wedged launcher.
+    # recorded in REC/launcher.signals; IGNORE_TERM=1 makes it ignore the force (SIGINT) like a wedged launcher.
     _FAKE_PRTERUN = (
         'd="$TMPDIR/prterun.fakehost.$$.$(id -u)"; mkdir -p "$d"; '
         'printf "fake-uri-%s\\n5.0.5\\n%s\\n" $$ $$ > "$d/pmix.fakehost.tool.$$"; '
-        'if [ "$IGNORE_TERM" = 1 ]; then trap "echo TERM >> $REC/launcher.signals" TERM; '
-        'else trap "echo TERM >> $REC/launcher.signals; exit 143" TERM; fi; '
+        'if [ "$IGNORE_TERM" = 1 ]; then trap "echo INT >> $REC/launcher.signals" INT; '
+        'else trap "echo INT >> $REC/launcher.signals; exit 130" INT; fi; '
         'while [ ! -e "$REC/ranks_gone" ]; do sleep 0.1; done; exit 143'
     )
 
@@ -1547,7 +1547,7 @@ class TestJobOwnership:
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "1")
         monkeypatch.setenv("IGNORE_TERM", "0")
         text, rc = self._logged_rc(
-            lambda: m.run_launcher(["bash", "-c", self._FAKE_PRTERUN, "--timeout", "1"], cwd=Path.cwd())
+            lambda: m.run_launcher(["bash", "-c", self._FAKE_PRTERUN], cwd=Path.cwd(), job_timeout=1.0)
         )
         assert rc == 241, text
         assert "the job reached its --timeout of 1 s: sent SIGTERM to all ranks" in text, text
@@ -1626,7 +1626,7 @@ class TestJobOwnership:
             assert "job end: outcome=stopped exit=143" in text, text
             return
         # every other case ends in a force: the launcher is signalled and the user is told the devices may be unhealthy
-        assert "TERM" in launcher_signals, "the force path did not signal the launcher"
+        assert "INT" in launcher_signals, "the force path did not signal the launcher (SIGINT, its kill path)"
         assert "job forced down" in text and "tt-smi -r" in text, text
         assert "job end: outcome=forced exit=143" in text, text
         why = {
@@ -1660,6 +1660,38 @@ class TestJobOwnership:
         monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "60")
         monkeypatch.setenv("IGNORE_TERM", "0")
         return rec
+
+    def test_run_launcher_ends_leftovers_on_a_ctrl_c_during_the_wait(self, monkeypatch, unreaped_orphans):
+        import signal
+        import threading
+        import time
+
+        from ttnn.distributed.ttrun import run_launcher
+
+        # After a clean finish tt-run waits up to the stop grace for a process still exiting. A Ctrl-C during that wait
+        # is still tt-run's (its handlers stay installed through the sweep): the leftover is ended at once, nothing
+        # raises out of tt-run, and the job returns 130.
+        monkeypatch.setenv("TT_RUN_STOP_GRACE_S", "60")
+        running = threading.Event()
+
+        def interrupt():
+            time.sleep(1.5)  # the launcher exited after 0.2 s; tt-run is in the sweep's wait
+            if running.is_set():
+                os.kill(os.getpid(), signal.SIGINT)
+
+        def launch():
+            running.set()
+            try:
+                return run_launcher(["bash", "-c", "sleep 60 & disown; sleep 0.2; exit 0"], cwd=Path.cwd())
+            finally:
+                running.clear()
+
+        threading.Thread(target=interrupt, daemon=True).start()
+        t0 = time.time()
+        text, rc = self._logged_rc(launch)
+        assert rc == 130, text
+        assert time.time() - t0 < 15, f"the Ctrl-C did not end the wait: {time.time() - t0:.0f} s\n{text}"
+        assert "straggler" in text and "outcome=stopped exit=130" in text, text
 
     def test_run_launcher_keeps_the_job_on_a_hangup(self, tmp_path, monkeypatch):
         import signal
@@ -1889,7 +1921,7 @@ class TestJobOwnership:
             assert launcher_signals == "", "a graceful stop must not signal the launcher (PRRTE's kill path)"
             return
         assert guard.returncode == 1, said
-        assert "TERM" in launcher_signals, "the force did not signal the launcher"
+        assert "INT" in launcher_signals, "the force did not signal the launcher (SIGINT, its kill path)"
         assert "job forced down" in said and "tt-smi -r" in said, said
         why = {"ranks_ignore_the_stop": "ranks did not exit within the stop grace", "no_helper": "no signal tool"}
         assert why[case] in said, said
@@ -1952,7 +1984,7 @@ class TestJobOwnership:
             running.set()
             try:
                 return run_launcher(
-                    ["bash", "-c", "sleep 300 & disown; trap 'exit 143' TERM; while :; do sleep 0.1; done"],
+                    ["bash", "-c", "sleep 300 & disown; trap 'exit 143' INT TERM; while :; do sleep 0.1; done"],
                     cwd=Path.cwd(),
                 )
             finally:
@@ -2016,12 +2048,14 @@ class TestJobOwnership:
     def test_timeout_is_taken_off_the_launch_line(self, monkeypatch):
         from ttnn.distributed.ttrun import LaunchedJob, split_launcher_timeout
 
-        # tt-run runs the --timeout clock itself (a graceful stop at N); PRRTE's, which kills every rank at once, goes.
-        assert split_launcher_timeout(["mpirun", "--timeout", "20", "x"]) == (20.0, ["mpirun", "x"])
-        assert split_launcher_timeout(["mpirun", "--timeout=7", "x"]) == (7.0, ["mpirun", "x"])
-        assert split_launcher_timeout(["mpirun", "x"]) == (None, ["mpirun", "x"])
-        job = LaunchedJob(["mpirun", "--timeout", "20", "--report-state-on-timeout", "x"], Path("."))
-        assert job.job_timeout == 20.0 and "--timeout" not in job.cmd, job.cmd
+        # tt-run runs the --timeout of --mpi-args itself (a graceful stop at N); PRRTE's, which kills every rank at once,
+        # leaves the launch line. A rank program's own --timeout (pytest's) is never read: only --mpi-args are.
+        assert split_launcher_timeout(["--oversubscribe", "--timeout", "20"]) == (20.0, ["--oversubscribe"])
+        assert split_launcher_timeout(["--timeout=7"]) == (7.0, [])
+        assert split_launcher_timeout(["--oversubscribe"]) == (None, ["--oversubscribe"])
+        program_timeout = ["mpirun", "-np", "1", "pytest", "tests/x.py", "--timeout", "600"]
+        job = LaunchedJob(program_timeout, Path("."))
+        assert job.job_timeout is None and job.cmd[-2:] == ["--timeout", "600"], job.cmd
 
     @staticmethod
     def _logged(fn):

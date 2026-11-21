@@ -37,8 +37,13 @@
 // (<tmpdir>/prterun.<host>.<pid>.<uid>/pmix.<host>.tool.<pid>); connecting by URI avoids PMIx's pid lookup, which
 // searches the whole system tmpdir recursively. Exit code: 0 on success, 1 on a PMIx error, 2 on bad arguments.
 
+// Without PMIx (an MPI install that has none) the graceful parts are compiled out: the wrapper still passes signals
+// on, stops a rank whose daemon died and prints the [tt-stop] line, but leaves ending the job to the launcher; the
+// --uri mode fails, so tt-run and the guard force a stop instead.
+#ifdef TT_RUN_RANK_HAS_PMIX
 #include <pmix.h>
 #include <pmix_tool.h>
+#endif
 
 #include <cerrno>
 #include <csignal>
@@ -70,6 +75,7 @@ void forward(int signal_number) {
     }
 }
 
+#ifdef TT_RUN_RANK_HAS_PMIX
 // The same bound as the ranks' exit wait (DistributedContext): TT_METAL_STOP_TIMEOUT_S, else tt-run's stop grace
 // (TT_RUN_STOP_GRACE_S, 120 s by default) plus 10 s.
 double stop_timeout_s() {
@@ -80,6 +86,7 @@ double stop_timeout_s() {
     const char* grace = std::getenv("TT_RUN_STOP_GRACE_S");
     return ((grace != nullptr && *grace != '\0') ? std::atof(grace) : 120.0) + 10.0;
 }
+#endif
 
 // Whether the process is writing a core dump right now (/proc/<pid>/status "CoreDumping: 1").
 bool core_dumping(pid_t pid) {
@@ -201,6 +208,10 @@ int signal_job(int argc, char** argv) {
         std::fprintf(stderr, "usage: %s --uri <prterun PMIx URI> --signal <N>\n", argv[0]);
         return 2;
     }
+#ifndef TT_RUN_RANK_HAS_PMIX
+    std::fprintf(stderr, "tt-run-rank: built without PMIx; cannot signal the job (signal %d)\n", signum);
+    return 3;
+#else
 
     // Identify as a tool with a namespace of our own, the way PRRTE's own tools (pterm) do.
     char nspace[PMIX_MAX_NSLEN + 1];
@@ -226,6 +237,7 @@ int signal_job(int argc, char** argv) {
     }
     PMIx_tool_finalize();
     return rc == PMIX_SUCCESS ? 0 : 1;
+#endif
 }
 
 int guard(int argc, char** argv) {
@@ -294,7 +306,7 @@ int guard(int argc, char** argv) {
         "a graceful shutdown, so devices may be left unhealthy. Run tt-smi -r on the job's hosts before the next "
         "run.\n",
         why.empty() ? "ranks did not exit within the stop grace" : why.c_str());
-    ::kill(launcher, SIGTERM);
+    ::kill(launcher, SIGINT);  // tt-run starts prterun with SIGTERM blocked; SIGINT is its kill path too
     for (int i = 0; i < 100 && launcher_running(); ++i) {  // 10 s, tt-run's SIGNAL_FORWARD_GRACE_S
         ::usleep(100000);
     }
@@ -383,8 +395,11 @@ int main(int argc, char** argv) {
                 std::getenv("OMPI_COMM_WORLD_RANK") != nullptr ? std::getenv("OMPI_COMM_WORLD_RANK") : "?",
                 static_cast<int>(daemon));
             forward(SIGTERM);
-        } else if (orphaned_ticks >= 0 && ++orphaned_ticks == 100) {  // still there 10 s later
-            ::kill(child, SIGKILL);
+        } else if (orphaned_ticks >= 0) {
+            ++orphaned_ticks;
+            if (orphaned_ticks == 100) {  // still there 10 s later
+                ::kill(child, SIGKILL);
+            }
         }
         if (g_stop_signal != 0 && !dump_ended && core_dumping(child)) {
             std::fprintf(
@@ -437,6 +452,11 @@ int main(int argc, char** argv) {
         code);
     std::fflush(stderr);
 
+#ifndef TT_RUN_RANK_HAS_PMIX
+    (void)context_rank;
+    std::fprintf(stderr, "[tt-stop] tt-run-rank: built without PMIx; the launcher ends the job\n");
+    return code;
+#else
     pmix_proc_t me;
     pmix_status_t rc = PMIx_Init(&me, nullptr, 0);
     if (rc != PMIX_SUCCESS) {
@@ -473,4 +493,5 @@ int main(int argc, char** argv) {
         ::usleep(100000);
     }
     return code;
+#endif
 }
