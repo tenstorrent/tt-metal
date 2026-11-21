@@ -55,6 +55,7 @@ from models.demos.deepseek_v3_d_p.tests.kimi_k3.golden import (
 )
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.kda_slabs import attach_kda_states
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.synthetic import CACHE_LEN, cache_rows, compose
+from models.demos.deepseek_v3_d_p.tests.kimi_k3.teacher_feed import topk_recall
 from models.demos.deepseek_v3_d_p.tests.kimi_k3.test_transformer_pipeline_split import RECOVERY_FROM, RECOVERY_PCC
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res import TtAttnRes
 from models.demos.deepseek_v3_d_p.tt.attn_res.attn_res_stream import TtAttnResWalk
@@ -514,15 +515,6 @@ def k31_topk_rows(mesh_device, indices, rows: int, sp_axis: int, tp_axis: int) -
         return host[0, 0]
     assert local * sp * tp == rows, f"top-k rows {host.shape} do not tile a {rows}-row chunk on {sp}x{tp}"
     return torch.cat([host[0, t, s * local : (s + 1) * local] for s in range(sp) for t in range(tp)])
-
-
-def topk_recall(got: torch.Tensor, want: torch.Tensor) -> torch.Tensor:
-    """Per row the fraction of `want`'s valid (>= 0) keys that occur in `got`, i.e. |got ∩ want| / |want| as sets
-    (a key `got` holds twice counts once). Both `[rows, k]` int64; `got`'s 0xFFFFFFFF sentinel matches nothing.
-    Rows with no valid `want` entry read NaN."""
-    rows = torch.arange(want.shape[0]).unsqueeze(1) << 32
-    valid = want >= 0
-    return (torch.isin(rows + want, rows + got) & valid).sum(dim=1) / valid.sum(dim=1)
 
 
 def test_topk_recall_counts_each_trace_key_once():
