@@ -24,6 +24,7 @@ from ....models.transformers.minimax_h3.sol_prepass import (
     SolGeometry,
     SolPrepass,
     build_constants,
+    sink_block_mask,
     torch_reference,
 )
 from ....models.transformers.minimax_h3.sol_prepass_fused import SolPrepassFused, torch_reference_chunk
@@ -82,11 +83,26 @@ def _check_bias(dev_bias, ref_bias, geo, *, marker_min, live_atol=None):
 
 
 def _check_fused(
-    mesh_device, sp_axis, tp_axis, ccl_manager, *, geo, tau, mode, sink_tokens, q, k, v, compare_ttnn=True
+    mesh_device,
+    sp_axis,
+    tp_axis,
+    ccl_manager,
+    *,
+    geo,
+    tau,
+    mode,
+    sink_tokens,
+    q,
+    k,
+    v,
+    compare_ttnn=True,
+    partial_prefix=False,
 ):
     S = geo.shards
     scale = D**-0.5
-    consts = build_constants(geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale)
+    consts = build_constants(
+        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale, partial_prefix=partial_prefix
+    )
     ref = torch_reference(q, k, v, geo, consts, tau=tau, scale=scale)
     compare_ttnn = compare_ttnn and mode != "compact"
     if mode == "chunk":
@@ -98,7 +114,14 @@ def _check_fused(
         cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(S)])
 
     tq, tk, tv = (_upload(mesh_device, sp_axis, x) for x in (q, k, v))
-    pre = SolPrepassFused(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, mode=mode)
+    pre = SolPrepassFused(
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        sp_axis=sp_axis,
+        tau=tau,
+        mode=mode,
+        partial_prefix=partial_prefix,
+    )
     pre.prepare(geo, sink_tokens, scale)
 
     pooled = pre.pool(tq, tk, tv)
@@ -135,7 +158,14 @@ def _check_fused(
 
     result = {"agree_all": agree_all, "agree_real": agree_real, "marker_agree": marker_agree}
     if compare_ttnn:
-        pre_ttnn = SolPrepass(mesh_device=mesh_device, ccl_manager=ccl_manager, sp_axis=sp_axis, tau=tau, mode=mode)
+        pre_ttnn = SolPrepass(
+            mesh_device=mesh_device,
+            ccl_manager=ccl_manager,
+            sp_axis=sp_axis,
+            tau=tau,
+            mode=mode,
+            partial_prefix=partial_prefix,
+        )
         pre_ttnn.prepare(geo, sink_tokens, scale)
         out2 = pre_ttnn(tq, tk, tv, scale=scale, report_density=True)
         ttnn.synchronize_device(mesh_device)
@@ -166,6 +196,56 @@ def test_sol_prepass_fused(
     ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
     r = _check_fused(
         mesh_device, sp_axis, tp_axis, ccl_manager, geo=geo, tau=1.0, mode=mode, sink_tokens=300, q=q, k=k, v=v
+    )
+    bar = max(0.985, r["agree_ttnn_ref"] - 0.002) if "agree_ttnn_ref" in r else 0.985
+    assert r["agree_real"] >= bar, (r, bar)
+
+
+def _partial_blocks(geo):
+    """[nbg] bool: valid blocks shorter than a block (a shard's short last block, the logical_n tail)."""
+    lens = geo.block_lengths().reshape(-1)
+    return (lens > 0) & (lens < geo.block)
+
+
+@GALAXY_RING
+@pytest.mark.parametrize(
+    ("rows", "logical_n", "sink_tokens"),
+    [(1184, 9000, 300), (1184, 7000, 1400)],
+    ids=["mid_shard_cut", "sink_two_shards"],
+)
+@pytest.mark.parametrize("mode", ["gather", "compact"])
+def test_sol_prepass_fused_partial_prefix(
+    mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, sink_tokens, mode, reset_seeds
+):
+    """partial_prefix (MINIMAX_H3_SOL_PREFIX_PARTIAL): the sink Q blocks keep every valid block, partial ones
+    included; the other Q blocks keep full blocks only. Fused and ttnn-op pre-pass vs the torch mirror."""
+    S = tuple(mesh_device.shape)[sp_axis]
+    geo = SolGeometry(shards=S, rows=rows, logical_n=logical_n, q_chunk=64, k_chunk=512)
+    q, k, v = _structured_qkv(S, rows)
+    scale = D**-0.5
+    consts = build_constants(
+        geo, band=1, sink_tokens=sink_tokens, force_first_chunk=True, scale=scale, partial_prefix=True
+    )
+    ref = torch_reference(q, k, v, geo, consts, tau=1.0, scale=scale)["block_mask"]
+    part = _partial_blocks(geo)
+    sink_q = torch.zeros(S, geo.nqc_pad, dtype=torch.bool)
+    sink_q[:, : geo.nb] = sink_block_mask(geo, sink_tokens)[:, : geo.nb]
+    assert bool(part.any()) and bool(ref[..., part][sink_q[:, None].expand(-1, H, -1)].all())
+    assert not bool(ref[..., part][~sink_q[:, None].expand(-1, H, -1)].any())
+    ccl_manager = CCLManager(mesh_device=mesh_device, num_links=num_links, topology=topology)
+    r = _check_fused(
+        mesh_device,
+        sp_axis,
+        tp_axis,
+        ccl_manager,
+        geo=geo,
+        tau=1.0,
+        mode=mode,
+        sink_tokens=sink_tokens,
+        q=q,
+        k=k,
+        v=v,
+        partial_prefix=True,
     )
     bar = max(0.985, r["agree_ttnn_ref"] - 0.002) if "agree_ttnn_ref" in r else 0.985
     assert r["agree_real"] >= bar, (r, bar)

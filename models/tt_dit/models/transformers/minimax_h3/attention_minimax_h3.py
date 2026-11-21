@@ -810,6 +810,7 @@ class MiniMaxH3Attention(Module):
                 mode=self._sol_prepass_mode,
                 emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
                 row_max=False,
+                partial_prefix=self._sol_sparse_resident() and self._PREFIX_PARTIAL and self.sol_prefix_mode == "fused",
                 **extra,
             )
         # The ring-joint reader's gather / compact paths attend block 0 of a shard exactly when a Q chunk keeps no block
@@ -1206,6 +1207,14 @@ class MiniMaxH3Attention(Module):
     # logical_n_tensor and dense_q_blocks_tensor), so one compile and one trace serve every prompt length of a bucket.
     # Default off: per-length programs and traces.
     _RUNTIME_LEN = os.environ.get("MINIMAX_H3_SOL_RUNTIME_LEN", "0") == "1"
+    # The sink (text / audio) Q blocks of the `fused` prefix mode also attend partial blocks (a shard's short last
+    # block, the logical_n tail) exactly instead of through their pooled entry; sparse ring op only, whose reader
+    # takes kept partial blocks. Default off.
+    _PREFIX_PARTIAL = os.environ.get("MINIMAX_H3_SOL_PREFIX_PARTIAL", "0") == "1"
+
+    def _sol_sparse_resident(self) -> bool:
+        """Whether the Sol path runs the sparse ring op (resident mode)."""
+        return self._SPARSE_RING and self.sol_mode == "resident"
 
     def _bf8_native_path(self, rows: int) -> bool:
         """Whether this call takes the 8-bit sparse ring path with native BFP8 q / k / v."""

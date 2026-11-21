@@ -65,6 +65,7 @@ def build_fused_constants(
     scale: float,
     dense_prefix_queries: bool,
     block_map: tuple[int, ...] | None = None,
+    partial_prefix: bool = False,
 ) -> dict:
     """Host constants of the route program (torch fp32), derived from sol_prepass.build_constants.
 
@@ -76,6 +77,8 @@ def build_fused_constants(
     qsel [1,1,nqc_pad,nb_pad]: 1 where the Q block belongs to the Q chunk. ksel [1,1,nb_pad,nkcl]: 1 where the
       local block belongs to the local K chunk (geometry only). erow [1,1,1024,32]: tile r has column r = 1
       (E_r @ T copies row r of T into every row). ones [1,1,32,32]: row 0 = 1.
+    partial_prefix: the full-block column constant becomes the valid one, and const_or is -16 where a chunk may not
+      keep a (partial) block, which outweighs any count of passing scores, so only the sink chunks keep partial blocks.
     """
     c = build_constants(
         geo,
@@ -85,13 +88,19 @@ def build_fused_constants(
         scale=scale,
         dense_prefix_queries=dense_prefix_queries,
         block_map=block_map,
+        partial_prefix=partial_prefix,
     )
     S, nbp, nqcp = geo.shards, geo.nb_pad, geo.nqc_pad
     m = ((c["band"] + c["sink_row"]) > 0.5).float()
     m2 = (m.transpose(-2, -1) @ c["qc_pool_t"]).transpose(-2, -1)
-    const_or = ((m2 + c["force_row"]) > 0.5).float() * c["full_row"]
+    allow = c.get("allow_chunk", c["full_row"])
+    const_or = ((m2 + c["force_row"]) > 0.5).float() * allow
+    keep_row = c["full_row"]
+    if "allow_chunk" in c:
+        const_or = const_or - 16.0 * (1.0 - allow)
+        keep_row = c["valid_row"]
     colconst = torch.zeros(1, 1, 3 * S * TILE, nbp)
-    for kind, row in enumerate((c["full_row"], c["valid_row"], c["len_bias_row"])):
+    for kind, row in enumerate((keep_row, c["valid_row"], c["len_bias_row"])):
         for s in range(S):
             colconst[0, 0, (kind * S + s) * TILE : (kind * S + s + 1) * TILE, :] = row[0, 0, 0, s * nbp : (s + 1) * nbp]
     qsel = c["qc_pool_t"][0, 0].T.contiguous().view(1, 1, nqcp, nbp)
@@ -184,10 +193,12 @@ class SolPrepassFused:
         head_weights: bool | None = None,
         gather_kwargs: dict | None = None,
         gather_persistent: bool = False,
+        partial_prefix: bool = False,
     ):
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         assert thresh_type == "diag", "fused pre-pass implements the diag threshold (H3 policy)"
         self.mode = mode
+        self.partial_prefix = bool(partial_prefix)
         self.mesh_device = mesh_device
         self.ccl_manager = ccl_manager
         self.sp_axis = sp_axis
@@ -295,6 +306,7 @@ class SolPrepassFused:
             scale=scale,
             dense_prefix_queries=self.dense_prefix_queries,
             block_map=self.block_map,
+            partial_prefix=self.partial_prefix,
         )
         host = {name: c[name] for name in self._CONST_SPECS if name != "geo"}
         host["geo"] = self._geo_host(geo, c["n_valid_blocks"])
@@ -315,6 +327,7 @@ class SolPrepassFused:
             self.band,
             self.force_first_chunk,
             self.dense_prefix_queries,
+            self.partial_prefix,
             self.tau,
             self.emit_bias,
             self.emit_chunk_union,

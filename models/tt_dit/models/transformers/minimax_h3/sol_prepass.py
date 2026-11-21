@@ -136,8 +136,13 @@ def build_constants(
     scale: float,
     dense_prefix_queries: bool = True,
     block_map: tuple[int, ...] | None = None,
+    partial_prefix: bool = False,
 ) -> dict:
     """Host-built constant matrices (torch fp32) for the device pre-pass; all tile-padded.
+
+    ``partial_prefix`` (with ``dense_prefix_queries``): the sink Q blocks also attend partial blocks (a shard's short
+    last block, the logical_n tail) exactly; ``allow`` [S,1,nb_pad,nbg] / ``allow_chunk`` [S,1,nqc_pad,nbg] then
+    replace ``full_row`` as the blocks a Q block / chunk may keep. Other Q blocks keep full blocks only.
 
     ``block_map`` (prefix spread, prefix_spread.py; None = identity, the constants are unchanged): the logical global
     block index (shard * nb + b) of each packed block. The band and the sink / dense-prefix rows follow the blocks'
@@ -206,7 +211,18 @@ def build_constants(
     len_bias_row = torch.full((1, 1, 1, nbg), NEG)
     pos = lengths.reshape(-1) > 0
     len_bias_row[0, 0, 0, pos] = torch.log(lengths.reshape(-1)[pos]) / scale
+    extra = {}
+    if partial_prefix and dense_prefix_queries:
+        allow = full_row.view(1, 1, 1, nbg).repeat(S, 1, nbp, 1)
+        allow_chunk = full_row.view(1, 1, 1, nbg).repeat(S, 1, geo.nqc_pad, 1)
+        for s in range(S):
+            for b in range(nb):
+                if sink_m[s, b]:
+                    allow[s, 0, b] = valid_row
+                    allow_chunk[s, 0, (b * geo.block) // geo.q_chunk] = valid_row
+        extra = {"allow": allow, "allow_chunk": allow_chunk}
     return {
+        **extra,
         "pool_t": pool_t,
         "band": band_m,
         "sink_row": sink_row,
@@ -298,9 +314,9 @@ def torch_reference(q, k, v, geo: SolGeometry, consts: dict, *, tau: float, scal
     scores = (q_bar @ kc[None].transpose(2, 3)) * log2_scale
     exact = (scores > thr).float()
     exact = exact + consts["band"] + consts["sink_row"]
-    exact = (exact > 0.5).float() * consts["full_row"]
+    exact = (exact > 0.5).float() * consts.get("allow", consts["full_row"])
     m2 = (exact.transpose(2, 3) @ consts["qc_pool_t"]).transpose(2, 3)
-    block_mask = ((m2 + consts["force_row"]) > 0.5).float() * consts["full_row"]
+    block_mask = ((m2 + consts["force_row"]) > 0.5).float() * consts.get("allow_chunk", consts["full_row"])
     bias = consts["len_bias_row"] + block_mask * NEG
     return {"block_mask": block_mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "q_bar": q_bar, "threshold": thr}
 
@@ -322,9 +338,11 @@ class SolPrepass:
         mode: str = "gather",
         emit_bias: bool | None = None,
         row_max: bool = False,
+        partial_prefix: bool = False,
     ):
         assert mode in ("gather", "chunk", "compact", "pack"), mode
         self.mode = mode
+        self.partial_prefix = bool(partial_prefix)
         self.emit_bias = True if emit_bias is None else bool(emit_bias)
         self.row_max = bool(row_max)
         self.mesh_device = mesh_device
@@ -372,6 +390,7 @@ class SolPrepass:
             self.band,
             self.force_first_chunk,
             self.dense_prefix_queries,
+            self.partial_prefix,
             key,
         )
         cached = SolPrepass._shared_consts.get(shared_key)
@@ -388,6 +407,7 @@ class SolPrepass:
             force_first_chunk=self.force_first_chunk,
             scale=scale,
             dense_prefix_queries=self.dense_prefix_queries,
+            partial_prefix=self.partial_prefix,
         )
         self._consts = {
             "pool_t": self._upload(c["pool_t"], shard=True),
@@ -402,6 +422,8 @@ class SolPrepass:
             "valid_row": self._upload(c["valid_row"], shard=False),
             "n_valid_blocks": c["n_valid_blocks"],
         }
+        for name in ("allow", "allow_chunk"):
+            self._consts[name] = self._upload(c[name], shard=True) if name in c else self._consts["full_row"]
         SolPrepass._shared_consts[shared_key] = self._consts
         self.geo = geo
         self._key = key
@@ -502,14 +524,14 @@ class SolPrepass:
         exact = ttnn.gtz(ttnn.subtract(scores, thr))
         ttnn.deallocate(scores)
         exact = ttnn.add(ttnn.add(exact, c["band"]), c["sink_row"])
-        exact = ttnn.multiply(ttnn.gtz(ttnn.subtract(exact, 0.5)), c["full_row"])
+        exact = ttnn.multiply(ttnn.gtz(ttnn.subtract(exact, 0.5)), c["allow"])
         exact_t = ttnn.transpose(exact, -2, -1)
         ttnn.deallocate(exact)
         m2t = ttnn.matmul(exact_t, c["qc_pool_t"], compute_kernel_config=self.hifi2)
         ttnn.deallocate(exact_t)
         m2 = ttnn.transpose(m2t, -2, -1)
         ttnn.deallocate(m2t)
-        block01 = ttnn.multiply(ttnn.gtz(ttnn.subtract(ttnn.add(m2, c["force_row"]), 0.5)), c["full_row"])
+        block01 = ttnn.multiply(ttnn.gtz(ttnn.subtract(ttnn.add(m2, c["force_row"]), 0.5)), c["allow_chunk"])
         ttnn.deallocate(m2)
         if self.mode == "chunk":
             self._pooled_k, self._pooled_v = kc, vc
