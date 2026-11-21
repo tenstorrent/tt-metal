@@ -377,7 +377,16 @@ FORCE_INLINE bool handle(
         auto& routers = downstreams.template of<ReceiverChannel<VC>::forwards_on_vc>();
         const typename Routing::Route route(route_word);
         bool delivers = route.delivers();
-        if (route.forwards()) {
+        if (is_2d && !ReceiverChannel<VC>::delivers_through_relay && route.forwards()) {
+            // 2D without a relay: nothing to admit besides the downstreams and no sparse multicast, so the admit and
+            // the commands are one step (Downstreams::admit_and_forward: a unicast forward tests only its downstream).
+            // (A 2D header does not change on the way: Routing2D::update_for_next_hop is empty.)
+            if (!routers.admit_and_forward(route.forward_to(), progress.next_slot_addr, size, trid, ready.forward)) {
+                return false;
+            }
+            note_received<VC>(size);
+            record_forwarded<VC>(route.forward_to());
+        } else if (route.forwards()) {
             if (!routers.admit(route.forward_to())) {
                 return false;
             }

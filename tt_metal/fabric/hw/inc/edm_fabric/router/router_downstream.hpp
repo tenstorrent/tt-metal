@@ -329,6 +329,30 @@ template <size_t VC>
 struct PartialPresetForwards {
     using Traits = DownstreamTraits<VC>;
 
+    // Whether every live downstream's credit register (the free-slots register of this router's channel on it) has the
+    // same address, and only VC forwards on these buffers: then the address is preset and a forward writes only the
+    // node. Usual on N/S-facing routers forwarding E/W, whose direction has the same compact index on either side.
+    template <uint32_t NAMES>
+    static constexpr bool credit_streams_equal(uint32_t stream) {
+        if constexpr (NAMES == 0) {
+            return true;
+        } else {
+            constexpr size_t entry = downstream_entry(lowest_bit(NAMES));
+            return Traits::template remote_credit_stream<entry> == stream &&
+                   credit_streams_equal<without_lowest_bit(NAMES)>(stream);
+        }
+    }
+    static constexpr uint32_t live = live_downstreams<VC>();
+    static constexpr uint32_t first_credit_stream = [] {
+        if constexpr (live != 0) {
+            return Traits::template remote_credit_stream<downstream_entry(lowest_bit(live))>;
+        } else {
+            return 0u;
+        }
+    }();
+    static constexpr bool credit_register_fixed = live != 0 && popcount(CommandBuffers::vcs_on_forward_pair(VC)) == 1 &&
+                                                  credit_streams_equal<live>(first_credit_stream);
+
     // After the opens: preset the forwarding buffers' invariant fields, from the lowest VC on them
     // (CommandBuffers::presets_forward_pair). The destination node in the preset is a placeholder: every forward writes
     // its own.
@@ -364,20 +388,33 @@ struct PartialPresetForwards {
             /*update_counter=*/false,
             /*posted=*/true,
             /*update_addr_mid=*/false>(Traits::noc, src_addr, node, dst, size_bytes);
-        noc_fast_write_dw_inline_with_state<
-            DM_DEDICATED_NOC,
-            /*update_addr_lo=*/true,
-            /*update_addr_hi=*/true,
-            /*update_val=*/false,
-            /*posted=*/true,
-            /*update_counter=*/false,
-            InlineWriteDst::REG,
-            /*skip_cmdbuf_chk=*/true>(
-            Traits::noc,
-            Traits::sync_cmd_buf,
-            0,
-            get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>(),
-            node);
+        if constexpr (credit_register_fixed) {
+            // The credit register's address is preset (credit_register_fixed): only the node.
+            noc_fast_write_dw_inline_with_state<
+                DM_DEDICATED_NOC,
+                /*update_addr_lo=*/false,
+                /*update_addr_hi=*/true,
+                /*update_val=*/false,
+                /*posted=*/true,
+                /*update_counter=*/false,
+                InlineWriteDst::REG,
+                /*skip_cmdbuf_chk=*/true>(Traits::noc, Traits::sync_cmd_buf, 0, node);
+        } else {
+            noc_fast_write_dw_inline_with_state<
+                DM_DEDICATED_NOC,
+                /*update_addr_lo=*/true,
+                /*update_addr_hi=*/true,
+                /*update_val=*/false,
+                /*posted=*/true,
+                /*update_counter=*/false,
+                InlineWriteDst::REG,
+                /*skip_cmdbuf_chk=*/true>(
+                Traits::noc,
+                Traits::sync_cmd_buf,
+                0,
+                get_stream_reg_write_addr<Traits::template remote_credit_stream<ENTRY>>(),
+                node);
+        }
         count_preset_forward_writes<Traits::noc>();
     }
 
@@ -386,7 +423,7 @@ private:
         constexpr uint8_t noc_vc = tt::tt_fabric::forward_and_local_write_noc_vc;
         noc_async_write_one_packet_with_trid_set_state</*posted=*/true>(0, Traits::data_cmd_buf, Traits::noc, noc_vc);
         noc_inline_dw_write_set_state</*posted=*/true, /*set_val=*/true>(
-            0,
+            credit_register_fixed ? get_stream_reg_write_addr(first_credit_stream) : 0,
             pack_value_for_inc_on_write_stream_reg_write(-1),
             INLINE_WRITE_ALL_BYTES,
             Traits::sync_cmd_buf,
@@ -477,6 +514,23 @@ struct Downstreams {
         increment_local_update_ptr_val<Traits::template local_credit_stream<entry>>(-1);
     }
 
+    // Admits and forwards in one step: false (nothing issued) when a downstream the packet needs has no free slot. A
+    // packet for one downstream (unicast, the usual case) takes that downstream's own test and commands, as a router
+    // with one live downstream does; only a packet for several takes the grouped admit and forward_all.
+    FORCE_INLINE bool admit_and_forward(
+        uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
+        if constexpr (popcount(live) > 1) {
+            if (__builtin_expect((forward_to & (forward_to - 1)) == 0, 1)) {
+                return forward_single<live>(forward_to, src_addr, size_bytes, trid, ready);
+            }
+        }
+        if (!admit(forward_to)) {
+            return false;
+        }
+        forward_all(forward_to, src_addr, size_bytes, trid, ready);
+        return true;
+    }
+
     // Forwards to every downstream in `forward_to` (live names), lowest name first. `ready`: the forward buffers' ready
     // states read before (read_forward_buffers_ready), good for the first forward only.
     FORCE_INLINE void forward_all(
@@ -487,6 +541,33 @@ struct Downstreams {
 private:
     // Per-packet helpers recurse over a mask of names rather than take per-bit closures: a lambda capturing the loop's
     // state can keep that state in memory.
+
+    // Downstream NAME has a free slot: its known count, re-read from its local credit register when used up.
+    template <size_t NAME>
+    FORCE_INLINE bool admit_one() {
+        constexpr size_t entry = downstream_entry(NAME);
+        if (__builtin_expect(progress[entry].free_slots == 0, 0)) {
+            progress[entry].free_slots = read_stream_count<Traits::template local_credit_stream<entry>>();
+        }
+        return progress[entry].free_slots != 0;
+    }
+
+    // `forward_to` is one live name in NAMES: admit and forward to it (the last candidate needs no test).
+    template <uint32_t NAMES>
+    FORCE_INLINE bool forward_single(
+        uint32_t forward_to, uint32_t src_addr, uint32_t size_bytes, uint8_t trid, ForwardBuffersReady ready) {
+        constexpr size_t name = lowest_bit(NAMES);
+        if constexpr (without_lowest_bit(NAMES) != 0) {
+            if (forward_to != (1u << name)) {
+                return forward_single<without_lowest_bit(NAMES)>(forward_to, src_addr, size_bytes, trid, ready);
+            }
+        }
+        if (!admit_one<name>()) {
+            return false;
+        }
+        forward<name>(src_addr, size_bytes, trid, ready);
+        return true;
+    }
 
     // Whether a downstream in NAMES that `forward_to` needs has no known free slot. Bitwise & and | on the tests: no
     // branch per downstream.
