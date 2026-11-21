@@ -360,6 +360,15 @@ TAP_DIRECT_GROUP = 3
 TAP_DIRECT_FIFO_GROUP = 4
 WEIGHT_DEPTH = 2
 OUT_DEPTH_ROW_GROUPS = 2
+# On the K-blocked ROW_MAJOR ring walk (and kh reuse) with more than one M-block per core, cb_output_tiles also takes the
+# L1 the solved blocking leaves, up to a whole M-block (_free_out_depth), before the deep im2col ring does: the last
+# K-block's bias pass then waits less on the store and the writer drains the rest under the next block's K-blocks. bm is
+# kept (bit-identical). Measured (Blackhole p150b, FLUX.2 bh2x4, device kernel us, base -> free, 2 runs): 130x256
+# 128->512 358.4 -> 345.6 / 345.9 (3 of 3 row groups), 258x512 64->256 397.5 -> 385.5 / 386.5 (8 of 10), 258x512
+# 128->256 736.0 -> 726.5 / 726.7 (4 of 7), 514x1024 32->128 545.1 -> 541.4 / 540.3 (8 of 50), 258x512 128->512
+# 1297.0 -> 1290.6 / 1290.1 (4 of 7). Trading bm for a whole-block CB instead regressed 1026x2048 32->128 (1772 -> 1949)
+# and 514x1024 64->256 (1270 -> 1294): with the output stream continuous, the store-bound convs' NoC hot spots (grid row
+# y3 on p150b) starve the cores they hold back.
 # cb_input_tiles depth in untilize batches: the reader reads batch b+1 while compute untilizes b. Where every core runs
 # one M-block the ring instead holds the whole slab in cb_im2col_tiles' L1 (see create_program_descriptor).
 INPUT_TILE_DEPTH_BATCHES = 2
@@ -1225,6 +1234,18 @@ def _shared_region_bytes(a_bytes, a_page, b_bytes, b_page):
     return _div_up(max(a_bytes, b_bytes), unit) * unit
 
 
+def _free_out_depth(g: Conv3x3Geometry, bm, sb_h, nslice, max_m_blocks, fits):
+    """cb_output_tiles depth in row groups (see OUT_DEPTH_ROW_GROUPS): the deepest, up to a whole M-block, that
+    `fits(depth)` on the interleaved, unsplit K-blocked walk of more than one M-block per core (the last block's store has
+    nothing left to run under); OUT_DEPTH_ROW_GROUPS elsewhere."""
+    if g.sharded_output or g.remote_output or g.k_split or g.fold or nslice or max_m_blocks < 2:
+        return OUT_DEPTH_ROW_GROUPS
+    for depth in range(_div_up(bm, sb_h), OUT_DEPTH_ROW_GROUPS, -1):
+        if fits(depth):
+            return depth
+    return OUT_DEPTH_ROW_GROUPS
+
+
 def _footprint(
     g: Conv3x3Geometry,
     core_m_tiles,
@@ -1237,6 +1258,7 @@ def _footprint(
     shared=False,
     resident=False,
     n_groups=1,
+    out_depth=OUT_DEPTH_ROW_GROUPS,
 ):
     num_k_blocks = g.tensor_k_tiles // bk
     im2col_rm_depth_rows = (
@@ -1301,9 +1323,7 @@ def _footprint(
             bm * ns * g.out_tile_bytes
             if g.remote_output
             else (
-                0
-                if g.sharded_output
-                else (COUT_FOLD_OUT_TILES if g.fold else OUT_DEPTH_ROW_GROUPS * sb_h * bn) * g.out_tile_bytes
+                0 if g.sharded_output else (COUT_FOLD_OUT_TILES if g.fold else out_depth * sb_h * bn) * g.out_tile_bytes
             )
         )
         + (cout_fold_plane_bytes(g, bm) + RING_TOKEN_BYTES if g.fold else 0)
@@ -1329,6 +1349,7 @@ def _footprint(
         footprint_bytes=total,
         nslice=nslice,
         im2col_rm_depth_rows=im2col_rm_depth_rows,
+        out_depth_row_groups=out_depth,
         shared_slab_bytes=shared_slab_bytes,
     )
 
@@ -1591,7 +1612,7 @@ def _khr_plan(g: Conv3x3Geometry, bm):
     return ring_rows, table, ring_px, KHR_DEPTH
 
 
-def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm):
+def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm, out_depth=OUT_DEPTH_ROW_GROUPS):
     """The L1 of the kh-reuse walk at bm (the ring-slab walk's buffers with the tile ring for in0, the ring slab sized
     to the reader's lookahead, three-tap gathered blocks and FIFO entries), or None when one-row subblocks do not
     hold."""
@@ -1612,7 +1633,7 @@ def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm):
         + weight_depth * b.block_k_tiles * bn * g.weight_tile_bytes
         + (ns * g.weight_tile_bytes if g.has_bias else 0)
         + bm * bn * TILE_BYTES_FP32
-        + OUT_DEPTH_ROW_GROUPS * sb_h * bn * g.out_tile_bytes
+        + out_depth * sb_h * bn * g.out_tile_bytes
         + table * 16
     )
     return dict(
@@ -1621,6 +1642,7 @@ def _khr_footprint(g: Conv3x3Geometry, b: Conv3x3Blocking, bm):
         ring_px=ring_px,
         depth=depth,
         sb=(sb_h, sb_w),
+        out_depth=out_depth,
         footprint=total,
     )
 
@@ -1635,6 +1657,11 @@ def kh_reuse_blocking(g: Conv3x3Geometry, b: Conv3x3Blocking, l1_budget):
         fit = _khr_footprint(g, b, bm)
         if fit is None or fit["footprint"] > l1_budget:
             continue
+        depth = _free_out_depth(
+            g, bm, fit["sb"][0], False, _div_up(cm, bm), lambda d: _khr_footprint(g, b, bm, d)["footprint"] <= l1_budget
+        )
+        if depth != fit["out_depth"]:
+            fit = _khr_footprint(g, b, bm, depth)
         sb_h, sb_w = fit["sb"]
         return replace(
             b,
@@ -1650,6 +1677,7 @@ def kh_reuse_blocking(g: Conv3x3Geometry, b: Conv3x3Blocking, l1_budget):
             footprint_bytes=fit["footprint"],
             khr_ring_rows=fit["ring_rows"],
             khr_table=fit["table"],
+            out_depth_row_groups=fit["out_depth"],
         )
     return None
 
@@ -1725,6 +1753,43 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                         footprint_bytes=fit["footprint_bytes"] + rm_delta,
                     )
                 if fit["footprint_bytes"] <= l1_budget:
+                    out_depth = OUT_DEPTH_ROW_GROUPS
+                    if rm_px:
+                        # cb_output_tiles takes the L1 left at this (bm, bk, ub) first (see OUT_DEPTH_ROW_GROUPS).
+                        def out_fit(d):
+                            return _footprint(
+                                g,
+                                cm,
+                                bm,
+                                bk,
+                                bn_,
+                                ub_cap,
+                                nslice,
+                                shared=shared,
+                                resident=resident,
+                                n_groups=ng,
+                                out_depth=d,
+                            )
+
+                        out_depth = _free_out_depth(
+                            g,
+                            bm,
+                            fit["out_subblock_h"],
+                            nslice,
+                            fit["max_m_blocks_per_core"],
+                            lambda d: out_fit(d)["footprint_bytes"] + rm_delta <= l1_budget,
+                        )
+                        if out_depth != OUT_DEPTH_ROW_GROUPS:
+                            deep_out = out_fit(out_depth)
+                            fit = dict(
+                                deep_out,
+                                rm_ring_px=fit["rm_ring_px"],
+                                rm_stage_n=fit["rm_stage_n"],
+                                rm_stage_px=fit["rm_stage_px"],
+                                footprint_bytes=deep_out["footprint_bytes"] + rm_delta,
+                            )
+                            if resident:
+                                fit["weights_resident"] = True
                     # The deeper im2col ring only takes L1 left at this (bm, bk, ub): it never costs a coarser block.
                     for depth in range(_im2col_ring_target(g, bm, bk, nslice), IM2COL_RM_DEPTH_ROWS, -1):
                         deep = _footprint(
@@ -1739,6 +1804,7 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                             shared=shared,
                             resident=resident,
                             n_groups=ng,
+                            out_depth=out_depth,
                         )
                         if rm_px:
                             deep = dict(
@@ -1777,7 +1843,6 @@ def select_blocking(g: Conv3x3Geometry, grid, l1_budget) -> Conv3x3Blocking:
                         block_m_tiles=bm,
                         block_k_tiles=bk,
                         block_n_tiles=bn_,
-                        out_depth_row_groups=OUT_DEPTH_ROW_GROUPS,
                         n_groups=ng,
                         **fit,
                     )
