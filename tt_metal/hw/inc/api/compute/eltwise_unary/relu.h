@@ -70,7 +70,7 @@ ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
 
 // clang-format off
 /**
- * Performs element-wise computation of relu max (relu(max(x, upper_limit))) on each element of a tile
+ * Performs element-wise computation of relu max (max(min(x, upper_limit), 0)) on each element of a tile
  * in DST register at index tile_index. The DST register buffer must be in
  * acquired state via *tile_regs_acquire* call. This call is blocking and is only
  * available on the compute engine.
@@ -81,7 +81,7 @@ ALWI void relu_min_tile_init() { MATH(SFPU_UNARY_INIT(relu_min)); }
  * |----------------|----------------------------------------------------------------------------|----------|-------------------------------------------------------|----------|
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
  * | tile_index     | The index of the tile in DST register buffer to perform the computation on | uint32_t | Must be less than the size of the DST register buffer | True     |
- * | upper_limit    | Upper limit of relu_min                                                    | uint32_t | Greater than 0                                        | True     |
+ * | upper_limit    | Upper limit of relu_max                                                    | uint32_t | Any value; a negative limit gives 0 (signed dtypes)   | True     |
  */
 // clang-format on
 ALWI void relu_max_tile(uint32_t idst, uint32_t param0) {
