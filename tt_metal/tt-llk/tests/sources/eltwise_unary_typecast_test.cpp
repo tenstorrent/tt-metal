@@ -156,28 +156,35 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
     {
         START_PERF_MEASURE("TILE_LOOP")
-        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE && perf_mock_mop<PERF_RUN_TYPE>() && !unpack_to_dest) // Wormhole: one MOP stream (perf.h)
+        if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
         {
-            _perf_math_stream_clear_valid<true, true, PERF_RUN_TYPE>(num_faces * TILE_CNT * LOOP_FACTOR);
-        }
-        else if constexpr (PERF_RUN_TYPE == PerfRunType::UNPACK_ISOLATE)
-        {
-            for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
+            if constexpr (unpack_to_dest)
             {
-                for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                // unpack_to_dest's handshake depends on the input width (llk_math_eltwise_unary_datacopy_):
+                //   32-bit: math mails the Dest write address to unpack; unpack unpacks there, posts
+                //           UNPACK_TO_DEST, and math waits on it.
+                //   non-32-bit: unpack posts SrcA (and SrcB) valid; math clears both.
+                if (is_32bit_input(formats.math, formats.math))
                 {
-                    if constexpr (unpack_to_dest)
+                    for (std::uint32_t loop = 0; loop < LOOP_FACTOR; ++loop)
                     {
-                        // Unpack-to-Dest datacopy only acknowledges Dest; it copies no data.
-                        _llk_math_eltwise_unary_datacopy_<data_copy_type, DST_SYNC, is_fp32_dest_acc_en, BROADCAST_TYPE, unpack_to_dest>(
-                            tile % MAX_TILES_DEST, formats.math, formats.math);
-                    }
-                    else
-                    {
-                        // Release the SrcA/SrcB valid bits consumed by unpack.
-                        _perf_math_loop_clear_valid<true /*clear_a*/, true /*clear_b*/>(num_faces /*iterations*/);
+                        for (std::uint32_t tile = 0; tile < TILE_CNT; ++tile)
+                        {
+                            math_unpack_to_dest_math_ready();
+                            math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::DestReg>(tile % MAX_TILES_DEST);
+                            math::math_unpack_to_dest_tile_ready();
+                        }
                     }
                 }
+                else
+                {
+                    _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces /*iterations*/);
+                }
+            }
+            else
+            {
+                // Batch all source-handshake retirements into a single stream call.
+                _perf_math_stream_clear_valid<true /*clear_a*/, true /*clear_b*/, PERF_RUN_TYPE>(LOOP_FACTOR * TILE_CNT * num_faces /*iterations*/);
             }
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::MATH_ISOLATE)
