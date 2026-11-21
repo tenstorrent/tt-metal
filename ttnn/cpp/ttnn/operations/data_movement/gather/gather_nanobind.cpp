@@ -61,7 +61,7 @@ void bind_gather_operation(nb::module_& mod) {
 
                 * - Dtypes
                   - Layouts
-                * - UINT16, UINT32
+                * - UINT16, UINT32, INT32
                   - TILE, ROW_MAJOR
 
             The input and index tensors must use the same layout.
