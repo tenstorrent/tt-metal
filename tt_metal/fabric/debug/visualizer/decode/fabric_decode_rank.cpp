@@ -105,8 +105,8 @@ DecodedRouter decode_router(
     decoded.directions = find_router_directions(router);
     decoded.count_reads = collect_stream_count_reads(values);
     if (std::optional<RoutingTableRead> read = find_routing_table_read(values)) {
-        routing_tables.push_back(RouterRoutingTable{
-            .ref = captured.ref, .path = captured.path, .router = captured.router, .read = std::move(*read)});
+        routing_tables.push_back(
+            RouterRoutingTable{.ref = captured.ref, .path = captured.path, .router = captured.router, .read = *read});
     }
     std::ranges::move(
         find_router_findings(values, arch, register_facts, decoded.directions), std::back_inserter(findings));
@@ -380,7 +380,7 @@ json make_decoded_json(const DecodedRank& rank, const manifest::ManifestFacts& f
     out["decode"] = make_decode_identity_json(rank.provenance.decode);
     out["coverage"] = make_coverage_json(rank);
     // The manifest within, as its writer wrote it, but for its own version and kind, which are above.
-    for (auto& [key, value] : manifest_json.items()) {
+    for (const auto& [key, value] : manifest_json.items()) {
         if (key != "manifest_version" && key != "file_kind") {
             out[key] = std::move(value);
         }

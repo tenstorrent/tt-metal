@@ -262,6 +262,7 @@ std::vector<Finding> find_router_findings(
 
 std::vector<Finding> find_pairing_findings(const RouterPairing& pairing) {
     std::vector<Finding> findings;
+    findings.reserve(pairing.record_routers_not_in_manifest.size());
     for (const std::string& path : pairing.record_routers_not_in_manifest) {
         findings.push_back(make_finding(
             FindingCode::ROUTER_NOT_IN_MANIFEST, path, "the capture record has the router, but the manifest doesn't"));

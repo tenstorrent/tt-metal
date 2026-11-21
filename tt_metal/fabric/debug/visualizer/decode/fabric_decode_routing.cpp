@@ -40,6 +40,7 @@ Finding make_finding(FindingCode code, std::vector<std::string> paths, std::stri
 // A chip's groups of routers, as "[E0, W0] [N0]", for the message.
 std::string describe_copies(const ChipRouting& routing) {
     std::vector<std::string> groups;
+    groups.reserve(routing.copies.size());
     for (const RoutingTableCopy& copy : routing.copies) {
         groups.push_back(fmt::format("[{}]", fmt::join(copy.routers, ", ")));
     }
