@@ -391,7 +391,7 @@ models:
     wh_n300: 6
     bh_p150: 35
     bh_p300: 42
-    bh_quietbox_2: 191
+    bh_quietbox_2: 197  # +6 for the gpt-oss-20b batched DFlash test (PR #61548)
   e2e_tier3:
     wh_llmbox_perf: 200
     wh_galaxy_perf: 55
@@ -418,7 +418,7 @@ models:
     wh_n300: 30
     wh_galaxy_perf: 85
     bh_p150: 53
-    bh_quietbox_2: 60
+    bh_quietbox_2: 65
   unit_tier3:
     wh_llmbox: 90
     wh_galaxy: 80

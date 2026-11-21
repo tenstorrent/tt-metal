@@ -57,7 +57,7 @@ def flat_tiles(hidden):
 
 # The boundary core holds the flat residual, partial sum, receive buffers and normed output, and runs the boundary op
 # and the producers' fabric sender. It must not be a streamed-matmul worker core (those sit next to the DRAM banks,
-# columns 0-2 and 6-8), so the sender can join the producer programs; (0, 1), (1, 1), (0, 2), (3, 0) and (4, 0)
+# columns 0-2 and 7-9), so the sender can join the producer programs; (0, 1), (1, 1), (0, 2), (3, 0) and (4, 0)
 # measured alike.
 BOUNDARY_CORE = (0, 1)
 
@@ -173,7 +173,10 @@ class DecodeBoundary:
         grid = mesh_device.compute_with_storage_grid_size()
         all_cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))])
         recv_config = flat_memory_config(mesh_device, hidden, self.ring * self.all)
-        # Fabric receive slots (the "ttnn" CCL reduces into its own scratch instead: no slots).
+        # Fabric receive slots (the "ttnn" CCL reduces into its own scratch instead: no slots; with helpers the slots
+        # are on the helper cores, allocated below). Not allocating the boundary core's slots when the helpers hold
+        # them keeps the helper slots at the top of L1: allocated below a freed pair of boundary-core slots they sat
+        # ~475 KB down, inside the L1 the prefill ops' circular buffers need (a static CB clash at 1K-token prefills).
         self.sites = {
             name: (
                 (
@@ -184,7 +187,7 @@ class DecodeBoundary:
                         device=mesh_device,
                         memory_config=recv_config,
                     )
-                    if ccl == "fabric"
+                    if ccl == "fabric" and not helpers
                     else None
                 ),
                 ttnn.create_global_semaphore(mesh_device, all_cores, 0),

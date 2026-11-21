@@ -51,15 +51,14 @@ void kernel_main() {
 #else
     constexpr uint32_t n_x = 2;
 #endif
+    compute_kernel_hw_startup(cb_q, cb_q, cb_sq);
     // A. 1 / rms per head row, q then k
     cb_wait_front(cb_scl, 1);
     cb_reserve_back(cb_rs, n_x);
     for (uint32_t x = 0; x < n_x; ++x) {
         const uint32_t cb_x = x == 0 ? cb_q : cb_k;
         cb_wait_front(cb_x, 2);
-        if (x == 0) {
-            compute_kernel_hw_startup(cb_x, cb_x, cb_sq);
-        } else {
+        if (x != 0) {  // q's formats are the startup's
             cfg(cb_x, cb_x, cb_sq);
         }
         tile_regs_acquire();

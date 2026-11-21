@@ -203,8 +203,9 @@ class Experts:
             )
         if is_decode and self.dense_decode_weights is not None:
             partial = decode_forward_dense(
-                hidden_states, topk_expert_weights, self.dense_decode_weights, self.dense_decode_plan, self.config
-            )
+                hidden_states, topk_expert_weights, self.dense_decode_weights, self.dense_decode_plan, self.config,
+                relaid=getattr(self, "gu_relaid", None),
+            )  # fmt: skip
             if getattr(self, "decode_all_reduce", None) is not None:
                 # Batched decode layer (batched_decode.py): one-op all-reduce into the sharded residual layout.
                 return self.decode_all_reduce(partial, "moe")
@@ -259,7 +260,8 @@ class Experts:
         for start in range(0, seq_len, tokens):
             x = ttnn.slice(hidden_states, [0, 0, start, 0], [1, 1, start + tokens, hidden])
             w = ttnn.slice(routing_weights, [start, 0], [start + tokens, experts])
-            parts.append(decode_forward_dense(x, w, self.dense_decode_weights, plan, self.config))
+            # (prefill keeps the separate elementwise ops: the decode's fused SwiGLU rounds differently)
+            parts.append(decode_forward_dense(x, w, self.dense_decode_weights, plan, self.config, fused_swiglu=False))
             x.deallocate(True)
             if len(parts) == 64:
                 groups.append(ttnn.concat(parts, dim=2))

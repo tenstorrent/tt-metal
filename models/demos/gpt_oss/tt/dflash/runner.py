@@ -41,6 +41,9 @@ class DFlashRunner:
             draft.mask_token_id,
             [self.verify.pos, draft.t_toks, draft.t_pos, draft.t_rot, draft.t_bound, draft.t_cpos, draft.t_crot],
         )
+        # the drafter's and verify pass's resident L1 buffers stay allocated across prefills: the prefill ops fit their
+        # circular buffers below them (the routed-expert MoE and 2D projections otherwise claim nearly all of L1)
+        model.set_prefill_l1_end(model.mesh_device.lowest_occupied_compute_l1_address() or 0)
         self.round_trace = None
 
     def compile(self):
