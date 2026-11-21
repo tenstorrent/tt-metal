@@ -72,6 +72,8 @@ public:
 
     std::optional<RouterChannelLayout> get_channel_layout() const override;
 
+    manifest::Router collect_manifest_router(const ChipRoutingFacts& chip_facts) const override;
+
     // ============ Compute-Mesh Specific Methods ============
 
     /**
@@ -204,6 +206,8 @@ private:
     bool downstream_is_tensix_builder_ = false;
     std::shared_ptr<ConnectionRegistry> connection_registry_;
     bool is_inter_mesh_;  // True if this router connects different meshes
+    // What create_kernel built each ERISC's kernel with.
+    std::vector<KernelInputs> kernel_inputs_by_erisc_;
 };
 
 }  // namespace tt::tt_fabric

@@ -110,8 +110,8 @@ struct DownstreamTraits {
     static constexpr size_t ranked_forwarding_position() {
         constexpr size_t first = VC == 0 ? 1 : VC1_FABRIC_POSITION_START;
         if constexpr (is_2d) {
-            constexpr size_t facing = static_cast<size_t>(downstream_direction(ENTRY));
-            return first + compact_index_on(facing, static_cast<size_t>(my_direction));
+            constexpr eth_chan_directions facing = downstream_direction(ENTRY);
+            return first + Routing2DCodec::compact_index_on(facing, static_cast<eth_chan_directions>(my_direction));
         } else {
             return first;
         }

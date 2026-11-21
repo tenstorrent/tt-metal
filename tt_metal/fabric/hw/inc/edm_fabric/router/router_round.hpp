@@ -23,16 +23,8 @@
 
 namespace fabric_router {
 
-enum class ContextSwitchState : uint32_t {
-    NORMAL_EXECUTION = 0,  // set by the master at init; the default
-    RETRAIN_INTENT = 1,    // master: about to switch; wait for the other ERISC
-    INTENT_ACK = 2,        // other ERISC: parked
-    RETRAIN_COMPLETE = 3,  // master: switch done
-    COMPLETE_ACK = 4,      // other ERISC: resuming
-};
-
 FORCE_INLINE uint32_t context_switch_state() { return read_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(); }
-FORCE_INLINE void set_context_switch_state(ContextSwitchState s) {
+FORCE_INLINE void set_context_switch_state(CoordinatedEriscContextSwitchState s) {
     write_stream_scratch_register<ETH_RETRAIN_LINK_SYNC_STREAM_ID>(static_cast<uint32_t>(s));
 }
 
@@ -41,7 +33,7 @@ constexpr bool is_context_switch_master = enable_context_switch;
 // At init, before the ERISCs' first sync: the context-switch register in its start state, where this router switches.
 FORCE_INLINE void init_context_switch_state() {
     if constexpr (is_context_switch_master) {
-        set_context_switch_state(ContextSwitchState::NORMAL_EXECUTION);
+        set_context_switch_state(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION);
     }
 }
 
@@ -54,7 +46,7 @@ FORCE_INLINE bool terminating() {
 }
 
 // Wait until the context-switch register reads `s`, or termination.
-FORCE_INLINE void wait_for_context_switch_state(ContextSwitchState s) {
+FORCE_INLINE void wait_for_context_switch_state(CoordinatedEriscContextSwitchState s) {
     while (context_switch_state() != static_cast<uint32_t>(s)) {
         if (terminating()) {
             return;
@@ -66,12 +58,12 @@ FORCE_INLINE void wait_for_context_switch_state(ContextSwitchState s) {
 template <typename F>
 FORCE_INLINE void with_other_erisc_parked(F&& f) {
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
-        set_context_switch_state(ContextSwitchState::RETRAIN_INTENT);
-        wait_for_context_switch_state(ContextSwitchState::INTENT_ACK);
+        set_context_switch_state(CoordinatedEriscContextSwitchState::RETRAIN_INTENT);
+        wait_for_context_switch_state(CoordinatedEriscContextSwitchState::INTENT_ACK);
         f();
-        set_context_switch_state(ContextSwitchState::RETRAIN_COMPLETE);
-        wait_for_context_switch_state(ContextSwitchState::COMPLETE_ACK);
-        set_context_switch_state(ContextSwitchState::NORMAL_EXECUTION);
+        set_context_switch_state(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE);
+        wait_for_context_switch_state(CoordinatedEriscContextSwitchState::COMPLETE_ACK);
+        set_context_switch_state(CoordinatedEriscContextSwitchState::NORMAL_EXECUTION);
     } else {
         f();
     }
@@ -81,11 +73,11 @@ FORCE_INLINE void with_other_erisc_parked(F&& f) {
 // NORMAL_EXECUTION: the master may already have moved on to its next RETRAIN_INTENT (a PAUSE right after a switch),
 // which the next round's check then acknowledges.
 FORCE_INLINE void follow_context_switch() {
-    if (context_switch_state() == static_cast<uint32_t>(ContextSwitchState::RETRAIN_INTENT)) {
-        set_context_switch_state(ContextSwitchState::INTENT_ACK);
-        wait_for_context_switch_state(ContextSwitchState::RETRAIN_COMPLETE);
-        set_context_switch_state(ContextSwitchState::COMPLETE_ACK);
-        while (context_switch_state() == static_cast<uint32_t>(ContextSwitchState::COMPLETE_ACK)) {
+    if (context_switch_state() == static_cast<uint32_t>(CoordinatedEriscContextSwitchState::RETRAIN_INTENT)) {
+        set_context_switch_state(CoordinatedEriscContextSwitchState::INTENT_ACK);
+        wait_for_context_switch_state(CoordinatedEriscContextSwitchState::RETRAIN_COMPLETE);
+        set_context_switch_state(CoordinatedEriscContextSwitchState::COMPLETE_ACK);
+        while (context_switch_state() == static_cast<uint32_t>(CoordinatedEriscContextSwitchState::COMPLETE_ACK)) {
             if (terminating()) {
                 return;
             }

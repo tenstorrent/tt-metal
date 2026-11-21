@@ -709,18 +709,14 @@ constexpr std::array<uint8_t, NUM_RECEIVER_CHANNELS> receiver_channel_local_writ
 constexpr bool ENABLE_FABRIC_TELEMETRY = static_cast<bool>(NAMED_CT_ARG("ENABLE_FABRIC_TELEMETRY"));
 
 constexpr uint8_t FABRIC_TELEMETRY_STATS_MASK = static_cast<uint8_t>(NAMED_CT_ARG("FABRIC_TELEMETRY_STATS_MASK"));
-constexpr bool FABRIC_TELEMETRY_ROUTER_STATE =
-    ENABLE_FABRIC_TELEMETRY &&
-    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::ROUTER_STATE)) != 0);
-constexpr bool FABRIC_TELEMETRY_BANDWIDTH =
-    ENABLE_FABRIC_TELEMETRY &&
-    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::BANDWIDTH)) != 0);
-constexpr bool FABRIC_TELEMETRY_HEARTBEAT_TX =
-    ENABLE_FABRIC_TELEMETRY &&
-    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_TX)) != 0);
-constexpr bool FABRIC_TELEMETRY_HEARTBEAT_RX =
-    ENABLE_FABRIC_TELEMETRY &&
-    ((FABRIC_TELEMETRY_STATS_MASK & static_cast<uint8_t>(DynamicStatistics::HEARTBEAT_RX)) != 0);
+constexpr bool FABRIC_TELEMETRY_ROUTER_STATE = tt::tt_fabric::is_telemetry_statistic_written(
+    ENABLE_FABRIC_TELEMETRY, FABRIC_TELEMETRY_STATS_MASK, DynamicStatistics::ROUTER_STATE);
+constexpr bool FABRIC_TELEMETRY_BANDWIDTH = tt::tt_fabric::is_telemetry_statistic_written(
+    ENABLE_FABRIC_TELEMETRY, FABRIC_TELEMETRY_STATS_MASK, DynamicStatistics::BANDWIDTH);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_TX = tt::tt_fabric::is_telemetry_statistic_written(
+    ENABLE_FABRIC_TELEMETRY, FABRIC_TELEMETRY_STATS_MASK, DynamicStatistics::HEARTBEAT_TX);
+constexpr bool FABRIC_TELEMETRY_HEARTBEAT_RX = tt::tt_fabric::is_telemetry_statistic_written(
+    ENABLE_FABRIC_TELEMETRY, FABRIC_TELEMETRY_STATS_MASK, DynamicStatistics::HEARTBEAT_RX);
 constexpr bool FABRIC_TELEMETRY_ANY_DYNAMIC_STAT = FABRIC_TELEMETRY_ROUTER_STATE || FABRIC_TELEMETRY_BANDWIDTH ||
                                                    FABRIC_TELEMETRY_HEARTBEAT_TX || FABRIC_TELEMETRY_HEARTBEAT_RX;
 

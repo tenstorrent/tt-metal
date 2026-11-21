@@ -31,6 +31,13 @@ static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC = 0xDCBA0000;
 static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_MAGIC_MASK = 0xFFFF0000;
 static constexpr std::uint32_t FABRIC_KERNEL_HEARTBEAT_PERIOD_ITERS = 64;
 
+// Whether an ERISC writes `statistic` in its router's FabricTelemetry: its telemetry is on, and the statistic's bit is
+// in its stats mask.
+constexpr bool is_telemetry_statistic_written(
+    bool telemetry_enabled, std::uint8_t stats_mask, DynamicStatistics statistic) {
+    return telemetry_enabled && (stats_mask & static_cast<std::uint8_t>(statistic)) != 0;
+}
+
 // Constants for fabric mesh configuration
 static constexpr std::uint32_t MAX_MESH_SIZE = 256;
 static constexpr std::uint32_t MAX_NUM_MESHES = 1024;
@@ -49,23 +56,6 @@ static constexpr uint32_t HORIZON_ATT_WORKER_GRID_X = 2;                    // A
 constexpr std::uint8_t USE_DYNAMIC_CREDIT_ADDR = 255;
 
 static constexpr std::size_t MAX_CHANNEL_BUFFER_SLOTS = UINT8_MAX / 2;
-
-// Read and write stream scratch register store values as uint32_t.
-enum class CoordinatedEriscContextSwitchState : std::uint32_t {
-    // Initially set by the master (erisc0) in entrance of kernel_main() and is the default state. erisc1 polls for this
-    // state at the end of the handshake
-    NORMAL_EXECUTION = 0,
-    // Set by master to signal intent on beginning handshake. Checked by erisc1 before it begins handshake
-    RETRAIN_INTENT = 1,
-    // Set by erisc1 to indicate it's cooperation. Polled by master before it runs the retrain to ensure that it has
-    // erisc1's cooperation
-    INTENT_ACK = 2,
-    // Set by erisc0 to indicate completion of retrain. Polled by erisc1
-    RETRAIN_COMPLETE = 3,
-    // Set by erisc1 to indicate it has seen the completion of retrain. Polled by erisc0 before it sets register back to
-    // NORMAL_EXECUTION
-    COMPLETE_ACK = 4,
-};
 
 // Magic values for ethernet channel directions
 enum eth_chan_magic_values : std::uint8_t {
@@ -87,6 +77,62 @@ enum eth_chan_directions : std::uint8_t {
 // and the kernel skips initialising any entry reading it. Out of the 0..31 register range, so it can
 // never collide with a real register.
 static constexpr uint32_t k_unused_stream_id = 32;
+
+// The count in a stream credit register (packets received, free slots). A count never exceeds its channel's slot
+// count, and every channel static_asserts its slot count against this mask, so the low 11 bits hold it.
+inline constexpr std::uint32_t stream_count_mask = 0x7FF;
+
+// ERISC sync. The phases a router's ERISCs pass together, in order. At each, the teardown master writes START with the
+// phase into the ERISC sync stream register (MULTI_RISC_TEARDOWN_SYNC_STREAM_ID), the other ERISC answers with ANSWER
+// and the phase, and the master clears the register to IDLE. A single-ERISC router never writes it.
+enum class EriscSyncPhase : std::uint32_t {
+    STREAMS_SET = 1,       // stream registers initialized
+    SETUP_DONE = 2,        // channels and connections set up locally
+    HANDSHAKE_DONE = 3,    // Ethernet and local-router handshakes done
+    DOWNSTREAMS_OPEN = 4,  // downstream connections opened
+    CMD_BUFS_SET = 5,      // forwarding command buffers programmed
+    CONNECTED = 6,         // static upstream connections in
+    TEARDOWN_START = 7,
+    TRANSACTIONS_DONE = 8,
+    TEARDOWN_DONE = 9,
+};
+
+// Where the ERISCs are in a sync.
+enum class EriscSyncStep : std::uint32_t {
+    // Between syncs: the master cleared the register.
+    IDLE = 0,
+    // The teardown master started the phase, and waits for the other ERISC's answer.
+    START = 0x0A00,
+    // The other ERISC answered the phase; the master hasn't cleared the register yet.
+    ANSWER = 0x0B00,
+};
+
+// The bits of the ERISC sync register the ERISCs compare.
+inline constexpr std::uint32_t k_erisc_sync_mask = 0x1FFF;
+
+// The value the ERISC sync register holds at `step` of `phase`. IDLE holds 0, whatever the phase.
+constexpr std::uint32_t make_erisc_sync_value(EriscSyncStep step, EriscSyncPhase phase) {
+    if (step == EriscSyncStep::IDLE) {
+        return 0;
+    }
+    return static_cast<std::uint32_t>(step) | static_cast<std::uint32_t>(phase);
+}
+
+// Context switch. The state in the retrain sync stream register (ETH_RETRAIN_LINK_SYNC_STREAM_ID), through which the
+// context-switch master (the ERISC with enable_context_switch) parks the router's other ERISC while it hands the core
+// to the base firmware. Read and written as a whole word.
+enum class CoordinatedEriscContextSwitchState : std::uint32_t {
+    // Set by the master at init; the default.
+    NORMAL_EXECUTION = 0,
+    // Set by the master: about to switch. The other ERISC checks for it each round.
+    RETRAIN_INTENT = 1,
+    // Set by the other ERISC: parked. The master waits for it before switching.
+    INTENT_ACK = 2,
+    // Set by the master: switch done. The other ERISC waits for it.
+    RETRAIN_COMPLETE = 3,
+    // Set by the other ERISC: resuming. The master waits for it, then sets NORMAL_EXECUTION.
+    COMPLETE_ACK = 4,
+};
 
 // Three-bit encodings for the packed first-hop direction tables. These are independent of the
 // destination-major 2D action maps below.
@@ -466,6 +512,13 @@ struct Routing2DCodec {
         }
     }
 
+    // ---- Router outputs -----------------------------------------------------------
+    // The compact entry of direction `dir` (dir != facing) on a router facing `facing`: its index in fwd_dirs, which
+    // lists the other directions in enum order, skipping the facing.
+    static constexpr uint32_t compact_index_on(eth_chan_directions facing, eth_chan_directions dir) {
+        return dir < facing ? static_cast<uint32_t>(dir) : static_cast<uint32_t>(dir) - 1;
+    }
+
     // The live downstreams of a 2D router facing MY_DIR on one VC, as a mask with bit d set for direction d (an
     // action bit). `entry_count` is the size of its downstream array on that VC (the first entries of fwd_dirs). Every
     // entry is live except, on an E/W-facing router that does not turn packets, the N and S ones. A router turns
@@ -487,6 +540,32 @@ struct Routing2DCodec {
             }
         }
         return live;
+    }
+
+    // live_downstreams<FACING>, for code that knows the facing only at run time (host-side)
+    static constexpr uint32_t live_downstreams(
+        eth_chan_directions facing,
+        size_t downstream_count,
+        bool is_intermesh_router,
+        bool is_intramesh_router_on_edge) {
+        switch (facing) {
+            case eth_chan_directions::EAST:
+                return live_downstreams<eth_chan_directions::EAST>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::WEST:
+                return live_downstreams<eth_chan_directions::WEST>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::NORTH:
+                return live_downstreams<eth_chan_directions::NORTH>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::SOUTH:
+                return live_downstreams<eth_chan_directions::SOUTH>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            case eth_chan_directions::Z:
+                return live_downstreams<eth_chan_directions::Z>(
+                    downstream_count, is_intermesh_router, is_intramesh_router_on_edge);
+            default: return 0;
+        }
     }
 
     // This chip is the mesh's exit when the maps say deliver here but the final mesh is elsewhere.
@@ -1243,6 +1322,16 @@ static_assert(sizeof(fabric_connection_sync_t) == 8, "fabric_connection_sync_t m
 static constexpr uint32_t FABRIC_CONNECTION_OBJECT_OFFSET = 8;
 // Size reserved for WorkerToFabricEdmSender object (verified by static_assert in tt_fabric_udm_impl.hpp)
 static constexpr uint32_t FABRIC_CONNECTION_OBJECT_SIZE = 128;
+
+// ============================================================================
+// Virtual channels
+// ============================================================================
+
+// The VC that a router's receiver channel on `vc` forwards to.
+constexpr std::size_t receiver_channel_forwards_on_vc(std::size_t vc, bool crosses_over_to_vc1) {
+    constexpr std::size_t intermesh_vc = 1;
+    return crosses_over_to_vc1 ? intermesh_vc : vc;
+}
 
 }  // namespace tt::tt_fabric
 

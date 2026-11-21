@@ -16,7 +16,8 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
     tt::tt_metal::Program& program,
     FabricNodeId local_node,
     const RouterLocation& location,
-    const ChipRoutingFacts& chip_facts) {
+    const ChipRoutingFacts& chip_facts,
+    std::shared_ptr<ConnectionRegistry> connection_registry) {
     // Query fabric context to determine router type
     bool is_switch_mesh = fabric_context.is_switch_mesh(local_node.mesh_id);
 
@@ -27,7 +28,14 @@ std::unique_ptr<FabricRouterBuilder> FabricRouterBuilder::create(
 
     // Create compute mesh router - it handles its own config lookup
     return ComputeMeshRouterBuilder::build(
-        fabric_context, dispatch_core_type, device, program, local_node, location, chip_facts);
+        fabric_context,
+        dispatch_core_type,
+        device,
+        program,
+        local_node,
+        location,
+        chip_facts,
+        std::move(connection_registry));
 }
 
 }  // namespace tt::tt_fabric
