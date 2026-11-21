@@ -285,7 +285,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                 "num_batches ({})",
                 num_cores_r,
                 num_batches);
-        } else if (shard_orientation == ShardOrientation::COL_MAJOR && num_groups_per_core == 1) {
+        } else if (shard_orientation == ShardOrientation::COL_MAJOR && num_batches_per_core == 1) {
             TT_FATAL(
                 num_cores_c % num_batches == 0,
                 "for CM shard, when each batch is split across cores, num_cores_c ({}) must be divisible by "
@@ -1275,7 +1275,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     CoreCoord mcast_first_end = device->worker_core_from_logical_core(mcast_group_first.back());
 
                     if (reader_noc == NOC::NOC_1) {
-                        std::swap(mcast_start, mcast_end);
+                        std::swap(mcast_first_start, mcast_first_end);
                     }
                     mcast_sender_args.push_back(mcast_first_start.x);
                     mcast_sender_args.push_back(mcast_first_start.y);
@@ -1297,7 +1297,7 @@ tt::tt_metal::ProgramDescriptor GroupNormDeviceOperation::GroupNormShardedProgra
                     CoreCoord mcast_last_end = device->worker_core_from_logical_core(mcast_group_last.back());
 
                     if (reader_noc == NOC::NOC_1) {
-                        std::swap(mcast_start, mcast_end);
+                        std::swap(mcast_last_start, mcast_last_end);
                     }
                     mcast_sender_args.push_back(mcast_last_start.x);
                     mcast_sender_args.push_back(mcast_last_start.y);
