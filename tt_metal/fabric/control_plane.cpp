@@ -3531,6 +3531,10 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
     for (const auto& tensix_core : all_tensix_cores) {
         tt::tt_metal::CoreCoord core_coord(tensix_core.x, tensix_core.y);
 
+        // Per-worker connection info. Declared at loop-body scope (not inside the worker branch below) because
+        // data_to_write may point at it, and cluster.write_core() reads through that pointer after the branch ends.
+        tt::tt_fabric::tensix_fabric_connections_l1_info_t worker_connections = {};
+
         // Determine core type
         const void* data_to_write = nullptr;
         if (fabric_mux_cores_translated.contains(core_coord)) {
@@ -3540,8 +3544,7 @@ void ControlPlane::write_udm_fabric_connections_to_tensix_cores(
             // Dispatcher core: write fabric_dispatcher_connections (passed in from caller)
             data_to_write = &fabric_dispatcher_connections;
         } else {
-            // Worker core: build per-worker connection info
-            tt::tt_fabric::tensix_fabric_connections_l1_info_t worker_connections = {};
+            // Worker core: build per-worker connection info (into worker_connections declared above)
 
             // Get worker assignment info (tensix core + channel index) with a single lookup
             auto tensix_info = tensix_config.get_worker_tensix_info(physical_chip_id, core_coord);
