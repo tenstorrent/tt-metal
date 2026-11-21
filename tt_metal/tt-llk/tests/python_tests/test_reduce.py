@@ -7,6 +7,7 @@ import torch
 from helpers.format_config import DataFormat, is_dest_acc_needed
 from helpers.golden_generators import ReduceGolden, get_golden_generator
 from helpers.llk_params import (
+    ALL_MATH_FIDELITIES,
     BlocksCalculationAlgorithm,
     DestAccumulation,
     DestSync,
@@ -15,7 +16,6 @@ from helpers.llk_params import (
     PerfRunType,
     ReduceDimension,
     ReducePool,
-    format_dict,
 )
 from helpers.param_config import (
     get_num_blocks_and_num_tiles_in_block,
@@ -38,7 +38,12 @@ from helpers.test_variant_parameters import (
     TILE_COUNT,
 )
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test, tolerances
+from helpers.utils import (
+    passed_test,
+    result_tensor,
+    skip_ttsim_partial_face_bfp_zero_write,
+    tolerances,
+)
 
 # Helper dictionary to map reduce dimensions to math operations
 mathop_mapping = {
@@ -49,12 +54,6 @@ mathop_mapping = {
 
 REDUCE_DIMS = [ReduceDimension.Row, ReduceDimension.Column, ReduceDimension.Scalar]
 POOL_TYPES = [ReducePool.Max, ReducePool.Average, ReducePool.Sum]
-ALL_FIDELITIES = [
-    MathFidelity.LoFi,
-    MathFidelity.HiFi2,
-    MathFidelity.HiFi3,
-    MathFidelity.HiFi4,
-]
 REDUCE_TILE_DIMENSIONS = [
     [1, 32],
     [2, 32],
@@ -71,7 +70,7 @@ def _fidelities_for_format(formats):
     """LoFi fails for Float16_b/Float32 inputs — exclude at parametrize time."""
     if formats.input_format in [DataFormat.Float16_b, DataFormat.Float32]:
         return [MathFidelity.HiFi2, MathFidelity.HiFi3, MathFidelity.HiFi4]
-    return ALL_FIDELITIES
+    return ALL_MATH_FIDELITIES
 
 
 def _reduce_to_one_for_format(formats):
@@ -129,19 +128,46 @@ REDUCE_SWEEP = dict(
 )
 
 
-def _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type):
+def _scaler_value(tile_dimensions, reduce_dim, pool_type):
     if pool_type in [ReducePool.Max, ReducePool.Sum]:
         # result in srcA should be divided by 1
-        return torch.full((tile_shape.total_tile_size(),), 1)
+        return 1.0
     # reduce average divides by length of elements in array we reduce
     if reduce_dim == ReduceDimension.Row:
-        return torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[1])
+        return 1 / tile_dimensions[1]
     if reduce_dim == ReduceDimension.Column:
-        return torch.full((tile_shape.total_tile_size(),), 1 / tile_dimensions[0])
+        return 1 / tile_dimensions[0]
+    return 1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1])
+
+
+def _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type):
     return torch.full(
         (tile_shape.total_tile_size(),),
-        1 / math.sqrt(tile_dimensions[0] * tile_dimensions[1]),
+        _scaler_value(tile_dimensions, reduce_dim, pool_type),
     )
+
+
+# Fills every scaler datum the unpacker must not reach; one reaching math breaks the result.
+SCALER_POISON = 1024.0
+
+
+def _poisoned_scaler_slots(tile_shape, scaler_shape, scaler_value):
+    """A scaler of its own shape in data-tile-sized L1 slots, with one spare slot of poison after it.
+
+    Only the first row of each scaler face holds the scaler; everything else is SCALER_POISON.
+    (SUM/AVG REDUCE_ROW reads full-height scaler faces whole, but those rows reach only result
+    columns the packer drops.)
+
+    Returns the slots and how many there are.
+    """
+    data_size = tile_shape.total_tile_size()
+    num_slots = -(-scaler_shape.total_tile_size() // data_size) + 1
+    slot = torch.full((num_slots * data_size,), SCALER_POISON)
+    face_size = scaler_shape.face_r_dim * scaler_shape.face_c_dim
+    for face in range(scaler_shape.total_num_faces()):
+        start = face * face_size
+        slot[start : start + scaler_shape.face_c_dim] = scaler_value
+    return slot, num_slots
 
 
 def _functional_input_dimensions(is_reduce_to_one):
@@ -160,6 +186,7 @@ def _run_reduce_test(
     is_reduce_to_one,
     tile_dimensions,
     *,
+    scaler_dimensions=None,
     input_dimensions=None,
     is_perf=False,
     perf_report=None,
@@ -167,6 +194,9 @@ def _run_reduce_test(
     loop_factor=1,
 ):
     tile_shape = construct_tile_shape(tile_dimensions)
+    skip_ttsim_partial_face_bfp_zero_write(
+        tile_shape, formats.output_format, reduce_dim
+    )
     if input_dimensions is None:
         input_dimensions = _functional_input_dimensions(is_reduce_to_one)
 
@@ -178,7 +208,17 @@ def _run_reduce_test(
         tile_dimensions=tile_dimensions,
     )
     # One resident scaler tile, as in production.
-    src_B = _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type)
+    if scaler_dimensions is None:
+        scaler_shape = tile_shape
+        src_B = _scaler_tile(tile_shape, tile_dimensions, reduce_dim, pool_type)
+        tile_cnt_B = 1
+    else:
+        scaler_shape = construct_tile_shape(scaler_dimensions)
+        src_B, tile_cnt_B = _poisoned_scaler_slots(
+            tile_shape,
+            scaler_shape,
+            _scaler_value(tile_dimensions, reduce_dim, pool_type),
+        )
 
     output_tile_count = 1 if is_reduce_to_one else tile_cnt_A
 
@@ -205,15 +245,15 @@ def _run_reduce_test(
             IN_FACE_DIMS(
                 tile_shape.face_r_dim,
                 tile_shape.face_c_dim,
-                tile_shape.face_r_dim,
-                tile_shape.face_c_dim,
+                scaler_shape.face_r_dim,
+                scaler_shape.face_c_dim,
             ),
             TILE_COUNT(tile_cnt_A),
             OUTPUT_TILE_CNT(output_tile_count),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
             REDUCE_TO_ONE(is_reduce_to_one),
-            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim),
-            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim),
+            NUM_FACES_R_DIM(tile_shape.num_faces_r_dim, scaler_shape.num_faces_r_dim),
+            NUM_FACES_C_DIM(tile_shape.num_faces_c_dim, scaler_shape.num_faces_c_dim),
             LOOP_FACTOR(loop_factor),
         ],
         "variant_stimuli": StimuliConfig(
@@ -223,7 +263,7 @@ def _run_reduce_test(
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,
-            tile_count_B=1,
+            tile_count_B=tile_cnt_B,
             tile_count_res=output_tile_count,
             num_faces=tile_shape.total_num_faces(),
             face_r_dim=tile_shape.face_r_dim,
@@ -256,11 +296,7 @@ def _run_reduce_test(
 
     res_from_L1 = configuration.run().result
 
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    res_tensor = torch.tensor(res_from_L1, dtype=format_dict[formats.output_format])
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     if is_reduce_to_one:
         # Lower the threshold for reduce to one cases as they are more prone to numerical errors, especially in lower precision formats
@@ -308,6 +344,42 @@ def test_reduce(
     )
 
 
+# A [1,32] scaler, a [16,32] scaler (full-height faces, but fewer than a 32x32 tile), and a 32x32
+# scaler next to smaller data tiles.
+REDUCE_SCALER_DIMENSIONS = [[1, 32], [16, 32], [32, 32]]
+
+
+@parametrize(
+    tile_dimensions=REDUCE_TILE_DIMENSIONS,
+    scaler_dimensions=lambda tile_dimensions: [
+        dims for dims in REDUCE_SCALER_DIMENSIONS if dims != tile_dimensions
+    ],
+    # Float formats only: the poisoned slot has no block-float exponent section.
+    formats=[
+        fmt
+        for fmt in input_output_formats([DataFormat.Float16_b, DataFormat.Float32])
+        if fmt.input_format == fmt.output_format
+    ],
+    dest_acc=_required_dest_acc_mode,
+    reduce_dim=REDUCE_DIMS,
+    pool_type=POOL_TYPES,
+)
+def test_reduce_scaler_shape(
+    tile_dimensions, scaler_dimensions, formats, dest_acc, reduce_dim, pool_type
+):
+    """The scaler unpacks from its own tile shape."""
+    _run_reduce_test(
+        formats,
+        dest_acc,
+        reduce_dim,
+        pool_type,
+        MathFidelity.HiFi4,
+        False,
+        tile_dimensions,
+        scaler_dimensions=scaler_dimensions,
+    )
+
+
 @parametrize(
     formats=[
         fmt
@@ -325,7 +397,7 @@ def test_reduce(
     dest_acc=_required_dest_acc_mode,
     reduce_dim=REDUCE_DIMS,
     pool_type=POOL_TYPES,
-    math_fidelity=ALL_FIDELITIES,
+    math_fidelity=ALL_MATH_FIDELITIES,
     is_reduce_to_one=[False, True],
     tile_dimensions=[[32, 32]],
 )

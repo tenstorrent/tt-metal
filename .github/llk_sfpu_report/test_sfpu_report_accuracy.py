@@ -7,8 +7,9 @@ Not a test in the usual sense: it asserts nothing about accuracy. It runs each
 requested op over two stimuli per variant and saves ``(src, golden, result)``, so
 the report can compare the base side's results with the head side's lane by lane:
 
-* ``sweep``    -- every finite value of the input format (float32: a stride of
-  them), the same stimuli as the nightly ULP sweep in ``test_unary_sfpu_ulp.py``;
+* ``sweep``    -- every normal value of the input format, and zero on a 16-bit one
+  (float32: a stride of them), the same stimuli as the nightly ULP sweep in
+  ``test_unary_sfpu_ulp.py``; no subnormal, which the unpack path flushes;
 * ``specials`` -- the inputs a sweep never feeds: NaNs, infinities, signed zeros
   and subnormals.
 
@@ -22,7 +23,10 @@ from pathlib import Path
 
 import pytest
 import torch
-from helpers.data_format_inference import is_format_combination_outlier
+from helpers.data_format_inference import (
+    is_format_combination_outlier,
+    unpacks_to_dest,
+)
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     TILE_DIMENSIONS,
@@ -31,28 +35,15 @@ from helpers.golden_generators import (
 )
 from helpers.llk_params import (
     ApproximationMode,
-    BlocksCalculationAlgorithm,
     DestAccumulation,
-    DestSync,
     FastMode,
     MathOperation,
     format_dict,
 )
-from helpers.param_config import get_num_blocks_and_num_tiles_in_block
-from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
-from helpers.test_variant_parameters import (
-    APPROX_MODE,
-    CLAMP_NEGATIVE,
-    FAST_MODE,
-    MATH_OP,
-    NUM_BLOCKS,
-    NUM_TILES_IN_BLOCK,
-    TILE_COUNT,
-    generate_input_dim,
-)
-from helpers.ulp_sweep import golden_input, stimuli_format_for, sweep_spec
+from helpers.ulp_sweep import fp16_dest_unusable, golden_input, sweep_spec
+from test_eltwise_unary_sfpu import build_eltwise_unary_sfpu_config
 
 pytestmark = pytest.mark.accuracy
 
@@ -73,10 +64,10 @@ SWEEP_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1] * 64]
 SPECIALS_DIMENSIONS = [TILE_DIMENSIONS[0], TILE_DIMENSIONS[1]]
 
 
-def _arch_is_blackhole():
-    from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
+def _arch():
+    from helpers.chip_architecture import get_chip_architecture
 
-    return get_chip_architecture() == ChipArchitecture.BLACKHOLE
+    return get_chip_architecture()
 
 
 def _cells():
@@ -90,9 +81,9 @@ def _cells():
         # A float32 input through a 16-bit Dest is truncated before the SFPU sees
         # it: that measures the Dest, not the kernel.
         and not (in_fmt == DataFormat.Float32 and dest == DestAccumulation.No)
-        # Blackhole cannot run a Float16 SFPU input through a 16-bit Dest (the
-        # functional tests skip it too); what comes back is not the kernel's.
-        and not (_arch_is_blackhole() and DataFormat.Float16 in (in_fmt, out_fmt) and dest == DestAccumulation.No)
+        # Blackhole cannot run fp16 through a 16-bit Dest; what comes back is not the
+        # kernel's. The sweep leaves out the same cells.
+        and not fp16_dest_unusable(in_fmt, out_fmt, dest, _arch())
     ]
 
 
@@ -133,41 +124,22 @@ def _run(mathop, formats, approx_mode, dest_acc, src_A, tile_cnt, dimensions):
         formats.input_format,
         dimensions,
     )
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
+    # The functional driver's own builder, as the nightly ULP sweep calls it: the
+    # templates and runtimes the shared kernel source reads are the harness's to list.
+    # A copy of that list here stopped compiling when the source gained parameters.
+    configuration = build_eltwise_unary_sfpu_config(
+        formats,
         dest_acc,
-        formats,
+        approx_mode,
+        mathop,
         dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(dimensions, dimensions),
-            APPROX_MODE(approx_mode),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=mathop),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
-        ),
-        dest_acc=dest_acc,
-        unpack_to_dest=(formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes),
+        src_A,
+        src_B,
+        tile_cnt,
+        tile_cnt,
+        fast_mode=FastMode.No,
+        clamp_negative=True,
+        unpack_to_dest=unpacks_to_dest(formats.input_format, dest_acc),
     )
     result = configuration.run().result
     return golden, torch.tensor(result, dtype=format_dict[formats.output_format])
@@ -186,11 +158,10 @@ def test_sfpu_report_accuracy(op_name, in_fmt, out_fmt, approx_mode, dest_acc, k
     classes = None
     if kind == "sweep":
         torch.manual_seed(0)
-        stimuli_format = stimuli_format_for(in_fmt)
         src, tile_cnt, _, _ = generate_stimuli(
-            stimuli_format_A=stimuli_format,
+            stimuli_format_A=in_fmt,
             input_dimensions_A=SWEEP_DIMENSIONS,
-            stimuli_format_B=stimuli_format,
+            stimuli_format_B=in_fmt,
             input_dimensions_B=SWEEP_DIMENSIONS,
             spec_A=sweep_spec(in_fmt),
         )

@@ -29,6 +29,8 @@ Usage (capture once, replay many) — the forward runs ONCE during capture; this
 
 Boundary tensors (produced in one segment, read by the next) stay valid because the forward keeps them
 referenced across the end/begin split; trace replay reproduces them at the same addresses.
+
+`CapturedCall` below applies the same idea to a single call: one region, one trace id.
 """
 
 import ttnn
@@ -170,7 +172,7 @@ class SubDeviceTraceController:
         self._current_tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
 
     # ------------------------------------------------------------------ replay
-    def replay(self, variant=None):
+    def replay(self, variant=None, sync=True):
         """Run the whole segmented forward: execute each trace, load/clear between segments.
 
         Segments are enqueued NON-blocking on one CQ: the device runs them in enqueue order, and the
@@ -179,13 +181,15 @@ class SubDeviceTraceController:
         to have finished on device. We force a device sync in only two places:
           - BEFORE each per-layer migration ack — the migration worker reads the just-written KV over NoC,
             out-of-band from the CQ, so that segment's writes must be on-device first; and
-          - ONCE after the last segment — so the chunk's KV is fully written before replay() returns.
+          - ONCE after the last segment — so the chunk's KV is fully written before replay() returns. With
+            ``sync=False`` that last sync is left to the caller (for back-to-back replays on the same CQ).
         ``variant`` picks which capture of each capture_variants() region runs.
         This replaces the old block-every-segment (which serialized dispatch for no reason but the ack)."""
         assert not self._capturing, "still capturing"
         assert self._program, "nothing captured"
         self._replay_steps(self._program, variant)
-        ttnn.synchronize_device(self.mesh_device)
+        if sync:
+            ttnn.synchronize_device(self.mesh_device)
 
     def _replay_steps(self, program, variant):
         for kind, payload in program:
@@ -251,3 +255,39 @@ class SubDeviceTraceController:
             if manager_loaded:
                 self.mesh_device.clear_loaded_sub_device_manager()
             self._program = []
+
+
+class CapturedCall:
+    """A single device call recorded as its own ttnn trace, so it can be replayed instead of
+    dispatched again."""
+
+    def __init__(self, mesh_device, cq_id=0):
+        self.mesh_device = mesh_device
+        self.cq_id = cq_id
+        self._tid = None
+
+    def capture(self, fn):
+        """Record `fn`'s device work as a trace instead of running it now."""
+        assert self._tid is None, "already captured"
+        tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=self.cq_id)
+        try:
+            try:
+                fn()
+            finally:
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=self.cq_id)
+        except BaseException:
+            # Nothing owns `tid` once this propagates -- self._tid stays None, so release() would not
+            # reach it and the trace would sit on the device until teardown.
+            ttnn.release_trace(self.mesh_device, tid)
+            raise
+        self._tid = tid
+
+    def replay(self):
+        assert self._tid is not None, "nothing captured"
+        ttnn.execute_trace(self.mesh_device, self._tid, cq_id=self.cq_id, blocking=False)
+
+    def release(self):
+        """Release the captured trace. Safe to call repeatedly."""
+        if self._tid is not None:
+            ttnn.release_trace(self.mesh_device, self._tid)
+            self._tid = None

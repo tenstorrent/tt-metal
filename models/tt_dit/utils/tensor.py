@@ -13,6 +13,8 @@ from loguru import logger
 
 import ttnn
 
+from .torch_threads import cap_torch_threads_to_half_the_cpus
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
     from types import EllipsisType
@@ -208,6 +210,17 @@ def from_torch_to_devices(
 ) -> list[ttnn.Tensor]:
     """Replicate a torch tensor across submesh devices, returning one ttnn.Tensor per device."""
     return [from_torch(x, device=d, mesh_axes=mesh_axes, on_host=on_host) for d in devices]
+
+
+def logical_length_tensor(value: int, *, device: ttnn.MeshDevice) -> ttnn.Tensor:
+    """`value` as the replicated `[1, 1, 1, 1]` uint32 device tensor that carries a runtime row count."""
+    return from_torch(
+        torch.tensor([value], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=device,
+        dtype=ttnn.uint32,
+        layout=ttnn.Layout.ROW_MAJOR,
+        mesh_axes=[..., None, None],
+    )
 
 
 def to_torch(
@@ -546,6 +559,7 @@ def _get_inter_host_axis(mesh_device: ttnn.MeshDevice, view, mesh_shape: tuple[i
     return 0
 
 
+@cap_torch_threads_to_half_the_cpus()
 def _reassemble_2d(
     mesh_coords: list,
     shards: list[torch.Tensor],
@@ -867,18 +881,49 @@ def full(
     size: ttnn.Shape | Sequence[int],
     fill_value: float,
     *,
-    dtype: ttnn.DataType,
+    dtype: ttnn.DataType = ttnn.bfloat16,
     layout: ttnn.Layout = ttnn.TILE_LAYOUT,
     device: ttnn.MeshDevice,
     memory_config: ttnn.MemoryConfig | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
 ) -> ttnn.Tensor:
-    """Alternative to `ttnn.full` that supports tracing."""
-    if not isinstance(size, ttnn.Shape):
-        size = ttnn.Shape(size)
+    """Alternative to `ttnn.full` that supports tracing and sharding over the mesh."""
+    size = list(size)
 
-    result = ttnn.allocate_tensor_on_device(size, dtype, layout, device, memory_config)
+    if mesh_axes is not None:
+        mesh_shape = list(device.shape)
+        mesh_axes = canonicalize_tensor_mesh_axes(mesh_axes, tensor_rank=len(size), mesh_rank=len(mesh_shape))
+        for dim, axis in enumerate(mesh_axes):
+            if axis is not None:
+                if size[dim] % mesh_shape[axis] != 0:
+                    msg = f"size {size[dim]} of dimension {dim} is not divisible by mesh axis {axis}"
+                    raise ValueError(msg)
+                size[dim] //= mesh_shape[axis]
+
+    result = ttnn.allocate_tensor_on_device(ttnn.Shape(size), dtype, layout, device, memory_config)
     ttnn.fill(result, fill_value, output_tensor=result)
     return result
+
+
+def zeros(
+    size: ttnn.Shape | Sequence[int],
+    *,
+    dtype: ttnn.DataType = ttnn.bfloat16,
+    layout: ttnn.Layout = ttnn.TILE_LAYOUT,
+    device: ttnn.MeshDevice,
+    memory_config: ttnn.MemoryConfig | None = None,
+    mesh_axes: Sequence[int | None | EllipsisType] | None = None,
+) -> ttnn.Tensor:
+    """Alternative to `ttnn.zeros` that supports tracing and sharding over the mesh."""
+    return full(
+        size,
+        0,
+        dtype=dtype,
+        layout=layout,
+        device=device,
+        memory_config=memory_config,
+        mesh_axes=mesh_axes,
+    )
 
 
 def arange(

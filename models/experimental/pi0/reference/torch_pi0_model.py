@@ -29,6 +29,16 @@ from models.experimental.pi0.reference.torch_paligemma import PaliGemmaBackbone
 from models.experimental.pi0.reference.torch_denoise import DenoisingModule, KVCacheManager
 
 
+def _att_2d_masks(pad_masks: torch.Tensor, att_masks: torch.Tensor) -> torch.Tensor:
+    """openpi make_att_2d_masks: a token attends to valid tokens in its own and earlier blocks."""
+    blocks = torch.cumsum(att_masks.long(), dim=1)
+    return (blocks[:, None, :] <= blocks[:, :, None]) & (pad_masks[:, None, :] & pad_masks[:, :, None])
+
+
+def _additive_mask(allowed: torch.Tensor) -> torch.Tensor:
+    return torch.where(allowed, 0.0, torch.finfo(torch.float32).min)[:, None]
+
+
 class PI0Model:
     """
     Complete PI0 model implementation (PyTorch).
@@ -111,19 +121,28 @@ class PI0Model:
         timestep: torch.Tensor,
         kv_cache: Optional[List[Tuple[torch.Tensor, torch.Tensor]]] = None,
         state: Optional[torch.Tensor] = None,
+        prefix_pad: Optional[torch.Tensor] = None,
         **kwargs,
     ) -> torch.Tensor:
         """Forward pass for denoising (predicts velocity)."""
         # Embed suffix
-        suffix_embs, _, _, _ = self.suffix_embedding.embed_suffix(
+        suffix_embs, suffix_pad, suffix_att, _ = self.suffix_embedding.embed_suffix(
             state,
             noisy_actions,
             timestep,
         )
 
+        mask = position_ids = None
+        if prefix_pad is not None:
+            prefix_keys = prefix_pad[:, None, :].expand(-1, suffix_embs.shape[1], -1)
+            mask = _additive_mask(torch.cat([prefix_keys, _att_2d_masks(suffix_pad, suffix_att)], dim=2))
+            position_ids = prefix_pad.long().sum(dim=1, keepdim=True) + torch.cumsum(suffix_pad.long(), dim=1) - 1
+
         # Forward through expert
         expert_output, _ = self.backbone.forward_expert(
             suffix_embs,
+            attention_mask=mask,
+            position_ids=position_ids,
             past_key_values=kv_cache,
         )
 
@@ -174,10 +193,12 @@ class PI0Model:
         device = state.device
 
         # Prefill: process prefix and cache KV
-        prefix_embs, _, _ = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
+        prefix_embs, prefix_pad, prefix_att = self.embed_prefix(images, img_masks, lang_tokens, lang_masks)
 
         _, vlm_cache = self.backbone.forward_vlm(
             prefix_embs,
+            attention_mask=_additive_mask(_att_2d_masks(prefix_pad, prefix_att)),
+            position_ids=torch.cumsum(prefix_pad.long(), dim=1) - 1,
             use_cache=True,
         )
 
@@ -187,6 +208,7 @@ class PI0Model:
             prefix_kv_cache=vlm_cache,
             device=device,
             state=state,
+            prefix_pad=prefix_pad,
         )
 
         return actions

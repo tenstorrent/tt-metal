@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-import torch
 from helpers.constraints import get_valid_math_fidelities
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
@@ -10,18 +9,22 @@ from helpers.golden_generators import (
     get_golden_generator,
 )
 from helpers.llk_params import (
+    BroadcastType,
     DestAccumulation,
     DestSync,
+    EltwiseBinaryReuseDestType,
     MathFidelity,
     MathOperation,
     PerfRunType,
-    format_dict,
+    Transpose,
 )
 from helpers.param_config import (
+    generate_dest_depth_input_dimensions,
     generate_reduced_input_dimensions,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
+    quasar_dest_sync_modes,
     quasar_mx_smoke,
     runtime,
     select_perf_tile_sizes,
@@ -32,6 +35,7 @@ from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import BootMode
 from helpers.test_variant_parameters import (
     ACC_TO_DEST,
+    BROADCAST_TYPE,
     DEST_SYNC,
     ENABLE_DIRECT_INDEXING,
     INPUT_TILE_CNT,
@@ -44,31 +48,23 @@ from helpers.test_variant_parameters import (
     NUM_FACES_R_DIM,
     NUM_TILES_IN_BLOCK,
     OUTPUT_TILE_CNT,
+    REUSE_DEST_TYPE,
     TEST_FACE_DIMS,
     TILE_COUNT,
+    UNPACK_TRANS_FACES,
+    UNPACK_TRANS_WITHIN_FACE,
     generate_input_dim,
 )
 from helpers.tile_constants import is_mx_unsupported_tile_dims
 from helpers.tile_shape import construct_tile_shape
-from helpers.utils import passed_test
+from helpers.utils import passed_test, result_tensor
 
 
-def _eltwise_dest_acc_sync(dest_acc_modes, *, is_perf=False):
-    dest_sync_modes = (DestSync.Half,) if is_perf else (DestSync.Half, DestSync.Full)
-    return [
-        (dest_sync, dest_acc)
-        for dest_sync in dest_sync_modes
-        for dest_acc in dest_acc_modes
-    ]
-
-
-def eltwise_binary_dest_sync_dest_acc(formats, *, is_perf=False):
-    dest_acc_modes = (
-        (DestAccumulation.Yes,)
-        if formats.input_format == DataFormat.Int8
-        else (DestAccumulation.No,)
-    )
-    return _eltwise_dest_acc_sync(dest_acc_modes, is_perf=is_perf)
+def eltwise_binary_dest_acc(formats):
+    """Int8 -> Int32 and Float32 need the 32-bit Dest."""
+    if formats.input_format in (DataFormat.Int8, DataFormat.Float32):
+        return [DestAccumulation.Yes]
+    return [DestAccumulation.No]
 
 
 # For acc_to_dest setting, accumulate two result tiles into dest. Can be extended.
@@ -80,7 +76,7 @@ def runs_tile_shape_paths(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     enable_direct_indexing,
     *,
     is_perf=False,
@@ -97,13 +93,13 @@ def runs_tile_shape_paths(
             and mathop == MathOperation.Elwadd
             and math_fidelity == MathFidelity.LoFi
         )
-    if dest_sync_dest_acc[0] != DestSync.Half:
+    if dest_sync != DestSync.Half:
         return False
     if math_fidelity == MathFidelity.HiFi4:
-        # Float16 is the only input format that keeps HiFi fidelities on Quasar.
+        # Float32 is the only swept input format that keeps HiFi fidelities on Quasar.
         return (
             mathop == MathOperation.Elwmul
-            and formats.input_format == DataFormat.Float16
+            and formats.input_format == DataFormat.Float32
         )
     lofi_formats = (
         (DataFormat.Float16_b,)
@@ -117,7 +113,7 @@ def eltwise_binary_direct_indexing(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     *,
     is_perf=False,
 ):
@@ -125,7 +121,7 @@ def eltwise_binary_direct_indexing(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         True,
         is_perf=is_perf,
     ):
@@ -137,7 +133,7 @@ def eltwise_binary_tile_dimensions(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
     enable_direct_indexing,
     *,
     is_perf=False,
@@ -146,7 +142,7 @@ def eltwise_binary_tile_dimensions(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         enable_direct_indexing,
         is_perf=is_perf,
     ):
@@ -180,14 +176,19 @@ def valid_acc_to_dest(input_dimensions, tile_dimensions) -> list:
     return [False]
 
 
+# Int32 -> Int32 has no FPU path: Int32 unpacks only to Dest or SrcS, never to the 19-bit
+# SrcA/SrcB this op reads. test_eltwise_binary_sfpu_quasar covers Int32 add/sub/mul on the SFPU.
 ELTWISE_FORMATS = (
     input_output_formats(
         [
             DataFormat.Float16_b,
-            DataFormat.Float16,
         ],
     )
-    + [InputOutputFormat(DataFormat.Int8, DataFormat.Int32)]
+    + [
+        # The HiFi carrier: Float16_b, Int8 and MX are capped at LoFi on Quasar.
+        InputOutputFormat(DataFormat.Float32, DataFormat.Float32),
+        InputOutputFormat(DataFormat.Int8, DataFormat.Int32),
+    ]
     + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 )
 
@@ -201,30 +202,29 @@ ELTWISE_FORMATS = (
         MathOperation.Elwmul,
     ],
     math_fidelity=lambda formats, mathop: get_valid_math_fidelities(formats, mathop),
-    dest_sync_dest_acc=lambda formats: eltwise_binary_dest_sync_dest_acc(
-        formats, is_perf=False
-    ),
-    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync_dest_acc: eltwise_binary_direct_indexing(
+    dest_sync=lambda: quasar_dest_sync_modes(is_perf=False),
+    dest_acc=eltwise_binary_dest_acc,
+    enable_direct_indexing=lambda formats, mathop, math_fidelity, dest_sync: eltwise_binary_direct_indexing(
         formats,
         mathop,
         math_fidelity,
-        dest_sync_dest_acc,
+        dest_sync,
         is_perf=False,
     ),
     tile_dimensions=runtime(
-        lambda formats, mathop, math_fidelity, dest_sync_dest_acc, enable_direct_indexing: eltwise_binary_tile_dimensions(
+        lambda formats, mathop, math_fidelity, dest_sync, enable_direct_indexing: eltwise_binary_tile_dimensions(
             formats,
             mathop,
             math_fidelity,
-            dest_sync_dest_acc,
+            dest_sync,
             enable_direct_indexing,
             is_perf=False,
         )
     ),
     input_dimensions=runtime(
-        lambda dest_sync_dest_acc, tile_dimensions: generate_reduced_input_dimensions(
-            dest_sync_dest_acc[1],
-            dest_sync_dest_acc[0],
+        lambda dest_acc, dest_sync, tile_dimensions: generate_reduced_input_dimensions(
+            dest_acc,
+            dest_sync,
             construct_tile_shape(tile_dimensions),
         )
     ),
@@ -236,7 +236,8 @@ def test_eltwise_binary(
     formats,
     mathop,
     math_fidelity,
-    dest_sync_dest_acc,
+    dest_sync,
+    dest_acc,
     input_dimensions,
     acc_to_dest,
     tile_dimensions,
@@ -248,14 +249,13 @@ def test_eltwise_binary(
     is_perf=False,
     perf_report=None,
 ):
-    dest_sync_mode, dest_acc = dest_sync_dest_acc
     tile_shape = construct_tile_shape(tile_dimensions)
     num_faces = tile_shape.total_num_faces()
 
     num_tiles_per_accumulation = get_num_tiles_per_accumulation(acc_to_dest)
 
     num_blocks, input_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        dest_sync_mode,
+        dest_sync,
         dest_acc,
         formats,
         input_dimensions,
@@ -304,9 +304,13 @@ def test_eltwise_binary(
         "templates": [
             MATH_FIDELITY(math_fidelity),
             MATH_OP(mathop=mathop),
-            DEST_SYNC(dest_sync_mode),
+            DEST_SYNC(dest_sync),
             ACC_TO_DEST(acc_to_dest),
             ENABLE_DIRECT_INDEXING(enable_direct_indexing),
+            # This kernel is a plain binary op: no broadcast and no dest reuse. Stated here so
+            # the perf CSV carries the same columns as the other eltwise binary families.
+            BROADCAST_TYPE(BroadcastType.None_),
+            REUSE_DEST_TYPE(EltwiseBinaryReuseDestType.NONE),
         ],
         "runtimes": [
             generate_input_dim(
@@ -325,6 +329,8 @@ def test_eltwise_binary(
                 output_num_tiles_in_block=output_tiles_in_block,
             ),
             LOOP_FACTOR(loop_factor),
+            UNPACK_TRANS_FACES(Transpose.No),
+            UNPACK_TRANS_WITHIN_FACE(Transpose.No),
         ],
         "variant_stimuli": StimuliConfig(
             src_A,
@@ -340,9 +346,8 @@ def test_eltwise_binary(
             tile_dimensions=tile_dimensions,
             use_dense_tile_dimensions=True,
         ),
-        "unpack_to_dest": (
-            formats.input_format.is_32_bit() and dest_acc == DestAccumulation.Yes
-        ),
+        # Both operands go through SrcA/SrcB, so a 32-bit input does not unpack to Dest.
+        "unpack_to_dest": False,
         "dest_acc": dest_acc,
     }
 
@@ -359,15 +364,95 @@ def test_eltwise_binary(
     res_from_L1 = configuration.run().result
 
     # Verify results match golden
-    assert len(res_from_L1) == len(
-        golden_tensor
-    ), "Result tensor and golden tensor are not of the same length"
-
-    torch_format = format_dict[formats.output_format]
-    res_tensor = torch.tensor(res_from_L1, dtype=torch_format)
+    res_tensor = result_tensor(res_from_L1, formats.output_format, golden_tensor)
 
     assert passed_test(
         golden_tensor,
         res_tensor,
         formats.output_format,
     ), "Assert against golden failed"
+
+
+ELTWISE_BINARY_LOFI_HIFI4 = [MathFidelity.LoFi, MathFidelity.HiFi4]
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=[InputOutputFormat(DataFormat.Float32, DataFormat.Float16_b)],
+    mathop=[
+        MathOperation.Elwadd,
+        MathOperation.Elwsub,
+        MathOperation.Elwmul,
+    ],
+    math_fidelity=lambda formats, mathop: [
+        fidelity
+        for fidelity in get_valid_math_fidelities(formats, mathop)
+        if fidelity in ELTWISE_BINARY_LOFI_HIFI4
+    ],
+    dest_sync=lambda: quasar_dest_sync_modes(),
+    dest_acc=eltwise_binary_dest_acc,
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync: generate_reduced_input_dimensions(
+            dest_acc, dest_sync
+        )
+    ),
+    acc_to_dest=lambda input_dimensions: valid_acc_to_dest(input_dimensions, (32, 32)),
+)
+def test_eltwise_binary_float32_quasar(
+    formats,
+    mathop,
+    math_fidelity,
+    dest_sync,
+    dest_acc,
+    input_dimensions,
+    acc_to_dest,
+):
+    """Float32 L1 input packed to Float16_b; Float32 -> Float32 runs in test_eltwise_binary."""
+    test_eltwise_binary(
+        formats,
+        mathop,
+        math_fidelity,
+        dest_sync,
+        dest_acc,
+        input_dimensions,
+        acc_to_dest,
+        (32, 32),
+        False,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )
+
+
+@pytest.mark.quasar
+@parametrize(
+    formats=input_output_formats([DataFormat.Float16_b]),
+    mathop=[MathOperation.Elwadd, MathOperation.Elwmul],
+    dest_sync=lambda: quasar_dest_sync_modes(),
+    dest_acc=[DestAccumulation.No, DestAccumulation.Yes],
+    input_dimensions=runtime(
+        lambda dest_acc, dest_sync: generate_dest_depth_input_dimensions(
+            dest_acc, dest_sync
+        )
+    ),
+)
+def test_eltwise_binary_dest_depth_quasar(
+    formats,
+    mathop,
+    dest_sync,
+    dest_acc,
+    input_dimensions,
+):
+    """4 and 8 full Dest sections per run, in both sync modes and Dest widths."""
+    test_eltwise_binary(
+        formats,
+        mathop,
+        MathFidelity.LoFi,
+        dest_sync,
+        dest_acc,
+        input_dimensions,
+        False,
+        (32, 32),
+        False,
+        [PerfRunType.L1_TO_L1],
+        1,
+    )

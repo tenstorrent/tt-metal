@@ -7,20 +7,16 @@
 #include "gtest/gtest.h"
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tt_metal.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
-#include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include "common/tt_backend_api_types.hpp"
 #include <llrt/tt_cluster.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/program/program_impl.hpp"
-#include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "test_host_kernel_common.hpp"
 
 #include <unordered_map>
@@ -45,6 +41,12 @@ class ControlPlaneFixture : public ::testing::Test {
        }
 
        void TearDown() override {
+           // Reset the process-wide fabric config to DISABLED so the next test starts clean. set_fabric_config is
+           // one-shot per process (metal_env.cpp: non-DISABLED -> non-DISABLED is a TT_FATAL), and tearing down to
+           // DISABLED is always allowed. Without this, a test that set e.g. FABRIC_2D would make a subsequent test
+           // that sets a different config (TORUS_Y / MGD_DEFAULT / per-mesh heterogeneous) abort with
+           // "Tried to override previous value of fabric config".
+           tt::tt_metal::MetalContext::instance().set_fabric_config(tt::tt_fabric::FabricConfig::DISABLED);
            tt::tt_metal::MetalContext::instance().get_cluster().configure_ethernet_cores_for_fabric_routers(
                tt::tt_fabric::FabricConfig::DISABLED);
        }
@@ -197,8 +199,7 @@ private:
 
 protected:
     static void SetUpTestSuite() {
-        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-            tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster()) {
+        if (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy()) {
             should_skip_ = true;
             return;
         }
@@ -249,9 +250,8 @@ protected:
     static void SetUpTestSuite() {
         // Check specifically for Wormhole Galaxy
         arch_ = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-        bool is_wormhole_galaxy = (arch_ == tt::ARCH::WORMHOLE_B0) &&
-                                  (tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy() ||
-                                   tt::tt_metal::MetalContext::instance().get_cluster().is_galaxy_cluster());
+        bool is_wormhole_galaxy =
+            (arch_ == tt::ARCH::WORMHOLE_B0) && tt::tt_metal::MetalContext::instance().get_cluster().is_ubb_galaxy();
 
         if (is_wormhole_galaxy) {
             should_skip_ = true;

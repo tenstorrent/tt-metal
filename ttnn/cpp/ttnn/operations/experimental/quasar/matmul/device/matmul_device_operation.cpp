@@ -4,13 +4,22 @@
 
 #include "ttnn/operations/experimental/quasar/matmul/device/matmul_device_operation.hpp"
 
+#include <map>
 #include <string_view>
 
+#include "ttnn/device_operation.hpp"
+#include "ttnn/global_circular_buffer.hpp"
+#include "ttnn/mesh_device_operation_utils.hpp"
+#include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
+#include "ttnn/operations/data_movement/common/synthesize_output_shard_spec.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_program_config.hpp"
+#include "ttnn/operations/experimental/quasar/matmul/device/config/matmul_unified_plan.hpp"
 #include "ttnn/operations/experimental/quasar/matmul/device/utilities/matmul_utilities.hpp"
 #include "tt-metalium/hal_types.hpp"
 #include "tt-metalium/experimental/global_circular_buffer.hpp"
+#include "tt-metalium/experimental/prefetcher_pipe.hpp"
+#include "tt-metalium/experimental/tensor_prefetcher.hpp"
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/unreachable.hpp"
 
@@ -21,7 +30,7 @@ namespace {
 using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
-// A block-sharded output cannot be produced from an unfused batched A: the output CB is backed by the shard buffer,
+// A sharded output cannot be produced from an unfused batched A: the output CB is backed by the shard buffer,
 // which holds a single batch's worth of tiles, and the output shard grid is sized from the fused M. Batch can only
 // be fused when input B is unbatched.
 void validate_block_sharded_output_batch_fusion(
@@ -30,7 +39,7 @@ void validate_block_sharded_output_batch_fusion(
     const uint32_t batch_b = ttnn::get_batch_size(b_shape_padded);
     TT_FATAL(
         fuse_batch || batch_a == 1,
-        "Block-sharded output is incompatible with batch > 1 (batch_A={}, batch_B={}) when batch fusion is "
+        "Sharded output is incompatible with batch > 1 (batch_A={}, batch_B={}) when batch fusion is "
         "disabled. Batch can only be fused when input B has batch size 1; use an interleaved output or "
         "fuse_batch=True.",
         batch_a,
@@ -754,6 +763,146 @@ void validate_dram_sender_global_cb_gather_in0_geometry_recv_contig(
         ring_size);
 }
 
+// Runs before the op queues its prefetch request: a request whose matmul then fails blocks the prefetcher for good.
+// Only DRAM-sender (Tensor prefetcher) pipes have a weight contract to check; a worker-sender producer is the caller's.
+void validate_unified_prefetcher_pipes(
+    const ttnn::PrefetcherPipeList& prefetcher_pipes,
+    const Tensor& input_tensor_b,
+    const CoreRangeSet& cores,
+    const MatmulUnifiedPlan& plan) {
+    using tt::tt_metal::ShardDistributionStrategy;
+    using tt::tt_metal::experimental::SenderCoreType;
+    const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
+    const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
+    for (size_t p = 0; p < pipes.size(); ++p) {
+        const tt::tt_metal::experimental::PrefetcherPipe& pipe = pipes[p];
+        TT_FATAL(
+            pipe.sender_core_type() == first_pipe.sender_core_type() && pipe.ring_size() == first_pipe.ring_size(),
+            "prefetcher_pipes must share a sender kind and a ring_size: pipe {} has a {} sender and {} B, pipe 0 a {} "
+            "sender and {} B",
+            p,
+            pipe.sender_core_type(),
+            pipe.ring_size(),
+            first_pipe.sender_core_type(),
+            first_pipe.ring_size());
+    }
+    const CoreRangeSet receivers = tt::tt_metal::experimental::GetPrefetcherPipeReceiverCores(pipes);
+    TT_FATAL(
+        receivers.num_cores() == cores.num_cores() && receivers.contains(cores),
+        "MatmulUnifiedProgramConfig with prefetcher_pipes needs the pipes' receivers ({}) to be exactly its cores ({})",
+        receivers.str(),
+        cores.str());
+    TT_FATAL(
+        plan.batch_size == 1 && plan.C_slice_M_tiles == plan.M_tiles &&
+            plan.C_slice_N_tiles * receivers.num_cores() == plan.N_tiles &&
+            plan.C_slice_N_padded_tiles == plan.C_slice_N_tiles,
+        "prefetcher_pipes deliver each of the {} receivers its slice of N once, so each computes all of M ({} tiles) "
+        "and N / receivers ({} / {} tiles) in one batch, unpadded; got {} batches with their own B and a {}x{}-tile C "
+        "slice padded to {} wide. Leave C_slice_M_tiles, C_slice_N_tiles and num_batch_groups unset, and give a "
+        "subblock_N_tiles that divides the C slice width.",
+        receivers.num_cores(),
+        plan.M_tiles,
+        plan.N_tiles,
+        receivers.num_cores(),
+        plan.batch_size,
+        plan.C_slice_M_tiles,
+        plan.C_slice_N_tiles,
+        plan.C_slice_N_padded_tiles);
+    TT_FATAL(
+        first_pipe.ring_size() >= MIN_PIPE_ENTRIES * plan.B_pipe_entry_bytes,
+        "prefetcher_pipes ring_size ({} B) must hold at least {} K chunks of B ({} B each at K_chunk_tiles={}): the "
+        "reader publishes one while compute multiplies the previous one",
+        first_pipe.ring_size(),
+        MIN_PIPE_ENTRIES,
+        plan.B_pipe_entry_bytes,
+        plan.K_chunk_tiles);
+    if (first_pipe.sender_core_type() != SenderCoreType::Dram) {
+        return;
+    }
+
+    // B's layout: the Tensor prefetcher feeds this matmul as a 1D mcast_in0 one with in0_block_w = K chunk and
+    // per_core_N = C slice width.
+    ttnn::global_circular_buffer::tensor_prefetcher_block_count_for_matmul_1d(
+        operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig{
+            .in0_block_w = plan.K_chunk_tiles, .per_core_N = plan.C_slice_N_tiles, .mcast_in0 = true},
+        input_tensor_b,
+        prefetcher_pipes);
+
+    // Core i must be sent B's shard i: bank i % banks, shard i / banks under ROUND_ROBIN_1D, else bank i / shards per
+    // bank; a K-row-major B's bank shard is sliced over the bank's receivers in order, like CONTIGUOUS_1D shards.
+    const tt::tt_metal::Buffer* weight_buffer = input_tensor_b.mesh_tensor().mesh_buffer().get_reference_buffer();
+    const auto& bds = weight_buffer->buffer_distribution_spec();
+    TT_FATAL(bds.has_value(), "prefetcher_pipes needs a DRAM-sharded B, which carries a buffer distribution spec");
+    const ShardDistributionStrategy strategy = bds->shard_distribution_strategy();
+    TT_FATAL(
+        strategy == ShardDistributionStrategy::ROUND_ROBIN_1D || strategy == ShardDistributionStrategy::CONTIGUOUS_1D,
+        "prefetcher_pipes needs a ROUND_ROBIN_1D or CONTIGUOUS_1D B, but its shard distribution strategy is {}",
+        strategy);
+    std::map<std::pair<uint32_t, uint32_t>, CoreCoord> receiver_of_shard;
+    for (const auto& delivery : tt::tt_metal::experimental::GetTensorPrefetcherReceiverShards(pipes)) {
+        receiver_of_shard.emplace(std::pair{delivery.bank, delivery.bank_local_shard}, delivery.receiver);
+    }
+    const std::vector<CoreCoord>& banks = bds->cores();
+    const size_t num_cores = plan.cores.size();
+    // Classified as tensor_prefetcher_block_count_for_matmul_1d did above: a legacy shard spec is K-row-major.
+    const bool krow_major = weight_buffer->has_shard_spec();
+    const bool contiguous = krow_major || strategy == ShardDistributionStrategy::CONTIGUOUS_1D;
+    const size_t shards_per_bank = (krow_major ? num_cores : bds->num_shards()) / bds->num_cores_with_data();
+    for (size_t i = 0; i < num_cores; ++i) {
+        const size_t bank_index = contiguous ? i / shards_per_bank : i % banks.size();
+        const auto bank_local_shard = static_cast<uint32_t>(contiguous ? i % shards_per_bank : i / banks.size());
+        const auto bank = static_cast<uint32_t>(banks[bank_index].x);
+        const auto it = receiver_of_shard.find({bank, bank_local_shard});
+        TT_FATAL(
+            it != receiver_of_shard.end() && it->second == plan.cores[i],
+            "prefetcher_pipes: core {} computes C slice {} (cores in row-major order), whose B shard sits at "
+            "bank-local shard {} of DRAM bank {} under B's {} distribution, but the pipes deliver that shard to {}. "
+            "Pair each bank with the cores whose shards it holds.",
+            plan.cores[i].str(),
+            i,
+            bank_local_shard,
+            bank,
+            strategy,
+            it == receiver_of_shard.end() ? std::string("no receiver") : it->second.str());
+    }
+}
+
+// Over the Tensor prefetcher's pipes the op queues the request that feeds them, cut into its config's K chunks. A
+// worker-sender pipe's producer is the caller's.
+void queue_B_tensor_prefetcher_request(const MatmulParams& attributes, const MatmulInputs& tensor_args) {
+    namespace metal_exp = tt::tt_metal::experimental;
+    const ttnn::PrefetcherPipeRefList pipes = ttnn::prefetcher_pipe_refs(attributes.prefetcher_pipes);
+    // A NO_DISPATCH graph capture runs this op without launching its program, so nothing would drain the request.
+    if (pipes.front().get().sender_core_type() != metal_exp::SenderCoreType::Dram ||
+        ttnn::device_operation::detail::graph_capture_blocks_dispatch()) {
+        return;
+    }
+    const Tensor& input_tensor_b = tensor_args.input_tensors.at(1);
+    const uint32_t K_tiles = input_tensor_b.padded_shape()[-2] / TILE_HEIGHT;
+    const auto K_chunk_tiles =
+        static_cast<uint32_t>(std::get<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+                                  attributes.program_config.value())
+                                  .K_chunk_tiles.value());
+    // To the devices launch runs the matmul on: the whole mesh, or the tensors' coordinates when they are not on all.
+    auto* mesh_device = input_tensor_b.device();
+    std::optional<tt::tt_metal::distributed::MeshCoordinateRangeSet> devices;
+    if (!ttnn::device_operation::mesh_device_operation_utils::all_tensors_have_uniform_storage(tensor_args)) {
+        devices.emplace();
+        for (const auto& coord : ttnn::device_operation::mesh_device_operation_utils::extract_tensor_coordinates(
+                 tensor_args, mesh_device)) {
+            devices->merge(tt::tt_metal::distributed::MeshCoordinateRange(coord, coord));
+        }
+    }
+    // In K order, which every core consumes. On the calling thread's current queue, the one launch dispatches on, so a
+    // trace recording there captures the request and re-sends it on every replay.
+    metal_exp::QueueTensorPrefetcherRequest(
+        *mesh_device,
+        pipes,
+        devices,
+        {{input_tensor_b.mesh_tensor(), K_tiles / K_chunk_tiles}},
+        &mesh_device->mesh_command_queue());
+}
+
 }  // namespace
 
 MatmulDeviceOperation::program_factory_t MatmulDeviceOperation::select_program_factory(
@@ -838,6 +987,12 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         (input_tensor_a.layout() == Layout::TILE && input_tensor_b.layout() == Layout::TILE),
         "Inputs to matmul must be tilized");
+    TT_FATAL(
+        attributes.prefetcher_pipes.empty() ||
+            std::holds_alternative<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+                attributes.program_config.value()),
+        "prefetcher_pipes delivery of B is supported only with MatmulUnifiedProgramConfig, got {}",
+        ttsl::get_active_type_name_in_variant(attributes.program_config.value()));
     validate_matmul_matrix_dimensions(a_shape, b_shape, a_shape_padded, b_shape_padded, in0_tile, in1_tile);
 
     const bool is_optional_output_tensor =
@@ -930,7 +1085,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(is_floating_point(input_tensor_a.dtype()), "Unsupported data format");
 
     TT_FATAL(
-        input_tensor_a.buffer() != nullptr and input_tensor_b.buffer() != nullptr,
+        input_tensor_a.is_allocated() and input_tensor_b.is_allocated(),
         "Operands to matmul need to be allocated in buffers on device!");
     TT_FATAL(input_tensor_a.device() == input_tensor_b.device(), "Operands to matmul need to be on the same device!");
 
@@ -939,6 +1094,42 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
     if (optional_bias.has_value()) {
         auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(optional_bias.value().dtype());
         bias_single_tile_size = tt::tile_size(bias_data_format);
+    }
+    {
+        // MX (OCP microscaling) operands. The unpacker expands every MX format to Float16_b in the Src registers,
+        // so the FPU never sees MX and the matmul itself is format-agnostic; the packer converts Dest back to MX
+        // for an MX output (the partials ring stays Float16_b / Float32, see get_interm_data_format). What the
+        // kernels cannot do on MX tiles is rejected here:
+        //  - MXFP4: matmul_init unpacks it as the 2x-packed src-register format (MxFp4_2x_B) and the FPU reads
+        //    SrcB through the same packed-FP4 view, so both operands must be MXFP4 (or neither);
+        //  - transpose: SrcA transpose is not supported for 2x formats, and the in0 transpose kernel path has
+        //    not been run on MX tiles;
+        //  - K not a tile multiple: the readers zero the last K tile's padding in L1 (pad_last_ktile), which knows
+        //    the bf16 / fp32 / WH block-float tile layouts but not the MX scale + element layout;
+        //  - bias: added through the Float16_b bias path; MX bias tiles are out of scope.
+        const DataType a_dtype = input_tensor_a.dtype();
+        const DataType b_dtype = input_tensor_b.dtype();
+        if (is_mx(a_dtype) || is_mx(b_dtype)) {
+            TT_FATAL(
+                (a_dtype == DataType::MXFP4) == (b_dtype == DataType::MXFP4),
+                "MXFP4 matmul needs both operands in MXFP4 (the 2x-packed src format pairs FP4 with FP4), got in0 {} "
+                "and in1 {}",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                !attributes.transpose_a && !attributes.transpose_b,
+                "transpose_a / transpose_b are not supported with MX operands (in0 {}, in1 {})",
+                a_dtype,
+                b_dtype);
+            TT_FATAL(
+                a_shape[-1] % input_tensor_a.tensor_spec().tile().get_width() == 0,
+                "MX matmul needs K to be a tile multiple (the MX tile layout cannot be zero-padded in L1), got K = {}",
+                a_shape[-1]);
+            TT_FATAL(
+                !optional_bias.has_value() || !is_mx(optional_bias->dtype()),
+                "MX bias tensors are not supported, got {}",
+                optional_bias->dtype());
+        }
     }
     operations::experimental::quasar::matmul::MatmulProgramConfig chosen_program_config =
         operations::experimental::quasar::matmul::get_program_config(
@@ -1199,17 +1390,17 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
                             (input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED &&
-                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM) ||
+                             input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM) ||
                             // Receiver-contiguous Tensor prefetcher: in1 is an NdShardSpec DRAM
                             // weight (reported as ND_SHARDED) whose data is delivered via the
                             // global CB receivers, not read directly per its DRAM layout. The
                             // weight's own layout is irrelevant to the matmul in this case.
                             (attributes.global_cb.has_value() &&
-                             input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM),
+                             input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM),
                         "Input tensor B must be width sharded, DRAM interleaved, or a DRAM weight fed "
                         "via a global circular buffer when using gather_in0.");
                     if (!attributes.global_cb.has_value() && input_tensor_b.is_sharded()) {
-                        if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1) {
+                        if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1) {
                             TT_FATAL(
                                 input_tensor_a.shard_spec().value().grid == input_tensor_b.shard_spec().value().grid,
                                 "Input tensor A and B must be sharded on the same cores "
@@ -1356,7 +1547,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             program_config.out_block_w == per_core_N || program_config.out_block_h == 1,
                             "Error: out_block_w must be equal to per_core_N or out_block_h must be equal to 1.");
                     }
-                    if (input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::L1 &&
+                    if (input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::L1 &&
                         input_tensor_b.memory_config().is_sharded()) {
                         TT_FATAL(
                             input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED,
@@ -1437,6 +1628,13 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     TT_FATAL(
                         input_tensor_b.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
                         "Error: Operand B must be interleaved.");
+                }
+                // With a sharded output, the in0 and in1 multicast programs (mcast_in0 true or false) use the core's
+                // output shard as the output buffer, which holds the output of one batch. gather_in0 uses different
+                // kernels, which this check does not cover.
+                if (!program_config.gather_in0 && attributes.output_mem_config.is_sharded()) {
+                    validate_block_sharded_output_batch_fusion(
+                        program_config.fuse_batch, a_shape_padded, b_shape_padded);
                 }
             } else if constexpr (std::is_same_v<
                                      ProgramConfigType,
@@ -1631,8 +1829,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     // interleaved-style reader, which addresses the NdShardSpec layout from the accessor
                     // args. The width/height-specific validation below is gated on those layouts, so ND
                     // DRAM in1 skips it (no shard_spec() access).
-                    const bool in1_is_nd_dram = tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
-                                                input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM;
+                    const bool in1_is_nd_dram =
+                        tensor_b_memory_layout == TensorMemoryLayout::ND_SHARDED &&
+                        input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM;
                     TT_FATAL(
                         tensor_b_memory_layout == TensorMemoryLayout::WIDTH_SHARDED ||
                             tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED || in1_is_nd_dram,
@@ -1641,9 +1840,9 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                     if (tensor_b_memory_layout == TensorMemoryLayout::HEIGHT_SHARDED) {
                         // Height-sharded in1 is only supported for DRAM batched matmuls
                         TT_FATAL(
-                            input_tensor_b.buffer()->buffer_type() == tt_metal::BufferType::DRAM,
+                            input_tensor_b.memory_config().buffer_type() == tt_metal::BufferType::DRAM,
                             "HEIGHT_SHARDED input B is only supported in DRAM, got: {}",
-                            input_tensor_b.buffer()->buffer_type());
+                            input_tensor_b.memory_config().buffer_type());
                         TT_FATAL(
                             !program_config.fuse_batch,
                             "HEIGHT_SHARDED input B requires fuse_batch=false for batched matmul");
@@ -1688,7 +1887,7 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                             batches_per_bank * num_banks,
                             B);
                     }
-                    if (input_tensor_b.buffer()->buffer_type() != tt_metal::BufferType::DRAM) {
+                    if (input_tensor_b.memory_config().buffer_type() != tt_metal::BufferType::DRAM) {
                         const auto tensor_a_memory_layout = input_tensor_a.memory_config().memory_layout();
                         TT_FATAL(
                             (input_tensor_a.memory_config().is_sharded() &&
@@ -1877,15 +2076,26 @@ void MatmulDeviceOperation::validate_on_program_cache_miss(
                 // tensor accessor. Geometry, blocking, buffer fit and sharded-output constraints are
                 // all checked by the plan (shared with the factory and compute_output_specs).
                 TT_FATAL(
-                    !optional_bias.has_value(),
-                    "MatmulUnifiedProgramConfig does not fuse bias; ttnn::matmul applies it as a separate add");
-                (void)plan_unified_matmul(
-                    *input_tensor_a.device(),
-                    input_tensor_a,
-                    input_tensor_b,
-                    program_config,
-                    attributes,
-                    optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0));
+                    !optional_bias.has_value() || optional_bias->logical_shape()[-2] == 1,
+                    "MatmulUnifiedProgramConfig fuses a bias of one row, broadcast down M (got {} rows); ttnn.linear "
+                    "adds a taller one separately",
+                    optional_bias.has_value() ? optional_bias->logical_shape()[-2] : 0);
+                const MatmulUnifiedPlan plan =
+                    plan_unified_matmul(
+                        input_tensor_a,
+                        input_tensor_b,
+                        optional_bias.has_value()
+                            ? tt::tile_size(tt::tt_metal::datatype_to_dataformat_converter(optional_bias->dtype()))
+                            : 0,
+                        program_config,
+                        attributes,
+                        optional_output_tensors.empty() ? std::nullopt : optional_output_tensors.at(0),
+                        /*must_fit=*/true)
+                        .value();
+                if (plan.B_from_pipes) {
+                    validate_unified_prefetcher_pipes(
+                        attributes.prefetcher_pipes, input_tensor_b, program_config.cores, plan);
+                }
             } else {
                 TT_FATAL(
                     input_tensor_a.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -2223,25 +2433,34 @@ MatmulDeviceOperation::spec_return_value_t MatmulDeviceOperation::compute_output
                 } else if constexpr (std::is_same_v<
                                          ProgramConfigType,
                                          operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>) {
-                    // One C slice of C per core; the shard grid is the active cores in assignment order, so
-                    // the accessor's shard -> core mapping is the factory's C slice -> core mapping and every
-                    // core writes its own shard.
-                    // Reached only when no output tensor was supplied, so C is allocated from this plan.
-                    const UnifiedMatmulPlan plan = plan_unified_matmul(
-                        *input_tensor_a.device(),
-                        input_tensor_a,
-                        input_tensor_b,
-                        program_config,
-                        attributes,
-                        std::nullopt);
-                    const CoreRangeSet grid(ttsl::Span<const CoreCoord>(plan.cores));
-                    const ShardOrientation orientation = plan.orientation;
-                    ShardSpec shard_spec = ShardSpec{
-                        grid,
-                        {plan.C_slice_M_tiles * in0_tile.get_height(), plan.C_slice_N_tiles * in1_tile.get_width()},
-                        orientation};
-                    const tt::tt_metal::MemoryConfig mem_config(
-                        plan.sharded_output_layout, attributes.output_mem_config.buffer_type(), shard_spec);
+                    // Reached only when no output tensor was supplied. A shard spec given in the memory config is
+                    // kept; without one, C's shards are the C slices when they form a shard spec in the layout asked
+                    // for (each core writes its own), else C split over the grid as other ops do (the writer reaches
+                    // any shard through the tensor accessor).
+                    tt::tt_metal::MemoryConfig mem_config = attributes.output_mem_config;
+                    if (!mem_config.shard_spec().has_value()) {
+                        const MatmulUnifiedPlan plan = plan_unified_matmul(
+                                                           input_tensor_a,
+                                                           input_tensor_b,
+                                                           bias_single_tile_size,
+                                                           program_config,
+                                                           attributes,
+                                                           std::nullopt,
+                                                           /*must_fit=*/true)
+                                                           .value();
+                        std::optional<ShardSpec> shard_spec = C_slice_shard_spec(plan, mem_config);
+                        if (!shard_spec.has_value()) {
+                            shard_spec = ttnn::operations::data_movement::common::synthesize_output_shard_spec(
+                                mem_config.is_dram() ? input_tensor_a.device()->dram_grid_size()
+                                                     : input_tensor_a.device()->compute_with_storage_grid_size(),
+                                (uint64_t)plan.batch_size * plan.M_tiles * TILE_HEIGHT,
+                                (uint64_t)plan.N_tiles * TILE_WIDTH,
+                                mem_config.memory_layout(),
+                                {.orientation_hint = plan.orientation, .caller_tag = "QuasarMatmulUnified"});
+                        }
+                        mem_config = tt::tt_metal::MemoryConfig(
+                            mem_config.memory_layout(), mem_config.buffer_type(), shard_spec);
+                    }
                     return {tt::tt_metal::TensorSpec(
                         output_shape,
                         TensorLayout(
@@ -2354,9 +2573,13 @@ MatmulParams create_matmul_attributes(
     auto arch = device->arch();
     const bool has_user_grid = parameters.user_core_coord.has_value();
     const bool has_program_config = parameters.program_config.has_value();
+    // MX elements carry at most 7 mantissa bits and are unpacked to Float16_b, which the first fidelity phase
+    // multiplies in full on Quasar (#57880), so MX inputs default to LoFi like the WH/BH block floats.
+    const auto is_low_precision_df = [](DataType dtype) {
+        return dtype == DataType::BFLOAT8_B || dtype == DataType::BFLOAT4_B || is_mx(dtype);
+    };
     bool are_inputs_low_precision_df =
-        ((input_tensor_a.dtype() == DataType::BFLOAT8_B || input_tensor_a.dtype() == DataType::BFLOAT4_B) &&
-         (input_tensor_b.dtype() == DataType::BFLOAT8_B || input_tensor_b.dtype() == DataType::BFLOAT4_B));
+        is_low_precision_df(input_tensor_a.dtype()) && is_low_precision_df(input_tensor_b.dtype());
     const auto increase_fidelity = !has_program_config && !has_user_grid && !are_inputs_low_precision_df;
     auto math_fidelity = increase_fidelity ? tt::tt_metal::MathFidelity::HiFi2 : tt::tt_metal::MathFidelity::LoFi;
     bool are_inputs_32F = (input_tensor_a.dtype() == DataType::FLOAT32 && input_tensor_b.dtype() == DataType::FLOAT32);
@@ -2438,7 +2661,8 @@ MatmulParams create_matmul_attributes(
         parameters.transpose_b,
         output_tile,
         parameters.global_cb,
-        parameters.sub_device_id};
+        parameters.sub_device_id,
+        parameters.prefetcher_pipes};
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
@@ -2448,25 +2672,48 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
-    if (!normalized_attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-        if (bias.has_value()) {
-            auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
-            bias_single_tile_size = tt::tile_size(bias_data_format);
-        }
-
-        normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
-            input_tensor_a,
-            input_tensor_b,
-            normalized_attributes.transpose_a,
-            normalized_attributes.transpose_b,
-            bias_single_tile_size,
-            normalized_attributes);
+    uint32_t bias_single_tile_size = 0;
+    if (bias.has_value()) {
+        auto bias_data_format = tt::tt_metal::datatype_to_dataformat_converter(bias.value().dtype());
+        bias_single_tile_size = tt::tile_size(bias_data_format);
     }
+    // The caller's config, with its placement chosen if it has none, or an auto-chosen one.
+    normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
+        input_tensor_a,
+        input_tensor_b,
+        normalized_attributes.transpose_a,
+        normalized_attributes.transpose_b,
+        bias_single_tile_size,
+        normalized_attributes);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensor_a.device()->compute_with_storage_grid_size());
-    return ttnn::device_operation::launch<MatmulDeviceOperation>(
-        normalized_attributes, {{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}});
+    MatmulInputs inputs{{input_tensor_a, input_tensor_b}, {bias}, {optional_output_tensor}};
+    if (!normalized_attributes.prefetcher_pipes.empty()) {
+        // The request goes out ahead of the program (a head start for the prefetcher; launch blocks under slow
+        // dispatch). So C is allocated first, the K chunk the request is cut into is chosen in the L1 C leaves (it is
+        // in the config, so the program cache keys on it), and the op is validated.
+        Tensor C = MatmulDeviceOperation::create_output_tensors(normalized_attributes, inputs).at(0);
+        normalized_attributes.output_mem_config = C.memory_config();
+        auto* config = std::get_if<operations::experimental::quasar::matmul::MatmulUnifiedProgramConfig>(
+            &normalized_attributes.program_config.value());
+        if (config != nullptr && !config->K_chunk_tiles.has_value()) {
+            // A worker-sender producer sizes its own entries, which the op cannot see; a K chunk other than theirs
+            // hangs both ends.
+            TT_FATAL(
+                ttnn::prefetcher_pipe_refs(normalized_attributes.prefetcher_pipes).front().get().sender_core_type() ==
+                    tt::tt_metal::experimental::SenderCoreType::Dram,
+                "prefetcher_pipes with worker senders need MatmulUnifiedProgramConfig::K_chunk_tiles set to the K "
+                "tiles of each entry their producer sends (for ttnn.dram_prefetcher, K tiles / receivers)");
+            config->K_chunk_tiles =
+                plan_unified_matmul(
+                    input_tensor_a, input_tensor_b, bias_single_tile_size, *config, normalized_attributes, C, true)
+                    ->K_chunk_tiles;
+        }
+        inputs.optional_output_tensors.at(0) = std::move(C);
+        MatmulDeviceOperation::validate_on_program_cache_miss(normalized_attributes, inputs);
+        queue_B_tensor_prefetcher_request(normalized_attributes, inputs);
+    }
+    return ttnn::device_operation::launch<MatmulDeviceOperation>(normalized_attributes, inputs);
 }
 
 MatmulDeviceOperation::tensor_return_value_t matmul(
@@ -2474,17 +2721,14 @@ MatmulDeviceOperation::tensor_return_value_t matmul(
     const std::optional<Tensor>& optional_output_tensor,
     const MatmulParams& attributes) {
     MatmulParams normalized_attributes = attributes;
-    if (!normalized_attributes.program_config.has_value()) {
-        uint32_t bias_single_tile_size = 0;
-
-        normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
-            input_tensors.at(0),
-            input_tensors.at(1),
-            normalized_attributes.transpose_a,
-            normalized_attributes.transpose_b,
-            bias_single_tile_size,
-            normalized_attributes);
-    }
+    uint32_t bias_single_tile_size = 0;
+    normalized_attributes.program_config = operations::experimental::quasar::matmul::get_program_config(
+        input_tensors.at(0),
+        input_tensors.at(1),
+        normalized_attributes.transpose_a,
+        normalized_attributes.transpose_b,
+        bias_single_tile_size,
+        normalized_attributes);
     operations::experimental::quasar::matmul::normalize_program_config(
         normalized_attributes.program_config.value(), input_tensors.at(0).device()->compute_with_storage_grid_size());
     // validate requires optional_input_tensors.size() == 1; this path has no bias.

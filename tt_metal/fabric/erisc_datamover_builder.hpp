@@ -4,17 +4,14 @@
 
 #pragma once
 
+#include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
-#include <tt-metalium/hal.hpp>
-#include <tt-metalium/tt_align.hpp>
 
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
-#include <tt-metalium/experimental/fabric/edm_fabric_counters.hpp>
-#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>  // for FabricNodeId
 #include <hostdevcommon/fabric_common.h>
 #include <optional>
 #include <cstdint>
@@ -25,9 +22,10 @@
 #include <string>
 #include <unordered_map>
 #include "builder/fabric_channel_allocator.hpp"
+#include "builder/fabric_static_sized_channels_allocator.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/builder/connection_writer_adapter.hpp"
+#include "tt_metal/fabric/builder/fabric_master_router_selection.hpp"
 #include "tt_metal/fabric/channel_trimming_import.hpp"
 #include "tt_metal/fabric/fabric_datamover_builder_base.hpp"
 
@@ -45,7 +43,6 @@ struct FabricRiscConfig;
 class FabricContext;
 class FabricRouterBuilder;
 class ComputeMeshRouterBuilder;
-class FabricRemoteChannelsAllocator;
 
 class FabricEriscDatamoverBuilder;
 class FabricTensixDatamoverBuilder;
@@ -134,10 +131,13 @@ struct FabricRouterDiagnosticBufferMap {
 };
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+    // The NoC command buffer a router uses for a kind of transfer.
+    enum class NocCmdBuf : uint32_t {
+        WR_CMD_BUF = 0,      // for large writes
+        RD_CMD_BUF = 1,      // for all reads
+        WR_REG_CMD_BUF = 2,  // for small writes (e.g., registers, semaphores)
+        AT_CMD_BUF = 3,      // for atomics
+    };
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
@@ -166,6 +166,7 @@ struct FabricEriscDatamoverConfig {
 
     // Performance telemetry buffer address (16B aligned)
     std::size_t perf_telemetry_buffer_address = 0;
+    static constexpr std::size_t perf_telemetry_buffer_size = 32;
 
     // Code profiling buffer address (16B aligned)
     std::size_t code_profiling_buffer_address = 0;
@@ -208,6 +209,9 @@ struct FabricEriscDatamoverConfig {
     size_t receiver_channel_remote_ack_counters_base_addr = 0;
     size_t receiver_channel_remote_completion_counters_base_addr = 0;
     size_t router_buffer_clear_size_words = 1;
+    // Every sender channel's connection info and semaphores, [start, end): zeroed at fabric init.
+    size_t sender_channels_bookkeeping_start = 0;
+    size_t sender_channels_bookkeeping_end = 0;
 
     // ----------- Local Tensix Relay Connection (UDM mode only)
     // Connection buffer index for the local tensix relay interface
@@ -221,6 +225,8 @@ struct FabricEriscDatamoverConfig {
 
     // Channel Allocations
     std::size_t max_l1_loading_size = 0;
+    // One past the last byte the router places below max_l1_loading_size.
+    std::size_t allocated_l1_end_address = 0;
     std::vector<MemoryRegion> available_buffer_memory_regions;
 
     FabricEriscDatamoverConfig(
@@ -242,6 +248,9 @@ struct FabricEriscDatamoverConfig {
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
+    // Senders and receivers transmit on separate Ethernet TX queues, which two-ERISC mode enables. The kernel derives
+    // the same flag from SENDER_TXQ_ID and RECEIVER_TXQ_ID.
+    bool multi_txq_enabled() const { return sender_txq_id != receiver_txq_id; }
     std::size_t num_riscv_cores = 0;
     tt::ARCH arch = tt::ARCH::Invalid;
 
@@ -254,25 +263,21 @@ struct FabricEriscDatamoverConfig {
 
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids =
-        {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids = {};
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
 
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
     // emd vcs
     std::size_t edm_noc_vc = 0;
 
     // Fabric channel allocator for L1 memory management
     // Points to the primary allocator (typically static allocator for single-pool configs)
+    // The fabric-wide allocation here; each router's builder replaces it with one laid out for its own channels.
     std::shared_ptr<FabricChannelAllocator> channel_allocator;
-
-    // Remote channels allocator - tracks remote receiver channel info for the remote ethernet core
-    std::shared_ptr<FabricRemoteChannelsAllocator> remote_channels_allocator;
 
 private:
     FabricEriscDatamoverConfig(const FabricContext& fabric_context, Topology topology);
@@ -337,6 +342,14 @@ void append_worker_to_fabric_edm_sender_rt_args(
     size_t sender_worker_buffer_index_semaphore_id,
     std::vector<uint32_t>& args_out);
 size_t log_worker_to_fabric_edm_sender_rt_args(const std::vector<uint32_t>& args, size_t starting_arg_idx = 0);
+
+// What a fabric graph already knows about a router, handed in instead of worked out by the builder.
+// Sender vectors are by flat sender channel (VC0's, then VC1's, then VC2's).
+struct RouterGraphInputs {
+    RouterChannelLayout layout;       // this router's channels
+    std::vector<bool> injection;      // acquires a protected ring (bubble flow control)
+    std::vector<bool> serviced;       // a channel, or a slot stock services anyway
+};
 
 /*
  * The `FabricEriscDatamoverBuilder` is a general class that is used to build fabric router erisc kernels.
@@ -414,7 +427,8 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
             std::nullopt,
         std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
-        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt,
+        const RouterGraphInputs* graph_inputs = nullptr);
 
     // fabric_context must outlive the returned builder.
     static FabricEriscDatamoverBuilder build(
@@ -435,7 +449,8 @@ public:
         std::optional<std::array<std::size_t, builder_config::MAX_NUM_VCS>> actual_receiver_channels_per_vc =
             std::nullopt,
         std::optional<ChannelTrimmingOverrides> channel_trimming_overrides = std::nullopt,
-        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt);
+        std::optional<Vc0TrimFastPathInfo> vc0_trim_fast_path_info = std::nullopt,
+        const RouterGraphInputs* graph_inputs = nullptr);
 
     [[nodiscard]] SenderWorkerAdapterSpec build_connection_to_worker_channel() const;
     // Overload that accepts VC, absolute channel ID, and VC-relative channel ID
@@ -451,6 +466,14 @@ public:
     };
     [[nodiscard]] CompileTimeArgs get_compile_time_args(uint32_t risc_id) const;
 
+    // The length of each VC's downstream arrays in the kernel (VC0_DOWNSTREAM_EDM_SIZE and VC1_DOWNSTREAM_EDM_SIZE).
+    // Note: This is only valid once the router's downstream connections are made.
+    [[nodiscard]] std::array<uint32_t, 2> get_downstream_edm_array_sizes() const;
+
+    // Creates the master routercandidate type that describes the router's downstream connections. Only valid once the
+    // router's downstream connections are made.
+    [[nodiscard]] MasterRouterCandidate describe_master_router_candidate() const;
+
     // Helper for `get_compile_time_args`
     void get_telemetry_compile_time_args(uint32_t risc_id, std::unordered_map<std::string, uint32_t>& named_args) const;
 
@@ -459,6 +482,12 @@ public:
     void connect_to_downstream_edm(FabricDatamoverBuilderBase* downstream_builder);
 
     size_t get_configured_risc_count() const;
+
+    // One past the last byte the router places below config.max_l1_loading_size.
+    size_t get_allocated_l1_end_address() const { return config.allocated_l1_end_address; }
+
+    // This router's channel buffers, as its link peer and the routers feeding it address them.
+    RouterChannelLayout get_channel_layout() const;
 
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
@@ -475,9 +504,16 @@ public:
 
     void set_firmware_context_switch_interval(size_t interval);
     void set_firmware_context_switch_type(FabricEriscDatamoverContextSwitchType type);
+    // Ethernet TX queue keepalive period in cycles (ETH_TXQ_LOCAL_SEQ_UPDATE_TIMEOUT), set by the router while it
+    // runs. 0 leaves the firmware's value.
+    void set_eth_txq_seq_update_timeout(uint32_t cycles);
     void set_wait_for_host_signal(bool wait_for_host_signal);
 
     bool is_first_level_ack_enabled() const { return this->enable_first_level_ack; }
+    // The channel trimming profile entry that turned off this router's unused channels, if one was applied.
+    const std::optional<ChannelTrimmingOverrides>& get_channel_trimming_overrides() const {
+        return channel_trimming_overrides_;
+    }
 
     //    protected:
     const FabricContext& fabric_context_;
@@ -498,9 +534,7 @@ public:
         downstream_allocators = {};
 
     std::array<size_t, builder_config::num_max_receiver_channels> receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers = {};
     std::array<size_t, builder_config::num_max_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address = {};
 
     std::array<size_t, builder_config::num_max_sender_channels> local_sender_channels_connection_info_addr = {};
 
@@ -536,6 +570,7 @@ public:
     bool build_in_worker_connection_mode = false;
     size_t firmware_context_switch_interval = default_firmware_context_switch_interval;
     FabricEriscDatamoverContextSwitchType firmware_context_switch_type = default_firmware_context_switch_type;
+    uint32_t eth_txq_seq_update_timeout = 0;
     bool fuse_receiver_flush_and_completion_ptr = true;
     bool wait_for_host_signal = false;
     bool has_tensix_extension = false;

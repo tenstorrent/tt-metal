@@ -7,7 +7,8 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/tilize_utils.hpp>
+#include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 
 namespace ttnn::prim::qsr {
 
@@ -80,7 +81,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     const uint8_t in_cb_id = tt::CBIndex::c_0;
     uint32_t buffering_factor = 1;  // data is already fully buffered in the CBs since its sharded
     uint32_t aligned_input_tile_nbytes =
-        round_up_to_mul32(input_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(input_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t in_cb_pagesize = aligned_input_tile_nbytes;
     uint32_t in_cb_npages = num_tile_per_core * buffering_factor;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -97,7 +98,7 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
     // output sharded CB
     const uint8_t out_cb_id = tt::CBIndex::c_2;
     uint32_t aligned_output_tile_nbytes =
-        round_up_to_mul32(output_tile_size);  // will have issue if the page is not multiple of 32
+        tt::round_up(output_tile_size, 32u);  // will have issue if the page is not multiple of 32
     uint32_t out_cb_pagesize = aligned_output_tile_nbytes;
     uint32_t out_cb_npages = num_tile_per_core * buffering_factor;
     desc.cbs.push_back(tt::tt_metal::CBDescriptor{
@@ -132,16 +133,16 @@ tt::tt_metal::ProgramDescriptor TypecastShardedProgramFactory::create_descriptor
         args.preserve_fp32_precision,
         args.fp32_dest_acc_en);
 
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto* src_buffer = &input.mesh_buffer();
+    const auto* dst_buffer = &output.mesh_buffer();
 
-    bool src_is_dram = src_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool src_is_dram = src_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(src_is_dram == 0, "Input buffer should be in L1");
     std::vector<uint32_t> reader_compile_time_args = {
         in_cb_id,
     };
 
-    bool dst_is_dram = dst_buffer->buffer_type() == tt::tt_metal::BufferType::DRAM;
+    bool dst_is_dram = dst_buffer->device_local_config().buffer_type == tt::tt_metal::BufferType::DRAM;
     TT_FATAL(dst_is_dram == 0, "Output buffer should be in L1");
 
     std::map<std::string, std::string> kernel_defines;

@@ -12,8 +12,8 @@
 #include "tt-metalium/kernel_types.hpp"
 #include "tt-metalium/tt_backend_api_types.hpp"
 #include "ttnn/tensor/types.hpp"
-#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
-#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/workload/run_args/program_run_args.hpp>
+#include <tt-metalium/workload/specification/program_spec.hpp>
 #include <tt-metalium/work_split.hpp>
 
 #include <bit>
@@ -27,7 +27,7 @@ using AccumulationProgramFactory = AccumulationDeviceOperation::AccumulationProg
 
 namespace {
 
-using namespace tt::tt_metal::experimental;
+using namespace tt::tt_metal;
 
 // The constants below carry a per-factory prefix so this file and the sibling EMA factory can
 // safely share a translation unit: both are sources of the unity-built ttnn_op_reduction target,
@@ -250,7 +250,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_prog
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
@@ -450,7 +449,6 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     Tensor& tensor_return_value) {
     using namespace tt;
     using namespace tt::tt_metal;
-    using namespace tt::tt_metal::experimental;
 
     const auto& input_tensor{tensor_args.input_tensor.mesh_tensor()};
     const auto& output_tensor{tensor_return_value.mesh_tensor()};
@@ -459,8 +457,8 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     const int32_t dim{
         (operation_attributes.dim >= 0) ? operation_attributes.dim : (input_rank + operation_attributes.dim)};
     const bool scan_width = dim == input_rank - 1;
-    // Only forward scans get here: cumsum_tile scans forward only, so is_tile_axis_accumulation()
-    // rejects flip and validate_on_program_cache_miss() enforces that.
+    // Only forward scans get here: cumsum_tile and cumprod_tile scan forward only, so
+    // is_tile_axis_accumulation() rejects flip and validate_on_program_cache_miss() enforces that.
     TT_ASSERT(!operation_attributes.flip, "The tile-axis accumulation kernel only scans forward");
 
     const auto& tile = input_tensor.tensor_spec().tile();
@@ -476,18 +474,30 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     const auto input_dataformat = datatype_to_dataformat_converter(input_tensor.dtype());
     const auto output_dataformat = datatype_to_dataformat_converter(output_tensor.dtype());
 
-    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to bf16. The
-    // bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    // 32-bit Dest keeps the running totals in fp32; only the packed output is rounded to the output
+    // format. A bf16 input goes through SrcA, which holds it exactly, so it needs no unpack-mode entry.
+    // SrcA would cut an fp32 input to tf32, so that one is unpacked straight into Dest.
+    ComputeHardwareConfig::ComputeUnpackModes unpack_modes;
+    if (input_dataformat == DataFormat::Float32) {
+        unpack_modes[ACCUM_SRC] = UnpackMode::UnpackToDest;
+    }
     const ComputeHardwareConfig compute_config{
         .fpu_math_fidelity = MathFidelity::HiFi4,
         .sfpu_precision_mode = Precision::Precise,
         .enable_32_bit_dest = true,
         .double_buffer_dest = true,
+        .unpack_modes = unpack_modes,
     };
 
     std::map<std::string, std::string> compute_defines_map;
     if (scan_width) {
         compute_defines_map["SCAN_WIDTH"] = "1";
+    }
+    if (operation_attributes.op == AccumulationOp::CUMPROD) {
+        compute_defines_map["CUMPROD"] = "1";
+    } else if (output_dataformat == DataFormat::Float32 && !operation_attributes.disable_compensation) {
+        // fp32 cumsum keeps the compensated (Kahan) sum of the permuted path.
+        compute_defines_map["COMPENSATED_SUM"] = "1";
     }
     const KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 

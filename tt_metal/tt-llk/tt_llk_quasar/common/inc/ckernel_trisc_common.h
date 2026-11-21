@@ -40,14 +40,21 @@ using ckernel::TILE_C_DIM;
 using ckernel::TILE_R_DIM;
 
 // Default number of faces
-constexpr static std::uint32_t NUM_FACES = 4;
+constexpr std::uint32_t NUM_FACES = 4;
 
 // Default number of tiles processed per one _llk_* execute call
-static constexpr std::uint32_t NUM_TILES = 1;
+constexpr std::uint32_t NUM_TILES = 1;
+
+// SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
+// index aliases back to an earlier tile.
+constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
+
+// The TILE_SEL counter is 18 bits and wraps, so INC can step it back with a negative value.
+constexpr std::uint32_t TILE_SEL_IDX_LIMIT = 1u << 18;
 
 // Number of rows that can fit into Dest
-static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
-static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
+constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
+constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
 
 // Number of bits used to represent data format in unpacker/packer config.
 // The reason we keep only the bottom 4 bits is because the HW only has 4 bits to represent the dataformat.
@@ -64,7 +71,11 @@ constexpr std::uint32_t DATA_FORMAT_BIT_COUNT = 5;
 constexpr std::uint32_t DATA_FORMAT_CONFIG_MASK = (1 << DATA_FORMAT_BIT_COUNT) - 1;
 constexpr std::uint32_t NUM_WORDS_TILE_CNT      = 8;
 
-typedef struct
+// MxFp4_2x exists only on the base/8-row variant, Int8_2x only on the 4-row variant.
+constexpr bool HAS_MXFP4_2X_SRC_FORMAT = MATH_ROWS == 8;
+constexpr bool HAS_INT8_2X_SRC_FORMAT  = MATH_ROWS == 4;
+
+struct tile_counter_t
 {
     std::uint32_t reserved0                    : 32;
     std::uint32_t reset                        : 32;
@@ -74,18 +85,18 @@ typedef struct
     std::uint32_t reserved1                    : 32;
     std::uint32_t tiles_avail_interrupt_thresh : 32;
     std::uint32_t space_avail_interrupt_thresh : 32;
-} tile_counter_t;
+};
 
 static_assert(sizeof(tile_counter_t) == NUM_WORDS_TILE_CNT * sizeof(std::uint32_t), "tile_counter_t must be 96b!");
 
-typedef union
+union tile_counter_u
 {
     std::uint32_t words[NUM_WORDS_TILE_CNT];
     tile_counter_t f;
-} tile_counter_u;
+};
 
 // Points to the tile counters
-tile_counter_u volatile* const tile_counters = (tile_counter_u volatile* const)TILE_COUNTERS_BASE;
+tile_counter_u volatile* const tile_counters = reinterpret_cast<tile_counter_u volatile*>(TILE_COUNTERS_BASE);
 
 // Destination register offset, offset = 0 -> targets dest bank 0, offset = 512 for 16bit dest, 256 for 32bit dest -> targets dest bank 1
 #ifdef ENV_LLK_INFRA
@@ -170,6 +181,8 @@ inline std::uint32_t get_dest_max_tiles()
 template <std::uint8_t TRISC_ID>
 inline void _set_dest_section_base_(const std::uint32_t base_addr)
 {
+    static_assert(TRISC_ID < 4, "_set_dest_section_base_ takes a per-Neo thread id in [0, 3]");
+
     if constexpr (TRISC_ID == 0)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32] = base_addr;
@@ -182,7 +195,7 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC2_Offset_ADDR32] = base_addr;
     }
-    else
+    else if constexpr (TRISC_ID == 3)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
     }
@@ -225,12 +238,12 @@ inline std::uint32_t _get_dest_buffer_base_()
     return dest_register_offset;
 }
 
-inline constexpr static std::uint32_t masked_data_format(std::uint32_t data_format)
+inline constexpr std::uint32_t masked_data_format(std::uint32_t data_format)
 {
     return data_format & DATA_FORMAT_CONFIG_MASK;
 }
 
-constexpr static std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
+constexpr std::uint32_t SCALE_DATUM_SIZE(std::uint32_t format, std::uint32_t datum_count)
 {
     switch (masked_data_format(format))
     {
@@ -292,17 +305,10 @@ struct semaphore
     // - UNPACK_MATH = unpack->math
     // - UNPACK_PACK = unpack->pack
     // - PACK_UNPACK = pack->unpack
-    // - UNPACK_INIT = unpack->math (startup barrier, see llk_sync.h)
     constexpr static std::uint32_t MATH_PACK   = 1; // math <-> pack sync on dest register
     constexpr static std::uint32_t UNPACK_PACK = 3; // unpack -> pack: DEST sections unpacked and not yet released by pack
     constexpr static std::uint32_t UNPACK_MATH = 4; // unpack <-> math sync on dest register
     constexpr static std::uint32_t PACK_UNPACK = 7; // pack <-> unpack sync on L1 memory
-    // Startup barrier for the unpack-to-dest handshake. Each semaphore is seeded by the thread that posts it, in front of
-    // its first post: MATH_PACK by math, UNPACK_MATH / UNPACK_PACK by unpack. The unpack thread raises this one right
-    // after its seeds, and math passes it before its first wait on UNPACK_MATH, so no SEMWAIT is ever pending on a
-    // semaphore when its SEMINIT lands. Pack needs no barrier: its first get on UNPACK_PACK follows math's first
-    // MATH_PACK post, which follows the unpacker's first UNPACK_MATH post. Rest state 0.
-    constexpr static std::uint32_t UNPACK_INIT = 0; // unpack -> math: the unpack-posted semaphores are seeded
 
     constexpr static std::uint16_t t6_sem(const std::uint8_t sem_index)
     {

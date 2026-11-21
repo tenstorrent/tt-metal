@@ -3,7 +3,7 @@
 
 #pragma once
 #include <cstdint>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 namespace kda_chronology {
 // The four-tap convolution retains three preceding tokens.
 constexpr uint32_t history_rows = 3;
@@ -74,21 +74,6 @@ inline void store(volatile uint32_t* words, const Topology& topology) {
     words[5] = topology.split;
     words[6] = topology.local_rows;
     words[7] = topology.valid_rows;
-}
-template <typename Buffer>
-inline Topology receive(Buffer& buffer) {
-    buffer.wait_front(1);
-    Topology result{
-        buffer.read_tile_value(0, 0),
-        buffer.read_tile_value(0, 1),
-        buffer.read_tile_value(0, 2),
-        buffer.read_tile_value(0, 3),
-        buffer.read_tile_value(0, 4),
-        buffer.read_tile_value(0, 5),
-        buffer.read_tile_value(0, 6),
-        buffer.read_tile_value(0, 7)};
-    buffer.pop_front(1);
-    return result;
 }
 // The caller supplies a nonnegative, TILE_HEIGHT-aligned absolute position as UINT32.
 // Values may exceed the mesh span; the modulo below maps them to physical partitions.

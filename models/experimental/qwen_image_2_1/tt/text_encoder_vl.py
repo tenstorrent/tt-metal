@@ -32,7 +32,8 @@ import torch
 
 import ttnn
 from models.tt_dit.encoders.qwen3vl.model_qwen3vl import _apply_interleaved_mrope, mrope_position_ids
-from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel, vision_cu_seqlens
+from models.tt_dit.encoders.qwen3vl.vision_qwen3vl import Qwen3VlVisionModel
+from models.tt_dit.encoders.vision import vision_cu_seqlens
 from models.tt_dit.layers.linear import Linear as TTDitLinear
 
 from ..common import rope as rope_mod

@@ -12,15 +12,14 @@
 #include <tt-metalium/device.hpp>
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/dispatch_telemetry_types.hpp>
-#include <hostdevcommon/kernel_structs.h>  // Leaked up to ttnn level from here
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/kernel_types.hpp>
-#include "context/metal_context.hpp"
+#include "impl/context/metal_context.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/sub_device.hpp>
-#include "trace/trace_buffer.hpp"
+#include "impl/trace/trace_buffer.hpp"
 #include <tt_stl/span.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt-metalium/experimental/device.hpp>
@@ -149,8 +148,6 @@ public:
 
     void init_command_queue_device_with_topology(DispatchTopology* topology);
 
-    bool compile_fabric();
-    void configure_fabric();
     void update_smc_dispatch_telemetry_for_fast_dispatch(
         uint8_t cq_id, const dispatch_telemetry_types::SMCDispatchCoreCoords& coords);
     void set_smc_dispatch_telemetry_slow_dispatch_enabled(bool enabled);
@@ -185,7 +182,6 @@ public:
     void unregister_program(detail::ProgramImpl* program);
     uint64_t get_total_cb_allocated() const;
 
-private:
     // Deprecated overrides for sub_device_manager_tracker
     CoreRangeSet worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
     uint32_t num_worker_cores(HalProgrammableCoreType core_type, SubDeviceId sub_device_id) const override;
@@ -209,6 +205,7 @@ private:
     void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) override;
     void reset_sub_device_stall_group() override;
 
+private:
     static constexpr uint32_t DEFAULT_NUM_SUB_DEVICES = 1;
 
     std::unique_ptr<AllocatorImpl> initialize_allocator(
@@ -241,9 +238,6 @@ private:
 
     // TODO #20966: Remove this member
     std::weak_ptr<distributed::MeshDevice> mesh_device;
-
-    // Fabric program includes ethernet router kernel
-    std::unique_ptr<Program> fabric_program_;
 
     std::unique_ptr<SystemMemoryManager> sysmem_manager_;
     uint8_t num_hw_cqs_ = 1;

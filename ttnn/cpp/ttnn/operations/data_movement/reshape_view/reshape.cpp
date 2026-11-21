@@ -31,6 +31,10 @@
 #include "reshape.hpp"
 #include "reshape_common.hpp"
 #include "device/reshape_device_operation.hpp"
+#include "reshape_force.hpp"
+#include "codegen/reshape_codegen_device_operation.hpp"
+#include "codegen/reshape_codegen_supported.hpp"
+#include <tt-metalium/experimental/tensor_layout_apis_with_custom_alignment.hpp>
 
 namespace ttnn::operations::data_movement {
 namespace detail {
@@ -70,6 +74,22 @@ static float pad_value_as_float(const PadValue& pad_value, DataType dtype) {
             return static_cast<float>(v);
         },
         pad_value);
+}
+
+// fill_implicit_tile_padding for an interleaved rank-3 tensor. fill_pad has no UINT8 kernel, so UINT8 is filled
+// in BFLOAT16 (every value 0..255 is exact there) and cast back, which leaves the logical data untouched.
+static ttnn::Tensor fill_tile_padding_interleaved(const ttnn::Tensor& tensor, float fill_value) {
+    // typecast needs interleaved tensors, so callers with a sharded tensor convert it first.
+    TT_FATAL(!tensor.memory_config().is_sharded(), "fill_tile_padding_interleaved requires an interleaved tensor");
+    if (tensor.dtype() != DataType::UINT8) {
+        return ttnn::fill_implicit_tile_padding(tensor, fill_value, std::nullopt);
+    }
+    // Normalize first so a fractional or out-of-range pad_value ends up as the same uint8 every other
+    // data-movement op writes (truncated, saturated), not whatever BFLOAT16 rounds it to.
+    const float uint8_fill_value = static_cast<float>(pack_scalar_into_uint32(DataType::UINT8, fill_value) & 0xFFu);
+    auto as_bf16 = ttnn::typecast(tensor, DataType::BFLOAT16);
+    as_bf16 = ttnn::fill_implicit_tile_padding(as_bf16, uint8_fill_value, std::nullopt);
+    return ttnn::typecast(as_bf16, DataType::UINT8);
 }
 
 // True if the inner-2D of `shape` is not tile-aligned, i.e. the tiled output has implicit padding lanes.
@@ -446,7 +466,7 @@ ttnn::Tensor reshape_tiled(
             MemoryConfig interleaved_output_mem_config{TensorMemoryLayout::INTERLEAVED, memory_config.buffer_type()};
             auto interleaved_output_spec = tt::tt_metal::TensorSpec(
                 requested_shape_3d,
-                tt::tt_metal::TensorLayout::fromPaddedShape(
+                tt::tt_metal::experimental::tensor_layout_from_padded_shape(
                     tensor3d.dtype(),
                     tensor3d.tensor_spec().page_config(),
                     interleaved_output_mem_config,
@@ -484,10 +504,10 @@ ttnn::Tensor reshape_tiled(
                 const auto sharded_mem_config = output_tensor_3d.memory_config();
                 MemoryConfig interleaved_mem{TensorMemoryLayout::INTERLEAVED, sharded_mem_config.buffer_type()};
                 auto interleaved = ttnn::sharded_to_interleaved(output_tensor_3d, interleaved_mem, std::nullopt);
-                interleaved = ttnn::fill_implicit_tile_padding(interleaved, fill_value, std::nullopt);
+                interleaved = detail::fill_tile_padding_interleaved(interleaved, fill_value);
                 output_tensor_3d = ttnn::interleaved_to_sharded(interleaved, sharded_mem_config, std::nullopt);
             } else {
-                output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+                output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
             }
         }
 
@@ -510,7 +530,7 @@ ttnn::Tensor reshape_tiled(
         // passed here ends up baked into the layout's alignment, so synthetic_spec.physical_shape()
         // exactly matches the requested padded shape, even if compute_padded_shape ever produced
         // dimensions that exceed tile alignment (e.g., due to shard-aware padding).
-        auto synthetic_layout = tt::tt_metal::TensorLayout::fromPaddedShape(
+        auto synthetic_layout = tt::tt_metal::experimental::tensor_layout_from_padded_shape(
             tensor3d.dtype(),
             tensor3d.tensor_spec().page_config(),
             MemoryConfig(updated_mem_config.buffer_type()),
@@ -545,7 +565,7 @@ ttnn::Tensor reshape_tiled(
     const bool is_block_float_output = is_block_float(tensor.dtype());
     const bool should_fill = is_block_float_output || (pad_value_explicit && !skip_padding_fill);
     if (should_fill && detail::has_inner_2d_tile_padding(requested_shape_3d)) {
-        output_tensor_3d = ttnn::fill_implicit_tile_padding(output_tensor_3d, fill_value, std::nullopt);
+        output_tensor_3d = detail::fill_tile_padding_interleaved(output_tensor_3d, fill_value);
     }
 
     if (is_block_float(tensor.dtype())) {
@@ -558,8 +578,36 @@ ttnn::Tensor reshape_tiled(
 
 }  // namespace ttnn::operations::data_movement
 
-// Free function implementations
-ttnn::Tensor ttnn::reshape(
+namespace ttnn::operations::data_movement::detail {
+namespace {
+
+enum class ReshapeImpl { ROUTED, NATIVE, CODEGEN };
+
+// The codegen plan when routing should take it. The padded shape and pad_value are free-function arguments the prim
+// never sees, so call_contract_violation checks them here.
+std::optional<reshape_codegen::LaunchPlan> routed_codegen_plan(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_shape,
+    const ttnn::Shape& padded_shape,
+    const std::optional<PadValue>& pad_value,
+    const MemoryConfig& mem_config,
+    const std::optional<CoreRangeSet>& sub_core_grid) {
+    if (!operations::data_movement::codegen_supported_on_arch(tensor) ||
+        reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value) != nullptr) {
+        return std::nullopt;
+    }
+    auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+    if (!planned.has_value()) {
+        return std::nullopt;
+    }
+    const uint32_t num_cores = reshape_codegen::reshape_core_grid(tensor, sub_core_grid).num_cores();
+    if (reshape_codegen::is_demoted(tensor, logical_shape, mem_config, num_cores, *planned)) {
+        return std::nullopt;
+    }
+    return planned;
+}
+
+ttnn::Tensor reshape_dispatch(
     const ttnn::Tensor& tensor,
     const ttnn::Shape& logical_input_shape,
     const ttnn::Shape& padded_input_shape,
@@ -567,7 +615,8 @@ ttnn::Tensor ttnn::reshape(
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,
     const std::optional<CoreRangeSet>& sub_core_grid,
-    const bool skip_padding_fill) {
+    const bool skip_padding_fill,
+    const ReshapeImpl impl) {
     MemoryConfig mem_config = memory_config.value_or(tensor.memory_config());
     const bool explicit_memory_config = memory_config.has_value();
     auto layout = tensor.layout();
@@ -575,6 +624,20 @@ ttnn::Tensor ttnn::reshape(
 
     const auto [logical_shape, padded_shape] =
         operations::data_movement::shape_corrector(tensor, logical_input_shape, padded_input_shape);
+
+    // Skips the arch gate like the gather/repeat/untilize forced entries, so a caller can force codegen on any arch.
+    if (impl == ReshapeImpl::CODEGEN) {
+        const char* violation =
+            reshape_codegen::call_contract_violation(tensor, logical_shape, padded_shape, pad_value);
+        TT_FATAL(violation == nullptr, "reshape_force_codegen: outside the codegen scope: {}", violation);
+        auto planned = reshape_codegen::plan_codegen(tensor, logical_shape, mem_config, sub_core_grid);
+        TT_FATAL(
+            planned.has_value(),
+            "reshape_force_codegen: outside the codegen scope: {}",
+            reshape_codegen::unsupported_reason(tensor, logical_shape, mem_config, sub_core_grid, nullptr));
+        return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*planned));
+    }
+
     // No reshape required only when the shape AND the memory config are unchanged. A same-shape
     // request with a different config is a pure config conversion, handled by the short-circuit
     // below. Default callers pass the input's own config, so they still take this no-op. Compared
@@ -683,7 +746,7 @@ ttnn::Tensor ttnn::reshape(
             working = ttnn::to_memory_config(tensor, MemoryConfig{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM});
         }
         MemoryConfig interleaved_mem_config{TensorMemoryLayout::INTERLEAVED, BufferType::DRAM};
-        auto interleaved_result = reshape(
+        auto interleaved_result = reshape_dispatch(
             working,
             logical_input_shape,
             padded_input_shape,
@@ -691,7 +754,8 @@ ttnn::Tensor ttnn::reshape(
             pad_value,
             reshape_map_mode,
             sub_core_grid,
-            skip_padding_fill);
+            skip_padding_fill,
+            impl);
 
         // Explicit config: honor the caller's exact ND spec. Inherited config: re-derive a spec for
         // the output shape rather than reusing the input's literal per-core shard (which over-pads).
@@ -720,6 +784,12 @@ ttnn::Tensor ttnn::reshape(
     if (this_is_view) {
         return operations::data_movement::PerformView(
             tensor, logical_shape, padded_shape, tile_first_dim, tile_second_dim);
+    }
+    if (impl == ReshapeImpl::ROUTED) {
+        if (auto plan =
+                routed_codegen_plan(tensor, logical_shape, padded_shape, pad_value, mem_config, sub_core_grid)) {
+            return ttnn::prim::reshape_codegen(tensor, logical_shape, mem_config, sub_core_grid, std::move(*plan));
+        }
     }
     if (logical_shape.volume() != tensor.logical_volume()) {
         // This is completely incorrect but it is due to issue 15137 or issue 15558
@@ -760,6 +830,74 @@ ttnn::Tensor ttnn::reshape(
         explicit_memory_config,
         skip_padding_fill,
         pad_value_explicit);
+}
+
+}  // namespace
+
+ttnn::Tensor reshape_force_native(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int32_t>& shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool skip_padding_fill) {
+    const auto logical_shape = infer_dims_for_reshape(input_tensor, shape);
+    return reshape_dispatch(
+        input_tensor,
+        logical_shape,
+        logical_shape,
+        memory_config,
+        pad_value,
+        reshape_map_mode,
+        sub_core_grids,
+        skip_padding_fill,
+        ReshapeImpl::NATIVE);
+}
+
+ttnn::Tensor reshape_force_codegen(
+    const ttnn::Tensor& input_tensor,
+    const ttsl::SmallVector<int32_t>& shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const bool skip_padding_fill) {
+    const auto logical_shape = infer_dims_for_reshape(input_tensor, shape);
+    return reshape_dispatch(
+        input_tensor,
+        logical_shape,
+        logical_shape,
+        memory_config,
+        pad_value,
+        reshape_map_mode,
+        sub_core_grids,
+        skip_padding_fill,
+        ReshapeImpl::CODEGEN);
+}
+
+}  // namespace ttnn::operations::data_movement::detail
+
+// Free function implementations
+ttnn::Tensor ttnn::reshape(
+    const ttnn::Tensor& tensor,
+    const ttnn::Shape& logical_input_shape,
+    const ttnn::Shape& padded_input_shape,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<PadValue>& pad_value,
+    const TileReshapeMapMode reshape_map_mode,
+    const std::optional<CoreRangeSet>& sub_core_grid,
+    const bool skip_padding_fill) {
+    return operations::data_movement::detail::reshape_dispatch(
+        tensor,
+        logical_input_shape,
+        padded_input_shape,
+        memory_config,
+        pad_value,
+        reshape_map_mode,
+        sub_core_grid,
+        skip_padding_fill,
+        operations::data_movement::detail::ReshapeImpl::ROUTED);
 }
 
 ttnn::Tensor ttnn::reshape(

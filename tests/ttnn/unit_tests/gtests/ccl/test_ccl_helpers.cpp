@@ -6,6 +6,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -13,12 +15,20 @@
 #include "tests/tt_metal/test_utils/env_vars.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "ttnn/config.hpp"
+#include "ttnn/device_operation_detail.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/shared_with_host/snake_ring.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/device/all_gather_concat_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/all_gather_minimal_matmul_async/device/all_gather_minimal_matmul_async_device_operation.hpp"
+#include "ttnn/operations/experimental/ccl/minimal_matmul_strided_reduce_scatter_async/device/minimal_matmul_strided_reduce_scatter_async_op.hpp"
+#include "ttnn/global_semaphore.hpp"
+#include "ttnn/operations/experimental/ccl/strided_all_gather_minimal_matmul_async/device/strided_all_gather_minimal_matmul_async_op.hpp"
+#include "ttnn/distributed/distributed_tensor.hpp"
+#include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/arch.hpp>
 #include "common/tt_backend_api_types.hpp"
@@ -1075,11 +1085,9 @@ TEST(CclTopologyUtils, AllGatherOfACollapsedShardAlongAnOuterAxisIsRefusedUnless
 }
 
 TEST(CclTopologyUtils, AllGatherOfAnNDLabelThatShardsTheGatheredDimTwiceFollowsTheCollapsedRules) {
-    // No mapper builds [Shard{d}, Shard{d}] (chunk_ndim requires unique dims), but update_tensor_topology accepts it
-    // and the whole-mesh reduce_scatter_minimal_async label used to be exactly that. The helper reads it the way
-    // `finalise` does -- row-major hierarchical sharding, like a collapsed Shard{d} -- so gathering d along the inner
-    // axis is honest and along the outer axis interleaves. Before this check the outer gather returned
-    // [Replicate, Shard{3}], claiming identical rows.
+    // No mapper builds [Shard{d}, Shard{d}] (chunk_ndim requires unique dims), but update_tensor_topology accepts it.
+    // The helper reads it the way `finalise` does -- row-major hierarchical sharding, like a collapsed Shard{d} -- so
+    // gathering d along the inner axis is honest and along the outer axis interleaves.
     const MeshShape mesh(2, 4);
     const auto twice = nd_label(mesh, {TopoShard{3}, TopoShard{3}});
     StrictCclTopologyScope strict(true);
@@ -1732,6 +1740,155 @@ TEST(CclTopologyUtils, StrictModeThrowsWhereWarnOnlyReturnsNullopt) {
     EXPECT_NE(message.find("row-major"), std::string::npos) << message;
 }
 
+// ---------------------------------------------------------------------------------------------------------------------
+// The topology-level overload of the framework's union default (compute_output_placements_and_shape). The fused
+// collective + matmul ops label their matmul output with the union of the collective's result label and the weight
+// (and bias) labels through this overload, so its rule has to be the one launch() applies to plain ops: first Shard
+// on a mesh axis wins, a tensor dim already claimed by another axis reads Replicate, lower-rank sharded labels are
+// dropped, the distribution shape is the per-axis maximum.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using UnionPlacements = std::vector<TopoPlacement>;
+
+std::pair<UnionPlacements, MeshShape> union_of(const std::vector<TensorTopology>& labels) {
+    std::vector<std::reference_wrapper<const TensorTopology>> refs(labels.begin(), labels.end());
+    auto [placements, shape] = ttnn::device_operation::detail::compute_output_placements_and_shape(refs);
+    return {UnionPlacements(placements.begin(), placements.end()), shape};
+}
+
+UnionPlacements placements_of(const TensorTopology& label) {
+    return UnionPlacements(label.placements().begin(), label.placements().end());
+}
+
+}  // namespace
+
+TEST(TopologyUnion, FirstShardOnAnAxisWinsAndAClaimedDimReadsReplicate) {
+    const MeshShape mesh(2, 4);
+
+    // A reduce_scatter result [Shard{2}, Shard{3}] with a weight [Replicate, Shard{3}]: the weight's Shard{3} is the
+    // dim axis 1 already holds, so nothing changes.
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoShard{3}}), nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+    // Two labels sharding different dims on the same axis: the earliest-seen Shard is kept; an axis only the second
+    // label shards takes that label's Shard.
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoReplicate{}}), nd_label(mesh, {TopoShard{3}, TopoShard{1}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{1}}));
+    }
+    // A dim already claimed on one axis is not sharded again on another: the second label's Shard{3} on axis 0 is
+    // ignored because axis 1 already shards dim 3, so axis 0 stays Replicate.
+    {
+        const auto [placements, shape] = union_of(
+            {nd_label(mesh, {TopoReplicate{}, TopoShard{3}}), nd_label(mesh, {TopoShard{3}, TopoReplicate{}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoReplicate{}, TopoShard{3}}));
+    }
+}
+
+TEST(TopologyUnion, LowerRankShardedLabelsAreDroppedAndStridesAreTheMaximum) {
+    const MeshShape mesh(2, 4);
+
+    // An N-D all_gather result with a collapsed 1-D weight label: the collapsed label has the lower distribution
+    // rank, so it does not contribute (the union default drops it the same way).
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{2}, TopoReplicate{}}), collapsed_label(mesh, TopoShard{3})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoReplicate{}}));
+    }
+    // A fully-replicated label never decides the rank while something is sharded, whichever order they come in.
+    {
+        const auto [placements, shape] =
+            union_of({collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoShard{3}, TopoReplicate{}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{3}, TopoReplicate{}}));
+    }
+    // Nothing sharded: the first label's rank, all Replicate.
+    {
+        const auto [placements, shape] =
+            union_of({collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoReplicate{}, TopoReplicate{}})});
+        EXPECT_EQ(shape, MeshShape(8));
+        EXPECT_EQ(placements, (UnionPlacements{TopoReplicate{}}));
+    }
+    // Same rank, different distribution shapes: the result's shape is the per-axis maximum.
+    {
+        const auto [placements, shape] = union_of(
+            {nd_label(MeshShape(1, 8), {TopoReplicate{}, TopoShard{3}}),
+             nd_label(MeshShape(2, 4), {TopoShard{2}, TopoReplicate{}})});
+        EXPECT_EQ(shape, MeshShape(2, 8));
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+}
+
+// union_topology: the fused hooks' union as a TensorTopology, with one rule beyond the union's -- a sharded first
+// operand (the collective's label) fixes the result's rank and sharded operands of another rank are left out.
+TEST(TopologyUnion, UnionTopologyKeepsTheRankOfAShardedFirstOperand) {
+    const MeshShape mesh(2, 4);
+    const auto coords = row_major_coords(mesh);
+    const auto union_topology = [&](const std::vector<TensorTopology>& labels) {
+        std::vector<std::reference_wrapper<const TensorTopology>> refs(labels.begin(), labels.end());
+        return ttnn::operations::ccl::common::union_topology(refs, coords);
+    };
+
+    // A whole-mesh reduce_scatter result ({N}, [Shard{3}]: every device holds a distinct piece) with two N-D
+    // elementwise (addcmul) operands sharded on dim 3 along axis 1. The union alone keeps only the highest-rank
+    // sharded labels, so it would drop the reduce_scatter label and read [Replicate, Shard{3}]: Replicate on an axis
+    // whose devices hold different pieces. The first operand's rank wins and the result is the reduce_scatter label
+    // over the given coordinates.
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoShard{3}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(result.distribution_shape(), MeshShape(8));
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoShard{3}}));
+        EXPECT_EQ(result.mesh_coords(), coords);
+    }
+    // An uncollapsed [Shard{3}, Shard{3}] first operand unions to [Shard{3}, Replicate]: a dim claimed on one axis
+    // reads Replicate on the next, so only the collapsed form carries "a distinct piece on every device".
+    {
+        const auto [placements, shape] =
+            union_of({nd_label(mesh, {TopoShard{3}, TopoShard{3}}), nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(shape, mesh);
+        EXPECT_EQ(placements, (UnionPlacements{TopoShard{3}, TopoReplicate{}}));
+    }
+    // An N-D first operand: a collapsed sharded weight is left out (the union drops it too) while a same-rank bias
+    // still contributes its Shard.
+    {
+        const auto result = union_topology(
+            {nd_label(mesh, {TopoShard{2}, TopoReplicate{}}),
+             collapsed_label(mesh, TopoShard{3}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}})});
+        EXPECT_EQ(result.distribution_shape(), mesh);
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoShard{2}, TopoShard{3}}));
+    }
+    // A fully replicated first operand (a whole-mesh all_gather result) decides nothing: the sharded operands' rank
+    // and placements, as the union has them (the lower-rank collapsed bias is dropped).
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoReplicate{}),
+             nd_label(mesh, {TopoReplicate{}, TopoShard{3}}),
+             collapsed_label(mesh, TopoShard{3})});
+        EXPECT_EQ(result.distribution_shape(), mesh);
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoReplicate{}, TopoShard{3}}));
+    }
+    // Nothing sharded anywhere: the first operand's rank, all Replicate, as the union has it.
+    {
+        const auto result = union_topology(
+            {collapsed_label(mesh, TopoReplicate{}), nd_label(mesh, {TopoReplicate{}, TopoReplicate{}})});
+        EXPECT_EQ(result.distribution_shape(), MeshShape(8));
+        EXPECT_EQ(placements_of(result), (UnionPlacements{TopoReplicate{}}));
+    }
+}
+
 TEST(CclTopologyUtils, RefuseIsHandledLikeTheHelpersOwnRefusals) {
     // A hook-level refusal (a label the op cannot renumber into its output layout, a ring order no label carries)
     // goes through the same handling as the helpers' own: nullopt in warn-only mode, TT_FATAL under strict mode,
@@ -1794,4 +1951,245 @@ TEST(CclTopologyUtils, UncollapseJudgesASubRangeLabelOnADeviceTensorByItsShape) 
         topo::all_broadcast_output_topology(nd_label(MeshShape(1, 4), row_placements, all), 1, mesh, kRank);
     ASSERT_TRUE(broadcast.has_value());
     EXPECT_EQ(*broadcast, nd_label(MeshShape(1, 4), {TopoReplicate{}, TopoReplicate{}}, all));
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// The fused all-gather + matmul ops label every output they create: their compute_output_topologies hook returns one
+// label per output compute_output_specs gives, for each attribute that changes the output count (FSDP, chunks, and
+// explicit chunk widths, which take precedence over chunks). The hooks count from the attributes, so these tests pin
+// that count against the specs on device tensors carrying real mesh labels.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using FusedAllGatherMatmulHookTest = tt::tt_metal::GenericMeshDeviceFixture;
+
+// A bf16 tile-layout tensor of `shape` placed on `mesh` by `mapper`.
+ttnn::Tensor mesh_tensor(
+    tt::tt_metal::distributed::MeshDevice& mesh,
+    const ttnn::Shape& shape,
+    const ttnn::distributed::TensorToMesh& mapper) {
+    const tt::tt_metal::TensorSpec spec(
+        shape,
+        tt::tt_metal::TensorLayout(
+            tt::tt_metal::DataType::BFLOAT16,
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            tt::tt_metal::MemoryConfig{}));
+    return ttnn::distributed::distribute_tensor(
+        ttnn::Tensor::from_vector(std::vector<float>(shape.volume(), 1.0F), spec), mapper, mesh);
+}
+
+}  // namespace
+
+TEST_F(FusedAllGatherMatmulHookTest, AllGatherMinimalMatmulAsyncLabelsEveryOutput) {
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncInputs;
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncOp;
+    using ttnn::experimental::prim::AllGatherMinimalMatmulAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    if (mesh.num_devices() < 2 || shape.dims() != 2) {
+        GTEST_SKIP() << "needs a 2-D mesh with more than one device";
+    }
+    // The activation gathers its last dim along the axis with more devices, the weight its K dim along the other.
+    const uint32_t cluster_axis = shape[1] > 1 ? 1 : 0;
+    const uint32_t fsdp_axis = 1 - cluster_axis;
+    const auto num_devices = static_cast<uint32_t>(mesh.num_devices());
+    const ttnn::Tensor input = mesh_tensor(
+        mesh, ttnn::Shape{1, 1, 32, 32 * num_devices}, *ttnn::distributed::shard_tensor_to_mesh_mapper(mesh, 3));
+    const ttnn::Tensor weight =
+        mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 96}, *ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh));
+    const std::optional<tt::tt_metal::GlobalSemaphore> no_barrier;
+
+    struct Case {
+        int32_t chunks;
+        std::vector<uint32_t> chunk_sizes;
+        bool fsdp;
+    };
+    for (const auto& c : std::vector<Case>{
+             {1, {}, false},
+             {3, {}, false},
+             {2, {64, 32}, false},
+             {1, {32, 32, 32}, false},
+             {1, {}, true},
+             {3, {}, true},
+             {2, {64, 32}, true}}) {
+        const AllGatherMinimalMatmulAsyncParams params(
+            /*config=*/std::nullopt,
+            /*fused_activation=*/std::nullopt,
+            /*output_mem_config=*/std::nullopt,
+            /*output_dtype=*/std::nullopt,
+            ttnn::DeviceComputeKernelConfig{},
+            /*num_links=*/1,
+            /*ring_size=*/shape[cluster_axis],
+            ttnn::ccl::Topology::Linear,
+            /*semaphore=*/{},
+            cluster_axis,
+            no_barrier,
+            /*using_persistent_buffers=*/false,
+            /*force_transpose=*/false,
+            /*num_workers_per_link=*/1,
+            /*num_buffers_per_channel=*/1,
+            /*fused_ternary_scalar=*/std::nullopt,
+            c.chunks,
+            /*dim=*/-1,
+            c.fsdp ? std::optional<uint32_t>(fsdp_axis) : std::nullopt,
+            /*fsdp_ring_size=*/c.fsdp ? shape[fsdp_axis] : 1,
+            /*fsdp_semaphore=*/{},
+            /*using_persistent_weight_buffer=*/false,
+            ttnn::ccl::Topology::Linear,
+            /*fuse_swiglu=*/false,
+            c.chunk_sizes);
+        const AllGatherMinimalMatmulAsyncInputs args{.input_tensor = input, .weight_tensor = weight};
+        EXPECT_EQ(
+            AllGatherMinimalMatmulAsyncOp::compute_output_topologies(params, args).size(),
+            AllGatherMinimalMatmulAsyncOp::compute_output_specs(params, args).size())
+            << "chunks " << c.chunks << ", " << c.chunk_sizes.size() << " explicit chunk widths, fsdp " << c.fsdp;
+    }
+}
+
+TEST_F(FusedAllGatherMatmulHookTest, StridedAllGatherMinimalMatmulAsyncLabelsEveryOutput) {
+    using ttnn::experimental::prim::MinimalMatmulParams;
+    using ttnn::experimental::prim::StridedAllGatherAsync;
+    using ttnn::experimental::prim::StridedAllGatherAsyncParams;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsync;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsyncInputs;
+    using ttnn::experimental::prim::StridedAllGatherMinimalMatmulAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    if (mesh.num_devices() < 2 || shape.dims() != 2) {
+        GTEST_SKIP() << "needs a 2-D mesh with more than one device";
+    }
+    const uint32_t cluster_axis = shape[1] > 1 ? 1 : 0;
+    const auto num_devices = static_cast<uint32_t>(mesh.num_devices());
+    const ttnn::Tensor input = mesh_tensor(
+        mesh, ttnn::Shape{1, 1, 32, 32 * num_devices}, *ttnn::distributed::shard_tensor_to_mesh_mapper(mesh, 3));
+    const ttnn::Tensor weight =
+        mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 96}, *ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh));
+
+    for (const int32_t chunks : {1, 2, 3}) {
+        const StridedAllGatherMinimalMatmulAsyncParams params{
+            StridedAllGatherAsyncParams{
+                /*dim=*/3,
+                /*num_links=*/1,
+                /*ring_size=*/shape[cluster_axis],
+                tt::tt_metal::MemoryConfig{},
+                ttnn::ccl::Topology::Linear,
+                /*semaphore=*/{},
+                cluster_axis,
+                /*num_workers_per_link=*/std::nullopt,
+                /*num_buffers_per_channel=*/std::nullopt,
+                /*mm_cores_y=*/std::nullopt,
+                /*mm_block_ht=*/std::nullopt,
+                /*mm_block_wt=*/std::nullopt},
+            MinimalMatmulParams{.chunks = chunks},
+            /*all_gather_core_grid_offset=*/tt::tt_metal::CoreCoord{0, 0},
+            /*read_local_slice_from_input=*/false,
+            StridedAllGatherAsync{}};
+        const StridedAllGatherMinimalMatmulAsyncInputs args{input, weight, /*persistent_output_buffer=*/std::nullopt};
+        EXPECT_EQ(
+            StridedAllGatherMinimalMatmulAsync::compute_output_topologies(params, args).size(),
+            StridedAllGatherMinimalMatmulAsync::compute_output_specs(params, args).size())
+            << "chunks " << chunks;
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Two fused ops whose operands carry labels of different distribution ranks, on a 2x4 mesh. Each test builds the op's
+// attributes and inputs, places device tensors with real mesh mappers, and calls the op's compute_output_topologies:
+// the hook itself is pinned, with no fabric and no kernel involved.
+// ---------------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+using FusedOpHookLabel2x4Test = tt::tt_metal::MeshDevice2x4Fixture;
+
+}  // namespace
+
+// A whole-mesh reduce_scatter of a replicated matmul labels its output {8},[Shard(3)] over the input's storage
+// coordinates. The fused addcmul operands carry the N-D [Replicate, Shard(3)] label of a 2-D mapper: their distribution
+// rank differs from the scatter label's, so union_topology leaves them out and the scatter label stands.
+TEST_F(FusedOpHookLabel2x4Test, MinimalMatmulStridedReduceScatterAsyncKeepsTheScatterLabelOverAddcmulOperands) {
+    using ttnn::experimental::prim::MinimalMatmulParams;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsync;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsyncInputs;
+    using ttnn::experimental::prim::MinimalMatmulStridedReduceScatterAsyncParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    const auto replicate = ttnn::distributed::replicate_tensor_to_mesh_mapper(mesh);
+    const auto addcmul_mapper = ttnn::distributed::create_mesh_mapper(
+        mesh, ttnn::distributed::MeshMapperConfig{.placements = {TopoReplicate{}, TopoShard{3}}});
+    const ttnn::Tensor input = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 64}, *replicate);
+    const ttnn::Tensor weight = mesh_tensor(mesh, ttnn::Shape{1, 1, 64, 256}, *replicate);
+    const ttnn::Tensor addcmul_a = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 256 * shape[1]}, *addcmul_mapper);
+    const ttnn::Tensor addcmul_b = mesh_tensor(mesh, ttnn::Shape{1, 1, 32, 256 * shape[1]}, *addcmul_mapper);
+    ASSERT_EQ(addcmul_a.tensor_topology(), nd_label(shape, {TopoReplicate{}, TopoShard{3}}));
+
+    const MinimalMatmulStridedReduceScatterAsyncParams params{
+        .matmul_struct = MinimalMatmulParams{},
+        .fused_ternary_scalar = 1.0F,
+        .dim = 3,
+        .num_links = 1,
+        .ring_size = static_cast<uint32_t>(mesh.num_devices()),
+        .rs_output_mem_config = tt::tt_metal::MemoryConfig{},
+        .rs_intermediate_mem_config = std::nullopt,
+        .topology = ttnn::ccl::Topology::Ring,
+        .semaphore = {},
+        .barrier_semaphore = std::nullopt,
+        .using_persistent_buffers = false,
+        .sub_device_id = std::nullopt,
+        .cluster_axis = std::nullopt,
+        .num_workers_per_link = std::nullopt,
+        .num_buffers_per_channel = std::nullopt,
+        .chunk_width_in_mm_blocks = std::nullopt,
+        .mm_window_blocks = std::nullopt,
+        .reduce_scatter_core_grid_offset = tt::tt_metal::CoreCoord{0, 0}};
+    const MinimalMatmulStridedReduceScatterAsyncInputs args{
+        .input_tensor = input,
+        .weight_tensor = weight,
+        .optional_rs_intermediate_tensor = std::nullopt,
+        .optional_rs_output_tensor = std::nullopt,
+        .addcmul_input_tensor1 = addcmul_a,
+        .addcmul_input_tensor2 = addcmul_b};
+
+    const auto labels = MinimalMatmulStridedReduceScatterAsync::compute_output_topologies(params, args);
+    ASSERT_EQ(labels.size(), 3u);
+    const TensorTopology matmul = collapsed_label(shape, TopoReplicate{});
+    EXPECT_EQ(labels[0], matmul);                                // the matmul output
+    EXPECT_EQ(labels[1], matmul);                                // the reduce_scatter intermediate
+    EXPECT_EQ(labels[2], collapsed_label(shape, TopoShard{3}));  // the reduce_scatter output
+}
+
+// all_gather_concat gathers the users dim along mesh axis 1 and folds the heads into the last dim of its
+// [seq, 1, users, num_heads * head_dim] output: an N-D [Shard(2), Shard(1)] input (heads on axis 0, users on axis 1)
+// reads [Shard(3), Replicate] after it.
+TEST_F(FusedOpHookLabel2x4Test, AllGatherConcatRenumbersTheHeadsShardOfAnNdLabel) {
+    using ttnn::experimental::prim::AllGatherConcatDeviceOperation;
+    using ttnn::experimental::prim::AllGatherConcatInputs;
+    using ttnn::experimental::prim::AllGatherConcatParams;
+    auto& mesh = *mesh_device_;
+    const MeshShape& shape = mesh.shape();
+    const auto mapper = ttnn::distributed::create_mesh_mapper(
+        mesh, ttnn::distributed::MeshMapperConfig{.placements = {TopoShard{2}, TopoShard{1}}});
+    // [seq, users, heads, head_dim], with 8 users and 32 heads on each device.
+    const ttnn::Tensor input = mesh_tensor(mesh, ttnn::Shape{1, 8 * shape[1], 32 * shape[0], 128}, *mapper);
+    ASSERT_EQ(input.tensor_topology(), nd_label(shape, {TopoShard{2}, TopoShard{1}}));
+
+    const tt::tt_metal::CoreRangeSet semaphore_cores{
+        tt::tt_metal::CoreRange{tt::tt_metal::CoreCoord{0, 0}, tt::tt_metal::CoreCoord{0, 0}}};
+    const AllGatherConcatParams params(
+        /*dim=*/1,
+        /*num_links=*/1,
+        /*ring_size=*/shape[1],
+        tt::tt_metal::MemoryConfig{},
+        ttnn::ccl::Topology::Linear,
+        ttnn::global_semaphore::create_global_semaphore(&mesh, semaphore_cores, 0),
+        /*sub_device_id=*/std::nullopt,
+        /*num_heads=*/32,
+        /*use_noc1_only=*/false,
+        /*cluster_axis=*/1);
+    const AllGatherConcatInputs args{.input_tensor = input, .buffer_tensor = input};
+
+    const auto labels = AllGatherConcatDeviceOperation::compute_output_topologies(params, args);
+    ASSERT_EQ(labels.size(), 1u);
+    EXPECT_EQ(labels[0], nd_label(shape, {TopoShard{3}, TopoReplicate{}}));
 }

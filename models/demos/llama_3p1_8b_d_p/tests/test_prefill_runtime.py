@@ -62,16 +62,16 @@ class _Input:
 
 
 class _Cache(SimpleNamespace):
-    def __init__(self, events=None):
+    def __init__(self, events=None, num_users=2):
         super().__init__(
-            num_users=2,
+            num_users=num_users,
             num_layers=32,
             max_seq_len=2048,
             sp=4,
             k=_Tensor(0x10000, events),
             v=_Tensor(0x20000, events),
         )
-        self.populated_ends = {slot: 0 for slot in range(2)}
+        self.populated_ends = {slot: 0 for slot in range(num_users)}
 
     def record_write(self, slot, actual_start, actual_end):
         if actual_start <= self.populated_ends[slot]:
@@ -85,9 +85,10 @@ class _Model:
     num_layers = 32
     max_seq_len = 2048
 
-    def __init__(self, events, failure=None):
+    def __init__(self, events, failure=None, num_users=2):
         self.events = events
         self.failure = failure
+        self.num_users = num_users
 
     def prefill_chunk(self, tokens, cache, **kwargs):
         self.events.append(("forward", tokens, cache, kwargs))
@@ -97,11 +98,11 @@ class _Model:
         return _Tensor(0, self.events)
 
 
-def _cache(events=None):
-    return _Cache(events)
+def _cache(events=None, num_users=2):
+    return _Cache(events, num_users)
 
 
-def _runtime(*, failure=None):
+def _runtime(*, failure=None, num_users=2):
     events = []
     uploads = []
 
@@ -117,13 +118,13 @@ def _runtime(*, failure=None):
 
     runtime = TtPrefillRuntime(
         "mesh",
-        config=TtPrefillRuntimeConfig(max_seq_len=2048, chunk_size=1024, num_users=2),
-        model=_Model(events, failure),
+        config=TtPrefillRuntimeConfig(max_seq_len=2048, chunk_size=1024, num_users=num_users),
+        model=_Model(events, failure, num_users),
         synchronize=synchronize,
         upload=upload,
     )
     runtime.compiled = True
-    return runtime, _cache(events), events, uploads
+    return runtime, _cache(events, num_users), events, uploads
 
 
 # Resolve the registered adapter in a clean interpreter and prove that producer-side imports stay device-free.
@@ -167,7 +168,62 @@ def test_adapter_allocates_the_runner_resolved_two_slot_cache():
         "num_layers": 32,
         "max_seq_len": 2048,
         "cache_dtype": dtype,
+        "bank_aligned": True,
     }
+
+
+# A deployment's PREFILL_NUM_USERS reaches the allocator and the model; nothing pins the count to two.
+@pytest.mark.parametrize("num_users", [1, 4, 16])
+def test_runner_slot_count_reaches_the_allocator_and_the_model(num_users):
+    captured = {}
+
+    class Model:
+        def __init__(self, mesh, checkpoint, **kwargs):
+            captured["model"] = kwargs
+            self.num_layers = kwargs["num_layers"]
+            self.max_seq_len = kwargs["max_seq_len"]
+            self.num_users = kwargs["num_users"]
+
+    def allocate(mesh, mesh_config, **kwargs):
+        captured["cache"] = kwargs
+
+    stubs = {
+        "ttnn": SimpleNamespace(bfloat8_b="bf8", synchronize_device=None),
+        MODEL_PREFIX + "config": SimpleNamespace(MeshConfig=lambda shape, tp: (tuple(shape), tp)),
+        MODEL_PREFIX + "kv_cache": SimpleNamespace(allocate_kv_cache=allocate),
+        MODEL_PREFIX + "input": SimpleNamespace(upload_token_chunk=None),
+        MODEL_PREFIX + "model": SimpleNamespace(PrefillModel=Model),
+    }
+    adapter = get_adapter("llama_3p1_8b")
+    with patch.dict(sys.modules, stubs), patch(MODEL_PREFIX + "model_config.resolve_weights_path", lambda: "ckpt"):
+        adapter.allocate_kv_cache(mesh_device="mesh", hf_config=None, params=_params(num_users=num_users))
+        runtime = adapter.build_runtime(mesh_device="mesh", hf_config=None, params=_params(num_users=num_users))
+
+    assert captured["cache"]["num_users"] == num_users
+    assert captured["model"]["num_users"] == num_users
+    assert runtime.config.num_users == runtime.geometry.num_users == num_users
+
+
+# The runtime validates the cache against its configured count and serves the top slot of a wider cache.
+def test_runtime_serves_the_top_slot_of_a_wider_cache_and_rejects_a_mismatched_one(expect_error):
+    runtime, cache, events, _ = _runtime(num_users=4)
+    runtime.set_layer_completion_sink(_Sink(events))
+
+    runtime.prefill_chunk(object(), cache, slot_id=3, actual_start=0, actual_end=1024, request_id=1)
+    assert events[-1] == ("ack", 0, 32, 3, 0, 1024)
+
+    with expect_error(ValueError, "outside the allocated cache"):
+        runtime.prefill_chunk(object(), cache, slot_id=4, actual_start=0, actual_end=1024, request_id=2)
+    with expect_error(ValueError, "num_users=4"):
+        runtime.prefill_chunk(object(), _cache(num_users=2), slot_id=0, actual_start=0, actual_end=1024, request_id=3)
+    with expect_error(ValueError, "slot count differs"):
+        TtPrefillRuntime(
+            "mesh",
+            config=TtPrefillRuntimeConfig(max_seq_len=2048, chunk_size=1024, num_users=4),
+            model=_Model([], num_users=2),
+            synchronize=None,
+            upload=None,
+        )
 
 
 class _Sink:

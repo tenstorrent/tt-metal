@@ -13,6 +13,7 @@ from helpers.compressed_utils import (
     generate_exact_assignment,
     run_compressed,
 )
+from helpers.llk_params import CustomMmDestLayout, DestSync
 from helpers.param_config import parametrize
 from helpers.test_variant_parameters import CUSTOM_MM_CALLS
 from helpers.tile_constants import DEFAULT_TILE_C_DIM, DEFAULT_TILE_R_DIM
@@ -42,7 +43,21 @@ SUPPORTED_M = {1, 2, 4, 8}
 SUPPORTED_FORMATS = {FMT_CODE[f] for f in ("bfp0", "bfp2", "bfp4", "bfp8")}
 
 
-def run_tile_compressed(M, K, N, assignment, pcc_threshold=None):
+def run_tile_compressed(
+    M,
+    K,
+    N,
+    assignment,
+    pcc_threshold=None,
+    dest_layout=CustomMmDestLayout.Dense,
+    dest_sync=DestSync.Half,
+    compression_case=None,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+):
     run_compressed(
         M,
         K,
@@ -56,6 +71,13 @@ def run_tile_compressed(M, K, N, assignment, pcc_threshold=None):
         pack_b,
         encode_meta,
         pcc_threshold=pcc_threshold,
+        dest_layout=dest_layout,
+        dest_sync=dest_sync,
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )
 
 
@@ -192,6 +214,55 @@ def test_matmul_custom_compressed_deepseek(shape, seed):
 
 
 # ---------------------------------------------------------------------------
+# DEST layouts besides the Dense default the other tests run: Default puts tiles 64 rows apart, Compact puts
+# output face 1 at row 8 and tiles 16 rows apart. The widths fit the Default layout's 8 tiles. The SplitAcc
+# layouts are not supported: finalizing a skipped (bfp0) weight tile hangs math.
+
+LAYOUTS = [CustomMmDestLayout.Default, CustomMmDestLayout.Compact]
+LAYOUT_SHAPES = [
+    (1, 64, 32),  #  2x1
+    (8, 256, 128),  #  8x4
+    (8, 512, 224),  # 16x7
+]
+
+
+@blackhole_only
+@parametrize(
+    shape=LAYOUT_SHAPES,
+    formats=[("bfp4", "bfp2", "bfp0")],
+    dest_layout=LAYOUTS,
+)
+def test_matmul_custom_compressed_layouts(shape, formats, dest_layout):
+    M, K, N = shape
+    assignment = assign_random(K, N, formats, COMPRESSION_GRANULARITY)
+    run_tile_compressed(M, K, N, assignment, dest_layout=dest_layout)
+
+
+# Only DEST capacity bounds ct_dim: the unpacker walks the weight tiles one by one from the metadata and math loops
+# over them, so neither has a width limit of its own. The widest outputs: Compact fits 32 tiles in a 16-bit SyncHalf
+# DEST and 64 in a SyncFull one, Dense 32 in SyncFull.
+WIDE_CASES = [
+    # (id, M, K, N, layout, dest sync)
+    ("compact-ct32-half", 8, 64, 1024, CustomMmDestLayout.Compact, DestSync.Half),
+    ("compact-ct64-full", 1, 64, 2048, CustomMmDestLayout.Compact, DestSync.Full),
+    ("compact-ct64-full-m8", 8, 128, 2048, CustomMmDestLayout.Compact, DestSync.Full),
+    ("dense-ct32-full", 8, 128, 1024, CustomMmDestLayout.Dense, DestSync.Full),
+]
+
+
+@blackhole_only
+@pytest.mark.parametrize(
+    "M,K,N,dest_layout,dest_sync",
+    [pytest.param(*case[1:], id=case[0]) for case in WIDE_CASES],
+)
+def test_matmul_custom_compressed_wide(M, K, N, dest_layout, dest_sync):
+    assignment = assign_random(K, N, ("bfp4", "bfp2", "bfp0"), COMPRESSION_GRANULARITY)
+    run_tile_compressed(
+        M, K, N, assignment, dest_layout=dest_layout, dest_sync=dest_sync
+    )
+
+
+# ---------------------------------------------------------------------------
 # Metadata-word boundary.
 #
 # The unpacker walks the format metadata 10 tile indices per u32
@@ -270,7 +341,19 @@ MULTI_CALL_PCC = 0.9995
     "M,K,N,pattern,rearm",
     [pytest.param(*case[1:], id=case[0]) for case in MULTI_CALL_CASES],
 )
-def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
+def test_matmul_custom_compressed_multi_call(
+    M,
+    K,
+    N,
+    pattern,
+    rearm,
+    *,
+    is_perf=False,
+    perf_report=None,
+    run_types=None,
+    loop_factor=1,
+    compression_case=None,
+):
     """Back-to-back calls into one DEST, checked against the full-K golden."""
     kt, ct = K // DEFAULT_TILE_R_DIM, N // DEFAULT_TILE_C_DIM
     tiles_per_call = len(pattern)
@@ -315,4 +398,9 @@ def test_matmul_custom_compressed_multi_call(M, K, N, pattern, rearm):
         encode_meta_per_call,
         pcc_threshold=MULTI_CALL_PCC,
         calls=CUSTOM_MM_CALLS(num_calls=num_calls, rearm=rearm),
+        compression_case=compression_case,
+        is_perf=is_perf,
+        perf_report=perf_report,
+        run_types=run_types,
+        loop_factor=loop_factor,
     )

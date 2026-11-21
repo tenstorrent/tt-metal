@@ -385,7 +385,7 @@ inline std::string op_meta_data_serialized_json(
     // --- Cache hit: fast path, no JSON needed ---
     auto opname = program_hash_to_opname_.find_if_exists({device_id, program_hash});
     runtime_id_to_opname_.insert({device_id, program.get_runtime_id()}, std::move(opname));
-    return fmt::format("{}{}`", cached_ops.at(device_id).at(program_hash), operation_id);
+    return fmt::format("{}{}, {}`", cached_ops.at(device_id).at(program_hash), program_cache_hit, operation_id);
 }
 
 // ---------------------------------------------------------------------------

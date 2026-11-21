@@ -1371,6 +1371,9 @@ wormhole_b0:
   - tests/ttnn/unit_tests/test_b.py::test_wh_two[param_x]
 blackhole:
   - tests/ttnn/unit_tests/test_c.py::test_bh_only
+quasar:
+  - tt_metal/tt-llk/tests/python_tests/quasar/test_d.py::test_llk_only
+  - models/experimental/ops/quasar/tests/test_e.py::test_qsr_only[param_y]
 """
 
 
@@ -1441,18 +1444,64 @@ def test_sim_legs_carry_their_archs_deselect_args(repo: Repo):
     assert "gate_pytest_deselect" not in by_sku["wh_n150_civ2"]
 
 
-def test_sim_sku_with_no_skip_list_arch_gets_no_deselects(repo: Repo):
-    repo.write(".github/sku_config.yaml", SKU_CONFIG + "  sim_quasar_xl: {}\n")
+def test_sim_quasar_legs_carry_the_quasar_deselects(repo: Repo):
+    # The quasar section is shared with the LLK ttsim runner, which keeps only its own
+    # tt_metal/tt-llk/tests/python_tests/ entries; a ttnn sim_quasar leg gets the whole section.
+    repo.write(".github/sku_config.yaml", SKU_CONFIG + "  sim_quasar: {}\n")
     repo.write("tests/pipeline_reorg/ttsim-skip-list.yaml", SKIP_LIST)
     repo.write(
         "tests/pipeline_reorg/sample_sim_tests.yaml",
-        "- name: q\n  cmd: pytest tests/x.py\n  skus:\n    sim_quasar_xl:\n      timeout: 5\n"
+        "- name: q\n  cmd: pytest tests/x.py\n  skus:\n    sim_quasar:\n      timeout: 5\n"
+        "  team: ttnn\n  owner_id: U031\n",
+    )
+    rows = [matrix_row("q [sim_quasar]", "sim_quasar", cmd="pytest tests/x.py", ttsim_lib="libttsim_qsr.so")]
+    code, payload, stderr = run_with_skips(repo, {"sample_sim_tests": rows})
+    assert code == 0, stderr
+    assert payload["legs"][0]["gate_pytest_deselect"] == (
+        "--deselect=tt_metal/tt-llk/tests/python_tests/quasar/test_d.py::test_llk_only "
+        "--deselect=models/experimental/ops/quasar/tests/test_e.py::test_qsr_only[param_y]"
+    )
+
+
+def test_sim_sku_with_no_skip_list_arch_gets_no_deselects(repo: Repo):
+    repo.write(".github/sku_config.yaml", SKU_CONFIG + "  sim_other_xl: {}\n")
+    repo.write("tests/pipeline_reorg/ttsim-skip-list.yaml", SKIP_LIST)
+    repo.write(
+        "tests/pipeline_reorg/sample_sim_tests.yaml",
+        "- name: q\n  cmd: pytest tests/x.py\n  skus:\n    sim_other_xl:\n      timeout: 5\n"
         "  team: llk\n  owner_id: U031\n",
     )
-    rows = [matrix_row("q [sim_quasar_xl]", "sim_quasar_xl", cmd="pytest tests/x.py", ttsim_lib="libttsim_qsr.so")]
+    rows = [matrix_row("q [sim_other_xl]", "sim_other_xl", cmd="pytest tests/x.py", ttsim_lib="libttsim_other.so")]
     code, payload, stderr = run_with_skips(repo, {"sample_sim_tests": rows})
     assert code == 0, stderr
     assert payload["legs"][0]["gate_pytest_deselect"] == ""
+
+
+def test_non_string_skip_list_entry_is_a_gate_error(repo: Repo):
+    # "- some::test[param:" is a yaml mapping key, not a string; the gate must say so rather than crash
+    # on "--deselect=" + dict or silently lose the trailing ':'.
+    rows = sim_repo(repo)
+    repo.write(
+        "tests/pipeline_reorg/ttsim-skip-list.yaml", SKIP_LIST + "  - tests/ttnn/unit_tests/test_f.py::test_g[case:\n"
+    )
+    code, payload, stderr = run_with_skips(repo, {"sample_sim_tests": rows})
+    assert code != 0
+    assert "is not a string; quote test ids that end in ':'" in stderr
+
+
+def test_repository_skip_list_loads_as_strings():
+    # The checked-in file, not a fixture: an LLK entry ending in ':' once loaded as a yaml mapping,
+    # which the loaders only noticed once the quasar section was wired to the ttnn sim legs.
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("gate_mod_skips", SCRIPT)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    skips = mod.load_ttsim_skips(str(SCRIPT.parents[3] / "tests/pipeline_reorg/ttsim-skip-list.yaml"))
+    assert {"wormhole_b0", "blackhole", "quasar"} <= set(skips)
+    for arch, ids in skips.items():
+        assert ids, f"{arch} section is empty"
+        assert all(isinstance(test_id, str) and test_id for test_id in ids), arch
 
 
 def test_missing_skip_list_is_not_fatal(repo: Repo):

@@ -86,6 +86,20 @@ def test_packed_fl2va_layout(sp_factor):
     assert 0 < mixed <= 8
 
 
+def test_remap_tables_are_unsigned_table_rows(expect_error):
+    """Both tables upload as uint32 with no device typecast: entries are >= 0 and inside their table."""
+    num_rows, sp_factor = 4, 8
+    indices = _runs([(45, 1), (19, 0), (64, 2), (300, 3)], 2 * sp_factor * TILE)
+    tile_map, expanded = tilerow_remap(indices, num_rows=num_rows, sp_factor=sp_factor)
+    assert tile_map.dtype == expanded.dtype == torch.int32
+    assert tile_map.min().item() >= 0
+    assert tile_map.max().item() < num_rows + DEFAULT_MAX_MIXED_TILES
+    assert expanded.min().item() >= 0
+    assert expanded.max().item() < num_rows
+    with expect_error(ValueError, "the table has"):
+        tilerow_remap(indices - 1, num_rows=num_rows, sp_factor=sp_factor)
+
+
 def test_too_many_mixed_tiles_raises():
     indices = torch.arange(4 * TILE) % 2
     with pytest.raises(  # allow-pytest.raises: the message is the knob's contract

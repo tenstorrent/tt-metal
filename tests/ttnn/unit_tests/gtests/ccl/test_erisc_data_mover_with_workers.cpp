@@ -338,12 +338,12 @@ bool RunWriteBWTest(
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
 
     distributed::MeshWorkload sender_workload;
-    tt_metal::Program sender_program_{};
+    tt_metal::Program sender_program_ = tt_metal::CreateProgram(*sender_mesh_device);
     sender_workload.add_program(device_range, std::move(sender_program_));
     auto& sender_program = sender_workload.get_programs().at(device_range);
 
     distributed::MeshWorkload receiver_workload;
-    tt_metal::Program receiver_program_{};
+    tt_metal::Program receiver_program_ = tt_metal::CreateProgram(*receiver_mesh_device);
     receiver_workload.add_program(device_range, std::move(receiver_program_));
     auto& receiver_program = receiver_workload.get_programs().at(device_range);
 
@@ -598,7 +598,6 @@ bool RunWriteBWTest(
     ////////////////////////////////////////////////////////////////////////////
     auto local_edm_kernel = ttnn::ccl::generate_edm_kernel(
         sender_program,
-        sender_mesh_device->impl().get_devices()[0],
         local_chip_edm_builder,
         eth_sender_core,
         tt_metal::DataMovementProcessor::RISCV_0,
@@ -607,7 +606,6 @@ bool RunWriteBWTest(
 
     auto remote_edm_kernel = ttnn::ccl::generate_edm_kernel(
         receiver_program,
-        receiver_mesh_device->impl().get_devices()[0],
         remote_chip_edm_builder,
         eth_receiver_core,
         tt_metal::DataMovementProcessor::RISCV_0,
