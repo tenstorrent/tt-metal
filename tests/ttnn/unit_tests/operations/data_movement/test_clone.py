@@ -234,6 +234,39 @@ def test_clone_dtype_conversion(
     )
 
 
+def test_clone_uint16_to_32bit(device):
+    torch.manual_seed(0)
+    vals = torch.tensor([0, 1, 2, 255, 256, 32767, 32768, 65535], dtype=torch.int32)
+    n = 32 * 64
+    tiled = vals.repeat(n // len(vals) + 1)[:n].reshape(1, 1, 32, 64)
+    mem = ttnn.DRAM_MEMORY_CONFIG
+
+    uint16_input = ttnn.from_torch(tiled, dtype=ttnn.uint16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+
+    # uint16 -> int32 must zero-extend (was bit-shifted before the routing fix).
+    i32 = ttnn.clone(uint16_input, dtype=ttnn.int32, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(i32).to(torch.int64), tiled.to(torch.int64))
+
+    # uint16 -> uint32 must zero-extend.
+    u32 = ttnn.clone(uint16_input, dtype=ttnn.uint32, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(u32).to(torch.int64), tiled.to(torch.int64))
+
+    # uint16 -> float32 is exact for these values.
+    f32 = ttnn.clone(uint16_input, dtype=ttnn.float32, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(f32).to(torch.float32), tiled.to(torch.float32))
+
+    # uint16 -> bfloat16 rounds like torch.
+    bf16 = ttnn.clone(uint16_input, dtype=ttnn.bfloat16, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(bf16).to(torch.float32), tiled.to(torch.bfloat16).to(torch.float32))
+
+    # uint8 -> int32 control: already exact through the copy path.
+    u8_vals = torch.tensor([0, 1, 2, 127, 128, 255], dtype=torch.int32)
+    u8_tiled = u8_vals.repeat(n // len(u8_vals) + 1)[:n].reshape(1, 1, 32, 64)
+    uint8_input = ttnn.from_torch(u8_tiled, dtype=ttnn.uint8, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
+    i32_from_u8 = ttnn.clone(uint8_input, dtype=ttnn.int32, memory_config=mem)
+    assert torch.equal(ttnn.to_torch(i32_from_u8).to(torch.int64), u8_tiled.to(torch.int64))
+
+
 @pytest.mark.parametrize(
     "tilized",
     [True, False],
