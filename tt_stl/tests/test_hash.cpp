@@ -7,9 +7,11 @@
 #include <tt_stl/span.hpp>
 
 #include <array>
+#include <bit>
 #include <chrono>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -457,6 +459,73 @@ TEST(CanonicalKeyTest, CPU_RelativeCostVsHash) {
               << " bytes)\n";
     EXPECT_GT(hash_ns, 0.0);
     EXPECT_GT(canon_ns, 0.0);
+}
+
+// --- Floating point: by bit pattern, as canonical_key encodes it ------------------------------
+// The hash keys the program cache, and a program built with a float attribute keeps its exact
+// bits. For an op with its own compute_program_hash the cache key is the hash alone, so a hash
+// that folds -0.0 into +0.0 hands the -0.0 call the +0.0 program, or the other way around,
+// whichever ran first.
+
+struct FloatAttr {
+    float value;
+    static constexpr auto attribute_names = std::forward_as_tuple("value");
+    auto attribute_values() const { return std::forward_as_tuple(value); }
+};
+
+const float kQuietNaN = std::bit_cast<float>(0x7fc00000u);
+const float kQuietNaNPayload = std::bit_cast<float>(0x7fc00001u);
+
+TEST(FloatHashTest, CPU_SignedZerosAndNaNPayloadsHashApart) {
+    EXPECT_NE(hash_objects_with_default_seed(0.0f), hash_objects_with_default_seed(-0.0f));
+    EXPECT_NE(hash_objects_with_default_seed(0.0), hash_objects_with_default_seed(-0.0));
+    EXPECT_NE(hash_objects_with_default_seed(kQuietNaN), hash_objects_with_default_seed(kQuietNaNPayload));
+    EXPECT_EQ(hash_objects_with_default_seed(1.5f), hash_objects_with_default_seed(1.5f));
+    // The ways op attributes reach it: an attribute struct, std::vector, SmallVector.
+    EXPECT_NE(hash_objects_with_default_seed(FloatAttr{0.0f}), hash_objects_with_default_seed(FloatAttr{-0.0f}));
+    EXPECT_NE(
+        hash_objects_with_default_seed(std::vector<float>{0.0f}),
+        hash_objects_with_default_seed(std::vector<float>{-0.0f}));
+    EXPECT_NE(
+        hash_objects_with_default_seed(SmallVector<float>{0.0f}),
+        hash_objects_with_default_seed(SmallVector<float>{-0.0f}));
+}
+
+TEST(FloatHashTest, CPU_HashSeparatesWhatCanonicalKeySeparates) {
+    // The program cache compares keys by hash and canonical_key; for an op with a custom hash,
+    // by hash alone. Both must tell apart the same floats.
+    const std::vector<float> values{
+        0.0f,
+        -0.0f,
+        1.0f,
+        kQuietNaN,
+        kQuietNaNPayload,
+        -kQuietNaN,
+        std::numeric_limits<float>::infinity(),
+        -std::numeric_limits<float>::infinity()};
+    for (const float a : values) {
+        for (const float b : values) {
+            EXPECT_EQ(
+                hash_objects_with_default_seed(a) == hash_objects_with_default_seed(b),
+                canonical_key(a) == canonical_key(b))
+                << std::bit_cast<uint32_t>(a) << " vs " << std::bit_cast<uint32_t>(b);
+        }
+    }
+}
+
+TEST(FloatHashTest, CPU_SmallVectorStdHashFollowsOperatorEquals) {
+    // std::hash<SmallVector> serves unordered containers, which compare with operator==, and
+    // that says -0.0 == +0.0, so it must hash them alike.
+    const SmallVector<float> positive{0.0f, 1.0f};
+    const SmallVector<float> negative{-0.0f, 1.0f};
+    ASSERT_EQ(positive, negative);
+    EXPECT_EQ(std::hash<SmallVector<float>>{}(positive), std::hash<SmallVector<float>>{}(negative));
+    const SmallVector<double> positive_d{0.0};
+    const SmallVector<double> negative_d{-0.0};
+    ASSERT_EQ(positive_d, negative_d);
+    EXPECT_EQ(std::hash<SmallVector<double>>{}(positive_d), std::hash<SmallVector<double>>{}(negative_d));
+    const std::unordered_set<SmallVector<float>> set{positive};
+    EXPECT_TRUE(set.contains(negative));
 }
 
 }  // namespace
