@@ -40,6 +40,16 @@ def test_nonzero(device):
     logger.debug(f"Non-zero indices: {indices.tolist()}")  # [[0, 0, 0, 3], [0, 0, 0, 10], [0, 0, 0, 20]]
 
 
+def test_bcast(device):
+    # Create a tensor and a single row to broadcast over its height
+    input_tensor_a = ttnn.rand((1, 1, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+    input_tensor_b = ttnn.rand((1, 1, 1, 32), dtype=ttnn.bfloat16, layout=ttnn.Layout.TILE, device=device)
+
+    # Add the row of input_tensor_b to every row of input_tensor_a
+    output_tensor = ttnn.bcast(input_tensor_a, input_tensor_b, ttnn.BcastOpMath.ADD, ttnn.BcastOpDim.H)
+    logger.debug(f"Bcast Tensor Shape: {output_tensor.shape}")  # Shape([1, 1, 64, 32])
+
+
 def test_pad(device):
     # Create a tensor to pad
     input_tensor = ttnn.rand((1, 1, 4, 4), dtype=ttnn.bfloat16, device=device)
