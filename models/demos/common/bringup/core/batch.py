@@ -440,7 +440,11 @@ def _config_of(units: list[tuple[str, str]], parsed: dict | None = None) -> dict
     for u, c in units:
         runs = parsed[u] if parsed is not None else parse_all(launch_form(c)[0])
         if runs and not _determinism_only(runs) and unit_class(runs) == "full":
-            item = ITEM_VARS | DECLARED_ITEM_VARS | call_vars(runs[0]["env"])
+            # F296: only the unit's OWN tests' declared per-run variables: another test's declaration (test_no_rebuild's
+            # BRINGUP_CHUNK) is that test's business; for this unit it is the model's geometry (an 8192 gate's
+            # determinism check otherwise loaded the 5120 model and F283 refused the 8192 oracles: PB.MB, PB.9X)
+            own = set().union(*(declared_item_vars(t) for r in runs for t in r["args"]))
+            item = ITEM_VARS | own | call_vars(runs[0]["env"])
             return {k: v for k, v in runs[0]["env"].items() if k not in item}
     return {}
 
