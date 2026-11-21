@@ -60,7 +60,7 @@ SoftmaxDeviceOperation::SoftmaxProgramFactoryGeneralCLarge::create_program_artif
     }
 
     const auto data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : data_format;
+    const auto intermed_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
 
     const std::uint32_t in_tile_size = tt::tile_size(data_format);
     const std::uint32_t intermed_tile_size = tt::tile_size(intermed_data_format);
